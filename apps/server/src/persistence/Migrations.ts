@@ -55,6 +55,7 @@ import Migration034V2 from "./Migrations/034_OrchestrationV2Subagents.ts";
 import Migration035V2 from "./Migrations/035_OrchestrationV2Foundation.ts";
 import Migration036V2 from "./Migrations/036_OrchestrationV2ProviderSessionBindings.ts";
 import Migration037V2 from "./Migrations/037_OrchestrationV2ThreadLaunchWorkflows.ts";
+import Migration038V2 from "./Migrations/038_ApplicationEventSource.ts";
 
 /**
  * Migration loader with all migrations defined inline.
@@ -103,12 +104,21 @@ export const migrationEntries = [
   [34, "ProjectionThreadsSnoozed", Migration0034],
   [35, "ProjectionThreadTitleRegeneration", Migration0035],
   [36, "ProjectionThreadsPinned", Migration0036],
+<<<<<<< HEAD
   [37, "ProjectionTurnsKeysetIndex", Migration0037],
   [38, "OrchestrationV2", Migration033V2],
   [39, "OrchestrationV2Subagents", Migration034V2],
   [40, "OrchestrationV2Foundation", Migration035V2],
   [41, "OrchestrationV2ProviderSessionBindings", Migration036V2],
   [42, "OrchestrationV2ThreadLaunchWorkflows", Migration037V2],
+=======
+  [37, "OrchestrationV2", Migration0026V2],
+  [38, "OrchestrationV2Subagents", Migration0034V2],
+  [39, "OrchestrationV2Foundation", Migration0035V2],
+  [40, "OrchestrationV2ProviderSessionBindings", Migration036V2],
+  [41, "OrchestrationV2ThreadLaunchWorkflows", Migration037V2],
+  [42, "ApplicationEventSource", Migration038V2],
+>>>>>>> 56f9a4b262 (Integrate orchestration v2 with the application runtime)
 ] as const;
 
 export const migrationManifest = migrationEntries.map(([id, name]) => [id, name] as const);
