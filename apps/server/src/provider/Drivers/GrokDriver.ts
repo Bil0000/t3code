@@ -16,14 +16,11 @@ import {
   type GrokAdapterV2DriverEnv,
 } from "../../orchestration-v2/Adapters/GrokAdapterV2.ts";
 import { ProviderDriverError } from "../Errors.ts";
-import { makeGrokAdapter } from "../Layers/GrokAdapter.ts";
 import {
   buildInitialGrokProviderSnapshot,
   checkGrokProviderStatus,
   enrichGrokSnapshot,
 } from "../Layers/GrokProvider.ts";
-import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { readGrokAccount } from "../Layers/grokUsageLimits.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
 import {
   defaultProviderContinuationIdentity,
@@ -32,12 +29,9 @@ import {
 } from "../ProviderDriver.ts";
 import { withInstanceIdentity } from "./instanceIdentity.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
-import { discoverGrokSkills } from "./GrokSkills.ts";
 import {
-  makeCachedProviderMaintenanceResolution,
   makeManualOnlyProviderMaintenanceCapabilities,
-  makeProviderMaintenanceCapabilities,
-  type ProviderMaintenanceCapabilitiesResolver,
+  makeStaticProviderMaintenanceResolver,
   resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
 import {
@@ -82,7 +76,6 @@ export type GrokDriverEnv =
   | FileSystem.FileSystem
   | HttpClient.HttpClient
   | Path.Path
-  | ProviderEventLoggers
   | ServerConfig
   | ServerSettingsService;
 
@@ -99,11 +92,7 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
       const crypto = yield* Crypto.Crypto;
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const httpClient = yield* HttpClient.HttpClient;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const path = yield* Path.Path;
       const serverSettings = yield* ServerSettingsService;
-      const { cwd } = yield* ServerConfig;
-      const eventLoggers = yield* ProviderEventLoggers;
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const continuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -117,21 +106,11 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies GrokSettings;
-      const resolveMaintenance = yield* makeCachedProviderMaintenanceResolution(
-        resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
-          binaryPath: effectiveConfig.binaryPath,
-          env: processEnv,
-        }).pipe(
-          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-          Effect.provideService(FileSystem.FileSystem, fileSystem),
-          Effect.provideService(Path.Path, path),
-        ),
-      );
-      const adapter = yield* makeGrokAdapter(effectiveConfig, {
-        environment: processEnv,
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
-        instanceId,
+      const maintenanceCapabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
+        binaryPath: effectiveConfig.binaryPath,
+        env: processEnv,
       });
+
       const orchestrationAdapter = yield* GrokAdapterV2Driver.create({
         instanceId,
         displayName,
@@ -152,28 +131,8 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
       );
       const textGeneration = yield* makeGrokTextGeneration(effectiveConfig, processEnv);
 
-      const checkProvider = checkGrokProviderStatus(effectiveConfig, processEnv, cwd).pipe(
-        Effect.filterOrElse(
-          (snapshot) =>
-            !(
-              effectiveConfig.enabled &&
-              snapshot.installed &&
-              snapshot.auth.status === "authenticated"
-            ),
-          (snapshot) =>
-            readGrokAccount(processEnv).pipe(
-              // The email lets clients recognize one account signed in on several environments.
-              Effect.map(({ email, usageLimits }) => ({
-                ...snapshot,
-                auth: email ? { ...snapshot.auth, email } : snapshot.auth,
-                usageLimits,
-              })),
-            ),
-        ),
+      const checkProvider = checkGrokProviderStatus(effectiveConfig, processEnv).pipe(
         Effect.map(stampIdentity),
-        Effect.provideService(HttpClient.HttpClient, httpClient),
-        Effect.provideService(FileSystem.FileSystem, fileSystem),
-        Effect.provideService(Path.Path, path),
         Effect.provideService(Crypto.Crypto, crypto),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
@@ -210,24 +169,6 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
             }),
         ),
       );
-      const snapshotForCwd = (workspaceCwd: string) =>
-        !effectiveConfig.enabled
-          ? snapshot.getSnapshot
-          : Effect.all([
-              snapshot.getSnapshot,
-              discoverGrokSkills(effectiveConfig, processEnv, workspaceCwd).pipe(
-                Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
-                Effect.mapError(
-                  (cause) =>
-                    new ProviderDriverError({
-                      driver: DRIVER_KIND,
-                      instanceId,
-                      detail: `Failed to discover Grok skills for '${workspaceCwd}'`,
-                      cause,
-                    }),
-                ),
-              ),
-            ]).pipe(Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })));
 
       return {
         instanceId,
@@ -237,8 +178,6 @@ export const GrokDriver: ProviderDriver<GrokSettings, GrokDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
-        snapshotForCwd,
-        adapter,
         orchestrationAdapter,
         textGeneration,
       } satisfies ProviderInstance;

@@ -31,19 +31,12 @@ import {
   type ClaudeAdapterV2DriverEnv,
 } from "../../orchestration-v2/Adapters/ClaudeAdapterV2.ts";
 import { ProviderDriverError } from "../Errors.ts";
-import { makeClaudeAdapter } from "../Layers/ClaudeAdapter.ts";
-import { makeClaudeScopedLimitNames } from "../Layers/claudeUsageLimits.ts";
-import * as ClaudeResetCredits from "../Layers/claudeResetCredits.ts";
-import * as ResetCreditCoordinator from "../Layers/resetCreditCoordinator.ts";
 import {
   checkClaudeProviderStatus,
   makePendingClaudeProvider,
   probeClaudeCapabilities,
 } from "../Layers/ClaudeProvider.ts";
-import { ProviderEventLoggers } from "../Layers/ProviderEventLoggers.ts";
-import { resolveClaudeModelCatalog } from "../ClaudeModelCatalog.ts";
 import { makeManagedServerProvider } from "../makeManagedServerProvider.ts";
-import * as ModelManifest from "../ModelManifest.ts";
 import {
   defaultProviderContinuationIdentity,
   type ProviderDriver,
@@ -63,12 +56,7 @@ import {
   makeProviderSnapshotSettingsSource,
   type ProviderSnapshotSettings,
 } from "../providerUpdateSettings.ts";
-import {
-  makeClaudeCapabilitiesCacheKey,
-  makeClaudeContinuationGroupKey,
-  resolveClaudeHomePath,
-} from "./ClaudeHome.ts";
-import { discoverClaudeSkills } from "./ClaudeSkills.ts";
+import { makeClaudeCapabilitiesCacheKey, makeClaudeContinuationGroupKey } from "./ClaudeHome.ts";
 const decodeClaudeSettings = Schema.decodeSync(ClaudeSettings);
 
 const DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
@@ -99,9 +87,7 @@ export type ClaudeDriverEnv =
   | Crypto.Crypto
   | FileSystem.FileSystem
   | HttpClient.HttpClient
-  | ModelManifest.ModelManifest
   | Path.Path
-  | ProviderEventLoggers
   | ServerConfig
   | ServerSettingsService;
 
@@ -122,9 +108,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
       const httpClient = yield* HttpClient.HttpClient;
       const resetCreditCoordinator = yield* ResetCreditCoordinator.ResetCreditCoordinator;
       const serverSettings = yield* ServerSettingsService;
-      const eventLoggers = yield* ProviderEventLoggers;
-      const modelManifest = yield* ModelManifest.ModelManifest;
-      const modelCatalog = modelManifest.current.pipe(Effect.map(resolveClaudeModelCatalog));
       const processEnv = mergeProviderInstanceEnvironment(environment);
       const fallbackContinuationIdentity = defaultProviderContinuationIdentity({
         driverKind: DRIVER_KIND,
@@ -159,17 +142,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         continuationGroupKey,
       });
 
-      // One per instance: the status probe writes the model-scoped bucket
-      // names it saw, the adapter reads them to place turn-driven events.
-      const scopedLimitNames = yield* makeClaudeScopedLimitNames;
-      const adapterOptions = {
-        instanceId,
-        environment: processEnv,
-        modelCatalog,
-        scopedLimitNames,
-        ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
-      };
-      const adapter = yield* makeClaudeAdapter(effectiveConfig, adapterOptions);
       const orchestrationAdapter = yield* ClaudeAdapterV2Driver.create({
         instanceId,
         displayName,
@@ -206,30 +178,13 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         processEnv,
       );
 
-      // Start the TTL-gated refresh without delaying provider readiness. The
-      // next check observes a remote manifest after the background fetch lands.
-      const checkProvider = modelManifest.refreshInBackground.pipe(
-        Effect.andThen(
-          modelManifest.current.pipe(
-            Effect.flatMap((manifest) =>
-              checkClaudeProviderStatus(
-                effectiveConfig,
-                () => Cache.get(capabilitiesProbeCache, capabilitiesCacheKey),
-                processEnv,
-                cwd,
-                resolveClaudeModelCatalog(manifest),
-                scopedLimitNames,
-                (version) =>
-                  ClaudeResetCredits.readClaudeResetCredits(configDir, version).pipe(
-                    Effect.provideService(HttpClient.HttpClient, httpClient),
-                    Effect.provideService(FileSystem.FileSystem, fileSystem),
-                    Effect.provideService(Path.Path, path),
-                  ),
-              ),
-            ),
-            Effect.map(stampIdentity),
-          ),
-        ),
+      const checkProvider = checkClaudeProviderStatus(
+        effectiveConfig,
+        () => Cache.get(capabilitiesProbeCache, capabilitiesCacheKey),
+        processEnv,
+        cwd,
+      ).pipe(
+        Effect.map(stampIdentity),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         Effect.provideService(FileSystem.FileSystem, fileSystem),
         Effect.provideService(Path.Path, path),
@@ -242,12 +197,7 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
         initialSnapshot: (settings) =>
-          modelManifest.current.pipe(
-            Effect.flatMap((manifest) =>
-              makePendingClaudeProvider(settings.provider, resolveClaudeModelCatalog(manifest)),
-            ),
-            Effect.map(stampIdentity),
-          ),
+          makePendingClaudeProvider(settings.provider).pipe(Effect.map(stampIdentity)),
         checkProvider,
         enrichSnapshot: ({ settings, snapshot, publishSnapshot }) =>
           resolveMaintenance().pipe(
@@ -270,17 +220,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
             }),
         ),
       );
-      const snapshotForCwd = (cwd: string) =>
-        !effectiveConfig.enabled
-          ? snapshot.getSnapshot
-          : Effect.all([
-              snapshot.getSnapshot,
-              discoverClaudeSkills(effectiveConfig, cwd, processEnv),
-            ]).pipe(
-              Effect.map(([machineSnapshot, skills]) => ({ ...machineSnapshot, skills })),
-              Effect.provideService(FileSystem.FileSystem, fileSystem),
-              Effect.provideService(Path.Path, path),
-            );
 
       // Same rules as Codex: serialised on the config directory that holds the
       // login, one request id kept until Claude answers (a cooldown or rate
@@ -355,9 +294,6 @@ export const ClaudeDriver: ProviderDriver<ClaudeSettings, ClaudeDriverEnv> = {
         accentColor,
         enabled,
         snapshot,
-        invalidateCaches: Cache.invalidateAll(capabilitiesProbeCache),
-        snapshotForCwd,
-        adapter,
         orchestrationAdapter,
         textGeneration,
         consumeResetCredit,
