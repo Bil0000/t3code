@@ -1,16 +1,15 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
-import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import type { LegendListRef } from "@legendapp/list/react-native";
 import type {
-  ApprovalRequestId,
   EnvironmentId,
   MessageId,
   ModelSelection,
-  OrchestrationThreadShell,
   ProviderApprovalDecision,
   ProviderInteractionMode,
   RuntimeMode,
+  RuntimeRequestId,
   ServerConfig as T3ServerConfig,
   ThreadId,
 } from "@t3tools/contracts";
@@ -43,7 +42,7 @@ import { ThreadFeed } from "./ThreadFeed";
 import type { ThreadContentPresentation } from "./threadContentPresentation";
 
 export interface ThreadDetailScreenProps {
-  readonly selectedThread: OrchestrationThreadShell;
+  readonly selectedThread: EnvironmentThreadShell;
   readonly contentPresentation: ThreadContentPresentation;
   readonly screenTone: StatusTone;
   readonly connectionError: string | null;
@@ -51,11 +50,11 @@ export interface ThreadDetailScreenProps {
   readonly selectedThreadFeed: ReadonlyArray<ThreadFeedEntry>;
   readonly activeWorkStartedAt: string | null;
   readonly activePendingApproval: PendingApproval | null;
-  readonly respondingApprovalId: ApprovalRequestId | null;
+  readonly respondingApprovalId: RuntimeRequestId | null;
   readonly activePendingUserInput: PendingUserInput | null;
   readonly activePendingUserInputDrafts: Record<string, PendingUserInputDraftAnswer>;
   readonly activePendingUserInputAnswers: Record<string, string> | null;
-  readonly respondingUserInputId: ApprovalRequestId | null;
+  readonly respondingUserInputId: RuntimeRequestId | null;
   readonly draftMessage: string;
   readonly draftAttachments: ReadonlyArray<DraftComposerImageAttachment>;
   readonly connectionStateLabel: EnvironmentConnectionPhase;
@@ -84,16 +83,16 @@ export interface ThreadDetailScreenProps {
   readonly onUpdateThreadRuntimeMode: (runtimeMode: RuntimeMode) => void;
   readonly onUpdateThreadInteractionMode: (interactionMode: ProviderInteractionMode) => void;
   readonly onRespondToApproval: (
-    requestId: ApprovalRequestId,
+    requestId: RuntimeRequestId,
     decision: ProviderApprovalDecision,
   ) => Promise<unknown>;
   readonly onSelectUserInputOption: (
-    requestId: ApprovalRequestId,
+    requestId: RuntimeRequestId,
     questionId: string,
     label: string,
   ) => void;
   readonly onChangeUserInputCustomAnswer: (
-    requestId: ApprovalRequestId,
+    requestId: RuntimeRequestId,
     questionId: string,
     customAnswer: string,
   ) => void;
@@ -343,6 +342,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, []);
 
   return (
+<<<<<<< HEAD
     <View className="flex-1">
       {showContent ? (
         <View
@@ -379,6 +379,51 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
       ) : (
         <View className="flex-1" />
       )}
+=======
+    <GestureDetector gesture={headerDrawerGesture}>
+      <View className="flex-1">
+        {showContent ? (
+          <View
+            style={{ flex: 1 }}
+            onTouchStart={handleFeedTouchStart}
+            onTouchMove={handleFeedTouchMove}
+            onTouchEnd={handleFeedTouchEnd}
+            onTouchCancel={handleFeedTouchCancel}
+          >
+            <ThreadFeed
+              key={props.selectedThread.id}
+              environmentId={props.environmentId}
+              threadId={props.selectedThread.id}
+              workspaceRoot={props.threadCwd}
+              feed={props.selectedThreadFeed}
+              contentPresentation={props.contentPresentation}
+              agentLabel={agentLabel}
+              latestRun={props.selectedThread.latestRun}
+              listRef={listRef}
+              freeze={freeze}
+              anchorMessageId={anchorMessageId}
+              contentInsetEndAdjustment={contentInsetEndAdjustment}
+              contentTopInset={headerHeight}
+              contentBottomInset={estimatedOverlayHeight}
+              layoutVariant={layoutVariant}
+              skills={selectedProviderSkills}
+            />
+          </View>
+        ) : (
+          <View style={{ flex: 1 }} />
+        )}
+
+        {/* Floating composer — sticks to keyboard via KeyboardStickyView */}
+        {showContent ? (
+          <KeyboardStickyView
+            style={{ position: "absolute", bottom: 0, left: 0, right: 0 }}
+            offset={{ closed: 0, opened: 0 }}
+          >
+            <View ref={composerOverlayRef} onLayout={onComposerLayout} style={{ paddingTop: 8 }}>
+              {props.activeWorkStartedAt ? (
+                <WorkingDurationPill startedAt={props.activeWorkStartedAt} />
+              ) : null}
+>>>>>>> 79c36e6204 (Complete orchestration V2 frontend cutover)
 
       {/* Floating composer — sticks to keyboard via KeyboardStickyView */}
       {showContent ? (
