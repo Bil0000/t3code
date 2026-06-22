@@ -1,11 +1,6 @@
-import { NativeStackScreenOptions } from "../../native/StackHeader";
-import {
-  StackActions,
-  useFocusEffect,
-  useNavigation,
-  type StaticScreenProps,
-} from "@react-navigation/native";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
+import { useCallback, useMemo, useState } from "react";
 import * as Option from "effect/Option";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -530,20 +525,15 @@ function ThreadRouteContent(
     void navigation.navigate("Connections");
   }, [navigation]);
   const handleStopThread = useCallback(() => {
-    if (
-      !selectedThread ||
-      (selectedThread.session?.status !== "running" &&
-        selectedThread.session?.status !== "starting")
-    ) {
+    const runtime = selectedThread?.runtime;
+    if (!selectedThread || !runtime || !threadRuntimeIsActive(runtime)) {
       return;
     }
     return interruptThreadTurn({
       environmentId: selectedThread.environmentId,
       input: {
         threadId: selectedThread.id,
-        ...(selectedThread.session.activeTurnId
-          ? { turnId: selectedThread.session.activeTurnId }
-          : {}),
+        ...(runtime.activeRunId ? { runId: runtime.activeRunId } : {}),
       },
     });
   }, [interruptThreadTurn, selectedThread]);
@@ -573,7 +563,7 @@ function ThreadRouteContent(
     terminalDebugLog("terminal-menu:open-new", {
       hasThread: Boolean(selectedThread),
       hasWorkspaceRoot: Boolean(selectedThreadProject?.workspaceRoot),
-      listedTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
+      listedTerminalIds: terminalMenuSessions.map((runtime) => runtime.terminalId),
     });
 
     if (!selectedThread || !selectedThreadProject?.workspaceRoot) {
@@ -581,7 +571,7 @@ function ThreadRouteContent(
     }
 
     const nextId = nextOpenTerminalId({
-      listedTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
+      listedTerminalIds: terminalMenuSessions.map((runtime) => runtime.terminalId),
     });
     void navigation.navigate("ThreadTerminal", {
       environmentId: String(selectedThread.environmentId),
@@ -608,9 +598,9 @@ function ThreadRouteContent(
       }
 
       const targetTerminalId = resolveProjectScriptTerminalId({
-        existingTerminalIds: terminalMenuSessions.map((session) => session.terminalId),
+        existingTerminalIds: terminalMenuSessions.map((runtime) => runtime.terminalId),
         hasRunningTerminal: terminalMenuSessions.some(
-          (session) => session.status === "running" || session.status === "starting",
+          (runtime) => runtime.status === "running" || runtime.status === "starting",
         ),
       });
       const preferredWorktreePath = resolvePreferredThreadWorktreePath({
