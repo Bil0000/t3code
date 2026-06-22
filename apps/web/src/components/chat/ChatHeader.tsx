@@ -37,6 +37,7 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
+import { ThreadRelationshipsControl } from "./ThreadRelationshipsControl";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
@@ -312,6 +313,12 @@ export const ChatHeader = memo(function ChatHeader({
             onDeleteScript={onDeleteProjectScript}
           />
         )}
+        {!draftId ? (
+          <ThreadRelationshipsControl
+            environmentId={activeThreadEnvironmentId}
+            threadId={activeThreadId}
+          />
+        ) : null}
         {showOpenInPicker && (
           <OpenInPicker
             environmentId={activeThreadEnvironmentId}

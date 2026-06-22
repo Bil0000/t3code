@@ -4,6 +4,7 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Spinner } from "../ui/spinner";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface PendingActionState {
   questionIndex: number;
@@ -129,7 +130,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (isRunning) {
+  if (isRunning && !hasSendableContent) {
     return (
       <button
         type="button"
@@ -202,7 +203,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  return (
+  const sendButton = (
     <button
       type="submit"
       className={cn(
@@ -220,14 +221,14 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
       aria-label={
         isEnvironmentUnavailable
           ? "Environment disconnected"
-          : sendDisabledReason
-            ? sendDisabledReason
-            : isConnecting
-              ? "Connecting"
-              : isPreparingWorktree
-                ? "Preparing worktree"
-                : isSendBusy
-                  ? "Sending"
+          : isConnecting
+            ? "Connecting"
+            : isPreparingWorktree
+              ? "Preparing worktree"
+              : isSendBusy
+                ? "Sending"
+                : isRunning
+                  ? "Send message to steer active turn"
                   : "Send message"
       }
     >
@@ -245,5 +246,14 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
         </svg>
       )}
     </button>
+  );
+
+  if (!isRunning) return sendButton;
+
+  return (
+    <Tooltip>
+      <TooltipTrigger render={sendButton} />
+      <TooltipPopup side="top">Send now to steer the active turn</TooltipPopup>
+    </Tooltip>
   );
 });
