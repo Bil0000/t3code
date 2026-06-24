@@ -48,13 +48,11 @@ export type ThreadKeybindingCommand = (typeof THREAD_KEYBINDING_COMMANDS)[number
 
 const MODEL_PICKER_KEYBINDING_COMMANDS = [
   "modelPicker.toggle",
-  "modelPicker.previousProvider",
-  "modelPicker.nextProvider",
   ...MODEL_PICKER_JUMP_KEYBINDING_COMMANDS,
 ] as const;
 export type ModelPickerKeybindingCommand = (typeof MODEL_PICKER_KEYBINDING_COMMANDS)[number];
 
-export const STATIC_KEYBINDING_COMMANDS = [
+export const BUILT_IN_KEYBINDING_COMMANDS = [
   "sidebar.toggle",
   "terminal.toggle",
   "terminal.split",
@@ -62,9 +60,7 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "terminal.new",
   "terminal.close",
   "rightPanel.toggle",
-  "rightPanel.toggleMaximized",
-  "rightPanel.close",
-  "pullRequest.copyNumber",
+  "threadPanel.toggle",
   "diff.toggle",
   "preview.toggle",
   "preview.refresh",
@@ -77,12 +73,6 @@ export const STATIC_KEYBINDING_COMMANDS = [
   "projectSearch.toggle",
   "themeEditor.toggle",
   "composer.stash",
-  "composer.host",
-  "composer.effort",
-  "composer.mode",
-  "composer.workspace",
-  "composer.previousWorktree",
-  "composer.branch",
   "chat.new",
   "chat.newLocal",
   "editor.openFavorite",
@@ -100,7 +90,7 @@ export const SCRIPT_RUN_COMMAND_PATTERN = Schema.TemplateLiteral([
 ]);
 
 export const KeybindingCommand = Schema.Union([
-  Schema.Literals(STATIC_KEYBINDING_COMMANDS),
+  Schema.Literals(BUILT_IN_KEYBINDING_COMMANDS),
   SCRIPT_RUN_COMMAND_PATTERN,
 ]);
 export type KeybindingCommand = typeof KeybindingCommand.Type;
