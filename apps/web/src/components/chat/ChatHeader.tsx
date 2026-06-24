@@ -1,34 +1,11 @@
 import {
   type EnvironmentId,
   type EditorId,
-  type ProjectScript,
   type ResolvedKeybindingsConfig,
-  type ThreadId,
 } from "@t3tools/contracts";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
-import type { ChangeRequestStateLike } from "@t3tools/client-runtime/state/thread-settled";
-import { ChevronDownIcon } from "lucide-react";
-import {
-  memo,
-  useCallback,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type MouseEvent as ReactMouseEvent,
-} from "react";
-import GitActionsControl from "../GitActionsControl";
-import { type DraftId } from "~/composerDraftStore";
+import { memo } from "react";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { toastManager } from "../ui/toast";
-import ProjectScriptsControl, {
-  type NewProjectScriptInput,
-  type ProjectScriptActionResult,
-} from "../ProjectScriptsControl";
+import { SidebarTrigger } from "../ui/sidebar";
 import { OpenInPicker } from "./OpenInPicker";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
@@ -37,12 +14,9 @@ import { threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
 import { ProjectFavicon } from "../ProjectFavicon";
 import { cn } from "~/lib/utils";
-import { ThreadRelationshipsControl } from "./ThreadRelationshipsControl";
 
 interface ChatHeaderProps {
   activeThreadEnvironmentId: EnvironmentId;
-  activeThreadId: ThreadId;
-  draftId?: DraftId;
   activeThreadTitle: string;
   /** Drafts have no server thread yet, so the title carries no action menu. */
   isServerThread: boolean;
@@ -51,20 +25,9 @@ interface ChatHeaderProps {
   activeProjectName: string | undefined;
   activeProjectCwd: string | null;
   openInCwd: string | null;
-  activeProjectScripts: ReadonlyArray<ProjectScript> | undefined;
-  preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
   rightPanelOpen: boolean;
-  gitCwd: string | null;
-  onNewThreadInProject: () => void;
-  onRunProjectScript: (script: ProjectScript) => void;
-  onAddProjectScript: (input: NewProjectScriptInput) => Promise<ProjectScriptActionResult>;
-  onUpdateProjectScript: (
-    scriptId: string,
-    input: NewProjectScriptInput,
-  ) => Promise<ProjectScriptActionResult>;
-  onDeleteProjectScript: (scriptId: string) => Promise<ProjectScriptActionResult>;
 }
 
 /**
@@ -95,25 +58,15 @@ export function shouldShowOpenInPicker(input: {
 
 export const ChatHeader = memo(function ChatHeader({
   activeThreadEnvironmentId,
-  activeThreadId,
-  draftId,
   activeThreadTitle,
   isServerThread,
   changeRequestState,
   activeProjectName,
   activeProjectCwd,
   openInCwd,
-  activeProjectScripts,
-  preferredScriptId,
   keybindings,
   availableEditors,
   rightPanelOpen,
-  gitCwd,
-  onNewThreadInProject,
-  onRunProjectScript,
-  onAddProjectScript,
-  onUpdateProjectScript,
-  onDeleteProjectScript,
 }: ChatHeaderProps) {
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const fileScripts = useT3ProjectFileScripts(
@@ -211,64 +164,14 @@ export const ChatHeader = memo(function ChatHeader({
       onContextMenu={handleHeaderContextMenu}
     >
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
-        {/* The project always leads the header: knowing which project a
-            thread lives in is priority zero, and the thread title alone
-            doesn't answer it. */}
-        {activeProjectName ? (
-          <span className="inline-flex shrink-0 items-center gap-2">
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <button
-                    type="button"
-                    aria-label={`New thread in ${activeProjectName}`}
-                    onClick={onNewThreadInProject}
-                    className="inline-flex min-w-0 cursor-pointer items-center gap-1.5 rounded-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-                  />
-                }
+        <SidebarTrigger className="size-7 shrink-0 md:hidden" />
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <h2
+                aria-label={activeThreadTitle}
+                className="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
               >
-                <ProjectFavicon
-                  environmentId={activeThreadEnvironmentId}
-                  cwd={activeProjectCwd ?? ""}
-                  className="size-3.5"
-                />
-                <span className="max-w-40 truncate text-sm font-medium">{activeProjectName}</span>
-              </TooltipTrigger>
-              <TooltipPopup side="top">New thread in {activeProjectName}</TooltipPopup>
-            </Tooltip>
-            <span aria-hidden className="text-icon-muted">
-              /
-            </span>
-          </span>
-        ) : null}
-        {renamingTitle !== null ? (
-          <input
-            autoFocus
-            aria-label="Thread title"
-            className="min-w-0 flex-1 rounded-sm bg-transparent text-sm font-medium text-foreground outline-none ring-1 ring-ring/50 focus:ring-ring"
-            defaultValue={renamingTitle}
-            onBlur={(event) => {
-              if (renameCommittedRef.current) return;
-              commitRename(event.currentTarget.value);
-            }}
-            onFocus={(event) => event.currentTarget.select()}
-            onKeyDown={handleRenameKeyDown}
-          />
-        ) : isServerThread ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <button
-                  ref={titleButtonRef}
-                  type="button"
-                  aria-label={`Thread actions for ${activeThreadTitle}`}
-                  aria-haspopup="menu"
-                  onClick={openMenuFromTitle}
-                  className="group/thread-title inline-flex min-w-0 flex-1 cursor-pointer items-center gap-1 rounded-sm text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
-                />
-              }
-            >
-              <h2 className="min-w-0 truncate text-sm font-medium text-foreground">
                 {activeThreadTitle}
               </h2>
               <ChevronDownIcon
@@ -298,40 +201,15 @@ export const ChatHeader = memo(function ChatHeader({
         data-chat-header-actions
         className={cn(
           "flex shrink-0 items-center justify-end gap-2 @3xl/header-actions:gap-3",
-          rightPanelOpen ? "pr-0" : "pr-16",
+          rightPanelOpen ? "pr-10" : "pr-24",
         )}
       >
-        {activeProjectScripts && (
-          <ProjectScriptsControl
-            scripts={activeProjectScripts}
-            fileScripts={fileScripts}
-            keybindings={keybindings}
-            preferredScriptId={preferredScriptId}
-            onRunScript={onRunProjectScript}
-            onAddScript={onAddProjectScript}
-            onUpdateScript={onUpdateProjectScript}
-            onDeleteScript={onDeleteProjectScript}
-          />
-        )}
-        {!draftId ? (
-          <ThreadRelationshipsControl
-            environmentId={activeThreadEnvironmentId}
-            threadId={activeThreadId}
-          />
-        ) : null}
         {showOpenInPicker && (
           <OpenInPicker
             environmentId={activeThreadEnvironmentId}
             keybindings={keybindings}
             availableEditors={availableEditors}
             openInCwd={openInCwd}
-          />
-        )}
-        {activeProjectName && (
-          <GitActionsControl
-            gitCwd={gitCwd}
-            activeThreadRef={scopeThreadRef(activeThreadEnvironmentId, activeThreadId)}
-            {...(draftId ? { draftId } : {})}
           />
         )}
       </div>
