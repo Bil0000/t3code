@@ -235,6 +235,8 @@ import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
 import { MessagesTimeline } from "./chat/MessagesTimeline";
 import { resolveTimelineIsAtEnd } from "./chat/MessagesTimeline.logic";
 import { ChatHeader } from "./chat/ChatHeader";
+import { shouldShowOpenInPicker } from "./chat/OpenInPicker.logic";
+import { useOpenFavoriteEditorShortcut } from "./chat/OpenInPickerShortcut";
 import {
   PanelLayoutControls,
   type PanelLayoutControlsProps,
@@ -2365,6 +2367,18 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
+  const showOpenInPicker = shouldShowOpenInPicker({
+    activeProjectName: activeProject?.title,
+    activeThreadEnvironmentId: activeThread?.environmentId ?? environmentId,
+    primaryEnvironmentId,
+  });
+  useOpenFavoriteEditorShortcut({
+    enabled: showOpenInPicker,
+    environmentId: activeThread?.environmentId ?? environmentId,
+    keybindings,
+    availableEditors,
+    openInCwd: gitCwd,
+  });
   // Prefer an instance-id match so a custom Codex instance (e.g.
   // `codex_personal`) surfaces its own status/message in the banner rather
   // than the default Codex's. Falls back to first-match-by-kind when no
@@ -5982,6 +5996,8 @@ function ChatViewContent(props: ChatViewProps) {
       ? (lastInvokedScriptByProjectId[activeProject.id] ?? null)
       : null,
     keybindings,
+    availableEditors,
+    showOpenInPicker,
     gitCwd,
     isGitRepo,
     envLocked,
@@ -6112,15 +6128,7 @@ function ChatViewContent(props: ChatViewProps) {
               ? panelLayoutControls
               : null}
           <ChatHeader
-            activeThreadEnvironmentId={activeThread.environmentId}
             activeThreadTitle={activeThread.title}
-            isServerThread={isServerThread}
-            changeRequestState={activeThreadPr?.state ?? null}
-            activeProjectName={activeProject?.title}
-            activeProjectCwd={activeProject?.workspaceRoot ?? null}
-            openInCwd={gitCwd}
-            keybindings={keybindings}
-            availableEditors={availableEditors}
             rightPanelOpen={inlineRightPanelOwnsTitleBar}
           />
         </header>
