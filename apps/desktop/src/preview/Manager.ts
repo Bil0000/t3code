@@ -158,6 +158,25 @@ export const buildPreviewPictureInPictureDataUrl = (): string => {
   return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
 };
 
+export const fitPictureInPictureContentSize = (
+  current: ReadonlyArray<number>,
+  aspectRatio: number,
+): readonly [width: number, height: number] => {
+  const currentWidth = Math.max(1, current[0] ?? PICTURE_IN_PICTURE_INITIAL_WIDTH);
+  const currentHeight = Math.max(1, current[1] ?? PICTURE_IN_PICTURE_INITIAL_HEIGHT);
+  let width =
+    currentWidth / currentHeight > aspectRatio ? currentHeight * aspectRatio : currentWidth;
+  let height = width / aspectRatio;
+  const minimumScale = Math.max(
+    1,
+    PICTURE_IN_PICTURE_MIN_WIDTH / width,
+    PICTURE_IN_PICTURE_MIN_HEIGHT / height,
+  );
+  width *= minimumScale;
+  height *= minimumScale;
+  return [Math.round(width), Math.round(height)];
+};
+
 const artifactSiteSlug = (rawUrl: string): string => {
   try {
     const url = new URL(rawUrl);
@@ -2060,7 +2079,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                   tabId,
                   webContentsId: wc.id,
                 },
-                () => pictureInPictureWindow.setAspectRatio(aspectRatio),
+                () => {
+                  const contentSize = fitPictureInPictureContentSize(
+                    pictureInPictureWindow.getContentSize(),
+                    aspectRatio,
+                  );
+                  pictureInPictureWindow.setContentSize(contentSize[0], contentSize[1], false);
+                  pictureInPictureWindow.setAspectRatio(aspectRatio);
+                },
               );
               yield* Ref.update(pictureInPictureAspectRatiosRef, (aspectRatios) =>
                 replaceMap(aspectRatios, (copy) => {

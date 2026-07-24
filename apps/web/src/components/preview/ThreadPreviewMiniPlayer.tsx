@@ -55,11 +55,6 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
     miniPlayer?.tabId === tabId && miniPlayer.size
       ? miniPlayer.size
       : PREVIEW_MINI_PLAYER_DEFAULT_SIZE;
-  const title =
-    snapshot?.navStatus._tag === "Idle"
-      ? "New tab"
-      : snapshot?.navStatus.title || snapshot?.navStatus.url || "Preview";
-
   const close = () => {
     usePreviewMiniPlayerStore.getState().close(threadRef);
   };
@@ -226,72 +221,60 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
           ? { left: position.x, top: position.y, width: size.width, height: size.height }
           : {
               right: 16,
-              bottom: Math.max(16, bottomInset + 16),
+              top: 16,
               width: size.width,
               height: size.height,
             }
       }
     >
       <div
-        className="pointer-events-auto relative z-40 flex h-9 cursor-grab items-center gap-2 rounded-t-xl border border-b-0 border-border/80 bg-popover/95 px-2 shadow-lg/20 backdrop-blur-xl active:cursor-grabbing"
+        className="pointer-events-auto absolute right-2 top-2 z-[34] flex h-8 cursor-grab items-center gap-0.5 rounded-lg border border-border/80 bg-popover/92 p-0.5 shadow-lg/20 backdrop-blur-xl active:cursor-grabbing"
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
       >
-        <div aria-hidden className="flex shrink-0 items-center gap-1 px-0.5">
-          <span className="size-2 rounded-full bg-destructive/80" />
-          <span className="size-2 rounded-full bg-muted-foreground/35" />
-          <span className="size-2 rounded-full bg-muted-foreground/35" />
-        </div>
-        <span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground">
-          Preview · {title}
-        </span>
-        <div className="flex shrink-0 items-center gap-0.5">
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Open preview in right panel"
-            title="Open in right panel"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={openInPanel}
-          >
-            <PanelRightIcon />
-          </Button>
-          <Button
-            variant={desktopOverlay?.pictureInPicture ? "secondary" : "ghost"}
-            size="icon-xs"
-            aria-label={
-              desktopOverlay?.pictureInPicture
-                ? "Close popped-out preview"
-                : "Pop preview into separate window"
-            }
-            title={
-              desktopOverlay?.pictureInPicture
-                ? "Close separate window"
-                : "Pop into separate window"
-            }
-            disabled={!desktopOverlay?.hasWebContents}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={toggleNativePictureInPicture}
-          >
-            <PictureInPicture2 />
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label="Close floating preview"
-            title="Close floating preview"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={close}
-          >
-            <XIcon />
-          </Button>
-        </div>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Open preview in right panel"
+          title="Open in right panel"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={openInPanel}
+        >
+          <PanelRightIcon />
+        </Button>
+        <Button
+          variant={desktopOverlay?.pictureInPicture ? "secondary" : "ghost"}
+          size="icon-xs"
+          aria-label={
+            desktopOverlay?.pictureInPicture
+              ? "Close popped-out preview"
+              : "Pop preview into separate window"
+          }
+          title={
+            desktopOverlay?.pictureInPicture ? "Close separate window" : "Pop into separate window"
+          }
+          disabled={!desktopOverlay?.hasWebContents}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={toggleNativePictureInPicture}
+        >
+          <PictureInPicture2 />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          aria-label="Close floating preview"
+          title="Close floating preview"
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={close}
+        >
+          <XIcon />
+        </Button>
       </div>
 
-      <div className="relative min-h-0 flex-1" style={{ height: size.height - 36 }}>
-        <div className="absolute inset-0 z-[29] rounded-b-xl bg-muted shadow-2xl/35" />
+      <div className="relative h-full min-h-0">
+        <div className="absolute inset-0 z-[29] rounded-xl bg-muted shadow-2xl/35" />
         <BrowserSurfaceSlot
           tabId={tabId}
           visible={Boolean(desktopOverlay?.hasWebContents)}
@@ -300,9 +283,9 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
           layoutVersion={position ? `${position.x}:${position.y}` : `initial:${bottomInset}`}
           className="absolute inset-0"
         />
-        <div className="pointer-events-none absolute inset-0 z-[31] rounded-b-xl ring-1 ring-inset ring-border/80" />
+        <div className="pointer-events-none absolute inset-0 z-[31] rounded-xl ring-1 ring-inset ring-border/80" />
         {!desktopOverlay?.hasWebContents ? (
-          <div className="pointer-events-none absolute inset-0 z-[32] flex items-center justify-center rounded-b-xl bg-muted text-xs text-muted-foreground">
+          <div className="pointer-events-none absolute inset-0 z-[32] flex items-center justify-center rounded-xl bg-muted text-xs text-muted-foreground">
             Reconnecting preview…
           </div>
         ) : null}

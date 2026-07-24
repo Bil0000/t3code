@@ -21,6 +21,13 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as BrowserSession from "./BrowserSession.ts";
 import * as PreviewManager from "./Manager.ts";
 
+describe("fitPictureInPictureContentSize", () => {
+  it("fits landscape and portrait viewports without letterboxing the window", () => {
+    expect(PreviewManager.fitPictureInPictureContentSize([480, 320], 16 / 9)).toEqual([480, 270]);
+    expect(PreviewManager.fitPictureInPictureContentSize([480, 320], 9 / 16)).toEqual([240, 427]);
+  });
+});
+
 const {
   browserWindowConstructor,
   createFromPath,
@@ -161,6 +168,8 @@ const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () 
     setAlwaysOnTop: vi.fn(),
     setVisibleOnAllWorkspaces: vi.fn(),
     setAspectRatio: vi.fn(),
+    getContentSize: vi.fn(() => [480, 320]),
+    setContentSize: vi.fn(),
     loadURL: vi.fn(loadURL),
     showInactive: vi.fn(() => {
       if (destroyed) throw new Error("Picture-in-picture window is closed.");
@@ -952,6 +961,8 @@ describe("PreviewManager", () => {
           setAlwaysOnTop: vi.fn(),
           setVisibleOnAllWorkspaces: vi.fn(),
           setAspectRatio: vi.fn(),
+          getContentSize: vi.fn(() => [480, 320] as [number, number]),
+          setContentSize: vi.fn(),
           loadURL: vi.fn(async () => undefined),
           showInactive: vi.fn(),
           close: vi.fn(() => {
@@ -998,6 +1009,7 @@ describe("PreviewManager", () => {
           skipTransformProcessType: true,
         });
         expect(pictureInPictureWindow.setAspectRatio).toHaveBeenCalledWith(1280 / 720);
+        expect(pictureInPictureWindow.setContentSize).toHaveBeenCalledWith(480, 270, false);
         expect(pictureInPictureSend).toHaveBeenCalledWith(
           "desktop:preview-pip-frame",
           expect.objectContaining({
