@@ -2084,6 +2084,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                     pictureInPictureWindow.getContentSize(),
                     aspectRatio,
                   );
+                  pictureInPictureWindow.setAspectRatio(0);
                   pictureInPictureWindow.setContentSize(contentSize[0], contentSize[1], false);
                   pictureInPictureWindow.setAspectRatio(aspectRatio);
                 },

@@ -1008,8 +1008,14 @@ describe("PreviewManager", () => {
           visibleOnFullScreen: true,
           skipTransformProcessType: true,
         });
-        expect(pictureInPictureWindow.setAspectRatio).toHaveBeenCalledWith(1280 / 720);
+        expect(pictureInPictureWindow.setAspectRatio.mock.calls).toEqual([[0], [1280 / 720]]);
         expect(pictureInPictureWindow.setContentSize).toHaveBeenCalledWith(480, 270, false);
+        expect(pictureInPictureWindow.setAspectRatio.mock.invocationCallOrder[0]).toBeLessThan(
+          pictureInPictureWindow.setContentSize.mock.invocationCallOrder[0] ?? 0,
+        );
+        expect(pictureInPictureWindow.setContentSize.mock.invocationCallOrder[0]).toBeLessThan(
+          pictureInPictureWindow.setAspectRatio.mock.invocationCallOrder[1] ?? 0,
+        );
         expect(pictureInPictureSend).toHaveBeenCalledWith(
           "desktop:preview-pip-frame",
           expect.objectContaining({
@@ -1119,7 +1125,7 @@ describe("PreviewManager", () => {
 
         yield* TestClock.adjust(100);
 
-        expect(pictureInPictureWindow.setAspectRatio).toHaveBeenCalledWith(1280 / 720);
+        expect(pictureInPictureWindow.setAspectRatio.mock.calls).toEqual([[0], [1280 / 720]]);
         expect(send).toHaveBeenCalledOnce();
         yield* manager.closePictureInPicture("tab_empty_frame");
       }),
