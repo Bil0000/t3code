@@ -40,6 +40,33 @@ describe("browserSurfaceStore", () => {
     fittedLease.release();
   });
 
+  it("freezes the first content dimensions when fitting starts before the browser is measured", () => {
+    const tabId = "pending-fitted-browser-surface";
+    const fittedLease = acquireBrowserSurface(tabId, true);
+    const sourceContent = {
+      x: 0,
+      y: 0,
+      width: 1_280,
+      height: 720,
+      scale: 1,
+      scrollLeft: 0,
+      scrollTop: 0,
+    };
+
+    useBrowserSurfaceStore.getState().presentContent(tabId, sourceContent);
+    useBrowserSurfaceStore.getState().presentContent(tabId, {
+      ...sourceContent,
+      width: 320,
+      height: 180,
+      scale: 0.25,
+    });
+
+    expect(useBrowserSurfaceStore.getState().byTabId[tabId]?.fittedSourceContent).toEqual(
+      sourceContent,
+    );
+    fittedLease.release();
+  });
+
   it("tracks content dimensions for a browser that has never been visible", () => {
     const tabId = "hidden-browser-surface-content-test";
     useBrowserSurfaceStore.getState().presentContent(tabId, {
@@ -70,6 +97,7 @@ describe("browserSurfaceStore", () => {
             visible: false,
             content: null,
             fittedSourceContent: null,
+            fitSourceContent: false,
             cornerRadius: 0,
             updatedAt: 1,
             owner: null,
@@ -79,6 +107,7 @@ describe("browserSurfaceStore", () => {
             visible: true,
             content: null,
             fittedSourceContent: null,
+            fitSourceContent: false,
             cornerRadius: 0,
             updatedAt: 2,
             owner: null,

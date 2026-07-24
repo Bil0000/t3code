@@ -12,6 +12,7 @@ export interface BrowserSurfacePresentation {
   readonly visible: boolean;
   readonly content: BrowserSurfaceContentPresentation | null;
   readonly fittedSourceContent: BrowserSurfaceContentPresentation | null;
+  readonly fitSourceContent: boolean;
   readonly cornerRadius: number;
   readonly updatedAt: number;
   readonly owner: symbol | null;
@@ -87,6 +88,7 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
             visible: false,
             content: current?.content ?? null,
             fittedSourceContent: fitSourceContent ? (current?.content ?? null) : null,
+            fitSourceContent,
             cornerRadius: current?.cornerRadius ?? 0,
             updatedAt: Date.now(),
             owner,
@@ -125,6 +127,7 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
               visible: false,
               content,
               fittedSourceContent: null,
+              fitSourceContent: false,
               cornerRadius: 0,
               updatedAt: Date.now(),
               owner: null,
@@ -148,7 +151,15 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
       return {
         byTabId: {
           ...state.byTabId,
-          [tabId]: { ...current, content, updatedAt: Date.now() },
+          [tabId]: {
+            ...current,
+            content,
+            fittedSourceContent:
+              current.fitSourceContent && current.fittedSourceContent === null
+                ? content
+                : current.fittedSourceContent,
+            updatedAt: Date.now(),
+          },
         },
       };
     }),

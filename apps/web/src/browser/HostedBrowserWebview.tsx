@@ -57,6 +57,7 @@ export function HostedBrowserWebview(props: {
       const current = state.byTabId[tabId];
       return {
         cornerRadius: current?.cornerRadius ?? 0,
+        fitSourceContent: current?.fitSourceContent ?? false,
         fittedSourceContent: current?.fittedSourceContent ?? null,
         rect: resolveBrowserSurfacePanelRect(state.byTabId, tabId),
         visible: current?.visible ?? false,
@@ -177,26 +178,32 @@ export function HostedBrowserWebview(props: {
     aspectRatio: lockedAspectRatio,
   });
   const fittedSourceViewport =
-    presentation.fittedSourceContent && lastRect
-      ? {
-          _tag: "freeform" as const,
-          width: Math.max(
-            1,
-            Math.round(
-              presentation.fittedSourceContent.width /
-                presentation.fittedSourceContent.scale /
-                normalizedZoomFactor,
+    presentation.fitSourceContent && lastRect
+      ? presentation.fittedSourceContent
+        ? {
+            _tag: "freeform" as const,
+            width: Math.max(
+              1,
+              Math.round(
+                presentation.fittedSourceContent.width /
+                  presentation.fittedSourceContent.scale /
+                  normalizedZoomFactor,
+              ),
             ),
-          ),
-          height: Math.max(
-            1,
-            Math.round(
-              presentation.fittedSourceContent.height /
-                presentation.fittedSourceContent.scale /
-                normalizedZoomFactor,
+            height: Math.max(
+              1,
+              Math.round(
+                presentation.fittedSourceContent.height /
+                  presentation.fittedSourceContent.scale /
+                  normalizedZoomFactor,
+              ),
             ),
-          ),
-        }
+          }
+        : {
+            _tag: "freeform" as const,
+            width: viewport._tag === "fill" ? 1280 : viewport.width,
+            height: viewport._tag === "fill" ? 800 : viewport.height,
+          }
       : null;
   const layout =
     fittedSourceViewport && lastRect

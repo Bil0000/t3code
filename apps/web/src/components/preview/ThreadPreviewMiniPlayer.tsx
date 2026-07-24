@@ -227,50 +227,58 @@ export function ThreadPreviewMiniPlayer({ threadRef, tabId, bottomInset }: Props
             }
       }
     >
-      <div
-        className="pointer-events-auto absolute right-2 top-2 z-[34] flex h-8 cursor-grab items-center gap-0.5 rounded-lg border border-border/80 bg-popover/92 p-0.5 opacity-0 shadow-lg/20 backdrop-blur-xl transition-opacity hover:opacity-100 focus-within:opacity-100 active:cursor-grabbing"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={endDrag}
-        onPointerCancel={endDrag}
-      >
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Open preview in right panel"
-          title="Open in right panel"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={openInPanel}
+      <div className="group pointer-events-auto absolute right-2 top-2 z-[34] size-3">
+        <div
+          aria-hidden="true"
+          className="absolute right-0 top-0 size-2 rounded-full bg-foreground/25 shadow-sm ring-1 ring-background/70 transition-opacity group-hover:opacity-0 group-focus-within:opacity-0"
+        />
+        <div
+          className="pointer-events-none absolute right-0 top-0 flex h-8 cursor-grab items-center gap-0.5 rounded-lg border border-border/80 bg-popover/92 p-0.5 opacity-0 shadow-lg/20 backdrop-blur-xl transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 active:cursor-grabbing"
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
         >
-          <PanelRightIcon />
-        </Button>
-        <Button
-          variant={desktopOverlay?.pictureInPicture ? "secondary" : "ghost"}
-          size="icon-xs"
-          aria-label={
-            desktopOverlay?.pictureInPicture
-              ? "Close popped-out preview"
-              : "Pop preview into separate window"
-          }
-          title={
-            desktopOverlay?.pictureInPicture ? "Close separate window" : "Pop into separate window"
-          }
-          disabled={!desktopOverlay?.hasWebContents}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={toggleNativePictureInPicture}
-        >
-          <PictureInPicture2 />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label="Close floating preview"
-          title="Close floating preview"
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={close}
-        >
-          <XIcon />
-        </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Open preview in right panel"
+            title="Open in right panel"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={openInPanel}
+          >
+            <PanelRightIcon />
+          </Button>
+          <Button
+            variant={desktopOverlay?.pictureInPicture ? "secondary" : "ghost"}
+            size="icon-xs"
+            aria-label={
+              desktopOverlay?.pictureInPicture
+                ? "Close popped-out preview"
+                : "Pop preview into separate window"
+            }
+            title={
+              desktopOverlay?.pictureInPicture
+                ? "Close separate window"
+                : "Pop into separate window"
+            }
+            disabled={!desktopOverlay?.hasWebContents}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={toggleNativePictureInPicture}
+          >
+            <PictureInPicture2 />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label="Close floating preview"
+            title="Close floating preview"
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={close}
+          >
+            <XIcon />
+          </Button>
+        </div>
       </div>
 
       <div className="relative h-full min-h-0">

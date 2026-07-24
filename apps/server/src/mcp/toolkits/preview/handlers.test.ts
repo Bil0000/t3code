@@ -7,6 +7,7 @@ describe("normalizePreviewOpenInput", () => {
     expect(normalizePreviewOpenInput({})).toEqual({
       open: true,
       reuseExistingTab: true,
+      show: true,
     });
   });
 
@@ -14,6 +15,7 @@ describe("normalizePreviewOpenInput", () => {
     expect(normalizePreviewOpenInput({ open: false })).toEqual({
       open: false,
       reuseExistingTab: true,
+      show: false,
     });
   });
 
@@ -26,7 +28,7 @@ describe("normalizePreviewOpenInput", () => {
     expect(normalizePreviewOpenInput({ open: true, show: false })).toEqual({
       open: true,
       reuseExistingTab: true,
-      show: false,
+      show: true,
     });
   });
 });
