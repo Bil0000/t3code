@@ -149,4 +149,27 @@ describe("browserSurfaceStore", () => {
       owner: null,
     });
   });
+
+  it("clears fitted presentation state when its lease is released", () => {
+    const tabId = "released-fitted-browser-surface";
+    const fittedLease = acquireBrowserSurface(tabId, true);
+    useBrowserSurfaceStore.getState().presentContent(tabId, {
+      x: 0,
+      y: 0,
+      width: 1_280,
+      height: 800,
+      scale: 1,
+      scrollLeft: 0,
+      scrollTop: 0,
+    });
+
+    fittedLease.release();
+
+    expect(useBrowserSurfaceStore.getState().byTabId[tabId]).toMatchObject({
+      fittedSourceContent: null,
+      fitSourceContent: false,
+      owner: null,
+      visible: false,
+    });
+  });
 });

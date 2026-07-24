@@ -160,8 +160,7 @@ export function HostedBrowserWebview(props: {
         }
       : { width: lastRect?.width ?? 1280, height: lastRect?.height ?? 800 };
   const containerSize = active && lastRect ? lastRect : hiddenSize;
-  const deviceToolbarVisible =
-    active && viewport._tag !== "fill" && presentation.fittedSourceContent === null;
+  const deviceToolbarVisible = active && viewport._tag !== "fill" && !presentation.fitSourceContent;
   const {
     activeDrag,
     commitViewportChange,

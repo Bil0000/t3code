@@ -170,7 +170,14 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
       return {
         byTabId: {
           ...state.byTabId,
-          [tabId]: { ...current, visible: false, updatedAt: Date.now(), owner: null },
+          [tabId]: {
+            ...current,
+            visible: false,
+            fittedSourceContent: null,
+            fitSourceContent: false,
+            updatedAt: Date.now(),
+            owner: null,
+          },
         },
       };
     }),
