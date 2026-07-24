@@ -98,7 +98,7 @@ describe("browserSurfaceStore", () => {
 
     const liveLease = acquireBrowserSurface(tabId);
     liveLease.present(liveRect, true);
-    staleLease.present(staleRect, true);
+    expect(staleLease.present(staleRect, true)).toBe(false);
     staleLease.release();
 
     expect(useBrowserSurfaceStore.getState().byTabId[tabId]).toMatchObject({

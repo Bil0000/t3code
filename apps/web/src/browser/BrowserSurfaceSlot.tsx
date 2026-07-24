@@ -27,11 +27,11 @@ export function BrowserSurfaceSlot(props: {
   useLayoutEffect(() => {
     const element = elementRef.current;
     if (!element) return;
-    const lease = acquireBrowserSurface(tabId, fitSourceContent);
+    let lease = acquireBrowserSurface(tabId, fitSourceContent);
     const update = () => {
       const rect = element.getBoundingClientRect();
       const presentation = presentationRef.current;
-      lease.present(
+      const presented = lease.present(
         {
           x: Math.round(rect.x),
           y: Math.round(rect.y),
@@ -41,6 +41,20 @@ export function BrowserSurfaceSlot(props: {
         presentation.visible && rect.width > 0 && rect.height > 0,
         presentation.cornerRadius,
       );
+      if (presentation.visible && !presented) {
+        lease.release();
+        lease = acquireBrowserSurface(tabId, fitSourceContent);
+        lease.present(
+          {
+            x: Math.round(rect.x),
+            y: Math.round(rect.y),
+            width: Math.max(1, Math.round(rect.width)),
+            height: Math.max(1, Math.round(rect.height)),
+          },
+          rect.width > 0 && rect.height > 0,
+          presentation.cornerRadius,
+        );
+      }
     };
     updateRef.current = update;
     update();
@@ -55,7 +69,7 @@ export function BrowserSurfaceSlot(props: {
       if (updateRef.current === update) updateRef.current = null;
       lease.release();
     };
-  }, [fitSourceContent, tabId, visible]);
+  }, [fitSourceContent, tabId]);
 
   useLayoutEffect(() => {
     presentationRef.current = { visible, cornerRadius };

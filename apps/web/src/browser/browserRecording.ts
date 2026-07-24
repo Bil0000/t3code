@@ -468,33 +468,16 @@ const finalizeBrowserRecording = async (
       }
     | { readonly _tag: "Failure"; readonly error: unknown };
   try {
-    let stopScreencastError: BrowserRecordingOperationError | undefined;
+    await waitForRecordingStartupToSettle(recording);
     try {
       await bridge.recording.stopScreencast(tabId);
     } catch (cause) {
-      stopScreencastError = new BrowserRecordingOperationError({
+      throw new BrowserRecordingOperationError({
         operation: "stop-screencast",
         tabId,
         cause,
       });
     }
-    try {
-      await waitForRecordingStartupToSettle(recording);
-    } catch (startupError) {
-      if (stopScreencastError) {
-        throw new BrowserRecordingOperationError({
-          operation: "wait-startup",
-          tabId,
-          cause: new AggregateError(
-            [startupError, stopScreencastError],
-            `Browser recording stop failed while startup remained pending for tab ${tabId}.`,
-            { cause: startupError },
-          ),
-        });
-      }
-      throw startupError;
-    }
-    if (stopScreencastError) throw stopScreencastError;
     if (!recording.recorder || !recording.mimeType) {
       result = { _tag: "Success", artifact: null };
     } else {

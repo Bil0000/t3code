@@ -42,7 +42,7 @@ interface BrowserSurfaceStoreState {
 }
 
 export interface BrowserSurfaceLease {
-  readonly present: (rect: BrowserSurfaceRect, visible: boolean, cornerRadius?: number) => void;
+  readonly present: (rect: BrowserSurfaceRect, visible: boolean, cornerRadius?: number) => boolean;
   readonly release: () => void;
 }
 
@@ -175,8 +175,10 @@ export function acquireBrowserSurface(
 
   return {
     present: (rect, visible, cornerRadius = 0) => {
-      if (released) return;
+      if (released) return false;
+      if (useBrowserSurfaceStore.getState().byTabId[tabId]?.owner !== owner) return false;
       useBrowserSurfaceStore.getState().present(tabId, owner, rect, visible, cornerRadius);
+      return true;
     },
     release: () => {
       if (released) return;

@@ -448,7 +448,7 @@ describe("browser recording", () => {
     await vi.waitFor(() => expect(startScreencast).toHaveBeenCalledOnce());
 
     const stopPromise = stopBrowserRecording("recording-tab");
-    await vi.waitFor(() => expect(stopScreencast).toHaveBeenCalledOnce());
+    expect(stopScreencast).not.toHaveBeenCalled();
     finishStartingScreencast?.();
 
     await startPromise;
@@ -504,7 +504,7 @@ describe("browser recording", () => {
       operation: "stop-screencast",
       tabId: "recording-tab",
     });
-    await vi.waitFor(() => expect(stopScreencast).toHaveBeenCalledOnce());
+    expect(stopScreencast).not.toHaveBeenCalled();
     await expect(startBrowserRecording("recording-tab")).rejects.toBeInstanceOf(
       BrowserRecordingConflictError,
     );
@@ -512,6 +512,7 @@ describe("browser recording", () => {
     finishStartingScreencast?.();
     await firstStart;
     await rejectedStop;
+    expect(stopScreencast).toHaveBeenCalledOnce();
 
     await startBrowserRecording("recording-tab");
     await stopBrowserRecording("recording-tab");
@@ -534,7 +535,7 @@ describe("browser recording", () => {
     const stopPromise = stopBrowserRecording("recording-tab");
     await Promise.resolve();
     await Promise.resolve();
-    expect(stopScreencast).toHaveBeenCalledOnce();
+    expect(stopScreencast).not.toHaveBeenCalled();
 
     const rejection = expect(stopPromise).rejects.toMatchObject({
       operation: "wait-startup",
@@ -552,6 +553,7 @@ describe("browser recording", () => {
     await startPromise;
     const cleanupResult = await stopBrowserRecording("recording-tab");
     expect(cleanupResult).toBeNull();
+    expect(stopScreencast).toHaveBeenCalledOnce();
     expect(save).not.toHaveBeenCalled();
     expect(events.at(-1)).toBe("clear");
   });
