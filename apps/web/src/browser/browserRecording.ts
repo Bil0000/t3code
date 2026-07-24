@@ -362,7 +362,9 @@ export async function startBrowserRecording(
       });
     }
     const throwIfStartupCancelled = async (): Promise<void> => {
-      if (isRecordingStarting(recording)) return;
+      // A stop requested during startup should let startup finish so the
+      // caller receives a real artifact. Only replacement/removal cancels it.
+      if (activeRecordings.get(tabId) === recording) return;
       try {
         await bridge.recording.stopScreencast(tabId);
       } catch (cause) {
@@ -442,7 +444,9 @@ export async function startBrowserRecording(
               ),
       });
     }
-    recording.lifecycle = { phase: "recording" };
+    if (recording.lifecycle.phase === "starting") {
+      recording.lifecycle = { phase: "recording" };
+    }
     appAtomRegistry.set(activeBrowserRecordingTabIdsAtom, {
       tabIds: new Set(activeRecordings.keys()),
     });
@@ -583,7 +587,6 @@ export function stopBrowserRecording(
   if (!bridge || !recording) return Promise.resolve(null);
   if (recording.lifecycle.phase === "stopping") return recording.lifecycle.stopPromise;
 
-  recording.settleFirstFrameSize("cancelled");
   const stopPromise = Promise.resolve()
     .then(() => finalizeBrowserRecording(bridge, recording))
     .catch((error) => {

@@ -64,4 +64,10 @@ describe("clampPreviewMiniPlayerSize", () => {
       ),
     ).toEqual({ width: 976, height: 556 });
   });
+
+  it("lets a tiny container win over the preferred minimum", () => {
+    expect(
+      clampPreviewMiniPlayerSize({ width: 360, height: 239 }, { width: 250, height: 180 }, 20),
+    ).toEqual({ width: 226, height: 136 });
+  });
 });

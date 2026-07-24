@@ -9,24 +9,17 @@ export function clampPreviewMiniPlayerSize(
   container: PreviewMiniPlayerSize,
   bottomInset = 0,
 ): PreviewMiniPlayerSize {
+  const availableWidth = Math.max(1, container.width - PREVIEW_MINI_PLAYER_EDGE_GAP * 2);
+  const availableHeight = Math.max(
+    1,
+    container.height - Math.max(0, bottomInset) - PREVIEW_MINI_PLAYER_EDGE_GAP * 2,
+  );
   return {
     width: Math.round(
-      Math.min(
-        Math.max(PREVIEW_MINI_PLAYER_MIN_SIZE.width, size.width),
-        Math.max(
-          PREVIEW_MINI_PLAYER_MIN_SIZE.width,
-          container.width - PREVIEW_MINI_PLAYER_EDGE_GAP * 2,
-        ),
-      ),
+      Math.min(Math.max(PREVIEW_MINI_PLAYER_MIN_SIZE.width, size.width), availableWidth),
     ),
     height: Math.round(
-      Math.min(
-        Math.max(PREVIEW_MINI_PLAYER_MIN_SIZE.height, size.height),
-        Math.max(
-          PREVIEW_MINI_PLAYER_MIN_SIZE.height,
-          container.height - Math.max(0, bottomInset) - PREVIEW_MINI_PLAYER_EDGE_GAP * 2,
-        ),
-      ),
+      Math.min(Math.max(PREVIEW_MINI_PLAYER_MIN_SIZE.height, size.height), availableHeight),
     ),
   };
 }

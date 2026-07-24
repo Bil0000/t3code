@@ -55,7 +55,7 @@ export function BrowserSurfaceSlot(props: {
       if (updateRef.current === update) updateRef.current = null;
       lease.release();
     };
-  }, [fitSourceContent, tabId]);
+  }, [fitSourceContent, tabId, visible]);
 
   useLayoutEffect(() => {
     presentationRef.current = { visible, cornerRadius };

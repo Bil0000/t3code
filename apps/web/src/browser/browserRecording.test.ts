@@ -89,7 +89,6 @@ import {
   BROWSER_RECORDING_FIRST_FRAME_SIZE_TIMEOUT_MS,
   BROWSER_RECORDING_STARTUP_SETTLE_TIMEOUT_MS,
   BrowserRecordingConflictError,
-  BrowserRecordingOperationError,
   readActiveBrowserRecordingTabIds,
   startBrowserRecording,
   stopBrowserRecording,
@@ -121,6 +120,16 @@ class FakeMediaRecorder {
     }
   }
 }
+
+const emitRecordingFrame = () => {
+  frameSubscription.listener?.({
+    tabId: "recording-tab",
+    data: "startup-frame",
+    width: 800,
+    height: 600,
+    receivedAt: "2026-06-26T00:00:00.000Z",
+  });
+};
 
 describe("browser recording", () => {
   beforeEach(() => {
@@ -425,28 +434,27 @@ describe("browser recording", () => {
     expect(save).toHaveBeenCalledOnce();
   });
 
-  it("stops a screencast that finishes starting after cancellation", async () => {
+  it("finishes startup before stopping so an active recording yields an artifact", async () => {
     let finishStartingScreencast: (() => void) | undefined;
     startScreencast.mockImplementationOnce(async () => {
       events.push("start-screencast");
       await new Promise<void>((resolve) => {
         finishStartingScreencast = resolve;
       });
+      emitRecordingFrame();
     });
 
     const startPromise = startBrowserRecording("recording-tab");
-    const rejectedStart = expect(startPromise).rejects.toBeInstanceOf(
-      BrowserRecordingOperationError,
-    );
     await vi.waitFor(() => expect(startScreencast).toHaveBeenCalledOnce());
 
     const stopPromise = stopBrowserRecording("recording-tab");
     await vi.waitFor(() => expect(stopScreencast).toHaveBeenCalledOnce());
     finishStartingScreencast?.();
 
-    await rejectedStart;
-    await stopPromise;
-    expect(stopScreencast).toHaveBeenCalledTimes(2);
+    await startPromise;
+    await expect(stopPromise).resolves.toMatchObject({ tabId: "recording-tab" });
+    expect(stopScreencast).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledOnce();
     expect(events.at(-1)).toBe("clear");
   });
 
@@ -457,12 +465,10 @@ describe("browser recording", () => {
       await new Promise<void>((resolve) => {
         finishStartingScreencast = resolve;
       });
+      emitRecordingFrame();
     });
 
     const firstStart = startBrowserRecording("recording-tab");
-    const rejectedFirstStart = expect(firstStart).rejects.toBeInstanceOf(
-      BrowserRecordingOperationError,
-    );
     await vi.waitFor(() => expect(startScreencast).toHaveBeenCalledOnce());
 
     const stopPromise = stopBrowserRecording("recording-tab");
@@ -471,7 +477,7 @@ describe("browser recording", () => {
     const startCallsBeforeFirstSettled = startScreencast.mock.calls.length;
 
     finishStartingScreencast?.();
-    await rejectedFirstStart;
+    await firstStart;
     await stopPromise;
     await restartAfterStop;
     await stopBrowserRecording("recording-tab");
@@ -486,11 +492,11 @@ describe("browser recording", () => {
       await new Promise<void>((resolve) => {
         finishStartingScreencast = resolve;
       });
+      emitRecordingFrame();
     });
     stopScreencast.mockRejectedValueOnce(new Error("initial stop failed"));
 
     const firstStart = startBrowserRecording("recording-tab");
-    const rejectedStart = expect(firstStart).rejects.toBeInstanceOf(BrowserRecordingOperationError);
     await vi.waitFor(() => expect(startScreencast).toHaveBeenCalledOnce());
 
     const stopPromise = stopBrowserRecording("recording-tab");
@@ -504,7 +510,7 @@ describe("browser recording", () => {
     );
 
     finishStartingScreencast?.();
-    await rejectedStart;
+    await firstStart;
     await rejectedStop;
 
     await startBrowserRecording("recording-tab");
@@ -519,12 +525,10 @@ describe("browser recording", () => {
       await new Promise<void>((resolve) => {
         finishStartingScreencast = resolve;
       });
+      emitRecordingFrame();
     });
 
     const startPromise = startBrowserRecording("recording-tab");
-    const rejectedStart = expect(startPromise).rejects.toBeInstanceOf(
-      BrowserRecordingOperationError,
-    );
     expect(startScreencast).toHaveBeenCalledOnce();
 
     const stopPromise = stopBrowserRecording("recording-tab");
@@ -545,7 +549,7 @@ describe("browser recording", () => {
     );
 
     finishStartingScreencast?.();
-    await rejectedStart;
+    await startPromise;
     const cleanupResult = await stopBrowserRecording("recording-tab");
     expect(cleanupResult).toBeNull();
     expect(save).not.toHaveBeenCalled();

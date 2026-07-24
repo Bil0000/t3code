@@ -1505,13 +1505,21 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         { concurrency: 3, discard: true },
       );
     }
+    const currentTab = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
+    if (
+      !currentTab ||
+      tabLifecycleGenerations.get(tabId) !== expectedGeneration ||
+      (yield* Ref.get(closingTabIdsRef)).has(tabId)
+    ) {
+      return yield* new PreviewTabNotFoundError({ tabId });
+    }
     const zoomFactor =
       replacedWebContentsId !== null
         ? yield* attempt(
             { operation: "registerWebview.restoreZoomFactor", tabId, webContentsId },
             () => {
-              wc.setZoomFactor(tab.zoomFactor);
-              return tab.zoomFactor;
+              wc.setZoomFactor(currentTab.zoomFactor);
+              return currentTab.zoomFactor;
             },
           )
         : yield* attempt({ operation: "registerWebview.getZoomFactor", tabId, webContentsId }, () =>

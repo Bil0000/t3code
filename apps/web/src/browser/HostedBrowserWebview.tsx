@@ -76,6 +76,12 @@ export function HostedBrowserWebview(props: {
   }, [tabId]);
 
   const [webviewGeneration, setWebviewGeneration] = useState(0);
+  const [recoverySrc, setRecoverySrc] = useState(initialSrc);
+  const latestUrlRef = useRef(initialUrl);
+
+  useEffect(() => {
+    latestUrlRef.current = initialUrl;
+  }, [initialUrl]);
 
   const setWebviewRef = useCallback((node: HTMLElement | null) => {
     webviewRef.current = node as ElectronWebview | null;
@@ -114,7 +120,10 @@ export function HostedBrowserWebview(props: {
       crashRecoveryRef.current = recovery.state;
       recoveryTimeout = setTimeout(() => {
         recoveryTimeout = null;
-        if (!disposed) setWebviewGeneration((generation) => generation + 1);
+        if (!disposed) {
+          setRecoverySrc(latestUrlRef.current ?? initialSrc);
+          setWebviewGeneration((generation) => generation + 1);
+        }
       }, recovery.delayMs);
     };
     webview.addEventListener("did-attach", register);
@@ -128,7 +137,7 @@ export function HostedBrowserWebview(props: {
       webview.removeEventListener("dom-ready", register);
       webview.removeEventListener("render-process-gone", recoverGuest);
     };
-  }, [config, tabId, webviewGeneration]);
+  }, [config, initialSrc, tabId, webviewGeneration]);
 
   const active = presentation.visible && presentation.rect !== null;
   const lastRect = presentation.rect;
@@ -249,7 +258,7 @@ export function HostedBrowserWebview(props: {
         <webview
           key={webviewGeneration}
           ref={setWebviewRef}
-          src={webviewGeneration === 0 ? initialSrc : (initialUrl ?? initialSrc)}
+          src={webviewGeneration === 0 ? initialSrc : recoverySrc}
           partition={config.partition}
           webpreferences={config.webPreferences}
           {...(config.preloadUrl ? { preload: config.preloadUrl } : {})}
