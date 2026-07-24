@@ -29,6 +29,16 @@ const decodeAutomationHost = Schema.decodeUnknownSync(PreviewAutomationHost);
 const decodeAutomationError = Schema.decodeUnknownSync(PreviewAutomationError);
 const decodeAutomationStatus = Schema.decodeUnknownSync(PreviewAutomationStatus);
 
+describe("PreviewAutomationOpenInput", () => {
+  it("accepts the inline preview visibility flag", () => {
+    expect(decodeOpenInput({ open: false })).toEqual({ open: false });
+  });
+
+  it("retains the legacy show visibility alias", () => {
+    expect(decodeOpenInput({ show: false })).toEqual({ show: false });
+  });
+});
+
 describe("PreviewNavStatus", () => {
   it("decodes Idle", () => {
     expect(decodeNavStatus({ _tag: "Idle" })).toEqual({ _tag: "Idle" });
