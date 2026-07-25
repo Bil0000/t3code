@@ -1,6 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, expect, it } from "@effect/vitest";
-import * as ConfigProvider from "effect/ConfigProvider";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
@@ -17,9 +16,10 @@ import { RelayClientTracer } from "@t3tools/shared/relayTracing";
 import * as EnvironmentAuth from "../auth/EnvironmentAuth.ts";
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
 import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import { CLOUD_CLI_DESIRED_LINK_SECRET } from "./CliState.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
 import type { RelayLinkProofRequest } from "@t3tools/contracts/relay";
-import { CLOUD_ENDPOINT_RUNTIME_CONFIG } from "./config.ts";
+import { CLOUD_ENDPOINT_RUNTIME_CONFIG, RELAY_URL_SECRET } from "./config.ts";
 import {
   consumeCloudReplayGuards,
   isSupportedLinkProviderKind,
@@ -223,10 +223,6 @@ describe("reconcileDesiredCloudLink", () => {
 });
 
 describe("releaseManagedTunnelOnShutdown", () => {
-  const relayConfigLayer = ConfigProvider.layer(
-    ConfigProvider.fromEnv({ env: { T3CODE_RELAY_URL: "https://relay.example.test" } }),
-  );
-
   const cliToken: CliTokenManager.PersistedToken = {
     accessToken: "cli-access-token",
     refreshToken: "cli-refresh-token",
@@ -310,13 +306,17 @@ describe("releaseManagedTunnelOnShutdown", () => {
             }),
           ),
         ),
-        Effect.provide(relayConfigLayer),
       );
 
+  // The persisted state of a CLI-managed link whose tunnel is releasable.
+  const managedLinkSecrets = [
+    [CLOUD_ENDPOINT_RUNTIME_CONFIG, "runtime-config"],
+    [RELAY_URL_SECRET, "https://relay.example.test"],
+    [CLOUD_CLI_DESIRED_LINK_SECRET, "managed"],
+  ] as const;
+
   it.effect("stops the connector, releases the relay tunnel, and drops the dead token", () => {
-    const { store, values } = makeMemorySecretStore([
-      [CLOUD_ENDPOINT_RUNTIME_CONFIG, "runtime-config"],
-    ]);
+    const { store, values } = makeMemorySecretStore(managedLinkSecrets);
     const applyConfigCalls: Array<unknown> = [];
     const requests: Array<HttpClientRequest.HttpClientRequest> = [];
 
@@ -350,10 +350,48 @@ describe("releaseManagedTunnelOnShutdown", () => {
     }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
   });
 
-  it.effect("keeps the stored connector token when the relay release request fails", () => {
+  it.effect("leaves the tunnel of a web/mobile-installed link untouched", () => {
+    // A managed runtime config without a CLI-desired link: the environment was
+    // linked by a web/mobile client, and nothing re-provisions the tunnel on
+    // the next boot, so shutdown must not release it.
     const { store, values } = makeMemorySecretStore([
       [CLOUD_ENDPOINT_RUNTIME_CONFIG, "runtime-config"],
+      [RELAY_URL_SECRET, "https://relay.example.test"],
     ]);
+    const applyConfigCalls: Array<unknown> = [];
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+
+    return Effect.gen(function* () {
+      const released = yield* releaseManagedTunnelOnShutdown();
+
+      expect(released).toBe(false);
+      expect(applyConfigCalls).toEqual([]);
+      expect(requests).toEqual([]);
+      expect(values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(true);
+    }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
+  });
+
+  it.effect("leaves the tunnel of a publish-only desired link untouched", () => {
+    const { store, values } = makeMemorySecretStore([
+      [CLOUD_ENDPOINT_RUNTIME_CONFIG, "runtime-config"],
+      [RELAY_URL_SECRET, "https://relay.example.test"],
+      [CLOUD_CLI_DESIRED_LINK_SECRET, "publish_only"],
+    ]);
+    const applyConfigCalls: Array<unknown> = [];
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+
+    return Effect.gen(function* () {
+      const released = yield* releaseManagedTunnelOnShutdown();
+
+      expect(released).toBe(false);
+      expect(applyConfigCalls).toEqual([]);
+      expect(requests).toEqual([]);
+      expect(values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(true);
+    }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
+  });
+
+  it.effect("keeps the stored connector token when the relay release request fails", () => {
+    const { store, values } = makeMemorySecretStore(managedLinkSecrets);
     const applyConfigCalls: Array<unknown> = [];
     const requests: Array<HttpClientRequest.HttpClientRequest> = [];
 

@@ -74,6 +74,7 @@ export class ManagedEndpointProvisioningFailed extends Schema.TaggedErrorClass<M
 
 const ManagedEndpointDeprovisioningStage = Schema.Literals([
   "load-allocation",
+  "claim-release",
   "delete-dns-record",
   "delete-tunnel",
   "remove-allocation",
@@ -490,7 +491,35 @@ export const make = Effect.gen(function* () {
         ),
       );
       const tunnelId = allocation?.tunnelId ?? null;
-      if (tunnelId === null) {
+      if (allocation === null || tunnelId === null) {
+        return;
+      }
+      // Claim the release against the allocation's current generation before
+      // touching Cloudflare. A provision racing this release (fast environment
+      // restart) rewrites updatedAt when it records its tunnel, so a stale
+      // claim means the recorded tunnel may already back a fresh connector and
+      // must be left alive. A provision that starts after the claim instead
+      // fails loudly on the deleted tunnel and the client-side retry
+      // provisions a replacement.
+      const claimed = yield* allocations
+        .claimRelease({
+          userId: input.userId,
+          environmentId: input.environmentId,
+          tunnelId,
+          updatedAt: allocation.updatedAt,
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new ManagedEndpointDeprovisioningFailed({
+                ...input,
+                stage: "claim-release",
+                tunnelId,
+                cause,
+              }),
+          ),
+        );
+      if (!claimed) {
         return;
       }
       yield* ignoreNotFound(tunnels.delete(tunnelId)).pipe(

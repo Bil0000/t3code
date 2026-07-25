@@ -69,7 +69,11 @@ import {
   RELAY_URL_SECRET,
 } from "./config.ts";
 import { relayUrlConfig } from "./publicConfig.ts";
-import { readCliDesiredLinkMode, setCliDesiredCloudLink } from "./CliState.ts";
+import {
+  readCliDesiredCloudLink,
+  readCliDesiredLinkMode,
+  setCliDesiredCloudLink,
+} from "./CliState.ts";
 import * as CliTokenManager from "./CliTokenManager.ts";
 import { getOrCreateEnvironmentKeyPairFromSecretStore } from "./environmentKeys.ts";
 import { traceRelayRequest } from "./traceRelayRequest.ts";
@@ -637,16 +641,29 @@ export const releaseManagedTunnelOnShutdown = Effect.fn(
   if (Option.isNone(runtimeConfig)) {
     return false;
   }
-  // Stop the local connector before the relay deletes the tunnel it serves.
-  yield* dependencies.endpointRuntime.applyConfig(null);
+  // Only CLI-desired managed links release on shutdown, because the startup
+  // reconcile that provisions the replacement tunnel only runs for them. A
+  // link installed by a web/mobile client comes back after a restart by
+  // reapplying the stored connector token — it has no boot-time re-provision
+  // path — so its tunnel must survive the restart. (Unlink still deletes it.)
+  if (!(yield* readCliDesiredCloudLink) || (yield* readCliDesiredLinkMode) !== "managed") {
+    return false;
+  }
   const token = yield* dependencies.cliTokenManager.getExisting;
   if (Option.isNone(token)) {
     return false;
   }
-  const relayUrl = yield* requireRelayUrl;
+  // The link belongs to the relay it was installed against, so target the
+  // persisted URL: T3CODE_RELAY_URL may have changed since the link was made.
+  const relayUrl = yield* dependencies.secrets.get(RELAY_URL_SECRET);
+  if (Option.isNone(relayUrl)) {
+    return false;
+  }
   const environmentId = yield* dependencies.environment.getEnvironmentId;
+  // Stop the local connector before the relay deletes the tunnel it serves.
+  yield* dependencies.endpointRuntime.applyConfig(null);
   yield* HttpClientRequest.delete(
-    `${relayUrl}/v1/client/environment-links/${encodeURIComponent(environmentId)}/tunnel`,
+    `${bytesToString(relayUrl.value)}/v1/client/environment-links/${encodeURIComponent(environmentId)}/tunnel`,
   ).pipe(
     HttpClientRequest.bearerToken(token.value.accessToken),
     dependencies.httpClient.execute,

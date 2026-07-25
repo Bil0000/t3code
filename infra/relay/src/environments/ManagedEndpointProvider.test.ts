@@ -40,7 +40,14 @@ interface DnsCall {
 }
 
 interface AllocationCall {
-  readonly operation: "get" | "reserve" | "recordTunnel" | "recordDns" | "markReady" | "remove";
+  readonly operation:
+    | "get"
+    | "reserve"
+    | "recordTunnel"
+    | "recordDns"
+    | "markReady"
+    | "claimRelease"
+    | "remove";
   readonly input: unknown;
 }
 
@@ -147,6 +154,18 @@ function makeDnsClient(
 
 function makeAllocations(calls: AllocationCall[] = []) {
   const allocations = new Map<string, ManagedEndpointAllocations.ManagedEndpointAllocation>();
+  let generation = 0;
+  const mutate = (
+    key: string,
+    change: (
+      allocation: ManagedEndpointAllocations.ManagedEndpointAllocation,
+    ) => ManagedEndpointAllocations.ManagedEndpointAllocation,
+  ) => {
+    const allocation = allocations.get(key);
+    if (allocation !== undefined) {
+      allocations.set(key, { ...change(allocation), updatedAt: `generation-${++generation}` });
+    }
+  };
   return ManagedEndpointAllocations.ManagedEndpointAllocations.of({
     get: (input) =>
       Effect.sync(() => {
@@ -161,6 +180,7 @@ function makeAllocations(calls: AllocationCall[] = []) {
           tunnelId: null,
           dnsRecordId: null,
           readyAt: null,
+          updatedAt: `generation-${++generation}`,
         };
         allocations.set(allocationKey(input), allocation);
         return allocation;
@@ -168,29 +188,40 @@ function makeAllocations(calls: AllocationCall[] = []) {
     recordTunnel: (input) =>
       Effect.sync(() => {
         calls.push({ operation: "recordTunnel", input });
-        const allocation = allocations.get(allocationKey(input));
-        if (allocation !== undefined) {
-          allocations.set(allocationKey(input), { ...allocation, tunnelId: input.tunnelId });
-        }
+        mutate(allocationKey(input), (allocation) => ({
+          ...allocation,
+          tunnelId: input.tunnelId,
+        }));
       }),
     recordDns: (input) =>
       Effect.sync(() => {
         calls.push({ operation: "recordDns", input });
-        const allocation = allocations.get(allocationKey(input));
-        if (allocation !== undefined) {
-          allocations.set(allocationKey(input), { ...allocation, dnsRecordId: input.dnsRecordId });
-        }
+        mutate(allocationKey(input), (allocation) => ({
+          ...allocation,
+          dnsRecordId: input.dnsRecordId,
+        }));
       }),
     markReady: (input) =>
       Effect.sync(() => {
         calls.push({ operation: "markReady", input });
+        mutate(allocationKey(input), (allocation) => ({
+          ...allocation,
+          readyAt: "2026-06-02T00:00:00.000Z",
+        }));
+      }),
+    claimRelease: (input) =>
+      Effect.sync(() => {
+        calls.push({ operation: "claimRelease", input });
         const allocation = allocations.get(allocationKey(input));
-        if (allocation !== undefined) {
-          allocations.set(allocationKey(input), {
-            ...allocation,
-            readyAt: "2026-06-02T00:00:00.000Z",
-          });
+        if (
+          allocation === undefined ||
+          allocation.tunnelId !== input.tunnelId ||
+          allocation.updatedAt !== input.updatedAt
+        ) {
+          return false;
         }
+        mutate(allocationKey(input), (current) => current);
+        return true;
       }),
     remove: (input) =>
       Effect.sync(() => {
@@ -687,6 +718,35 @@ describe("ManagedEndpointProvider", () => {
 
       expect(tunnelCalls).toEqual([]);
       expect(dnsCalls).toEqual([]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("keeps the tunnel alive when a concurrent provision outdates the release claim", () => {
+    const tunnelCalls: TunnelCall[] = [];
+    const allocations = makeAllocations();
+    // Simulates a provision racing the release: the allocation generation no
+    // longer matches what the release loaded, so the claim fails.
+    const outdated = ManagedEndpointAllocations.ManagedEndpointAllocations.of({
+      ...allocations,
+      claimRelease: () => Effect.succeed(false),
+    });
+    const layer = providerLayer(makePersistentTunnelClient(tunnelCalls), makeDnsClient(), outdated);
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
+      yield* provider.provision({
+        ...key,
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      });
+      yield* provider.release(key);
+
+      expect(tunnelCalls.map((call) => call.operation)).toEqual([
+        "list",
+        "create",
+        "putConfiguration",
+        "getToken",
+      ]);
     }).pipe(Effect.provide(layer));
   });
 
