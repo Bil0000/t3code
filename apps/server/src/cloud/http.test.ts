@@ -390,6 +390,30 @@ describe("releaseManagedTunnelOnShutdown", () => {
     }).pipe(provideReleaseHarness({ store, applyConfigCalls, requests }));
   });
 
+  it.effect("keeps the stored connector token when the relay skipped the release", () => {
+    // ok:false means a concurrent provision owns the recorded tunnel, so the
+    // stored runtime config (possibly freshly written by that provision) must
+    // survive.
+    const { store, values } = makeMemorySecretStore(managedLinkSecrets);
+    const applyConfigCalls: Array<unknown> = [];
+    const requests: Array<HttpClientRequest.HttpClientRequest> = [];
+
+    return Effect.gen(function* () {
+      const released = yield* releaseManagedTunnelOnShutdown();
+
+      expect(released).toBe(false);
+      expect(requests).toHaveLength(1);
+      expect(values.has(CLOUD_ENDPOINT_RUNTIME_CONFIG)).toBe(true);
+    }).pipe(
+      provideReleaseHarness({
+        store,
+        applyConfigCalls,
+        requests,
+        respond: () => Response.json({ ok: false }),
+      }),
+    );
+  });
+
   it.effect("keeps the stored connector token when the relay release request fails", () => {
     const { store, values } = makeMemorySecretStore(managedLinkSecrets);
     const applyConfigCalls: Array<unknown> = [];

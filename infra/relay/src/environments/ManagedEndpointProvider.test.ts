@@ -675,9 +675,10 @@ describe("ManagedEndpointProvider", () => {
       const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
       const origin = { localHttpHost: "127.0.0.1", localHttpPort: 3773 } as const;
       const first = yield* provider.provision({ ...key, origin });
-      yield* provider.release(key);
+      const released = yield* provider.release(key);
       const second = yield* provider.provision({ ...key, origin });
 
+      expect(released).toBe(true);
       expect(second.endpoint).toEqual(first.endpoint);
       expect(tunnelCalls.map((call) => call.operation)).toEqual([
         // first provision
@@ -714,8 +715,9 @@ describe("ManagedEndpointProvider", () => {
 
     return Effect.gen(function* () {
       const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
-      yield* provider.release({ userId: "user_ABC", environmentId: "env_ABC" });
+      const released = yield* provider.release({ userId: "user_ABC", environmentId: "env_ABC" });
 
+      expect(released).toBe(true);
       expect(tunnelCalls).toEqual([]);
       expect(dnsCalls).toEqual([]);
     }).pipe(Effect.provide(layer));
@@ -739,8 +741,11 @@ describe("ManagedEndpointProvider", () => {
         ...key,
         origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
       });
-      yield* provider.release(key);
+      const released = yield* provider.release(key);
 
+      // false tells the caller its connector token is still live, so it must
+      // keep its runtime config.
+      expect(released).toBe(false);
       expect(tunnelCalls.map((call) => call.operation)).toEqual([
         "list",
         "create",

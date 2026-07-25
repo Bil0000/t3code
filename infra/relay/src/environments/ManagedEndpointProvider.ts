@@ -138,11 +138,16 @@ export class ManagedEndpointProvider extends Context.Service<
      * provisioned tunnel, so environments release the tunnel when they shut
      * down; the next `provision` recreates it under the same name and repoints
      * the CNAME, preserving the endpoint URL.
+     *
+     * Resolves to whether the caller's connector token is now dead: true when
+     * the tunnel was deleted (or none was recorded to begin with), false when
+     * a concurrent provision outbid the release claim and the recorded tunnel
+     * — and any token issued for it — stays live.
      */
     readonly release: (input: {
       readonly userId: string;
       readonly environmentId: string;
-    }) => Effect.Effect<void, ManagedEndpointDeprovisioningFailed>;
+    }) => Effect.Effect<boolean, ManagedEndpointDeprovisioningFailed>;
   }
 >()("t3code-relay/environments/ManagedEndpointProvider") {}
 
@@ -492,7 +497,7 @@ export const make = Effect.gen(function* () {
       );
       const tunnelId = allocation?.tunnelId ?? null;
       if (allocation === null || tunnelId === null) {
-        return;
+        return true;
       }
       // Claim the release against the allocation's current generation before
       // touching Cloudflare. A provision racing this release (fast environment
@@ -520,7 +525,7 @@ export const make = Effect.gen(function* () {
           ),
         );
       if (!claimed) {
-        return;
+        return false;
       }
       yield* ignoreNotFound(tunnels.delete(tunnelId)).pipe(
         Effect.mapError(
@@ -539,6 +544,7 @@ export const make = Effect.gen(function* () {
       // "offline" (health probe fails) rather than "not authorized". The next
       // provision lists tunnels by name, finds none, creates a replacement and
       // re-records the fresh id.
+      return true;
     }),
     provision: Effect.fn("relay.managed_endpoint_provider.provision")(function* (input) {
       yield* Effect.annotateCurrentSpan({

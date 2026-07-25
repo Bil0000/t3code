@@ -616,13 +616,16 @@ export const clientApi = HttpApiBuilder.group(
         Effect.fn("relay.api.client.releaseEnvironmentTunnel")(function* (args) {
           const { params } = args;
           const { userId } = yield* RelayClientPrincipal;
-          yield* managedEndpointProvider
+          // ok mirrors whether the connector token is now dead: false means a
+          // concurrent provision kept the recorded tunnel alive, so the caller
+          // must not discard its runtime config.
+          const released = yield* managedEndpointProvider
             .release({
               userId,
               environmentId: params.environmentId,
             })
             .pipe(Effect.catch(() => relayInternalErrorResponse("upstream_unavailable")));
-          return { ok: true };
+          return { ok: released };
         }, mapRelayCommonApiErrors("not_authorized")),
       );
   }),

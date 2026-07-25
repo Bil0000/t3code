@@ -662,7 +662,7 @@ export const releaseManagedTunnelOnShutdown = Effect.fn(
   const environmentId = yield* dependencies.environment.getEnvironmentId;
   // Stop the local connector before the relay deletes the tunnel it serves.
   yield* dependencies.endpointRuntime.applyConfig(null);
-  yield* HttpClientRequest.delete(
+  const response = yield* HttpClientRequest.delete(
     `${bytesToString(relayUrl.value)}/v1/client/environment-links/${encodeURIComponent(environmentId)}/tunnel`,
   ).pipe(
     HttpClientRequest.bearerToken(token.value.accessToken),
@@ -671,6 +671,11 @@ export const releaseManagedTunnelOnShutdown = Effect.fn(
     Effect.flatMap(HttpClientResponse.schemaBodyJson(RelayOkResponse)),
     withRelayClientTracing,
   );
+  // ok:false means the relay skipped deletion because a concurrent provision
+  // owns the recorded tunnel now — leave the stored config alone.
+  if (!response.ok) {
+    return false;
+  }
   // The connector token died with the tunnel. Drop the stored config so the
   // next start waits for the link reconcile instead of respawning the relay
   // client with a dead token. Kept when the release request fails: the tunnel
