@@ -131,6 +131,17 @@ export class ManagedEndpointProvider extends Context.Service<
       readonly userId: string;
       readonly environmentId: string;
     }) => Effect.Effect<void, ManagedEndpointDeprovisioningFailed>;
+    /**
+     * Deletes the provisioned Cloudflare tunnel while keeping the allocation
+     * (hostname + tunnel name reservation) and DNS record. Cloudflare bills per
+     * provisioned tunnel, so environments release the tunnel when they shut
+     * down; the next `provision` recreates it under the same name and repoints
+     * the CNAME, preserving the endpoint URL.
+     */
+    readonly release: (input: {
+      readonly userId: string;
+      readonly environmentId: string;
+    }) => Effect.Effect<void, ManagedEndpointDeprovisioningFailed>;
   }
 >()("t3code-relay/environments/ManagedEndpointProvider") {}
 
@@ -462,6 +473,43 @@ export const make = Effect.gen(function* () {
             }),
         ),
       );
+    }),
+    release: Effect.fn("relay.managed_endpoint_provider.release")(function* (input) {
+      yield* Effect.annotateCurrentSpan({
+        "relay.user_id": input.userId,
+        "relay.environment_id": input.environmentId,
+      });
+      const allocation = yield* allocations.get(input).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ManagedEndpointDeprovisioningFailed({
+              ...input,
+              stage: "load-allocation",
+              cause,
+            }),
+        ),
+      );
+      const tunnelId = allocation?.tunnelId ?? null;
+      if (tunnelId === null) {
+        return;
+      }
+      yield* ignoreNotFound(tunnels.delete(tunnelId)).pipe(
+        Effect.mapError(
+          (cause) =>
+            new ManagedEndpointDeprovisioningFailed({
+              ...input,
+              stage: "delete-tunnel",
+              tunnelId,
+              cause,
+            }),
+        ),
+      );
+      // The recorded tunnelId is now stale, but the allocation row is left
+      // untouched deliberately: connect/status authorization requires a fully
+      // recorded allocation, and an offline environment must keep reporting
+      // "offline" (health probe fails) rather than "not authorized". The next
+      // provision lists tunnels by name, finds none, creates a replacement and
+      // re-records the fresh id.
     }),
     provision: Effect.fn("relay.managed_endpoint_provider.provision")(function* (input) {
       yield* Effect.annotateCurrentSpan({

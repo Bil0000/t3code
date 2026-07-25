@@ -610,6 +610,20 @@ export const clientApi = HttpApiBuilder.group(
           }
           return { ok: unlinked };
         }, mapRelayCommonApiErrors("not_authorized")),
+      )
+      .handle(
+        "releaseEnvironmentTunnel",
+        Effect.fn("relay.api.client.releaseEnvironmentTunnel")(function* (args) {
+          const { params } = args;
+          const { userId } = yield* RelayClientPrincipal;
+          yield* managedEndpointProvider
+            .release({
+              userId,
+              environmentId: params.environmentId,
+            })
+            .pipe(Effect.catch(() => relayInternalErrorResponse("upstream_unavailable")));
+          return { ok: true };
+        }, mapRelayCommonApiErrors("not_authorized")),
       );
   }),
 );

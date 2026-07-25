@@ -629,6 +629,125 @@ describe("ManagedEndpointProvider", () => {
     },
   );
 
+  it.effect("releases the tunnel while keeping the allocation, DNS record, and hostname", () => {
+    const tunnelCalls: TunnelCall[] = [];
+    const dnsCalls: DnsCall[] = [];
+    const allocationCalls: AllocationCall[] = [];
+    const layer = providerLayer(
+      makePersistentTunnelClient(tunnelCalls),
+      makeDnsClient(dnsCalls),
+      makeAllocations(allocationCalls),
+    );
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
+      const origin = { localHttpHost: "127.0.0.1", localHttpPort: 3773 } as const;
+      const first = yield* provider.provision({ ...key, origin });
+      yield* provider.release(key);
+      const second = yield* provider.provision({ ...key, origin });
+
+      expect(second.endpoint).toEqual(first.endpoint);
+      expect(tunnelCalls.map((call) => call.operation)).toEqual([
+        // first provision
+        "list",
+        "create",
+        "putConfiguration",
+        "getToken",
+        // release deletes only the tunnel...
+        "delete",
+        // ...and the next provision recreates it under the same name
+        "list",
+        "create",
+        "putConfiguration",
+        "getToken",
+      ]);
+      // The DNS record survives the release and is repointed, never deleted.
+      expect(dnsCalls.map((call) => call.operation)).toEqual([
+        "listRecords",
+        "createRecord",
+        "updateRecord",
+      ]);
+      expect(allocationCalls.map((call) => call.operation)).not.toContain("remove");
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("treats an environment without a recorded tunnel as already released", () => {
+    const tunnelCalls: TunnelCall[] = [];
+    const dnsCalls: DnsCall[] = [];
+    const layer = providerLayer(
+      makePersistentTunnelClient(tunnelCalls),
+      makeDnsClient(dnsCalls),
+      makeAllocations(),
+    );
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      yield* provider.release({ userId: "user_ABC", environmentId: "env_ABC" });
+
+      expect(tunnelCalls).toEqual([]);
+      expect(dnsCalls).toEqual([]);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("treats an already deleted tunnel as successfully released", () => {
+    const notFound = { _tag: "NotFound" } as const;
+    const tunnelClient = ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
+      ...makeTunnelClient(),
+      delete: (tunnelId) =>
+        Effect.fail(
+          new ManagedEndpointProvider.ManagedEndpointTunnelClientError({
+            operation: "delete",
+            tunnelId,
+            cause: notFound,
+          }),
+        ),
+    });
+    const layer = providerLayer(tunnelClient, makeDnsClient(), makeAllocations());
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
+      yield* provider.provision({
+        ...key,
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      });
+      yield* provider.release(key);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("surfaces non-not-found tunnel deletion failures when releasing", () => {
+    const failure = new ManagedEndpointProvider.ManagedEndpointTunnelClientError({
+      operation: "delete",
+      tunnelId: "tunnel-id",
+      cause: "Cloudflare tunnel deletion failed",
+    });
+    const tunnelClient = ManagedEndpointProvider.ManagedEndpointTunnelClient.of({
+      ...makeTunnelClient(),
+      delete: () => Effect.fail(failure),
+    });
+    const layer = providerLayer(tunnelClient, makeDnsClient(), makeAllocations());
+
+    return Effect.gen(function* () {
+      const provider = yield* ManagedEndpointProvider.ManagedEndpointProvider;
+      const key = { userId: "user_ABC", environmentId: "env_ABC" } as const;
+      yield* provider.provision({
+        ...key,
+        origin: { localHttpHost: "127.0.0.1", localHttpPort: 3773 },
+      });
+      const error = yield* Effect.flip(provider.release(key));
+
+      expect(error).toMatchObject({
+        _tag: "ManagedEndpointDeprovisioningFailed",
+        stage: "delete-tunnel",
+        userId: key.userId,
+        environmentId: key.environmentId,
+        tunnelId: "tunnel-id",
+      });
+      expect(error.cause).toBe(failure);
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("treats an absent allocation as already deprovisioned", () => {
     const tunnelCalls: TunnelCall[] = [];
     const dnsCalls: DnsCall[] = [];

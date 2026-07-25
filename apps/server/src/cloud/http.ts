@@ -28,6 +28,7 @@ import {
   RelayEnvironmentLinkProofPayload,
   RelayLinkProofRequest,
   RelayManagedEndpointOrigin,
+  RelayOkResponse,
 } from "@t3tools/contracts/relay";
 import { withRelayClientTracing } from "@t3tools/shared/relayTracing";
 import {
@@ -621,6 +622,45 @@ export const reconcileDesiredCloudLink = Effect.fn("environment.cloud.reconcileD
     return yield* reconcileDesiredCloudLinkWith(yield* cloudHttpDependencies, localOrigin);
   },
 );
+
+// Cloudflare bills per provisioned tunnel, so an environment that goes offline
+// must not leave its tunnel behind. Releasing deletes only the tunnel — the
+// relay keeps the link and its hostname reservation, and the next startup's
+// link reconcile provisions a replacement tunnel under the same URL.
+export const releaseManagedTunnelOnShutdown = Effect.fn(
+  "environment.cloud.releaseManagedTunnelOnShutdown",
+)(function* () {
+  const dependencies = yield* cloudHttpDependencies;
+  // Only a managed link stores a runtime config; publish-only links have no
+  // tunnel to release.
+  const runtimeConfig = yield* dependencies.secrets.get(CLOUD_ENDPOINT_RUNTIME_CONFIG);
+  if (Option.isNone(runtimeConfig)) {
+    return false;
+  }
+  // Stop the local connector before the relay deletes the tunnel it serves.
+  yield* dependencies.endpointRuntime.applyConfig(null);
+  const token = yield* dependencies.cliTokenManager.getExisting;
+  if (Option.isNone(token)) {
+    return false;
+  }
+  const relayUrl = yield* requireRelayUrl;
+  const environmentId = yield* dependencies.environment.getEnvironmentId;
+  yield* HttpClientRequest.delete(
+    `${relayUrl}/v1/client/environment-links/${encodeURIComponent(environmentId)}/tunnel`,
+  ).pipe(
+    HttpClientRequest.bearerToken(token.value.accessToken),
+    dependencies.httpClient.execute,
+    Effect.flatMap(HttpClientResponse.filterStatusOk),
+    Effect.flatMap(HttpClientResponse.schemaBodyJson(RelayOkResponse)),
+    withRelayClientTracing,
+  );
+  // The connector token died with the tunnel. Drop the stored config so the
+  // next start waits for the link reconcile instead of respawning the relay
+  // client with a dead token. Kept when the release request fails: the tunnel
+  // still exists, so the stored token keeps working across the restart.
+  yield* dependencies.secrets.remove(CLOUD_ENDPOINT_RUNTIME_CONFIG);
+  return true;
+});
 
 const readCloudLinkState = Effect.fn("environment.cloud.readLinkState")(function* (
   dependencies: CloudHttpDependencies,
