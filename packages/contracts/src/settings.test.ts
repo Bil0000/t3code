@@ -72,6 +72,15 @@ describe("ClientSettings sidebar v2", () => {
     expect(settings.sidebarV2ConfiguredByUser).toBe(true);
   });
 
+  it("carries an explicit beta opt-out through the patch the beta toggle writes", () => {
+    const patch = decodeClientSettingsPatch({
+      sidebarV2Enabled: false,
+      sidebarV2ConfiguredByUser: true,
+    });
+    expect(patch.sidebarV2Enabled).toBe(false);
+    expect(patch.sidebarV2ConfiguredByUser).toBe(true);
+  });
+
   it("allows auto-settle by inactivity to be disabled", () => {
     expect(
       decodeClientSettings({ sidebarAutoSettleAfterDays: null }).sidebarAutoSettleAfterDays,

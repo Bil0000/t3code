@@ -16,10 +16,10 @@ import { resolveThreadListV2Enabled } from "./threadListV2";
  */
 export function useThreadListV2Enabled(): boolean {
   const preferencesResult = useAtomValue(mobilePreferencesAtom);
+  const loaded = AsyncResult.isSuccess(preferencesResult);
   return resolveThreadListV2Enabled({
-    preference: AsyncResult.isSuccess(preferencesResult)
-      ? preferencesResult.value.threadListV2Enabled
-      : undefined,
+    preference: loaded ? preferencesResult.value.threadListV2Enabled : undefined,
+    preferencesLoaded: loaded,
     appVariant: Constants.expoConfig?.extra?.appVariant,
   });
 }

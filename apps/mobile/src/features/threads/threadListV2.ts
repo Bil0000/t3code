@@ -31,11 +31,21 @@ export function resolveThreadListV2Default(appVariant: unknown): boolean {
  * Resolved Thread List v2 state: the device-local preference if the user has
  * set one, otherwise the default for this app variant. Preferences persist as
  * sparse patches, so `undefined` genuinely means "never chosen".
+ *
+ * `preferencesLoaded` guards the startup window: preferences load
+ * asynchronously, and treating "still loading" as "never chosen" would mount
+ * v2 on a development build and then flip to v1 once a stored opt-out arrives,
+ * remounting the whole list. While loading, hold v1 — the state both variants
+ * already start from.
  */
 export function resolveThreadListV2Enabled(input: {
   readonly preference: boolean | undefined;
+  readonly preferencesLoaded: boolean;
   readonly appVariant: unknown;
 }): boolean {
+  if (!input.preferencesLoaded) {
+    return false;
+  }
   return input.preference ?? resolveThreadListV2Default(input.appVariant);
 }
 

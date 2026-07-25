@@ -41,16 +41,42 @@ const NOW = "2026-06-02T00:00:00.000Z";
 
 describe("resolveThreadListV2Enabled", () => {
   it.each(["development", "preview"])("defaults on for the %s variant", (appVariant) => {
-    expect(resolveThreadListV2Enabled({ preference: undefined, appVariant })).toBe(true);
+    expect(
+      resolveThreadListV2Enabled({ preference: undefined, preferencesLoaded: true, appVariant }),
+    ).toBe(true);
   });
 
   it.each(["production", undefined])("defaults off for the %s variant", (appVariant) => {
-    expect(resolveThreadListV2Enabled({ preference: undefined, appVariant })).toBe(false);
+    expect(
+      resolveThreadListV2Enabled({ preference: undefined, preferencesLoaded: true, appVariant }),
+    ).toBe(false);
   });
 
   it("prefers an explicit device choice over the variant default", () => {
-    expect(resolveThreadListV2Enabled({ preference: false, appVariant: "preview" })).toBe(false);
-    expect(resolveThreadListV2Enabled({ preference: true, appVariant: "production" })).toBe(true);
+    expect(
+      resolveThreadListV2Enabled({
+        preference: false,
+        preferencesLoaded: true,
+        appVariant: "preview",
+      }),
+    ).toBe(false);
+    expect(
+      resolveThreadListV2Enabled({
+        preference: true,
+        preferencesLoaded: true,
+        appVariant: "production",
+      }),
+    ).toBe(true);
+  });
+
+  it("holds v1 while preferences are still loading so the list does not remount", () => {
+    expect(
+      resolveThreadListV2Enabled({
+        preference: undefined,
+        preferencesLoaded: false,
+        appVariant: "development",
+      }),
+    ).toBe(false);
   });
 });
 

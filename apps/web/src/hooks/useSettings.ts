@@ -25,7 +25,7 @@ import {
 } from "@t3tools/contracts/settings";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
 import { APP_STAGE_LABEL } from "~/branding";
-import { resolveSidebarV2Default } from "~/branding.logic";
+import { resolveSidebarV2Enabled } from "~/branding.logic";
 import { ensureLocalApi } from "~/localApi";
 import * as Struct from "effect/Struct";
 import { primaryServerSettingsAtom, serverEnvironment } from "~/state/server";
@@ -226,12 +226,23 @@ export function useClientSettings<T = ClientSettings>(
  * dev, off for production). Every consumer must read through this rather than
  * `settings.sidebarV2Enabled`, which is only meaningful alongside
  * `sidebarV2ConfiguredByUser`.
+ *
+ * Held at v1 until client settings hydrate. The pre-hydration snapshot is just
+ * the schema defaults, so resolving against it would mount one sidebar and then
+ * swap it out once persisted settings land — remounting the whole tree.
  */
 export function useSidebarV2Enabled(): boolean {
-  return useClientSettings((settings) =>
-    settings.sidebarV2ConfiguredByUser
-      ? settings.sidebarV2Enabled
-      : resolveSidebarV2Default(APP_STAGE_LABEL),
+  const settingsHydrated = useClientSettingsHydrated();
+  const settings = useClientSettingsValue();
+  return useMemo(
+    () =>
+      resolveSidebarV2Enabled({
+        enabled: settings.sidebarV2Enabled,
+        configuredByUser: settings.sidebarV2ConfiguredByUser,
+        settingsHydrated,
+        stageLabel: APP_STAGE_LABEL,
+      }),
+    [settings.sidebarV2Enabled, settings.sidebarV2ConfiguredByUser, settingsHydrated],
   );
 }
 
