@@ -21,7 +21,7 @@ export class ManagedTunnelLimitPersistenceError extends Schema.TaggedErrorClass<
   {
     operation: Schema.Literals(["load-limit", "count-tunnels"]),
     userId: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
+    cause: Schema.Defect(),
   },
 ) {
   override get message(): string {

@@ -514,18 +514,19 @@ export const make = Effect.gen(function* () {
           environmentId: input.environmentId,
         })
         .pipe(
-          Effect.catchTag("ManagedTunnelLimitPersistenceError", (cause) =>
-            Effect.fail(
-              new ManagedEndpointProvisioningFailed({
-                userId: input.userId,
-                environmentId: input.environmentId,
-                stage: "check-tunnel-limit",
-                hostname: requestedHostname,
-                tunnelName: requestedTunnelName,
-                cause,
-              }),
-            ),
-          ),
+          Effect.catchTags({
+            ManagedTunnelLimitPersistenceError: (cause) =>
+              Effect.fail(
+                new ManagedEndpointProvisioningFailed({
+                  userId: input.userId,
+                  environmentId: input.environmentId,
+                  stage: "check-tunnel-limit",
+                  hostname: requestedHostname,
+                  tunnelName: requestedTunnelName,
+                  cause,
+                }),
+              ),
+          }),
         );
       const allocation = yield* allocations
         .reserve({
