@@ -24,6 +24,8 @@ import {
   type UnifiedSettings,
 } from "@t3tools/contracts/settings";
 import { safeErrorLogAttributes } from "@t3tools/client-runtime/errors";
+import { APP_STAGE_LABEL } from "~/branding";
+import { resolveSidebarV2Default } from "~/branding.logic";
 import { ensureLocalApi } from "~/localApi";
 import * as Struct from "effect/Struct";
 import { primaryServerSettingsAtom, serverEnvironment } from "~/state/server";
@@ -216,6 +218,21 @@ export function useClientSettings<T = ClientSettings>(
 ): T {
   const settings = useClientSettingsValue();
   return useMemo(() => (selector ? selector(settings) : (settings as T)), [selector, settings]);
+}
+
+/**
+ * Resolved sidebar v2 state: an explicit choice in Settings → Beta if the user
+ * has made one, otherwise the default for this build stage (on for nightly and
+ * dev, off for production). Every consumer must read through this rather than
+ * `settings.sidebarV2Enabled`, which is only meaningful alongside
+ * `sidebarV2ConfiguredByUser`.
+ */
+export function useSidebarV2Enabled(): boolean {
+  return useClientSettings((settings) =>
+    settings.sidebarV2ConfiguredByUser
+      ? settings.sidebarV2Enabled
+      : resolveSidebarV2Default(APP_STAGE_LABEL),
+  );
 }
 
 /** Read current settings for one environment, merged with client-local preferences. */

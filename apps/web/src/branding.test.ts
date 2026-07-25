@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import {
   resolveServerBackedAppDisplayName,
   resolveServerBackedAppStageLabel,
+  resolveSidebarV2Default,
 } from "./branding.logic";
 
 const originalWindow = globalThis.window;
@@ -112,5 +113,15 @@ describe("branding logic", () => {
         primaryServerVersion: "0.0.28-nightly.20260616",
       }),
     ).toBe("T3 Code (Alpha)");
+  });
+});
+
+describe("resolveSidebarV2Default", () => {
+  it.each(["Nightly", "Dev", "nightly", " dev "])("enables the beta for %s builds", (stage) => {
+    expect(resolveSidebarV2Default(stage)).toBe(true);
+  });
+
+  it.each(["Alpha", "Latest", ""])("leaves the beta off for %s builds", (stage) => {
+    expect(resolveSidebarV2Default(stage)).toBe(false);
   });
 });

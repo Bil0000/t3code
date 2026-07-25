@@ -18,6 +18,27 @@ export type ThreadListV2Status = "approval" | "input" | "working" | "failed" | "
 export const THREAD_LIST_V2_SETTLED_INITIAL_COUNT = 10;
 export const THREAD_LIST_V2_SETTLED_PAGE_COUNT = 25;
 
+/**
+ * Whether Thread List v2 is on by default for an app variant. The `development`
+ * and `preview` variants are mobile's nightly equivalents and opt in;
+ * `production` stays on v1. Counterpart of web's `resolveSidebarV2Default`.
+ */
+export function resolveThreadListV2Default(appVariant: unknown): boolean {
+  return appVariant === "development" || appVariant === "preview";
+}
+
+/**
+ * Resolved Thread List v2 state: the device-local preference if the user has
+ * set one, otherwise the default for this app variant. Preferences persist as
+ * sparse patches, so `undefined` genuinely means "never chosen".
+ */
+export function resolveThreadListV2Enabled(input: {
+  readonly preference: boolean | undefined;
+  readonly appVariant: unknown;
+}): boolean {
+  return input.preference ?? resolveThreadListV2Default(input.appVariant);
+}
+
 export function resolveThreadListV2Status(
   thread: Pick<EnvironmentThreadShell, "hasPendingApprovals" | "hasPendingUserInput" | "session">,
 ): ThreadListV2Status {
