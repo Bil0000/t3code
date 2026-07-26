@@ -22,8 +22,13 @@ const makeServerConfigLayer = (overrides?: Partial<ServerConfig.ServerConfig["Se
       const config = yield* ServerConfig.ServerConfig;
       return {
         ...config,
-        port: TEST_SERVER_PORT,
         ...overrides,
+        // Last, so the port cannot be overridden out from under
+        // makeCookieRequest — which builds the cookie name from this constant.
+        // An override that changed it would leave the server reading
+        // t3_session_<other> while every request still sent t3_session_13773,
+        // and the tests would fail for a reason unrelated to what they assert.
+        port: TEST_SERVER_PORT,
       } satisfies ServerConfig.ServerConfig["Service"];
     }),
   ).pipe(Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-auth-server-test-" })));

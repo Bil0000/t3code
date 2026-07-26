@@ -27,17 +27,41 @@ import {
 const encoder = new TextEncoder();
 
 /**
- * Asserts no field of `error` (nor its message) contains `secret`. Walks the
- * own enumerable values rather than serializing, so it holds for any field
- * added later without the test needing to know the shape.
+ * Asserts nothing reachable from `error` contains `secret`. Recurses through
+ * nested objects, arrays, and `cause` chains rather than checking only
+ * top-level strings: a leak one level down (say, a wrapped cause carrying raw
+ * stderr) is just as visible in a log, and a shallow check would pass it.
+ *
+ * Walks values instead of serializing so it holds for fields added later, and
+ * tracks visited objects so a cyclic cause chain terminates.
  */
 function assertCarriesNoSecret(error: object, secret: string): void {
-  assert.notInclude(String((error as { message?: unknown }).message ?? ""), secret);
-  for (const [key, value] of Object.entries(error)) {
+  const seen = new WeakSet<object>();
+
+  const walk = (value: unknown, path: string): void => {
     if (typeof value === "string") {
-      assert.notInclude(value, secret, `field "${key}" leaked stderr`);
+      assert.notInclude(value, secret, `${path} leaked stderr`);
+      return;
     }
-  }
+    if (typeof value !== "object" || value === null || seen.has(value)) {
+      return;
+    }
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      value.forEach((entry, index) => walk(entry, `${path}[${String(index)}]`));
+      return;
+    }
+    // `message` and `cause` are getters on Error subclasses, so they are not
+    // own enumerable properties and Object.entries alone would skip them.
+    walk((value as { message?: unknown }).message, `${path}.message`);
+    walk((value as { cause?: unknown }).cause, `${path}.cause`);
+    for (const [key, nested] of Object.entries(value)) {
+      walk(nested, `${path}.${key}`);
+    }
+  };
+
+  walk(error, "error");
 }
 const tailscaleStatusJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.100.100.100","fd7a:115c:a1e0::1","192.168.1.20"]}}`;
 const tailscaleStatusWithSingleIpJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.90.1.2"]}}`;
