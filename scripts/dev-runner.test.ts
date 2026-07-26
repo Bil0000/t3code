@@ -654,6 +654,34 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
       }),
     );
 
+    // Sharing dev:desktop would publish a URL whose renderer dials the
+    // visitor's own loopback, and would clobber the VITE_DEV_SERVER_URL that
+    // Electron loads from. It must decline, not half-work.
+    it.effect("declines to share for dev:desktop and still starts the stack", () => {
+      let spawnCount = 0;
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() => {
+          spawnCount += 1;
+          return Effect.succeed(mockProcess(0));
+        }),
+      );
+
+      return Effect.gen(function* () {
+        yield* runDevRunnerWithInput({
+          ...devServerInput,
+          mode: "dev:desktop",
+          port: undefined,
+          share: true,
+        }).pipe(
+          Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
+          Effect.provideService(HostProcessPlatform, "linux"),
+        );
+
+        assert.equal(spawnCount, 1);
+      });
+    });
+
     it.effect("spawns nothing when --dry-run is combined with --share", () => {
       let spawnCount = 0;
       const spawnerLayer = Layer.succeed(

@@ -591,6 +591,16 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     if (input.share) {
       if (input.mode === "dev:server") {
         yield* Effect.logInfo("[dev-runner] --share has no effect for dev:server (no web server).");
+      } else if (input.mode === "dev:desktop") {
+        // Desktop is not single-origin: the renderer gets VITE_HTTP_URL and
+        // VITE_WS_URL baked to loopback, so a tailnet visitor would load the UI
+        // and then watch it dial its own 127.0.0.1 for the backend. Worse,
+        // sharing would overwrite VITE_DEV_SERVER_URL, which is the origin
+        // Electron itself loads the renderer from. Refuse rather than hand out
+        // a URL that is broken in a way the user cannot see.
+        yield* Effect.logWarning(
+          "[dev-runner] --share is not supported for dev:desktop (the renderer is pinned to loopback). Use `dev` or `dev:web`.",
+        );
       } else {
         // acquireRelease, not share-then-addFinalizer: the mapping outlives this
         // process (and reboots), so the cleanup has to be registered atomically
