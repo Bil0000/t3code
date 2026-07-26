@@ -696,6 +696,19 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         }).pipe(Effect.scoped),
       );
 
+      it.effect("treats a blank --home-dir as unset rather than as a selection", () =>
+        Effect.gen(function* () {
+          const path = yield* Path.Path;
+          const root = yield* makeWorktree;
+          const home = yield* spawnedHome({
+            t3Home: "   ",
+            cwd: root,
+            ambientHome: "/home/user/.t3",
+          });
+          assert.equal(home, path.join(path.resolve(root), ".t3"));
+        }).pipe(Effect.scoped),
+      );
+
       it.effect("prefers the worktree .t3 over an ambient T3CODE_HOME", () =>
         Effect.gen(function* () {
           const path = yield* Path.Path;

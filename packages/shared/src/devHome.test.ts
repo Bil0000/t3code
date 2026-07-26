@@ -8,12 +8,27 @@ import * as Effect from "effect/Effect";
 
 import { resolveGitWorktreePath, resolveWorktreeT3Home } from "./devHome.ts";
 
-const makeRepo = (kind: "worktree" | "checkout" | "bare" | "submodule" | "unreadable-git-file") =>
+const makeRepo = (
+  kind:
+    | "worktree"
+    | "checkout"
+    | "bare"
+    | "submodule"
+    | "unreadable-git-file"
+    | "bare-repo-worktree"
+    | "custom-common-dir-worktree",
+) =>
   Effect.acquireRelease(
     Effect.sync(() => {
       const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-devhome-"));
       if (kind === "worktree") {
         NodeFS.writeFileSync(NodePath.join(root, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n");
+      } else if (kind === "bare-repo-worktree") {
+        // `git worktree add` from a bare repo: the common dir is `<name>.git`.
+        NodeFS.writeFileSync(NodePath.join(root, ".git"), "gitdir: /srv/myrepo.git/worktrees/x\n");
+      } else if (kind === "custom-common-dir-worktree") {
+        // $GIT_COMMON_DIR need not be named `.git` at all.
+        NodeFS.writeFileSync(NodePath.join(root, ".git"), "gitdir: /srv/store/worktrees/x\n");
       } else if (kind === "submodule") {
         NodeFS.writeFileSync(NodePath.join(root, ".git"), "gitdir: ../.git/modules/sub\n");
       } else if (kind === "unreadable-git-file") {
@@ -61,6 +76,20 @@ describe("resolveGitWorktreePath", () => {
     Effect.gen(function* () {
       const { nested } = yield* makeRepo("unreadable-git-file");
       assert.equal(yield* resolveGitWorktreePath(nested), undefined);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("finds a worktree of a bare repository", () =>
+    Effect.gen(function* () {
+      const { root, nested } = yield* makeRepo("bare-repo-worktree");
+      assert.equal(yield* resolveGitWorktreePath(nested), NodePath.resolve(root));
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("finds a worktree whose common dir is not named .git", () =>
+    Effect.gen(function* () {
+      const { root, nested } = yield* makeRepo("custom-common-dir-worktree");
+      assert.equal(yield* resolveGitWorktreePath(nested), NodePath.resolve(root));
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );
 });

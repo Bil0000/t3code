@@ -14,10 +14,15 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 
 /**
- * A `.git` file points at the real git directory. A linked worktree's lives
- * under `<repo>/.git/worktrees/<name>`; a submodule's under
- * `<super>/.git/modules/<name>`. Both are files, so the pointer — not the
+ * A `.git` file points at the real git directory. A linked worktree's lives at
+ * `<common-dir>/worktrees/<name>`; a submodule's at
+ * `<super-git-dir>/modules/<name>`. Both are files, so the pointer — not the
  * file-vs-directory distinction alone — is what identifies a worktree.
+ *
+ * The common dir is not necessarily named `.git`: a worktree of a bare repo
+ * points at `<repo>.git/worktrees/<name>`, and `$GIT_COMMON_DIR` can be
+ * anything. So match on the `worktrees/<name>` tail, which git always uses,
+ * rather than on the name of the directory containing it.
  */
 const pointsAtLinkedWorktree = (gitFileContents: string, path: Path.Path): boolean => {
   const gitdir = gitFileContents
@@ -29,11 +34,15 @@ const pointsAtLinkedWorktree = (gitFileContents: string, path: Path.Path): boole
   if (gitdir === undefined || gitdir.length === 0) {
     return false;
   }
-  // Normalize so `.git/worktrees` is matched as path segments rather than as a
-  // substring of some directory that merely happens to be named that way.
-  const segments = path.normalize(gitdir.replaceAll("\\", "/")).split(/[/\\]/);
-  const gitIndex = segments.lastIndexOf(".git");
-  return gitIndex !== -1 && segments[gitIndex + 1] === "worktrees";
+  // Compare as path segments so a directory merely named `…worktrees…` cannot
+  // match as a substring. Trailing separators normalize away first.
+  const segments = path
+    .normalize(gitdir.replaceAll("\\", "/"))
+    .split(/[/\\]/)
+    .filter((segment) => segment.length > 0);
+  // `<common-dir>/worktrees/<name>`: `worktrees` is the penultimate segment,
+  // and something must precede it. This excludes `<git-dir>/modules/<name>`.
+  return segments.length >= 3 && segments.at(-2) === "worktrees";
 };
 
 /**

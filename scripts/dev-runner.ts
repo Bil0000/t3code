@@ -512,8 +512,13 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     // outranks ambient T3CODE_HOME, which otherwise selects the installed
     // app's live userdata database. An explicit --home-dir still wins.
     const worktreeHome = yield* resolveWorktreeT3Home(yield* HostProcessWorkingDirectory);
+    // Trim before choosing: `--home-dir ""` is not a selection, and treating it
+    // as one would skip the worktree default and land on the shared home —
+    // exactly the outcome this precedence exists to prevent.
     const resolvedT3Home =
-      input.t3Home ?? worktreeHome ?? (hostEnvironment.T3CODE_HOME?.trim() || undefined);
+      (input.t3Home?.trim() || undefined) ??
+      worktreeHome ??
+      (hostEnvironment.T3CODE_HOME?.trim() || undefined);
     const env = yield* createDevRunnerEnv({
       mode: input.mode,
       baseEnv: hostEnvironment,
