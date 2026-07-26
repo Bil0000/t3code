@@ -55,7 +55,15 @@ const MODE_ARGS = {
 } as const satisfies Record<string, ReadonlyArray<string>>;
 
 type DevMode = keyof typeof MODE_ARGS;
-type PortAvailabilityCheck<R = never> = (port: number) => Effect.Effect<boolean, never, R>;
+/**
+ * `role` matters because only the backend honours `--host`/`T3CODE_HOST`; the
+ * web port is always loopback. Passed explicitly rather than inferred from the
+ * port number, which stops distinguishing them under a large port offset.
+ */
+type PortAvailabilityCheck<R = never> = (
+  port: number,
+  role?: "server" | "web",
+) => Effect.Effect<boolean, never, R>;
 
 const DEV_RUNNER_MODES = Object.keys(MODE_ARGS) as Array<DevMode>;
 
@@ -392,6 +400,12 @@ export function checkPortAvailabilityOnHosts<R>(
  * another interface, that interface decides whether the bind actually
  * succeeds — probing only loopback would hand back a port that is free here
  * and taken there, and the server would fail to start.
+ *
+ * `configuredHost` applies to the *backend* only. Vite takes its bind address
+ * from `HOST`, which the runner sets for desktop alone, so the web port stays
+ * on loopback and must not be judged against the backend's interface —
+ * a port free on loopback but busy on that interface would otherwise be
+ * rejected for a server that was never going to bind there.
  */
 export function devPortProbeHosts(configuredHost: string | undefined): ReadonlyArray<string> {
   const host = configuredHost?.trim();
@@ -403,13 +417,12 @@ export function devPortProbeHosts(configuredHost: string | undefined): ReadonlyA
 
 const makeDefaultCheckPortAvailability =
   (configuredHost: string | undefined): PortAvailabilityCheck<NetService.NetService> =>
-  (port) =>
+  (port, role) =>
     Effect.gen(function* () {
       const net = yield* NetService.NetService;
-      return yield* checkPortAvailabilityOnHosts(
-        port,
-        devPortProbeHosts(configuredHost),
-        (candidatePort, host) => net.canListenOnHost(candidatePort, host),
+      const hosts = role === "web" ? DEV_PORT_PROBE_HOSTS : devPortProbeHosts(configuredHost);
+      return yield* checkPortAvailabilityOnHosts(port, hosts, (candidatePort, host) =>
+        net.canListenOnHost(candidatePort, host),
       );
     });
 
@@ -447,10 +460,10 @@ export function findFirstAvailableOffset<R = NetService.NetService>({
 
       const checks: Array<Effect.Effect<boolean, never, R>> = [];
       if (requireServerPort) {
-        checks.push(checkPort(serverPort));
+        checks.push(checkPort(serverPort, "server"));
       }
       if (requireWebPort) {
-        checks.push(checkPort(webPort));
+        checks.push(checkPort(webPort, "web"));
       }
 
       if (checks.length === 0) {

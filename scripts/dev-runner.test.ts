@@ -570,6 +570,31 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.deepStrictEqual(devPortProbeHosts("127.0.0.1"), ["127.0.0.1", "::1"]);
       }),
     );
+
+    // Only the backend honours --host/T3CODE_HOST. Vite reads HOST (set for
+    // desktop only), so judging the web port against the backend's interface
+    // would reject ports for a server that never binds there.
+    it.effect("passes the port role so only the server port sees the bind host", () =>
+      Effect.gen(function* () {
+        const probed: Array<{ port: number; role: string | undefined }> = [];
+
+        yield* resolveModePortOffsets({
+          mode: "dev",
+          startOffset: 0,
+          hasExplicitServerPort: false,
+          hasExplicitDevUrl: false,
+          checkPortAvailability: (port, role) => {
+            probed.push({ port, role });
+            return Effect.succeed(true);
+          },
+        });
+
+        assert.deepStrictEqual(probed, [
+          { port: 13_773, role: "server" },
+          { port: 5733, role: "web" },
+        ]);
+      }),
+    );
   });
 
   describe("resolveModePortOffsets", () => {
