@@ -5,6 +5,7 @@ import * as NodeOS from "node:os";
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
+import { resolveWorktreeT3Home } from "@t3tools/shared/devHome";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Config from "effect/Config";
@@ -245,7 +246,9 @@ export function createDevRunnerEnv({
   return Effect.gen(function* () {
     const serverPort = port ?? BASE_SERVER_PORT + serverOffset;
     const webPort = BASE_WEB_PORT + webOffset;
-    const configuredBaseDir = t3Home?.trim() || baseEnv.T3CODE_HOME?.trim() || undefined;
+    // Precedence is resolved by the caller. An unset t3Home here genuinely
+    // means "use the default" rather than inheriting an ambient value.
+    const configuredBaseDir = t3Home?.trim() || undefined;
     const resolvedBaseDir = yield* resolveBaseDir(configuredBaseDir);
     const isDesktopMode = mode === "dev:desktop";
 
@@ -505,12 +508,18 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     });
 
     const hostEnvironment = yield* HostProcessEnvironment;
+    // A worktree defaults to its own gitignored `.t3`. This deliberately
+    // outranks ambient T3CODE_HOME, which otherwise selects the installed
+    // app's live userdata database. An explicit --home-dir still wins.
+    const worktreeHome = yield* resolveWorktreeT3Home(process.cwd());
+    const resolvedT3Home =
+      input.t3Home ?? worktreeHome ?? (hostEnvironment.T3CODE_HOME?.trim() || undefined);
     const env = yield* createDevRunnerEnv({
       mode: input.mode,
       baseEnv: hostEnvironment,
       serverOffset,
       webOffset,
-      t3Home: input.t3Home,
+      t3Home: resolvedT3Home,
       browser: input.browser,
       autoBootstrapProjectFromCwd: input.autoBootstrapProjectFromCwd,
       logWebSocketEvents: input.logWebSocketEvents,
@@ -592,9 +601,10 @@ const devRunnerCli = Command.make("dev-runner", {
   ),
   t3Home: Flag.string("home-dir").pipe(
     Flag.withDescription(
-      "Explicit T3 Code data directory; runtime state is stored under userdata (equivalent to T3CODE_HOME).",
+      "Explicit T3 Code data directory; runtime state is stored under userdata. Inside a git worktree this defaults to that worktree's own .t3.",
     ),
-    Flag.withFallbackConfig(optionalStringConfig("T3CODE_HOME")),
+    Flag.optional,
+    Flag.map(Option.getOrUndefined),
   ),
   browser: Flag.boolean("browser").pipe(
     Flag.withDescription("Open a browser automatically (disabled by default for web dev)."),
