@@ -66,6 +66,7 @@ const devServerInput = {
   port: 13_773,
   devUrl: undefined,
   dryRun: false,
+  share: false,
   runArgs: ["--inspect", "secret-token-value"],
 } as const;
 
@@ -344,8 +345,58 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         });
 
         assert.equal(env.T3CODE_PORT, "13773");
-        assert.equal(env.VITE_HTTP_URL, "http://localhost:13773");
-        assert.equal(env.VITE_WS_URL, "ws://localhost:13773");
+        assert.equal(env.PORT, "5733");
+      }),
+    );
+
+    // Browser dev is single-origin: Vite proxies the backend, and the client
+    // resolves it from window.location.origin. Baking a localhost URL here is
+    // what breaks sharing a dev server to another device.
+    for (const mode of ["dev", "dev:web"] as const) {
+      it.effect(`leaves the client backend URLs unset in ${mode} mode`, () =>
+        Effect.gen(function* () {
+          const env = yield* createDevRunnerEnv({
+            mode,
+            baseEnv: {
+              VITE_HTTP_URL: "http://localhost:1234",
+              VITE_WS_URL: "ws://localhost:1234",
+            },
+            serverOffset: 0,
+            webOffset: 0,
+            t3Home: undefined,
+            browser: undefined,
+            autoBootstrapProjectFromCwd: undefined,
+            logWebSocketEvents: undefined,
+            host: undefined,
+            port: undefined,
+            devUrl: undefined,
+          });
+
+          assert.equal(env.VITE_HTTP_URL, undefined);
+          assert.equal(env.VITE_WS_URL, undefined);
+          assert.equal(env.T3CODE_PORT, "13773");
+        }),
+      );
+    }
+
+    it.effect("keeps explicit backend URLs for the desktop renderer", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev:desktop",
+          baseEnv: {},
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.VITE_HTTP_URL, "http://127.0.0.1:13773");
+        assert.equal(env.VITE_WS_URL, "ws://127.0.0.1:13773");
       }),
     );
   });
@@ -574,6 +625,58 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
         assert.ok(!error.message.includes(cause.message));
         assert.notProperty(error, "args");
         assert.notInclude(error.message, "secret-token-value");
+      });
+    });
+
+    // `tailscale serve` config outlives the process, so a dry run that shared
+    // would replace and then tear down whatever mapping the port already had.
+    // Base-dir precedence (--home-dir > worktree .t3 > ambient T3CODE_HOME)
+    // lives in runDevRunnerWithInput; the env builder must not consult the
+    // ambient variable on its own, or it would silently outrank the worktree
+    // default and land dev state on the user's real database.
+    it.effect("ignores an ambient T3CODE_HOME when no home is resolved", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev",
+          baseEnv: { T3CODE_HOME: "/home/user/.t3" },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.T3CODE_HOME, undefined);
+      }),
+    );
+
+    it.effect("spawns nothing when --dry-run is combined with --share", () => {
+      let spawnCount = 0;
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() => {
+          spawnCount += 1;
+          return Effect.succeed(mockProcess(0));
+        }),
+      );
+
+      return Effect.gen(function* () {
+        yield* runDevRunnerWithInput({
+          ...devServerInput,
+          mode: "dev",
+          port: undefined,
+          dryRun: true,
+          share: true,
+        }).pipe(
+          Effect.provide(Layer.mergeAll(emptyConfigLayer, netServiceLayer, spawnerLayer)),
+          Effect.provideService(HostProcessPlatform, "linux"),
+        );
+
+        assert.equal(spawnCount, 0);
       });
     });
 
