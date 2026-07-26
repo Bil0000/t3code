@@ -8,12 +8,16 @@ import * as Effect from "effect/Effect";
 
 import { resolveGitWorktreePath, resolveWorktreeT3Home } from "./devHome.ts";
 
-const makeRepo = (kind: "worktree" | "checkout" | "bare") =>
+const makeRepo = (kind: "worktree" | "checkout" | "bare" | "submodule" | "unreadable-git-file") =>
   Effect.acquireRelease(
     Effect.sync(() => {
       const root = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-devhome-"));
       if (kind === "worktree") {
         NodeFS.writeFileSync(NodePath.join(root, ".git"), "gitdir: /elsewhere/.git/worktrees/x\n");
+      } else if (kind === "submodule") {
+        NodeFS.writeFileSync(NodePath.join(root, ".git"), "gitdir: ../.git/modules/sub\n");
+      } else if (kind === "unreadable-git-file") {
+        NodeFS.writeFileSync(NodePath.join(root, ".git"), "not a gitdir pointer\n");
       } else if (kind === "checkout") {
         NodeFS.mkdirSync(NodePath.join(root, ".git"));
       }
@@ -42,6 +46,20 @@ describe("resolveGitWorktreePath", () => {
   it.effect("reports a directory outside a repository", () =>
     Effect.gen(function* () {
       const { nested } = yield* makeRepo("bare");
+      assert.equal(yield* resolveGitWorktreePath(nested), undefined);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reports a submodule as not a linked worktree", () =>
+    Effect.gen(function* () {
+      const { nested } = yield* makeRepo("submodule");
+      assert.equal(yield* resolveGitWorktreePath(nested), undefined);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("reports a .git file without a usable gitdir pointer", () =>
+    Effect.gen(function* () {
+      const { nested } = yield* makeRepo("unreadable-git-file");
       assert.equal(yield* resolveGitWorktreePath(nested), undefined);
     }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

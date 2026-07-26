@@ -6,7 +6,7 @@ import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NetService from "@t3tools/shared/Net";
 import { resolveWorktreeT3Home } from "@t3tools/shared/devHome";
-import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessWorkingDirectory } from "@t3tools/shared/hostProcess";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import * as Config from "effect/Config";
 import * as Effect from "effect/Effect";
@@ -511,7 +511,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
     // A worktree defaults to its own gitignored `.t3`. This deliberately
     // outranks ambient T3CODE_HOME, which otherwise selects the installed
     // app's live userdata database. An explicit --home-dir still wins.
-    const worktreeHome = yield* resolveWorktreeT3Home(process.cwd());
+    const worktreeHome = yield* resolveWorktreeT3Home(yield* HostProcessWorkingDirectory);
     const resolvedT3Home =
       input.t3Home ?? worktreeHome ?? (hostEnvironment.T3CODE_HOME?.trim() || undefined);
     const env = yield* createDevRunnerEnv({

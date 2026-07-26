@@ -57,7 +57,7 @@ T3CODE_PORT=<server-port> node apps/server/src/bin.ts auth pairing create \
 
 Use the `Pair URL` from this command once. Derive `<server-port>` and `<web-url>` from the current dev-runner output, including any automatically selected port offset. Setting `T3CODE_PORT` keeps the administrative CLI from probing for an unrelated free port.
 
-Always pass `--dev-url` for a dev-runner environment so the generated pairing URL uses the current web origin. An explicit base directory stores runtime state in `<base-dir>/userdata`; the `<base-dir>/dev` fallback is only used by an implicit dev home. Use `auth pairing list` to inspect active token metadata; it intentionally cannot reveal token secrets.
+Always pass `--dev-url` for a dev-runner environment so the generated pairing URL uses the current web origin. An explicit base directory stores runtime state in `<base-dir>/userdata`; the `<base-dir>/dev` fallback is only used by an implicit dev home. A worktree-local `.t3` counts as explicit, so its state lives in `<worktree>/.t3/userdata`. Use `auth pairing list` to inspect active token metadata; it intentionally cannot reveal token secrets.
 
 ## Inspect or seed SQLite state
 
