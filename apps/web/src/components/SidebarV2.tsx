@@ -69,6 +69,7 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { isMacPlatform } from "~/lib/utils";
 import { useOpenPrLink } from "../lib/openPullRequestLink";
 import { readLocalApi } from "../localApi";
+import { longPressContextMenuProps } from "../longPressContextMenu";
 import {
   deriveProjectGroupingOverrideKey,
   getProjectOrderKey,
@@ -748,6 +749,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 onDoubleClick={handleDoubleClick}
                 onKeyDown={handleKeyDown}
                 onContextMenu={handleContextMenu}
+                {...longPressContextMenuProps}
               />
             }
           >
@@ -857,6 +859,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
               onDoubleClick={handleDoubleClick}
               onKeyDown={handleKeyDown}
               onContextMenu={handleContextMenu}
+              {...longPressContextMenuProps}
             />
           }
         >

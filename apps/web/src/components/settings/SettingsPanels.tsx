@@ -56,6 +56,7 @@ import {
   sortProviderInstanceEntries,
 } from "../../providerInstances";
 import { ensureLocalApi, readLocalApi } from "../../localApi";
+import { longPressContextMenuProps } from "../../longPressContextMenu";
 import {
   primaryServerObservabilityAtom,
   primaryServerProvidersAtom,
@@ -1714,6 +1715,7 @@ export function ArchivedThreadsPanel() {
                     }
                   })();
                 }}
+                {...longPressContextMenuProps}
                 title={thread.title}
                 description={
                   <>
