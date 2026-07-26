@@ -25,6 +25,20 @@ import {
 } from "./tailscale.ts";
 
 const encoder = new TextEncoder();
+
+/**
+ * Asserts no field of `error` (nor its message) contains `secret`. Walks the
+ * own enumerable values rather than serializing, so it holds for any field
+ * added later without the test needing to know the shape.
+ */
+function assertCarriesNoSecret(error: object, secret: string): void {
+  assert.notInclude(String((error as { message?: unknown }).message ?? ""), secret);
+  for (const [key, value] of Object.entries(error)) {
+    if (typeof value === "string") {
+      assert.notInclude(value, secret, `field "${key}" leaked stderr`);
+    }
+  }
+}
 const tailscaleStatusJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.100.100.100","fd7a:115c:a1e0::1","192.168.1.20"]}}`;
 const tailscaleStatusWithSingleIpJson = `{"Self":{"DNSName":"desktop.tail.ts.net.","TailscaleIPs":["100.90.1.2"]}}`;
 
@@ -194,6 +208,26 @@ describe("tailscale", () => {
       assert.notProperty(error, "stderr");
       assert.notInclude(error.message, "tskey-auth-secret-token-value");
       assert.equal(error.message, "tailscale status exited with code 7.");
+      assert.equal(error.stderrDiagnostic, "not-logged-in");
+      assertCarriesNoSecret(error, "tskey-auth-secret-token-value");
+    });
+  });
+
+  it.effect("classifies unrecognized stderr without quoting it", () => {
+    const layer = mockSpawnerLayer(() => ({
+      code: 3,
+      stderr: "something novel went wrong for node fluffy-badger tskey-auth-secret-token-value",
+    }));
+
+    return Effect.gen(function* () {
+      const error = yield* readTailscaleStatus.pipe(Effect.flip, Effect.provide(layer));
+
+      assert.instanceOf(error, TailscaleCommandExitError);
+      // Unmatched stderr degrades to "unknown" rather than passing text
+      // through — that fallback is what keeps novel output from leaking.
+      assert.equal(error.stderrDiagnostic, "unknown");
+      assertCarriesNoSecret(error, "tskey-auth-secret-token-value");
+      assertCarriesNoSecret(error, "fluffy-badger");
     });
   });
 
@@ -253,6 +287,10 @@ describe("tailscale", () => {
       assert.notProperty(error, "command");
       assert.notProperty(error, "stderr");
       assert.notInclude(error.message, "tskey-auth-secret-token-value");
+      // The diagnostic classifies the failure without quoting stderr, so the
+      // key cannot reach a log through it either.
+      assert.equal(error.stderrDiagnostic, "permission-denied");
+      assertCarriesNoSecret(error, "tskey-auth-secret-token-value");
     });
   });
 

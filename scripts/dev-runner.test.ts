@@ -22,6 +22,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import {
   checkPortAvailabilityOnHosts,
   createDevRunnerEnv,
+  devPortProbeHosts,
   findFirstAvailableOffset,
   getDevRunnerModeArgs,
   resolveModePortOffsets,
@@ -491,6 +492,34 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           [13_773, "0.0.0.0"],
           [13_773, "::"],
         ]);
+      }),
+    );
+  });
+
+  describe("devPortProbeHosts", () => {
+    it.effect("probes loopback only when no bind host is configured", () =>
+      Effect.sync(() => {
+        assert.deepStrictEqual(devPortProbeHosts(undefined), ["127.0.0.1", "::1"]);
+        assert.deepStrictEqual(devPortProbeHosts("  "), ["127.0.0.1", "::1"]);
+      }),
+    );
+
+    // A port free on loopback can be taken on the interface the server will
+    // actually bind, so --host/T3CODE_HOST has to be probed as well.
+    it.effect("adds a non-loopback bind host to the probe list", () =>
+      Effect.sync(() => {
+        assert.deepStrictEqual(devPortProbeHosts("0.0.0.0"), ["127.0.0.1", "::1", "0.0.0.0"]);
+        assert.deepStrictEqual(devPortProbeHosts("192.168.1.10"), [
+          "127.0.0.1",
+          "::1",
+          "192.168.1.10",
+        ]);
+      }),
+    );
+
+    it.effect("does not probe loopback twice when it is the configured host", () =>
+      Effect.sync(() => {
+        assert.deepStrictEqual(devPortProbeHosts("127.0.0.1"), ["127.0.0.1", "::1"]);
       }),
     );
   });

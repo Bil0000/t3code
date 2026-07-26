@@ -374,13 +374,36 @@ export function checkPortAvailabilityOnHosts<R>(
   });
 }
 
-const defaultCheckPortAvailability: PortAvailabilityCheck<NetService.NetService> = (port) =>
-  Effect.gen(function* () {
-    const net = yield* NetService.NetService;
-    return yield* checkPortAvailabilityOnHosts(port, DEV_PORT_PROBE_HOSTS, (candidatePort, host) =>
-      net.canListenOnHost(candidatePort, host),
-    );
-  });
+/**
+ * Hosts to probe for a dev server bound to `configuredHost`.
+ *
+ * Loopback is always checked because the web server and the desktop renderer
+ * target reach it there. When `--host`/`T3CODE_HOST` moves the backend onto
+ * another interface, that interface decides whether the bind actually
+ * succeeds — probing only loopback would hand back a port that is free here
+ * and taken there, and the server would fail to start.
+ */
+export function devPortProbeHosts(configuredHost: string | undefined): ReadonlyArray<string> {
+  const host = configuredHost?.trim();
+  if (!host || DEV_PORT_PROBE_HOSTS.includes(host as (typeof DEV_PORT_PROBE_HOSTS)[number])) {
+    return DEV_PORT_PROBE_HOSTS;
+  }
+  return [...DEV_PORT_PROBE_HOSTS, host];
+}
+
+const makeDefaultCheckPortAvailability =
+  (configuredHost: string | undefined): PortAvailabilityCheck<NetService.NetService> =>
+  (port) =>
+    Effect.gen(function* () {
+      const net = yield* NetService.NetService;
+      return yield* checkPortAvailabilityOnHosts(
+        port,
+        devPortProbeHosts(configuredHost),
+        (candidatePort, host) => net.canListenOnHost(candidatePort, host),
+      );
+    });
+
+const defaultCheckPortAvailability = makeDefaultCheckPortAvailability(undefined);
 
 interface FindFirstAvailableOffsetInput<R = NetService.NetService> {
   readonly startOffset: number;
@@ -542,6 +565,9 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
       startOffset: offset,
       hasExplicitServerPort: input.port !== undefined,
       hasExplicitDevUrl: input.devUrl !== undefined,
+      // A non-loopback bind host decides whether the backend can actually take
+      // the port, so it has to be probed alongside loopback.
+      checkPortAvailability: makeDefaultCheckPortAvailability(input.host),
     });
 
     const hostEnvironment = yield* HostProcessEnvironment;

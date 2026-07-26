@@ -111,9 +111,36 @@ describe("shareDevServer", () => {
       );
 
       assert.equal(error.reason, "serve-failed");
-      assert.include(error.message, "port already in use");
+      // Unclassifiable stderr is never quoted (it can carry auth keys), so the
+      // message points at the command instead of echoing the CLI.
+      assert.notInclude(error.message, "port already in use");
+      assert.include(error.message, "Run the command by hand");
       assert.include(error.message, "no longer served");
       assert.include(error.message, "5788");
+    }),
+  );
+
+  // A recognized failure gets our own wording for it — enough to act on
+  // without passing CLI text through.
+  it.effect("explains a recognized serve failure without quoting stderr", () =>
+    Effect.gen(function* () {
+      const error: DevShareError = yield* shareDevServer({ webPort: 5788 }).pipe(
+        Effect.provide(
+          spawnerLayer({
+            off: { exitCode: 0 },
+            serve: {
+              exitCode: 1,
+              stderr: "permission denied for tskey-auth-secret-token-value",
+            },
+          }),
+        ),
+        Effect.flip,
+      );
+
+      assert.equal(error.reason, "serve-failed");
+      assert.include(error.message, "permission denied");
+      assert.include(error.message, "elevated privileges");
+      assert.notInclude(error.message, "tskey-auth-secret-token-value");
     }),
   );
 

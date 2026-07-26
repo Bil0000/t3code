@@ -23,6 +23,37 @@ const TailscaleCommandContext = {
   argumentCount: Schema.Number,
 };
 
+/**
+ * Failure kinds we can name without quoting the CLI. Anything unrecognized
+ * becomes "unknown" rather than falling back to raw text — stderr can contain
+ * auth keys (`tskey-…`) and node names, and these labels are logged.
+ */
+export const TailscaleStderrDiagnostic = Schema.Literals([
+  "no-existing-handler",
+  "not-logged-in",
+  "permission-denied",
+  "unknown",
+]);
+export type TailscaleStderrDiagnostic = typeof TailscaleStderrDiagnostic.Type;
+
+// Matched against stderr, most specific first. Patterns are deliberately short
+// and anchored on tailscale's own wording.
+const STDERR_DIAGNOSTIC_PATTERNS: ReadonlyArray<
+  readonly [RegExp, Exclude<TailscaleStderrDiagnostic, "unknown">]
+> = [
+  [/handler does not exist/i, "no-existing-handler"],
+  [/not logged in|logged out|needs? login/i, "not-logged-in"],
+  [/permission denied|access denied|must be root|operation not permitted/i, "permission-denied"],
+];
+
+/** Classifies stderr into a safe label, dropping the text itself. */
+export const stderrDiagnosticOf = (stderr: string): TailscaleStderrDiagnostic | undefined => {
+  if (stderr.trim().length === 0) {
+    return undefined;
+  }
+  return STDERR_DIAGNOSTIC_PATTERNS.find(([pattern]) => pattern.test(stderr))?.[1] ?? "unknown";
+};
+
 export class TailscaleCommandSpawnError extends Schema.TaggedErrorClass<TailscaleCommandSpawnError>()(
   "TailscaleCommandSpawnError",
   {
@@ -54,22 +85,18 @@ export class TailscaleCommandExitError extends Schema.TaggedErrorClass<Tailscale
     exitCode: Schema.Number,
     stdoutLength: Schema.optional(Schema.Number),
     stderrLength: Schema.Number,
-    // Bounded, so callers can recognize specific CLI errors (e.g. `serve off`
-    // on a port with no mapping) without the error carrying arbitrary output.
-    stderrPreview: Schema.optional(Schema.String),
+    // A classified diagnostic, never raw CLI output. `tailscale` prints auth
+    // keys and node identifiers into stderr, and this field is surfaced in
+    // dev-runner logs — so it carries only a known-safe label from the closed
+    // set below. Callers that need to recognize a specific failure (e.g.
+    // `serve off` on a port with no mapping) match on the label.
+    stderrDiagnostic: Schema.optional(TailscaleStderrDiagnostic),
   },
 ) {
   override get message(): string {
     return `tailscale ${this.subcommand} exited with code ${this.exitCode}.`;
   }
 }
-
-const STDERR_PREVIEW_LIMIT = 200;
-
-export const stderrPreviewOf = (stderr: string): string | undefined => {
-  const trimmed = stderr.trim();
-  return trimmed.length > 0 ? trimmed.slice(0, STDERR_PREVIEW_LIMIT) : undefined;
-};
 
 export class TailscaleCommandTimeoutError extends Schema.TaggedErrorClass<TailscaleCommandTimeoutError>()(
   "TailscaleCommandTimeoutError",
@@ -222,8 +249,8 @@ export const readTailscaleStatus = Effect.gen(function* () {
         exitCode,
         stdoutLength: stdout.length,
         stderrLength: stderr.length,
-        ...(stderrPreviewOf(stderr) !== undefined
-          ? { stderrPreview: stderrPreviewOf(stderr) }
+        ...(stderrDiagnosticOf(stderr) !== undefined
+          ? { stderrDiagnostic: stderrDiagnosticOf(stderr) }
           : {}),
       });
     }
@@ -288,8 +315,8 @@ const runTailscaleCommand = (
           ...commandContext,
           exitCode,
           stderrLength: stderr.length,
-          ...(stderrPreviewOf(stderr) !== undefined
-            ? { stderrPreview: stderrPreviewOf(stderr) }
+          ...(stderrDiagnosticOf(stderr) !== undefined
+            ? { stderrDiagnostic: stderrDiagnosticOf(stderr) }
             : {}),
         });
       }

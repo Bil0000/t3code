@@ -19,6 +19,7 @@ import {
   ensureTailscaleServe,
   readTailscaleStatus,
   type TailscaleCommandError,
+  type TailscaleStderrDiagnostic,
 } from "@t3tools/tailscale";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
@@ -48,16 +49,27 @@ export class DevShareError extends Schema.TaggedErrorClass<DevShareError>()("Dev
   }
 }
 
-const commandDetail = (error: TailscaleCommandError): string =>
-  error._tag === "TailscaleCommandExitError" && error.stderrPreview !== undefined
-    ? `${error.message} ${error.stderrPreview}`
-    : error.message;
-
 /**
- * `tailscale serve … off` exits nonzero with this when the port had no mapping,
- * which is the normal case for a first-time share — not a failure.
+ * Human-readable gloss for each diagnostic. Deliberately our own words rather
+ * than the CLI's: tailscale prints auth keys and node names into stderr, and
+ * this string is logged.
  */
-const NO_EXISTING_HANDLER_PATTERN = /handler does not exist/i;
+const DIAGNOSTIC_EXPLANATIONS: Record<TailscaleStderrDiagnostic, string | undefined> = {
+  "no-existing-handler": "no mapping existed for that port",
+  "not-logged-in": "this machine is not logged into a tailnet — run `tailscale up`",
+  "permission-denied": "permission denied — `tailscale serve` may need elevated privileges",
+  unknown: undefined,
+};
+
+const commandDetail = (error: TailscaleCommandError): string => {
+  if (error._tag !== "TailscaleCommandExitError" || error.stderrDiagnostic === undefined) {
+    return error.message;
+  }
+  const explanation = DIAGNOSTIC_EXPLANATIONS[error.stderrDiagnostic];
+  return explanation === undefined
+    ? `${error.message} Run the command by hand to see why.`
+    : `${error.message} ${explanation}.`;
+};
 
 /**
  * Removes any mapping for `webPort`, reporting whether the port is now clear.
@@ -79,7 +91,7 @@ export const unshareDevServer = (
       Effect.succeed(
         // "Nothing was mapped" leaves the port clear either way.
         error._tag === "TailscaleCommandExitError" &&
-          NO_EXISTING_HANDLER_PATTERN.test(error.stderrPreview ?? "")
+          error.stderrDiagnostic === "no-existing-handler"
           ? ({ cleared: true } as const)
           : ({ cleared: false, detail: commandDetail(error) } as const),
       ),
