@@ -5,7 +5,12 @@ import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { DevShareError, shareDevServer, unshareDevServer } from "./dev-share.ts";
+import {
+  type DevShareError,
+  DevServeFailedError,
+  shareDevServer,
+  unshareDevServer,
+} from "./dev-share.ts";
 
 const TAILNET_STATUS = JSON.stringify({ Self: { DNSName: "host.example.ts.net." } });
 const NO_HANDLER_STDERR = "error: failed to remove web serve: handler does not exist";
@@ -78,7 +83,9 @@ describe("unshareDevServer", () => {
         Effect.provide(spawnerLayer({ off: { exitCode: 1, stderr: "permission denied" } })),
       );
       assert.isFalse(result.cleared);
-      assert.include(result.detail, "permission denied");
+      assert.include(result.explanation, "permission denied");
+      // Structured, so a wrapping error can keep the real chain.
+      assert.equal(result.cause?._tag, "TailscaleCommandExitError");
     }),
   );
 });
@@ -110,11 +117,18 @@ describe("shareDevServer", () => {
         Effect.flip,
       );
 
-      assert.equal(error.reason, "serve-failed");
+      assert.instanceOf(error, DevServeFailedError);
+      assert.equal(error.stage, "serve");
+      assert.equal(error.webPort, 5788);
+      // The underlying failure is preserved rather than flattened to a string.
+      assert.equal(
+        (error.cause as { _tag?: string } | undefined)?._tag,
+        "TailscaleCommandExitError",
+      );
       // Unclassifiable stderr is never quoted (it can carry auth keys), so the
       // message points at the command instead of echoing the CLI.
       assert.notInclude(error.message, "port already in use");
-      assert.include(error.message, "Run the command by hand");
+      assert.include(error.message, "run the command by hand");
       assert.include(error.message, "no longer served");
       assert.include(error.message, "5788");
     }),
@@ -137,7 +151,8 @@ describe("shareDevServer", () => {
         Effect.flip,
       );
 
-      assert.equal(error.reason, "serve-failed");
+      assert.instanceOf(error, DevServeFailedError);
+      assert.equal(error.stage, "serve");
       assert.include(error.message, "permission denied");
       assert.include(error.message, "elevated privileges");
       assert.notInclude(error.message, "tskey-auth-secret-token-value");
@@ -153,7 +168,9 @@ describe("shareDevServer", () => {
         Effect.flip,
       );
 
-      assert.equal(error.reason, "serve-failed");
+      assert.instanceOf(error, DevServeFailedError);
+      // A distinct stage: the prior mapping survived, so nothing was replaced.
+      assert.equal(error.stage, "clear-existing");
       assert.include(error.message, "could not clear the existing mapping");
       assert.include(error.message, "permission denied");
     }),

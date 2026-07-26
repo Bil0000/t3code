@@ -25,30 +25,6 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 
-export class DevShareError extends Schema.TaggedErrorClass<DevShareError>()("DevShareError", {
-  reason: Schema.Literals(["tailscale-unavailable", "no-tailnet-name", "serve-failed"]),
-  detail: Schema.optional(Schema.String),
-}) {
-  override get message(): string {
-    const base = {
-      "tailscale-unavailable": "could not talk to tailscale",
-      "no-tailnet-name": "this machine has no tailnet DNS name",
-      "serve-failed": "tailscale serve failed",
-    }[this.reason];
-    return this.detail ? `${base}: ${this.detail}` : base;
-  }
-
-  /** What the user can actually do about it. */
-  get hint(): string | undefined {
-    return {
-      "tailscale-unavailable":
-        "Is Tailscale installed and tailscaled running? Try `tailscale status` — or drop --share and open the printed localhost URL.",
-      "no-tailnet-name": "Run `tailscale up` and make sure MagicDNS is enabled.",
-      "serve-failed": undefined,
-    }[this.reason];
-  }
-}
-
 /**
  * Human-readable gloss for each diagnostic. Deliberately our own words rather
  * than the CLI's: tailscale prints auth keys and node names into stderr, and
@@ -61,15 +37,86 @@ const DIAGNOSTIC_EXPLANATIONS: Record<TailscaleStderrDiagnostic, string | undefi
   unknown: undefined,
 };
 
-const commandDetail = (error: TailscaleCommandError): string => {
-  if (error._tag !== "TailscaleCommandExitError" || error.stderrDiagnostic === undefined) {
-    return error.message;
+/**
+ * Our own wording for why a tailscale command failed, derived from the
+ * classified diagnostic. Never the CLI's text — see `stderrDiagnosticOf`.
+ */
+const explainCommandFailure = (error: TailscaleCommandError): string | undefined =>
+  error._tag === "TailscaleCommandExitError" && error.stderrDiagnostic !== undefined
+    ? (DIAGNOSTIC_EXPLANATIONS[error.stderrDiagnostic] ?? "run the command by hand to see why")
+    : undefined;
+
+/**
+ * Three distinct failures, three classes: each has its own caller-visible
+ * message and its own remedy, and `shareDevServer` chooses between them
+ * structurally. A single error with a `reason` discriminator would encode that
+ * distinction twice and put a lookup table in the `message` getter.
+ *
+ * Each wraps a real underlying failure and so keeps it as `cause`; the message
+ * is derived only from the structural fields, never from `cause.message`.
+ */
+export class TailscaleUnavailableError extends Schema.TaggedErrorClass<TailscaleUnavailableError>()(
+  "TailscaleUnavailableError",
+  { cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "could not talk to tailscale";
   }
-  const explanation = DIAGNOSTIC_EXPLANATIONS[error.stderrDiagnostic];
-  return explanation === undefined
-    ? `${error.message} Run the command by hand to see why.`
-    : `${error.message} ${explanation}.`;
-};
+
+  get hint(): string {
+    return "Is Tailscale installed and tailscaled running? Try `tailscale status` — or drop --share and open the printed localhost URL.";
+  }
+}
+
+/** No underlying failure: the status read succeeded and simply had no name. */
+export class TailnetNameMissingError extends Schema.TaggedErrorClass<TailnetNameMissingError>()(
+  "TailnetNameMissingError",
+  {},
+) {
+  override get message(): string {
+    return "this machine has no tailnet DNS name";
+  }
+
+  get hint(): string {
+    return "Run `tailscale up` and make sure MagicDNS is enabled.";
+  }
+}
+
+/**
+ * `stage` is a genuine multi-value discriminator: both stages share the same
+ * semantics (a `tailscale serve` invocation failed for this port) and differ
+ * only in which one, which the message states plainly.
+ */
+export class DevServeFailedError extends Schema.TaggedErrorClass<DevServeFailedError>()(
+  "DevServeFailedError",
+  {
+    stage: Schema.Literals(["clear-existing", "serve"]),
+    webPort: Schema.Number,
+    explanation: Schema.optional(Schema.String),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    const port = String(this.webPort);
+    const base =
+      this.stage === "clear-existing"
+        ? `could not clear the existing mapping for port ${port}. Run \`tailscale serve --https=${port} off\` and retry`
+        : `could not serve port ${port} on the tailnet (it is no longer served; any previous mapping for it was cleared before this attempt)`;
+    return this.explanation ? `${base}: ${this.explanation}` : base;
+  }
+
+  get hint(): undefined {
+    return undefined;
+  }
+}
+
+export const DevShareError = Schema.Union([
+  TailscaleUnavailableError,
+  TailnetNameMissingError,
+  DevServeFailedError,
+]);
+export type DevShareError = typeof DevShareError.Type;
+export const isDevShareError = Schema.is(DevShareError);
 
 /**
  * Removes any mapping for `webPort`, reporting whether the port is now clear.
@@ -81,7 +128,13 @@ const commandDetail = (error: TailscaleCommandError): string => {
 export const unshareDevServer = (
   webPort: number,
 ): Effect.Effect<
-  { readonly cleared: boolean; readonly detail?: string | undefined },
+  {
+    readonly cleared: boolean;
+    readonly explanation?: string | undefined;
+    // Kept structured so a caller wrapping this can preserve the real error
+    // chain rather than a flattened string.
+    readonly cause?: TailscaleCommandError | undefined;
+  },
   never,
   ChildProcessSpawner.ChildProcessSpawner
 > =>
@@ -93,7 +146,13 @@ export const unshareDevServer = (
         error._tag === "TailscaleCommandExitError" &&
           error.stderrDiagnostic === "no-existing-handler"
           ? ({ cleared: true } as const)
-          : ({ cleared: false, detail: commandDetail(error) } as const),
+          : ({
+              cleared: false,
+              ...(explainCommandFailure(error) !== undefined
+                ? { explanation: explainCommandFailure(error) }
+                : {}),
+              cause: error,
+            } as const),
       ),
     ),
     Effect.uninterruptible,
@@ -112,12 +171,10 @@ export const shareDevServer = Effect.fn("devShare.shareDevServer")(function* (in
   readonly webPort: number;
 }) {
   const status = yield* readTailscaleStatus.pipe(
-    Effect.mapError(
-      (error) => new DevShareError({ reason: "tailscale-unavailable", detail: error.message }),
-    ),
+    Effect.mapError((error) => new TailscaleUnavailableError({ cause: error })),
   );
   if (status.magicDnsName === null) {
-    return yield* new DevShareError({ reason: "no-tailnet-name" });
+    return yield* new TailnetNameMissingError();
   }
 
   // Clear any mapping left behind by a run that was killed before its finalizer
@@ -130,22 +187,24 @@ export const shareDevServer = Effect.fn("devShare.shareDevServer")(function* (in
     // Serving over routes we failed to remove would hand out a URL that is
     // broken in a way the user cannot see: the page loads while /ws and /api
     // silently resolve to a dead backend. Better to refuse and say why.
-    return yield* new DevShareError({
-      reason: "serve-failed",
-      detail: `could not clear the existing mapping for port ${String(input.webPort)}${
-        cleared.detail ? `: ${cleared.detail}` : ""
-      }. Run \`tailscale serve --https=${String(input.webPort)} off\` and retry.`,
+    return yield* new DevServeFailedError({
+      stage: "clear-existing",
+      webPort: input.webPort,
+      ...(cleared.explanation !== undefined ? { explanation: cleared.explanation } : {}),
+      ...(cleared.cause !== undefined ? { cause: cleared.cause } : {}),
     });
   }
 
   yield* ensureTailscaleServe({ localPort: input.webPort, servePort: input.webPort }).pipe(
-    Effect.mapError(
-      (error) =>
-        new DevShareError({
-          reason: "serve-failed",
-          detail: `${commandDetail(error)} (port ${String(input.webPort)} is no longer served; any previous mapping for it was cleared before this attempt)`,
-        }),
-    ),
+    Effect.mapError((error) => {
+      const explanation = explainCommandFailure(error);
+      return new DevServeFailedError({
+        stage: "serve",
+        webPort: input.webPort,
+        ...(explanation !== undefined ? { explanation } : {}),
+        cause: error,
+      });
+    }),
   );
 
   return {
