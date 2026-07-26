@@ -19,7 +19,7 @@ import * as Schema from "effect/Schema";
 import { Argument, Command, Flag } from "effect/unstable/cli";
 import { ChildProcess } from "effect/unstable/process";
 
-import { DevShareError, shareDevServer, unshareDevServer } from "./lib/dev-share.ts";
+import { type DevShareError, shareDevServer, unshareDevServer } from "./lib/dev-share.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 
 Object.assign(process.env, loadRepoEnv());
@@ -669,7 +669,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
                   ? Effect.void
                   : Effect.logWarning(
                       `[dev-runner] could not remove the tailnet mapping for port ${String(sharedWebPort)}${
-                        result.detail ? `: ${result.detail}` : ""
+                        result.explanation ? `: ${result.explanation}` : ""
                       }. Remove it with \`tailscale serve --https=${String(sharedWebPort)} off\`.`,
                     ),
               ),
