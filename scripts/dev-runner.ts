@@ -296,14 +296,24 @@ export function createDevRunnerEnv({
         // phone): the remote browser dials its own machine.
         delete output.VITE_HTTP_URL;
         delete output.VITE_WS_URL;
+        // Deleting is not enough on its own: vite.config.ts calls loadRepoEnv,
+        // which merges `.env`/`.env.local` *under* this env, so a developer
+        // with either URL in their `.env` would get it back and silently lose
+        // single-origin mode. This states the intent positively so Vite can
+        // ignore those values rather than infer from their absence.
+        output.T3CODE_SINGLE_ORIGIN_DEV = "1";
       } else {
         output.VITE_HTTP_URL = `http://localhost:${serverPort}`;
         output.VITE_WS_URL = `ws://localhost:${serverPort}`;
+        delete output.T3CODE_SINGLE_ORIGIN_DEV;
       }
     } else {
       output.T3CODE_PORT = String(serverPort);
       output.VITE_HTTP_URL = `http://${DESKTOP_DEV_LOOPBACK_HOST}:${serverPort}`;
       output.VITE_WS_URL = `ws://${DESKTOP_DEV_LOOPBACK_HOST}:${serverPort}`;
+      // Desktop pins the renderer to loopback on purpose; an ambient marker
+      // must not make Vite drop those URLs.
+      delete output.T3CODE_SINGLE_ORIGIN_DEV;
       delete output.T3CODE_MODE;
       delete output.T3CODE_NO_BROWSER;
       delete output.T3CODE_HOST;
@@ -625,7 +635,7 @@ export function runDevRunnerWithInput(input: DevRunnerCliInput) {
         // Electron itself loads the renderer from. Refuse rather than hand out
         // a URL that is broken in a way the user cannot see.
         yield* Effect.logWarning(
-          "[dev-runner] --share is not supported for dev:desktop (the renderer is pinned to loopback). Use `dev` or `dev:web`.",
+          "[dev-runner] --share is not supported for dev:desktop (the renderer is pinned to loopback). Use `dev`, which runs the whole browser stack.",
         );
       } else {
         // acquireRelease, not share-then-addFinalizer: the mapping outlives this

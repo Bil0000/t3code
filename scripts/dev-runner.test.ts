@@ -376,9 +376,57 @@ it.layer(NodeServices.layer)("dev-runner", (it) => {
           assert.equal(env.VITE_HTTP_URL, undefined);
           assert.equal(env.VITE_WS_URL, undefined);
           assert.equal(env.T3CODE_PORT, "13773");
+          // Deleting the keys is not sufficient — vite.config.ts merges
+          // `.env`/`.env.local` underneath this env and would revive them, so
+          // the intent has to be stated positively.
+          assert.equal(env.T3CODE_SINGLE_ORIGIN_DEV, "1");
         }),
       );
     }
+
+    // Desktop pins the renderer at loopback deliberately; an ambient marker
+    // must not make Vite discard those URLs.
+    it.effect("clears the single-origin marker in dev:desktop mode", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev:desktop",
+          baseEnv: { T3CODE_SINGLE_ORIGIN_DEV: "1" },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.T3CODE_SINGLE_ORIGIN_DEV, undefined);
+        assert.equal(env.VITE_HTTP_URL, "http://127.0.0.1:13773");
+      }),
+    );
+
+    it.effect("clears the single-origin marker in dev:server mode", () =>
+      Effect.gen(function* () {
+        const env = yield* createDevRunnerEnv({
+          mode: "dev:server",
+          baseEnv: { T3CODE_SINGLE_ORIGIN_DEV: "1" },
+          serverOffset: 0,
+          webOffset: 0,
+          t3Home: undefined,
+          browser: undefined,
+          autoBootstrapProjectFromCwd: undefined,
+          logWebSocketEvents: undefined,
+          host: undefined,
+          port: undefined,
+          devUrl: undefined,
+        });
+
+        assert.equal(env.T3CODE_SINGLE_ORIGIN_DEV, undefined);
+        assert.equal(env.VITE_HTTP_URL, "http://localhost:13773");
+      }),
+    );
 
     it.effect("keeps explicit backend URLs for the desktop renderer", () =>
       Effect.gen(function* () {
