@@ -426,7 +426,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           terminalOpen,
         },
       });
-      if (command !== "commandPalette.toggle") {
+      if (command !== "commandPalette.toggle" || importSession !== null) {
         return;
       }
       event.preventDefault();
@@ -435,7 +435,7 @@ export function CommandPalette({ children }: { children: ReactNode }) {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [keybindings, terminalOpen, toggleOpen]);
+  }, [importSession, keybindings, terminalOpen, toggleOpen]);
 
   useEffect(
     () =>
