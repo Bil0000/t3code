@@ -138,6 +138,8 @@ export function ImportSessionDialog({
         );
       }
       projectId = createdProjectId;
+      session = { ...session, projectId: createdProjectId };
+      setResolved(session);
     }
 
     const importResult = await importThread({
