@@ -24,6 +24,8 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
+  resolveImportSession: "orchestration.resolveImportSession",
+  importThread: "orchestration.importThread",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
   replayEvents: "orchestration.replayEvents",
@@ -746,6 +748,23 @@ const ThreadSessionStopCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+export const ThreadImportedMessage = Schema.Struct({
+  messageId: MessageId,
+  role: Schema.Literals(["user", "assistant"]),
+  text: Schema.String,
+  createdAt: IsoDateTime,
+  updatedAt: IsoDateTime,
+});
+export type ThreadImportedMessage = typeof ThreadImportedMessage.Type;
+
+const ThreadMessagesImportCommand = Schema.Struct({
+  type: Schema.Literal("thread.messages.import"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  messages: Schema.Array(ThreadImportedMessage),
+  createdAt: IsoDateTime,
+});
+
 const DispatchableClientOrchestrationCommand = Schema.Union([
   ProjectCreateCommand,
   ProjectMetaUpdateCommand,
@@ -862,6 +881,7 @@ const ThreadRevertCompleteCommand = Schema.Struct({
 
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
+  ThreadMessagesImportCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
@@ -893,6 +913,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.runtime-mode-set",
   "thread.interaction-mode-set",
   "thread.message-sent",
+  "thread.messages-imported",
   "thread.turn-start-requested",
   "thread.turn-interrupt-requested",
   "thread.approval-response-requested",
@@ -1030,6 +1051,11 @@ export const ThreadMessageSentPayload = Schema.Struct({
   streaming: Schema.Boolean,
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
+});
+
+export const ThreadMessagesImportedPayload = Schema.Struct({
+  threadId: ThreadId,
+  messages: Schema.Array(ThreadImportedMessage),
 });
 
 export const ThreadTurnStartRequestedPayload = Schema.Struct({
@@ -1206,6 +1232,11 @@ export const OrchestrationEvent = Schema.Union([
   }),
   Schema.Struct({
     ...EventBaseFields,
+    type: Schema.Literal("thread.messages-imported"),
+    payload: ThreadMessagesImportedPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
     type: Schema.Literal("thread.turn-start-requested"),
     payload: ThreadTurnStartRequestedPayload,
   }),
@@ -1341,6 +1372,34 @@ export const DispatchResult = Schema.Struct({
 });
 export type DispatchResult = typeof DispatchResult.Type;
 
+export const OrchestrationResolveImportSessionInput = Schema.Struct({
+  instanceId: ProviderInstanceId,
+  externalId: TrimmedNonEmptyString,
+});
+export type OrchestrationResolveImportSessionInput =
+  typeof OrchestrationResolveImportSessionInput.Type;
+
+export const OrchestrationResolveImportSessionResult = Schema.Struct({
+  externalId: TrimmedNonEmptyString,
+  workspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
+  projectId: Schema.NullOr(ProjectId),
+  title: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type OrchestrationResolveImportSessionResult =
+  typeof OrchestrationResolveImportSessionResult.Type;
+
+export const OrchestrationImportThreadInput = Schema.Struct({
+  projectId: ProjectId,
+  modelSelection: ModelSelection,
+  externalId: TrimmedNonEmptyString,
+});
+export type OrchestrationImportThreadInput = typeof OrchestrationImportThreadInput.Type;
+
+export const OrchestrationImportThreadResult = Schema.Struct({
+  threadId: ThreadId,
+});
+export type OrchestrationImportThreadResult = typeof OrchestrationImportThreadResult.Type;
+
 export const OrchestrationGetTurnDiffInput = TurnCountRange.mapFields(
   Struct.assign({
     threadId: ThreadId,
@@ -1375,6 +1434,14 @@ export const OrchestrationRpcSchemas = {
   dispatchCommand: {
     input: ClientOrchestrationCommand,
     output: DispatchResult,
+  },
+  resolveImportSession: {
+    input: OrchestrationResolveImportSessionInput,
+    output: OrchestrationResolveImportSessionResult,
+  },
+  importThread: {
+    input: OrchestrationImportThreadInput,
+    output: OrchestrationImportThreadResult,
   },
   getTurnDiff: {
     input: OrchestrationGetTurnDiffInput,
@@ -1412,6 +1479,14 @@ export class OrchestrationGetSnapshotError extends Schema.TaggedErrorClass<Orche
 
 export class OrchestrationDispatchCommandError extends Schema.TaggedErrorClass<OrchestrationDispatchCommandError>()(
   "OrchestrationDispatchCommandError",
+  {
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+export class OrchestrationImportThreadError extends Schema.TaggedErrorClass<OrchestrationImportThreadError>()(
+  "OrchestrationImportThreadError",
   {
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
