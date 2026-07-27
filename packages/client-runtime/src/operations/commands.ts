@@ -2,6 +2,8 @@ import {
   CommandId,
   ORCHESTRATION_WS_METHODS,
   type ClientOrchestrationCommand,
+  type OrchestrationImportThreadInput,
+  type OrchestrationResolveImportSessionInput,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -48,12 +50,28 @@ export type RespondToThreadApprovalInput = CommandInput<"thread.approval.respond
 export type RespondToThreadUserInputInput = CommandInput<"thread.user-input.respond">;
 export type RevertThreadCheckpointInput = CommandInput<"thread.checkpoint.revert">;
 export type StopThreadSessionInput = CommandInput<"thread.session.stop">;
+export type ImportThreadInput = OrchestrationImportThreadInput;
+export type ResolveImportSessionInput = OrchestrationResolveImportSessionInput;
 
 type DispatchTag = typeof ORCHESTRATION_WS_METHODS.dispatchCommand;
 type CommandEffect = Effect.Effect<
   EnvironmentRpcSuccess<DispatchTag>,
   EnvironmentRpcFailure<DispatchTag> | EnvironmentRpcUnavailableError,
   Crypto.Crypto | EnvironmentSupervisor
+>;
+
+type ImportThreadTag = typeof ORCHESTRATION_WS_METHODS.importThread;
+type ImportThreadEffect = Effect.Effect<
+  EnvironmentRpcSuccess<ImportThreadTag>,
+  EnvironmentRpcFailure<ImportThreadTag> | EnvironmentRpcUnavailableError,
+  EnvironmentSupervisor
+>;
+
+type ResolveImportSessionTag = typeof ORCHESTRATION_WS_METHODS.resolveImportSession;
+type ResolveImportSessionEffect = Effect.Effect<
+  EnvironmentRpcSuccess<ResolveImportSessionTag>,
+  EnvironmentRpcFailure<ResolveImportSessionTag> | EnvironmentRpcUnavailableError,
+  EnvironmentSupervisor
 >;
 
 function commandId(input: { readonly commandId?: CommandId }) {
@@ -297,4 +315,18 @@ export const stopThreadSession: (input: StopThreadSessionInput) => CommandEffect
     commandId: metadata.commandId,
     createdAt: metadata.createdAt,
   });
+});
+
+export const resolveImportSession: (
+  input: ResolveImportSessionInput,
+) => ResolveImportSessionEffect = Effect.fn("EnvironmentCommands.resolveImportSession")(
+  function* (input) {
+    return yield* request(ORCHESTRATION_WS_METHODS.resolveImportSession, input);
+  },
+);
+
+export const importThread: (input: ImportThreadInput) => ImportThreadEffect = Effect.fn(
+  "EnvironmentCommands.importThread",
+)(function* (input) {
+  return yield* request(ORCHESTRATION_WS_METHODS.importThread, input);
 });

@@ -396,6 +396,57 @@ describe("applyThreadDetailEvent", () => {
     });
   });
 
+  describe("thread.messages-imported", () => {
+    const importedEvent = {
+      ...baseEventFields,
+      sequence: 8,
+      occurredAt: "2026-04-01T07:00:00.000Z",
+      aggregateKind: "thread",
+      aggregateId: ThreadId.make("thread-1"),
+      type: "thread.messages-imported",
+      payload: {
+        threadId: ThreadId.make("thread-1"),
+        messages: [
+          {
+            messageId: MessageId.make("imported:claudeAgent:thread-1:000000:uuid-1"),
+            role: "user",
+            text: "Fix the flaky test",
+            createdAt: "2026-04-01T07:00:00.000Z",
+            updatedAt: "2026-04-01T07:00:00.000Z",
+          },
+          {
+            messageId: MessageId.make("imported:claudeAgent:thread-1:000001:uuid-2"),
+            role: "assistant",
+            text: "Looking at it",
+            createdAt: "2026-04-01T07:00:00.000Z",
+            updatedAt: "2026-04-01T07:00:00.000Z",
+          },
+        ],
+      },
+    } as const;
+
+    it("appends the imported transcript", () => {
+      const result = applyThreadDetailEvent(baseThread, importedEvent);
+
+      expect(result.kind).toBe("updated");
+      if (result.kind === "updated") {
+        expect(result.thread.messages.map((message) => [message.role, message.text])).toEqual([
+          ["user", "Fix the flaky test"],
+          ["assistant", "Looking at it"],
+        ]);
+      }
+    });
+
+    it("returns unchanged when the snapshot already carries the imported messages", () => {
+      const imported = applyThreadDetailEvent(baseThread, importedEvent);
+      if (imported.kind !== "updated") {
+        throw new Error("Expected the first import to update the thread.");
+      }
+
+      expect(applyThreadDetailEvent(imported.thread, importedEvent).kind).toBe("unchanged");
+    });
+  });
+
   describe("thread.session-set", () => {
     it("settles a running latestTurn when the session leaves the running status", () => {
       const threadWithRunningTurn: OrchestrationThread = {

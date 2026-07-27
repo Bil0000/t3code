@@ -322,6 +322,33 @@ export function applyThreadDetailEvent(
       };
     }
 
+    case "thread.messages-imported": {
+      const knownMessageIds = new Set(thread.messages.map((entry) => entry.id));
+      const importedMessages: OrchestrationMessage[] = Arr.filter(
+        event.payload.messages,
+        (message) => !knownMessageIds.has(message.messageId),
+      ).map((message) => ({
+        id: message.messageId,
+        role: message.role,
+        text: message.text,
+        turnId: null,
+        streaming: false,
+        createdAt: message.createdAt,
+        updatedAt: message.updatedAt,
+      }));
+      if (importedMessages.length === 0) {
+        return { kind: "unchanged" };
+      }
+      return {
+        kind: "updated",
+        thread: {
+          ...thread,
+          messages: Arr.appendAll(thread.messages, importedMessages),
+          updatedAt: event.occurredAt,
+        },
+      };
+    }
+
     // ── Session ─────────────────────────────────────────────────────
     case "thread.session-set": {
       // Leaving the "running" session status is the turn-end signal: settle a

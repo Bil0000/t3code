@@ -6,6 +6,8 @@ import {
   type ArchiveThreadInput,
   type CreateThreadInput,
   type DeleteThreadInput,
+  type ImportThreadInput,
+  type ResolveImportSessionInput,
   type InterruptThreadTurnInput,
   type RespondToThreadApprovalInput,
   type RespondToThreadUserInputInput,
@@ -23,7 +25,9 @@ import {
   archiveThread,
   createThread,
   deleteThread,
+  importThread,
   interruptThreadTurn,
+  resolveImportSession,
   respondToThreadApproval,
   respondToThreadUserInput,
   revertThreadCheckpoint,
@@ -44,7 +48,9 @@ export type {
   ArchiveThreadInput,
   CreateThreadInput,
   DeleteThreadInput,
+  ImportThreadInput,
   InterruptThreadTurnInput,
+  ResolveImportSessionInput,
   RespondToThreadApprovalInput,
   RespondToThreadUserInputInput,
   RevertThreadCheckpointInput,
@@ -68,6 +74,11 @@ export function createThreadEnvironmentAtoms<R, E>(
     mode: "serial" as const,
     key: ({ environmentId, input }: { environmentId: string; input: { threadId: string } }) =>
       JSON.stringify([environmentId, input.threadId]),
+  };
+  const importConcurrency = {
+    mode: "serial" as const,
+    key: ({ environmentId, input }: { environmentId: string; input: { externalId: string } }) =>
+      JSON.stringify([environmentId, input.externalId]),
   };
   return {
     create: createEnvironmentCommand(runtime, {
@@ -171,6 +182,18 @@ export function createThreadEnvironmentAtoms<R, E>(
       execute: (input: StopThreadSessionInput) => stopThreadSession(input),
       scheduler,
       concurrency,
+    }),
+    resolveImportSession: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:resolve-import-session",
+      execute: (input: ResolveImportSessionInput) => resolveImportSession(input),
+      scheduler,
+      concurrency: importConcurrency,
+    }),
+    importThread: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:import-thread",
+      execute: (input: ImportThreadInput) => importThread(input),
+      scheduler,
+      concurrency: importConcurrency,
     }),
   };
 }
