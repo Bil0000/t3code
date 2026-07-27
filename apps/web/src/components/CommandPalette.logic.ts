@@ -405,9 +405,10 @@ export function buildImportSessionProviderOptions(
 ): ImportSessionProviderOption[] {
   const entries = deriveProviderInstanceEntries(providers);
   return IMPORT_SESSION_PROVIDERS.flatMap((candidate) => {
-    const entry = entries.find(
+    const readyEntries = entries.filter(
       (item) => item.driverKind === candidate.driverKind && isProviderInstancePickerReady(item),
     );
+    const entry = readyEntries.find((item) => item.isDefault) ?? readyEntries[0];
     if (!entry) {
       return [];
     }
