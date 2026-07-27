@@ -1432,6 +1432,113 @@ it.layer(BaseTestLayer)("OrchestrationProjectionPipeline", (it) => {
     }),
   );
 
+  it.effect("projects an imported transcript into thread messages", () =>
+    Effect.gen(function* () {
+      const projectionPipeline = yield* OrchestrationProjectionPipeline;
+      const eventStore = yield* OrchestrationEventStore;
+      const sql = yield* SqlClient.SqlClient;
+      const now = "2026-01-01T00:00:00.000Z";
+      const threadId = ThreadId.make("thread-imported-transcript");
+
+      yield* eventStore.append({
+        type: "thread.created",
+        eventId: EventId.make("evt-it1"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: now,
+        commandId: CommandId.make("cmd-it1"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-it1"),
+        metadata: {},
+        payload: {
+          threadId,
+          projectId: ProjectId.make("project-imported-transcript"),
+          title: "Imported transcript",
+          modelSelection: {
+            instanceId: ProviderInstanceId.make("claudeAgent"),
+            model: "sonnet",
+          },
+          runtimeMode: "full-access",
+          branch: null,
+          worktreePath: null,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      yield* eventStore.append({
+        type: "thread.messages-imported",
+        eventId: EventId.make("evt-it2"),
+        aggregateKind: "thread",
+        aggregateId: threadId,
+        occurredAt: "2026-01-01T00:00:01.000Z",
+        commandId: CommandId.make("cmd-it2"),
+        causationEventId: null,
+        correlationId: CorrelationId.make("cmd-it2"),
+        metadata: {},
+        payload: {
+          threadId,
+          messages: [
+            {
+              messageId: MessageId.make(
+                "imported:claudeAgent:thread-imported-transcript:000000:uuid-1",
+              ),
+              role: "user",
+              text: "Fix the flaky test",
+              createdAt: "2026-01-01T00:00:01.000Z",
+              updatedAt: "2026-01-01T00:00:01.000Z",
+            },
+            {
+              messageId: MessageId.make(
+                "imported:claudeAgent:thread-imported-transcript:000001:uuid-2",
+              ),
+              role: "assistant",
+              text: "Looking at it",
+              createdAt: "2026-01-01T00:00:01.000Z",
+              updatedAt: "2026-01-01T00:00:01.000Z",
+            },
+          ],
+        },
+      });
+
+      yield* projectionPipeline.bootstrap;
+
+      const messageRows = yield* sql<{
+        readonly messageId: string;
+        readonly role: string;
+        readonly text: string;
+        readonly turnId: string | null;
+        readonly isStreaming: number;
+      }>`
+        SELECT
+          message_id AS "messageId",
+          role,
+          text,
+          turn_id AS "turnId",
+          is_streaming AS "isStreaming"
+        FROM projection_thread_messages
+        WHERE thread_id = ${threadId}
+        ORDER BY message_id ASC
+      `;
+      assert.deepEqual(messageRows, [
+        {
+          messageId: "imported:claudeAgent:thread-imported-transcript:000000:uuid-1",
+          role: "user",
+          text: "Fix the flaky test",
+          turnId: null,
+          isStreaming: 0,
+        },
+        {
+          messageId: "imported:claudeAgent:thread-imported-transcript:000001:uuid-2",
+          role: "assistant",
+          text: "Looking at it",
+          turnId: null,
+          isStreaming: 0,
+        },
+      ]);
+    }),
+  );
+
   it.effect("settles a superseded running turn when a new turn becomes active", () =>
     Effect.gen(function* () {
       const projectionPipeline = yield* OrchestrationProjectionPipeline;

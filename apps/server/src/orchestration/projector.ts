@@ -11,6 +11,7 @@ import * as Schema from "effect/Schema";
 import { toProjectorDecodeError, type OrchestrationProjectorDecodeError } from "./Errors.ts";
 import {
   MessageSentPayloadSchema,
+  MessagesImportedPayloadSchema,
   ProjectCreatedPayload,
   ProjectDeletedPayload,
   ProjectMetaUpdatedPayload,
@@ -492,6 +493,44 @@ export function projectEvent(
           ...nextBase,
           threads: updateThread(nextBase.threads, payload.threadId, {
             messages: cappedMessages,
+            updatedAt: event.occurredAt,
+          }),
+        };
+      });
+
+    case "thread.messages-imported":
+      return Effect.gen(function* () {
+        const payload = yield* decodeForEvent(
+          MessagesImportedPayloadSchema,
+          event.payload,
+          event.type,
+          "payload",
+        );
+        const thread = nextBase.threads.find((entry) => entry.id === payload.threadId);
+        if (!thread) {
+          return nextBase;
+        }
+
+        const knownMessageIds = new Set(thread.messages.map((entry) => entry.id));
+        const importedMessages: OrchestrationMessage[] = payload.messages
+          .filter((message) => !knownMessageIds.has(message.messageId))
+          .map((message) => ({
+            id: message.messageId,
+            role: message.role,
+            text: message.text,
+            turnId: null,
+            streaming: false,
+            createdAt: message.createdAt,
+            updatedAt: message.updatedAt,
+          }));
+        if (importedMessages.length === 0) {
+          return nextBase;
+        }
+
+        return {
+          ...nextBase,
+          threads: updateThread(nextBase.threads, payload.threadId, {
+            messages: [...thread.messages, ...importedMessages].slice(-MAX_THREAD_MESSAGES),
             updatedAt: event.occurredAt,
           }),
         };

@@ -209,6 +209,77 @@ describe("orchestration projector", () => {
     expect(unarchived.threads[0]?.archivedAt).toBeNull();
   });
 
+  it("applies thread.messages-imported into the command read model", async () => {
+    const now = "2026-01-01T00:00:00.000Z";
+    const importedAt = "2025-12-31T09:00:00.000Z";
+    const withThread = await Effect.runPromise(
+      projectEvent(
+        createEmptyReadModel(now),
+        makeEvent({
+          sequence: 1,
+          type: "thread.created",
+          aggregateKind: "thread",
+          aggregateId: "thread-import",
+          occurredAt: now,
+          commandId: "cmd-thread-create",
+          payload: {
+            threadId: "thread-import",
+            projectId: "project-1",
+            title: "Imported",
+            modelSelection: {
+              provider: ProviderDriverKind.make("claudeAgent"),
+              model: "sonnet",
+            },
+            runtimeMode: "full-access",
+            branch: null,
+            worktreePath: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        }),
+      ),
+    );
+
+    const importEvent = makeEvent({
+      sequence: 2,
+      type: "thread.messages-imported",
+      aggregateKind: "thread",
+      aggregateId: "thread-import",
+      occurredAt: now,
+      commandId: "cmd-messages-import",
+      payload: {
+        threadId: "thread-import",
+        messages: [
+          {
+            messageId: "imported:claudeAgent:thread-import:000000:uuid-1",
+            role: "user",
+            text: "Fix the flaky test",
+            createdAt: importedAt,
+            updatedAt: importedAt,
+          },
+          {
+            messageId: "imported:claudeAgent:thread-import:000001:uuid-2",
+            role: "assistant",
+            text: "Looking at it",
+            createdAt: importedAt,
+            updatedAt: importedAt,
+          },
+        ],
+      },
+    });
+
+    const next = await Effect.runPromise(projectEvent(withThread, importEvent));
+    expect(next.threads[0]?.messages.map((message) => [message.role, message.text])).toEqual([
+      ["user", "Fix the flaky test"],
+      ["assistant", "Looking at it"],
+    ]);
+    expect(next.threads[0]?.messages.every((message) => message.turnId === null)).toBe(true);
+    expect(next.threads[0]?.messages[0]?.createdAt).toBe(importedAt);
+
+    const replayed = await Effect.runPromise(projectEvent(next, importEvent));
+    expect(replayed.threads[0]?.messages).toHaveLength(2);
+  });
+
   it("keeps projector forward-compatible for unhandled event types", async () => {
     const now = "2026-01-01T00:00:00.000Z";
     const model = createEmptyReadModel(now);
