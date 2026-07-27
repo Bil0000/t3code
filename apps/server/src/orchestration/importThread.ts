@@ -15,6 +15,7 @@ import {
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 
 import type { ProviderServiceShape } from "../provider/Services/ProviderService.ts";
@@ -33,13 +34,14 @@ function isImportableDriver(driver: string): driver is ImportableDriver {
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 
-const importFailure = (message: string) => (cause: unknown) =>
-  new OrchestrationImportThreadError({ message, cause });
-
 const readClaudeSessionInfo = (externalId: string) =>
   Effect.tryPromise({
     try: () => getSessionInfo(externalId, {}),
-    catch: importFailure(`Could not read Claude Code session '${externalId}'.`),
+    catch: (cause) =>
+      new OrchestrationImportThreadError({
+        message: `Could not read Claude Code session '${externalId}'.`,
+        cause,
+      }),
   });
 
 const claudeSessionNotFound = (externalId: string) =>
@@ -86,9 +88,15 @@ export const makeImportThread = (dependencies: {
   const requireImportableDriver = Effect.fnUntraced(function* (
     instanceId: ProviderInstanceId,
   ): Effect.fn.Return<ImportableDriver, OrchestrationImportThreadError> {
-    const instanceInfo = yield* providerService
-      .getInstanceInfo(instanceId)
-      .pipe(Effect.mapError(importFailure(`Provider instance '${instanceId}' is not available.`)));
+    const instanceInfo = yield* providerService.getInstanceInfo(instanceId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestrationImportThreadError({
+            message: `Provider instance '${instanceId}' is not available.`,
+            cause,
+          }),
+      ),
+    );
     const driver = instanceInfo.driverKind;
     if (isImportableDriver(driver)) {
       return driver;
@@ -109,9 +117,11 @@ export const makeImportThread = (dependencies: {
     if (input.driver === "claudeAgent") {
       const sessionMessages = yield* Effect.tryPromise({
         try: () => getSessionMessages(input.externalId, {}),
-        catch: importFailure(
-          `Could not read the transcript for Claude Code session '${input.externalId}'.`,
-        ),
+        catch: (cause) =>
+          new OrchestrationImportThreadError({
+            message: `Could not read the transcript for Claude Code session '${input.externalId}'.`,
+            cause,
+          }),
       });
       return mapClaudeSessionMessages({
         threadId: input.threadId,
@@ -120,13 +130,15 @@ export const makeImportThread = (dependencies: {
       });
     }
 
-    const snapshot = yield* providerService
-      .readThread(input.threadId)
-      .pipe(
-        Effect.mapError(
-          importFailure(`Could not read the transcript for Codex thread '${input.externalId}'.`),
-        ),
-      );
+    const snapshot = yield* providerService.readThread(input.threadId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestrationImportThreadError({
+            message: `Could not read the transcript for Codex thread '${input.externalId}'.`,
+            cause,
+          }),
+      ),
+    );
     const snapshotWorkspaceRoot = snapshot.workspaceRoot?.trim() ?? "";
     if (snapshotWorkspaceRoot.length > 0 && snapshotWorkspaceRoot !== input.workspaceRoot) {
       return yield* new OrchestrationImportThreadError({
@@ -140,24 +152,29 @@ export const makeImportThread = (dependencies: {
     });
   });
 
-  const deletingCreatedThreadOnFailure = <A, E, R>(
+  const deletingCreatedThreadUnlessImported = <A, E, R>(
     threadId: ThreadId,
     effect: Effect.Effect<A, E, R>,
   ) =>
     effect.pipe(
-      Effect.tapError(() =>
-        commandId("delete").pipe(
-          Effect.flatMap((deleteCommandId) =>
-            orchestrationEngine.dispatch({
-              type: "thread.delete",
-              commandId: deleteCommandId,
-              threadId,
-            }),
-          ),
-          Effect.catchCause((cause) =>
-            Effect.logWarning("failed to delete thread after a failed import", { threadId, cause }),
-          ),
-        ),
+      Effect.onExit((exit) =>
+        Exit.isSuccess(exit)
+          ? Effect.void
+          : commandId("delete").pipe(
+              Effect.flatMap((deleteCommandId) =>
+                orchestrationEngine.dispatch({
+                  type: "thread.delete",
+                  commandId: deleteCommandId,
+                  threadId,
+                }),
+              ),
+              Effect.catchCause((cause) =>
+                Effect.logWarning("failed to delete thread after an abandoned import", {
+                  threadId,
+                  cause,
+                }),
+              ),
+            ),
       ),
     );
 
@@ -188,7 +205,13 @@ export const makeImportThread = (dependencies: {
       .getActiveProjectByWorkspaceRoot(workspaceRoot)
       .pipe(
         Effect.map(Option.getOrUndefined),
-        Effect.mapError(importFailure(`Could not look up a project for '${workspaceRoot}'.`)),
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationImportThreadError({
+              message: `Could not look up a project for '${workspaceRoot}'.`,
+              cause,
+            }),
+        ),
       );
 
     return {
@@ -202,12 +225,16 @@ export const makeImportThread = (dependencies: {
   const importThread = Effect.fnUntraced(function* (
     input: OrchestrationImportThreadInput,
   ): Effect.fn.Return<OrchestrationImportThreadResult, OrchestrationImportThreadError> {
-    const project = yield* projectionSnapshotQuery
-      .getProjectShellById(input.projectId)
-      .pipe(
-        Effect.map(Option.getOrUndefined),
-        Effect.mapError(importFailure(`Could not read project '${input.projectId}'.`)),
-      );
+    const project = yield* projectionSnapshotQuery.getProjectShellById(input.projectId).pipe(
+      Effect.map(Option.getOrUndefined),
+      Effect.mapError(
+        (cause) =>
+          new OrchestrationImportThreadError({
+            message: `Could not read project '${input.projectId}'.`,
+            cause,
+          }),
+      ),
+    );
     if (project === undefined) {
       return yield* new OrchestrationImportThreadError({
         message: `Project '${input.projectId}' no longer exists.`,
@@ -248,9 +275,17 @@ export const makeImportThread = (dependencies: {
         worktreePath: null,
         createdAt,
       })
-      .pipe(Effect.mapError(importFailure("Could not create a thread for the imported session.")));
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationImportThreadError({
+              message: "Could not create a thread for the imported session.",
+              cause,
+            }),
+        ),
+      );
 
-    yield* deletingCreatedThreadOnFailure(
+    yield* deletingCreatedThreadUnlessImported(
       threadId,
       Effect.gen(function* () {
         const session = yield* providerService
@@ -268,7 +303,11 @@ export const makeImportThread = (dependencies: {
           })
           .pipe(
             Effect.mapError(
-              importFailure(`Could not resume session '${input.externalId}' for this thread.`),
+              (cause) =>
+                new OrchestrationImportThreadError({
+                  message: `Could not resume session '${input.externalId}' for this thread.`,
+                  cause,
+                }),
             ),
           );
 
@@ -294,7 +333,15 @@ export const makeImportThread = (dependencies: {
             messages,
             createdAt: importedAt,
           })
-          .pipe(Effect.mapError(importFailure("Could not store the imported transcript.")));
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationImportThreadError({
+                  message: "Could not store the imported transcript.",
+                  cause,
+                }),
+            ),
+          );
 
         yield* orchestrationEngine
           .dispatch({
@@ -314,7 +361,13 @@ export const makeImportThread = (dependencies: {
             createdAt: yield* nowIso,
           })
           .pipe(
-            Effect.mapError(importFailure("Could not bind the resumed session to this thread.")),
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationImportThreadError({
+                  message: "Could not bind the resumed session to this thread.",
+                  cause,
+                }),
+            ),
           );
       }),
     );

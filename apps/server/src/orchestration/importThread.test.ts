@@ -12,6 +12,7 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Option from "effect/Option";
 
 import { makeImportThread } from "./importThread.ts";
@@ -61,6 +62,7 @@ function makeHarness(options?: {
   readonly driverKind?: string;
   readonly items?: ReadonlyArray<unknown>;
   readonly snapshotWorkspaceRoot?: string;
+  readonly startSessionNeverSettles?: boolean;
 }) {
   const dispatched: OrchestrationCommand[] = [];
   const instanceId = options?.instanceId ?? codexInstanceId;
@@ -90,7 +92,10 @@ function makeHarness(options?: {
             continuationKey: `${driverKind}:instance:${instanceId}`,
           },
         }),
-      startSession: (threadId) => Effect.succeed({ ...codexSession, threadId }),
+      startSession: (threadId) =>
+        options?.startSessionNeverSettles === true
+          ? Effect.never
+          : Effect.succeed({ ...codexSession, threadId }),
       readThread: (threadId) =>
         Effect.succeed({
           threadId,
@@ -188,6 +193,24 @@ describe("importThread", () => {
       );
 
       expect(failure.message).toContain("has no conversation to import");
+      expect(dispatchedTypes(harness.dispatched)).toEqual(["thread.create", "thread.delete"]);
+    }),
+  );
+
+  it.effect("deletes the thread it created when the import is interrupted", () =>
+    Effect.gen(function* () {
+      const harness = makeHarness({ items: codexTranscript, startSessionNeverSettles: true });
+
+      const fiber = yield* Effect.forkChild(
+        harness.importSession.importThread({
+          projectId,
+          modelSelection: codexModelSelection,
+          externalId: "codex-thread-interrupted",
+        }),
+      );
+      yield* Effect.yieldNow;
+      yield* Fiber.interrupt(fiber);
+
       expect(dispatchedTypes(harness.dispatched)).toEqual(["thread.create", "thread.delete"]);
     }),
   );
