@@ -335,6 +335,7 @@ describe("ProviderCommandReactor", () => {
           },
         });
       },
+      readThread: () => unsupported(),
       rollbackConversation: () => unsupported(),
       get streamEvents() {
         return Stream.fromPubSub(runtimeEventPubSub);
