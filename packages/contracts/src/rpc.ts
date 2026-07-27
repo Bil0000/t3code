@@ -54,6 +54,9 @@ import {
   OrchestrationGetSnapshotError,
   OrchestrationGetTurnDiffError,
   OrchestrationGetTurnDiffInput,
+  OrchestrationImportThreadError,
+  OrchestrationImportThreadInput,
+  OrchestrationResolveImportSessionInput,
   OrchestrationReplayEventsError,
   OrchestrationReplayEventsInput,
   OrchestrationRpcSchemas,
@@ -616,6 +619,21 @@ export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationResolveImportSessionRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.resolveImportSession,
+  {
+    payload: OrchestrationResolveImportSessionInput,
+    success: OrchestrationRpcSchemas.resolveImportSession.output,
+    error: Schema.Union([OrchestrationImportThreadError, EnvironmentAuthorizationError]),
+  },
+);
+
+export const WsOrchestrationImportThreadRpc = Rpc.make(ORCHESTRATION_WS_METHODS.importThread, {
+  payload: OrchestrationImportThreadInput,
+  success: OrchestrationRpcSchemas.importThread.output,
+  error: Schema.Union([OrchestrationImportThreadError, EnvironmentAuthorizationError]),
+});
+
 export const WsOrchestrationGetTurnDiffRpc = Rpc.make(ORCHESTRATION_WS_METHODS.getTurnDiff, {
   payload: OrchestrationGetTurnDiffInput,
   success: OrchestrationRpcSchemas.getTurnDiff.output,
@@ -763,6 +781,8 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeServerLifecycleRpc,
   WsSubscribeAuthAccessRpc,
   WsOrchestrationDispatchCommandRpc,
+  WsOrchestrationResolveImportSessionRpc,
+  WsOrchestrationImportThreadRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,
   WsOrchestrationReplayEventsRpc,

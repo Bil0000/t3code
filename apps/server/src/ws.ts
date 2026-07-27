@@ -68,6 +68,7 @@ import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as ServerConfig from "./config.ts";
 import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
+import { makeImportThread } from "./orchestration/importThread.ts";
 import { normalizeDispatchCommand } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
@@ -77,6 +78,7 @@ import {
   observeRpcStreamEffect as instrumentRpcStreamEffect,
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
+import * as ProviderService from "./provider/Services/ProviderService.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
 import * as ServerSelfUpdate from "./cloud/selfUpdate.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
@@ -259,6 +261,7 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
   {
     type:
       | "thread.message-sent"
+      | "thread.messages-imported"
       | "thread.proposed-plan-upserted"
       | "thread.activity-appended"
       | "thread.turn-diff-completed"
@@ -268,6 +271,7 @@ function isThreadDetailEvent(event: OrchestrationEvent): event is Extract<
 > {
   return (
     event.type === "thread.message-sent" ||
+    event.type === "thread.messages-imported" ||
     event.type === "thread.proposed-plan-upserted" ||
     event.type === "thread.activity-appended" ||
     event.type === "thread.turn-diff-completed" ||
@@ -287,6 +291,8 @@ const SHELL_RESUME_MAX_GAP = 1_000;
 
 const RPC_REQUIRED_SCOPE = new Map<string, AuthEnvironmentScope>([
   [ORCHESTRATION_WS_METHODS.dispatchCommand, AuthOrchestrationOperateScope],
+  [ORCHESTRATION_WS_METHODS.resolveImportSession, AuthOrchestrationReadScope],
+  [ORCHESTRATION_WS_METHODS.importThread, AuthOrchestrationOperateScope],
   [ORCHESTRATION_WS_METHODS.getTurnDiff, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.getFullThreadDiff, AuthOrchestrationReadScope],
   [ORCHESTRATION_WS_METHODS.replayEvents, AuthOrchestrationReadScope],
@@ -409,6 +415,13 @@ const makeWsRpcLayer = (
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
+      const providerService = yield* ProviderService.ProviderService;
+      const importSession = makeImportThread({
+        crypto,
+        orchestrationEngine,
+        projectionSnapshotQuery,
+        providerService,
+      });
       const keybindings = yield* Keybindings.Keybindings;
       const externalLauncher = yield* ExternalLauncher.ExternalLauncher;
       const gitWorkflow = yield* GitWorkflowService.GitWorkflowService;
@@ -1170,6 +1183,18 @@ const makeWsRpcLayer = (
                     }),
               ),
             ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.resolveImportSession]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.resolveImportSession,
+            importSession.resolveImportSession(input),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.importThread]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.importThread,
+            importSession.importThread(input),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_WS_METHODS.getTurnDiff]: (input) =>
