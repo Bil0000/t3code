@@ -40,6 +40,8 @@ export interface ProviderThreadTurnSnapshot {
 export interface ProviderThreadSnapshot {
   readonly threadId: ThreadId;
   readonly turns: ReadonlyArray<ProviderThreadTurnSnapshot>;
+  readonly workspaceRoot?: string;
+  readonly lastActivityAtMs?: number;
 }
 
 export interface ProviderAdapterShape<TError> {

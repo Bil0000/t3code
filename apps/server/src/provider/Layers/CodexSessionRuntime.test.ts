@@ -19,6 +19,7 @@ import {
   hasConfiguredMcpServer,
   isRecoverableThreadResumeError,
   openCodexThread,
+  parseThreadSnapshot,
 } from "./CodexSessionRuntime.ts";
 const isCodexAppServerRequestError = Schema.is(CodexErrors.CodexAppServerRequestError);
 
@@ -468,4 +469,29 @@ describe("openCodexThread", () => {
       NodeAssert.equal(error.errorMessage, "timed out waiting for server");
     }),
   );
+});
+
+describe("parseThreadSnapshot", () => {
+  it("converts the codex thread's unix seconds into epoch milliseconds", () => {
+    const snapshot = parseThreadSnapshot({
+      thread: {
+        id: "thread-1",
+        cwd: "/repo/app",
+        createdAt: 1767225600,
+        recencyAt: 1767312000,
+        turns: [],
+      },
+    });
+
+    NodeAssert.equal(snapshot.workspaceRoot, "/repo/app");
+    NodeAssert.equal(snapshot.lastActivityAtMs, 1767312000000);
+  });
+
+  it("falls back to the creation time when the thread has no recency stamp", () => {
+    const snapshot = parseThreadSnapshot({
+      thread: { id: "thread-2", cwd: "/repo/app", createdAt: 1767225600, turns: [] },
+    });
+
+    NodeAssert.equal(snapshot.lastActivityAtMs, 1767225600000);
+  });
 });

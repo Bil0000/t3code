@@ -91,6 +91,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     (): Promise<CodexThreadSnapshot> =>
       Promise.resolve({
         threadId: "provider-thread-1",
+        workspaceRoot: "/tmp/codex-thread-1",
+        lastActivityAtMs: 0,
         turns: [],
       }),
   );
@@ -99,6 +101,8 @@ class FakeCodexRuntime implements CodexSessionRuntimeShape {
     (_numTurns: number): Promise<CodexThreadSnapshot> =>
       Promise.resolve({
         threadId: "provider-thread-1",
+        workspaceRoot: "/tmp/codex-thread-1",
+        lastActivityAtMs: 0,
         turns: [],
       }),
   );

@@ -128,6 +128,8 @@ export interface CodexThreadTurnSnapshot {
 export interface CodexThreadSnapshot {
   readonly threadId: string;
   readonly turns: ReadonlyArray<CodexThreadTurnSnapshot>;
+  readonly workspaceRoot: string;
+  readonly lastActivityAtMs: number;
 }
 
 export interface CodexSessionRuntimeShape {
@@ -695,11 +697,25 @@ function updateSession(
   });
 }
 
-function parseThreadSnapshot(
-  response: EffectCodexSchema.V2ThreadReadResponse | EffectCodexSchema.V2ThreadRollbackResponse,
-): CodexThreadSnapshot {
+const MILLISECONDS_PER_SECOND = 1_000;
+
+export function parseThreadSnapshot(response: {
+  readonly thread: {
+    readonly id: string;
+    readonly cwd: string;
+    readonly createdAt: number;
+    readonly recencyAt?: number | null;
+    readonly turns: ReadonlyArray<{
+      readonly id: string;
+      readonly items: ReadonlyArray<CodexThreadItem>;
+    }>;
+  };
+}): CodexThreadSnapshot {
   return {
     threadId: response.thread.id,
+    workspaceRoot: response.thread.cwd,
+    lastActivityAtMs:
+      (response.thread.recencyAt ?? response.thread.createdAt) * MILLISECONDS_PER_SECOND,
     turns: response.thread.turns.map((turn) => ({
       id: TurnId.make(turn.id),
       items: turn.items,

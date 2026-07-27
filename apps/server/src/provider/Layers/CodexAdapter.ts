@@ -1593,6 +1593,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
       Effect.map((snapshot) => ({
         threadId,
+        workspaceRoot: snapshot.workspaceRoot,
+        lastActivityAtMs: snapshot.lastActivityAtMs,
         turns: snapshot.turns,
       })),
     );
@@ -1617,6 +1619,8 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
       ),
       Effect.map((snapshot) => ({
         threadId,
+        workspaceRoot: snapshot.workspaceRoot,
+        lastActivityAtMs: snapshot.lastActivityAtMs,
         turns: snapshot.turns,
       })),
     );
