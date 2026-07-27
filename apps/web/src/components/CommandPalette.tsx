@@ -11,6 +11,7 @@ import {
   type EnvironmentId,
   type FilesystemBrowseResult,
   type ProjectId,
+  type ScopedProjectRef,
   type SourceControlDiscoveryResult,
   type SourceControlProviderKind,
   type SourceControlRepositoryInfo,
@@ -25,6 +26,7 @@ import {
   CornerLeftUpIcon,
   FolderIcon,
   FolderPlusIcon,
+  ImportIcon,
   LinkIcon,
   MessageSquareIcon,
   SettingsIcon,
@@ -89,6 +91,7 @@ import {
 import {
   ADDON_ICON_CLASS,
   buildBrowseGroups,
+  buildImportSessionProviderOptions,
   buildProjectActionItems,
   buildRootGroups,
   buildThreadActionItems,
@@ -96,6 +99,7 @@ import {
   type CommandPaletteActionItem,
   type CommandPaletteSubmenuItem,
   type CommandPaletteView,
+  type ImportSessionProviderOption,
   filterBrowseEntries,
   filterCommandPaletteGroups,
   getCommandPaletteInputPlaceholder,
@@ -106,6 +110,7 @@ import {
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
 import { resolveEnvironmentOptionLabel } from "./BranchToolbar.logic";
 import { CommandPaletteResults } from "./CommandPaletteResults";
+import { ImportSessionDialog } from "./ImportSessionDialog";
 import { AzureDevOpsIcon, BitbucketIcon, GitHubIcon, GitLabIcon } from "./Icons";
 import { ProjectFavicon } from "./ProjectFavicon";
 import { ThreadRowLeadingStatus, ThreadRowTrailingStatus } from "./ThreadStatusIndicators";
@@ -376,6 +381,11 @@ function reduceCommandPaletteUiState(
   }
 }
 
+interface ImportSessionRequest {
+  readonly projectRef: ScopedProjectRef;
+  readonly providerOptions: ReadonlyArray<ImportSessionProviderOption>;
+}
+
 export function CommandPalette({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(reduceCommandPaletteUiState, {
     open: false,
@@ -386,6 +396,14 @@ export function CommandPalette({ children }: { children: ReactNode }) {
   const openAddProject = useCallback(() => dispatch({ _tag: "OpenAddProject" }), []);
   const openNewThreadIn = useCallback(() => dispatch({ _tag: "OpenNewThreadIn" }), []);
   const clearOpenIntent = useCallback(() => dispatch({ _tag: "ClearOpenIntent" }), []);
+  const [importSession, setImportSession] = useState<ImportSessionRequest | null>(null);
+  const openImportSession = useCallback(
+    (request: ImportSessionRequest) => {
+      setOpen(false);
+      setImportSession(request);
+    },
+    [setOpen],
+  );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const composerHandleRef = useRef<ChatComposerHandle | null>(null);
   const routeTarget = useParams({
@@ -442,8 +460,21 @@ export function CommandPalette({ children }: { children: ReactNode }) {
           openIntent={state.openIntent}
           setOpen={setOpen}
           clearOpenIntent={clearOpenIntent}
+          openImportSession={openImportSession}
         />
       </CommandDialog>
+      {importSession ? (
+        <ImportSessionDialog
+          open
+          projectRef={importSession.projectRef}
+          providerOptions={importSession.providerOptions}
+          onOpenChange={(nextOpen) => {
+            if (!nextOpen) {
+              setImportSession(null);
+            }
+          }}
+        />
+      ) : null}
     </ComposerHandleContext>
   );
 }
@@ -453,6 +484,7 @@ function CommandPaletteDialog(props: {
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
   readonly clearOpenIntent: () => void;
+  readonly openImportSession: (request: ImportSessionRequest) => void;
 }) {
   if (!props.open) {
     return null;
@@ -463,6 +495,7 @@ function CommandPaletteDialog(props: {
       openIntent={props.openIntent}
       setOpen={props.setOpen}
       clearOpenIntent={props.clearOpenIntent}
+      openImportSession={props.openImportSession}
     />
   );
 }
@@ -471,9 +504,10 @@ function OpenCommandPaletteDialog(props: {
   readonly openIntent: CommandPaletteOpenIntent | null;
   readonly setOpen: (open: boolean) => void;
   readonly clearOpenIntent: () => void;
+  readonly openImportSession: (request: ImportSessionRequest) => void;
 }) {
   const navigate = useNavigate();
-  const { clearOpenIntent, openIntent, setOpen } = props;
+  const { clearOpenIntent, openImportSession, openIntent, setOpen } = props;
   const composerHandleRef = useComposerHandleContext();
   const [query, setQuery] = useState("");
   const deferredQuery = useDeferredValue(query);
@@ -1145,6 +1179,15 @@ function OpenCommandPaletteDialog(props: {
     projectThreadItems,
   ]);
 
+  const importSessionProviderOptions = useMemo(
+    () => buildImportSessionProviderOptions(providers),
+    [providers],
+  );
+  const importSessionProjectRef =
+    currentProjectEnvironmentId && currentProjectId
+      ? scopeProjectRef(currentProjectEnvironmentId, currentProjectId)
+      : defaultProjectRef;
+
   const actionItems: Array<CommandPaletteActionItem | CommandPaletteSubmenuItem> = [];
 
   if (projects.length > 0) {
@@ -1183,6 +1226,23 @@ function OpenCommandPaletteDialog(props: {
       icon: <SquarePenIcon className={ITEM_ICON_CLASS} />,
       addonIcon: <SquarePenIcon className={ADDON_ICON_CLASS} />,
       groups: [{ value: "projects", label: "Projects", items: projectThreadItems }],
+    });
+  }
+
+  if (importSessionProviderOptions.length > 0 && importSessionProjectRef) {
+    actionItems.push({
+      kind: "action",
+      value: "action:import-session",
+      searchTerms: ["import session", "resume", "continue", "claude", "codex", "session id"],
+      title: "Import session...",
+      icon: <ImportIcon className={ITEM_ICON_CLASS} />,
+      keepOpen: true,
+      run: async () => {
+        openImportSession({
+          projectRef: importSessionProjectRef,
+          providerOptions: importSessionProviderOptions,
+        });
+      },
     });
   }
 
