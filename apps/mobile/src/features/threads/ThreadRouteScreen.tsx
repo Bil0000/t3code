@@ -1,6 +1,11 @@
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { threadRuntimeIsActive } from "@t3tools/client-runtime/state/shell";
-import { useCallback, useMemo, useState } from "react";
+import { NativeStackScreenOptions } from "../../native/StackHeader";
+import {
+  StackActions,
+  useFocusEffect,
+  useNavigation,
+  type StaticScreenProps,
+} from "@react-navigation/native";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Option from "effect/Option";
 import {
   DEFAULT_SERVER_SETTINGS,
@@ -525,18 +530,17 @@ function ThreadRouteContent(
     void navigation.navigate("Connections");
   }, [navigation]);
   const handleStopThread = useCallback(() => {
-    const runtime = selectedThread?.runtime;
-    if (!selectedThread || !runtime || !threadRuntimeIsActive(runtime)) {
+    if (!selectedThread || composer.interruptibleRunId === null) {
       return;
     }
     return interruptThreadTurn({
       environmentId: selectedThread.environmentId,
       input: {
         threadId: selectedThread.id,
-        ...(runtime.activeRunId ? { runId: runtime.activeRunId } : {}),
+        runId: composer.interruptibleRunId,
       },
     });
-  }, [interruptThreadTurn, selectedThread]);
+  }, [composer.interruptibleRunId, interruptThreadTurn, selectedThread]);
 
   const handleOpenTerminal = useCallback(
     (nextTerminalId?: string | null) => {
@@ -902,6 +906,7 @@ function ThreadRouteContent(
           feedbackSubmissions={composer.feedbackSubmissions}
           onDismissFeedback={composer.dismissFeedback}
           selectedThreadFeed={composer.selectedThreadFeed}
+          activityRun={composer.selectedThreadActivityRun}
           activeWorkStartedAt={composer.activeWorkStartedAt}
           isCompacting={composer.isCompacting}
           creationState={creationState}
@@ -916,6 +921,8 @@ function ThreadRouteContent(
           connectionStateLabel={routeConnectionState}
           threadSyncStatus={selectedThreadDetailState.status}
           loadEarlier={loadEarlierTurns}
+          activeThreadBusy={composer.activeThreadBusy}
+          canStopThread={composer.interruptibleRunId !== null}
           environmentId={selectedThread.environmentId}
           projectWorkspaceRoot={selectedThreadProject?.workspaceRoot ?? null}
           threadCwd={selectedThreadCwd}
