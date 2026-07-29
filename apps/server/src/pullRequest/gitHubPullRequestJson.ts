@@ -298,11 +298,14 @@ function toComments(
       reviewState: null,
     }),
   );
-  // Reviews without a body are approvals/dismissals with nothing to read; they already show
-  // up as the review decision, so keeping them here would pad the timeline with empty cards.
+  // A review with neither a body nor a state carries nothing to show. One with a state but no
+  // body is an approval or a change request, which is the whole event and is kept.
   const reviews = (raw.reviews ?? []).flatMap((review): ReadonlyArray<PullRequestComment> => {
     const submittedAt = trimmed(review.submittedAt);
-    if (submittedAt === null || (review.body ?? "").trim().length === 0) return [];
+    const reviewState = trimmed(review.state);
+    if (submittedAt === null || ((review.body ?? "").trim().length === 0 && reviewState === null)) {
+      return [];
+    }
     return [
       {
         id: review.id,
@@ -312,7 +315,7 @@ function toComments(
         createdAt: submittedAt,
         url: trimmed(review.url),
         path: null,
-        reviewState: trimmed(review.state),
+        reviewState,
       },
     ];
   });

@@ -109,7 +109,9 @@ export function buildFixFindingsPrompt(input: {
         body: boundedField(check.description ? `${check.name} — ${check.description}` : check.name),
       })),
   ];
-  const included = findings.slice(0, FINDING_LIMIT);
+  // Comments arrive oldest-first and the failing checks are appended after them, so the
+  // bound is taken from the end: current failures and recent reviews, not stale ones.
+  const included = findings.slice(-FINDING_LIMIT);
   return [
     `Fix the actionable findings on PR #${input.number}, titled \`${boundedField(input.title)}\`, at \`${boundedField(input.url)}\`.`,
     `The PR branch is \`${boundedField(input.headBranch)}\` targeting \`${boundedField(input.baseBranch)}\`. Work in the prepared checkout, verify each valid finding, and keep the change focused.`,

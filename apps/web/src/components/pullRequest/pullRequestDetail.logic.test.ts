@@ -117,6 +117,21 @@ describe("fix findings prompt", () => {
     expect(prompt.length).toBeLessThan(2_000);
   });
 
+  it("keeps the newest findings and the failing checks when it has to cut", () => {
+    const prompt = buildFixFindingsPrompt({
+      ...base,
+      comments: Array.from({ length: 25 }, (_, index) => ({
+        ...review(`finding ${index}`),
+        id: `r${index}`,
+      })),
+      checks: [failingCheck],
+    });
+    // Oldest reviews are dropped rather than the current failure and the recent feedback.
+    expect(prompt).toContain("finding 24");
+    expect(prompt).toContain("typecheck");
+    expect(prompt).not.toContain("finding 0:");
+  });
+
   it("reports how many findings the bound left out", () => {
     const prompt = buildFixFindingsPrompt({
       ...base,

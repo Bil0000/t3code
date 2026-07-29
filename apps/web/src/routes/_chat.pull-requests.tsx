@@ -175,7 +175,16 @@ function PullRequestsRouteView() {
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const sentinel = sentinelRef.current;
-    if (!sentinel || listData?.truncated !== true || listQuery.isPending) return;
+    // A failed page must stop the observer. Retained rows keep the sentinel on screen, so
+    // re-arming it after a failure would ask for the next page again, forever.
+    if (
+      !sentinel ||
+      listData?.truncated !== true ||
+      listQuery.isPending ||
+      listQuery.error !== null
+    ) {
+      return;
+    }
     const observer = new IntersectionObserver(
       (observed) => {
         if (observed.some((entry) => entry.isIntersecting)) {
@@ -187,7 +196,7 @@ function PullRequestsRouteView() {
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [filterKey, listData?.truncated, listQuery.isPending, pageSize]);
+  }, [filterKey, listData?.truncated, listQuery.error, listQuery.isPending, pageSize]);
 
   const entries = useMemo(() => {
     const involvementEntries = filterPullRequestsByInvolvement(
@@ -343,9 +352,12 @@ function PullRequestsRouteView() {
               )}
 
               {listQuery.error && listData !== null ? (
-                <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
-                  The latest refresh failed. Showing the last pull requests loaded.
-                </p>
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
+                  <span>The latest request failed. Showing the last pull requests loaded.</span>
+                  <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+                    Retry
+                  </Button>
+                </div>
               ) : null}
               {listData?.errors.length ? (
                 <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
