@@ -56,6 +56,8 @@ interface SupportedProject {
   readonly project: OrchestrationProjectShell;
   readonly api: PullRequestProviderApi;
   readonly repository: string;
+  /** The host the repository lives on, which is the account boundary rather than the kind. */
+  readonly host: string;
 }
 
 /**
@@ -94,6 +96,16 @@ function toPullRequestError(
     isProviderUnusable(error)
       ? toUnavailableError(error)
       : new PullRequestOperationError({ operation, detail: error.detail, cause: error });
+}
+
+/**
+ * The host below which the repository is addressed. `canonicalKey` is the normalized remote,
+ * `host/owner/repo`, so its first segment is the host; the provider kind stands in when there
+ * is no canonical key to read, which keeps one bucket per kind as before.
+ */
+function hostOf(project: OrchestrationProjectShell, kind: SourceControlProviderKind): string {
+  const host = project.repositoryIdentity?.canonicalKey?.split("/")[0]?.trim();
+  return host === undefined || host.length === 0 ? kind : host.toLowerCase();
 }
 
 /**
@@ -137,8 +149,10 @@ export const make = Effect.gen(function* () {
           if (kind === undefined || repository === null) continue;
           if (filter.provider !== undefined && kind !== filter.provider) continue;
           // Worktrees of one repository are separate projects; reading the remote once keeps
-          // the page from repeating every change request per local checkout.
-          const key = `${kind} ${repository.toLowerCase()}`;
+          // the page from repeating every change request per local checkout. The host is part
+          // of the key, so the same `owner/repo` on two hosts stays two repositories.
+          const host = hostOf(project, kind);
+          const key = `${host} ${repository.toLowerCase()}`;
           if (seen.has(key)) continue;
           seen.add(key);
           const api = registry.get(kind);
@@ -146,7 +160,7 @@ export const make = Effect.gen(function* () {
             unimplemented.set(kind, (unimplemented.get(kind) ?? 0) + 1);
             continue;
           }
-          supported.push({ project, api, repository });
+          supported.push({ project, api, repository, host });
         }
         return { supported, unimplemented };
       }),
@@ -175,24 +189,28 @@ export const make = Effect.gen(function* () {
 
   /**
    * One viewer lookup per host, tried across that host's workspaces so a single broken checkout
-   * cannot hide every healthy repository on it. Its failure doubles as the answer to "is this
-   * host set up", which is what the provider switcher shows.
+   * cannot hide every healthy repository on it. Per host and not per provider kind: two GitHub
+   * hosts are two accounts, and the wrong login would misattribute every review request.
+   *
+   * Its failure doubles as the answer to "is this host set up", which is what the provider
+   * switcher shows.
    */
   const resolveViewers = (projects: ReadonlyArray<SupportedProject>) =>
     Effect.forEach(
-      [...new Set(projects.map(({ api }) => api.kind))],
-      (kind) => {
-        const forKind = projects.filter(({ api }) => api.kind === kind);
-        const api = forKind[0]!.api;
+      [...new Set(projects.map(({ host }) => host))],
+      (host) => {
+        const forHost = projects.filter((project) => project.host === host);
+        const api = forHost[0]!.api;
         return Effect.firstSuccessOf(
-          forKind.map(({ project }) => api.getViewer({ cwd: project.workspaceRoot })),
+          forHost.map(({ project }) => api.getViewer({ cwd: project.workspaceRoot })),
         ).pipe(
           Effect.map((viewer) => ({
-            kind,
+            host,
+            kind: api.kind,
             viewer: viewer as string | null,
             error: null as PullRequestProviderError | null,
           })),
-          Effect.catch((error) => Effect.succeed({ kind, viewer: null, error })),
+          Effect.catch((error) => Effect.succeed({ host, kind: api.kind, viewer: null, error })),
         );
       },
       { concurrency: REPOSITORY_CONCURRENCY },
@@ -206,6 +224,7 @@ export const make = Effect.gen(function* () {
     const viewer = input.viewer.toLowerCase();
     return {
       provider: input.project.api.kind,
+      host: input.project.host,
       projectId: input.project.project.id,
       projectTitle: input.project.project.title,
       repository: input.project.repository,
@@ -239,13 +258,23 @@ export const make = Effect.gen(function* () {
       }
 
       const viewerResults = yield* resolveViewers(projects);
+      const viewers: Record<string, string> = {};
+      for (const result of viewerResults) {
+        if (result.viewer !== null) viewers[result.host] = result.viewer;
+      }
+
+      // The switcher filters by provider kind, so several hosts of one kind collapse into one
+      // summary: configured when any of them could be read, and detail from one that could not.
       const providers: ReadonlyArray<PullRequestProviderSummary> = [
-        ...viewerResults.map((result) => ({
-          kind: result.kind,
-          projectCount: projectCounts.get(result.kind) ?? 1,
-          configured: result.viewer !== null,
-          detail: result.error === null ? null : result.error.detail,
-        })),
+        ...[...new Set(viewerResults.map((result) => result.kind))].map((kind) => {
+          const forKind = viewerResults.filter((result) => result.kind === kind);
+          return {
+            kind,
+            projectCount: projectCounts.get(kind) ?? 1,
+            configured: forKind.some((result) => result.viewer !== null),
+            detail: forKind.find((result) => result.error !== null)?.error?.detail ?? null,
+          };
+        }),
         ...[...unimplemented].map(([kind, projectCount]) => ({
           kind,
           projectCount,
@@ -253,12 +282,17 @@ export const make = Effect.gen(function* () {
           detail: "This host cannot be browsed here yet.",
         })),
       ];
-      const viewers: Record<string, string> = {};
-      for (const result of viewerResults) {
-        if (result.viewer !== null) viewers[result.kind] = result.viewer;
-      }
 
-      const readable = projects.filter(({ api }) => viewers[api.kind] !== undefined);
+      const readable = projects.filter(({ host }) => viewers[host] !== undefined);
+      // A host that could not be read still has projects, and they are absent from the list.
+      // Reporting them keeps "N repositories were unavailable" honest instead of dropping them.
+      const unreadable = projects
+        .filter(({ host }) => viewers[host] === undefined)
+        .map(({ project, repository }) => ({
+          projectId: project.id,
+          projectTitle: project.title,
+          message: `${repository} could not be read.`,
+        }));
       if (readable.length === 0) {
         // No host this request covers can be read, so it is not a per-project problem. An
         // unusable host is preferred as the reported cause because it names the fix; a host
@@ -271,6 +305,7 @@ export const make = Effect.gen(function* () {
         if (blocking) {
           return yield* toPullRequestError("list")(blocking);
         }
+
         return {
           viewers: viewers as PullRequestListResult["viewers"],
           providers,
@@ -283,7 +318,7 @@ export const make = Effect.gen(function* () {
       const batches = yield* Effect.forEach(
         readable,
         (project): Effect.Effect<RepositoryBatch> => {
-          const viewer = viewers[project.api.kind]!;
+          const viewer = viewers[project.host]!;
           return project.api
             .listChangeRequests({
               cwd: project.project.workspaceRoot,
@@ -327,7 +362,7 @@ export const make = Effect.gen(function* () {
         entries: batches
           .flatMap((batch) => batch.entries)
           .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-        errors: batches.flatMap((batch) => batch.errors),
+        errors: [...unreadable, ...batches.flatMap((batch) => batch.errors)],
         truncated: batches.some((batch) => batch.truncated),
       };
     });

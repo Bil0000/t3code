@@ -27,11 +27,12 @@ function normalize(value: string | null | undefined): string | null {
 }
 
 /**
- * Authorship is per host: the same list can hold a GitHub and a GitLab change request, and the
- * account that owns one says nothing about the other.
+ * Authorship is per host, not per provider kind: the same list can hold change requests from
+ * GitHub, GitLab and a GitHub Enterprise install, and the account that owns one says nothing
+ * about the others.
  */
 function isAuthoredByViewer(entry: PullRequestListEntry, viewers: PullRequestViewers): boolean {
-  const viewer = normalize(viewers[entry.provider]);
+  const viewer = normalize(viewers[entry.host]);
   return viewer !== null && normalize(entry.author?.login) === viewer;
 }
 
@@ -89,7 +90,7 @@ export function groupPullRequestsByInvolvement(
     .map((key) => ({ key, label: GROUP_LABELS[key], entries: buckets[key] }));
 }
 
-/** Repository plus number is unique per host, and the host disambiguates across hosts. */
+/** Repository plus number is unique on one host, so the host makes the key unique overall. */
 export function pullRequestEntryKey(entry: PullRequestListEntry): string {
-  return `${entry.provider}:${entry.repository}#${entry.number}`;
+  return `${entry.host}:${entry.repository}#${entry.number}`;
 }

@@ -23,7 +23,11 @@ function project(input: {
   readonly workspaceRoot: string;
   readonly repository?: string;
   readonly provider?: string;
+  readonly host?: string;
 }): OrchestrationProjectShell {
+  // The host defaults from the provider, so a fixture only names one when the point of the
+  // test is two hosts of the same kind.
+  const host = input.host ?? (input.provider === "gitlab" ? "gitlab.com" : "github.com");
   return {
     id: input.id as ProjectId,
     title: input.title,
@@ -31,11 +35,11 @@ function project(input: {
     ...(input.repository
       ? {
           repositoryIdentity: {
-            canonicalKey: `host/${input.repository}`,
+            canonicalKey: `${host}/${input.repository}`,
             locator: {
               source: "git-remote" as const,
               remoteName: "origin",
-              remoteUrl: `https://host/${input.repository}.git`,
+              remoteUrl: `https://${host}/${input.repository}.git`,
             },
             provider: input.provider ?? "github",
             displayName: input.repository,
@@ -472,7 +476,88 @@ it.effect("tries another workspace on the same host for the viewer", () =>
     const result = yield* service.list({ state: "open" });
 
     assert.strictEqual(result.entries.length, 2);
-    assert.strictEqual(result.viewers.github, "bilal");
+    assert.strictEqual(result.viewers["github.com"], "bilal");
+  }),
+);
+
+it.effect("keeps two hosts of one provider kind as two accounts", () =>
+  Effect.gen(function* () {
+    const viewerFor: Record<string, string> = { "/cloud": "bilal", "/enterprise": "b.hassan" };
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "cloud", workspaceRoot: "/cloud", repository: "acme/web" }),
+        project({
+          id: "p2",
+          title: "enterprise",
+          workspaceRoot: "/enterprise",
+          // The same path on a different host: neither the viewer nor the row may be shared.
+          repository: "acme/web",
+          host: "github.acme.dev",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getViewer: (input) => Effect.succeed(viewerFor[input.cwd] ?? "unknown"),
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+              truncated: false,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    // Both repositories survive de-duplication, each with its own account.
+    assert.strictEqual(result.entries.length, 2);
+    assert.deepStrictEqual(result.viewers, {
+      "github.com": "bilal",
+      "github.acme.dev": "b.hassan",
+    });
+    assert.deepStrictEqual(result.entries.map((entry) => entry.host).toSorted(), [
+      "github.acme.dev",
+      "github.com",
+    ]);
+  }),
+);
+
+it.effect("reports repositories on a host that could not be read", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "cloud", workspaceRoot: "/cloud", repository: "acme/web" }),
+        project({
+          id: "p2",
+          title: "enterprise",
+          workspaceRoot: "/enterprise",
+          repository: "acme/api",
+          host: "github.acme.dev",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getViewer: (input) =>
+            input.cwd === "/cloud"
+              ? Effect.succeed("bilal")
+              : Effect.fail(unusable("github", "unauthenticated")),
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+              truncated: false,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    // The healthy host still lists, and the unreadable one is named rather than dropped.
+    assert.strictEqual(result.entries.length, 1);
+    assert.deepStrictEqual(
+      result.errors.map((error) => error.projectId),
+      ["p2"],
+    );
   }),
 );
 

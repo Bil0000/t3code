@@ -64,10 +64,11 @@ export const make = Effect.gen(function* () {
           cli.getPullRequestDetail(input),
           cli.getRepositoryMergeCapabilities({ cwd: input.cwd, repository: input.repository }),
           // Line comments live on review threads, which `gh pr view --json` cannot reach. A
-          // GraphQL hiccup must not blank the whole detail, so it degrades to "none".
+          // GraphQL hiccup must not blank the whole detail, so it degrades to "none" — marked
+          // truncated, because an unread thread is a missing comment, not an absent one.
           cli
             .listReviewThreadComments(input)
-            .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: false }))),
+            .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: true }))),
         ],
         { concurrency: 3 },
       ).pipe(

@@ -285,7 +285,9 @@ export const make = Effect.gen(function* () {
         if (exhausted || collected.length > input.limit || input.page >= lastPage) {
           return Effect.succeed({
             items: collected.slice(0, input.limit),
-            truncated: collected.length > input.limit,
+            // Anything but a short final page means GitLab may still have rows, including the
+            // case where enough rows failed to decode to keep the collected count down.
+            truncated: !exhausted || collected.length > input.limit,
           });
         }
         return listPage({ ...input, page: input.page + 1, collected });
@@ -413,9 +415,10 @@ export const make = Effect.gen(function* () {
             );
           }
           return Effect.succeed({
-            comments: decoded.success,
-            // System notes are dropped, so a full page is the only signal of more.
-            truncated: decoded.success.length >= CONVERSATION_PAGE_SIZE,
+            comments: decoded.success.comments,
+            // The raw count, not the kept count: notes GitLab wrote itself are dropped, so a
+            // full page of them would otherwise read as "no more notes".
+            truncated: decoded.success.rawCount >= CONVERSATION_PAGE_SIZE,
           });
         }),
       ),

@@ -90,6 +90,8 @@ const RawDiffSchema = Schema.Struct({
   diff: Schema.optional(Schema.NullOr(Schema.String)),
   /** GitLab omits the hunks for a file it considers too large to inline. */
   too_large: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  /** And for one it collapsed, which withholds them the same way. */
+  collapsed: Schema.optional(Schema.NullOr(Schema.Boolean)),
 });
 
 const RawViewerSchema = Schema.Struct({
@@ -346,10 +348,16 @@ export function decodeProjectMergeCapabilitiesJson(
 /**
  * Comments only. System notes are GitLab's own activity feed entries, and a `DiffNote` is the
  * root of a line-level discussion, which is what the review-comment kind means.
+ *
+ * The raw note count comes back alongside, because dropping notes hides whether the page was
+ * full: a caller cannot tell "no more notes" from "a page of activity entries" without it.
  */
 export function decodeNotesJson(
   raw: string,
-): Result.Result<ReadonlyArray<PullRequestComment>, DecodeFailure> {
+): Result.Result<
+  { readonly comments: ReadonlyArray<PullRequestComment>; readonly rawCount: number },
+  DecodeFailure
+> {
   const decoded = decodeUnknownList(raw);
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
@@ -374,7 +382,7 @@ export function decodeNotesJson(
       reviewState: null,
     });
   }
-  return Result.succeed(comments);
+  return Result.succeed({ comments, rawCount: decoded.success.length });
 }
 
 export function decodeCommitsJson(
@@ -439,7 +447,7 @@ export function decodeMergeRequestDiffsJson(
     const hunks = value.diff ?? "";
     if (hunks.length === 0) {
       // A file GitLab declined to inline still belongs in the file list, header only.
-      truncated = truncated || value.too_large === true;
+      truncated = truncated || value.too_large === true || value.collapsed === true;
     }
     const { from, to } = diffHeaderPaths(value);
     const header = [

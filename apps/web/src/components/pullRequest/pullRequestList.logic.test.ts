@@ -7,12 +7,13 @@ import {
   matchesPullRequestQuery,
 } from "./pullRequestList.logic";
 
-const VIEWERS = { github: "Bilal" } as const;
+const VIEWERS = { "github.com": "Bilal" } as const;
 const NO_VIEWERS = {} as const;
 
 function entry(overrides: Partial<PullRequestListEntry> & Pick<PullRequestListEntry, "number">) {
   return {
     provider: "github",
+    host: "github.com",
     projectId: "project-1",
     projectTitle: "t3code",
     repository: "pingdotgg/t3code",
@@ -61,7 +62,12 @@ describe("pull request involvement filtering", () => {
     // The same name on GitLab is a different account, and its viewer is unknown here.
     const mixed = [
       entry({ number: 1, author: { login: "Bilal", name: null } }),
-      entry({ number: 2, provider: "gitlab", author: { login: "Bilal", name: null } }),
+      entry({
+        number: 2,
+        provider: "gitlab",
+        host: "gitlab.com",
+        author: { login: "Bilal", name: null },
+      }),
     ];
     expect(
       filterPullRequestsByInvolvement(mixed, VIEWERS, "authored").map((item) => item.number),
@@ -70,6 +76,18 @@ describe("pull request involvement filtering", () => {
 
   it("leaves the superset untouched for All", () => {
     expect(filterPullRequestsByInvolvement(entries, VIEWERS, "all")).toHaveLength(3);
+  });
+
+  it("keeps two hosts of one provider kind as two accounts", () => {
+    // A GitHub Enterprise install is a different account from github.com, so the viewer for
+    // one must not claim authorship of the other's change requests.
+    const mixed = [
+      entry({ number: 1, author: { login: "Bilal", name: null } }),
+      entry({ number: 2, host: "github.acme.dev", author: { login: "Bilal", name: null } }),
+    ];
+    expect(
+      filterPullRequestsByInvolvement(mixed, VIEWERS, "authored").map((item) => item.number),
+    ).toEqual([1]);
   });
 });
 

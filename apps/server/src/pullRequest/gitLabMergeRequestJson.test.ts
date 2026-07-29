@@ -197,7 +197,7 @@ describe("decodeViewerJson", () => {
 
 describe("decodeNotesJson", () => {
   it("keeps comments and drops GitLab's own activity notes", () => {
-    const comments = expectSuccess(
+    const notes = expectSuccess(
       decodeNotesJson(
         JSON.stringify([
           {
@@ -217,12 +217,18 @@ describe("decodeNotesJson", () => {
       ),
     );
 
-    expect(comments).toHaveLength(1);
-    expect(comments[0]).toMatchObject({ id: "2", kind: "issue-comment", body: "Looks good." });
+    expect(notes.comments).toHaveLength(1);
+    expect(notes.comments[0]).toMatchObject({
+      id: "2",
+      kind: "issue-comment",
+      body: "Looks good.",
+    });
+    // The raw count keeps the dropped notes visible to the caller, which needs them to page.
+    expect(notes.rawCount).toBe(3);
   });
 
   it("reads a line note as a review comment on its file", () => {
-    const comments = expectSuccess(
+    const notes = expectSuccess(
       decodeNotesJson(
         JSON.stringify([
           {
@@ -236,11 +242,11 @@ describe("decodeNotesJson", () => {
       ),
     );
 
-    expect(comments[0]).toMatchObject({ kind: "review-comment", path: "src/app.ts" });
+    expect(notes.comments[0]).toMatchObject({ kind: "review-comment", path: "src/app.ts" });
   });
 
   it("falls back to the old path for a note on a deleted line", () => {
-    const comments = expectSuccess(
+    const notes = expectSuccess(
       decodeNotesJson(
         JSON.stringify([
           {
@@ -254,7 +260,7 @@ describe("decodeNotesJson", () => {
       ),
     );
 
-    expect(comments[0]?.path).toBe("src/old.ts");
+    expect(notes.comments[0]?.path).toBe("src/old.ts");
   });
 });
 

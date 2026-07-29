@@ -63,10 +63,11 @@ export const make = Effect.gen(function* () {
           cli.getMergeRequestDetail(input),
           cli.getProjectMergeCapabilities({ cwd: input.cwd, repository: input.repository }),
           // The conversation and the commit list are worth degrading for: neither is reason
-          // to blank a merge request that was read successfully.
+          // to blank a merge request that was read successfully. An unread conversation counts
+          // as truncated, so it does not present as one with no comments.
           cli
             .listNotes(input)
-            .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: false }))),
+            .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: true }))),
           cli.listCommits(input).pipe(Effect.orElseSucceed(() => [])),
         ],
         { concurrency: 4 },

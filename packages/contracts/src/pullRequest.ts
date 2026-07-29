@@ -106,6 +106,11 @@ export type PullRequestMergeCapabilities = typeof PullRequestMergeCapabilities.T
 
 export const PullRequestListEntry = Schema.Struct({
   provider: SourceControlProviderKind,
+  /**
+   * The host below which `repository` is addressed, so the same provider kind can serve more
+   * than one account — github.com and a GitHub Enterprise install are different identities.
+   */
+  host: TrimmedNonEmptyString,
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
   repository: TrimmedNonEmptyString,
@@ -160,8 +165,13 @@ export const PullRequestListProjectError = Schema.Struct({
 export type PullRequestListProjectError = typeof PullRequestListProjectError.Type;
 
 export const PullRequestListResult = Schema.Struct({
-  /** The signed-in account per provider, which is what involvement filtering compares. */
-  viewers: Schema.Record(SourceControlProviderKind, Schema.optionalKey(TrimmedNonEmptyString)),
+  /**
+   * The signed-in account per host, which is what involvement filtering compares. Keyed by
+   * host rather than by provider kind: two GitHub hosts are two accounts. A host that could
+   * not be read is absent rather than present-and-undefined, because an open-keyed record
+   * cannot carry an optional value through the JSON codec.
+   */
+  viewers: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString),
   providers: Schema.Array(PullRequestProviderSummary),
   entries: Schema.Array(PullRequestListEntry),
   errors: Schema.Array(PullRequestListProjectError),
