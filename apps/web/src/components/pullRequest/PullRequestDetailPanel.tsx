@@ -154,8 +154,10 @@ export function PullRequestDetailPanel({
     );
   };
 
+  // The host says which strategies it offers at all; the repository narrows that to the ones
+  // it actually allows.
   const allowedMergeMethods = detail
-    ? (["merge", "squash", "rebase"] as const).filter((method) => detail.mergeCapabilities[method])
+    ? detail.capabilities.mergeMethods.filter((method) => detail.mergeCapabilities[method])
     : [];
   const selectedMergeMethod = allowedMergeMethods.includes(mergeMethod)
     ? mergeMethod

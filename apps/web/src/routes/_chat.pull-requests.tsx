@@ -4,6 +4,7 @@ import type {
   PullRequestListEntry,
   PullRequestListResult,
   PullRequestState,
+  SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { RefreshCwIcon } from "lucide-react";
@@ -19,6 +20,7 @@ import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDet
 import {
   PullRequestFilterPills,
   PullRequestProjectFilter,
+  PullRequestProviderFilter,
   PullRequestSearchInput,
 } from "../components/pullRequest/PullRequestListFilters";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
@@ -41,6 +43,8 @@ export interface PullRequestsSearch {
   readonly state: PullRequestState;
   /** Scopes the list. Separate from the selection so one cannot silently change the other. */
   readonly projectId?: ProjectId;
+  /** Narrows the list to one host. Absent means every host the workspace has. */
+  readonly provider?: SourceControlProviderKind;
   readonly repository?: string;
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
@@ -58,6 +62,15 @@ const STATE_TABS = [
   { value: "closed", label: "Closed" },
   { value: "merged", label: "Merged" },
 ] as const satisfies ReadonlyArray<{ value: PullRequestState; label: string }>;
+
+/** Accepted `provider` values in the URL, so an unknown one is dropped rather than sent on. */
+const PROVIDER_KINDS = new Set<string>([
+  "github",
+  "gitlab",
+  "azure-devops",
+  "bitbucket",
+  "unknown",
+]);
 
 const PAGE_SIZE = 50;
 /** Stable empty map so the memos below do not see a new object on every render. */
@@ -82,6 +95,9 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       : {}),
     ...(typeof raw.projectId === "string" && raw.projectId
       ? { projectId: raw.projectId as ProjectId }
+      : {}),
+    ...(typeof raw.provider === "string" && PROVIDER_KINDS.has(raw.provider)
+      ? { provider: raw.provider as SourceControlProviderKind }
       : {}),
     ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
@@ -131,6 +147,7 @@ function PullRequestsRouteView() {
           ...(next.repository ? { repository: next.repository } : {}),
           ...(next.number ? { number: next.number } : {}),
           ...(next.projectId ? { projectId: next.projectId } : {}),
+          ...(next.provider ? { provider: next.provider } : {}),
           ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
           ...(next.q ? { q: next.q } : {}),
         };
@@ -147,7 +164,7 @@ function PullRequestsRouteView() {
   };
 
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const filterKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${search.projectId ?? ""}`;
+  const filterKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${search.projectId ?? ""}:${search.provider ?? ""}`;
   const [page, setPage] = useState({ key: filterKey, size: PAGE_SIZE });
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
 
@@ -160,6 +177,7 @@ function PullRequestsRouteView() {
             state: search.state,
             limit: pageSize,
             ...(search.projectId ? { projectId: search.projectId } : {}),
+            ...(search.provider ? { provider: search.provider } : {}),
           },
         }),
   );
@@ -249,6 +267,14 @@ function PullRequestsRouteView() {
     // Depend on the identity fields: `selected` is a fresh object on every render.
   }, [selected?.projectId, selected?.repository, selected?.number]);
 
+  // The provider list is the workspace's hosts, not the filtered ones, so switching to a host
+  // cannot make the switcher that got you there disappear.
+  const [hosts, setHosts] = useState<PullRequestListResult["providers"]>([]);
+  useEffect(() => {
+    if (search.provider === undefined && listData !== null) setHosts(listData.providers);
+  }, [listData, search.provider]);
+  const showProvider = hosts.length > 1;
+
   const selectEntry = (entry: PullRequestListEntry) =>
     updateSearch({
       repository: entry.repository,
@@ -292,6 +318,13 @@ function PullRequestsRouteView() {
                     options={STATE_TABS}
                     onChange={(state) => updateSearch({ state, ...clearedSelection })}
                   />
+                  <div className="ms-auto">
+                    <PullRequestProviderFilter
+                      providers={hosts}
+                      value={search.provider}
+                      onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
+                    />
+                  </div>
                 </div>
                 <div className="flex items-center gap-2">
                   <PullRequestSearchInput
@@ -322,8 +355,8 @@ function PullRequestsRouteView() {
                   <EmptyHeader>
                     <EmptyTitle>No pull requests found</EmptyTitle>
                     <EmptyDescription>
-                      Try another involvement, state, or search filter. Only projects backed by a
-                      GitHub repository are listed.
+                      Try another involvement, state, or search filter. Only projects on a host this
+                      page can read are listed.
                     </EmptyDescription>
                   </EmptyHeader>
                 </Empty>
@@ -341,6 +374,7 @@ function PullRequestsRouteView() {
                           key={pullRequestEntryKey(entry)}
                           entry={entry}
                           showProjectTitle
+                          showProvider={showProvider}
                           selected={
                             selected?.repository === entry.repository &&
                             selected.number === entry.number
