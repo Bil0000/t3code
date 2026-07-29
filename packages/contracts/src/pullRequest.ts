@@ -7,6 +7,7 @@ import {
   ProjectId,
   TrimmedNonEmptyString,
 } from "./baseSchemas.ts";
+import { SourceControlProviderKind } from "./sourceControl.ts";
 
 export const PullRequestInvolvement = Schema.Literals(["all", "reviewing", "authored"]);
 export type PullRequestInvolvement = typeof PullRequestInvolvement.Type;
@@ -80,6 +81,22 @@ export const PullRequestCommit = Schema.Struct({
 });
 export type PullRequestCommit = typeof PullRequestCommit.Type;
 
+/**
+ * What a provider can actually do, so a surface can hide what is missing rather than offer an
+ * action that would fail. Every provider fills this in for itself; nothing is assumed.
+ */
+export const PullRequestCapabilities = Schema.Struct({
+  /** A unified patch can be fetched for the change request. */
+  diff: Schema.Boolean,
+  /** Line-level review comments are readable, not just the conversation. */
+  inlineComments: Schema.Boolean,
+  /** The change request can be moved between draft and ready. */
+  draft: Schema.Boolean,
+  /** Merge strategies the provider itself offers, before repository settings narrow them. */
+  mergeMethods: Schema.Array(PullRequestMergeMethod),
+});
+export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
+
 export const PullRequestMergeCapabilities = Schema.Struct({
   merge: Schema.Boolean,
   squash: Schema.Boolean,
@@ -88,6 +105,7 @@ export const PullRequestMergeCapabilities = Schema.Struct({
 export type PullRequestMergeCapabilities = typeof PullRequestMergeCapabilities.Type;
 
 export const PullRequestListEntry = Schema.Struct({
+  provider: SourceControlProviderKind,
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
   repository: TrimmedNonEmptyString,
@@ -113,10 +131,25 @@ export const PullRequestListInput = Schema.Struct({
   state: PullRequestState,
   involvement: Schema.optional(PullRequestInvolvement),
   projectId: Schema.optional(ProjectId),
+  /** Narrows the listing to one host. Absent means every configured provider. */
+  provider: Schema.optional(SourceControlProviderKind),
   /** Rows to return per repository. The page raises it to load further results. */
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
 });
 export type PullRequestListInput = typeof PullRequestListInput.Type;
+
+/**
+ * A provider the workspace has projects on, and whether it can be read right now. Drives the
+ * provider switcher and explains projects the list leaves out.
+ */
+export const PullRequestProviderSummary = Schema.Struct({
+  kind: SourceControlProviderKind,
+  projectCount: PositiveInt,
+  /** False when the provider's CLI or credentials are missing, with `detail` saying which. */
+  configured: Schema.Boolean,
+  detail: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type PullRequestProviderSummary = typeof PullRequestProviderSummary.Type;
 
 /** One project whose repository could not be read; healthy projects still return entries. */
 export const PullRequestListProjectError = Schema.Struct({
@@ -127,7 +160,9 @@ export const PullRequestListProjectError = Schema.Struct({
 export type PullRequestListProjectError = typeof PullRequestListProjectError.Type;
 
 export const PullRequestListResult = Schema.Struct({
-  viewer: Schema.NullOr(TrimmedNonEmptyString),
+  /** The signed-in account per provider, which is what involvement filtering compares. */
+  viewers: Schema.Record(SourceControlProviderKind, Schema.optionalKey(TrimmedNonEmptyString)),
+  providers: Schema.Array(PullRequestProviderSummary),
   entries: Schema.Array(PullRequestListEntry),
   errors: Schema.Array(PullRequestListProjectError),
   /** At least one repository hit the per-repository listing cap. */
@@ -143,6 +178,8 @@ export const PullRequestRef = Schema.Struct({
 export type PullRequestRef = typeof PullRequestRef.Type;
 
 export const PullRequestDetail = Schema.Struct({
+  provider: SourceControlProviderKind,
+  capabilities: PullRequestCapabilities,
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
