@@ -87,9 +87,19 @@ export function buildFixFindingsPrompt(input: {
 }): string {
   const findings = [
     ...input.comments
-      .filter((comment) => comment.kind === "review" && comment.body.trim().length > 0)
+      .filter(
+        (comment) =>
+          (comment.kind === "review" || comment.kind === "review-comment") &&
+          comment.body.trim().length > 0,
+      )
       .map((comment) => ({
-        heading: `Review by ${boundedField(comment.author?.login ?? "ghost")}`,
+        heading: [
+          comment.kind === "review" ? "Review" : "Review comment",
+          comment.path ? `on \`${boundedField(comment.path)}\`` : null,
+          `by ${boundedField(comment.author?.login ?? "ghost")}`,
+        ]
+          .filter(Boolean)
+          .join(" "),
         body: boundedField(comment.body),
       })),
     ...input.checks
