@@ -1,0 +1,53 @@
+import { WS_METHODS } from "@t3tools/contracts";
+import { Atom } from "effect/unstable/reactivity";
+
+import {
+  createAtomCommandScheduler,
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
+} from "./runtime.ts";
+import type { EnvironmentRegistry } from "../connection/registry.ts";
+
+/**
+ * Every read shells out to the GitHub CLI, so results are reused for a short while and
+ * refreshed explicitly. Mutations run serially per environment: `gh` actions on the same
+ * pull request are order-sensitive, and the detail view refetches after each one.
+ */
+export function createPullRequestEnvironmentAtoms<R, E>(
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
+) {
+  const commandScheduler = createAtomCommandScheduler();
+  const serialPerEnvironment = {
+    mode: "serial",
+    key: ({ environmentId }: { readonly environmentId: string }) => environmentId,
+  } as const;
+  return {
+    list: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:list",
+      tag: WS_METHODS.pullRequestsList,
+      staleTimeMs: 30_000,
+    }),
+    detail: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:detail",
+      tag: WS_METHODS.pullRequestsDetail,
+      staleTimeMs: 15_000,
+    }),
+    diff: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:diff",
+      tag: WS_METHODS.pullRequestsDiff,
+      staleTimeMs: 60_000,
+    }),
+    runAction: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:run-action",
+      tag: WS_METHODS.pullRequestsRunAction,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
+    comment: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:comment",
+      tag: WS_METHODS.pullRequestsComment,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
+  };
+}
