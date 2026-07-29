@@ -124,6 +124,30 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("stops walking when every row on a page fails to decode", () =>
+    Effect.gen(function* () {
+      // Full pages of unusable rows: nothing is collected, so the collected-count bound never
+      // trips and only the page bound can end the walk.
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const unusable = JSON.stringify(Array.from({ length: 100 }, () => ({ iid: "nope" })));
+      mockedExecute.mockReturnValue(Effect.succeed(output(unusable)));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const batch = yield* cli.listMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 150,
+      });
+
+      assert.strictEqual(batch.items.length, 0);
+      // ceil((150 + 1) / 100) pages, not one request per page forever.
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+    }),
+  );
+
   it.effect("filters by the reviewer when the viewer is reviewing", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));

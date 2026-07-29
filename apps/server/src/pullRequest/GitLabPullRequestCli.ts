@@ -231,8 +231,10 @@ export const make = Effect.gen(function* () {
 
   /**
    * `per_page` stops at 100, so a larger page is walked one request at a time. The walk is
-   * bounded by the page the caller asked for: it stops on a short page or once the extra row
-   * that reveals a next page has been read.
+   * bounded twice over: it stops on a short page or once the extra row that reveals a next
+   * page has been read, and it never asks for more pages than the caller's page needs. The
+   * second bound is what makes it terminate when every row on a page fails to decode, which
+   * leaves nothing collected but does not mean GitLab has run out of rows.
    */
   const listPage = (input: {
     readonly cwd: string;
@@ -247,6 +249,7 @@ export const make = Effect.gen(function* () {
     // Fixed across the walk: GitLab pages by offset, so a page size that changed between
     // requests would skip or repeat rows. One row over the limit probes for a next page.
     const perPage = Math.min(input.limit + 1, MAX_PAGE_SIZE);
+    const lastPage = Math.ceil((input.limit + 1) / perPage);
     return api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/merge_requests?${query([
@@ -277,7 +280,7 @@ export const make = Effect.gen(function* () {
         const collected = [...input.collected, ...decoded.success.items];
         // Counted before decoding, so a skipped malformed row cannot end paging early.
         const exhausted = decoded.success.rawCount < perPage;
-        if (exhausted || collected.length > input.limit) {
+        if (exhausted || collected.length > input.limit || input.page >= lastPage) {
           return Effect.succeed({
             items: collected.slice(0, input.limit),
             truncated: collected.length > input.limit,

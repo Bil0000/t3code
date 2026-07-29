@@ -271,7 +271,12 @@ function PullRequestsRouteView() {
   // cannot make the switcher that got you there disappear.
   const [hosts, setHosts] = useState<PullRequestListResult["providers"]>([]);
   useEffect(() => {
-    if (search.provider === undefined && listData !== null) setHosts(listData.providers);
+    if (listData === null) return;
+    // An unfiltered response is the full set of hosts. A filtered one only seeds the switcher
+    // when there is nothing to seed it with, which is a link that arrived already scoped.
+    setHosts((previous) =>
+      search.provider === undefined || previous.length === 0 ? listData.providers : previous,
+    );
   }, [listData, search.provider]);
   const showProvider = hosts.length > 1;
 

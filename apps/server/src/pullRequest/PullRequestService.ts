@@ -263,7 +263,7 @@ export const make = Effect.gen(function* () {
         // Every host this request covers is unusable, so it is not a per-project problem.
         const blocking = viewerResults.find((result) => result.error !== null)?.error;
         if (blocking) {
-          return yield* Effect.fail(toUnavailableError(blocking));
+          return yield* toUnavailableError(blocking);
         }
         return {
           viewers: viewers as PullRequestListResult["viewers"],

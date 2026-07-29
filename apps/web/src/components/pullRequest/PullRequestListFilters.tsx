@@ -48,7 +48,9 @@ export function PullRequestFilterPills<Value extends string>({
 /**
  * Host switcher, in the same pill chrome as the filters beside it. It only renders once a
  * workspace actually spans more than one host: with a single host there is nothing to switch
- * between, and an always-visible control would only raise the question.
+ * between, and an always-visible control would only raise the question. It also renders while
+ * a host is selected whatever the list says, so a link that arrives already filtered still
+ * offers the way back out.
  *
  * A host that cannot be read stays in the row, disabled, carrying the server's reason as its
  * title — the projects on it are missing from the list either way, and a dimmed pill explains
@@ -63,7 +65,7 @@ export function PullRequestProviderFilter({
   value: SourceControlProviderKind | undefined;
   onChange: (provider: SourceControlProviderKind | undefined) => void;
 }) {
-  if (providers.length < 2) {
+  if (providers.length < 2 && value === undefined) {
     return null;
   }
   return (
