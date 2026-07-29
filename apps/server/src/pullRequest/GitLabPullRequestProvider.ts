@@ -3,10 +3,9 @@ import type { PullRequestCapabilities } from "@t3tools/contracts";
 
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import {
-  providerError,
+  PullRequestProviderError,
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
-  type PullRequestProviderError,
 } from "./PullRequestProvider.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
@@ -30,7 +29,13 @@ export const make = Effect.gen(function* () {
   const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
 
   const fail = (operation: string) => (error: GitLabPullRequestCli.GitLabPullRequestCliError) =>
-    providerError("gitlab", operation, reasonFor(error), error.detail, error);
+    new PullRequestProviderError({
+      provider: "gitlab",
+      operation,
+      reason: reasonFor(error),
+      detail: error.detail,
+      cause: error,
+    });
 
   const provider: PullRequestProviderApi = {
     kind: "gitlab",

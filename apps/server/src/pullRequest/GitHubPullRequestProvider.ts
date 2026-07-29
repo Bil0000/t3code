@@ -3,10 +3,9 @@ import type { PullRequestCapabilities } from "@t3tools/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import {
-  providerError,
+  PullRequestProviderError,
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
-  type PullRequestProviderError,
 } from "./PullRequestProvider.ts";
 
 /** `gh pr view --json comments` returns one page; a full page means more exist on GitHub. */
@@ -32,7 +31,13 @@ export const make = Effect.gen(function* () {
   const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
   const fail = (operation: string) => (error: GitHubPullRequestCli.GitHubPullRequestCliError) =>
-    providerError("github", operation, reasonFor(error), error.detail, error);
+    new PullRequestProviderError({
+      provider: "github",
+      operation,
+      reason: reasonFor(error),
+      detail: error.detail,
+      cause: error,
+    });
 
   const provider: PullRequestProviderApi = {
     kind: "github",

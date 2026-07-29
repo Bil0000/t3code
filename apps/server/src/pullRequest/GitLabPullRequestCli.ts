@@ -24,7 +24,6 @@ import {
   decodeViewerJson,
   type GitLabMergeRequestDetail,
   type GitLabMergeRequestListItem,
-  type GitLabMergeRequestPatch,
 } from "./gitLabMergeRequestJson.ts";
 
 /**
@@ -75,8 +74,8 @@ export type GitLabPullRequestCliError =
 const MAX_PAGE_SIZE = 100;
 /** Conversation and commit history are read one page deep; the rest stays on GitLab. */
 const CONVERSATION_PAGE_SIZE = 100;
-/** Files in an assembled patch. A larger change set is reported as truncated. */
-const DIFF_MAX_FILES = 300;
+/** Diff pages to walk before a change set is reported as truncated. */
+const DIFF_MAX_PAGES = 3;
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
 
@@ -126,7 +125,10 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
       readonly number: number;
-    }) => Effect.Effect<GitLabMergeRequestPatch, GitLabPullRequestCliError>;
+    }) => Effect.Effect<
+      { readonly patch: string; readonly truncated: boolean },
+      GitLabPullRequestCliError
+    >;
 
     readonly getProjectMergeCapabilities: (input: {
       readonly cwd: string;
@@ -291,6 +293,59 @@ export const make = Effect.gen(function* () {
     );
   };
 
+  /**
+   * A merge request's files come one page at a time, so the patch is assembled across pages.
+   * The walk stops on a short page or at `DIFF_MAX_PAGES`; stopping on a full page means files
+   * were left behind, which is what `truncated` tells the caller.
+   */
+  const diffPage = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly page: number;
+    readonly sections: ReadonlyArray<string>;
+    /** GitLab withheld some file's hunks as too large to inline. */
+    readonly withheld: boolean;
+  }): Effect.Effect<
+    { readonly patch: string; readonly truncated: boolean },
+    GitLabPullRequestCliError
+  > =>
+    api({
+      cwd: input.cwd,
+      path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/diffs?${query(
+        [
+          ["per_page", String(MAX_PAGE_SIZE)],
+          ["page", String(input.page)],
+        ],
+      )}`,
+      maxOutputBytes: DIFF_MAX_OUTPUT_BYTES,
+      timeoutMs: DIFF_TIMEOUT_MS,
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeMergeRequestDiffsJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            new GitLabMergeRequestReadError({
+              command: "glab",
+              cwd: input.cwd,
+              operation: "getMergeRequestDiff",
+              cause: decoded.failure,
+            }),
+          );
+        }
+        const sections = [...input.sections, decoded.success.patch];
+        const withheld = input.withheld || decoded.success.truncated;
+        const morePages = decoded.success.rawCount >= MAX_PAGE_SIZE;
+        if (!morePages || input.page >= DIFF_MAX_PAGES || result.stdoutTruncated) {
+          return Effect.succeed({
+            patch: sections.filter((section) => section.length > 0).join("\n"),
+            truncated: withheld || result.stdoutTruncated || morePages,
+          });
+        }
+        return diffPage({ ...input, page: input.page + 1, sections, withheld });
+      }),
+    );
+
   return GitLabPullRequestCli.of({
     getViewerUsername: (input) =>
       api({ cwd: input.cwd, path: "user" }).pipe(
@@ -387,33 +442,7 @@ export const make = Effect.gen(function* () {
         }),
       ),
 
-    getMergeRequestDiff: (input) =>
-      api({
-        cwd: input.cwd,
-        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/diffs?${query(
-          [["per_page", String(MAX_PAGE_SIZE)]],
-        )}`,
-        maxOutputBytes: DIFF_MAX_OUTPUT_BYTES,
-        timeoutMs: DIFF_TIMEOUT_MS,
-      }).pipe(
-        Effect.flatMap((result) => {
-          const decoded = decodeMergeRequestDiffsJson(result.stdout.trim(), DIFF_MAX_FILES);
-          if (!Result.isSuccess(decoded)) {
-            return Effect.fail(
-              new GitLabMergeRequestReadError({
-                command: "glab",
-                cwd: input.cwd,
-                operation: "getMergeRequestDiff",
-                cause: decoded.failure,
-              }),
-            );
-          }
-          return Effect.succeed({
-            patch: decoded.success.patch,
-            truncated: decoded.success.truncated || result.stdoutTruncated,
-          });
-        }),
-      ),
+    getMergeRequestDiff: (input) => diffPage({ ...input, page: 1, sections: [], withheld: false }),
 
     getProjectMergeCapabilities: (input) =>
       api({

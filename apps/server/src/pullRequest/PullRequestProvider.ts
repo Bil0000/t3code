@@ -150,20 +150,3 @@ export function makeRegistry(
     kinds: providers.map((provider) => provider.kind),
   };
 }
-
-/** Convenience for implementations: one place that builds their failures. */
-export function providerError(
-  provider: SourceControlProviderKind,
-  operation: string,
-  reason: PullRequestProviderError["reason"],
-  detail: string,
-  cause?: unknown,
-): PullRequestProviderError {
-  return new PullRequestProviderError({
-    provider,
-    operation,
-    reason,
-    detail,
-    ...(cause === undefined ? {} : { cause }),
-  });
-}

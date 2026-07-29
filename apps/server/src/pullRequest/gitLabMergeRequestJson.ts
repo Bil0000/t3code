@@ -331,11 +331,15 @@ export function decodeProjectMergeCapabilitiesJson(
     return Result.fail(decoded.failure);
   }
   const mergeMethod = decoded.success.merge_method?.trim().toLowerCase();
+  const squashOption = decoded.success.squash_option?.trim().toLowerCase();
   return Result.succeed({
     merge: mergeMethod === "merge",
     // Both semi-linear and fast-forward histories are reached by rebasing onto the target.
     rebase: mergeMethod === "rebase_merge" || mergeMethod === "ff",
-    squash: decoded.success.squash_option?.trim().toLowerCase() !== "never",
+    // Only GitLab's own enabling values. An absent or unrecognized setting offers nothing,
+    // rather than offering a squash the project may forbid.
+    squash:
+      squashOption === "always" || squashOption === "default_on" || squashOption === "default_off",
   });
 }
 
@@ -408,26 +412,27 @@ function diffHeaderPaths(raw: Schema.Schema.Type<typeof RawDiffSchema>): {
 
 export interface GitLabMergeRequestPatch {
   readonly patch: string;
-  /** At least one file's hunks were withheld by GitLab or dropped past the file cap. */
+  /** At least one file's hunks were withheld by GitLab as too large to inline. */
   readonly truncated: boolean;
+  /** Files GitLab returned, counted before decoding, so the caller can page. */
+  readonly rawCount: number;
 }
 
 /**
  * GitLab returns hunks per file with no `diff --git` header, so the unified patch every diff
- * viewer expects is assembled here. Files past `maxFiles` are dropped and reported as
- * truncated rather than growing the payload without bound.
+ * viewer expects is assembled here. This decodes one page; walking pages is the caller's job,
+ * which is why the raw file count comes back with the patch.
  */
 export function decodeMergeRequestDiffsJson(
   raw: string,
-  maxFiles: number,
 ): Result.Result<GitLabMergeRequestPatch, DecodeFailure> {
   const decoded = decodeUnknownList(raw);
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
   }
   const sections: string[] = [];
-  let truncated = decoded.success.length > maxFiles;
-  for (const entry of decoded.success.slice(0, maxFiles)) {
+  let truncated = false;
+  for (const entry of decoded.success) {
     const file = decodeDiffEntry(entry);
     if (Exit.isFailure(file)) continue;
     const value = file.value;
@@ -449,5 +454,9 @@ export function decodeMergeRequestDiffsJson(
     ].join("\n");
     sections.push(hunks.length === 0 ? header : `${header}\n${hunks.replace(/\n?$/, "\n")}`);
   }
-  return Result.succeed({ patch: sections.join("\n"), truncated });
+  return Result.succeed({
+    patch: sections.join("\n"),
+    truncated,
+    rawCount: decoded.success.length,
+  });
 }

@@ -253,6 +253,76 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("walks diff pages and reports files it had to leave behind", () =>
+    Effect.gen(function* () {
+      const page = (start: number) =>
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify(
+          Array.from({ length: 100 }, (_, index) => ({
+            old_path: `src/${start + index}.ts`,
+            new_path: `src/${start + index}.ts`,
+            diff: "@@ -1 +1 @@\n-a\n+b\n",
+          })),
+        );
+      mockedExecute.mockReturnValue(Effect.succeed(output(page(0))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const diff = yield* cli.getMergeRequestDiff({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      // Three full pages, then it stops and says the change set was cut short.
+      assert.strictEqual(mockedExecute.mock.calls.length, 3);
+      assert.isTrue(diff.truncated);
+      expect(argsOfCall(2)[1]).toContain("page=3");
+    }),
+  );
+
+  it.effect("stops walking diffs on a short page and calls the patch complete", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              { old_path: "src/a.ts", new_path: "src/a.ts", diff: "@@ -1 +1 @@\n-a\n+b\n" },
+            ]),
+          ),
+        ),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const diff = yield* cli.getMergeRequestDiff({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      assert.isFalse(diff.truncated);
+      expect(diff.patch).toContain("diff --git a/src/a.ts b/src/a.ts");
+    }),
+  );
+
+  it.effect("offers no squash when the project does not say it allows one", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        Effect.succeed(output(JSON.stringify({ merge_method: "merge" }))),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const capabilities = yield* cli.getProjectMergeCapabilities({
+        cwd: "/w",
+        repository: "acme/web",
+      });
+
+      assert.deepStrictEqual(capabilities, { merge: true, squash: false, rebase: false });
+    }),
+  );
+
   it.effect("reads the project's merge settings as its merge capabilities", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(

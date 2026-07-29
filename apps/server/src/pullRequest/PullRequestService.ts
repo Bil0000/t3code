@@ -260,10 +260,16 @@ export const make = Effect.gen(function* () {
 
       const readable = projects.filter(({ api }) => viewers[api.kind] !== undefined);
       if (readable.length === 0) {
-        // Every host this request covers is unusable, so it is not a per-project problem.
-        const blocking = viewerResults.find((result) => result.error !== null)?.error;
+        // No host this request covers can be read, so it is not a per-project problem. An
+        // unusable host is preferred as the reported cause because it names the fix; a host
+        // that merely failed reports as a failed operation rather than as a signed-out CLI,
+        // which would send the reader to `auth login` over a transient error.
+        const errors = viewerResults.flatMap((result) =>
+          result.error === null ? [] : [result.error],
+        );
+        const blocking = errors.find(isProviderUnusable) ?? errors[0];
         if (blocking) {
-          return yield* toUnavailableError(blocking);
+          return yield* toPullRequestError("list")(blocking);
         }
         return {
           viewers: viewers as PullRequestListResult["viewers"],

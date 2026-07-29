@@ -292,7 +292,6 @@ describe("decodeMergeRequestDiffsJson", () => {
             diff: "@@ -1 +1 @@\n-old\n+new\n",
           },
         ]),
-        10,
       ),
     );
 
@@ -328,7 +327,6 @@ describe("decodeMergeRequestDiffsJson", () => {
             diff: "@@ -1 +0,0 @@\n-bye\n",
           },
         ]),
-        10,
       ),
     );
 
@@ -344,7 +342,6 @@ describe("decodeMergeRequestDiffsJson", () => {
         JSON.stringify([
           { old_path: "src/old.ts", new_path: "src/new.ts", renamed_file: true, diff: "" },
         ]),
-        10,
       ),
     );
 
@@ -356,7 +353,6 @@ describe("decodeMergeRequestDiffsJson", () => {
     const result = expectSuccess(
       decodeMergeRequestDiffsJson(
         JSON.stringify([{ old_path: "big.bin", new_path: "big.bin", diff: "", too_large: true }]),
-        10,
       ),
     );
 
@@ -364,7 +360,7 @@ describe("decodeMergeRequestDiffsJson", () => {
     expect(result.patch).toContain("diff --git a/big.bin b/big.bin");
   });
 
-  it("drops files past the cap and says so", () => {
+  it("reports how many files GitLab returned, so the caller can page", () => {
     const result = expectSuccess(
       decodeMergeRequestDiffsJson(
         JSON.stringify(
@@ -374,16 +370,15 @@ describe("decodeMergeRequestDiffsJson", () => {
             diff: "@@ -1 +1 @@\n-a\n+b\n",
           })),
         ),
-        2,
       ),
     );
 
-    expect(result.truncated).toBe(true);
-    expect(result.patch).toContain("src/1.ts");
-    expect(result.patch).not.toContain("src/2.ts");
+    expect(result.rawCount).toBe(3);
+    expect(result.truncated).toBe(false);
+    expect(result.patch).toContain("src/2.ts");
   });
 
   it("fails when GitLab did not return a list", () => {
-    expect(Result.isFailure(decodeMergeRequestDiffsJson('{"message":"404"}', 10))).toBe(true);
+    expect(Result.isFailure(decodeMergeRequestDiffsJson('{"message":"404"}'))).toBe(true);
   });
 });

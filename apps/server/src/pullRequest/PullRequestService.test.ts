@@ -172,6 +172,72 @@ it.effect("reads nothing from a host with no implementation, but reports it", ()
   }),
 );
 
+it.effect("calls a transient viewer failure a failed operation, not a signed-out CLI", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getViewer: () =>
+            Effect.fail(
+              new PullRequestProviderError({
+                provider: "github",
+                operation: "getViewer",
+                reason: "failed",
+                detail: "HTTP 500",
+              }),
+            ),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(service.list({ state: "open" }));
+
+    // `cli-unauthenticated` would send the reader to `gh auth login` over a transient error.
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect("reports an unusable host over a merely failing one", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p2",
+          title: "on gitlab",
+          workspaceRoot: "/c",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getViewer: () =>
+            Effect.fail(
+              new PullRequestProviderError({
+                provider: "github",
+                operation: "getViewer",
+                reason: "failed",
+                detail: "HTTP 500",
+              }),
+            ),
+        }),
+        fakeProvider("gitlab", {
+          getViewer: () => Effect.fail(unusable("gitlab", "missing-tool")),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(service.list({ state: "open" }));
+
+    assert.strictEqual(error._tag, "PullRequestUnavailableError");
+    assert.strictEqual(error.message.includes("glab"), true);
+  }),
+);
+
 it.effect("lists every host that has an implementation", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
