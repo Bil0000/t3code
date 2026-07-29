@@ -7,8 +7,12 @@ import {
   matchesPullRequestQuery,
 } from "./pullRequestList.logic";
 
+const VIEWERS = { github: "Bilal" } as const;
+const NO_VIEWERS = {} as const;
+
 function entry(overrides: Partial<PullRequestListEntry> & Pick<PullRequestListEntry, "number">) {
   return {
+    provider: "github",
     projectId: "project-1",
     projectTitle: "t3code",
     repository: "pingdotgg/t3code",
@@ -39,22 +43,33 @@ describe("pull request involvement filtering", () => {
 
   it("matches the viewer's own pull requests case-insensitively", () => {
     expect(
-      filterPullRequestsByInvolvement(entries, "bilal", "authored").map((item) => item.number),
+      filterPullRequestsByInvolvement(entries, VIEWERS, "authored").map((item) => item.number),
     ).toEqual([1]);
   });
 
   it("returns nothing for Authored when the viewer is unknown", () => {
-    expect(filterPullRequestsByInvolvement(entries, null, "authored")).toEqual([]);
+    expect(filterPullRequestsByInvolvement(entries, NO_VIEWERS, "authored")).toEqual([]);
   });
 
   it("uses the server-computed review-request flag for Reviewing", () => {
     expect(
-      filterPullRequestsByInvolvement(entries, "bilal", "reviewing").map((item) => item.number),
+      filterPullRequestsByInvolvement(entries, VIEWERS, "reviewing").map((item) => item.number),
     ).toEqual([2]);
   });
 
+  it("does not treat a matching login on another host as the viewer", () => {
+    // The same name on GitLab is a different account, and its viewer is unknown here.
+    const mixed = [
+      entry({ number: 1, author: { login: "Bilal", name: null } }),
+      entry({ number: 2, provider: "gitlab", author: { login: "Bilal", name: null } }),
+    ];
+    expect(
+      filterPullRequestsByInvolvement(mixed, VIEWERS, "authored").map((item) => item.number),
+    ).toEqual([1]);
+  });
+
   it("leaves the superset untouched for All", () => {
-    expect(filterPullRequestsByInvolvement(entries, "bilal", "all")).toHaveLength(3);
+    expect(filterPullRequestsByInvolvement(entries, VIEWERS, "all")).toHaveLength(3);
   });
 });
 
@@ -65,7 +80,7 @@ describe("pull request grouping", () => {
         entry({ number: 1, author: { login: "bilal", name: null } }),
         entry({ number: 2, viewerReviewRequested: true }),
       ],
-      "Bilal",
+      VIEWERS,
     );
     expect(groups.map((group) => [group.key, group.entries.length])).toEqual([
       ["reviewRequested", 1],
@@ -74,14 +89,14 @@ describe("pull request grouping", () => {
   });
 
   it("puts everything in Others when the viewer is unknown", () => {
-    const groups = groupPullRequestsByInvolvement([entry({ number: 1 })], null);
+    const groups = groupPullRequestsByInvolvement([entry({ number: 1 })], NO_VIEWERS);
     expect(groups.map((group) => group.key)).toEqual(["others"]);
   });
 
   it("counts an authored pull request once, even with a review request on it", () => {
     const groups = groupPullRequestsByInvolvement(
       [entry({ number: 1, author: { login: "bilal", name: null }, viewerReviewRequested: true })],
-      "bilal",
+      VIEWERS,
     );
     expect(groups.map((group) => group.key)).toEqual(["authored"]);
   });

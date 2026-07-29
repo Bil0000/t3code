@@ -60,6 +60,8 @@ const STATE_TABS = [
 ] as const satisfies ReadonlyArray<{ value: PullRequestState; label: string }>;
 
 const PAGE_SIZE = 50;
+/** Stable empty map so the memos below do not see a new object on every render. */
+const EMPTY_VIEWERS: PullRequestListResult["viewers"] = {};
 /** Matches the panel's transition so it can animate out before it leaves the tree. */
 const DETAIL_CLOSE_ANIMATION_MS = 200;
 const DETAIL_WIDTH_STORAGE_KEY = "t3code:pull-requests-detail-width";
@@ -201,7 +203,7 @@ function PullRequestsRouteView() {
   const entries = useMemo(() => {
     const involvementEntries = filterPullRequestsByInvolvement(
       listData?.entries ?? [],
-      listData?.viewer ?? null,
+      listData?.viewers ?? EMPTY_VIEWERS,
       search.involvement,
     );
     return involvementEntries.filter((entry) => matchesPullRequestQuery(entry, search.q ?? ""));
@@ -210,9 +212,9 @@ function PullRequestsRouteView() {
   const groups = useMemo(
     () =>
       search.involvement === "all"
-        ? groupPullRequestsByInvolvement(entries, listData?.viewer ?? null)
+        ? groupPullRequestsByInvolvement(entries, listData?.viewers ?? EMPTY_VIEWERS)
         : [{ key: "others" as const, label: "", entries }],
-    [entries, listData?.viewer, search.involvement],
+    [entries, listData?.viewers, search.involvement],
   );
 
   // A link from a thread or the sidebar only knows the repository, so the owning project is
