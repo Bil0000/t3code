@@ -1,0 +1,216 @@
+import type {
+  PullRequestActor,
+  PullRequestCheck,
+  PullRequestCheckStatus,
+  PullRequestMergeability,
+  PullRequestState,
+} from "@t3tools/contracts";
+import {
+  CircleCheckIcon,
+  CircleDashedIcon,
+  CircleXIcon,
+  GitMergeIcon,
+  GitPullRequestClosedIcon,
+  GitPullRequestDraftIcon,
+  GitPullRequestIcon,
+  LoaderIcon,
+  TriangleAlertIcon,
+} from "lucide-react";
+import type { ReactNode } from "react";
+
+import { cn } from "~/lib/utils";
+
+interface StatePresentation {
+  readonly label: string;
+  readonly toneClassName: string;
+  readonly Icon: typeof GitPullRequestIcon;
+}
+
+/**
+ * Single source of truth for how a pull request's state reads. Draft outranks conflicts: a
+ * draft is not heading for a merge yet, so conflicts only surface once it is real work.
+ */
+export function resolvePullRequestState(input: {
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
+  readonly mergeability?: PullRequestMergeability;
+}): StatePresentation {
+  if (input.state === "merged") {
+    return {
+      label: "Merged",
+      toneClassName: "text-violet-600 dark:text-violet-300/90",
+      Icon: GitMergeIcon,
+    };
+  }
+  if (input.state === "closed") {
+    return {
+      label: "Closed",
+      toneClassName: "text-zinc-500 dark:text-zinc-400/80",
+      Icon: GitPullRequestClosedIcon,
+    };
+  }
+  if (input.isDraft) {
+    return {
+      label: "Draft",
+      toneClassName: "text-zinc-500 dark:text-zinc-400/80",
+      Icon: GitPullRequestDraftIcon,
+    };
+  }
+  if (input.mergeability === "conflicting") {
+    return {
+      label: "Has conflicts",
+      toneClassName: "text-destructive",
+      Icon: TriangleAlertIcon,
+    };
+  }
+  return {
+    label: "Open",
+    toneClassName: "text-emerald-600 dark:text-emerald-300/90",
+    Icon: GitPullRequestIcon,
+  };
+}
+
+export function PullRequestStateGlyph({
+  state,
+  isDraft,
+  mergeability,
+  className,
+}: {
+  state: PullRequestState;
+  isDraft: boolean;
+  mergeability?: PullRequestMergeability;
+  className?: string;
+}) {
+  const presentation = resolvePullRequestState({
+    state,
+    isDraft,
+    ...(mergeability ? { mergeability } : {}),
+  });
+  return (
+    <presentation.Icon
+      role="img"
+      aria-label={presentation.label}
+      className={cn("size-4 shrink-0", presentation.toneClassName, className)}
+    />
+  );
+}
+
+const CHECK_STATUS_PRESENTATION = {
+  pending: { label: "Running", Icon: LoaderIcon, toneClassName: "animate-spin text-amber-500" },
+  success: {
+    label: "Passed",
+    Icon: CircleCheckIcon,
+    toneClassName: "text-emerald-600 dark:text-emerald-300/90",
+  },
+  failure: { label: "Failed", Icon: CircleXIcon, toneClassName: "text-destructive" },
+  cancelled: { label: "Cancelled", Icon: CircleXIcon, toneClassName: "text-destructive" },
+  skipped: { label: "Skipped", Icon: CircleDashedIcon, toneClassName: "text-muted-foreground/70" },
+  neutral: { label: "Neutral", Icon: CircleDashedIcon, toneClassName: "text-muted-foreground/70" },
+} as const satisfies Record<
+  PullRequestCheckStatus,
+  { label: string; Icon: typeof CircleCheckIcon; toneClassName: string }
+>;
+
+export function pullRequestCheckStatusLabel(status: PullRequestCheckStatus): string {
+  return CHECK_STATUS_PRESENTATION[status].label;
+}
+
+export function PullRequestCheckStatusIcon({ status }: { status: PullRequestCheckStatus }) {
+  const presentation = CHECK_STATUS_PRESENTATION[status];
+  return (
+    <presentation.Icon
+      aria-hidden
+      className={cn("size-3.5 shrink-0", presentation.toneClassName)}
+    />
+  );
+}
+
+/** GitHub attributes work from a deleted account to "ghost"; say the same word everywhere. */
+export function PullRequestActorLabel({
+  actor,
+  className,
+}: {
+  actor: PullRequestActor | null;
+  className?: string;
+}) {
+  const login = actor?.login ?? "ghost";
+  return (
+    <span className={cn("flex min-w-0 items-center gap-1.5", className)} title={login}>
+      <span
+        aria-hidden
+        className="flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-medium text-muted-foreground"
+      >
+        {login.slice(0, 1).toUpperCase()}
+      </span>
+      <span className="truncate">{login}</span>
+    </span>
+  );
+}
+
+export function PullRequestDiffStat({
+  additions,
+  deletions,
+  tone,
+  className,
+}: {
+  additions: number;
+  deletions: number;
+  tone?: "muted" | "diff";
+  className?: string;
+}) {
+  const diffTone = tone === "diff";
+  return (
+    <span
+      className={cn(
+        "inline-flex items-baseline gap-1 tabular-nums",
+        !diffTone && "text-muted-foreground/70",
+        className,
+      )}
+    >
+      <span className={diffTone ? "text-emerald-600 dark:text-emerald-300/90" : undefined}>
+        +{additions.toLocaleString()}
+      </span>
+      <span className={diffTone ? "text-destructive" : undefined}>
+        -{deletions.toLocaleString()}
+      </span>
+    </span>
+  );
+}
+
+/** Dot-separated metadata. Owns the separator so a `null` segment leaves no stray dot behind. */
+export function PullRequestMetaLine({
+  children,
+  className,
+}: {
+  children: ReactNode;
+  className?: string;
+}) {
+  const segments = Array.isArray(children) ? children.filter(Boolean) : [children];
+  return (
+    <span className={cn("flex min-w-0 items-center gap-1.5", className)}>
+      {segments.map((segment, index) => (
+        // eslint-disable-next-line react/no-array-index-key -- segments are positional metadata
+        <span key={index} className="flex min-w-0 items-center gap-1.5">
+          {index > 0 ? (
+            <span aria-hidden className="shrink-0 text-muted-foreground/50">
+              ·
+            </span>
+          ) : null}
+          {segment}
+        </span>
+      ))}
+    </span>
+  );
+}
+
+export function summarizePullRequestChecks(checks: ReadonlyArray<PullRequestCheck>): string {
+  if (checks.length === 0) return "No checks reported";
+  const failed = checks.filter(
+    (check) => check.status === "failure" || check.status === "cancelled",
+  ).length;
+  const pending = checks.filter((check) => check.status === "pending").length;
+  const passed = checks.filter((check) => check.status === "success").length;
+  if (failed > 0) return `${failed} of ${checks.length} failing`;
+  if (pending > 0) return `${pending} of ${checks.length} running`;
+  return passed === checks.length ? "All checks passed" : `${passed} of ${checks.length} passing`;
+}
