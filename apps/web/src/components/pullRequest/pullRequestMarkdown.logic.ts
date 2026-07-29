@@ -3,12 +3,15 @@ export type PullRequestBodySegment =
   | { readonly id: string; readonly kind: "markdown"; readonly text: string }
   | { readonly id: string; readonly kind: "video"; readonly url: string };
 
-const FENCE_PATTERN = /^\s{0,3}(?:`{3,}|~{3,})/u;
+const FENCE_PATTERN = /^\s{0,3}((`{3,})|(~{3,}))/u;
 const BARE_URL_PATTERN = /^<?(https?:\/\/\S+?)>?$/u;
 const VIDEO_EXTENSION_PATTERN = /\.(?:mp4|webm|mov|m4v|ogv)(?:$|[?#])/iu;
 /** A dropped video becomes a bare asset link; a dropped image becomes `![alt](…)`. */
 const GITHUB_ASSET_PATTERN = /^https:\/\/github\.com\/user-attachments\/assets\/[\w-]+$/iu;
 const VIDEO_TAG_SRC_PATTERN = /<(?:video|source)\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/iu;
+/** Only a tag that owns its line is an embed; inline, it is prose the renderer should keep. */
+const STANDALONE_VIDEO_TAG_PATTERN = /^\s*<video\b/iu;
+const VIDEO_TAG_END_PATTERN = /<\/video>\s*$/iu;
 
 function isPlayableUrl(url: string): boolean {
   try {
@@ -36,12 +39,14 @@ function videoUrlFromLine(line: string): string | null {
 export function splitPullRequestBody(body: string): ReadonlyArray<PullRequestBodySegment> {
   const segments: PullRequestBodySegment[] = [];
   const markdown: string[] = [];
-  let insideFence = false;
+  let openFence: string | null = null;
 
+  // Blank lines around a run are dropped, but never leading spaces: four of them open an
+  // indented code block, so trimming a run would silently turn code into prose.
   const flushMarkdown = () => {
-    const text = markdown.join("\n").trim();
+    const text = markdown.join("\n").replace(/^\n+/u, "").replace(/\s+$/u, "");
     markdown.length = 0;
-    if (text.length > 0) {
+    if (text.trim().length > 0) {
       segments.push({ id: `markdown:${segments.length}`, kind: "markdown", text });
     }
   };
@@ -49,12 +54,19 @@ export function splitPullRequestBody(body: string): ReadonlyArray<PullRequestBod
   const lines = body.split("\n");
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
-    if (FENCE_PATTERN.test(line)) {
-      insideFence = !insideFence;
+    const fence = FENCE_PATTERN.exec(line)?.[1];
+    if (fence !== undefined) {
+      // A fence closes only on the same marker, at least as long as the one that opened it,
+      // so a ~~~ line cannot end a ``` block and expose its contents to the rules below.
+      if (openFence === null) {
+        openFence = fence;
+      } else if (fence[0] === openFence[0] && fence.length >= openFence.length) {
+        openFence = null;
+      }
       markdown.push(line);
       continue;
     }
-    if (insideFence) {
+    if (openFence !== null) {
       markdown.push(line);
       continue;
     }
@@ -66,22 +78,26 @@ export function splitPullRequestBody(body: string): ReadonlyArray<PullRequestBod
       continue;
     }
 
-    if (!/<video\b/iu.test(line)) {
+    if (!STANDALONE_VIDEO_TAG_PATTERN.test(line)) {
       markdown.push(line);
       continue;
     }
     // A tag can span lines; consume through its close before looking for the source.
     let block = line;
-    while (!/<\/video>/iu.test(block) && index + 1 < lines.length) {
-      index += 1;
-      block += `\n${lines[index]!}`;
+    let cursor = index;
+    while (!VIDEO_TAG_END_PATTERN.test(block) && cursor + 1 < lines.length) {
+      cursor += 1;
+      block += `\n${lines[cursor]!}`;
     }
-    const source = VIDEO_TAG_SRC_PATTERN.exec(block)?.[1];
+    const source = VIDEO_TAG_END_PATTERN.test(block)
+      ? VIDEO_TAG_SRC_PATTERN.exec(block)?.[1]
+      : undefined;
     if (source !== undefined && isPlayableUrl(source)) {
       flushMarkdown();
       segments.push({ id: `video:${segments.length}`, kind: "video", url: source });
+      index = cursor;
     } else {
-      markdown.push(block);
+      markdown.push(line);
     }
   }
 

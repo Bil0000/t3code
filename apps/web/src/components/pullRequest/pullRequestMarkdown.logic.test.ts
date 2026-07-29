@@ -53,6 +53,27 @@ describe("pull request body segmentation", () => {
     ]);
   });
 
+  it("does not let a different fence marker close an open fence", () => {
+    const body = "```\n~~~\nhttps://example.com/demo.mp4\n```";
+    expect(splitPullRequestBody(body)).toEqual([
+      { id: "markdown:0", kind: "markdown", text: body },
+    ]);
+  });
+
+  it("keeps a video tag that shares its line with prose as markdown", () => {
+    const body = 'Before <video src="https://example.com/a.mp4"></video> after';
+    expect(splitPullRequestBody(body)).toEqual([
+      { id: "markdown:0", kind: "markdown", text: body },
+    ]);
+  });
+
+  it("keeps the indentation that opens a code block", () => {
+    const body = "    const answer = 42;";
+    expect(splitPullRequestBody(body)).toEqual([
+      { id: "markdown:0", kind: "markdown", text: body },
+    ]);
+  });
+
   it("refuses a non-http source rather than putting it in a player", () => {
     const body = '<video src="javascript:alert(1)"></video>';
     expect(splitPullRequestBody(body)).toEqual([
