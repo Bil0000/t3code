@@ -93,7 +93,13 @@ function PullRequestsRouteView() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const environmentId = usePrimaryEnvironmentId();
-  const projects = useProjects();
+  const allProjects = useProjects();
+  // The page reads one environment, so a project from another one could neither be listed
+  // nor acted on: scoping here keeps the filter and the selection honest.
+  const projects = useMemo(
+    () => allProjects.filter((project) => project.environmentId === environmentId),
+    [allProjects, environmentId],
+  );
   const scopedProjects = useMemo(
     () =>
       projects

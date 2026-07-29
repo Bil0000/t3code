@@ -88,6 +88,25 @@ describe("pull request body segmentation", () => {
     ]);
   });
 
+  it("leaves an unclosed video tag as prose without eating the rest of the body", () => {
+    const body = ['<video src="https://example.com/a.mp4">', "still prose", "more prose"].join(
+      "\n",
+    );
+    expect(splitPullRequestBody(body)).toEqual([
+      { id: "markdown:0", kind: "markdown", text: body },
+    ]);
+  });
+
+  it("stays linear when the body is full of unclosed video tags", () => {
+    const body = Array.from(
+      { length: 4_000 },
+      () => '<video src="https://example.com/a.mp4">',
+    ).join("\n");
+    const startedAt = performance.now();
+    expect(splitPullRequestBody(body)).toHaveLength(1);
+    expect(performance.now() - startedAt).toBeLessThan(1_000);
+  });
+
   it("refuses a non-http source rather than putting it in a player", () => {
     const body = '<video src="javascript:alert(1)"></video>';
     expect(splitPullRequestBody(body)).toEqual([

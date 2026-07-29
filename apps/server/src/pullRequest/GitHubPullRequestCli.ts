@@ -143,6 +143,21 @@ export function isValidRepositorySelector(value: string): boolean {
   return /^(?:[a-z0-9.-]+\/)?[\w.-]+\/[\w.-]+$/i.test(value.trim());
 }
 
+/**
+ * `gh --repo` accepts the host-qualified form directly, but the GraphQL API takes owner and
+ * name as separate arguments and the host as a flag, so the selector is split here.
+ */
+export function parseRepositorySelector(value: string): {
+  readonly host: string | null;
+  readonly owner: string;
+  readonly name: string;
+} {
+  const parts = value.trim().split("/").filter(Boolean);
+  const name = parts.at(-1) ?? "";
+  const owner = parts.at(-2) ?? "";
+  return { host: parts.length > 2 ? (parts.at(-3) ?? null) : null, owner, name };
+}
+
 function involvementArgs(input: {
   readonly state: PullRequestState;
   readonly involvement: PullRequestInvolvement;
@@ -279,17 +294,18 @@ export const make = Effect.gen(function* () {
         ),
 
     listReviewThreadComments: (input) => {
-      const [owner, name] = input.repository.split("/");
+      const { host, owner, name } = parseRepositorySelector(input.repository);
       return github
         .execute({
           cwd: input.cwd,
           args: [
             "api",
             "graphql",
+            ...(host === null ? [] : ["--hostname", host]),
             "-f",
-            `owner=${owner ?? ""}`,
+            `owner=${owner}`,
             "-f",
-            `name=${name ?? ""}`,
+            `name=${name}`,
             "-F",
             `number=${input.number}`,
             "-f",
