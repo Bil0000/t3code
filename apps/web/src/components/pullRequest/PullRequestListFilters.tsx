@@ -1,7 +1,12 @@
-import type { ProjectId } from "@t3tools/contracts";
+import type {
+  ProjectId,
+  PullRequestProviderSummary,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 import { ListFilterIcon, SearchIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
+import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 
@@ -36,6 +41,70 @@ export function PullRequestFilterPills<Value extends string>({
           {option.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+/**
+ * Host switcher, in the same pill chrome as the filters beside it. It only renders once a
+ * workspace actually spans more than one host: with a single host there is nothing to switch
+ * between, and an always-visible control would only raise the question.
+ *
+ * A host that cannot be read stays in the row, disabled, carrying the server's reason as its
+ * title — the projects on it are missing from the list either way, and a dimmed pill explains
+ * that where an absent one would not.
+ */
+export function PullRequestProviderFilter({
+  providers,
+  value,
+  onChange,
+}: {
+  providers: ReadonlyArray<PullRequestProviderSummary>;
+  value: SourceControlProviderKind | undefined;
+  onChange: (provider: SourceControlProviderKind | undefined) => void;
+}) {
+  if (providers.length < 2) {
+    return null;
+  }
+  return (
+    <div className="flex items-center gap-1" role="group" aria-label="Filter by host">
+      <button
+        type="button"
+        aria-pressed={value === undefined}
+        onClick={() => onChange(undefined)}
+        className={cn(
+          "rounded-md px-2.5 py-1 text-sm transition-colors",
+          value === undefined
+            ? "bg-accent text-foreground"
+            : "text-muted-foreground hover:text-foreground",
+        )}
+      >
+        All
+      </button>
+      {providers.map((provider) => {
+        const { Icon, providerName } = getSourceControlPresentationForKind(provider.kind);
+        const active = provider.kind === value;
+        return (
+          <button
+            key={provider.kind}
+            type="button"
+            aria-pressed={active}
+            disabled={!provider.configured}
+            title={provider.configured ? providerName : (provider.detail ?? undefined)}
+            onClick={() => onChange(provider.kind)}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm transition-colors",
+              active ? "bg-accent text-foreground" : "text-muted-foreground",
+              // Opacity rather than a muted colour: the icons are brand-coloured, so text
+              // colour alone would leave a disabled host looking active.
+              provider.configured ? "hover:text-foreground" : "cursor-not-allowed opacity-45",
+            )}
+          >
+            <Icon className="size-3.5" />
+            {providerName}
+          </button>
+        );
+      })}
     </div>
   );
 }
