@@ -132,13 +132,26 @@ export function PullRequestDetailPanel({
       worktreePath: prepared.value.worktreePath,
       envMode: "worktree",
     });
-    await writeTextToClipboard(prompt);
+    // The checkout and the thread already exist by this point, so a denied clipboard is
+    // reported on its own rather than being mistaken for the handoff having failed.
+    const copied = await writeTextToClipboard(prompt).then(
+      () => true,
+      () => false,
+    );
     setHandoff(null);
-    toastManager.add({
-      type: "success",
-      title: "Checkout ready",
-      description: "The prompt is on your clipboard — paste it to start.",
-    });
+    toastManager.add(
+      copied
+        ? {
+            type: "success",
+            title: "Checkout ready",
+            description: "The prompt is on your clipboard — paste it to start.",
+          }
+        : {
+            type: "error",
+            title: "Checkout ready, but the prompt could not be copied",
+            description: "Copy the task into the composer manually.",
+          },
+    );
   };
 
   const allowedMergeMethods = detail
