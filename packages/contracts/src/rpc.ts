@@ -63,6 +63,17 @@ import {
 } from "./orchestration.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
+  PullRequestActionInput,
+  PullRequestCommentInput,
+  PullRequestDetail,
+  PullRequestDiffResult,
+  PullRequestListInput,
+  PullRequestListResult,
+  PullRequestOperationError,
+  PullRequestRef,
+  PullRequestUnavailableError,
+} from "./pullRequest.ts";
+import {
   RelayClientInstallFailedError,
   RelayClientInstallProgressEventSchema,
   RelayClientStatusSchema,
@@ -237,6 +248,13 @@ export const WS_METHODS = {
   cloudGetRelayClientStatus: "cloud.getRelayClientStatus",
   cloudInstallRelayClient: "cloud.installRelayClient",
 
+  // Pull request methods
+  pullRequestsList: "pullRequests.list",
+  pullRequestsDetail: "pullRequests.detail",
+  pullRequestsDiff: "pullRequests.diff",
+  pullRequestsRunAction: "pullRequests.runAction",
+  pullRequestsComment: "pullRequests.comment",
+
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
   sourceControlCloneRepository: "sourceControl.cloneRepository",
@@ -392,6 +410,42 @@ export const WsServerGetBackgroundPolicyRpc = Rpc.make(WS_METHODS.serverGetBackg
   payload: Schema.Struct({}),
   success: BackgroundPolicySnapshot,
   error: EnvironmentAuthorizationError,
+});
+
+const PullRequestRpcError = Schema.Union([
+  PullRequestUnavailableError,
+  PullRequestOperationError,
+  EnvironmentAuthorizationError,
+]);
+
+export const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
+  payload: PullRequestListInput,
+  success: PullRequestListResult,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
+  payload: PullRequestRef,
+  success: PullRequestDetail,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsDiffRpc = Rpc.make(WS_METHODS.pullRequestsDiff, {
+  payload: PullRequestRef,
+  success: PullRequestDiffResult,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsRunActionRpc = Rpc.make(WS_METHODS.pullRequestsRunAction, {
+  payload: PullRequestActionInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment, {
+  payload: PullRequestCommentInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -775,6 +829,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsServerGetBackgroundPolicyRpc,
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
+  WsPullRequestsListRpc,
+  WsPullRequestsDetailRpc,
+  WsPullRequestsDiffRpc,
+  WsPullRequestsRunActionRpc,
+  WsPullRequestsCommentRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
