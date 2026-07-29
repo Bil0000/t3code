@@ -306,6 +306,37 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("returns what it read when the diff response was cut off mid-JSON", () =>
+    Effect.gen(function* () {
+      const fullPage = (start: number) =>
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.stringify(
+          Array.from({ length: 100 }, (_, index) => ({
+            old_path: `src/${start + index}.ts`,
+            new_path: `src/${start + index}.ts`,
+            diff: "@@ -1 +1 @@\n-a\n+b\n",
+          })),
+        );
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(fullPage(0))))
+        // A byte-truncated prefix: valid JSON never survives the cut.
+        .mockReturnValueOnce(
+          Effect.succeed({ ...output('[{"old_path":"src/x.ts","new_p'), stdoutTruncated: true }),
+        );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const diff = yield* cli.getMergeRequestDiff({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      assert.isTrue(diff.truncated);
+      // The first page survives rather than the whole read failing.
+      expect(diff.patch).toContain("diff --git a/src/0.ts b/src/0.ts");
+    }),
+  );
+
   it.effect("offers no squash when the project does not say it allows one", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(

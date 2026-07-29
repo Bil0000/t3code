@@ -324,6 +324,13 @@ export const make = Effect.gen(function* () {
       timeoutMs: DIFF_TIMEOUT_MS,
     }).pipe(
       Effect.flatMap((result) => {
+        const joined = (sections: ReadonlyArray<string>) =>
+          sections.filter((section) => section.length > 0).join("\n");
+        // Checked before decoding: a byte-truncated response is a JSON prefix, which would
+        // fail to parse and lose the pages already read. What was read is worth returning.
+        if (result.stdoutTruncated) {
+          return Effect.succeed({ patch: joined(input.sections), truncated: true });
+        }
         const decoded = decodeMergeRequestDiffsJson(result.stdout.trim());
         if (!Result.isSuccess(decoded)) {
           return Effect.fail(
@@ -338,11 +345,8 @@ export const make = Effect.gen(function* () {
         const sections = [...input.sections, decoded.success.patch];
         const withheld = input.withheld || decoded.success.truncated;
         const morePages = decoded.success.rawCount >= MAX_PAGE_SIZE;
-        if (!morePages || input.page >= DIFF_MAX_PAGES || result.stdoutTruncated) {
-          return Effect.succeed({
-            patch: sections.filter((section) => section.length > 0).join("\n"),
-            truncated: withheld || result.stdoutTruncated || morePages,
-          });
+        if (!morePages || input.page >= DIFF_MAX_PAGES) {
+          return Effect.succeed({ patch: joined(sections), truncated: withheld || morePages });
         }
         return diffPage({ ...input, page: input.page + 1, sections, withheld });
       }),
