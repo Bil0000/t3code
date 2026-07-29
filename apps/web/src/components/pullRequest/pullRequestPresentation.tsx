@@ -16,7 +16,7 @@ import {
   LoaderIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import type { ReactNode } from "react";
+import { Children, isValidElement, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -27,8 +27,12 @@ interface StatePresentation {
 }
 
 /**
- * Single source of truth for how a pull request's state reads. Draft outranks conflicts: a
- * draft is not heading for a merge yet, so conflicts only surface once it is real work.
+ * How a pull request's state reads on this page. Open, closed and merged use the same ink as
+ * the thread badge in `ThreadStatusIndicators`, so one pull request cannot look like two
+ * different things in two places; draft and conflicts are states that badge never shows.
+ *
+ * Draft outranks conflicts: a draft is not heading for a merge yet, so conflicts only surface
+ * once it is real work.
  */
 export function resolvePullRequestState(input: {
   readonly state: PullRequestState;
@@ -45,7 +49,7 @@ export function resolvePullRequestState(input: {
   if (input.state === "closed") {
     return {
       label: "Closed",
-      toneClassName: "text-zinc-500 dark:text-zinc-400/80",
+      toneClassName: "text-red-600 dark:text-red-300/90",
       Icon: GitPullRequestClosedIcon,
     };
   }
@@ -177,7 +181,17 @@ export function PullRequestDiffStat({
   );
 }
 
-/** Dot-separated metadata. Owns the separator so a `null` segment leaves no stray dot behind. */
+/**
+ * Dot-separated metadata. It owns the separator, and draws one only between the segments that
+ * survive, so a caller can render `{condition ? <span/> : null}` without leaving a stray dot.
+ * `Children.toArray` drops the nullish entries and keys what remains, which a plain array
+ * check would not do for a single child or a fragment. A separator borrows the key of the
+ * segment it precedes, so it stays stable without counting positions.
+ */
+function separatorKey(segment: ReactNode): string {
+  return `separator:${isValidElement(segment) ? String(segment.key) : String(segment)}`;
+}
+
 export function PullRequestMetaLine({
   children,
   className,
@@ -185,20 +199,23 @@ export function PullRequestMetaLine({
   children: ReactNode;
   className?: string;
 }) {
-  const segments = Array.isArray(children) ? children.filter(Boolean) : [children];
+  const segments = Children.toArray(children);
   return (
     <span className={cn("flex min-w-0 items-center gap-1.5", className)}>
-      {segments.map((segment, index) => (
-        // eslint-disable-next-line react/no-array-index-key -- segments are positional metadata
-        <span key={index} className="flex min-w-0 items-center gap-1.5">
-          {index > 0 ? (
-            <span aria-hidden className="shrink-0 text-muted-foreground/50">
-              ·
-            </span>
-          ) : null}
-          {segment}
-        </span>
-      ))}
+      {segments.flatMap((segment, index) =>
+        index === 0
+          ? segment
+          : [
+              <span
+                aria-hidden
+                className="shrink-0 text-muted-foreground/50"
+                key={separatorKey(segment)}
+              >
+                ·
+              </span>,
+              segment,
+            ],
+      )}
     </span>
   );
 }
