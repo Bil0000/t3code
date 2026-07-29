@@ -138,11 +138,6 @@ export class GitHubPullRequestCli extends Context.Service<
   }
 >()("t3/pullRequest/GitHubPullRequestCli") {}
 
-/** `owner/repo`, optionally host-qualified for GitHub Enterprise (`host/owner/repo`). */
-export function isValidRepositorySelector(value: string): boolean {
-  return /^(?:[a-z0-9.-]+\/)?[\w.-]+\/[\w.-]+$/i.test(value.trim());
-}
-
 /**
  * `gh --repo` accepts the host-qualified form directly, but the GraphQL API takes owner and
  * name as separate arguments and the host as a flag, so the selector is split here.
