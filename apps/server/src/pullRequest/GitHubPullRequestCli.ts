@@ -2,6 +2,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
 import type {
   PullRequestAction,
   PullRequestInvolvement,
@@ -25,6 +26,50 @@ import {
   type GitHubReviewThreadComments,
 } from "./gitHubPullRequestJson.ts";
 
+/**
+ * Names the read that produced unusable output, so a failure reports the call it came from
+ * rather than borrowing another operation's message.
+ */
+export class GitHubPullRequestReadError extends Schema.TaggedErrorClass<GitHubPullRequestReadError>()(
+  "GitHubPullRequestReadError",
+  {
+    command: Schema.Literal("gh"),
+    cwd: Schema.String,
+    operation: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  get detail(): string {
+    return `GitHub CLI returned an unreadable ${this.operation} response.`;
+  }
+
+  override get message(): string {
+    return `GitHub CLI failed in ${this.operation}: ${this.detail}`;
+  }
+}
+
+/** Not a decode failure: gh answered, the account it answered for just has no login. */
+export class GitHubViewerLoginUnavailableError extends Schema.TaggedErrorClass<GitHubViewerLoginUnavailableError>()(
+  "GitHubViewerLoginUnavailableError",
+  {
+    command: Schema.Literal("gh"),
+    cwd: Schema.String,
+  },
+) {
+  get detail(): string {
+    return "GitHub CLI returned no login for the authenticated account.";
+  }
+
+  override get message(): string {
+    return `GitHub CLI failed in getViewerLogin: ${this.detail}`;
+  }
+}
+
+export type GitHubPullRequestCliError =
+  | GitHubCli.GitHubCliError
+  | GitHubPullRequestReadError
+  | GitHubViewerLoginUnavailableError;
+
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
@@ -39,7 +84,7 @@ export class GitHubPullRequestCli extends Context.Service<
   {
     readonly getViewerLogin: (input: {
       readonly cwd: string;
-    }) => Effect.Effect<string, GitHubCli.GitHubCliError>;
+    }) => Effect.Effect<string, GitHubPullRequestCliError>;
 
     readonly listPullRequests: (input: {
       readonly cwd: string;
@@ -48,13 +93,13 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
-    }) => Effect.Effect<GitHubPullRequestListBatch, GitHubCli.GitHubCliError>;
+    }) => Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestCliError>;
 
     readonly getPullRequestDetail: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly number: number;
-    }) => Effect.Effect<GitHubPullRequestDetail, GitHubCli.GitHubCliError>;
+    }) => Effect.Effect<GitHubPullRequestDetail, GitHubPullRequestCliError>;
 
     readonly getPullRequestDiff: (input: {
       readonly cwd: string;
@@ -62,19 +107,19 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
     }) => Effect.Effect<
       { readonly patch: string; readonly truncated: boolean },
-      GitHubCli.GitHubCliError
+      GitHubPullRequestCliError
     >;
 
     readonly listReviewThreadComments: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly number: number;
-    }) => Effect.Effect<GitHubReviewThreadComments, GitHubCli.GitHubCliError>;
+    }) => Effect.Effect<GitHubReviewThreadComments, GitHubPullRequestCliError>;
 
     readonly getRepositoryMergeCapabilities: (input: {
       readonly cwd: string;
       readonly repository: string;
-    }) => Effect.Effect<PullRequestMergeCapabilities, GitHubCli.GitHubCliError>;
+    }) => Effect.Effect<PullRequestMergeCapabilities, GitHubPullRequestCliError>;
 
     readonly runPullRequestAction: (input: {
       readonly cwd: string;
@@ -82,14 +127,14 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
       readonly action: PullRequestAction;
       readonly mergeMethod?: PullRequestMergeMethod;
-    }) => Effect.Effect<void, GitHubCli.GitHubCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestCliError>;
 
     readonly commentOnPullRequest: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly number: number;
       readonly body: string;
-    }) => Effect.Effect<void, GitHubCli.GitHubCliError>;
+    }) => Effect.Effect<void, GitHubPullRequestCliError>;
   }
 >()("t3/pullRequest/GitHubPullRequestCli") {}
 
@@ -136,8 +181,8 @@ function actionArgs(
 export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
 
-  const decodeError = (cwd: string, cause: unknown) =>
-    new GitHubCli.GitHubPullRequestDecodeError({ command: "gh", cwd, cause });
+  const readError = (cwd: string, operation: string, cause: unknown) =>
+    new GitHubPullRequestReadError({ command: "gh", cwd, operation, cause });
 
   const repositoryArgs = (repository: string) => ["--repo", repository];
 
@@ -148,7 +193,7 @@ export const make = Effect.gen(function* () {
           const login = result.stdout.trim();
           return login.length > 0
             ? Effect.succeed(login)
-            : Effect.fail(decodeError(input.cwd, new Error("Empty viewer login.")));
+            : Effect.fail(new GitHubViewerLoginUnavailableError({ command: "gh", cwd: input.cwd }));
         }),
       ),
 
@@ -179,10 +224,12 @@ export const make = Effect.gen(function* () {
             const decoded = decodePullRequestListJson(raw);
             return Result.isSuccess(decoded)
               ? Effect.succeed({
-                  items: decoded.success.slice(0, input.limit),
-                  truncated: decoded.success.length > input.limit,
+                  items: decoded.success.items.slice(0, input.limit),
+                  // One row over the page size is the probe for a next page, and it is
+                  // counted before decoding: a skipped malformed row must not end paging.
+                  truncated: decoded.success.rawCount > input.limit,
                 })
-              : Effect.fail(decodeError(input.cwd, decoded.failure));
+              : Effect.fail(readError(input.cwd, "listPullRequests", decoded.failure));
           }),
         ),
 
@@ -204,7 +251,7 @@ export const make = Effect.gen(function* () {
             const decoded = decodePullRequestDetailJson(result.stdout.trim());
             return Result.isSuccess(decoded)
               ? Effect.succeed(decoded.success)
-              : Effect.fail(decodeError(input.cwd, decoded.failure));
+              : Effect.fail(readError(input.cwd, "getPullRequestDetail", decoded.failure));
           }),
         ),
 
@@ -254,7 +301,7 @@ export const make = Effect.gen(function* () {
             const decoded = decodeReviewThreadsJson(result.stdout.trim());
             return Result.isSuccess(decoded)
               ? Effect.succeed(decoded.success)
-              : Effect.fail(decodeError(input.cwd, decoded.failure));
+              : Effect.fail(readError(input.cwd, "listReviewThreadComments", decoded.failure));
           }),
         );
     },
@@ -276,7 +323,9 @@ export const make = Effect.gen(function* () {
             const decoded = decodeRepositoryMergeCapabilitiesJson(result.stdout.trim());
             return Result.isSuccess(decoded)
               ? Effect.succeed(decoded.success)
-              : Effect.fail(decodeError(input.cwd, decoded.failure));
+              : Effect.fail(
+                  readError(input.cwd, "getRepositoryMergeCapabilities", decoded.failure),
+                );
           }),
         ),
 

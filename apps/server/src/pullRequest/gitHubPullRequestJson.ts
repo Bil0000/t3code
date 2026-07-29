@@ -120,10 +120,12 @@ const RawReviewThreadsSchema = Schema.Struct({
   }),
 });
 
+/** Requested together, so a response missing any of them fails rather than defaulting open:
+ *  guessing `true` would offer a merge method the repository forbids. */
 const RawMergeCapabilitiesSchema = Schema.Struct({
-  mergeCommitAllowed: Schema.optional(Schema.Boolean),
-  squashMergeAllowed: Schema.optional(Schema.Boolean),
-  rebaseMergeAllowed: Schema.optional(Schema.Boolean),
+  mergeCommitAllowed: Schema.Boolean,
+  squashMergeAllowed: Schema.Boolean,
+  rebaseMergeAllowed: Schema.Boolean,
 });
 
 export const PULL_REQUEST_LIST_JSON_FIELDS =
@@ -221,12 +223,16 @@ function toLabels(
   });
 }
 
-/** Team review requests carry a slug instead of a login; both identify a requested reviewer. */
+/**
+ * User review requests only. A team request carries a slug, and the viewer check compares
+ * these against a login, so keeping slugs here would let an unrelated team read as the
+ * viewer. Team-routed requests need GitHub's review-requested search to resolve.
+ */
 function toReviewRequestLogins(
   raw: ReadonlyArray<Schema.Schema.Type<typeof RawReviewRequestSchema>> | undefined,
 ): ReadonlyArray<string> {
   return (raw ?? []).flatMap((request) => {
-    const login = trimmed(request.login) ?? trimmed(request.slug) ?? trimmed(request.name);
+    const login = trimmed(request.login);
     return login === null ? [] : [login];
   });
 }
@@ -358,11 +364,17 @@ const decodeReviewThreads = decodeJsonResult(RawReviewThreadsSchema);
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
 
+export interface GitHubPullRequestListBatch {
+  readonly items: ReadonlyArray<GitHubPullRequestListItem>;
+  /** Rows gh returned, counted before decoding, so a skipped row cannot hide a next page. */
+  readonly rawCount: number;
+}
+
 /** Malformed entries are skipped rather than failing the batch: one unexpected pull request
  *  must not blank the whole list. */
 export function decodePullRequestListJson(
   raw: string,
-): Result.Result<ReadonlyArray<GitHubPullRequestListItem>, DecodeFailure> {
+): Result.Result<GitHubPullRequestListBatch, DecodeFailure> {
   const decoded = decodeUnknownList(raw);
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
@@ -374,7 +386,7 @@ export function decodePullRequestListJson(
       items.push(toListItem(item.value));
     }
   }
-  return Result.succeed(items);
+  return Result.succeed({ items, rawCount: decoded.success.length });
 }
 
 export function decodePullRequestDetailJson(
@@ -431,9 +443,9 @@ export function decodeRepositoryMergeCapabilitiesJson(
   const decoded = decodeMergeCapabilities(raw);
   return Result.isSuccess(decoded)
     ? Result.succeed({
-        merge: decoded.success.mergeCommitAllowed ?? true,
-        squash: decoded.success.squashMergeAllowed ?? true,
-        rebase: decoded.success.rebaseMergeAllowed ?? true,
+        merge: decoded.success.mergeCommitAllowed,
+        squash: decoded.success.squashMergeAllowed,
+        rebase: decoded.success.rebaseMergeAllowed,
       })
     : Result.fail(decoded.failure);
 }

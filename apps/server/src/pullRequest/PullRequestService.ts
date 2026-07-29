@@ -18,7 +18,6 @@ import {
 } from "@t3tools/contracts";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import type { GitHubPullRequestListItem } from "./gitHubPullRequestJson.ts";
 
@@ -63,21 +62,22 @@ interface RepositoryBatch {
 /** `gh` being absent or logged out disables the whole feature, so it is reported as such
  *  instead of being folded into a single project's error list. */
 function unavailableReason(
-  error: GitHubCli.GitHubCliError,
+  error: GitHubPullRequestCli.GitHubPullRequestCliError,
 ): PullRequestUnavailableError["reason"] | null {
   if (error._tag === "GitHubCliUnavailableError") return "cli-missing";
   if (error._tag === "GitHubCliAuthenticationError") return "cli-unauthenticated";
   return null;
 }
 
+/** Either way the CLI failure travels in `cause`; only the reported shape differs. */
 function toPullRequestError(
   operation: string,
-): (error: GitHubCli.GitHubCliError) => PullRequestError {
+): (error: GitHubPullRequestCli.GitHubPullRequestCliError) => PullRequestError {
   return (error) => {
     const reason = unavailableReason(error);
     return reason === null
       ? new PullRequestOperationError({ operation, detail: error.detail, cause: error })
-      : new PullRequestUnavailableError({ reason, detail: error.detail });
+      : new PullRequestUnavailableError({ reason, cause: error });
   };
 }
 
@@ -158,12 +158,7 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((projects): Effect.Effect<GitHubProject, PullRequestError> => {
         const match = projects[0];
         if (!match) {
-          return Effect.fail(
-            new PullRequestUnavailableError({
-              reason: "provider-unsupported",
-              detail: "This project is not backed by a GitHub repository.",
-            }),
-          );
+          return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
         }
         // The repository travels through the client, so it is checked against the project's
         // own remote rather than being passed to `gh --repo` verbatim.

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   decodePullRequestDetailJson,
   decodePullRequestListJson,
+  decodeRepositoryMergeCapabilitiesJson,
   decodeReviewThreadsJson,
 } from "./gitHubPullRequestJson.ts";
 
@@ -32,35 +33,37 @@ describe("pull request list decoding", () => {
   it("treats a merge timestamp as merged even when the state still says closed", () => {
     const [entry] = expectSuccess(
       decodePullRequestListJson(listJson([{ state: "CLOSED", mergedAt: "2026-07-03T00:00:00Z" }])),
-    );
+    ).items;
     expect(entry?.state).toBe("merged");
   });
 
   it("normalizes mergeability and defaults unknown values", () => {
-    const entries = expectSuccess(
+    const batch = expectSuccess(
       decodePullRequestListJson(
         listJson([{ mergeable: "CONFLICTING" }, { mergeable: "SOMETHING_NEW" }, {}]),
       ),
     );
-    expect(entries.map((entry) => entry.mergeability)).toEqual([
+    expect(batch.items.map((entry) => entry.mergeability)).toEqual([
       "conflicting",
       "unknown",
       "unknown",
     ]);
   });
 
-  it("reads review requests from user logins and team slugs alike", () => {
+  it("keeps user review requests and drops team ones, which are not logins", () => {
     const [entry] = expectSuccess(
       decodePullRequestListJson(
         listJson([{ reviewRequests: [{ login: "octocat" }, { slug: "web-platform" }] }]),
       ),
-    );
-    expect(entry?.reviewRequestLogins).toEqual(["octocat", "web-platform"]);
+    ).items;
+    expect(entry?.reviewRequestLogins).toEqual(["octocat"]);
   });
 
-  it("skips malformed entries instead of failing the batch", () => {
+  it("skips malformed entries but still counts them, so paging does not stop early", () => {
     const raw = `[${listJson([{}]).slice(1, -1)},{"number":"not-a-number"}]`;
-    expect(expectSuccess(decodePullRequestListJson(raw))).toHaveLength(1);
+    const batch = expectSuccess(decodePullRequestListJson(raw));
+    expect(batch.items).toHaveLength(1);
+    expect(batch.rawCount).toBe(2);
   });
 });
 
@@ -152,5 +155,28 @@ describe("review thread decoding", () => {
       ),
     );
     expect(result.truncated).toBe(true);
+  });
+});
+
+describe("repository merge capability decoding", () => {
+  it("reads the three settings gh reports", () => {
+    expect(
+      expectSuccess(
+        decodeRepositoryMergeCapabilitiesJson(
+          JSON.stringify({
+            mergeCommitAllowed: true,
+            squashMergeAllowed: false,
+            rebaseMergeAllowed: true,
+          }),
+        ),
+      ),
+    ).toEqual({ merge: true, squash: false, rebase: true });
+  });
+
+  it("fails rather than defaulting open when a setting is missing", () => {
+    const decoded = decodeRepositoryMergeCapabilitiesJson(
+      JSON.stringify({ mergeCommitAllowed: true }),
+    );
+    expect(Result.isSuccess(decoded)).toBe(false);
   });
 });

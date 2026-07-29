@@ -195,15 +195,34 @@ export const PullRequestCommentInput = Schema.Struct({
 });
 export type PullRequestCommentInput = typeof PullRequestCommentInput.Type;
 
+export const PullRequestUnavailableReason = Schema.Literals([
+  "cli-missing",
+  "cli-unauthenticated",
+  "provider-unsupported",
+]);
+export type PullRequestUnavailableReason = typeof PullRequestUnavailableReason.Type;
+
+const PULL_REQUEST_UNAVAILABLE_MESSAGES: Record<PullRequestUnavailableReason, string> = {
+  "cli-missing":
+    "GitHub CLI (`gh`) is required to browse pull requests. Install it from https://cli.github.com/ and reload.",
+  "cli-unauthenticated": "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
+  "provider-unsupported": "Pull requests are only available for projects on GitHub.",
+};
+
+/**
+ * The feature is switched off entirely. The message is derived from `reason` rather than from
+ * whatever the CLI printed, so it stays a stable sentence the UI can show as-is; the
+ * underlying failure travels in `cause` (absent for `provider-unsupported`, which has none).
+ */
 export class PullRequestUnavailableError extends Schema.TaggedErrorClass<PullRequestUnavailableError>()(
   "PullRequestUnavailableError",
   {
-    reason: Schema.Literals(["cli-missing", "cli-unauthenticated", "provider-unsupported"]),
-    detail: TrimmedNonEmptyString,
+    reason: PullRequestUnavailableReason,
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return this.detail;
+    return PULL_REQUEST_UNAVAILABLE_MESSAGES[this.reason];
   }
 }
 
