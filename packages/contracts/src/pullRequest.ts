@@ -241,27 +241,42 @@ export const PullRequestUnavailableReason = Schema.Literals([
 ]);
 export type PullRequestUnavailableReason = typeof PullRequestUnavailableReason.Type;
 
-const PULL_REQUEST_UNAVAILABLE_MESSAGES: Record<PullRequestUnavailableReason, string> = {
-  "cli-missing":
-    "GitHub CLI (`gh`) is required to browse pull requests. Install it from https://cli.github.com/ and reload.",
-  "cli-unauthenticated": "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
-  "provider-unsupported": "Pull requests are only available for projects on GitHub.",
+/** The tool each host is read through, so a failure names the one the reader has to fix. */
+const PROVIDER_CLI: Partial<
+  Record<SourceControlProviderKind, { readonly label: string; readonly command: string }>
+> = {
+  github: { label: "GitHub CLI", command: "gh" },
+  gitlab: { label: "GitLab CLI", command: "glab" },
 };
 
 /**
- * The feature is switched off entirely. The message is derived from `reason` rather than from
- * whatever the CLI printed, so it stays a stable sentence the UI can show as-is; the
- * underlying failure travels in `cause` (absent for `provider-unsupported`, which has none).
+ * The feature is switched off entirely. The message is derived from `reason` and the host
+ * rather than from whatever the CLI printed, so it stays a stable sentence the UI can show
+ * as-is; the underlying failure travels in `cause` (absent for `provider-unsupported`, which
+ * has none).
  */
 export class PullRequestUnavailableError extends Schema.TaggedErrorClass<PullRequestUnavailableError>()(
   "PullRequestUnavailableError",
   {
     reason: PullRequestUnavailableReason,
+    provider: Schema.optional(SourceControlProviderKind),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return PULL_REQUEST_UNAVAILABLE_MESSAGES[this.reason];
+    const cli = this.provider === undefined ? undefined : PROVIDER_CLI[this.provider];
+    switch (this.reason) {
+      case "cli-missing":
+        return cli === undefined
+          ? "The command-line tool this host is read through is not installed."
+          : `${cli.label} (\`${cli.command}\`) is required to browse change requests on this host. Install it and reload.`;
+      case "cli-unauthenticated":
+        return cli === undefined
+          ? "The command-line tool this host is read through is not signed in."
+          : `${cli.label} is not authenticated. Run \`${cli.command} auth login\` and retry.`;
+      case "provider-unsupported":
+        return "Change requests cannot be browsed for this project's host yet.";
+    }
   }
 }
 

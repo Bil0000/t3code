@@ -58,6 +58,16 @@ interface SupportedProject {
   readonly repository: string;
 }
 
+/**
+ * What the workspace has, split by whether this build can read it. Hosts with no
+ * implementation are counted rather than dropped, so their projects are explained in the
+ * provider list instead of quietly missing from the page.
+ */
+interface WorkspaceProjects {
+  readonly supported: ReadonlyArray<SupportedProject>;
+  readonly unimplemented: ReadonlyMap<SourceControlProviderKind, number>;
+}
+
 interface RepositoryBatch {
   readonly entries: ReadonlyArray<PullRequestListEntry>;
   readonly errors: ReadonlyArray<PullRequestListProjectError>;
@@ -72,6 +82,7 @@ function isProviderUnusable(error: PullRequestProviderError): boolean {
 function toUnavailableError(error: PullRequestProviderError): PullRequestUnavailableError {
   return new PullRequestUnavailableError({
     reason: error.reason === "missing-tool" ? "cli-missing" : "cli-unauthenticated",
+    provider: error.provider,
     cause: error,
   });
 }
@@ -101,9 +112,9 @@ export const make = Effect.gen(function* () {
   const registry = yield* PullRequestProviderRegistry;
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
 
-  const listSupportedProjects = (
+  const listWorkspaceProjects = (
     filter: Pick<PullRequestListInput, "projectId" | "provider">,
-  ): Effect.Effect<ReadonlyArray<SupportedProject>, PullRequestError> =>
+  ): Effect.Effect<WorkspaceProjects, PullRequestError> =>
     projections.getShellSnapshot().pipe(
       Effect.mapError(
         (error) =>
@@ -115,6 +126,7 @@ export const make = Effect.gen(function* () {
       ),
       Effect.map((snapshot) => {
         const supported: SupportedProject[] = [];
+        const unimplemented = new Map<SourceControlProviderKind, number>();
         const seen = new Set<string>();
         for (const project of snapshot.projects) {
           if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
@@ -124,23 +136,26 @@ export const make = Effect.gen(function* () {
           const repository = repositoryIdentityOf(project);
           if (kind === undefined || repository === null) continue;
           if (filter.provider !== undefined && kind !== filter.provider) continue;
-          const api = registry.get(kind);
-          if (api === null) continue;
           // Worktrees of one repository are separate projects; reading the remote once keeps
           // the page from repeating every change request per local checkout.
           const key = `${kind} ${repository.toLowerCase()}`;
           if (seen.has(key)) continue;
           seen.add(key);
+          const api = registry.get(kind);
+          if (api === null) {
+            unimplemented.set(kind, (unimplemented.get(kind) ?? 0) + 1);
+            continue;
+          }
           supported.push({ project, api, repository });
         }
-        return supported;
+        return { supported, unimplemented };
       }),
     );
 
   const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
-    listSupportedProjects({ projectId: ref.projectId }).pipe(
-      Effect.flatMap((projects): Effect.Effect<SupportedProject, PullRequestError> => {
-        const match = projects[0];
+    listWorkspaceProjects({ projectId: ref.projectId }).pipe(
+      Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, PullRequestError> => {
+        const match = supported[0];
         if (!match) {
           return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
         }
@@ -217,19 +232,27 @@ export const make = Effect.gen(function* () {
   const list: PullRequestService["Service"]["list"] = (input) =>
     Effect.gen(function* () {
       const involvement = input.involvement ?? "all";
-      const projects = yield* listSupportedProjects(input);
+      const { supported: projects, unimplemented } = yield* listWorkspaceProjects(input);
       const projectCounts = new Map<SourceControlProviderKind, number>();
       for (const { api } of projects) {
         projectCounts.set(api.kind, (projectCounts.get(api.kind) ?? 0) + 1);
       }
 
       const viewerResults = yield* resolveViewers(projects);
-      const providers: ReadonlyArray<PullRequestProviderSummary> = viewerResults.map((result) => ({
-        kind: result.kind,
-        projectCount: projectCounts.get(result.kind) ?? 1,
-        configured: result.viewer !== null,
-        detail: result.error === null ? null : result.error.detail,
-      }));
+      const providers: ReadonlyArray<PullRequestProviderSummary> = [
+        ...viewerResults.map((result) => ({
+          kind: result.kind,
+          projectCount: projectCounts.get(result.kind) ?? 1,
+          configured: result.viewer !== null,
+          detail: result.error === null ? null : result.error.detail,
+        })),
+        ...[...unimplemented].map(([kind, projectCount]) => ({
+          kind,
+          projectCount,
+          configured: false,
+          detail: "This host cannot be browsed here yet.",
+        })),
+      ];
       const viewers: Record<string, string> = {};
       for (const result of viewerResults) {
         if (result.viewer !== null) viewers[result.kind] = result.viewer;

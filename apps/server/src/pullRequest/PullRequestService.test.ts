@@ -125,7 +125,7 @@ function makeService(input: {
   );
 }
 
-it.effect("skips projects on a host with no implementation", () =>
+it.effect("reads nothing from a host with no implementation, but reports it", () =>
   Effect.gen(function* () {
     const listed: string[] = [];
     const service = yield* makeService({
@@ -156,11 +156,19 @@ it.effect("skips projects on a host with no implementation", () =>
     const result = yield* service.list({ state: "open" });
 
     assert.deepStrictEqual(listed, ["pingdotgg/t3code"]);
-    assert.deepStrictEqual(
-      result.providers.map((summary) => summary.kind),
-      ["github"],
-    );
     assert.strictEqual(result.entries[0]?.provider, "github");
+    // The GitLab project is explained rather than quietly missing from the page.
+    assert.deepStrictEqual(
+      result.providers.map((summary) => ({
+        kind: summary.kind,
+        configured: summary.configured,
+        projectCount: summary.projectCount,
+      })),
+      [
+        { kind: "github", configured: true, projectCount: 1 },
+        { kind: "gitlab", configured: false, projectCount: 1 },
+      ],
+    );
   }),
 );
 
