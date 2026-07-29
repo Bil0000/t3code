@@ -1,6 +1,7 @@
 import type { PullRequestListEntry } from "@t3tools/contracts";
 
 import { cn } from "~/lib/utils";
+import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import {
@@ -13,13 +14,17 @@ export function PullRequestRow({
   entry,
   selected,
   showProjectTitle,
+  showProvider,
   onSelect,
 }: {
   entry: PullRequestListEntry;
   selected: boolean;
   showProjectTitle: boolean;
+  /** Only when the list spans more than one host, where the repository alone is ambiguous. */
+  showProvider: boolean;
   onSelect: (entry: PullRequestListEntry) => void;
 }) {
+  const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
   return (
     <button
       type="button"
@@ -38,7 +43,10 @@ export function PullRequestRow({
       <span className="min-w-0">
         <span className="block truncate text-sm font-medium text-foreground">{entry.title}</span>
         <PullRequestMetaLine className="mt-0.5 text-xs text-muted-foreground/70">
-          <span className="shrink-0">#{entry.number}</span>
+          <span className="flex shrink-0 items-center gap-1">
+            {showProvider ? <Icon aria-label={providerName} className="size-3" /> : null}#
+            {entry.number}
+          </span>
           {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
           <span className="truncate">{entry.author?.login ?? "ghost"}</span>
           <span className="truncate" title={`${entry.headBranch} to ${entry.baseBranch}`}>

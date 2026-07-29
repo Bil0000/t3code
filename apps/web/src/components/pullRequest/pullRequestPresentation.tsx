@@ -163,6 +163,11 @@ export function PullRequestDiffStat({
   className?: string;
 }) {
   const diffTone = tone === "diff";
+  // Not every host reports line counts. Showing "+0 -0" would read as an empty change set
+  // rather than as a missing one, so the stat is left out instead.
+  if (additions === 0 && deletions === 0) {
+    return null;
+  }
   return (
     <span
       className={cn(
