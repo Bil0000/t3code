@@ -10,6 +10,7 @@ import type {
   PullRequestCommit,
   PullRequestLabel,
   PullRequestMergeability,
+  PullRequestMergeCapabilities,
   PullRequestState,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -93,6 +94,12 @@ const RawDiffSchema = Schema.Struct({
 
 const RawViewerSchema = Schema.Struct({
   username: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+/** A GitLab project settles on one merge strategy plus an optional squash. */
+const RawProjectMergeSettingsSchema = Schema.Struct({
+  merge_method: Schema.optional(Schema.NullOr(Schema.String)),
+  squash_option: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 export interface GitLabMergeRequestListItem {
@@ -265,6 +272,7 @@ const decodeNoteEntry = Schema.decodeUnknownExit(RawNoteSchema);
 const decodeCommitEntry = Schema.decodeUnknownExit(RawCommitSchema);
 const decodeDiffEntry = Schema.decodeUnknownExit(RawDiffSchema);
 const decodeViewer = decodeJsonResult(RawViewerSchema);
+const decodeProjectMergeSettings = decodeJsonResult(RawProjectMergeSettingsSchema);
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
 
@@ -307,6 +315,28 @@ export function decodeViewerJson(raw: string): Result.Result<string | null, Deco
   return Result.isSuccess(decoded)
     ? Result.succeed(trimmed(decoded.success.username))
     : Result.fail(decoded.failure);
+}
+
+/**
+ * GitLab settles the strategy per project rather than offering all three per merge request:
+ * `merge_method` picks one of merge commit, semi-linear or fast-forward, and squashing is a
+ * separate switch. An unrecognized setting offers nothing rather than offering a strategy the
+ * project forbids.
+ */
+export function decodeProjectMergeCapabilitiesJson(
+  raw: string,
+): Result.Result<PullRequestMergeCapabilities, DecodeFailure> {
+  const decoded = decodeProjectMergeSettings(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const mergeMethod = decoded.success.merge_method?.trim().toLowerCase();
+  return Result.succeed({
+    merge: mergeMethod === "merge",
+    // Both semi-linear and fast-forward histories are reached by rebasing onto the target.
+    rebase: mergeMethod === "rebase_merge" || mergeMethod === "ff",
+    squash: decoded.success.squash_option?.trim().toLowerCase() !== "never",
+  });
 }
 
 /**
