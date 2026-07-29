@@ -1,12 +1,20 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
+import type {
+  OrchestrationProjectShell,
+  ProjectId,
+  SourceControlProviderKind,
+} from "@t3tools/contracts";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as GitHubCli from "../sourceControl/GitHubCli.ts";
-import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
-import type { GitHubPullRequestListItem } from "./gitHubPullRequestJson.ts";
+import {
+  PullRequestProviderError,
+  PullRequestProviderRegistry,
+  makeRegistry,
+  type ProviderChangeRequest,
+  type PullRequestProviderApi,
+} from "./PullRequestProvider.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 
 function project(input: {
@@ -16,7 +24,6 @@ function project(input: {
   readonly repository?: string;
   readonly provider?: string;
 }): OrchestrationProjectShell {
-  const [owner, name] = (input.repository ?? "/").split("/");
   return {
     id: input.id as ProjectId,
     title: input.title,
@@ -24,15 +31,14 @@ function project(input: {
     ...(input.repository
       ? {
           repositoryIdentity: {
-            canonicalKey: `github.com/${input.repository}`,
+            canonicalKey: `host/${input.repository}`,
             locator: {
               source: "git-remote" as const,
               remoteName: "origin",
-              remoteUrl: `https://github.com/${input.repository}.git`,
+              remoteUrl: `https://host/${input.repository}.git`,
             },
             provider: input.provider ?? "github",
-            owner: owner!,
-            name: name!,
+            displayName: input.repository,
           },
         }
       : {}),
@@ -43,11 +49,11 @@ function project(input: {
   };
 }
 
-function listItem(number: number, updatedAt: string): GitHubPullRequestListItem {
+function changeRequest(number: number, updatedAt: string): ProviderChangeRequest {
   return {
     number,
-    title: `Pull request ${number}`,
-    url: `https://github.com/pingdotgg/t3code/pull/${number}`,
+    title: `Change request ${number}`,
+    url: `https://host/pull/${number}`,
     author: { login: "octocat", name: null },
     headBranch: `feat/${number}`,
     baseBranch: "main",
@@ -63,17 +69,48 @@ function listItem(number: number, updatedAt: string): GitHubPullRequestListItem 
   };
 }
 
+function unusable(provider: SourceControlProviderKind, reason: "missing-tool" | "unauthenticated") {
+  return new PullRequestProviderError({
+    provider,
+    operation: "getViewer",
+    reason,
+    detail: `${provider} is not usable.`,
+  });
+}
+
+const requestFailed = new PullRequestProviderError({
+  provider: "github",
+  operation: "listChangeRequests",
+  reason: "failed",
+  detail: "HTTP 404",
+});
+
+/** A provider whose every call is supplied by the test; anything unset succeeds emptily. */
+function fakeProvider(
+  kind: SourceControlProviderKind,
+  overrides: Partial<PullRequestProviderApi> = {},
+): PullRequestProviderApi {
+  return {
+    kind,
+    capabilities: { diff: true, inlineComments: true, draft: true, mergeMethods: ["merge"] },
+    getViewer: () => Effect.succeed("bilal"),
+    listChangeRequests: () => Effect.succeed({ items: [], truncated: false }),
+    getChangeRequest: () => Effect.die("unused"),
+    getDiff: () => Effect.die("unused"),
+    runAction: () => Effect.void,
+    comment: () => Effect.void,
+    ...overrides,
+  };
+}
+
 function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
-  readonly github: Partial<GitHubPullRequestCli.GitHubPullRequestCli["Service"]>;
+  readonly providers: ReadonlyArray<PullRequestProviderApi>;
 }) {
   return PullRequestService.make.pipe(
     Effect.provide(
       Layer.mergeAll(
-        Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
-          getViewerLogin: () => Effect.succeed("bilal"),
-          ...input.github,
-        }),
+        Layer.succeed(PullRequestProviderRegistry, makeRegistry(input.providers)),
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
           getShellSnapshot: () =>
             Effect.succeed({
@@ -88,19 +125,7 @@ function makeService(input: {
   );
 }
 
-const cliUnavailable = new GitHubCli.GitHubCliUnavailableError({
-  command: "gh",
-  cwd: "/repo",
-  cause: new Error("spawn gh ENOENT"),
-});
-
-const cliFailed = new GitHubCli.GitHubCliCommandError({
-  command: "gh",
-  cwd: "/repo",
-  cause: new Error("HTTP 404"),
-});
-
-it.effect("lists only projects backed by a GitHub repository", () =>
+it.effect("skips projects on a host with no implementation", () =>
   Effect.gen(function* () {
     const listed: string[] = [];
     const service = yield* makeService({
@@ -109,25 +134,179 @@ it.effect("lists only projects backed by a GitHub repository", () =>
         project({ id: "p2", title: "notes", workspaceRoot: "/b" }),
         project({
           id: "p3",
-          title: "gitlab thing",
+          title: "on gitlab",
           workspaceRoot: "/c",
           repository: "group/project",
           provider: "gitlab",
         }),
       ],
-      github: {
-        listPullRequests: (input) => {
-          listed.push(input.repository);
-          return Effect.succeed({ items: [listItem(1, "2026-07-02T00:00:00Z")], truncated: false });
-        },
-      },
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: (input) => {
+            listed.push(input.repository);
+            return Effect.succeed({
+              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+              truncated: false,
+            });
+          },
+        }),
+      ],
     });
 
     const result = yield* service.list({ state: "open" });
 
     assert.deepStrictEqual(listed, ["pingdotgg/t3code"]);
-    assert.strictEqual(result.entries.length, 1);
-    assert.strictEqual(result.entries[0]?.projectTitle, "t3code");
+    assert.deepStrictEqual(
+      result.providers.map((summary) => summary.kind),
+      ["github"],
+    );
+    assert.strictEqual(result.entries[0]?.provider, "github");
+  }),
+);
+
+it.effect("lists every host that has an implementation", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p2",
+          title: "on gitlab",
+          workspaceRoot: "/b",
+          repository: "group/sub/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [changeRequest(1, "2026-07-01T00:00:00Z")],
+              truncated: false,
+            }),
+        }),
+        fakeProvider("gitlab", {
+          listChangeRequests: (input) =>
+            // Nested groups need the full path, not the last two segments.
+            input.repository === "group/sub/project"
+              ? Effect.succeed({
+                  items: [changeRequest(2, "2026-07-05T00:00:00Z")],
+                  truncated: false,
+                })
+              : Effect.die("wrong repository identity"),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(
+      result.entries.map((entry) => [entry.provider, entry.number]),
+      [
+        ["gitlab", 2],
+        ["github", 1],
+      ],
+    );
+  }),
+);
+
+it.effect("narrows the listing to one host when asked", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p2",
+          title: "on gitlab",
+          workspaceRoot: "/b",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", { listChangeRequests: () => Effect.die("should not be read") }),
+        fakeProvider("gitlab", {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [changeRequest(2, "2026-07-05T00:00:00Z")],
+              truncated: false,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open", provider: "gitlab" });
+
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.provider),
+      ["gitlab"],
+    );
+  }),
+);
+
+it.effect("keeps one host listed when another is not set up", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p2",
+          title: "on gitlab",
+          workspaceRoot: "/b",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [changeRequest(1, "2026-07-01T00:00:00Z")],
+              truncated: false,
+            }),
+        }),
+        fakeProvider("gitlab", {
+          getViewer: () => Effect.fail(unusable("gitlab", "missing-tool")),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.provider),
+      ["github"],
+    );
+    assert.deepStrictEqual(
+      result.providers.map((summary) => [summary.kind, summary.configured]),
+      [
+        ["github", true],
+        ["gitlab", false],
+      ],
+    );
+  }),
+);
+
+it.effect("fails as unavailable only when no host can be read", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getViewer: () => Effect.fail(unusable("github", "missing-tool")),
+        }),
+      ],
+    });
+
+    const error = yield* service.list({ state: "open" }).pipe(Effect.flip);
+
+    assert.strictEqual(error._tag, "PullRequestUnavailableError");
+    assert.strictEqual(
+      error._tag === "PullRequestUnavailableError" ? error.reason : null,
+      "cli-missing",
+    );
   }),
 );
 
@@ -144,12 +323,17 @@ it.effect("reads a repository once when several worktrees share it", () =>
           repository: "PingDotGG/T3Code",
         }),
       ],
-      github: {
-        listPullRequests: () => {
-          calls += 1;
-          return Effect.succeed({ items: [listItem(1, "2026-07-02T00:00:00Z")], truncated: false });
-        },
-      },
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () => {
+            calls += 1;
+            return Effect.succeed({
+              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+              truncated: false,
+            });
+          },
+        }),
+      ],
     });
 
     const result = yield* service.list({ state: "open" });
@@ -166,15 +350,17 @@ it.effect("keeps healthy repositories when one of them cannot be read", () =>
         project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
         project({ id: "p2", title: "broken", workspaceRoot: "/b", repository: "pingdotgg/broken" }),
       ],
-      github: {
-        listPullRequests: (input) =>
-          input.repository === "pingdotgg/broken"
-            ? Effect.fail(cliFailed)
-            : Effect.succeed({
-                items: [listItem(1, "2026-07-02T00:00:00Z")],
-                truncated: false,
-              }),
-      },
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: (input) =>
+            input.repository === "pingdotgg/broken"
+              ? Effect.fail(requestFailed)
+              : Effect.succeed({
+                  items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+                  truncated: false,
+                }),
+        }),
+      ],
     });
 
     const result = yield* service.list({ state: "open" });
@@ -187,74 +373,57 @@ it.effect("keeps healthy repositories when one of them cannot be read", () =>
   }),
 );
 
-it.effect("reports a missing CLI as unavailable rather than a per-project error", () =>
+it.effect("tries another workspace on the same host for the viewer", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
-        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({ id: "p1", title: "broken", workspaceRoot: "/broken", repository: "acme/one" }),
+        project({ id: "p2", title: "healthy", workspaceRoot: "/healthy", repository: "acme/two" }),
       ],
-      github: { listPullRequests: () => Effect.fail(cliUnavailable) },
-    });
-
-    const error = yield* service.list({ state: "open" }).pipe(Effect.flip);
-
-    assert.strictEqual(error._tag, "PullRequestUnavailableError");
-    assert.strictEqual(
-      error._tag === "PullRequestUnavailableError" ? error.reason : null,
-      "cli-missing",
-    );
-  }),
-);
-
-it.effect("orders entries by most recently updated across repositories", () =>
-  Effect.gen(function* () {
-    const service = yield* makeService({
-      projects: [
-        project({ id: "p1", title: "one", workspaceRoot: "/a", repository: "pingdotgg/one" }),
-        project({ id: "p2", title: "two", workspaceRoot: "/b", repository: "pingdotgg/two" }),
+      providers: [
+        fakeProvider("github", {
+          getViewer: (input) =>
+            input.cwd === "/healthy"
+              ? Effect.succeed("bilal")
+              : Effect.fail(unusable("github", "missing-tool")),
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+              truncated: false,
+            }),
+        }),
       ],
-      github: {
-        listPullRequests: (input) =>
-          Effect.succeed({
-            items: [
-              input.repository === "pingdotgg/one"
-                ? listItem(1, "2026-07-01T00:00:00Z")
-                : listItem(2, "2026-07-05T00:00:00Z"),
-            ],
-            truncated: false,
-          }),
-      },
     });
 
     const result = yield* service.list({ state: "open" });
 
-    assert.deepStrictEqual(
-      result.entries.map((entry) => entry.number),
-      [2, 1],
-    );
+    assert.strictEqual(result.entries.length, 2);
+    assert.strictEqual(result.viewers.github, "bilal");
   }),
 );
 
-it.effect("flags a review request for the viewer but not on their own pull request", () =>
+it.effect("flags a review request for the viewer but not on their own change request", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
       projects: [
         project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
       ],
-      github: {
-        listPullRequests: () =>
-          Effect.succeed({
-            items: [
-              { ...listItem(1, "2026-07-02T00:00:00Z"), reviewRequestLogins: ["Bilal"] },
-              {
-                ...listItem(2, "2026-07-02T00:00:00Z"),
-                author: { login: "bilal", name: null },
-                reviewRequestLogins: ["bilal"],
-              },
-            ],
-            truncated: false,
-          }),
-      },
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [
+                { ...changeRequest(1, "2026-07-02T00:00:00Z"), reviewRequestLogins: ["Bilal"] },
+                {
+                  ...changeRequest(2, "2026-07-02T00:00:00Z"),
+                  author: { login: "bilal", name: null },
+                  reviewRequestLogins: ["bilal"],
+                },
+              ],
+              truncated: false,
+            }),
+        }),
+      ],
     });
 
     const result = yield* service.list({ state: "open" });
@@ -272,13 +441,66 @@ it.effect("refuses a repository that does not belong to the requested project", 
       projects: [
         project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
       ],
-      github: {
-        getPullRequestDetail: () => Effect.die("must not reach GitHub"),
-      },
+      providers: [fakeProvider("github")],
     });
 
     const error = yield* service
       .diff({ projectId: "p1" as ProjectId, repository: "attacker/repo", number: 1 })
+      .pipe(Effect.flip);
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect("refuses a diff on a host that cannot produce one", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "on azure",
+          workspaceRoot: "/a",
+          repository: "org/project",
+          provider: "azure-devops",
+        }),
+      ],
+      providers: [
+        fakeProvider("azure-devops", {
+          capabilities: {
+            diff: false,
+            inlineComments: false,
+            draft: true,
+            mergeMethods: ["merge"],
+          },
+          getDiff: () => Effect.die("must not be called"),
+        }),
+      ],
+    });
+
+    const error = yield* service
+      .diff({ projectId: "p1" as ProjectId, repository: "org/project", number: 1 })
+      .pipe(Effect.flip);
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect("rejects an empty comment before reaching the host", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [fakeProvider("github", { comment: () => Effect.die("must not be called") })],
+    });
+
+    const error = yield* service
+      .comment({
+        projectId: "p1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 1,
+        body: "   ",
+      })
       .pipe(Effect.flip);
 
     assert.strictEqual(error._tag, "PullRequestOperationError");

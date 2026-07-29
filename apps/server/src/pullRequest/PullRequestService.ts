@@ -5,7 +5,6 @@ import {
   PullRequestOperationError,
   PullRequestUnavailableError,
   type OrchestrationProjectShell,
-  type ProjectId,
   type PullRequestActionInput,
   type PullRequestCommentInput,
   type PullRequestDetail,
@@ -14,22 +13,26 @@ import {
   type PullRequestListInput,
   type PullRequestListProjectError,
   type PullRequestListResult,
+  type PullRequestProviderSummary,
   type PullRequestRef,
+  type SourceControlProviderKind,
 } from "@t3tools/contracts";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
-import type { GitHubPullRequestListItem } from "./gitHubPullRequestJson.ts";
+import {
+  PullRequestProviderRegistry,
+  type ProviderChangeRequest,
+  type PullRequestProviderApi,
+  type PullRequestProviderError,
+} from "./PullRequestProvider.ts";
 
 /**
- * Rows per repository when the client does not ask for a page size. `gh pr list` has no
- * cursor, so "load more" re-reads a larger page rather than continuing from an offset —
- * cheap at the sizes a pull request list reaches, and the CLI pages internally.
+ * Rows per repository when the client does not ask for a page size. None of the provider tools
+ * expose a cursor, so "load more" re-reads a larger page rather than continuing from an offset
+ * — cheap at the sizes a change request list reaches, and the tools page internally.
  */
 const DEFAULT_REPOSITORY_LIST_LIMIT = 50;
-const REPOSITORY_LIST_CONCURRENCY = 4;
-/** `gh pr view --json comments` returns one page; a full page means more exist on GitHub. */
-const CONVERSATION_PAGE_SIZE = 100;
+const REPOSITORY_CONCURRENCY = 4;
 
 export type PullRequestError = PullRequestUnavailableError | PullRequestOperationError;
 
@@ -48,8 +51,10 @@ export class PullRequestService extends Context.Service<
   }
 >()("t3/pullRequest/PullRequestService") {}
 
-interface GitHubProject {
+/** A project this page can read: its remote is on a host with an implementation. */
+interface SupportedProject {
   readonly project: OrchestrationProjectShell;
+  readonly api: PullRequestProviderApi;
   readonly repository: string;
 }
 
@@ -59,88 +64,47 @@ interface RepositoryBatch {
   readonly truncated: boolean;
 }
 
-/** `gh` being absent or logged out disables the whole feature, so it is reported as such
- *  instead of being folded into a single project's error list. */
-function unavailableReason(
-  error: GitHubPullRequestCli.GitHubPullRequestCliError,
-): PullRequestUnavailableError["reason"] | null {
-  if (error._tag === "GitHubCliUnavailableError") return "cli-missing";
-  if (error._tag === "GitHubCliAuthenticationError") return "cli-unauthenticated";
-  return null;
+/** A host that cannot be read at all, as opposed to one request that failed. */
+function isProviderUnusable(error: PullRequestProviderError): boolean {
+  return error.reason === "missing-tool" || error.reason === "unauthenticated";
 }
 
-/** Either way the CLI failure travels in `cause`; only the reported shape differs. */
+function toUnavailableError(error: PullRequestProviderError): PullRequestUnavailableError {
+  return new PullRequestUnavailableError({
+    reason: error.reason === "missing-tool" ? "cli-missing" : "cli-unauthenticated",
+    cause: error,
+  });
+}
+
 function toPullRequestError(
   operation: string,
-): (error: GitHubPullRequestCli.GitHubPullRequestCliError) => PullRequestError {
-  return (error) => {
-    const reason = unavailableReason(error);
-    return reason === null
-      ? new PullRequestOperationError({ operation, detail: error.detail, cause: error })
-      : new PullRequestUnavailableError({ reason, cause: error });
-  };
+): (error: PullRequestProviderError) => PullRequestError {
+  return (error) =>
+    isProviderUnusable(error)
+      ? toUnavailableError(error)
+      : new PullRequestOperationError({ operation, detail: error.detail, cause: error });
 }
 
-function gitHubProjectsFrom(
-  projects: ReadonlyArray<OrchestrationProjectShell>,
-  projectId: ProjectId | undefined,
-): ReadonlyArray<GitHubProject> {
-  const seenRepositories = new Set<string>();
-  const gitHubProjects: GitHubProject[] = [];
-  for (const project of projects) {
-    if (projectId !== undefined && project.id !== projectId) continue;
-    const identity = project.repositoryIdentity;
-    if (!identity || identity.provider !== "github" || !identity.owner || !identity.name) continue;
-    const repository = `${identity.owner}/${identity.name}`;
-    // Worktrees of the same repository are separate projects; listing the remote once keeps
-    // the page from repeating every pull request per local checkout.
-    if (seenRepositories.has(repository.toLowerCase())) continue;
-    seenRepositories.add(repository.toLowerCase());
-    gitHubProjects.push({ project, repository });
-  }
-  return gitHubProjects;
-}
-
-function toListEntry(input: {
-  readonly project: OrchestrationProjectShell;
-  readonly repository: string;
-  readonly item: GitHubPullRequestListItem;
-  readonly viewer: string;
-}): PullRequestListEntry {
-  const viewer = input.viewer.toLowerCase();
-  return {
-    projectId: input.project.id,
-    projectTitle: input.project.title,
-    repository: input.repository,
-    number: input.item.number,
-    title: input.item.title,
-    url: input.item.url,
-    author: input.item.author,
-    headBranch: input.item.headBranch,
-    baseBranch: input.item.baseBranch,
-    state: input.item.state,
-    isDraft: input.item.isDraft,
-    mergeability: input.item.mergeability,
-    additions: input.item.additions,
-    deletions: input.item.deletions,
-    createdAt: input.item.createdAt,
-    updatedAt: input.item.updatedAt,
-    viewerReviewRequested:
-      input.item.author?.login.toLowerCase() !== viewer &&
-      input.item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer),
-    labels: input.item.labels,
-  };
+/**
+ * The provider-native repository identity. `displayName` is the full path below the host, which
+ * is what nested GitLab groups and Azure project paths need; owner/name is the two-segment
+ * fallback for identities recorded before that field existed.
+ */
+function repositoryIdentityOf(project: OrchestrationProjectShell): string | null {
+  const identity = project.repositoryIdentity;
+  if (!identity) return null;
+  if (identity.displayName) return identity.displayName;
+  return identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
 }
 
 export const make = Effect.gen(function* () {
-  const github = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+  const registry = yield* PullRequestProviderRegistry;
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
 
-  const listGitHubProjects = (
-    projectId: ProjectId | undefined,
-  ): Effect.Effect<ReadonlyArray<GitHubProject>, PullRequestError> =>
+  const listSupportedProjects = (
+    filter: Pick<PullRequestListInput, "projectId" | "provider">,
+  ): Effect.Effect<ReadonlyArray<SupportedProject>, PullRequestError> =>
     projections.getShellSnapshot().pipe(
-      Effect.map((snapshot) => gitHubProjectsFrom(snapshot.projects, projectId)),
       Effect.mapError(
         (error) =>
           new PullRequestOperationError({
@@ -149,24 +113,44 @@ export const make = Effect.gen(function* () {
             cause: error,
           }),
       ),
+      Effect.map((snapshot) => {
+        const supported: SupportedProject[] = [];
+        const seen = new Set<string>();
+        for (const project of snapshot.projects) {
+          if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
+          const kind = project.repositoryIdentity?.provider as
+            | SourceControlProviderKind
+            | undefined;
+          const repository = repositoryIdentityOf(project);
+          if (kind === undefined || repository === null) continue;
+          if (filter.provider !== undefined && kind !== filter.provider) continue;
+          const api = registry.get(kind);
+          if (api === null) continue;
+          // Worktrees of one repository are separate projects; reading the remote once keeps
+          // the page from repeating every change request per local checkout.
+          const key = `${kind} ${repository.toLowerCase()}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          supported.push({ project, api, repository });
+        }
+        return supported;
+      }),
     );
 
-  const requireGitHubProject = (
-    ref: PullRequestRef,
-  ): Effect.Effect<GitHubProject, PullRequestError> =>
-    listGitHubProjects(ref.projectId).pipe(
-      Effect.flatMap((projects): Effect.Effect<GitHubProject, PullRequestError> => {
+  const requireProject = (ref: PullRequestRef): Effect.Effect<SupportedProject, PullRequestError> =>
+    listSupportedProjects({ projectId: ref.projectId }).pipe(
+      Effect.flatMap((projects): Effect.Effect<SupportedProject, PullRequestError> => {
         const match = projects[0];
         if (!match) {
           return Effect.fail(new PullRequestUnavailableError({ reason: "provider-unsupported" }));
         }
         // The repository travels through the client, so it is checked against the project's
-        // own remote rather than being passed to `gh --repo` verbatim.
+        // own remote rather than being handed to a provider verbatim.
         if (match.repository.toLowerCase() !== ref.repository.trim().toLowerCase()) {
           return Effect.fail(
             new PullRequestOperationError({
               operation: "resolveRepository",
-              detail: "The pull request does not belong to the selected project.",
+              detail: "The change request does not belong to the selected project.",
             }),
           );
         }
@@ -174,27 +158,107 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * One viewer lookup per host, tried across that host's workspaces so a single broken checkout
+   * cannot hide every healthy repository on it. Its failure doubles as the answer to "is this
+   * host set up", which is what the provider switcher shows.
+   */
+  const resolveViewers = (projects: ReadonlyArray<SupportedProject>) =>
+    Effect.forEach(
+      [...new Set(projects.map(({ api }) => api.kind))],
+      (kind) => {
+        const forKind = projects.filter(({ api }) => api.kind === kind);
+        const api = forKind[0]!.api;
+        return Effect.firstSuccessOf(
+          forKind.map(({ project }) => api.getViewer({ cwd: project.workspaceRoot })),
+        ).pipe(
+          Effect.map((viewer) => ({
+            kind,
+            viewer: viewer as string | null,
+            error: null as PullRequestProviderError | null,
+          })),
+          Effect.catch((error) => Effect.succeed({ kind, viewer: null, error })),
+        );
+      },
+      { concurrency: REPOSITORY_CONCURRENCY },
+    );
+
+  const toEntry = (input: {
+    readonly project: SupportedProject;
+    readonly item: ProviderChangeRequest;
+    readonly viewer: string;
+  }): PullRequestListEntry => {
+    const viewer = input.viewer.toLowerCase();
+    return {
+      provider: input.project.api.kind,
+      projectId: input.project.project.id,
+      projectTitle: input.project.project.title,
+      repository: input.project.repository,
+      number: input.item.number,
+      title: input.item.title,
+      url: input.item.url,
+      author: input.item.author,
+      headBranch: input.item.headBranch,
+      baseBranch: input.item.baseBranch,
+      state: input.item.state,
+      isDraft: input.item.isDraft,
+      mergeability: input.item.mergeability,
+      additions: input.item.additions,
+      deletions: input.item.deletions,
+      createdAt: input.item.createdAt,
+      updatedAt: input.item.updatedAt,
+      viewerReviewRequested:
+        input.item.author?.login.toLowerCase() !== viewer &&
+        input.item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer),
+      labels: input.item.labels,
+    };
+  };
+
   const list: PullRequestService["Service"]["list"] = (input) =>
     Effect.gen(function* () {
       const involvement = input.involvement ?? "all";
-      const projects = yield* listGitHubProjects(input.projectId);
-      if (projects.length === 0) {
-        return { viewer: null, entries: [], errors: [], truncated: false };
+      const projects = yield* listSupportedProjects(input);
+      const projectCounts = new Map<SourceControlProviderKind, number>();
+      for (const { api } of projects) {
+        projectCounts.set(api.kind, (projectCounts.get(api.kind) ?? 0) + 1);
       }
 
-      // Any GitHub-backed workspace can answer who the viewer is, so a broken first checkout
-      // falls through to the next one rather than blanking every healthy repository.
-      const viewer = yield* Effect.firstSuccessOf(
-        projects.map(({ project }) => github.getViewerLogin({ cwd: project.workspaceRoot })),
-      ).pipe(Effect.mapError(toPullRequestError("viewer")));
+      const viewerResults = yield* resolveViewers(projects);
+      const providers: ReadonlyArray<PullRequestProviderSummary> = viewerResults.map((result) => ({
+        kind: result.kind,
+        projectCount: projectCounts.get(result.kind) ?? 1,
+        configured: result.viewer !== null,
+        detail: result.error === null ? null : result.error.detail,
+      }));
+      const viewers: Record<string, string> = {};
+      for (const result of viewerResults) {
+        if (result.viewer !== null) viewers[result.kind] = result.viewer;
+      }
+
+      const readable = projects.filter(({ api }) => viewers[api.kind] !== undefined);
+      if (readable.length === 0) {
+        // Every host this request covers is unusable, so it is not a per-project problem.
+        const blocking = viewerResults.find((result) => result.error !== null)?.error;
+        if (blocking) {
+          return yield* Effect.fail(toUnavailableError(blocking));
+        }
+        return {
+          viewers: viewers as PullRequestListResult["viewers"],
+          providers,
+          entries: [],
+          errors: [],
+          truncated: false,
+        };
+      }
 
       const batches = yield* Effect.forEach(
-        projects,
-        ({ project, repository }): Effect.Effect<RepositoryBatch, PullRequestError> =>
-          github
-            .listPullRequests({
-              cwd: project.workspaceRoot,
-              repository,
+        readable,
+        (project): Effect.Effect<RepositoryBatch> => {
+          const viewer = viewers[project.api.kind]!;
+          return project.api
+            .listChangeRequests({
+              cwd: project.project.workspaceRoot,
+              repository: project.repository,
               state: input.state,
               involvement,
               viewer,
@@ -202,34 +266,35 @@ export const make = Effect.gen(function* () {
             })
             .pipe(
               Effect.map(
-                (batch): RepositoryBatch => ({
-                  entries: batch.items.map((item) =>
-                    toListEntry({ project, repository, item, viewer }),
-                  ),
+                (page): RepositoryBatch => ({
+                  entries: page.items.map((item) => toEntry({ project, item, viewer })),
                   errors: [],
-                  truncated: batch.truncated,
+                  truncated: page.truncated,
                 }),
               ),
-              // One unreachable repository must not blank the page, but a missing or
-              // logged-out CLI is not repository-specific and stops the whole listing.
-              Effect.catchIf(
-                (error) => unavailableReason(error) === null,
-                (error) =>
-                  Effect.succeed<RepositoryBatch>({
-                    entries: [],
-                    errors: [
-                      { projectId: project.id, projectTitle: project.title, message: error.detail },
-                    ],
-                    truncated: false,
-                  }),
+              // One unreachable repository must not blank the page. A host-level failure is
+              // already reported through `providers`, so it degrades the same way here.
+              Effect.orElseSucceed(
+                (): RepositoryBatch => ({
+                  entries: [],
+                  errors: [
+                    {
+                      projectId: project.project.id,
+                      projectTitle: project.project.title,
+                      message: `${project.repository} could not be read.`,
+                    },
+                  ],
+                  truncated: false,
+                }),
               ),
-              Effect.mapError(toPullRequestError("list")),
-            ),
-        { concurrency: REPOSITORY_LIST_CONCURRENCY },
+            );
+        },
+        { concurrency: REPOSITORY_CONCURRENCY },
       );
 
       return {
-        viewer,
+        viewers: viewers as PullRequestListResult["viewers"],
+        providers,
         entries: batches
           .flatMap((batch) => batch.entries)
           .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
@@ -239,91 +304,84 @@ export const make = Effect.gen(function* () {
     });
 
   const detail: PullRequestService["Service"]["detail"] = (input) =>
-    requireGitHubProject(input).pipe(
-      Effect.flatMap(({ project, repository }) =>
-        Effect.all(
-          [
-            github.getPullRequestDetail({
-              cwd: project.workspaceRoot,
-              repository,
-              number: input.number,
-            }),
-            github.getRepositoryMergeCapabilities({ cwd: project.workspaceRoot, repository }),
-            // Line comments live on review threads, which `gh pr view --json` cannot reach.
-            // A GraphQL hiccup must not blank the whole detail, so it degrades to "none".
-            github
-              .listReviewThreadComments({
-                cwd: project.workspaceRoot,
-                repository,
-                number: input.number,
-              })
-              .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: false }))),
-          ],
-          { concurrency: 3 },
-        ).pipe(
-          Effect.mapError(toPullRequestError("detail")),
-          Effect.map(
-            ([pullRequest, mergeCapabilities, reviewThreads]): PullRequestDetail => ({
-              projectId: project.id,
-              projectTitle: project.title,
-              workspaceRoot: project.workspaceRoot,
-              repository,
-              number: pullRequest.number,
-              title: pullRequest.title,
-              body: pullRequest.body,
-              url: pullRequest.url,
-              author: pullRequest.author,
-              state: pullRequest.state,
-              isDraft: pullRequest.isDraft,
-              mergeability: pullRequest.mergeability,
-              additions: pullRequest.additions,
-              deletions: pullRequest.deletions,
-              changedFiles: pullRequest.changedFiles,
-              headBranch: pullRequest.headBranch,
-              baseBranch: pullRequest.baseBranch,
-              createdAt: pullRequest.createdAt,
-              updatedAt: pullRequest.updatedAt,
-              mergedAt: pullRequest.mergedAt,
-              closedAt: pullRequest.closedAt,
-              reviewers: pullRequest.reviewRequestLogins.map((login) => ({ login, name: null })),
-              labels: pullRequest.labels,
-              checks: pullRequest.checks,
-              comments: [...pullRequest.comments, ...reviewThreads.comments].toSorted(
-                (left, right) => left.createdAt.localeCompare(right.createdAt),
-              ),
-              commentsTruncated:
-                pullRequest.comments.length >= CONVERSATION_PAGE_SIZE || reviewThreads.truncated,
-              commits: pullRequest.commits,
-              mergeCapabilities,
-            }),
+    requireProject(input).pipe(
+      Effect.flatMap((project) =>
+        project.api
+          .getChangeRequest({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            number: input.number,
+          })
+          .pipe(
+            Effect.mapError(toPullRequestError("detail")),
+            Effect.map(
+              (changeRequest): PullRequestDetail => ({
+                provider: project.api.kind,
+                capabilities: project.api.capabilities,
+                projectId: project.project.id,
+                projectTitle: project.project.title,
+                workspaceRoot: project.project.workspaceRoot,
+                repository: project.repository,
+                number: changeRequest.number,
+                title: changeRequest.title,
+                body: changeRequest.body,
+                url: changeRequest.url,
+                author: changeRequest.author,
+                state: changeRequest.state,
+                isDraft: changeRequest.isDraft,
+                mergeability: changeRequest.mergeability,
+                additions: changeRequest.additions,
+                deletions: changeRequest.deletions,
+                changedFiles: changeRequest.changedFiles,
+                headBranch: changeRequest.headBranch,
+                baseBranch: changeRequest.baseBranch,
+                createdAt: changeRequest.createdAt,
+                updatedAt: changeRequest.updatedAt,
+                mergedAt: changeRequest.mergedAt,
+                closedAt: changeRequest.closedAt,
+                reviewers: changeRequest.reviewers,
+                labels: changeRequest.labels,
+                checks: changeRequest.checks,
+                comments: changeRequest.comments,
+                commentsTruncated: changeRequest.commentsTruncated,
+                commits: changeRequest.commits,
+                mergeCapabilities: changeRequest.mergeCapabilities,
+              }),
+            ),
           ),
-        ),
       ),
     );
 
   const diff: PullRequestService["Service"]["diff"] = (input) =>
-    requireGitHubProject(input).pipe(
-      Effect.flatMap(({ project, repository }) =>
-        github
-          .getPullRequestDiff({
-            cwd: project.workspaceRoot,
-            repository,
-            number: input.number,
-          })
-          .pipe(Effect.mapError(toPullRequestError("diff"))),
+    requireProject(input).pipe(
+      Effect.flatMap((project) =>
+        project.api.capabilities.diff
+          ? project.api
+              .getDiff({
+                cwd: project.project.workspaceRoot,
+                repository: project.repository,
+                number: input.number,
+              })
+              .pipe(Effect.mapError(toPullRequestError("diff")))
+          : Effect.fail(
+              new PullRequestOperationError({
+                operation: "diff",
+                detail: "This host cannot provide a diff for a change request.",
+              }),
+            ),
       ),
     );
 
   const runAction: PullRequestService["Service"]["runAction"] = (input) =>
-    requireGitHubProject(input).pipe(
-      Effect.flatMap(({ project, repository }) =>
-        github
-          .runPullRequestAction({
-            cwd: project.workspaceRoot,
-            repository,
+    requireProject(input).pipe(
+      Effect.flatMap((project) =>
+        project.api
+          .runAction({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
             number: input.number,
             action: input.action,
-            ...(input.mergeMethod !== undefined ? { mergeMethod: input.mergeMethod } : {}),
+            ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
           })
           .pipe(Effect.mapError(toPullRequestError("runAction"))),
       ),
@@ -339,13 +397,13 @@ export const make = Effect.gen(function* () {
             detail: "A comment cannot be empty.",
           }),
         )
-      : requireGitHubProject(input)
+      : requireProject(input)
     ).pipe(
-      Effect.flatMap(({ project, repository }) =>
-        github
-          .commentOnPullRequest({
-            cwd: project.workspaceRoot,
-            repository,
+      Effect.flatMap((project) =>
+        project.api
+          .comment({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
             number: input.number,
             body: input.body,
           })
