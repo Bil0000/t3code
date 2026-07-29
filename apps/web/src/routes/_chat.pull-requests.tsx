@@ -39,9 +39,11 @@ import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 export interface PullRequestsSearch {
   readonly involvement: PullRequestInvolvement;
   readonly state: PullRequestState;
+  /** Scopes the list. Separate from the selection so one cannot silently change the other. */
+  readonly projectId?: ProjectId;
   readonly repository?: string;
   readonly number?: number;
-  readonly projectId?: ProjectId;
+  readonly selectedProjectId?: ProjectId;
   readonly q?: string;
 }
 
@@ -78,6 +80,9 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       : {}),
     ...(typeof raw.projectId === "string" && raw.projectId
       ? { projectId: raw.projectId as ProjectId }
+      : {}),
+    ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
+      ? { selectedProjectId: raw.selectedProjectId as ProjectId }
       : {}),
     ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
   }),
@@ -118,6 +123,7 @@ function PullRequestsRouteView() {
           ...(next.repository ? { repository: next.repository } : {}),
           ...(next.number ? { number: next.number } : {}),
           ...(next.projectId ? { projectId: next.projectId } : {}),
+          ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
           ...(next.q ? { q: next.q } : {}),
         };
       },
@@ -125,7 +131,12 @@ function PullRequestsRouteView() {
     });
 
   // Changing what the list contains must not leave a selection from the previous view open.
-  const clearedSelection = { repository: undefined, number: undefined, projectId: undefined };
+  // The project filter is untouched: it is the user's scope, not part of the selection.
+  const clearedSelection = {
+    repository: undefined,
+    number: undefined,
+    selectedProjectId: undefined,
+  };
 
   // Page size is view state, not a URL concern: a shared link should open the first page.
   const filterKey = `${search.state}:${search.involvement}:${search.projectId ?? ""}`;
@@ -204,7 +215,7 @@ function PullRequestsRouteView() {
     return identity?.id;
   }, [projects, search.repository]);
 
-  const selectedProjectId = search.projectId ?? projectIdForRepository;
+  const selectedProjectId = search.selectedProjectId ?? projectIdForRepository;
   const selected =
     search.repository && search.number && selectedProjectId
       ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
@@ -225,7 +236,7 @@ function PullRequestsRouteView() {
     updateSearch({
       repository: entry.repository,
       number: entry.number,
-      projectId: entry.projectId,
+      selectedProjectId: entry.projectId,
     });
 
   return (
