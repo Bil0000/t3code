@@ -10,31 +10,6 @@ import {
   EmptyTitle,
 } from "../ui/empty";
 
-/**
- * The three ways the feature can be switched off, told apart by the message the server sent
- * so the user is pointed at the fix rather than at a generic failure.
- */
-function describeUnavailable(error: string): {
-  readonly title: string;
-  readonly description: string;
-} {
-  const normalized = error.toLowerCase();
-  if (normalized.includes("not available on path")) {
-    return {
-      title: "GitHub CLI is not installed",
-      description:
-        "Install the GitHub CLI (`gh`) from https://cli.github.com/ and reload to browse pull requests.",
-    };
-  }
-  if (normalized.includes("not authenticated")) {
-    return {
-      title: "GitHub CLI is not signed in",
-      description: "Run `gh auth login` in a terminal, then retry.",
-    };
-  }
-  return { title: "Could not load pull requests", description: error };
-}
-
 export function PullRequestsUnavailableState({
   error,
   onRetry,
@@ -42,15 +17,16 @@ export function PullRequestsUnavailableState({
   error: string;
   onRetry: () => void;
 }) {
-  const { title, description } = describeUnavailable(error);
   return (
     <Empty className="py-16">
       <EmptyMedia variant="icon">
         <GitPullRequestIcon />
       </EmptyMedia>
       <EmptyHeader>
-        <EmptyTitle>{title}</EmptyTitle>
-        <EmptyDescription>{description}</EmptyDescription>
+        <EmptyTitle>Could not load pull requests</EmptyTitle>
+        {/* The server names the fix — install gh, sign in, use a GitHub project — so this
+            shows its message rather than re-deriving one from the text. */}
+        <EmptyDescription>{error}</EmptyDescription>
       </EmptyHeader>
       <EmptyContent>
         <Button size="sm" variant="outline" onClick={onRetry}>
