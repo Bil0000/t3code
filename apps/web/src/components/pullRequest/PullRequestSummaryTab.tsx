@@ -122,6 +122,9 @@ function CommentComposer({
   return (
     <div className="mt-3 space-y-2">
       <Textarea
+        // Locked while posting: the body is cleared on success, which would otherwise throw
+        // away a new draft typed while the request was still in flight.
+        disabled={posting}
         value={body}
         rows={3}
         placeholder="Leave a comment"

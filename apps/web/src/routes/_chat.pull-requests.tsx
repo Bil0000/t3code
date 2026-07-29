@@ -139,7 +139,7 @@ function PullRequestsRouteView() {
   };
 
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const filterKey = `${search.state}:${search.involvement}:${search.projectId ?? ""}`;
+  const filterKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${search.projectId ?? ""}`;
   const [page, setPage] = useState({ key: filterKey, size: PAGE_SIZE });
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
 
@@ -295,7 +295,7 @@ function PullRequestsRouteView() {
                     <Skeleton key={index} className="h-13 w-full rounded-lg" />
                   ))}
                 </div>
-              ) : listQuery.error ? (
+              ) : listQuery.error && listData === null ? (
                 <PullRequestsUnavailableState
                   error={listQuery.error}
                   onRetry={() => listQuery.refresh()}
@@ -336,6 +336,11 @@ function PullRequestsRouteView() {
                 </div>
               )}
 
+              {listQuery.error && listData !== null ? (
+                <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
+                  The latest refresh failed. Showing the last pull requests loaded.
+                </p>
+              ) : null}
               {listData?.errors.length ? (
                 <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
                   {listData.errors.length}{" "}

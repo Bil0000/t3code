@@ -3,7 +3,9 @@ export type PullRequestBodySegment =
   | { readonly id: string; readonly kind: "markdown"; readonly text: string }
   | { readonly id: string; readonly kind: "video"; readonly url: string };
 
-const FENCE_PATTERN = /^\s{0,3}((`{3,})|(~{3,}))/u;
+const FENCE_PATTERN = /^\s{0,3}((?:`{3,})|(?:~{3,}))(.*)$/u;
+/** Four spaces open an indented code block, so its contents stay verbatim markdown. */
+const INDENTED_CODE_PATTERN = /^(?: {4}|\t)/u;
 const BARE_URL_PATTERN = /^<?(https?:\/\/\S+?)>?$/u;
 const VIDEO_EXTENSION_PATTERN = /\.(?:mp4|webm|mov|m4v|ogv)(?:$|[?#])/iu;
 /** A dropped video becomes a bare asset link; a dropped image becomes `![alt](…)`. */
@@ -54,19 +56,26 @@ export function splitPullRequestBody(body: string): ReadonlyArray<PullRequestBod
   const lines = body.split("\n");
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!;
-    const fence = FENCE_PATTERN.exec(line)?.[1];
-    if (fence !== undefined) {
+    const fenceMatch = FENCE_PATTERN.exec(line);
+    if (fenceMatch !== null) {
+      const fence = fenceMatch[1]!;
       // A fence closes only on the same marker, at least as long as the one that opened it,
-      // so a ~~~ line cannot end a ``` block and expose its contents to the rules below.
+      // and with nothing after it: `~~~` cannot end a ``` block, and ```` ```ts ```` is an
+      // info string opening a nested fence, not a close.
+      const closes =
+        openFence !== null &&
+        fence[0] === openFence[0] &&
+        fence.length >= openFence.length &&
+        fenceMatch[2]!.trim().length === 0;
       if (openFence === null) {
         openFence = fence;
-      } else if (fence[0] === openFence[0] && fence.length >= openFence.length) {
+      } else if (closes) {
         openFence = null;
       }
       markdown.push(line);
       continue;
     }
-    if (openFence !== null) {
+    if (openFence !== null || INDENTED_CODE_PATTERN.test(line)) {
       markdown.push(line);
       continue;
     }

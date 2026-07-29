@@ -251,6 +251,8 @@ function toCheckStatus(raw: Schema.Schema.Type<typeof RawCheckSchema>): PullRequ
     case "ERROR":
     case "TIMED_OUT":
     case "STARTUP_FAILURE":
+    // A completed check asking for manual intervention is blocking, not neutral.
+    case "ACTION_REQUIRED":
       return "failure";
     case "CANCELLED":
       return "cancelled";

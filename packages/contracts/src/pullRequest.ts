@@ -189,9 +189,11 @@ export type PullRequestActionInput = typeof PullRequestActionInput.Type;
 
 export const PullRequestCommentInput = Schema.Struct({
   ...PullRequestRef.fields,
-  // GitHub rejects comment bodies past 65536 characters; enforcing it here keeps oversized
-  // payloads off the wire and out of subprocess plumbing entirely.
-  body: TrimmedNonEmptyString.check(Schema.isMaxLength(65_536)),
+  // Not trimmed: the body is markdown, where leading spaces open a code block and two
+  // trailing spaces are a line break. GitHub rejects bodies past 65536 characters, so that
+  // bound is enforced here to keep oversized payloads off the wire and out of subprocess
+  // plumbing; the service rejects a body that is only whitespace.
+  body: Schema.String.check(Schema.isNonEmpty()).check(Schema.isMaxLength(65_536)),
 });
 export type PullRequestCommentInput = typeof PullRequestCommentInput.Type;
 

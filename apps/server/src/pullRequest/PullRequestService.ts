@@ -182,9 +182,11 @@ export const make = Effect.gen(function* () {
         return { viewer: null, entries: [], errors: [], truncated: false };
       }
 
-      const viewer = yield* github
-        .getViewerLogin({ cwd: projects[0]!.project.workspaceRoot })
-        .pipe(Effect.mapError(toPullRequestError("viewer")));
+      // Any GitHub-backed workspace can answer who the viewer is, so a broken first checkout
+      // falls through to the next one rather than blanking every healthy repository.
+      const viewer = yield* Effect.firstSuccessOf(
+        projects.map(({ project }) => github.getViewerLogin({ cwd: project.workspaceRoot })),
+      ).pipe(Effect.mapError(toPullRequestError("viewer")));
 
       const batches = yield* Effect.forEach(
         projects,
@@ -328,7 +330,17 @@ export const make = Effect.gen(function* () {
     );
 
   const comment: PullRequestService["Service"]["comment"] = (input) =>
-    requireGitHubProject(input).pipe(
+    // The contract keeps the body verbatim because it is markdown, so the "did the user
+    // actually write something" check lives here.
+    (input.body.trim().length === 0
+      ? Effect.fail(
+          new PullRequestOperationError({
+            operation: "comment",
+            detail: "A comment cannot be empty.",
+          }),
+        )
+      : requireGitHubProject(input)
+    ).pipe(
       Effect.flatMap(({ project, repository }) =>
         github
           .commentOnPullRequest({

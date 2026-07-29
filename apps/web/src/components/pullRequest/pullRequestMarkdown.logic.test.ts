@@ -74,6 +74,20 @@ describe("pull request body segmentation", () => {
     ]);
   });
 
+  it("treats an info-string fence as a nested opener, not a close", () => {
+    const body = "```\n```javascript\nhttps://example.com/demo.mp4\n```";
+    expect(splitPullRequestBody(body)).toEqual([
+      { id: "markdown:0", kind: "markdown", text: body },
+    ]);
+  });
+
+  it("leaves an indented code line alone even when it is only a video link", () => {
+    const body = "    https://example.com/demo.mp4";
+    expect(splitPullRequestBody(body)).toEqual([
+      { id: "markdown:0", kind: "markdown", text: body },
+    ]);
+  });
+
   it("refuses a non-http source rather than putting it in a player", () => {
     const body = '<video src="javascript:alert(1)"></video>';
     expect(splitPullRequestBody(body)).toEqual([
