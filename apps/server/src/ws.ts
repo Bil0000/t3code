@@ -101,8 +101,7 @@ import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
-import * as GitHubPullRequestCli from "./pullRequest/GitHubPullRequestCli.ts";
-import * as GitHubPullRequestProvider from "./pullRequest/GitHubPullRequestProvider.ts";
+import * as PullRequestProviders from "./pullRequest/PullRequestProviders.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -2078,13 +2077,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               Layer.provide(
                 PullRequestService.layer.pipe(
                   // One registry entry per supported host; the service only knows the registry.
-                  Layer.provide(
-                    GitHubPullRequestProvider.registryLayer.pipe(
-                      Layer.provide(
-                        GitHubPullRequestCli.layer.pipe(Layer.provide(GitHubCli.layer)),
-                      ),
-                    ),
-                  ),
+                  Layer.provide(PullRequestProviders.registryLayer),
                   Layer.provide(VcsProcess.layer),
                 ),
               ),

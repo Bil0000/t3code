@@ -1,11 +1,8 @@
 import * as Effect from "effect/Effect";
-import * as Layer from "effect/Layer";
 import type { PullRequestCapabilities } from "@t3tools/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import {
-  PullRequestProviderRegistry,
-  makeRegistry,
   providerError,
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
@@ -102,9 +99,3 @@ export const make = Effect.gen(function* () {
 
   return provider;
 });
-
-/** Registry holding the providers this build ships. */
-export const registryLayer = Layer.effect(
-  PullRequestProviderRegistry,
-  Effect.map(make, (github) => makeRegistry([github])),
-);
