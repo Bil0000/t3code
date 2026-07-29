@@ -37,7 +37,15 @@ import {
   AlertDialogTitle,
 } from "../ui/alert-dialog";
 import { Button } from "../ui/button";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -208,22 +216,25 @@ export function PullRequestDetailPanel({
                         )}
                         {detail.isDraft ? "Ready for review" : "Convert to draft"}
                       </MenuItem>
+                      {/* A preference for the merge action rather than a second action, so it
+                          is a radio group here instead of a chevron welded to the Merge pill.
+                          Hidden while conflicting: every method would fail. */}
                       {!detail.isDraft && !conflicting && allowedMergeMethods.length > 1 ? (
                         <>
                           <MenuSeparator />
-                          {allowedMergeMethods.map((method) => (
-                            <MenuItem
-                              key={method}
-                              disabled={actionPending}
-                              onClick={() => setMergeMethod(method)}
-                            >
-                              <GitMergeIcon className="size-3.5" />
-                              <span className="capitalize">
-                                {method}
-                                {method === selectedMergeMethod ? " (selected)" : ""}
-                              </span>
-                            </MenuItem>
-                          ))}
+                          <MenuRadioGroup
+                            value={selectedMergeMethod}
+                            onValueChange={(method) =>
+                              setMergeMethod(method as PullRequestMergeMethod)
+                            }
+                          >
+                            {allowedMergeMethods.map((method) => (
+                              <MenuRadioItem key={method} value={method} disabled={actionPending}>
+                                <GitMergeIcon className="size-3.5" />
+                                <span className="capitalize">{method}</span>
+                              </MenuRadioItem>
+                            ))}
+                          </MenuRadioGroup>
                         </>
                       ) : null}
                       <MenuSeparator />
