@@ -29,6 +29,8 @@ import type { GitHubPullRequestListItem } from "./gitHubPullRequestJson.ts";
  */
 const DEFAULT_REPOSITORY_LIST_LIMIT = 50;
 const REPOSITORY_LIST_CONCURRENCY = 4;
+/** `gh pr view --json comments` returns one page; a full page means more exist on GitHub. */
+const CONVERSATION_PAGE_SIZE = 100;
 
 export type PullRequestError = PullRequestUnavailableError | PullRequestOperationError;
 
@@ -292,8 +294,8 @@ export const make = Effect.gen(function* () {
               comments: [...pullRequest.comments, ...reviewThreads.comments].toSorted(
                 (left, right) => left.createdAt.localeCompare(right.createdAt),
               ),
-              // `gh pr view` returns the most recent page of conversation only.
-              commentsTruncated: pullRequest.comments.length >= 100 || reviewThreads.truncated,
+              commentsTruncated:
+                pullRequest.comments.length >= CONVERSATION_PAGE_SIZE || reviewThreads.truncated,
               commits: pullRequest.commits,
               mergeCapabilities,
             }),
