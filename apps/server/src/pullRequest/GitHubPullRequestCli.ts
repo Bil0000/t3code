@@ -196,9 +196,6 @@ function actionArgs(
 export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
 
-  const readError = (cwd: string, operation: string, cause: unknown) =>
-    new GitHubPullRequestReadError({ command: "gh", cwd, operation, cause });
-
   const repositoryArgs = (repository: string) => ["--repo", repository];
 
   return GitHubPullRequestCli.of({
@@ -244,7 +241,14 @@ export const make = Effect.gen(function* () {
                   // counted before decoding: a skipped malformed row must not end paging.
                   truncated: decoded.success.rawCount > input.limit,
                 })
-              : Effect.fail(readError(input.cwd, "listPullRequests", decoded.failure));
+              : Effect.fail(
+                  new GitHubPullRequestReadError({
+                    command: "gh",
+                    cwd: input.cwd,
+                    operation: "listPullRequests",
+                    cause: decoded.failure,
+                  }),
+                );
           }),
         ),
 
@@ -266,7 +270,14 @@ export const make = Effect.gen(function* () {
             const decoded = decodePullRequestDetailJson(result.stdout.trim());
             return Result.isSuccess(decoded)
               ? Effect.succeed(decoded.success)
-              : Effect.fail(readError(input.cwd, "getPullRequestDetail", decoded.failure));
+              : Effect.fail(
+                  new GitHubPullRequestReadError({
+                    command: "gh",
+                    cwd: input.cwd,
+                    operation: "getPullRequestDetail",
+                    cause: decoded.failure,
+                  }),
+                );
           }),
         ),
 
@@ -317,7 +328,14 @@ export const make = Effect.gen(function* () {
             const decoded = decodeReviewThreadsJson(result.stdout.trim());
             return Result.isSuccess(decoded)
               ? Effect.succeed(decoded.success)
-              : Effect.fail(readError(input.cwd, "listReviewThreadComments", decoded.failure));
+              : Effect.fail(
+                  new GitHubPullRequestReadError({
+                    command: "gh",
+                    cwd: input.cwd,
+                    operation: "listReviewThreadComments",
+                    cause: decoded.failure,
+                  }),
+                );
           }),
         );
     },
@@ -340,7 +358,12 @@ export const make = Effect.gen(function* () {
             return Result.isSuccess(decoded)
               ? Effect.succeed(decoded.success)
               : Effect.fail(
-                  readError(input.cwd, "getRepositoryMergeCapabilities", decoded.failure),
+                  new GitHubPullRequestReadError({
+                    command: "gh",
+                    cwd: input.cwd,
+                    operation: "getRepositoryMergeCapabilities",
+                    cause: decoded.failure,
+                  }),
                 );
           }),
         ),
