@@ -62,7 +62,9 @@ export const make = Effect.gen(function* () {
         provider: "bitbucket",
         operation,
         reason: reasonFor(error),
-        detail: "detail" in error ? error.detail : error.message,
+        // Every Bitbucket failure states its own fact; this names the operation around it, so
+        // the two do not stack into "failed in x: failed in y: ...".
+        detail: error.detail,
         cause: error,
       });
 

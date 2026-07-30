@@ -231,6 +231,26 @@ layer("BitbucketPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("states a failure once, without stacking one message inside another", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(
+        Effect.fail(
+          new BitbucketApi.BitbucketResponseError({
+            operation: "request",
+            status: 500,
+            responseBodyLength: 0,
+          }),
+        ),
+      );
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      const error = yield* Effect.flip(api.getViewer());
+
+      // The fact only; the provider adds the operation around it.
+      assert.strictEqual(error.detail, "Bitbucket returned HTTP 500.");
+    }),
+  );
+
   it.effect("fails when the credentials belong to no named account", () =>
     Effect.gen(function* () {
       // @effect-diagnostics-next-line preferSchemaOverJson:off

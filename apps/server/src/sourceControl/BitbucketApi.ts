@@ -64,8 +64,12 @@ export class BitbucketRepositoryLocatorError extends Schema.TaggedErrorClass<Bit
     repository: Schema.String,
   },
 ) {
+  get detail(): string {
+    return "Bitbucket repositories must be specified as workspace/repository.";
+  }
+
   override get message(): string {
-    return "Bitbucket API failed in createRepository: Bitbucket repositories must be specified as workspace/repository.";
+    return `Bitbucket API failed in createRepository: ${this.detail}`;
   }
 }
 
@@ -76,8 +80,12 @@ export class BitbucketRequestError extends Schema.TaggedErrorClass<BitbucketRequ
     cause: Schema.Defect(),
   },
 ) {
+  get detail(): string {
+    return "Failed to send the Bitbucket request.";
+  }
+
   override get message(): string {
-    return `Bitbucket API failed in ${this.operation}: Failed to send the Bitbucket request.`;
+    return `Bitbucket API failed in ${this.operation}: ${this.detail}`;
   }
 }
 
@@ -89,8 +97,12 @@ export class BitbucketResponseError extends Schema.TaggedErrorClass<BitbucketRes
     responseBodyLength: NonNegativeInt,
   },
 ) {
+  get detail(): string {
+    return `Bitbucket returned HTTP ${this.status}.`;
+  }
+
   override get message(): string {
-    return `Bitbucket API failed in ${this.operation}: Bitbucket returned HTTP ${this.status}.`;
+    return `Bitbucket API failed in ${this.operation}: ${this.detail}`;
   }
 }
 
@@ -102,8 +114,12 @@ export class BitbucketResponseBodyReadError extends Schema.TaggedErrorClass<Bitb
     cause: Schema.Defect(),
   },
 ) {
+  get detail(): string {
+    return `Bitbucket returned HTTP ${this.status}.`;
+  }
+
   override get message(): string {
-    return `Bitbucket API failed in ${this.operation}: Bitbucket returned HTTP ${this.status}.`;
+    return `Bitbucket API failed in ${this.operation}: ${this.detail}`;
   }
 }
 
@@ -115,8 +131,12 @@ export class BitbucketResponseDecodeError extends Schema.TaggedErrorClass<Bitbuc
     cause: Schema.Defect(),
   },
 ) {
+  get detail(): string {
+    return "Bitbucket returned invalid JSON for the requested resource.";
+  }
+
   override get message(): string {
-    return `Bitbucket API failed in ${this.operation}: Bitbucket returned invalid JSON for the requested resource.`;
+    return `Bitbucket API failed in ${this.operation}: ${this.detail}`;
   }
 }
 
@@ -127,8 +147,12 @@ export class BitbucketRepositoryVcsResolveError extends Schema.TaggedErrorClass<
     cause: Schema.Defect(),
   },
 ) {
+  get detail(): string {
+    return `Failed to resolve VCS repository for ${this.cwd}.`;
+  }
+
   override get message(): string {
-    return `Bitbucket API failed in resolveRepository: Failed to resolve VCS repository for ${this.cwd}.`;
+    return `Bitbucket API failed in resolveRepository: ${this.detail}`;
   }
 }
 
@@ -139,8 +163,12 @@ export class BitbucketRepositoryRemotesListError extends Schema.TaggedErrorClass
     cause: Schema.Defect(),
   },
 ) {
+  get detail(): string {
+    return `Failed to list remotes for ${this.cwd}.`;
+  }
+
   override get message(): string {
-    return `Bitbucket API failed in resolveRepository: Failed to list remotes for ${this.cwd}.`;
+    return `Bitbucket API failed in resolveRepository: ${this.detail}`;
   }
 }
 
@@ -150,8 +178,12 @@ export class BitbucketRepositoryRemoteNotFoundError extends Schema.TaggedErrorCl
     cwd: Schema.String,
   },
 ) {
+  get detail(): string {
+    return `No Bitbucket repository remote was detected for ${this.cwd}.`;
+  }
+
   override get message(): string {
-    return `Bitbucket API failed in resolveRepository: No Bitbucket repository remote was detected for ${this.cwd}.`;
+    return `Bitbucket API failed in resolveRepository: ${this.detail}`;
   }
 }
 
@@ -163,8 +195,12 @@ export class BitbucketPullRequestBodyReadError extends Schema.TaggedErrorClass<B
     cause: Schema.Defect(),
   },
 ) {
+  get detail(): string {
+    return `Failed to read pull request body file ${this.bodyFile}.`;
+  }
+
   override get message(): string {
-    return `Bitbucket API failed in createPullRequest: Failed to read pull request body file ${this.bodyFile}.`;
+    return `Bitbucket API failed in createPullRequest: ${this.detail}`;
   }
 }
 
@@ -176,8 +212,12 @@ export class BitbucketCheckoutError extends Schema.TaggedErrorClass<BitbucketChe
     cause: Schema.Defect(),
   },
 ) {
+  get detail(): string {
+    return "Failed to check out the Bitbucket pull request.";
+  }
+
   override get message(): string {
-    return "Bitbucket API failed in checkoutPullRequest: Failed to check out the Bitbucket pull request.";
+    return `Bitbucket API failed in checkoutPullRequest: ${this.detail}`;
   }
 }
 
@@ -193,8 +233,12 @@ export class BitbucketUntrustedUrlError extends Schema.TaggedErrorClass<Bitbucke
     host: Schema.String,
   },
 ) {
+  get detail(): string {
+    return `The response pointed at ${this.host}, outside the configured Bitbucket.`;
+  }
+
   override get message(): string {
-    return `Bitbucket API failed in request: the response pointed at ${this.host}, outside the configured Bitbucket.`;
+    return `Bitbucket API failed in request: ${this.detail}`;
   }
 }
 
@@ -530,7 +574,12 @@ function responseError(
   operation: BitbucketApiOperation,
   response: HttpClientResponse.HttpClientResponse,
 ): Effect.Effect<never, BitbucketApiError> {
-  return response.text.pipe(
+  // Bounded like any other body: an error response is no smaller than a successful one, and
+  // only its length is reported anyway.
+  return collectUint8StreamText({
+    stream: response.stream,
+    maxBytes: DEFAULT_MAX_RESPONSE_BYTES,
+  }).pipe(
     Effect.mapError(
       (cause) =>
         new BitbucketResponseBodyReadError({
@@ -539,12 +588,12 @@ function responseError(
           cause,
         }),
     ),
-    Effect.flatMap((body) =>
+    Effect.flatMap((collected) =>
       Effect.fail(
         new BitbucketResponseError({
           operation,
           status: response.status,
-          responseBodyLength: body.length,
+          responseBodyLength: collected.text.length,
         }),
       ),
     ),
