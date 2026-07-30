@@ -284,14 +284,14 @@ export const make = Effect.gen(function* () {
       const providers: ReadonlyArray<PullRequestProviderSummary> = [
         ...[...new Set(viewerResults.map((result) => result.kind))].map((kind) => {
           const forKind = viewerResults.filter((result) => result.kind === kind);
+          const failing = forKind.flatMap((result) =>
+            result.error === null ? [] : [result.error],
+          )[0];
           return {
             kind,
             projectCount: projectCounts.get(kind) ?? 1,
             configured: forKind.some((result) => result.viewer !== null),
-            detail: (() => {
-              const failing = forKind.find((result) => result.error !== null)?.error;
-              return failing === undefined ? null : providerDetail(failing);
-            })(),
+            detail: failing === undefined ? null : providerDetail(failing),
           };
         }),
         ...[...unimplemented].map(([kind, projectCount]) => ({
