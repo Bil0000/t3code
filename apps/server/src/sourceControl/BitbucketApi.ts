@@ -22,6 +22,7 @@ import {
   normalizeBitbucketPullRequestRecord,
   type NormalizedBitbucketPullRequestRecord,
 } from "./bitbucketPullRequests.ts";
+import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
 import * as SourceControlProvider from "./SourceControlProvider.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
@@ -188,11 +189,12 @@ export class BitbucketCheckoutError extends Schema.TaggedErrorClass<BitbucketChe
 export class BitbucketUntrustedUrlError extends Schema.TaggedErrorClass<BitbucketUntrustedUrlError>()(
   "BitbucketUntrustedUrlError",
   {
-    url: Schema.String,
+    /** The host only. A rejected hop is often a signed url, whose query carries a credential. */
+    host: Schema.String,
   },
 ) {
   override get message(): string {
-    return "Bitbucket API failed in request: the response pointed at a host outside the configured Bitbucket.";
+    return `Bitbucket API failed in request: the response pointed at ${this.host}, outside the configured Bitbucket.`;
   }
 }
 
@@ -769,7 +771,9 @@ export const make = Effect.gen(function* () {
   }): Effect.Effect<HttpClientResponse.HttpClientResponse, BitbucketApiError> => {
     const url = trustedUrl(input.url);
     if (url === null) {
-      return Effect.fail(new BitbucketUntrustedUrlError({ url: input.url }));
+      return Effect.fail(
+        new BitbucketUntrustedUrlError({ host: originOf(input.url) ?? "an unreadable url" }),
+      );
     }
     const base =
       input.method === "GET"
@@ -809,8 +813,14 @@ export const make = Effect.gen(function* () {
     send({ ...input, redirects: 0 }).pipe(
       Effect.flatMap((response) =>
         HttpClientResponse.matchStatus({
+          // Read through the body stream rather than `text`, so an oversized diff is stopped
+          // as it arrives instead of being materialized whole and then cut. The same collector
+          // the process runner bounds command output with.
           "2xx": (success) =>
-            success.text.pipe(
+            collectUint8StreamText({
+              stream: success.stream,
+              maxBytes: input.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES,
+            }).pipe(
               Effect.mapError(
                 (cause) =>
                   new BitbucketResponseBodyReadError({
@@ -819,14 +829,10 @@ export const make = Effect.gen(function* () {
                     cause,
                   }),
               ),
-              Effect.map((body) => {
-                // A pull request diff has no bound of its own, so one is imposed here the way
-                // the gh and glab paths bound theirs.
-                const maxBytes = input.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
-                return body.length > maxBytes
-                  ? { body: body.slice(0, maxBytes), truncated: true }
-                  : { body, truncated: false };
-              }),
+              Effect.map((collected) => ({
+                body: collected.text,
+                truncated: collected.truncated,
+              })),
             ),
           orElse: (failed) => responseError("request", failed),
         })(response),

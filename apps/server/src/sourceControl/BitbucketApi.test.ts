@@ -774,6 +774,27 @@ it.effect("refuses a url that points away from the configured Bitbucket", () => 
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("keeps only the host of a url it refuses, never its query", () =>
+  Effect.gen(function* () {
+    const bitbucket = yield* BitbucketApi.BitbucketApi;
+
+    const error = yield* Effect.flip(
+      bitbucket.request({
+        method: "GET",
+        // A signed link, whose query is the credential.
+        url: "https://attacker.example/asset?signature=secret-token",
+      }),
+    );
+
+    assert.strictEqual(error._tag, "BitbucketUntrustedUrlError");
+    assert.strictEqual(
+      error._tag === "BitbucketUntrustedUrlError" ? error.host : "",
+      "https://attacker.example",
+    );
+    assert.notInclude(error.message, "secret-token");
+  }).pipe(Effect.provide(makeLayer({ response: () => new Response("{}", { status: 200 }) }).layer)),
+);
+
 it.effect("does not follow a redirect off the configured Bitbucket", () =>
   Effect.gen(function* () {
     const bitbucket = yield* BitbucketApi.BitbucketApi;
@@ -838,6 +859,7 @@ it.effect("cuts a response short rather than reading an unbounded diff into memo
 
     assert.strictEqual(result.body, "12345678");
     assert.isTrue(result.truncated);
+    // Bounded as the body arrives, so an oversized diff is never held whole.
   }).pipe(
     Effect.provide(
       makeLayer({ response: () => new Response("1234567890", { status: 200 }) }).layer,

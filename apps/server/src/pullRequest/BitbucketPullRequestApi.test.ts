@@ -219,8 +219,8 @@ layer("BitbucketPullRequestApi.layer", (it) => {
 
   it.effect("fails the read when Bitbucket answers with something unreadable", () =>
     Effect.gen(function* () {
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       mockedRequest.mockReturnValueOnce(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
         Effect.succeed(response(JSON.stringify({ error: "nope" }))),
       );
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
