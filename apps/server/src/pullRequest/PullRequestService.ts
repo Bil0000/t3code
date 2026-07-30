@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import {
   PullRequestOperationError,
   PullRequestUnavailableError,
+  pullRequestProviderRequirement,
   type OrchestrationProjectShell,
   type PullRequestActionInput,
   type PullRequestCommentInput,
@@ -79,6 +80,21 @@ interface RepositoryBatch {
 /** A host that cannot be read at all, as opposed to one request that failed. */
 function isProviderUnusable(error: PullRequestProviderError): boolean {
   return error.reason === "missing-tool" || error.reason === "unauthenticated";
+}
+
+/**
+ * Why a host is not readable, told as the thing to do about it. A host that is simply not set up
+ * says so in the same words the whole-page state uses, rather than repeating whatever its tool
+ * printed — "HTTP 401" names the symptom, not the fix.
+ */
+function providerDetail(error: PullRequestProviderError): string {
+  if (!isProviderUnusable(error)) return error.detail;
+  return (
+    pullRequestProviderRequirement(
+      error.provider,
+      error.reason === "missing-tool" ? "cli-missing" : "cli-unauthenticated",
+    ) ?? error.detail
+  );
 }
 
 function toUnavailableError(error: PullRequestProviderError): PullRequestUnavailableError {
@@ -272,7 +288,10 @@ export const make = Effect.gen(function* () {
             kind,
             projectCount: projectCounts.get(kind) ?? 1,
             configured: forKind.some((result) => result.viewer !== null),
-            detail: forKind.find((result) => result.error !== null)?.error?.detail ?? null,
+            detail: (() => {
+              const failing = forKind.find((result) => result.error !== null)?.error;
+              return failing === undefined ? null : providerDetail(failing);
+            })(),
           };
         }),
         ...[...unimplemented].map(([kind, projectCount]) => ({

@@ -287,6 +287,27 @@ const PROVIDER_REQUIREMENT: Partial<
 };
 
 /**
+ * What a host needs before it can be read, as a sentence to show wherever that host is reported
+ * as unusable — the whole page when nothing can be read, and one entry in the host switcher when
+ * only that host cannot. Null when the reason is not about setting a host up.
+ */
+export function pullRequestProviderRequirement(
+  provider: SourceControlProviderKind,
+  reason: PullRequestUnavailableReason,
+): string | null {
+  const requirement = PROVIDER_REQUIREMENT[provider];
+  if (requirement === undefined) return null;
+  switch (reason) {
+    case "cli-missing":
+      return requirement.missing;
+    case "cli-unauthenticated":
+      return requirement.unauthenticated;
+    case "provider-unsupported":
+      return null;
+  }
+}
+
+/**
  * The feature is switched off entirely. The message is derived from `reason` and the host
  * rather than from whatever the CLI printed, so it stays a stable sentence the UI can show
  * as-is; the underlying failure travels in `cause` (absent for `provider-unsupported`, which
