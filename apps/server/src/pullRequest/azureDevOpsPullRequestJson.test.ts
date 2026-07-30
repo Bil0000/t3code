@@ -138,24 +138,44 @@ describe("decodePullRequestJson", () => {
       ),
     );
 
-    expect(detail.reviewRequestLogins).toEqual(["julius@acme.dev"]);
-    expect(detail.reviewers).toEqual([{ login: "julius@acme.dev", name: "Julius" }]);
+    expect(detail?.reviewRequestLogins).toEqual(["julius@acme.dev"]);
+    expect(detail?.reviewers).toEqual([{ login: "julius@acme.dev", name: "Julius" }]);
   });
 
   it("works out where the conversation lives from what Azure returned", () => {
     const detail = expectSuccess(decodePullRequestJson(asJson(pullRequest())));
 
-    expect(detail.threadsUrl).toBe(
+    expect(detail?.threadsUrl).toBe(
       "https://dev.azure.com/acme/platform/_apis/git/repositories/web/pullRequests/42/threads",
     );
   });
 
   it("reports no conversation url when Azure said too little to build one", () => {
+    // A web link places the pull request, but without the REST url and repository there is
+    // nothing to hang a threads collection off.
+    const detail = expectSuccess(
+      decodePullRequestJson(
+        asJson(
+          pullRequest({
+            url: null,
+            repository: null,
+            _links: {
+              web: { href: "https://dev.azure.com/acme/platform/_git/web/pullrequest/42" },
+            },
+          }),
+        ),
+      ),
+    );
+
+    expect(detail?.threadsUrl).toBeNull();
+  });
+
+  it("returns nothing when Azure gave no way to place the pull request at all", () => {
     const detail = expectSuccess(
       decodePullRequestJson(asJson(pullRequest({ url: null, repository: null }))),
     );
 
-    expect(detail.threadsUrl).toBeNull();
+    expect(detail).toBeNull();
   });
 });
 

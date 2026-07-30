@@ -39,6 +39,7 @@ function pullRequests(count: number, firstNumber: number): string {
       targetRefName: "refs/heads/main",
       creationDate: "2026-07-01T00:00:00Z",
       repository: { name: "web", project: { name: "platform" } },
+      url: `https://dev.azure.com/acme/_apis/git/repositories/web/pullRequests/${firstNumber + index}`,
     })),
   );
 }

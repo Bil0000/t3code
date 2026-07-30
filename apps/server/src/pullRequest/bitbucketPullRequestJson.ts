@@ -13,6 +13,7 @@ import type {
   PullRequestMergeability,
   PullRequestState,
 } from "@t3tools/contracts";
+import { TrimmedNonEmptyString } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 /**
@@ -26,8 +27,13 @@ const RawUserSchema = Schema.Struct({
   display_name: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+/**
+ * Required, and required to be non-empty: the wire contract will not carry a change request
+ * without a branch or a link, so a row missing one is skipped rather than breaking the response
+ * it travels in.
+ */
 const RawBranchSchema = Schema.Struct({
-  branch: Schema.optional(Schema.NullOr(Schema.Struct({ name: Schema.optional(Schema.String) }))),
+  branch: Schema.Struct({ name: TrimmedNonEmptyString }),
 });
 
 const RawLinkSchema = Schema.Struct({ href: Schema.optional(Schema.String) });
@@ -39,8 +45,8 @@ const RawPullRequestSchema = Schema.Struct({
   state: Schema.optional(Schema.NullOr(Schema.String)),
   draft: Schema.optional(Schema.Boolean),
   author: Schema.optional(Schema.NullOr(RawUserSchema)),
-  source: Schema.optional(Schema.NullOr(RawBranchSchema)),
-  destination: Schema.optional(Schema.NullOr(RawBranchSchema)),
+  source: RawBranchSchema,
+  destination: RawBranchSchema,
   created_on: Schema.String,
   updated_on: Schema.String,
   reviewers: Schema.optional(Schema.NullOr(Schema.Array(RawUserSchema))),
@@ -57,13 +63,7 @@ const RawPullRequestSchema = Schema.Struct({
       ),
     ),
   ),
-  links: Schema.optional(
-    Schema.NullOr(
-      Schema.Struct({
-        html: Schema.optional(Schema.NullOr(RawLinkSchema)),
-      }),
-    ),
-  ),
+  links: Schema.Struct({ html: Schema.Struct({ href: TrimmedNonEmptyString }) }),
 });
 
 const RawPageSchema = Schema.Struct({
@@ -223,10 +223,10 @@ function toPullRequest(raw: Schema.Schema.Type<typeof RawPullRequestSchema>): Bi
   return {
     number: raw.id,
     title: raw.title,
-    url: trimmed(raw.links?.html?.href) ?? "",
+    url: raw.links.html.href,
     author: toActor(raw.author),
-    headBranch: trimmed(raw.source?.branch?.name) ?? "",
-    baseBranch: trimmed(raw.destination?.branch?.name) ?? "",
+    headBranch: raw.source.branch.name,
+    baseBranch: raw.destination.branch.name,
     state: toState(raw),
     isDraft: raw.draft ?? false,
     mergeability: "unknown",

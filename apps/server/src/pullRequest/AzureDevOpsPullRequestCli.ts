@@ -238,19 +238,26 @@ export const make = Effect.gen(function* () {
         cwd: input.cwd,
         args: ["repos", "pr", "show", ...detectArgs, "--id", String(input.number)],
       }).pipe(
-        Effect.flatMap((result) => {
-          const decoded = decodePullRequestJson(result.stdout.trim());
-          return Result.isSuccess(decoded)
-            ? Effect.succeed(decoded.success)
-            : Effect.fail(
+        Effect.flatMap(
+          (result): Effect.Effect<AzureDevOpsPullRequest, AzureDevOpsPullRequestCliError> => {
+            const decoded = decodePullRequestJson(result.stdout.trim());
+            // Null means Azure answered with too little to place the pull request, which is a
+            // response this cannot use rather than one it can render partially.
+            if (!Result.isSuccess(decoded) || decoded.success === null) {
+              return Effect.fail(
                 new AzureDevOpsPullRequestReadError({
                   command: "az",
                   cwd: input.cwd,
                   operation: "getPullRequest",
-                  cause: decoded.failure,
+                  cause: Result.isSuccess(decoded)
+                    ? "Azure returned no branch or link for the pull request."
+                    : decoded.failure,
                 }),
               );
-        }),
+            }
+            return Effect.succeed(decoded.success);
+          },
+        ),
       ),
 
     listThreads: (input) =>

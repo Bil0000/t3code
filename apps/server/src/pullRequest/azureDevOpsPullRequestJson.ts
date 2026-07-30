@@ -8,6 +8,7 @@ import type {
   PullRequestMergeability,
   PullRequestState,
 } from "@t3tools/contracts";
+import { TrimmedNonEmptyString } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 import {
@@ -36,9 +37,12 @@ const RawPullRequestSchema = Schema.Struct({
   mergeStatus: Schema.optional(Schema.NullOr(Schema.String)),
   createdBy: Schema.optional(Schema.NullOr(RawIdentitySchema)),
   reviewers: Schema.optional(Schema.NullOr(Schema.Array(RawIdentitySchema))),
-  sourceRefName: Schema.String,
-  targetRefName: Schema.String,
-  creationDate: Schema.optional(Schema.NullOr(Schema.String)),
+  // Required, and required to be non-empty: the wire contract will not carry a change request
+  // without a branch or a created time, so a row missing one is skipped rather than breaking the
+  // response it travels in.
+  sourceRefName: TrimmedNonEmptyString,
+  targetRefName: TrimmedNonEmptyString,
+  creationDate: TrimmedNonEmptyString,
   closedDate: Schema.optional(Schema.NullOr(Schema.String)),
   url: Schema.optional(Schema.NullOr(Schema.String)),
   repository: Schema.optional(
@@ -173,19 +177,21 @@ function toThreadsUrl(raw: Schema.Schema.Type<typeof RawPullRequestSchema>): str
   return `${base}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repository)}/pullRequests/${raw.pullRequestId}/threads`;
 }
 
+/**
+ * Null when Azure said too little to place the pull request: a row with no browser url and no
+ * branch left after its prefix is dropped cannot be rendered or opened, and the wire contract
+ * refuses to carry it either.
+ */
 function toPullRequest(
   raw: Schema.Schema.Type<typeof RawPullRequestSchema>,
-): AzureDevOpsPullRequest {
+): AzureDevOpsPullRequest | null {
   const reviewers = (raw.reviewers ?? []).flatMap((reviewer) => {
     const actor = toActor(reviewer);
     return actor === null ? [] : [actor];
   });
-  const createdAt = trimmed(raw.creationDate);
   const closedAt = trimmed(raw.closedDate);
-  return {
-    number: raw.pullRequestId,
-    title: raw.title,
-    url: azureDevOpsPullRequestWebUrl({
+  const url = trimmed(
+    azureDevOpsPullRequestWebUrl({
       pullRequestId: raw.pullRequestId,
       webLink: raw._links?.web?.href,
       repositoryWebUrl: raw.repository?.webUrl,
@@ -193,14 +199,22 @@ function toPullRequest(
       projectName: raw.repository?.project?.name,
       repositoryName: raw.repository?.name,
     }),
+  );
+  const headBranch = trimmed(normalizeRefName(raw.sourceRefName));
+  const baseBranch = trimmed(normalizeRefName(raw.targetRefName));
+  if (url === null || headBranch === null || baseBranch === null) return null;
+  return {
+    number: raw.pullRequestId,
+    title: raw.title,
+    url,
     author: toActor(raw.createdBy),
-    headBranch: normalizeRefName(raw.sourceRefName),
-    baseBranch: normalizeRefName(raw.targetRefName),
+    headBranch,
+    baseBranch,
     state: toState(raw),
     isDraft: raw.isDraft ?? false,
     mergeability: toMergeability(raw.mergeStatus),
-    createdAt: createdAt ?? "",
-    updatedAt: closedAt ?? createdAt ?? "",
+    createdAt: raw.creationDate,
+    updatedAt: closedAt ?? raw.creationDate,
     closedAt,
     body: raw.description ?? "",
     reviewRequestLogins: reviewers.map((reviewer) => reviewer.login),
@@ -235,16 +249,17 @@ export function decodePullRequestListJson(
   const items: AzureDevOpsPullRequest[] = [];
   for (const entry of decoded.success) {
     const item = decodePullRequestEntry(entry);
-    if (Exit.isSuccess(item)) {
-      items.push(toPullRequest(item.value));
-    }
+    if (Exit.isFailure(item)) continue;
+    const pullRequest = toPullRequest(item.value);
+    if (pullRequest !== null) items.push(pullRequest);
   }
   return Result.succeed({ items, rawCount: decoded.success.length });
 }
 
+/** Null carries "Azure answered, but with too little to use", which the caller reports. */
 export function decodePullRequestJson(
   raw: string,
-): Result.Result<AzureDevOpsPullRequest, DecodeFailure> {
+): Result.Result<AzureDevOpsPullRequest | null, DecodeFailure> {
   const decoded = decodePullRequest(raw);
   return Result.isSuccess(decoded)
     ? Result.succeed(toPullRequest(decoded.success))

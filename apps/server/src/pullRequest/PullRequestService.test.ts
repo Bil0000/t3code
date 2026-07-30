@@ -485,6 +485,77 @@ it.effect("tries another workspace on the same host for the viewer", () =>
   }),
 );
 
+it.effect("refuses an action the host never claimed it could run", () =>
+  Effect.gen(function* () {
+    let ran = false;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            // Bitbucket's shape: it can merge and close, but cannot reopen.
+            actions: ["merge", "close"],
+            mergeMethods: ["merge"],
+          },
+          runAction: () => {
+            ran = true;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.runAction({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        action: "reopen",
+      }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.isFalse(ran);
+  }),
+);
+
+it.effect("refuses a comment on a host that cannot post one", () =>
+  Effect.gen(function* () {
+    let posted = false;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: false,
+            comment: false,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+          },
+          comment: () => {
+            posted = true;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.comment({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        body: "Looks good.",
+      }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.isFalse(posted);
+  }),
+);
+
 it.effect("keeps two hosts of one provider kind as two accounts", () =>
   Effect.gen(function* () {
     const viewerFor: Record<string, string> = { "/cloud": "bilal", "/enterprise": "b.hassan" };
