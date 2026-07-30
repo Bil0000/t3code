@@ -13,8 +13,8 @@ const CONVERSATION_PAGE_SIZE = 100;
 
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
-  inlineComments: true,
-  draft: true,
+  comment: true,
+  actions: ["merge", "ready", "draft", "close", "reopen"],
   mergeMethods: ["merge", "squash", "rebase"],
 };
 

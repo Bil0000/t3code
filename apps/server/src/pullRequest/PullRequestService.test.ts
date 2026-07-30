@@ -96,7 +96,12 @@ function fakeProvider(
 ): PullRequestProviderApi {
   return {
     kind,
-    capabilities: { diff: true, inlineComments: true, draft: true, mergeMethods: ["merge"] },
+    capabilities: {
+      diff: true,
+      comment: true,
+      actions: ["merge", "ready", "draft", "close", "reopen"],
+      mergeMethods: ["merge"],
+    },
     getViewer: () => Effect.succeed("bilal"),
     listChangeRequests: () => Effect.succeed({ items: [], truncated: false }),
     getChangeRequest: () => Effect.die("unused"),
@@ -627,8 +632,8 @@ it.effect("refuses a diff on a host that cannot produce one", () =>
         fakeProvider("azure-devops", {
           capabilities: {
             diff: false,
-            inlineComments: false,
-            draft: true,
+            comment: true,
+            actions: ["merge", "close"],
             mergeMethods: ["merge"],
           },
           getDiff: () => Effect.die("must not be called"),

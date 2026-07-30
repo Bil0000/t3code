@@ -84,14 +84,18 @@ export type PullRequestCommit = typeof PullRequestCommit.Type;
 /**
  * What a provider can actually do, so a surface can hide what is missing rather than offer an
  * action that would fail. Every provider fills this in for itself; nothing is assumed.
+ *
+ * Hosts differ more than they look: Azure DevOps exposes no patch through its CLI, and
+ * Bitbucket has no endpoint that reopens a declined pull request. Both would otherwise be dead
+ * buttons.
  */
 export const PullRequestCapabilities = Schema.Struct({
   /** A unified patch can be fetched for the change request. */
   diff: Schema.Boolean,
-  /** Line-level review comments are readable, not just the conversation. */
-  inlineComments: Schema.Boolean,
-  /** The change request can be moved between draft and ready. */
-  draft: Schema.Boolean,
+  /** A comment can be posted, and the conversation read back. */
+  comment: Schema.Boolean,
+  /** The actions this host can carry out; anything absent is never offered. */
+  actions: Schema.Array(PullRequestAction),
   /** Merge strategies the provider itself offers, before repository settings narrow them. */
   mergeMethods: Schema.Array(PullRequestMergeMethod),
 });
@@ -251,12 +255,35 @@ export const PullRequestUnavailableReason = Schema.Literals([
 ]);
 export type PullRequestUnavailableReason = typeof PullRequestUnavailableReason.Type;
 
-/** The tool each host is read through, so a failure names the one the reader has to fix. */
-const PROVIDER_CLI: Partial<
-  Record<SourceControlProviderKind, { readonly label: string; readonly command: string }>
+/**
+ * What each host needs before it can be read, so a failure names the fix rather than the
+ * symptom. Bitbucket is credentials on the server rather than a signed-in CLI, which is why
+ * these are whole sentences instead of a tool name to interpolate.
+ */
+const PROVIDER_REQUIREMENT: Partial<
+  Record<SourceControlProviderKind, { readonly missing: string; readonly unauthenticated: string }>
 > = {
-  github: { label: "GitHub CLI", command: "gh" },
-  gitlab: { label: "GitLab CLI", command: "glab" },
+  github: {
+    missing:
+      "GitHub CLI (`gh`) is required to browse change requests on this host. Install it from https://cli.github.com/ and reload.",
+    unauthenticated: "GitHub CLI is not authenticated. Run `gh auth login` and retry.",
+  },
+  gitlab: {
+    missing:
+      "GitLab CLI (`glab`) is required to browse change requests on this host. Install it from https://gitlab.com/gitlab-org/cli and reload.",
+    unauthenticated: "GitLab CLI is not authenticated. Run `glab auth login` and retry.",
+  },
+  "azure-devops": {
+    missing:
+      "Azure CLI (`az`) with the Azure DevOps extension is required. Install `az`, then run `az extension add --name azure-devops`.",
+    unauthenticated: "Azure CLI is not signed in. Run `az login` and retry.",
+  },
+  bitbucket: {
+    missing:
+      "Bitbucket needs API credentials on the server. Set T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN, or T3CODE_BITBUCKET_ACCESS_TOKEN.",
+    unauthenticated:
+      "Bitbucket rejected the configured credentials. Check T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN.",
+  },
 };
 
 /**
@@ -274,16 +301,15 @@ export class PullRequestUnavailableError extends Schema.TaggedErrorClass<PullReq
   },
 ) {
   override get message(): string {
-    const cli = this.provider === undefined ? undefined : PROVIDER_CLI[this.provider];
+    const requirement =
+      this.provider === undefined ? undefined : PROVIDER_REQUIREMENT[this.provider];
     switch (this.reason) {
       case "cli-missing":
-        return cli === undefined
-          ? "The command-line tool this host is read through is not installed."
-          : `${cli.label} (\`${cli.command}\`) is required to browse change requests on this host. Install it and reload.`;
+        return (
+          requirement?.missing ?? "The tool this host is read through is not installed or set up."
+        );
       case "cli-unauthenticated":
-        return cli === undefined
-          ? "The command-line tool this host is read through is not signed in."
-          : `${cli.label} is not authenticated. Run \`${cli.command} auth login\` and retry.`;
+        return requirement?.unauthenticated ?? "This host has no working credentials.";
       case "provider-unsupported":
         return "Change requests cannot be browsed for this project's host yet.";
     }

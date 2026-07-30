@@ -163,6 +163,12 @@ export function PullRequestDetailPanel({
     ? mergeMethod
     : (allowedMergeMethods[0] ?? "merge");
   const conflicting = detail?.state === "open" && detail.mergeability === "conflicting";
+  // A host that cannot produce a patch has no Code tab to open. Until the detail arrives the
+  // full set is shown, so the row does not shift once it does.
+  const visibleTabs = TABS.filter(
+    (item) => item.value !== "code" || detail === null || detail.capabilities.diff,
+  );
+  const can = (action: PullRequestAction) => detail?.capabilities.actions.includes(action) === true;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -175,7 +181,7 @@ export function PullRequestDetailPanel({
           />
         ) : null}
         <nav className="flex min-w-0 items-center gap-0.5" aria-label="Pull request tabs">
-          {TABS.map((item) => (
+          {visibleTabs.map((item) => (
             <button
               key={item.value}
               type="button"
@@ -220,17 +226,19 @@ export function PullRequestDetailPanel({
                 <MenuPopup align="end" side="bottom" className="min-w-52">
                   {detail.state === "open" ? (
                     <>
-                      <MenuItem
-                        disabled={actionPending}
-                        onClick={() => void perform(detail.isDraft ? "ready" : "draft")}
-                      >
-                        {detail.isDraft ? (
-                          <GitPullRequestIcon className="size-3.5" />
-                        ) : (
-                          <GitPullRequestDraftIcon className="size-3.5" />
-                        )}
-                        {detail.isDraft ? "Ready for review" : "Convert to draft"}
-                      </MenuItem>
+                      {can(detail.isDraft ? "ready" : "draft") ? (
+                        <MenuItem
+                          disabled={actionPending}
+                          onClick={() => void perform(detail.isDraft ? "ready" : "draft")}
+                        >
+                          {detail.isDraft ? (
+                            <GitPullRequestIcon className="size-3.5" />
+                          ) : (
+                            <GitPullRequestDraftIcon className="size-3.5" />
+                          )}
+                          {detail.isDraft ? "Ready for review" : "Convert to draft"}
+                        </MenuItem>
+                      ) : null}
                       {/* A preference for the merge action rather than a second action, so it
                           is a radio group here instead of a chevron welded to the Merge pill.
                           Hidden while conflicting: every method would fail. */}
@@ -299,7 +307,7 @@ export function PullRequestDetailPanel({
                       {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts in a thread"}
                     </MenuItem>
                   ) : null}
-                  {detail.state === "open" ? (
+                  {detail.state === "open" && can("close") ? (
                     <>
                       <MenuSeparator />
                       <MenuItem
@@ -311,7 +319,7 @@ export function PullRequestDetailPanel({
                         Close pull request
                       </MenuItem>
                     </>
-                  ) : detail.state === "closed" ? (
+                  ) : detail.state === "closed" && can("reopen") ? (
                     <>
                       <MenuSeparator />
                       <MenuItem disabled={actionPending} onClick={() => void perform("reopen")}>
@@ -322,11 +330,11 @@ export function PullRequestDetailPanel({
                   ) : null}
                 </MenuPopup>
               </Menu>
-              {detail.state === "open" && detail.isDraft ? (
+              {detail.state === "open" && detail.isDraft && can("ready") ? (
                 <Button size="xs" disabled={actionPending} onClick={() => void perform("ready")}>
                   Ready for review
                 </Button>
-              ) : detail.state === "open" && conflicting ? (
+              ) : detail.state === "open" && can("merge") && conflicting ? (
                 <Tooltip>
                   <TooltipTrigger
                     render={
@@ -337,7 +345,7 @@ export function PullRequestDetailPanel({
                   </TooltipTrigger>
                   <TooltipPopup side="bottom">Resolve merge conflicts before merging</TooltipPopup>
                 </Tooltip>
-              ) : detail.state === "open" && allowedMergeMethods.length > 0 ? (
+              ) : detail.state === "open" && can("merge") && allowedMergeMethods.length > 0 ? (
                 <Button
                   size="xs"
                   disabled={actionPending}

@@ -10,8 +10,8 @@ import {
 
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
-  inlineComments: true,
-  draft: true,
+  comment: true,
+  actions: ["merge", "ready", "draft", "close", "reopen"],
   // GitLab offers all three, though a project settles on one; `mergeCapabilities` narrows it.
   mergeMethods: ["merge", "squash", "rebase"],
 };

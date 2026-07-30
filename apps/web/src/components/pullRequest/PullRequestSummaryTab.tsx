@@ -252,7 +252,7 @@ export function PullRequestSummaryTab({
       <Section title="Comments" count={detail.comments.length}>
         {detail.commentsTruncated ? (
           <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
-            More comments are available on GitHub.
+            Some comments could not be shown here. Open the change request to read them all.
           </p>
         ) : null}
         {detail.comments.length === 0 ? (
@@ -283,7 +283,10 @@ export function PullRequestSummaryTab({
             ))}
           </div>
         )}
-        <CommentComposer environmentId={environmentId} detail={detail} onCommented={onRefresh} />
+        {/* A host that cannot post a comment gets no composer, rather than one that fails. */}
+        {detail.capabilities.comment ? (
+          <CommentComposer environmentId={environmentId} detail={detail} onCommented={onRefresh} />
+        ) : null}
       </Section>
     </div>
   );
