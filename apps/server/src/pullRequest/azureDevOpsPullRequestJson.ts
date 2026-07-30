@@ -1,0 +1,303 @@
+import * as Cause from "effect/Cause";
+import * as Exit from "effect/Exit";
+import * as Result from "effect/Result";
+import * as Schema from "effect/Schema";
+import type {
+  PullRequestActor,
+  PullRequestComment,
+  PullRequestMergeability,
+  PullRequestState,
+} from "@t3tools/contracts";
+import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+
+import {
+  azureDevOpsOrganizationBaseFromRestApiUrl,
+  azureDevOpsPullRequestWebUrl,
+} from "../sourceControl/azureDevOpsPullRequests.ts";
+
+/**
+ * Azure's enums are decoded as plain strings and normalized here, in the same tolerant style as
+ * the other hosts: a new merge status must not fail a whole payload. Every field beyond the
+ * identity is optional, because `az repos pr` returns rather more or less of the REST object
+ * depending on the command.
+ */
+const RawIdentitySchema = Schema.Struct({
+  displayName: Schema.optional(Schema.NullOr(Schema.String)),
+  /** An email or UPN, which is what `az account show` reports for the signed-in user. */
+  uniqueName: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawPullRequestSchema = Schema.Struct({
+  pullRequestId: Schema.Int,
+  title: Schema.String,
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  status: Schema.optional(Schema.NullOr(Schema.String)),
+  isDraft: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  mergeStatus: Schema.optional(Schema.NullOr(Schema.String)),
+  createdBy: Schema.optional(Schema.NullOr(RawIdentitySchema)),
+  reviewers: Schema.optional(Schema.NullOr(Schema.Array(RawIdentitySchema))),
+  sourceRefName: Schema.String,
+  targetRefName: Schema.String,
+  creationDate: Schema.optional(Schema.NullOr(Schema.String)),
+  closedDate: Schema.optional(Schema.NullOr(Schema.String)),
+  url: Schema.optional(Schema.NullOr(Schema.String)),
+  repository: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        name: Schema.optional(Schema.NullOr(Schema.String)),
+        webUrl: Schema.optional(Schema.NullOr(Schema.String)),
+        project: Schema.optional(
+          Schema.NullOr(Schema.Struct({ name: Schema.optional(Schema.NullOr(Schema.String)) })),
+        ),
+      }),
+    ),
+  ),
+  _links: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        web: Schema.optional(
+          Schema.NullOr(Schema.Struct({ href: Schema.optional(Schema.String) })),
+        ),
+      }),
+    ),
+  ),
+});
+
+/** A pull request thread, which is how Azure keeps its conversation. */
+const RawThreadSchema = Schema.Struct({
+  id: Schema.Int,
+  isDeleted: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  threadContext: Schema.optional(
+    Schema.NullOr(Schema.Struct({ filePath: Schema.optional(Schema.NullOr(Schema.String)) })),
+  ),
+  comments: Schema.optional(
+    Schema.NullOr(
+      Schema.Array(
+        Schema.Struct({
+          id: Schema.optional(Schema.NullOr(Schema.Int)),
+          content: Schema.optional(Schema.NullOr(Schema.String)),
+          author: Schema.optional(Schema.NullOr(RawIdentitySchema)),
+          publishedDate: Schema.optional(Schema.NullOr(Schema.String)),
+          isDeleted: Schema.optional(Schema.NullOr(Schema.Boolean)),
+          /** `system` marks the notes Azure writes itself, which are events, not comments. */
+          commentType: Schema.optional(Schema.NullOr(Schema.String)),
+        }),
+      ),
+    ),
+  ),
+});
+
+const RawThreadPageSchema = Schema.Struct({
+  value: Schema.Array(Schema.Unknown),
+});
+
+const RawViewerSchema = Schema.Struct({
+  user: Schema.optional(
+    Schema.NullOr(Schema.Struct({ name: Schema.optional(Schema.NullOr(Schema.String)) })),
+  ),
+});
+
+export interface AzureDevOpsPullRequest {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly author: PullRequestActor | null;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  readonly state: PullRequestState;
+  readonly isDraft: boolean;
+  readonly mergeability: PullRequestMergeability;
+  readonly createdAt: string;
+  /**
+   * Azure records no last-touched time on a pull request, so the closing time stands in where
+   * there is one and the creation time otherwise. The same fallback the rest of the app uses.
+   */
+  readonly updatedAt: string;
+  readonly closedAt: string | null;
+  readonly body: string;
+  readonly reviewRequestLogins: ReadonlyArray<string>;
+  readonly reviewers: ReadonlyArray<PullRequestActor>;
+  /** Where this pull request's threads live, when Azure said enough to work it out. */
+  readonly threadsUrl: string | null;
+}
+
+function trimmed(value: string | null | undefined): string | null {
+  const text = value?.trim() ?? "";
+  return text.length > 0 ? text : null;
+}
+
+function normalizeRefName(refName: string): string {
+  return refName.trim().replace(/^refs\/heads\//, "");
+}
+
+/** A login has to compare against `az account show`, which reports an email. */
+function toActor(raw: Schema.Schema.Type<typeof RawIdentitySchema> | null | undefined) {
+  const login = trimmed(raw?.uniqueName) ?? trimmed(raw?.displayName);
+  return login === null ? null : { login, name: trimmed(raw?.displayName) };
+}
+
+function toState(raw: Schema.Schema.Type<typeof RawPullRequestSchema>): PullRequestState {
+  switch (raw.status?.trim().toLowerCase()) {
+    case "completed":
+      return "merged";
+    case "abandoned":
+      return "closed";
+    default:
+      return "open";
+  }
+}
+
+function toMergeability(value: string | null | undefined): PullRequestMergeability {
+  switch (value?.trim().toLowerCase()) {
+    case "succeeded":
+      return "mergeable";
+    case "conflicts":
+    case "failure":
+    case "rejectedbypolicy":
+      return "conflicting";
+    default:
+      // `queued` and `notSet` mean Azure has not finished checking.
+      return "unknown";
+  }
+}
+
+/**
+ * The REST collection a pull request's threads hang from. Built from what Azure returned rather
+ * than from the local remote, whose shape differs between the modern, legacy and SSH forms.
+ */
+function toThreadsUrl(raw: Schema.Schema.Type<typeof RawPullRequestSchema>): string | null {
+  const base = azureDevOpsOrganizationBaseFromRestApiUrl(raw.url);
+  const project = trimmed(raw.repository?.project?.name);
+  const repository = trimmed(raw.repository?.name);
+  if (base === null || project === null || repository === null) return null;
+  return `${base}/${encodeURIComponent(project)}/_apis/git/repositories/${encodeURIComponent(repository)}/pullRequests/${raw.pullRequestId}/threads`;
+}
+
+function toPullRequest(
+  raw: Schema.Schema.Type<typeof RawPullRequestSchema>,
+): AzureDevOpsPullRequest {
+  const reviewers = (raw.reviewers ?? []).flatMap((reviewer) => {
+    const actor = toActor(reviewer);
+    return actor === null ? [] : [actor];
+  });
+  const createdAt = trimmed(raw.creationDate);
+  const closedAt = trimmed(raw.closedDate);
+  return {
+    number: raw.pullRequestId,
+    title: raw.title,
+    url: azureDevOpsPullRequestWebUrl({
+      pullRequestId: raw.pullRequestId,
+      webLink: raw._links?.web?.href,
+      repositoryWebUrl: raw.repository?.webUrl,
+      restApiUrl: raw.url,
+      projectName: raw.repository?.project?.name,
+      repositoryName: raw.repository?.name,
+    }),
+    author: toActor(raw.createdBy),
+    headBranch: normalizeRefName(raw.sourceRefName),
+    baseBranch: normalizeRefName(raw.targetRefName),
+    state: toState(raw),
+    isDraft: raw.isDraft ?? false,
+    mergeability: toMergeability(raw.mergeStatus),
+    createdAt: createdAt ?? "",
+    updatedAt: closedAt ?? createdAt ?? "",
+    closedAt,
+    body: raw.description ?? "",
+    reviewRequestLogins: reviewers.map((reviewer) => reviewer.login),
+    reviewers,
+    threadsUrl: toThreadsUrl(raw),
+  };
+}
+
+const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
+const decodePullRequestEntry = Schema.decodeUnknownExit(RawPullRequestSchema);
+const decodePullRequest = decodeJsonResult(RawPullRequestSchema);
+const decodeThreadPage = decodeJsonResult(RawThreadPageSchema);
+const decodeThreadEntry = Schema.decodeUnknownExit(RawThreadSchema);
+const decodeViewer = decodeJsonResult(RawViewerSchema);
+
+type DecodeFailure = Cause.Cause<Schema.SchemaError>;
+
+export interface AzureDevOpsPullRequestBatch {
+  readonly items: ReadonlyArray<AzureDevOpsPullRequest>;
+  /** Rows Azure returned, counted before decoding, so a skipped row cannot hide a next page. */
+  readonly rawCount: number;
+}
+
+/** Malformed entries are skipped rather than failing the batch, as on the other hosts. */
+export function decodePullRequestListJson(
+  raw: string,
+): Result.Result<AzureDevOpsPullRequestBatch, DecodeFailure> {
+  const decoded = decodeUnknownList(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const items: AzureDevOpsPullRequest[] = [];
+  for (const entry of decoded.success) {
+    const item = decodePullRequestEntry(entry);
+    if (Exit.isSuccess(item)) {
+      items.push(toPullRequest(item.value));
+    }
+  }
+  return Result.succeed({ items, rawCount: decoded.success.length });
+}
+
+export function decodePullRequestJson(
+  raw: string,
+): Result.Result<AzureDevOpsPullRequest, DecodeFailure> {
+  const decoded = decodePullRequest(raw);
+  return Result.isSuccess(decoded)
+    ? Result.succeed(toPullRequest(decoded.success))
+    : Result.fail(decoded.failure);
+}
+
+/** `az account show --query user` reports the signed-in account, whose name is an email. */
+export function decodeViewerJson(raw: string): Result.Result<string | null, DecodeFailure> {
+  const decoded = decodeViewer(raw);
+  return Result.isSuccess(decoded)
+    ? Result.succeed(trimmed(decoded.success.user?.name))
+    : Result.fail(decoded.failure);
+}
+
+/**
+ * Azure keeps its conversation as threads of comments. Only the first comment of each thread is
+ * taken, which is the remark itself rather than the replies under it, matching how the GitHub
+ * review threads are read. A thread pinned to a file is a line-level review comment.
+ */
+export function decodeThreadsJson(
+  raw: string,
+): Result.Result<ReadonlyArray<PullRequestComment>, DecodeFailure> {
+  const decoded = decodeThreadPage(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const comments: PullRequestComment[] = [];
+  for (const entry of decoded.success.value) {
+    const decodedThread = decodeThreadEntry(entry);
+    if (Exit.isFailure(decodedThread)) continue;
+    const thread = decodedThread.value;
+    if (thread.isDeleted === true) continue;
+    const root = (thread.comments ?? []).find(
+      (comment) =>
+        comment.isDeleted !== true &&
+        comment.commentType?.trim().toLowerCase() !== "system" &&
+        (comment.content ?? "").trim().length > 0,
+    );
+    const publishedDate = trimmed(root?.publishedDate);
+    if (root === undefined || publishedDate === null) continue;
+    const path = trimmed(thread.threadContext?.filePath);
+    comments.push({
+      id: `${thread.id}:${root.id ?? 0}`,
+      kind: path === null ? "issue-comment" : "review-comment",
+      author: toActor(root.author),
+      body: root.content ?? "",
+      createdAt: publishedDate,
+      url: null,
+      path,
+      reviewState: null,
+    });
+  }
+  return Result.succeed(
+    comments.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
+  );
+}

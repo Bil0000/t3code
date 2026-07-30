@@ -1,9 +1,12 @@
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
+import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
+import * as AzureDevOpsPullRequestProvider from "./AzureDevOpsPullRequestProvider.ts";
 import * as BitbucketPullRequestApi from "./BitbucketPullRequestApi.ts";
 import * as BitbucketPullRequestProvider from "./BitbucketPullRequestProvider.ts";
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
@@ -23,6 +26,7 @@ export const registryLayer = Layer.effect(
       GitHubPullRequestProvider.make,
       GitLabPullRequestProvider.make,
       BitbucketPullRequestProvider.make,
+      AzureDevOpsPullRequestProvider.make,
     ]),
     (providers) => makeRegistry(providers),
   ),
@@ -30,4 +34,5 @@ export const registryLayer = Layer.effect(
   Layer.provide(GitHubPullRequestCli.layer.pipe(Layer.provide(GitHubCli.layer))),
   Layer.provide(GitLabPullRequestCli.layer.pipe(Layer.provide(GitLabCli.layer))),
   Layer.provide(BitbucketPullRequestApi.layer.pipe(Layer.provide(BitbucketApi.layer))),
+  Layer.provide(AzureDevOpsPullRequestCli.layer.pipe(Layer.provide(AzureDevOpsCli.layer))),
 );

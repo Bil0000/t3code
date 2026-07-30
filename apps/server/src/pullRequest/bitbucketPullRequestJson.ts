@@ -1,5 +1,7 @@
 import * as Cause from "effect/Cause";
+import * as DateTime from "effect/DateTime";
 import * as Exit from "effect/Exit";
+import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type {
@@ -146,8 +148,10 @@ function trimmed(value: string | null | undefined): string | null {
  * the other hosts already use.
  */
 function toIsoUtc(value: string): string {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toISOString();
+  return Option.match(DateTime.make(value), {
+    onNone: () => value,
+    onSome: DateTime.formatIso,
+  });
 }
 
 /** An app account has no nickname, so the display name is the only handle it has. */
