@@ -278,6 +278,31 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("reports a pull request it cannot place as its own outcome", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // Well-formed, but with nothing to build a link from: not a decode failure.
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              pullRequestId: 42,
+              title: "Add the page",
+              sourceRefName: "refs/heads/feat/page",
+              targetRefName: "refs/heads/main",
+              creationDate: "2026-07-01T00:00:00Z",
+            }),
+          ),
+        ),
+      );
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      const error = yield* Effect.flip(cli.getPullRequest({ cwd: "/w", number: 42 }));
+
+      assert.strictEqual(error._tag, "AzureDevOpsPullRequestIncompleteError");
+    }),
+  );
+
   it.effect("fails the read when az returns something unreadable", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"message":"not found"}')));

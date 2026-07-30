@@ -59,9 +59,31 @@ export class AzureDevOpsViewerUnavailableError extends Schema.TaggedErrorClass<A
   }
 }
 
+/**
+ * Not a decode failure either: az answered with a well-formed pull request that simply carries
+ * no branch or link, which is a response this cannot place rather than one it cannot read.
+ */
+export class AzureDevOpsPullRequestIncompleteError extends Schema.TaggedErrorClass<AzureDevOpsPullRequestIncompleteError>()(
+  "AzureDevOpsPullRequestIncompleteError",
+  {
+    command: Schema.Literal("az"),
+    cwd: Schema.String,
+    number: Schema.Int,
+  },
+) {
+  get detail(): string {
+    return "Azure DevOps returned no branch or link for the pull request.";
+  }
+
+  override get message(): string {
+    return `Azure CLI failed in getPullRequest: ${this.detail}`;
+  }
+}
+
 export type AzureDevOpsPullRequestCliError =
   | AzureDevOpsCli.AzureDevOpsCliError
   | AzureDevOpsPullRequestReadError
+  | AzureDevOpsPullRequestIncompleteError
   | AzureDevOpsViewerUnavailableError;
 
 /** The version every REST call below is pinned to, so a new default cannot reshape a response. */
@@ -241,21 +263,27 @@ export const make = Effect.gen(function* () {
         Effect.flatMap(
           (result): Effect.Effect<AzureDevOpsPullRequest, AzureDevOpsPullRequestCliError> => {
             const decoded = decodePullRequestJson(result.stdout.trim());
-            // Null means Azure answered with too little to place the pull request, which is a
-            // response this cannot use rather than one it can render partially.
-            if (!Result.isSuccess(decoded) || decoded.success === null) {
+            if (!Result.isSuccess(decoded)) {
               return Effect.fail(
                 new AzureDevOpsPullRequestReadError({
                   command: "az",
                   cwd: input.cwd,
                   operation: "getPullRequest",
-                  cause: Result.isSuccess(decoded)
-                    ? "Azure returned no branch or link for the pull request."
-                    : decoded.failure,
+                  cause: decoded.failure,
                 }),
               );
             }
-            return Effect.succeed(decoded.success);
+            // Null means Azure answered with too little to place the pull request. Nothing
+            // failed underneath it, so it is its own outcome rather than a decode failure.
+            return decoded.success === null
+              ? Effect.fail(
+                  new AzureDevOpsPullRequestIncompleteError({
+                    command: "az",
+                    cwd: input.cwd,
+                    number: input.number,
+                  }),
+                )
+              : Effect.succeed(decoded.success);
           },
         ),
       ),

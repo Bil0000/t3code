@@ -27,6 +27,10 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
 const DEFAULT_API_BASE_URL = "https://api.bitbucket.org/2.0";
+/** A response body past this is cut short, so one huge diff cannot exhaust the server. */
+const DEFAULT_MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+/** Bitbucket redirects a diff once; this leaves room without following a chain forever. */
+const MAX_REDIRECTS = 3;
 
 const BitbucketApiEnvConfig = Config.all({
   baseUrl: Config.string("T3CODE_BITBUCKET_API_BASE_URL").pipe(
@@ -176,7 +180,24 @@ export class BitbucketCheckoutError extends Schema.TaggedErrorClass<BitbucketChe
   }
 }
 
+/**
+ * A url that does not belong to the configured Bitbucket. Refused rather than followed, because
+ * the request carries the account's credentials and a url that came back in a response — a
+ * pagination cursor, or the target of a redirect — is not this server's to trust.
+ */
+export class BitbucketUntrustedUrlError extends Schema.TaggedErrorClass<BitbucketUntrustedUrlError>()(
+  "BitbucketUntrustedUrlError",
+  {
+    url: Schema.String,
+  },
+) {
+  override get message(): string {
+    return "Bitbucket API failed in request: the response pointed at a host outside the configured Bitbucket.";
+  }
+}
+
 export const BitbucketApiError = Schema.Union([
+  BitbucketUntrustedUrlError,
   BitbucketRepositoryLocatorError,
   BitbucketRequestError,
   BitbucketResponseError,
@@ -257,11 +278,16 @@ export class BitbucketApi extends Context.Service<
      */
     readonly request: (input: {
       readonly method: "GET" | "POST" | "PUT";
-      /** A path below the API base, or a whole URL as a paged response reports its next page. */
+      /**
+       * A path below the API base, or a whole URL as a paged response reports its next page.
+       * A whole URL is refused unless it belongs to the configured Bitbucket.
+       */
       readonly url: string;
       /** A JSON document, for the endpoints that take one. */
       readonly body?: string;
-    }) => Effect.Effect<string, BitbucketApiError>;
+      /** Response bytes to keep; past this the body comes back cut short and marked. */
+      readonly maxBytes?: number;
+    }) => Effect.Effect<{ readonly body: string; readonly truncated: boolean }, BitbucketApiError>;
     readonly listPullRequests: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProvider.SourceControlProviderContext;
@@ -489,6 +515,15 @@ function authFromConfig(
   };
 }
 
+/** Null for anything that is not a url at all, which is never the configured Bitbucket. */
+function originOf(value: string): string | null {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
 function responseError(
   operation: BitbucketApiOperation,
   response: HttpClientResponse.HttpClientResponse,
@@ -708,10 +743,34 @@ export const make = Effect.gen(function* () {
   // A pull request's diff, diffstat and conflicts are served as redirects to a commit-range
   // URL, and the client does not follow redirects unless asked. The hop stays on the same host,
   // so the credentials travel with it.
-  const redirectingClient = httpClient.pipe(HttpClient.followRedirects(3));
+  /**
+   * The one host these credentials may be sent to. A url that came back inside a response — a
+   * pagination cursor, or the target of a redirect — is data, not instruction, so it is checked
+   * against this before the account's token travels with it.
+   */
+  const apiOrigin = originOf(config.baseUrl);
 
-  const request: BitbucketApi["Service"]["request"] = (input) => {
-    const url = /^https?:\/\//u.test(input.url) ? input.url : apiUrl(input.url);
+  const trustedUrl = (value: string): string | null => {
+    if (!/^https?:\/\//u.test(value)) return apiUrl(value);
+    const origin = originOf(value);
+    return origin !== null && origin === apiOrigin ? value : null;
+  };
+
+  /**
+   * Redirects are followed here rather than by the client, which forwards every header to
+   * whatever host it is sent to. A pull request diff, diffstat and conflicts are all served as
+   * redirects, so they have to be followed — but only back to the same Bitbucket.
+   */
+  const send = (input: {
+    readonly method: "GET" | "POST" | "PUT";
+    readonly url: string;
+    readonly body?: string;
+    readonly redirects: number;
+  }): Effect.Effect<HttpClientResponse.HttpClientResponse, BitbucketApiError> => {
+    const url = trustedUrl(input.url);
+    if (url === null) {
+      return Effect.fail(new BitbucketUntrustedUrlError({ url: input.url }));
+    }
     const base =
       input.method === "GET"
         ? HttpClientRequest.get(url)
@@ -723,8 +782,31 @@ export const make = Effect.gen(function* () {
       input.body === undefined
         ? base
         : base.pipe(HttpClientRequest.bodyText(input.body, "application/json"));
-    return redirectingClient.execute(withAuth(withBody)).pipe(
-      Effect.mapError((cause) => new BitbucketRequestError({ operation: "request", cause })),
+    return httpClient.execute(withAuth(withBody)).pipe(
+      Effect.mapError(
+        (cause): BitbucketApiError => new BitbucketRequestError({ operation: "request", cause }),
+      ),
+      Effect.flatMap((response) => {
+        const location = response.headers.location;
+        if (
+          response.status >= 300 &&
+          response.status < 400 &&
+          location !== undefined &&
+          input.redirects < MAX_REDIRECTS
+        ) {
+          return send({
+            ...input,
+            url: new URL(location, url).toString(),
+            redirects: input.redirects + 1,
+          });
+        }
+        return Effect.succeed(response);
+      }),
+    );
+  };
+
+  const request: BitbucketApi["Service"]["request"] = (input) =>
+    send({ ...input, redirects: 0 }).pipe(
       Effect.flatMap((response) =>
         HttpClientResponse.matchStatus({
           "2xx": (success) =>
@@ -737,12 +819,19 @@ export const make = Effect.gen(function* () {
                     cause,
                   }),
               ),
+              Effect.map((body) => {
+                // A pull request diff has no bound of its own, so one is imposed here the way
+                // the gh and glab paths bound theirs.
+                const maxBytes = input.maxBytes ?? DEFAULT_MAX_RESPONSE_BYTES;
+                return body.length > maxBytes
+                  ? { body: body.slice(0, maxBytes), truncated: true }
+                  : { body, truncated: false };
+              }),
             ),
           orElse: (failed) => responseError("request", failed),
         })(response),
       ),
     );
-  };
 
   return BitbucketApi.of({
     request,

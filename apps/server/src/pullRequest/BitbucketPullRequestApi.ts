@@ -92,6 +92,8 @@ const MAX_PAGE_SIZE = 50;
 const MAX_LIST_PAGES = 10;
 /** Conversation, commits and checks are read one page deep; the rest stays on Bitbucket. */
 const CONVERSATION_PAGE_SIZE = 50;
+/** The same ceiling the gh and glab diff reads use. */
+const DIFF_MAX_BYTES = 8 * 1024 * 1024;
 
 export interface BitbucketPullRequestBatch {
   readonly items: ReadonlyArray<BitbucketPullRequest>;
@@ -118,7 +120,10 @@ export class BitbucketPullRequestApi extends Context.Service<
     readonly getPullRequestDiff: (input: {
       readonly repository: string;
       readonly number: number;
-    }) => Effect.Effect<string, BitbucketPullRequestApiError>;
+    }) => Effect.Effect<
+      { readonly patch: string; readonly truncated: boolean },
+      BitbucketPullRequestApiError
+    >;
 
     readonly getDiffStat: (input: {
       readonly repository: string;
@@ -229,8 +234,8 @@ export const make = Effect.gen(function* () {
     readonly collected: ReadonlyArray<BitbucketPullRequest>;
   }): Effect.Effect<BitbucketPullRequestBatch, BitbucketPullRequestApiError> =>
     bitbucket.request({ method: "GET", url: input.url }).pipe(
-      Effect.flatMap((body) => {
-        const decoded = decodePullRequestPageJson(body);
+      Effect.flatMap((response) => {
+        const decoded = decodePullRequestPageJson(response.body);
         if (!Result.isSuccess(decoded)) {
           return Effect.fail(
             new BitbucketPullRequestReadError({
@@ -257,8 +262,8 @@ export const make = Effect.gen(function* () {
     readonly decode: (body: string) => Result.Result<A, unknown>;
   }): Effect.Effect<A, BitbucketPullRequestApiError> =>
     bitbucket.request({ method: "GET", url: input.url }).pipe(
-      Effect.flatMap((body) => {
-        const decoded = input.decode(body);
+      Effect.flatMap((response) => {
+        const decoded = input.decode(response.body);
         return Result.isSuccess(decoded)
           ? Effect.succeed(decoded.success)
           : Effect.fail(
@@ -273,8 +278,8 @@ export const make = Effect.gen(function* () {
   return BitbucketPullRequestApi.of({
     getViewer: () =>
       bitbucket.request({ method: "GET", url: "/user" }).pipe(
-        Effect.flatMap((body): Effect.Effect<string, BitbucketPullRequestApiError> => {
-          const decoded = decodeViewerJson(body);
+        Effect.flatMap((response): Effect.Effect<string, BitbucketPullRequestApiError> => {
+          const decoded = decodeViewerJson(response.body);
           if (!Result.isSuccess(decoded)) {
             return Effect.fail(
               new BitbucketPullRequestReadError({ operation: "getViewer", cause: decoded.failure }),
@@ -308,8 +313,17 @@ export const make = Effect.gen(function* () {
 
     getPullRequestDiff: (input) =>
       withRepository(input.repository, (path) =>
-        // Already a unified patch, so it needs no decoding at all.
-        bitbucket.request({ method: "GET", url: `${path}/pullrequests/${input.number}/diff` }),
+        // Already a unified patch, so it needs no decoding at all — only a bound, which a diff
+        // of any size would otherwise ignore.
+        bitbucket
+          .request({
+            method: "GET",
+            url: `${path}/pullrequests/${input.number}/diff`,
+            maxBytes: DIFF_MAX_BYTES,
+          })
+          .pipe(
+            Effect.map((response) => ({ patch: response.body, truncated: response.truncated })),
+          ),
       ),
 
     getDiffStat: (input) =>

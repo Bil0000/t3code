@@ -17,6 +17,11 @@ const layer = it.layer(
   ),
 );
 
+/** The shape `request` answers with: a body plus whether it had to be cut short. */
+function response(body: string) {
+  return { body, truncated: false };
+}
+
 function page(count: number, firstNumber: number, next?: string): string {
   // @effect-diagnostics-next-line preferSchemaOverJson:off
   return JSON.stringify({
@@ -50,7 +55,7 @@ afterEach(() => {
 layer("BitbucketPullRequestApi.layer", (it) => {
   it.effect("asks for reviewers, newest first, at Bitbucket's page ceiling", () =>
     Effect.gen(function* () {
-      mockedRequest.mockReturnValueOnce(Effect.succeed(page(3, 1)));
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(3, 1))));
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       const batch = yield* api.listPullRequests({
@@ -75,8 +80,8 @@ layer("BitbucketPullRequestApi.layer", (it) => {
     Effect.gen(function* () {
       const next = "https://api.bitbucket.org/2.0/repositories/acme/web/pullrequests?page=2";
       mockedRequest
-        .mockReturnValueOnce(Effect.succeed(page(50, 1, next)))
-        .mockReturnValueOnce(Effect.succeed(page(50, 51)));
+        .mockReturnValueOnce(Effect.succeed(response(page(50, 1, next))))
+        .mockReturnValueOnce(Effect.succeed(response(page(50, 51))));
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       const batch = yield* api.listPullRequests({
@@ -94,7 +99,7 @@ layer("BitbucketPullRequestApi.layer", (it) => {
   it.effect("stops at the caller's page and says more remain", () =>
     Effect.gen(function* () {
       const next = "https://api.bitbucket.org/2.0/repositories/acme/web/pullrequests?page=2";
-      mockedRequest.mockReturnValueOnce(Effect.succeed(page(50, 1, next)));
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(50, 1, next))));
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       const batch = yield* api.listPullRequests({
@@ -111,7 +116,7 @@ layer("BitbucketPullRequestApi.layer", (it) => {
 
   it.effect("asks for declined pull requests on the closed tab", () =>
     Effect.gen(function* () {
-      mockedRequest.mockReturnValueOnce(Effect.succeed(page(0, 1)));
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(0, 1))));
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       yield* api.listPullRequests({ repository: "acme/web", state: "closed", limit: 50 });
@@ -136,19 +141,24 @@ layer("BitbucketPullRequestApi.layer", (it) => {
   it.effect("returns the diff verbatim, because Bitbucket already sends a patch", () =>
     Effect.gen(function* () {
       const patch = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b\n";
-      mockedRequest.mockReturnValueOnce(Effect.succeed(patch));
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(patch)));
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       const diff = yield* api.getPullRequestDiff({ repository: "acme/web", number: 7 });
 
-      assert.strictEqual(diff, patch);
-      expect(callAt(0).url).toBe("/repositories/acme/web/pullrequests/7/diff");
+      assert.strictEqual(diff.patch, patch);
+      assert.isFalse(diff.truncated);
+      expect(callAt(0)).toMatchObject({
+        url: "/repositories/acme/web/pullrequests/7/diff",
+        // A diff of any size would otherwise be read into memory whole.
+        maxBytes: 8 * 1024 * 1024,
+      });
     }),
   );
 
   it.effect("reads an empty conflict list as mergeable", () =>
     Effect.gen(function* () {
-      mockedRequest.mockReturnValueOnce(Effect.succeed(page(0, 1)));
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(0, 1))));
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       const mergeability = yield* api.getMergeability({ repository: "acme/web", number: 7 });
@@ -160,7 +170,7 @@ layer("BitbucketPullRequestApi.layer", (it) => {
 
   it.effect("merges with Bitbucket's own name for the strategy", () =>
     Effect.gen(function* () {
-      mockedRequest.mockReturnValue(Effect.succeed("{}"));
+      mockedRequest.mockReturnValue(Effect.succeed(response("{}")));
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       yield* api.runAction({
@@ -180,7 +190,7 @@ layer("BitbucketPullRequestApi.layer", (it) => {
 
   it.effect("closes a pull request by declining it", () =>
     Effect.gen(function* () {
-      mockedRequest.mockReturnValue(Effect.succeed("{}"));
+      mockedRequest.mockReturnValue(Effect.succeed(response("{}")));
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       yield* api.runAction({ repository: "acme/web", number: 7, action: "close" });
@@ -194,7 +204,7 @@ layer("BitbucketPullRequestApi.layer", (it) => {
 
   it.effect("posts a comment as a JSON document, so the body stays text", () =>
     Effect.gen(function* () {
-      mockedRequest.mockReturnValue(Effect.succeed("{}"));
+      mockedRequest.mockReturnValue(Effect.succeed(response("{}")));
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       yield* api.comment({ repository: "acme/web", number: 7, body: "true" });
@@ -210,7 +220,9 @@ layer("BitbucketPullRequestApi.layer", (it) => {
   it.effect("fails the read when Bitbucket answers with something unreadable", () =>
     Effect.gen(function* () {
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      mockedRequest.mockReturnValueOnce(Effect.succeed(JSON.stringify({ error: "nope" })));
+      mockedRequest.mockReturnValueOnce(
+        Effect.succeed(response(JSON.stringify({ error: "nope" }))),
+      );
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       const error = yield* Effect.flip(api.getPullRequest({ repository: "acme/web", number: 7 }));
@@ -222,7 +234,7 @@ layer("BitbucketPullRequestApi.layer", (it) => {
   it.effect("fails when the credentials belong to no named account", () =>
     Effect.gen(function* () {
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      mockedRequest.mockReturnValueOnce(Effect.succeed(JSON.stringify({})));
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(JSON.stringify({}))));
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
 
       const error = yield* Effect.flip(api.getViewer());

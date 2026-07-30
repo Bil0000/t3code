@@ -142,10 +142,9 @@ export const make = Effect.gen(function* () {
     },
 
     getDiff: (input) =>
-      api.getPullRequestDiff({ repository: input.repository, number: input.number }).pipe(
-        Effect.mapError(fail("getDiff")),
-        Effect.map((patch) => ({ patch, truncated: false })),
-      ),
+      api
+        .getPullRequestDiff({ repository: input.repository, number: input.number })
+        .pipe(Effect.mapError(fail("getDiff"))),
 
     runAction: (input) =>
       api
