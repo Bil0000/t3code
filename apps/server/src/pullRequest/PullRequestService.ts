@@ -438,8 +438,18 @@ export const make = Effect.gen(function* () {
 
   const runAction: PullRequestService["Service"]["runAction"] = (input) =>
     requireProject(input).pipe(
-      Effect.flatMap((project) =>
-        project.api
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        // The surface hides what a host cannot do, and this refuses it as well: a request that
+        // reached here anyway must not be handed to a provider that never claimed the action.
+        if (!project.api.capabilities.actions.includes(input.action)) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "runAction",
+              detail: `This host cannot ${input.action} a change request.`,
+            }),
+          );
+        }
+        return project.api
           .runAction({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
@@ -447,8 +457,8 @@ export const make = Effect.gen(function* () {
             action: input.action,
             ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
           })
-          .pipe(Effect.mapError(toPullRequestError("runAction"))),
-      ),
+          .pipe(Effect.mapError(toPullRequestError("runAction")));
+      }),
     );
 
   const comment: PullRequestService["Service"]["comment"] = (input) =>
@@ -463,16 +473,24 @@ export const make = Effect.gen(function* () {
         )
       : requireProject(input)
     ).pipe(
-      Effect.flatMap((project) =>
-        project.api
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        if (!project.api.capabilities.comment) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "comment",
+              detail: "This host cannot post a comment on a change request.",
+            }),
+          );
+        }
+        return project.api
           .comment({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
             number: input.number,
             body: input.body,
           })
-          .pipe(Effect.mapError(toPullRequestError("comment"))),
-      ),
+          .pipe(Effect.mapError(toPullRequestError("comment")));
+      }),
     );
 
   return PullRequestService.of({ list, detail, diff, runAction, comment });

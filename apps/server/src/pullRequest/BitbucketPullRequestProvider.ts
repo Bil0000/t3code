@@ -1,0 +1,167 @@
+import * as Effect from "effect/Effect";
+import type { PullRequestCapabilities } from "@t3tools/contracts";
+
+import * as BitbucketPullRequestApi from "./BitbucketPullRequestApi.ts";
+import {
+  PullRequestProviderError,
+  type ProviderChangeRequest,
+  type ProviderChangeRequestDetail,
+  type PullRequestProviderApi,
+} from "./PullRequestProvider.ts";
+import type { BitbucketPullRequest } from "./bitbucketPullRequestJson.ts";
+
+const CAPABILITIES: PullRequestCapabilities = {
+  diff: true,
+  comment: true,
+  // Bitbucket has no endpoint that reopens a declined pull request, and nothing documented that
+  // moves one in or out of draft, so neither is offered rather than failing when pressed.
+  actions: ["merge", "close"],
+  mergeMethods: ["merge", "squash", "rebase"],
+};
+
+/** The failures that mean the credentials are the problem, rather than one request. */
+function reasonFor(
+  error: BitbucketPullRequestApi.BitbucketPullRequestApiError,
+): PullRequestProviderError["reason"] {
+  // Bitbucket is read over HTTP with credentials from the environment, so there is no tool to be
+  // missing: unusable always means the credentials are absent or refused.
+  if (error._tag === "BitbucketResponseError" && (error.status === 401 || error.status === 403)) {
+    return "unauthenticated";
+  }
+  return "failed";
+}
+
+function toChangeRequest(pullRequest: BitbucketPullRequest): ProviderChangeRequest {
+  return {
+    number: pullRequest.number,
+    title: pullRequest.title,
+    url: pullRequest.url,
+    author: pullRequest.author,
+    headBranch: pullRequest.headBranch,
+    baseBranch: pullRequest.baseBranch,
+    state: pullRequest.state,
+    isDraft: pullRequest.isDraft,
+    mergeability: pullRequest.mergeability,
+    // Line counts are a separate read, which only the detail is worth spending on.
+    additions: 0,
+    deletions: 0,
+    createdAt: pullRequest.createdAt,
+    updatedAt: pullRequest.updatedAt,
+    reviewRequestLogins: pullRequest.reviewRequestLogins,
+    // Bitbucket has no labels on a pull request.
+    labels: [],
+  };
+}
+
+export const make = Effect.gen(function* () {
+  const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+  const fail =
+    (operation: string) => (error: BitbucketPullRequestApi.BitbucketPullRequestApiError) =>
+      new PullRequestProviderError({
+        provider: "bitbucket",
+        operation,
+        reason: reasonFor(error),
+        detail: "detail" in error ? error.detail : error.message,
+        cause: error,
+      });
+
+  const provider: PullRequestProviderApi = {
+    kind: "bitbucket",
+    capabilities: CAPABILITIES,
+
+    // Bitbucket credentials come from the server's environment rather than a checkout, so the
+    // account is the same whichever workspace asks.
+    getViewer: () => api.getViewer().pipe(Effect.mapError(fail("getViewer"))),
+
+    listChangeRequests: (input) =>
+      api
+        .listPullRequests({
+          repository: input.repository,
+          state: input.state,
+          limit: input.limit,
+        })
+        .pipe(
+          Effect.mapError(fail("listChangeRequests")),
+          Effect.map((batch) => ({
+            items: batch.items.map(toChangeRequest),
+            truncated: batch.truncated,
+          })),
+        ),
+
+    getChangeRequest: (input) => {
+      const target = { repository: input.repository, number: input.number };
+      // Bitbucket spreads a pull request over six endpoints, so they are read together.
+      return Effect.all(
+        [
+          api.getPullRequest(target),
+          api.getDiffStat(target),
+          // Each of these is worth degrading for: none is a reason to blank a pull request that
+          // was read successfully. An unread conversation counts as truncated so it does not
+          // present as one with no comments.
+          api.getMergeability(target).pipe(Effect.orElseSucceed(() => "unknown" as const)),
+          api
+            .listComments(target)
+            .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: true }))),
+          api.listCommits(target).pipe(Effect.orElseSucceed(() => [])),
+          api.listChecks(target).pipe(Effect.orElseSucceed(() => [])),
+        ],
+        { concurrency: 6 },
+      ).pipe(
+        Effect.mapError(fail("getChangeRequest")),
+        Effect.map(
+          ([
+            pullRequest,
+            diffStat,
+            mergeability,
+            comments,
+            commits,
+            checks,
+          ]): ProviderChangeRequestDetail => ({
+            ...toChangeRequest(pullRequest),
+            mergeability,
+            additions: diffStat.additions,
+            deletions: diffStat.deletions,
+            changedFiles: diffStat.changedFiles,
+            body: pullRequest.body,
+            mergedAt: pullRequest.state === "merged" ? pullRequest.updatedAt : null,
+            closedAt: pullRequest.state === "closed" ? pullRequest.updatedAt : null,
+            reviewers: pullRequest.reviewers,
+            checks,
+            comments: [...comments.comments, ...pullRequest.reviews].toSorted((left, right) =>
+              left.createdAt.localeCompare(right.createdAt),
+            ),
+            commentsTruncated: comments.truncated,
+            commits,
+            // Bitbucket publishes no per-repository list of allowed strategies, so the ones it
+            // supports are all offered and a strategy the repository forbids fails on merge.
+            mergeCapabilities: { merge: true, squash: true, rebase: true },
+          }),
+        ),
+      );
+    },
+
+    getDiff: (input) =>
+      api.getPullRequestDiff({ repository: input.repository, number: input.number }).pipe(
+        Effect.mapError(fail("getDiff")),
+        Effect.map((patch) => ({ patch, truncated: false })),
+      ),
+
+    runAction: (input) =>
+      api
+        .runAction({
+          repository: input.repository,
+          number: input.number,
+          action: input.action,
+          ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+        })
+        .pipe(Effect.mapError(fail("runAction"))),
+
+    comment: (input) =>
+      api
+        .comment({ repository: input.repository, number: input.number, body: input.body })
+        .pipe(Effect.mapError(fail("comment"))),
+  };
+
+  return provider;
+});

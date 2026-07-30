@@ -47,6 +47,9 @@ const BitbucketApiOperation = Schema.Literals([
   "createPullRequest",
   "probeAuth",
   "checkoutPullRequest",
+  // The raw escape hatch. Callers name their own operation in their own error, the way the
+  // pull request wrappers do on top of `gh` and `glab`.
+  "request",
 ]);
 type BitbucketApiOperation = typeof BitbucketApiOperation.Type;
 
@@ -246,6 +249,19 @@ export class BitbucketApi extends Context.Service<
   BitbucketApi,
   {
     readonly probeAuth: Effect.Effect<SourceControlProviderAuth, never>;
+
+    /**
+     * One authenticated request, returning the body verbatim. Bitbucket answers most endpoints
+     * with JSON and a few — a pull request diff, for one — with plain text, so the body is
+     * handed back undecoded for the caller to read as it sees fit.
+     */
+    readonly request: (input: {
+      readonly method: "GET" | "POST" | "PUT";
+      /** A path below the API base, or a whole URL as a paged response reports its next page. */
+      readonly url: string;
+      /** A JSON document, for the endpoints that take one. */
+      readonly body?: string;
+    }) => Effect.Effect<string, BitbucketApiError>;
     readonly listPullRequests: (input: {
       readonly cwd: string;
       readonly context?: SourceControlProvider.SourceControlProviderContext;
@@ -689,7 +705,47 @@ export const make = Effect.gen(function* () {
     });
   });
 
+  // A pull request's diff, diffstat and conflicts are served as redirects to a commit-range
+  // URL, and the client does not follow redirects unless asked. The hop stays on the same host,
+  // so the credentials travel with it.
+  const redirectingClient = httpClient.pipe(HttpClient.followRedirects(3));
+
+  const request: BitbucketApi["Service"]["request"] = (input) => {
+    const url = /^https?:\/\//u.test(input.url) ? input.url : apiUrl(input.url);
+    const base =
+      input.method === "GET"
+        ? HttpClientRequest.get(url)
+        : input.method === "POST"
+          ? HttpClientRequest.post(url)
+          : HttpClientRequest.put(url);
+    // No `Accept: application/json`: the diff endpoints answer with a patch, not JSON.
+    const withBody =
+      input.body === undefined
+        ? base
+        : base.pipe(HttpClientRequest.bodyText(input.body, "application/json"));
+    return redirectingClient.execute(withAuth(withBody)).pipe(
+      Effect.mapError((cause) => new BitbucketRequestError({ operation: "request", cause })),
+      Effect.flatMap((response) =>
+        HttpClientResponse.matchStatus({
+          "2xx": (success) =>
+            success.text.pipe(
+              Effect.mapError(
+                (cause) =>
+                  new BitbucketResponseBodyReadError({
+                    operation: "request",
+                    status: success.status,
+                    cause,
+                  }),
+              ),
+            ),
+          orElse: (failed) => responseError("request", failed),
+        })(response),
+      ),
+    );
+  };
+
   return BitbucketApi.of({
+    request,
     probeAuth: executeJson(
       "probeAuth",
       HttpClientRequest.get(apiUrl("/user")),
