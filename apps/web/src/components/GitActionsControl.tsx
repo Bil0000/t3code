@@ -1219,6 +1219,13 @@ export default function GitActionsControl({
   }, [activeEnvironmentId, gitCwd, refreshVcsStatus]);
 
   const openExistingPr = useCallback(async () => {
+    const openPr = gitStatusForActions?.pr?.state === "open" ? gitStatusForActions.pr : null;
+    // Beside the thread where it was made, the way the browser opens beside it. Checked before
+    // the shell, which opening in the app does not need.
+    if (openPr && onOpenPullRequest) {
+      onOpenPullRequest(openPr.number);
+      return;
+    }
     const api = readLocalApi();
     if (!api) {
       toastManager.add({
@@ -1226,12 +1233,6 @@ export default function GitActionsControl({
         title: "Link opening is unavailable.",
         data: threadToastData,
       });
-      return;
-    }
-    const openPr = gitStatusForActions?.pr?.state === "open" ? gitStatusForActions.pr : null;
-    // Beside the thread where it was made, the way the browser opens beside it.
-    if (openPr && onOpenPullRequest) {
-      onOpenPullRequest(openPr.number);
       return;
     }
     const prUrl = openPr?.url ?? null;

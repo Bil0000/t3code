@@ -74,6 +74,8 @@ const PROVIDER_KINDS = new Set<string>([
 ]);
 
 const PAGE_SIZE = 50;
+/** The largest page the listing accepts; past it the request is refused outright. */
+const MAX_PAGE_SIZE = 500;
 /** Stable empty map so the memos below do not see a new object on every render. */
 const EMPTY_VIEWERS: PullRequestListResult["viewers"] = {};
 /** Matches the panel's transition so it can animate out before it leaves the tree. */
@@ -203,14 +205,17 @@ function PullRequestsRouteView() {
       !sentinel ||
       listData?.truncated !== true ||
       listQuery.isPending ||
-      listQuery.error !== null
+      listQuery.error !== null ||
+      // Asking past the cap is refused, which would strand the list on an error the retry
+      // could never clear, so growth stops here and the rest stays on the host.
+      pageSize >= MAX_PAGE_SIZE
     ) {
       return;
     }
     const observer = new IntersectionObserver(
       (observed) => {
         if (observed.some((entry) => entry.isIntersecting)) {
-          setPage({ key: filterKey, size: pageSize + PAGE_SIZE });
+          setPage({ key: filterKey, size: Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE) });
         }
       },
       // Start the next page slightly before the sentinel is on screen.

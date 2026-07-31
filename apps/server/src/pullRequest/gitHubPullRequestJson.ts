@@ -20,7 +20,12 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
  * release that adds a conclusion or a review state must not fail the whole payload.
  */
 const RawActorSchema = Schema.Struct({
-  login: Schema.String,
+  /**
+   * Optional because a review can be requested from a team or a mannequin, which the query has
+   * no fragment for and GraphQL answers with an empty object. A reviewer with no login names
+   * nobody to show, and must not fail the response the conversation travels in.
+   */
+  login: Schema.optional(Schema.String),
   name: Schema.optional(Schema.NullOr(Schema.String)),
   /** Only the GraphQL API reports one; `gh pr view --json` has no avatar to give. */
   avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),

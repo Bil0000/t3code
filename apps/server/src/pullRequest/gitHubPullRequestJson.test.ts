@@ -185,6 +185,20 @@ describe("review thread decoding", () => {
     expect(result.reviewers).toEqual([]);
   });
 
+  it("keeps the conversation when a request is from a team, which has no login", () => {
+    // GraphQL answers with an empty object for a union member the query has no fragment for.
+    // Failing on it would take the whole response down, comments included.
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        reviewJson({ requested: [{}, { login: "julius", avatarUrl: "https://avatars/j.png" }] }),
+      ),
+    );
+
+    expect(result.reviewers).toEqual([
+      { login: "julius", name: null, avatarUrl: "https://avatars/j.png" },
+    ]);
+  });
+
   it("keeps unresolved threads and carries their file path", () => {
     const result = expectSuccess(
       decodeReviewThreadsJson(
