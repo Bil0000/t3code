@@ -11,32 +11,40 @@ import { getSourceControlPresentationForKind } from "~/sourceControlPresentation
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 
 /**
- * Plain text pills with a chip behind the active option. Two groups sit on one row —
- * involvement then state — so the row reads as "which pull requests, in which state".
+ * The shell every filter group shares: an inset track that groups its options into one control,
+ * so a row of them reads as one question with one answer rather than as loose words.
  */
+const FILTER_GROUP_CLASS =
+  "inline-flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 dark:bg-white/5";
+
+/** The option itself, with the selected one lifted onto the surface rather than tinted. */
+const filterOptionClass = (selected: boolean, disabled = false) =>
+  cn(
+    "inline-flex items-center gap-1.5 rounded-[7px] px-2.5 py-1 text-sm whitespace-nowrap transition-colors",
+    selected ? "bg-background text-foreground shadow-sm dark:bg-white/10" : "text-muted-foreground",
+    disabled ? "cursor-not-allowed opacity-45" : !selected && "hover:text-foreground",
+  );
+
 export function PullRequestFilterPills<Value extends string>({
   value,
   options,
+  label,
   onChange,
 }: {
   value: Value;
   options: ReadonlyArray<{ readonly value: Value; readonly label: string }>;
+  label: string;
   onChange: (value: Value) => void;
 }) {
   return (
-    <div className="flex items-center gap-1">
+    <div className={FILTER_GROUP_CLASS} role="group" aria-label={label}>
       {options.map((option) => (
         <button
           key={option.value}
           type="button"
           aria-pressed={option.value === value}
           onClick={() => onChange(option.value)}
-          className={cn(
-            "rounded-md px-2.5 py-1 text-sm transition-colors",
-            option.value === value
-              ? "bg-accent text-foreground"
-              : "text-muted-foreground hover:text-foreground",
-          )}
+          className={filterOptionClass(option.value === value)}
         >
           {option.label}
         </button>
@@ -69,17 +77,12 @@ export function PullRequestProviderFilter({
     return null;
   }
   return (
-    <div className="flex items-center gap-1" role="group" aria-label="Filter by host">
+    <div className={FILTER_GROUP_CLASS} role="group" aria-label="Filter by host">
       <button
         type="button"
         aria-pressed={value === undefined}
         onClick={() => onChange(undefined)}
-        className={cn(
-          "rounded-md px-2.5 py-1 text-sm transition-colors",
-          value === undefined
-            ? "bg-accent text-foreground"
-            : "text-muted-foreground hover:text-foreground",
-        )}
+        className={filterOptionClass(value === undefined)}
       >
         All
       </button>
@@ -94,13 +97,9 @@ export function PullRequestProviderFilter({
             disabled={!provider.configured}
             title={provider.configured ? providerName : (provider.detail ?? undefined)}
             onClick={() => onChange(provider.kind)}
-            className={cn(
-              "inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-sm transition-colors",
-              active ? "bg-accent text-foreground" : "text-muted-foreground",
-              // Opacity rather than a muted colour: the icons are brand-coloured, so text
-              // colour alone would leave a disabled host looking active.
-              provider.configured ? "hover:text-foreground" : "cursor-not-allowed opacity-45",
-            )}
+            // Opacity rather than a muted colour: the icons are brand-coloured, so text colour
+            // alone would leave a disabled host looking active.
+            className={filterOptionClass(active, !provider.configured)}
           >
             <Icon className="size-3.5" />
             {providerName}

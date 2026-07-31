@@ -26,6 +26,8 @@ const RawActorSchema = Schema.Struct({
    * nobody to show, and must not fail the response the conversation travels in.
    */
   login: Schema.optional(Schema.String),
+  /** The node id, which is how a listing's authors are resolved to avatars in one request. */
+  id: Schema.optional(Schema.NullOr(Schema.String)),
   name: Schema.optional(Schema.NullOr(Schema.String)),
   /** Only the GraphQL API reports one; `gh pr view --json` has no avatar to give. */
   avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
@@ -122,6 +124,16 @@ const RawReviewThreadsSchema = Schema.Struct({
             }),
           ),
         }),
+        author: Schema.optional(Schema.NullOr(RawActorSchema)),
+        comments: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              nodes: Schema.Array(
+                Schema.Struct({ author: Schema.optional(Schema.NullOr(RawActorSchema)) }),
+              ),
+            }),
+          ),
+        ),
         reviewRequests: Schema.optional(
           Schema.NullOr(
             Schema.Struct({
@@ -156,6 +168,38 @@ const RawMergeCapabilitiesSchema = Schema.Struct({
   rebaseMergeAllowed: Schema.Boolean,
 });
 
+/** Resolves a listing's authors to avatars, which no `gh` JSON field carries. */
+export const ACTOR_AVATARS_GRAPHQL_QUERY = `query($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on User { login avatarUrl }
+    ... on Bot { login avatarUrl }
+  }
+}`;
+
+const RawActorAvatarsSchema = Schema.Struct({
+  data: Schema.Struct({
+    nodes: Schema.Array(Schema.NullOr(RawActorSchema)),
+  }),
+});
+
+const decodeActorAvatars = decodeJsonResult(RawActorAvatarsSchema);
+
+export function decodeActorAvatarsJson(
+  raw: string,
+): Result.Result<ReadonlyMap<string, string>, DecodeFailure> {
+  const decoded = decodeActorAvatars(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const avatarsByLogin = new Map<string, string>();
+  for (const node of decoded.success.data.nodes) {
+    const login = trimmed(node?.login);
+    const avatarUrl = trimmed(node?.avatarUrl);
+    if (login !== null && avatarUrl !== null) avatarsByLogin.set(login, avatarUrl);
+  }
+  return Result.succeed(avatarsByLogin);
+}
+
 export const PULL_REQUEST_LIST_JSON_FIELDS =
   "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels";
 
@@ -183,6 +227,8 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
           }
         }
       }
+      author { login avatarUrl }
+      comments(first: 100) { nodes { author { login avatarUrl } } }
       reviewRequests(first: 50) {
         nodes {
           requestedReviewer {
@@ -202,6 +248,8 @@ export const REPOSITORY_MERGE_CAPABILITIES_JSON_FIELDS =
   "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed";
 
 export interface GitHubPullRequestListItem {
+  /** The author's node id, kept so a batch can resolve the avatar the listing does not carry. */
+  readonly authorId: string | null;
   readonly number: number;
   readonly title: string;
   readonly url: string;
@@ -375,6 +423,7 @@ function toComments(
 
 function toListItem(raw: Schema.Schema.Type<typeof RawListItemSchema>): GitHubPullRequestListItem {
   return {
+    authorId: trimmed(raw.author?.id),
     number: raw.number,
     title: raw.title,
     url: raw.url,
@@ -461,6 +510,12 @@ export interface GitHubReviewThreadComments {
    * a pull request that has in fact been reviewed.
    */
   readonly reviewers: ReadonlyArray<PullRequestActor>;
+  /**
+   * Avatars by login, for the actors `gh pr view --json` reports without one — which is all of
+   * them, since no `gh` JSON field carries an avatar. Collected from everyone this query names,
+   * so an app's avatar arrives the same way a person's does.
+   */
+  readonly avatarsByLogin: ReadonlyMap<string, string>;
 }
 
 /**
@@ -492,6 +547,18 @@ export function decodeReviewThreadsJson(
     ];
   });
   const pullRequest = decoded.success.data.repository.pullRequest;
+  const avatarsByLogin = new Map<string, string>();
+  for (const raw of [
+    pullRequest.author,
+    ...(pullRequest.comments?.nodes ?? []).map((node) => node.author),
+    ...(pullRequest.reviewRequests?.nodes ?? []).map((node) => node.requestedReviewer),
+    ...(pullRequest.latestReviews?.nodes ?? []).map((node) => node.author),
+    ...threads.nodes.flatMap((thread) => thread.comments.nodes.map((comment) => comment.author)),
+  ]) {
+    const login = trimmed(raw?.login);
+    const avatarUrl = trimmed(raw?.avatarUrl);
+    if (login !== null && avatarUrl !== null) avatarsByLogin.set(login, avatarUrl);
+  }
   const reviewers = new Map<string, PullRequestActor>();
   for (const raw of [
     ...(pullRequest.reviewRequests?.nodes ?? []).map((node) => node.requestedReviewer),
@@ -505,6 +572,7 @@ export function decodeReviewThreadsJson(
     comments,
     truncated: (threads.totalCount ?? threads.nodes.length) > threads.nodes.length,
     reviewers: [...reviewers.values()],
+    avatarsByLogin,
   });
 }
 

@@ -5,6 +5,7 @@ import { getSourceControlPresentationForKind } from "~/sourceControlPresentation
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import {
+  PullRequestActorLabel,
   PullRequestDiffStat,
   PullRequestMetaLine,
   PullRequestStateGlyph,
@@ -48,7 +49,7 @@ export function PullRequestRow({
             {entry.number}
           </span>
           {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
-          <span className="truncate">{entry.author?.login ?? "ghost"}</span>
+          <PullRequestActorLabel actor={entry.author} className="max-w-40 shrink-0" />
           <span className="truncate" title={`${entry.headBranch} to ${entry.baseBranch}`}>
             {entry.headBranch}
           </span>

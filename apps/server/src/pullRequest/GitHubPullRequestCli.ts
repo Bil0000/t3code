@@ -13,6 +13,8 @@ import type {
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import {
+  ACTOR_AVATARS_GRAPHQL_QUERY,
+  decodeActorAvatarsJson,
   decodePullRequestDetailJson,
   decodePullRequestListJson,
   decodeRepositoryMergeCapabilitiesJson,
@@ -115,6 +117,13 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<GitHubReviewThreadComments, GitHubPullRequestCliError>;
+
+    /** One request for a listing's authors, since no `gh` JSON field reports an avatar. */
+    readonly listActorAvatars: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly ids: ReadonlyArray<string>;
+    }) => Effect.Effect<ReadonlyMap<string, string>, GitHubPullRequestCliError>;
 
     readonly getRepositoryMergeCapabilities: (input: {
       readonly cwd: string;
@@ -328,6 +337,40 @@ export const make = Effect.gen(function* () {
                     command: "gh",
                     cwd: input.cwd,
                     operation: "listReviewThreadComments",
+                    cause: decoded.failure,
+                  }),
+                );
+          }),
+        );
+    },
+
+    listActorAvatars: (input) => {
+      if (input.ids.length === 0) {
+        return Effect.succeed(new Map<string, string>());
+      }
+      const { host } = parseRepositorySelector(input.repository);
+      return github
+        .execute({
+          cwd: input.cwd,
+          args: [
+            "api",
+            "graphql",
+            ...(host === null ? [] : ["--hostname", host]),
+            ...input.ids.flatMap((id) => ["-f", `ids[]=${id}`]),
+            "-f",
+            `query=${ACTOR_AVATARS_GRAPHQL_QUERY}`,
+          ],
+        })
+        .pipe(
+          Effect.flatMap((result) => {
+            const decoded = decodeActorAvatarsJson(result.stdout.trim());
+            return Result.isSuccess(decoded)
+              ? Effect.succeed(decoded.success)
+              : Effect.fail(
+                  new GitHubPullRequestReadError({
+                    command: "gh",
+                    cwd: input.cwd,
+                    operation: "listActorAvatars",
                     cause: decoded.failure,
                   }),
                 );

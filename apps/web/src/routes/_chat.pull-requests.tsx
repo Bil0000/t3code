@@ -319,23 +319,27 @@ function PullRequestsRouteView() {
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pb-12 pt-4">
               <div className="flex flex-col gap-3">
-                {/* One row per question — who, what state, which host — because two groups on
-                    one row read as one, and both start with an "All" that means its own thing. */}
-                <PullRequestFilterPills
-                  value={search.involvement}
-                  options={INVOLVEMENT_TABS}
-                  onChange={(involvement) => updateSearch({ involvement, ...clearedSelection })}
-                />
-                <PullRequestFilterPills
-                  value={search.state}
-                  options={STATE_TABS}
-                  onChange={(state) => updateSearch({ state, ...clearedSelection })}
-                />
-                <PullRequestProviderFilter
-                  providers={hosts}
-                  value={search.provider}
-                  onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
-                />
+                {/* Each group is its own control, so they can share a row without the two
+                    "All" options reading as one list. */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <PullRequestFilterPills
+                    label="Filter by involvement"
+                    value={search.involvement}
+                    options={INVOLVEMENT_TABS}
+                    onChange={(involvement) => updateSearch({ involvement, ...clearedSelection })}
+                  />
+                  <PullRequestFilterPills
+                    label="Filter by state"
+                    value={search.state}
+                    options={STATE_TABS}
+                    onChange={(state) => updateSearch({ state, ...clearedSelection })}
+                  />
+                  <PullRequestProviderFilter
+                    providers={hosts}
+                    value={search.provider}
+                    onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
+                  />
+                </div>
                 <div className="flex items-center gap-2">
                   <PullRequestSearchInput
                     value={search.q ?? ""}

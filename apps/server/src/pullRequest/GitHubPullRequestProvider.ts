@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { PullRequestCapabilities } from "@t3tools/contracts";
+import type { PullRequestActor, PullRequestCapabilities } from "@t3tools/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import {
@@ -25,6 +25,19 @@ function reasonFor(
   if (error._tag === "GitHubCliUnavailableError") return "missing-tool";
   if (error._tag === "GitHubCliAuthenticationError") return "unauthenticated";
   return "failed";
+}
+
+/**
+ * `gh pr view --json` reports no avatar for anyone, so the ones the GraphQL read collected are
+ * applied here by login. An actor already carrying one keeps it.
+ */
+function withAvatar(
+  actor: PullRequestActor | null,
+  avatarsByLogin: ReadonlyMap<string, string>,
+): PullRequestActor | null {
+  if (actor === null || actor.avatarUrl !== null) return actor;
+  const avatarUrl = avatarsByLogin.get(actor.login) ?? null;
+  return avatarUrl === null ? actor : { ...actor, avatarUrl };
 }
 
 export const make = Effect.gen(function* () {
@@ -56,7 +69,29 @@ export const make = Effect.gen(function* () {
           viewer: input.viewer,
           limit: input.limit,
         })
-        .pipe(Effect.mapError(fail("listChangeRequests"))),
+        .pipe(
+          Effect.mapError(fail("listChangeRequests")),
+          Effect.flatMap((page) =>
+            cli
+              .listActorAvatars({
+                cwd: input.cwd,
+                repository: input.repository,
+                ids: [...new Set(page.items.flatMap((item) => item.authorId ?? []))],
+              })
+              // A listing without faces is still a listing, so a failed lookup falls back to
+              // the initials rather than taking the rows down with it.
+              .pipe(
+                Effect.orElseSucceed(() => new Map<string, string>()),
+                Effect.map((avatarsByLogin) => ({
+                  ...page,
+                  items: page.items.map((item) => ({
+                    ...item,
+                    author: withAvatar(item.author, avatarsByLogin),
+                  })),
+                })),
+              ),
+          ),
+        ),
 
     getChangeRequest: (input) =>
       Effect.all(
@@ -66,9 +101,14 @@ export const make = Effect.gen(function* () {
           // Line comments live on review threads, which `gh pr view --json` cannot reach. A
           // GraphQL hiccup must not blank the whole detail, so it degrades to "none" — marked
           // truncated, because an unread thread is a missing comment, not an absent one.
-          cli
-            .listReviewThreadComments(input)
-            .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: true, reviewers: [] }))),
+          cli.listReviewThreadComments(input).pipe(
+            Effect.orElseSucceed(() => ({
+              comments: [],
+              truncated: true,
+              reviewers: [],
+              avatarsByLogin: new Map<string, string>(),
+            })),
+          ),
         ],
         { concurrency: 3 },
       ).pipe(
@@ -76,12 +116,16 @@ export const make = Effect.gen(function* () {
         Effect.map(
           ([pullRequest, mergeCapabilities, reviewThreads]): ProviderChangeRequestDetail => ({
             ...pullRequest,
+            author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin),
             // From the review itself rather than from the listing's outstanding requests, which
             // hold no avatar and drop anyone who has already reviewed.
             reviewers: reviewThreads.reviewers,
-            comments: [...pullRequest.comments, ...reviewThreads.comments].toSorted((left, right) =>
-              left.createdAt.localeCompare(right.createdAt),
-            ),
+            comments: [...pullRequest.comments, ...reviewThreads.comments]
+              .map((comment) => ({
+                ...comment,
+                author: withAvatar(comment.author, reviewThreads.avatarsByLogin),
+              }))
+              .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
             commentsTruncated:
               pullRequest.comments.length >= CONVERSATION_PAGE_SIZE || reviewThreads.truncated,
             mergeCapabilities,
