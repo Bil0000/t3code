@@ -3,7 +3,7 @@ import type {
   PullRequestInvolvement,
   PullRequestListEntry,
   PullRequestListResult,
-  PullRequestState,
+  PullRequestListState,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
@@ -40,7 +40,7 @@ import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 export interface PullRequestsSearch {
   readonly involvement: PullRequestInvolvement;
-  readonly state: PullRequestState;
+  readonly state: PullRequestListState;
   /** Scopes the list. Separate from the selection so one cannot silently change the other. */
   readonly projectId?: ProjectId;
   /** Narrows the list to one host. Absent means every host the workspace has. */
@@ -58,10 +58,11 @@ const INVOLVEMENT_TABS = [
 ] as const satisfies ReadonlyArray<{ value: PullRequestInvolvement; label: string }>;
 
 const STATE_TABS = [
+  { value: "all", label: "All" },
   { value: "open", label: "Open" },
   { value: "closed", label: "Closed" },
   { value: "merged", label: "Merged" },
-] as const satisfies ReadonlyArray<{ value: PullRequestState; label: string }>;
+] as const satisfies ReadonlyArray<{ value: PullRequestListState; label: string }>;
 
 /** Accepted `provider` values in the URL, so an unknown one is dropped rather than sent on. */
 const PROVIDER_KINDS = new Set<string>([
@@ -86,7 +87,8 @@ export const Route = createFileRoute("/_chat/pull-requests")({
   validateSearch: (raw: Record<string, unknown>): PullRequestsSearch => ({
     involvement:
       raw.involvement === "reviewing" || raw.involvement === "authored" ? raw.involvement : "all",
-    state: raw.state === "closed" || raw.state === "merged" ? raw.state : "open",
+    state:
+      raw.state === "closed" || raw.state === "merged" || raw.state === "all" ? raw.state : "open",
     ...(typeof raw.repository === "string" && raw.repository
       ? { repository: raw.repository.slice(0, 200) }
       : {}),
@@ -312,25 +314,23 @@ function PullRequestsRouteView() {
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pb-12 pt-4">
               <div className="flex flex-col gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <PullRequestFilterPills
-                    value={search.involvement}
-                    options={INVOLVEMENT_TABS}
-                    onChange={(involvement) => updateSearch({ involvement, ...clearedSelection })}
-                  />
-                  <PullRequestFilterPills
-                    value={search.state}
-                    options={STATE_TABS}
-                    onChange={(state) => updateSearch({ state, ...clearedSelection })}
-                  />
-                  <div className="ms-auto">
-                    <PullRequestProviderFilter
-                      providers={hosts}
-                      value={search.provider}
-                      onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
-                    />
-                  </div>
-                </div>
+                {/* One row per question — who, what state, which host — because two groups on
+                    one row read as one, and both start with an "All" that means its own thing. */}
+                <PullRequestFilterPills
+                  value={search.involvement}
+                  options={INVOLVEMENT_TABS}
+                  onChange={(involvement) => updateSearch({ involvement, ...clearedSelection })}
+                />
+                <PullRequestFilterPills
+                  value={search.state}
+                  options={STATE_TABS}
+                  onChange={(state) => updateSearch({ state, ...clearedSelection })}
+                />
+                <PullRequestProviderFilter
+                  providers={hosts}
+                  value={search.provider}
+                  onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
+                />
                 <div className="flex items-center gap-2">
                   <PullRequestSearchInput
                     value={search.q ?? ""}

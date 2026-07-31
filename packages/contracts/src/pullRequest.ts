@@ -15,6 +15,14 @@ export type PullRequestInvolvement = typeof PullRequestInvolvement.Type;
 export const PullRequestState = Schema.Literals(["open", "closed", "merged"]);
 export type PullRequestState = typeof PullRequestState.Type;
 
+/**
+ * What a listing asks for, which is the three states a change request can be in plus the option
+ * to span them. Separate from `PullRequestState` because a change request is never "all" — only
+ * a request for one can be.
+ */
+export const PullRequestListState = Schema.Literals(["all", "open", "closed", "merged"]);
+export type PullRequestListState = typeof PullRequestListState.Type;
+
 export const PullRequestMergeability = Schema.Literals(["mergeable", "conflicting", "unknown"]);
 export type PullRequestMergeability = typeof PullRequestMergeability.Type;
 
@@ -137,7 +145,7 @@ export const PullRequestListEntry = Schema.Struct({
 export type PullRequestListEntry = typeof PullRequestListEntry.Type;
 
 export const PullRequestListInput = Schema.Struct({
-  state: PullRequestState,
+  state: PullRequestListState,
   involvement: Schema.optional(PullRequestInvolvement),
   projectId: Schema.optional(ProjectId),
   /** Narrows the listing to one host. Absent means every configured provider. */

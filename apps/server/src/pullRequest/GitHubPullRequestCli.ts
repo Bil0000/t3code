@@ -6,9 +6,9 @@ import * as Schema from "effect/Schema";
 import type {
   PullRequestAction,
   PullRequestInvolvement,
+  PullRequestListState,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
-  PullRequestState,
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
@@ -89,7 +89,7 @@ export class GitHubPullRequestCli extends Context.Service<
     readonly listPullRequests: (input: {
       readonly cwd: string;
       readonly repository: string;
-      readonly state: PullRequestState;
+      readonly state: PullRequestListState;
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
@@ -154,7 +154,7 @@ export function parseRepositorySelector(value: string): {
 }
 
 function involvementArgs(input: {
-  readonly state: PullRequestState;
+  readonly state: PullRequestListState;
   readonly involvement: PullRequestInvolvement;
   readonly viewer: string;
 }): ReadonlyArray<string> {

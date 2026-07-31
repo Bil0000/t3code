@@ -8,9 +8,9 @@ import type {
   PullRequestComment,
   PullRequestCommit,
   PullRequestInvolvement,
+  PullRequestListState,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
-  PullRequestState,
 } from "@t3tools/contracts";
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
@@ -94,7 +94,7 @@ export class GitLabPullRequestCli extends Context.Service<
     readonly listMergeRequests: (input: {
       readonly cwd: string;
       readonly repository: string;
-      readonly state: PullRequestState;
+      readonly state: PullRequestListState;
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
@@ -157,8 +157,9 @@ function projectPath(repository: string): string {
   return encodeURIComponent(repository.trim());
 }
 
-function stateParam(state: PullRequestState): string {
-  // GitLab's `closed` already excludes merged merge requests, so no extra filter is needed.
+function stateParam(state: PullRequestListState): string {
+  // GitLab's `closed` already excludes merged merge requests, so no extra filter is needed,
+  // and it spans every state under `all`.
   return state === "open" ? "opened" : state;
 }
 
@@ -241,7 +242,7 @@ export const make = Effect.gen(function* () {
   const listPage = (input: {
     readonly cwd: string;
     readonly repository: string;
-    readonly state: PullRequestState;
+    readonly state: PullRequestListState;
     readonly involvement: PullRequestInvolvement;
     readonly viewer: string;
     readonly limit: number;

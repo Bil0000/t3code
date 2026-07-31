@@ -148,6 +148,24 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("asks GitLab for every state on the All tab", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.listMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "all",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+      });
+
+      expect(argsOfCall(0)[1]).toContain("state=all");
+    }),
+  );
+
   it.effect("filters by the reviewer when the viewer is reviewing", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));

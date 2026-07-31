@@ -86,7 +86,9 @@ export function useOpenPrLink() {
           to: "/pull-requests",
           search: {
             involvement: "all",
-            state: "open",
+            // Every state, so the pull request being opened is also in the list behind it
+            // whether it is open, merged or closed.
+            state: "all",
             repository: parsed.repository,
             number: parsed.number,
           },

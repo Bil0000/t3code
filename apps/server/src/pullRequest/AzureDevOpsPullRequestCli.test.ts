@@ -132,6 +132,25 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("asks Azure for every status on the All tab", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "web",
+        state: "all",
+        involvement: "all",
+        viewer: "bilal@acme.dev",
+        limit: 10,
+      });
+
+      expect(argsOfCall(0)).toContain("--status");
+      expect(argsOfCall(0)).toContain("all");
+    }),
+  );
+
   it.effect("narrows to the reviewer on the reviewing tab", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));

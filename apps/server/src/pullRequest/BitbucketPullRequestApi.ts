@@ -8,9 +8,9 @@ import type {
   PullRequestCheck,
   PullRequestComment,
   PullRequestCommit,
+  PullRequestListState,
   PullRequestMergeMethod,
   PullRequestMergeability,
-  PullRequestState,
 } from "@t3tools/contracts";
 
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
@@ -108,7 +108,7 @@ export class BitbucketPullRequestApi extends Context.Service<
 
     readonly listPullRequests: (input: {
       readonly repository: string;
-      readonly state: PullRequestState;
+      readonly state: PullRequestListState;
       readonly limit: number;
     }) => Effect.Effect<BitbucketPullRequestBatch, BitbucketPullRequestApiError>;
 
@@ -185,16 +185,21 @@ function repositoryPath(
   );
 }
 
-function stateParam(state: PullRequestState): string {
+/**
+ * Bitbucket unions repeated `state` parameters, so a tab that spans several of its states asks
+ * for each. It separates a declined pull request from one superseded by another, and both read
+ * as closed here.
+ */
+function stateParams(state: PullRequestListState): ReadonlyArray<string> {
   switch (state) {
     case "open":
-      return "OPEN";
+      return ["OPEN"];
     case "merged":
-      return "MERGED";
+      return ["MERGED"];
     case "closed":
-      // Bitbucket separates a declined pull request from one superseded by another, and repeating
-      // the parameter does not union them, so the Closed tab shows the declined ones.
-      return "DECLINED";
+      return ["DECLINED", "SUPERSEDED"];
+    case "all":
+      return ["OPEN", "MERGED", "DECLINED", "SUPERSEDED"];
   }
 }
 
@@ -295,7 +300,9 @@ export const make = Effect.gen(function* () {
       withRepository(input.repository, (path) =>
         listPage({
           // Reviewers are not on a listing by default, and `viewerReviewRequested` needs them.
-          url: `${path}/pullrequests?state=${stateParam(input.state)}&pagelen=${MAX_PAGE_SIZE}&sort=-updated_on&fields=%2Bvalues.reviewers`,
+          url: `${path}/pullrequests?${stateParams(input.state)
+            .map((state) => `state=${state}`)
+            .join("&")}&pagelen=${MAX_PAGE_SIZE}&sort=-updated_on&fields=%2Bvalues.reviewers`,
           limit: input.limit,
           page: 1,
           collected: [],

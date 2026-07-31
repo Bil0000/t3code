@@ -125,6 +125,33 @@ layer("BitbucketPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("asks for every state at once on the All tab", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(0, 1))));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      yield* api.listPullRequests({ repository: "acme/web", state: "all", limit: 50 });
+
+      // Bitbucket unions repeated state parameters, which is the only way to span them.
+      const url = callAt(0).url;
+      for (const state of ["OPEN", "MERGED", "DECLINED", "SUPERSEDED"]) {
+        expect(url).toContain(`state=${state}`);
+      }
+    }),
+  );
+
+  it.effect("counts a superseded pull request as closed", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(0, 1))));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      yield* api.listPullRequests({ repository: "acme/web", state: "closed", limit: 50 });
+
+      expect(callAt(0).url).toContain("state=DECLINED");
+      expect(callAt(0).url).toContain("state=SUPERSEDED");
+    }),
+  );
+
   it.effect("refuses a repository that is not workspace and slug", () =>
     Effect.gen(function* () {
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;

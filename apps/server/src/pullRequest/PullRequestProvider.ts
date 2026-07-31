@@ -9,6 +9,7 @@ import type {
   PullRequestCommit,
   PullRequestInvolvement,
   PullRequestLabel,
+  PullRequestListState,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
   PullRequestMergeability,
@@ -100,7 +101,7 @@ export interface PullRequestProviderApi {
 
   readonly listChangeRequests: (
     input: ProviderRepositoryRef & {
-      readonly state: PullRequestState;
+      readonly state: PullRequestListState;
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;

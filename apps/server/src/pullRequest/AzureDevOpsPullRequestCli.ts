@@ -7,8 +7,8 @@ import type {
   PullRequestAction,
   PullRequestComment,
   PullRequestInvolvement,
+  PullRequestListState,
   PullRequestMergeMethod,
-  PullRequestState,
 } from "@t3tools/contracts";
 
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
@@ -99,7 +99,7 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
     readonly listPullRequests: (input: {
       readonly cwd: string;
       readonly repository: string;
-      readonly state: PullRequestState;
+      readonly state: PullRequestListState;
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
@@ -128,7 +128,7 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
   }
 >()("t3/pullRequest/AzureDevOpsPullRequestCli") {}
 
-function statusArgs(state: PullRequestState): ReadonlyArray<string> {
+function statusArgs(state: PullRequestListState): ReadonlyArray<string> {
   switch (state) {
     case "open":
       return ["--status", "active"];
@@ -136,6 +136,8 @@ function statusArgs(state: PullRequestState): ReadonlyArray<string> {
       return ["--status", "completed"];
     case "closed":
       return ["--status", "abandoned"];
+    case "all":
+      return ["--status", "all"];
   }
 }
 
