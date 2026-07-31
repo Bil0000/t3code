@@ -14,6 +14,14 @@ const CAPABILITIES: PullRequestCapabilities = {
   actions: ["merge", "ready", "draft", "close", "reopen"],
   // GitLab offers all three, though a project settles on one; `mergeCapabilities` narrows it.
   mergeMethods: ["merge", "squash", "rebase"],
+  review: {
+    inlineComment: true,
+    reply: true,
+    resolve: true,
+    // No "changes requested": GitLab has approval and unresolved discussions, and nothing that
+    // says a merge request has been reviewed and rejected.
+    verdicts: ["comment", "approve"],
+  },
 };
 
 /** The CLI tags that mean the tool itself is unusable, rather than one request failing. */
@@ -69,15 +77,25 @@ export const make = Effect.gen(function* () {
             .listNotes(input)
             .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: true }))),
           cli.listCommits(input).pipe(Effect.orElseSucceed(() => [])),
+          cli
+            .listDiscussions(input)
+            .pipe(Effect.orElseSucceed(() => ({ threads: [], truncated: true }))),
         ],
-        { concurrency: 4 },
+        { concurrency: 5 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
         Effect.map(
-          ([mergeRequest, mergeCapabilities, notes, commits]): ProviderChangeRequestDetail => ({
+          ([
+            mergeRequest,
+            mergeCapabilities,
+            notes,
+            commits,
+            discussions,
+          ]): ProviderChangeRequestDetail => ({
             ...mergeRequest,
             comments: notes.comments,
-            commentsTruncated: notes.truncated,
+            commentsTruncated: notes.truncated || discussions.truncated,
+            reviewThreads: discussions.threads,
             commits,
             mergeCapabilities,
           }),
@@ -98,6 +116,30 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(fail("runAction"))),
 
     comment: (input) => cli.commentOnMergeRequest(input).pipe(Effect.mapError(fail("comment"))),
+
+    submitReview: (input) => cli.submitReview(input).pipe(Effect.mapError(fail("submitReview"))),
+
+    replyToThread: (input) =>
+      cli
+        .replyToDiscussion({
+          cwd: input.cwd,
+          repository: input.repository,
+          number: input.number,
+          discussionId: input.threadId,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("replyToThread"))),
+
+    setThreadResolution: (input) =>
+      cli
+        .setDiscussionResolution({
+          cwd: input.cwd,
+          repository: input.repository,
+          number: input.number,
+          discussionId: input.threadId,
+          resolved: input.resolved,
+        })
+        .pipe(Effect.mapError(fail("setThreadResolution"))),
   };
 
   return provider;

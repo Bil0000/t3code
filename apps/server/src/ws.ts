@@ -1578,6 +1578,22 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsComment, pullRequests.comment(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsSubmitReview]: (input) =>
+          observeRpcEffect(WS_METHODS.pullRequestsSubmitReview, pullRequests.submitReview(input), {
+            "rpc.aggregate": "pull-requests",
+          }),
+        [WS_METHODS.pullRequestsReplyToThread]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsReplyToThread,
+            pullRequests.replyToThread(input),
+            { "rpc.aggregate": "pull-requests" },
+          ),
+        [WS_METHODS.pullRequestsSetThreadResolution]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.pullRequestsSetThreadResolution,
+            pullRequests.setThreadResolution(input),
+            { "rpc.aggregate": "pull-requests" },
+          ),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,

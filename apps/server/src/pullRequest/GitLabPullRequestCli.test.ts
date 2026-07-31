@@ -45,9 +45,14 @@ function mergeRequests(count: number, firstNumber: number): string {
 
 /** The endpoint or subcommand of the nth glab invocation. */
 function argsOfCall(index: number): ReadonlyArray<string> {
+  return callAt(index).args;
+}
+
+/** The whole nth invocation, so a request body can be asserted alongside its path. */
+function callAt(index: number) {
   const call = mockedExecute.mock.calls[index];
   assert.isDefined(call);
-  return call[0].args;
+  return call[0];
 }
 
 afterEach(() => {
@@ -411,6 +416,158 @@ layer("GitLabPullRequestCli.layer", (it) => {
       const error = yield* Effect.flip(cli.getViewerUsername({ cwd: "/w" }));
 
       assert.strictEqual(error._tag, "GitLabViewerUnavailableError");
+    }),
+  );
+
+  it.effect("reads a positioned discussion as a thread anchored to its line", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          output(
+            JSON.stringify([
+              {
+                id: "abc123",
+                notes: [
+                  {
+                    id: 1,
+                    body: "rename this",
+                    author: { username: "bilal", avatar_url: "https://avatars/b.png" },
+                    created_at: "2026-07-01T00:00:00Z",
+                    resolvable: true,
+                    resolved: true,
+                    position: {
+                      position_type: "text",
+                      new_path: "src/a.ts",
+                      old_path: "src/a.ts",
+                      new_line: 12,
+                      old_line: null,
+                    },
+                  },
+                  {
+                    id: 2,
+                    body: "done",
+                    author: { username: "julius" },
+                    created_at: "2026-07-01T01:00:00Z",
+                  },
+                ],
+              },
+              // A plain note is the timeline's business, not the diff's.
+              { id: "def456", notes: [{ id: 3, body: "ship it", created_at: "2026-07-01Z" }] },
+            ]),
+          ),
+        ),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const { threads } = yield* cli.listDiscussions({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      assert.strictEqual(threads.length, 1);
+      expect(threads[0]).toMatchObject({
+        id: "abc123",
+        path: "src/a.ts",
+        line: 12,
+        side: "right",
+        isResolved: true,
+      });
+      assert.strictEqual(threads[0]?.comments.length, 2);
+    }),
+  );
+
+  it.effect("sends a review as its comments, then its summary, then the verdict", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          output(
+            JSON.stringify({
+              iid: 7,
+              title: "t",
+              web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+              source_branch: "feat",
+              target_branch: "main",
+              created_at: "2026-07-01T00:00:00Z",
+              updated_at: "2026-07-01T00:00:00Z",
+              diff_refs: { base_sha: "base", head_sha: "head", start_sha: "start" },
+            }),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.submitReview({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        verdict: "approve",
+        body: "Looks right.",
+        comments: [{ path: "src/a.ts", line: 4, side: "left", body: "why remove?" }],
+      });
+
+      // The diff revisions first, because a positioned comment cannot be placed without them.
+      expect(argsOfCall(0)[1]).toContain("merge_requests/7");
+      expect(argsOfCall(1)[1]).toContain("/discussions");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(1).stdin ?? "")).toEqual({
+        body: "why remove?",
+        position: {
+          base_sha: "base",
+          head_sha: "head",
+          start_sha: "start",
+          position_type: "text",
+          old_path: "src/a.ts",
+          new_path: "src/a.ts",
+          old_line: 4,
+        },
+      });
+      expect(argsOfCall(2)[1]).toContain("/notes");
+      // The verdict goes last, so a review that failed part-way is never an approval.
+      expect(argsOfCall(3)[1]).toContain("/approve");
+    }),
+  );
+
+  it.effect("does not ask for diff revisions when a review carries no line comments", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.submitReview({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        verdict: "comment",
+        body: "One thought.",
+        comments: [],
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      expect(argsOfCall(0)[1]).toContain("/notes");
+    }),
+  );
+
+  it.effect("resolves a discussion in place rather than posting to it", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.setDiscussionResolution({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        discussionId: "abc123",
+        resolved: true,
+      });
+
+      expect(argsOfCall(0)).toContain("--method");
+      expect(argsOfCall(0)).toContain("PUT");
+      expect(argsOfCall(0)[1]).toContain("/discussions/abc123");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({ resolved: true });
     }),
   );
 });

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useState } from "react";
 
+import { useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
@@ -117,7 +118,7 @@ export function PullRequestDetailPanel({
   };
 
   // Both handoffs work the same way: check the pull request out into its own worktree, open a
-  // thread there, and hand the user the task-specific prompt to review before sending.
+  // thread there, and put the task in its composer for the user to read before sending.
   const startHandoff = async (kind: "findings" | "conflicts", prompt: string) => {
     if (!detail || handoff !== null) return;
     setHandoff(kind);
@@ -127,31 +128,34 @@ export function PullRequestDetailPanel({
       toastManager.add({ type: "error", title: "Could not prepare the pull request checkout" });
       return;
     }
-    await newThread(scopeProjectRef(environmentId, detail.projectId), {
+    const projectRef = scopeProjectRef(environmentId, detail.projectId);
+    await newThread(projectRef, {
       branch: prepared.value.branch,
       worktreePath: prepared.value.worktreePath,
       envMode: "worktree",
     });
-    // The checkout and the thread already exist by this point, so a denied clipboard is
-    // reported on its own rather than being mistaken for the handoff having failed.
-    const copied = await writeTextToClipboard(prompt).then(
-      () => true,
-      () => false,
-    );
+    const store = useComposerDraftStore.getState();
+    const draftId = store.getDraftSessionByProjectRef(projectRef)?.draftId ?? null;
     setHandoff(null);
-    toastManager.add(
-      copied
-        ? {
-            type: "success",
-            title: "Checkout ready",
-            description: "The prompt is on your clipboard — paste it to start.",
-          }
-        : {
-            type: "error",
-            title: "Checkout ready, but the prompt could not be copied",
-            description: "Copy the task into the composer manually.",
-          },
-    );
+    if (draftId === null) {
+      // The checkout and the thread exist either way, so this reports only the part that did
+      // not happen rather than presenting the whole handoff as failed.
+      toastManager.add({
+        type: "error",
+        title: "Checkout ready, but the task could not be written",
+        description: "Describe the task in the composer to start.",
+      });
+      return;
+    }
+    // Appended rather than assigned: the composer may already hold something the user typed,
+    // and losing it would be worse than a prompt they have to scroll.
+    const existing = store.getComposerDraft(draftId)?.prompt ?? "";
+    store.setPrompt(draftId, existing.trim().length === 0 ? prompt : `${existing}\n\n${prompt}`);
+    toastManager.add({
+      type: "success",
+      title: "Checkout ready",
+      description: "The task is in the composer — read it over, then send.",
+    });
   };
 
   // The host says which strategies it offers at all; the repository narrows that to the ones
@@ -394,7 +398,12 @@ export function PullRequestDetailPanel({
             <PullRequestTimelineTab detail={detail} />
           ) : (
             <Suspense fallback={<Skeleton className="m-5 h-48" />}>
-              <PullRequestCodeTab environmentId={environmentId} reference={reference} />
+              <PullRequestCodeTab
+                environmentId={environmentId}
+                reference={reference}
+                detail={detail}
+                onRefresh={() => detailQuery.refresh()}
+              />
             </Suspense>
           )
         ) : null}

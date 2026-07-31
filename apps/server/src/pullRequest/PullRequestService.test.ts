@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import type {
   OrchestrationProjectShell,
   ProjectId,
+  PullRequestReviewCapabilities,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 
@@ -88,6 +89,14 @@ const requestFailed = new PullRequestProviderError({
   detail: "HTTP 404",
 });
 
+/** Everything a host could offer, so a fixture only narrows what its own test is about. */
+const FULL_REVIEW: PullRequestReviewCapabilities = {
+  inlineComment: true,
+  reply: true,
+  resolve: true,
+  verdicts: ["comment", "approve", "request-changes"],
+};
+
 /** A provider whose every call is supplied by the test; anything unset succeeds emptily. */
 function fakeProvider(
   kind: SourceControlProviderKind,
@@ -100,6 +109,7 @@ function fakeProvider(
       comment: true,
       actions: ["merge", "ready", "draft", "close", "reopen"],
       mergeMethods: ["merge"],
+      review: FULL_REVIEW,
     },
     getViewer: () => Effect.succeed("bilal"),
     listChangeRequests: () => Effect.succeed({ items: [], truncated: false }),
@@ -107,6 +117,9 @@ function fakeProvider(
     getDiff: () => Effect.die("unused"),
     runAction: () => Effect.void,
     comment: () => Effect.void,
+    submitReview: () => Effect.void,
+    replyToThread: () => Effect.void,
+    setThreadResolution: () => Effect.void,
     ...overrides,
   };
 }
@@ -497,6 +510,7 @@ it.effect("refuses an action the host never claimed it could run", () =>
             // Bitbucket's shape: it can merge and close, but cannot reopen.
             actions: ["merge", "close"],
             mergeMethods: ["merge"],
+            review: FULL_REVIEW,
           },
           runAction: () => {
             ran = true;
@@ -532,6 +546,7 @@ it.effect("refuses a comment on a host that cannot post one", () =>
             comment: false,
             actions: ["merge"],
             mergeMethods: ["merge"],
+            review: FULL_REVIEW,
           },
           comment: () => {
             posted = true;
@@ -705,6 +720,7 @@ it.effect("refuses a diff on a host that cannot produce one", () =>
             comment: true,
             actions: ["merge", "close"],
             mergeMethods: ["merge"],
+            review: FULL_REVIEW,
           },
           getDiff: () => Effect.die("must not be called"),
         }),
@@ -736,6 +752,196 @@ it.effect("rejects an empty comment before reaching the host", () =>
         body: "   ",
       })
       .pipe(Effect.flip);
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect("refuses a verdict the host never claimed, without asking the provider", () =>
+  Effect.gen(function* () {
+    let submitted = false;
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "on gitlab",
+          workspaceRoot: "/a",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("gitlab", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+            // GitLab's shape: it approves, and has nothing that rejects.
+            review: {
+              inlineComment: true,
+              reply: true,
+              resolve: true,
+              verdicts: ["comment", "approve"],
+            },
+          },
+          submitReview: () => {
+            submitted = true;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.submitReview({
+        projectId: "p1" as ProjectId,
+        repository: "group/project",
+        number: 1,
+        verdict: "request-changes",
+        body: "no",
+        comments: [],
+      }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.isFalse(submitted);
+  }),
+);
+
+it.effect("refuses line comments on a host that takes only a summary", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+            review: { inlineComment: false, reply: false, resolve: false, verdicts: ["comment"] },
+          },
+          submitReview: () => Effect.die("must not be called"),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.submitReview({
+        projectId: "p1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 1,
+        verdict: "comment",
+        body: "",
+        comments: [{ path: "src/a.ts", line: 1, side: "right", body: "nit" }],
+      }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect(
+  "refuses a review with neither a summary nor a comment, but lets an approval through",
+  () =>
+    Effect.gen(function* () {
+      let approved = false;
+      const service = yield* makeService({
+        projects: [
+          project({
+            id: "p1",
+            title: "t3code",
+            workspaceRoot: "/a",
+            repository: "pingdotgg/t3code",
+          }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            submitReview: () => {
+              approved = true;
+              return Effect.void;
+            },
+          }),
+        ],
+      });
+      const reference = {
+        projectId: "p1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 1,
+      };
+
+      const error = yield* Effect.flip(
+        service.submitReview({ ...reference, verdict: "comment", body: "   ", comments: [] }),
+      );
+      assert.strictEqual(error._tag, "PullRequestOperationError");
+
+      // An approval is a verdict in itself, so it needs no words.
+      yield* service.submitReview({ ...reference, verdict: "approve", body: "", comments: [] });
+      assert.isTrue(approved);
+    }),
+);
+
+it.effect("refuses to resolve a conversation on a host that cannot", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+            review: { inlineComment: true, reply: false, resolve: false, verdicts: ["comment"] },
+          },
+          setThreadResolution: () => Effect.die("must not be called"),
+          replyToThread: () => Effect.die("must not be called"),
+        }),
+      ],
+    });
+    const reference = {
+      projectId: "p1" as ProjectId,
+      repository: "pingdotgg/t3code",
+      number: 1,
+    };
+
+    const resolveError = yield* Effect.flip(
+      service.setThreadResolution({ ...reference, threadId: "t1", resolved: true }),
+    );
+    const replyError = yield* Effect.flip(
+      service.replyToThread({ ...reference, threadId: "t1", body: "hi" }),
+    );
+
+    assert.strictEqual(resolveError._tag, "PullRequestOperationError");
+    assert.strictEqual(replyError._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect("refuses an empty reply before it reaches the host", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", { replyToThread: () => Effect.die("must not be called") }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.replyToThread({
+        projectId: "p1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 1,
+        threadId: "t1",
+        body: "   ",
+      }),
+    );
 
     assert.strictEqual(error._tag, "PullRequestOperationError");
   }),

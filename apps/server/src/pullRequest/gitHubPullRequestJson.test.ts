@@ -2,6 +2,7 @@ import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildReviewSubmissionJson,
   decodePullRequestDetailJson,
   decodePullRequestListJson,
   decodeRepositoryMergeCapabilitiesJson,
@@ -305,5 +306,143 @@ describe("repository merge capability decoding", () => {
       JSON.stringify({ mergeCommitAllowed: true }),
     );
     expect(Result.isSuccess(decoded)).toBe(false);
+  });
+});
+
+describe("review thread decoding", () => {
+  const threadsJson = (nodes: ReadonlyArray<Record<string, unknown>>) =>
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: { totalCount: nodes.length, nodes },
+            author: null,
+            comments: { nodes: [] },
+            reviewRequests: { nodes: [] },
+            latestReviews: { nodes: [] },
+          },
+        },
+      },
+    });
+
+  const comment = (id: string, body: string) => ({
+    id,
+    author: { login: "bilal", avatarUrl: "https://avatars/b.png" },
+    body,
+    createdAt: "2026-07-01T00:00:00Z",
+    url: `https://github.com/acme/web/pull/1#discussion_r${id}`,
+  });
+
+  it("anchors a thread to its line and side, keeping the whole conversation", () => {
+    const { reviewThreads } = expectSuccess(
+      decodeReviewThreadsJson(
+        threadsJson([
+          {
+            id: "PRRT_1",
+            isResolved: false,
+            isOutdated: false,
+            path: "src/a.ts",
+            line: 42,
+            diffSide: "LEFT",
+            comments: { totalCount: 2, nodes: [comment("c1", "first"), comment("c2", "second")] },
+          },
+        ]),
+      ),
+    );
+    expect(reviewThreads).toEqual([
+      {
+        id: "PRRT_1",
+        path: "src/a.ts",
+        line: 42,
+        side: "left",
+        isResolved: false,
+        isOutdated: false,
+        comments: [
+          {
+            id: "c1",
+            author: { login: "bilal", name: null, avatarUrl: "https://avatars/b.png" },
+            body: "first",
+            createdAt: "2026-07-01T00:00:00Z",
+            url: "https://github.com/acme/web/pull/1#discussion_rc1",
+          },
+          {
+            id: "c2",
+            author: { login: "bilal", name: null, avatarUrl: "https://avatars/b.png" },
+            body: "second",
+            createdAt: "2026-07-01T00:00:00Z",
+            url: "https://github.com/acme/web/pull/1#discussion_rc2",
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("leaves an outdated thread without a line rather than pinning it to a stale one", () => {
+    const { reviewThreads } = expectSuccess(
+      decodeReviewThreadsJson(
+        threadsJson([
+          {
+            id: "PRRT_2",
+            isResolved: true,
+            isOutdated: true,
+            path: "src/a.ts",
+            // GitHub reports no current line once the thread has fallen off the diff.
+            line: null,
+            diffSide: "RIGHT",
+            comments: { totalCount: 1, nodes: [comment("c3", "stale")] },
+          },
+        ]),
+      ),
+    );
+    expect(reviewThreads[0]).toMatchObject({ line: null, isOutdated: true, isResolved: true });
+  });
+
+  it("keeps resolved threads out of the flat conversation but in the anchored one", () => {
+    const decoded = expectSuccess(
+      decodeReviewThreadsJson(
+        threadsJson([
+          {
+            id: "PRRT_3",
+            isResolved: true,
+            path: "src/a.ts",
+            line: 7,
+            diffSide: "RIGHT",
+            comments: { totalCount: 1, nodes: [comment("c4", "done")] },
+          },
+        ]),
+      ),
+    );
+    // The timeline shows outstanding findings; the diff shows the conversation either way.
+    expect(decoded.comments).toEqual([]);
+    expect(decoded.reviewThreads).toHaveLength(1);
+  });
+});
+
+describe("review submission payload", () => {
+  it("sends the verdict, the summary and every line comment in one body", () => {
+    const payload = JSON.parse(
+      buildReviewSubmissionJson({
+        verdict: "request-changes",
+        body: "Two things.",
+        comments: [
+          { path: "src/a.ts", line: 12, side: "right", body: "rename this" },
+          { path: "src/b.ts", line: 3, side: "left", body: "why remove?" },
+        ],
+      }),
+    ) as Record<string, unknown>;
+    expect(payload).toEqual({
+      event: "REQUEST_CHANGES",
+      body: "Two things.",
+      comments: [
+        { path: "src/a.ts", line: 12, side: "RIGHT", body: "rename this" },
+        { path: "src/b.ts", line: 3, side: "LEFT", body: "why remove?" },
+      ],
+    });
+  });
+
+  it("sends an approval with no words and no comments", () => {
+    expect(
+      JSON.parse(buildReviewSubmissionJson({ verdict: "approve", body: "", comments: [] })),
+    ).toEqual({ event: "APPROVE", body: "", comments: [] });
   });
 });

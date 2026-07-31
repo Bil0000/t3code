@@ -17,6 +17,12 @@ const CAPABILITIES: PullRequestCapabilities = {
   // moves one in or out of draft, so neither is offered rather than failing when pressed.
   actions: ["merge", "close"],
   mergeMethods: ["merge", "squash", "rebase"],
+  review: {
+    inlineComment: true,
+    reply: true,
+    resolve: true,
+    verdicts: ["comment", "approve", "request-changes"],
+  },
 };
 
 /** The failures that mean the credentials are the problem, rather than one request. */
@@ -104,7 +110,7 @@ export const make = Effect.gen(function* () {
           api.getMergeability(target).pipe(Effect.orElseSucceed(() => "unknown" as const)),
           api
             .listComments(target)
-            .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: true }))),
+            .pipe(Effect.orElseSucceed(() => ({ comments: [], threads: [], truncated: true }))),
           api.listCommits(target).pipe(Effect.orElseSucceed(() => [])),
           api.listChecks(target).pipe(Effect.orElseSucceed(() => [])),
         ],
@@ -134,6 +140,7 @@ export const make = Effect.gen(function* () {
               left.createdAt.localeCompare(right.createdAt),
             ),
             commentsTruncated: comments.truncated,
+            reviewThreads: comments.threads,
             commits,
             // Bitbucket publishes no per-repository list of allowed strategies, so the ones it
             // supports are all offered and a strategy the repository forbids fails on merge.
@@ -162,6 +169,37 @@ export const make = Effect.gen(function* () {
       api
         .comment({ repository: input.repository, number: input.number, body: input.body })
         .pipe(Effect.mapError(fail("comment"))),
+
+    submitReview: (input) =>
+      api
+        .submitReview({
+          repository: input.repository,
+          number: input.number,
+          verdict: input.verdict,
+          body: input.body,
+          comments: input.comments,
+        })
+        .pipe(Effect.mapError(fail("submitReview"))),
+
+    replyToThread: (input) =>
+      api
+        .replyToComment({
+          repository: input.repository,
+          number: input.number,
+          commentId: input.threadId,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("replyToThread"))),
+
+    setThreadResolution: (input) =>
+      api
+        .setCommentResolution({
+          repository: input.repository,
+          number: input.number,
+          commentId: input.threadId,
+          resolved: input.resolved,
+        })
+        .pipe(Effect.mapError(fail("setThreadResolution"))),
   };
 
   return provider;

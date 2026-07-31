@@ -11,6 +11,9 @@ import type {
   PullRequestListState,
   PullRequestMergeMethod,
   PullRequestMergeability,
+  PullRequestReviewCommentDraft,
+  PullRequestReviewThread,
+  PullRequestReviewVerdict,
 } from "@t3tools/contracts";
 
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
@@ -139,7 +142,11 @@ export class BitbucketPullRequestApi extends Context.Service<
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<
-      { readonly comments: ReadonlyArray<PullRequestComment>; readonly truncated: boolean },
+      {
+        readonly comments: ReadonlyArray<PullRequestComment>;
+        readonly threads: ReadonlyArray<PullRequestReviewThread>;
+        readonly truncated: boolean;
+      },
       BitbucketPullRequestApiError
     >;
 
@@ -164,6 +171,28 @@ export class BitbucketPullRequestApi extends Context.Service<
       readonly repository: string;
       readonly number: number;
       readonly body: string;
+    }) => Effect.Effect<void, BitbucketPullRequestApiError>;
+
+    readonly submitReview: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly verdict: PullRequestReviewVerdict;
+      readonly body: string;
+      readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+    }) => Effect.Effect<void, BitbucketPullRequestApiError>;
+
+    readonly replyToComment: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly commentId: string;
+      readonly body: string;
+    }) => Effect.Effect<void, BitbucketPullRequestApiError>;
+
+    readonly setCommentResolution: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly commentId: string;
+      readonly resolved: boolean;
     }) => Effect.Effect<void, BitbucketPullRequestApiError>;
   }
 >()("t3/pullRequest/BitbucketPullRequestApi") {}
@@ -360,7 +389,11 @@ export const make = Effect.gen(function* () {
         }).pipe(
           // Deleted and unposted comments are dropped, so the cursor is the only honest signal
           // that more remain.
-          Effect.map((page) => ({ comments: page.comments, truncated: page.next !== null })),
+          Effect.map((page) => ({
+            comments: page.comments,
+            threads: page.threads,
+            truncated: page.next !== null,
+          })),
         ),
       ),
 
@@ -411,6 +444,75 @@ export const make = Effect.gen(function* () {
             // A JSON document rather than a form field, so the body stays text whatever it says.
             // @effect-diagnostics-next-line preferSchemaOverJson:off
             body: JSON.stringify({ content: { raw: input.body } }),
+          })
+          .pipe(Effect.asVoid),
+      ),
+
+    submitReview: (input) =>
+      withRepository(input.repository, (path) =>
+        Effect.gen(function* () {
+          const pullRequest = `${path}/pullrequests/${input.number}`;
+          // Bitbucket has no pending review, so a review is replayed as the requests it is
+          // made of: the line comments, then the summary, then the verdict. The verdict goes
+          // last so a review that fails part-way is never left standing as an approval.
+          yield* Effect.forEach(
+            input.comments,
+            (comment) =>
+              bitbucket.request({
+                method: "POST",
+                url: `${pullRequest}/comments`,
+                // @effect-diagnostics-next-line preferSchemaOverJson:off
+                body: JSON.stringify({
+                  content: { raw: comment.body },
+                  inline: {
+                    path: comment.path,
+                    ...(comment.side === "left" ? { from: comment.line } : { to: comment.line }),
+                  },
+                }),
+              }),
+            { discard: true },
+          );
+          if (input.body.trim().length > 0) {
+            yield* bitbucket.request({
+              method: "POST",
+              url: `${pullRequest}/comments`,
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              body: JSON.stringify({ content: { raw: input.body } }),
+            });
+          }
+          if (input.verdict === "approve") {
+            yield* bitbucket.request({ method: "POST", url: `${pullRequest}/approve` });
+          }
+          if (input.verdict === "request-changes") {
+            yield* bitbucket.request({ method: "POST", url: `${pullRequest}/request-changes` });
+          }
+        }),
+      ),
+
+    replyToComment: (input) =>
+      withRepository(input.repository, (path) =>
+        bitbucket
+          .request({
+            method: "POST",
+            url: `${path}/pullrequests/${input.number}/comments`,
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            body: JSON.stringify({
+              content: { raw: input.body },
+              parent: { id: Number(input.commentId) },
+            }),
+          })
+          .pipe(Effect.asVoid),
+      ),
+
+    setCommentResolution: (input) =>
+      withRepository(input.repository, (path) =>
+        bitbucket
+          .request({
+            // Resolving is a sub-resource that is created and deleted, rather than a field.
+            method: input.resolved ? "POST" : "DELETE",
+            url: `${path}/pullrequests/${input.number}/comments/${encodeURIComponent(
+              input.commentId,
+            )}/resolve`,
           })
           .pipe(Effect.asVoid),
       ),

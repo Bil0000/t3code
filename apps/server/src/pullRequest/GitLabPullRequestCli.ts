@@ -11,17 +11,23 @@ import type {
   PullRequestListState,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
+  PullRequestReviewCommentDraft,
+  PullRequestReviewThread,
+  PullRequestReviewVerdict,
 } from "@t3tools/contracts";
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import {
   decodeCommitsJson,
+  decodeDiffRefsJson,
+  decodeDiscussionsJson,
   decodeMergeRequestDetailJson,
   decodeMergeRequestDiffsJson,
   decodeMergeRequestListJson,
   decodeNotesJson,
   decodeProjectMergeCapabilitiesJson,
   decodeViewerJson,
+  type GitLabDiffRefs,
   type GitLabMergeRequestDetail,
   type GitLabMergeRequestListItem,
 } from "./gitLabMergeRequestJson.ts";
@@ -148,6 +154,40 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly number: number;
       readonly body: string;
+    }) => Effect.Effect<void, GitLabPullRequestCliError>;
+
+    readonly listDiscussions: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+    }) => Effect.Effect<
+      { readonly threads: ReadonlyArray<PullRequestReviewThread>; readonly truncated: boolean },
+      GitLabPullRequestCliError
+    >;
+
+    readonly submitReview: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly verdict: PullRequestReviewVerdict;
+      readonly body: string;
+      readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+    }) => Effect.Effect<void, GitLabPullRequestCliError>;
+
+    readonly replyToDiscussion: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly discussionId: string;
+      readonly body: string;
+    }) => Effect.Effect<void, GitLabPullRequestCliError>;
+
+    readonly setDiscussionResolution: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly discussionId: string;
+      readonly resolved: boolean;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
   }
 >()("t3/pullRequest/GitLabPullRequestCli") {}
@@ -353,6 +393,38 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * The revisions a positioned comment is written against. GitLab resolves a comment's line
+   * against these three shas, so a review with line comments cannot be sent without them.
+   */
+  const getDiffRefs = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+  }): Effect.Effect<GitLabDiffRefs, GitLabPullRequestCliError> =>
+    api({
+      cwd: input.cwd,
+      path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeDiffRefsJson(result.stdout.trim());
+        // A merge request with no diff refs cannot carry a positioned comment at all, which
+        // is the same dead end as a response that could not be read.
+        return Result.isSuccess(decoded) && decoded.success !== null
+          ? Effect.succeed(decoded.success)
+          : Effect.fail(
+              new GitLabMergeRequestReadError({
+                command: "glab",
+                cwd: input.cwd,
+                operation: "getDiffRefs",
+                cause: Result.isSuccess(decoded)
+                  ? new Error("The merge request reported no diff revisions.")
+                  : decoded.failure,
+              }),
+            );
+      }),
+    );
+
   return GitLabPullRequestCli.of({
     getViewerUsername: (input) =>
       api({ cwd: input.cwd, path: "user" }).pipe(
@@ -490,6 +562,106 @@ export const make = Effect.gen(function* () {
         // A JSON body rather than a `--raw-field`: glab coerces a field that reads as a
         // literal `true` or a number, and a comment body is text either way.
         stdin: JSON.stringify({ body: input.body }),
+      }).pipe(Effect.asVoid),
+
+    listDiscussions: (input) =>
+      api({
+        cwd: input.cwd,
+        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/discussions?${query(
+          [["per_page", String(CONVERSATION_PAGE_SIZE)]],
+        )}`,
+      }).pipe(
+        Effect.flatMap((result) => {
+          const decoded = decodeDiscussionsJson(result.stdout.trim());
+          if (!Result.isSuccess(decoded)) {
+            return Effect.fail(
+              new GitLabMergeRequestReadError({
+                command: "glab",
+                cwd: input.cwd,
+                operation: "listDiscussions",
+                cause: decoded.failure,
+              }),
+            );
+          }
+          return Effect.succeed({
+            threads: decoded.success.threads,
+            // The raw count, not the kept count: this endpoint returns the plain notes too,
+            // so a full page of those would otherwise read as "no more discussions".
+            truncated: decoded.success.rawCount >= CONVERSATION_PAGE_SIZE,
+          });
+        }),
+      ),
+
+    submitReview: (input) =>
+      Effect.gen(function* () {
+        const project = projectPath(input.repository);
+        const mergeRequest = `projects/${project}/merge_requests/${input.number}`;
+        // GitLab has no pending review to attach comments to, so a review is replayed as the
+        // requests it is made of: the line comments, then the summary, then the verdict. A
+        // failure part-way therefore leaves what was already posted in place, which is why
+        // the verdict goes last — a half-sent review is never an approval.
+        if (input.comments.length > 0) {
+          const refs = yield* getDiffRefs(input);
+          yield* Effect.forEach(
+            input.comments,
+            (comment) =>
+              api({
+                cwd: input.cwd,
+                path: `${mergeRequest}/discussions`,
+                method: "POST",
+                stdin: JSON.stringify({
+                  body: comment.body,
+                  position: {
+                    base_sha: refs.baseSha,
+                    head_sha: refs.headSha,
+                    start_sha: refs.startSha,
+                    position_type: "text",
+                    // Both paths are sent because GitLab resolves a position against both
+                    // sides of the diff. A renamed file is the one case this gets wrong, and
+                    // GitLab answers that with a position it cannot resolve rather than a
+                    // comment in the wrong place.
+                    old_path: comment.path,
+                    new_path: comment.path,
+                    ...(comment.side === "left"
+                      ? { old_line: comment.line }
+                      : { new_line: comment.line }),
+                  },
+                }),
+              }),
+            { discard: true },
+          );
+        }
+        if (input.body.trim().length > 0) {
+          yield* api({
+            cwd: input.cwd,
+            path: `${mergeRequest}/notes`,
+            method: "POST",
+            stdin: JSON.stringify({ body: input.body }),
+          });
+        }
+        if (input.verdict === "approve") {
+          yield* api({ cwd: input.cwd, path: `${mergeRequest}/approve`, method: "POST" });
+        }
+      }),
+
+    replyToDiscussion: (input) =>
+      api({
+        cwd: input.cwd,
+        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/discussions/${encodeURIComponent(
+          input.discussionId,
+        )}/notes`,
+        method: "POST",
+        stdin: JSON.stringify({ body: input.body }),
+      }).pipe(Effect.asVoid),
+
+    setDiscussionResolution: (input) =>
+      api({
+        cwd: input.cwd,
+        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/discussions/${encodeURIComponent(
+          input.discussionId,
+        )}`,
+        method: "PUT",
+        stdin: JSON.stringify({ resolved: input.resolved }),
       }).pipe(Effect.asVoid),
   });
 });

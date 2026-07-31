@@ -49,5 +49,23 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),
+    submitReview: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:submit-review",
+      tag: WS_METHODS.pullRequestsSubmitReview,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
+    replyToThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:reply-to-thread",
+      tag: WS_METHODS.pullRequestsReplyToThread,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
+    setThreadResolution: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:set-thread-resolution",
+      tag: WS_METHODS.pullRequestsSetThreadResolution,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
   };
 }

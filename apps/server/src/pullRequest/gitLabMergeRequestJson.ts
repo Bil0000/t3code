@@ -11,6 +11,7 @@ import type {
   PullRequestLabel,
   PullRequestMergeability,
   PullRequestMergeCapabilities,
+  PullRequestReviewThread,
   PullRequestState,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -68,6 +69,49 @@ const RawNoteSchema = Schema.Struct({
       Schema.Struct({
         new_path: Schema.optional(Schema.NullOr(Schema.String)),
         old_path: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
+});
+
+/**
+ * A discussion note carrying its place in the diff, which is the shape the whole thread view
+ * is built from. `resolved` lives on the note rather than on the discussion: GitLab calls a
+ * discussion resolved once every resolvable note in it is.
+ */
+const RawDiscussionNoteSchema = Schema.Struct({
+  id: Schema.Int,
+  body: Schema.optional(Schema.NullOr(Schema.String)),
+  author: Schema.optional(Schema.NullOr(RawUserSchema)),
+  created_at: Schema.String,
+  system: Schema.optional(Schema.Boolean),
+  resolvable: Schema.optional(Schema.Boolean),
+  resolved: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  position: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        position_type: Schema.optional(Schema.NullOr(Schema.String)),
+        new_path: Schema.optional(Schema.NullOr(Schema.String)),
+        old_path: Schema.optional(Schema.NullOr(Schema.String)),
+        new_line: Schema.optional(Schema.NullOr(Schema.Int)),
+        old_line: Schema.optional(Schema.NullOr(Schema.Int)),
+      }),
+    ),
+  ),
+});
+
+const RawDiscussionSchema = Schema.Struct({
+  id: Schema.String,
+  notes: Schema.optional(Schema.NullOr(Schema.Array(RawDiscussionNoteSchema))),
+});
+
+const RawDiffRefsSchema = Schema.Struct({
+  diff_refs: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        base_sha: Schema.String,
+        head_sha: Schema.String,
+        start_sha: Schema.String,
       }),
     ),
   ),
@@ -280,6 +324,8 @@ const decodeMergeRequest = decodeJsonResult(RawMergeRequestSchema);
 const decodeNoteEntry = Schema.decodeUnknownExit(RawNoteSchema);
 const decodeCommitEntry = Schema.decodeUnknownExit(RawCommitSchema);
 const decodeDiffEntry = Schema.decodeUnknownExit(RawDiffSchema);
+const decodeDiscussionEntry = Schema.decodeUnknownExit(RawDiscussionSchema);
+const decodeDiffRefs = decodeJsonResult(RawDiffRefsSchema);
 const decodeViewer = decodeJsonResult(RawViewerSchema);
 const decodeProjectMergeSettings = decodeJsonResult(RawProjectMergeSettingsSchema);
 
@@ -359,6 +405,78 @@ export function decodeProjectMergeCapabilitiesJson(
  * The raw note count comes back alongside, because dropping notes hides whether the page was
  * full: a caller cannot tell "no more notes" from "a page of activity entries" without it.
  */
+/** The three revisions a positioned comment is written against. */
+export interface GitLabDiffRefs {
+  readonly baseSha: string;
+  readonly headSha: string;
+  readonly startSha: string;
+}
+
+export interface GitLabDiscussions {
+  readonly threads: ReadonlyArray<PullRequestReviewThread>;
+  /** Discussions GitLab returned, counted before decoding, so a skipped one still counts. */
+  readonly rawCount: number;
+}
+
+/**
+ * Positioned discussions only. GitLab returns the merge request's whole conversation here,
+ * including the plain notes the timeline already shows, and only a positioned one belongs
+ * against a line of the diff.
+ */
+export function decodeDiscussionsJson(
+  raw: string,
+): Result.Result<GitLabDiscussions, DecodeFailure> {
+  const decoded = decodeUnknownList(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const threads: PullRequestReviewThread[] = [];
+  for (const entry of decoded.success) {
+    const discussion = decodeDiscussionEntry(entry);
+    if (!Exit.isSuccess(discussion)) continue;
+    const notes = (discussion.value.notes ?? []).filter((note) => note.system !== true);
+    const root = notes[0];
+    const position = root?.position;
+    if (root === undefined || !position || position.position_type !== "text") continue;
+    // A comment on an added or context line carries `new_line`; one on a removed line carries
+    // only `old_line`, and belongs against the file as it was.
+    const side = position.new_line === null || position.new_line === undefined ? "left" : "right";
+    const path = trimmed(side === "left" ? position.old_path : position.new_path);
+    const line = side === "left" ? position.old_line : position.new_line;
+    if (path === null) continue;
+    threads.push({
+      id: discussion.value.id,
+      path,
+      line: typeof line === "number" && line > 0 ? line : null,
+      side,
+      isResolved: root.resolved === true,
+      // GitLab reports no equivalent of "written against a line that has since moved", so a
+      // thread the diff cannot place is worked out from the diff itself rather than claimed
+      // here.
+      isOutdated: false,
+      comments: notes.map((note) => ({
+        id: String(note.id),
+        author: toActor(note.author),
+        body: note.body ?? "",
+        createdAt: note.created_at,
+        url: null,
+      })),
+    });
+  }
+  return Result.succeed({ threads, rawCount: decoded.success.length });
+}
+
+export function decodeDiffRefsJson(
+  raw: string,
+): Result.Result<GitLabDiffRefs | null, DecodeFailure> {
+  const decoded = decodeDiffRefs(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const refs = decoded.success.diff_refs;
+  return Result.succeed(
+    refs ? { baseSha: refs.base_sha, headSha: refs.head_sha, startSha: refs.start_sha } : null,
+  );
+}
+
 export function decodeNotesJson(
   raw: string,
 ): Result.Result<

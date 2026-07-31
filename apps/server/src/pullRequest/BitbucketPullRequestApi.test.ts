@@ -289,4 +289,131 @@ layer("BitbucketPullRequestApi.layer", (it) => {
       assert.strictEqual(error._tag, "BitbucketViewerUnavailableError");
     }),
   );
+
+  it.effect("reassembles a thread from the flat comment list, replies included", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(
+        Effect.succeed(
+          response(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              values: [
+                {
+                  id: 10,
+                  content: { raw: "rename this" },
+                  user: { nickname: "bilal" },
+                  created_on: "2026-06-16T05:04:32+00:00",
+                  inline: { path: "src/a.ts", to: 12, from: null },
+                  resolution: { type: "pullrequest_comment_resolution" },
+                },
+                {
+                  id: 11,
+                  content: { raw: "done" },
+                  user: { nickname: "julius" },
+                  created_on: "2026-06-16T06:04:32+00:00",
+                  parent: { id: 10 },
+                },
+                // A reply to a reply still belongs to the thread its root opened.
+                {
+                  id: 12,
+                  content: { raw: "thanks" },
+                  user: { nickname: "bilal" },
+                  created_on: "2026-06-16T07:04:32+00:00",
+                  parent: { id: 11 },
+                },
+                {
+                  id: 13,
+                  content: { raw: "ship it" },
+                  user: { nickname: "bilal" },
+                  created_on: "2026-06-16T08:04:32+00:00",
+                },
+              ],
+            }),
+          ),
+        ),
+      );
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      const { threads } = yield* api.listComments({ repository: "acme/web", number: 7 });
+
+      assert.strictEqual(threads.length, 1);
+      expect(threads[0]).toMatchObject({
+        id: "10",
+        path: "src/a.ts",
+        line: 12,
+        side: "right",
+        isResolved: true,
+      });
+      expect(threads[0]?.comments.map((comment) => comment.id)).toEqual(["10", "11", "12"]);
+    }),
+  );
+
+  it.effect("writes a review's line comments, its summary, then its verdict", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValue(Effect.succeed(response("{}")));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      yield* api.submitReview({
+        repository: "acme/web",
+        number: 7,
+        verdict: "request-changes",
+        body: "Two things.",
+        comments: [{ path: "src/a.ts", line: 12, side: "left", body: "why remove?" }],
+      });
+
+      expect(callAt(0).url).toContain("/pullrequests/7/comments");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(0).body ?? "")).toEqual({
+        content: { raw: "why remove?" },
+        inline: { path: "src/a.ts", from: 12 },
+      });
+      expect(callAt(1).url).toContain("/pullrequests/7/comments");
+      // The verdict goes last, so a review that failed part-way is never a rejection either.
+      expect(callAt(2).url).toContain("/pullrequests/7/request-changes");
+    }),
+  );
+
+  it.effect("resolves by creating the sub-resource and unresolves by deleting it", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValue(Effect.succeed(response("{}")));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      yield* api.setCommentResolution({
+        repository: "acme/web",
+        number: 7,
+        commentId: "10",
+        resolved: true,
+      });
+      yield* api.setCommentResolution({
+        repository: "acme/web",
+        number: 7,
+        commentId: "10",
+        resolved: false,
+      });
+
+      assert.strictEqual(callAt(0).method, "POST");
+      assert.strictEqual(callAt(1).method, "DELETE");
+      expect(callAt(0).url).toContain("/comments/10/resolve");
+    }),
+  );
+
+  it.effect("replies by naming the comment it answers", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValue(Effect.succeed(response("{}")));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      yield* api.replyToComment({
+        repository: "acme/web",
+        number: 7,
+        commentId: "10",
+        body: "Fixed.",
+      });
+
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(0).body ?? "")).toEqual({
+        content: { raw: "Fixed." },
+        parent: { id: 10 },
+      });
+    }),
+  );
 });

@@ -20,6 +20,8 @@ const CAPABILITIES: PullRequestCapabilities = {
   actions: ["merge", "ready", "draft", "close", "reopen"],
   // Azure squashes as a completion option; it has no rebase strategy of its own.
   mergeMethods: ["merge", "squash"],
+  // With no patch to show there are no lines to write against, so nothing here is offered.
+  review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
 };
 
 /** The CLI tags that mean the tool itself is unusable, rather than one request failing. */
@@ -66,6 +68,17 @@ export const make = Effect.gen(function* () {
         detail: error.detail,
         cause: error,
       });
+
+  /** Refuses what the capabilities already say this host cannot do. */
+  const unsupported = (operation: string) =>
+    Effect.fail(
+      new PullRequestProviderError({
+        provider: "azure-devops",
+        operation,
+        reason: "failed",
+        detail: "Azure DevOps reviews cannot be written from here yet.",
+      }),
+    );
 
   const provider: PullRequestProviderApi = {
     kind: "azure-devops",
@@ -119,6 +132,8 @@ export const make = Effect.gen(function* () {
                 checks: [],
                 comments: conversation.comments,
                 commentsTruncated: conversation.truncated,
+                // No patch to pin a conversation to, so nothing here is anchored to a line.
+                reviewThreads: [],
                 // `az repos pr show` carries no commit list.
                 commits: [],
                 // Which strategies a repository allows lives in its branch policies, so the two
@@ -152,15 +167,15 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(fail("runAction"))),
 
     // Never called: `capabilities.comment` is false, and the service refuses a comment without it.
-    comment: () =>
-      Effect.fail(
-        new PullRequestProviderError({
-          provider: "azure-devops",
-          operation: "comment",
-          reason: "failed",
-          detail: "Azure DevOps comments cannot be posted from here yet.",
-        }),
-      ),
+    comment: () => unsupported("comment"),
+
+    // Declared unsupported above, so the service refuses these before a provider is reached.
+    // They exist because every provider answers the whole port.
+    submitReview: () => unsupported("submitReview"),
+
+    replyToThread: () => unsupported("replyToThread"),
+
+    setThreadResolution: () => unsupported("setThreadResolution"),
   };
 
   return provider;

@@ -323,7 +323,7 @@ export class BitbucketApi extends Context.Service<
      * handed back undecoded for the caller to read as it sees fit.
      */
     readonly request: (input: {
-      readonly method: "GET" | "POST" | "PUT";
+      readonly method: "GET" | "POST" | "PUT" | "DELETE";
       /**
        * A path below the API base, or a whole URL as a paged response reports its next page.
        * A whole URL is refused unless it belongs to the configured Bitbucket.
@@ -813,7 +813,7 @@ export const make = Effect.gen(function* () {
    * redirects, so they have to be followed — but only back to the same Bitbucket.
    */
   const send = (input: {
-    readonly method: "GET" | "POST" | "PUT";
+    readonly method: "GET" | "POST" | "PUT" | "DELETE";
     readonly url: string;
     readonly body?: string;
     readonly redirects: number;
@@ -829,7 +829,9 @@ export const make = Effect.gen(function* () {
         ? HttpClientRequest.get(url)
         : input.method === "POST"
           ? HttpClientRequest.post(url)
-          : HttpClientRequest.put(url);
+          : input.method === "DELETE"
+            ? HttpClientRequest.del(url)
+            : HttpClientRequest.put(url);
     // No `Accept: application/json`: the diff endpoints answer with a patch, not JSON.
     const withBody =
       input.body === undefined

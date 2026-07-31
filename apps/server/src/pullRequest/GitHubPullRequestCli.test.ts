@@ -285,6 +285,83 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("sends a whole review as one request body over stdin", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.submitReview({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        verdict: "approve",
+        body: "Looks right.",
+        comments: [{ path: "src/a.ts", line: 4, side: "right", body: "nit" }],
+      });
+
+      expect(callAt(0).args).toEqual([
+        "api",
+        "--method",
+        "POST",
+        "repos/acme/web/pulls/7/reviews",
+        "--input",
+        "-",
+      ]);
+      // One request, so nothing is on the pull request until the verdict is.
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({
+        event: "APPROVE",
+        body: "Looks right.",
+        comments: [{ path: "src/a.ts", line: 4, side: "RIGHT", body: "nit" }],
+      });
+    }),
+  );
+
+  it.effect("replies to a thread by its node id", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.replyToReviewThread({
+        cwd: "/w",
+        repository: "acme/web",
+        threadId: "PRRT_1",
+        body: "Fixed.",
+      });
+
+      const args = callAt(0).args;
+      expect(args).toContain("threadId=PRRT_1");
+      expect(args).toContain("body=Fixed.");
+      expect(args.join(" ")).toContain("addPullRequestReviewThreadReply");
+    }),
+  );
+
+  it.effect("resolves and unresolves through the mutation each one needs", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.setReviewThreadResolution({
+        cwd: "/w",
+        repository: "github.acme.dev/acme/web",
+        threadId: "PRRT_1",
+        resolved: true,
+      });
+      yield* cli.setReviewThreadResolution({
+        cwd: "/w",
+        repository: "github.acme.dev/acme/web",
+        threadId: "PRRT_1",
+        resolved: false,
+      });
+
+      expect(callAt(0).args.join(" ")).toContain("resolveReviewThread(");
+      expect(callAt(1).args.join(" ")).toContain("unresolveReviewThread(");
+      // A GitHub Enterprise thread is resolved on its own host, not on github.com.
+      expect(callAt(0).args).toContain("github.acme.dev");
+    }),
+  );
+
   it.effect("fails the read when gh returns something unreadable", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"message":"not found"}')));

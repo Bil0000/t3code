@@ -16,6 +16,12 @@ const CAPABILITIES: PullRequestCapabilities = {
   comment: true,
   actions: ["merge", "ready", "draft", "close", "reopen"],
   mergeMethods: ["merge", "squash", "rebase"],
+  review: {
+    inlineComment: true,
+    reply: true,
+    resolve: true,
+    verdicts: ["comment", "approve", "request-changes"],
+  },
 };
 
 /** The CLI tags that mean the tool itself is unusable, rather than one request failing. */
@@ -104,6 +110,7 @@ export const make = Effect.gen(function* () {
           cli.listReviewThreadComments(input).pipe(
             Effect.orElseSucceed(() => ({
               comments: [],
+              reviewThreads: [],
               truncated: true,
               reviewers: [],
               avatarsByLogin: new Map<string, string>(),
@@ -128,6 +135,13 @@ export const make = Effect.gen(function* () {
               .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
             commentsTruncated:
               pullRequest.comments.length >= CONVERSATION_PAGE_SIZE || reviewThreads.truncated,
+            reviewThreads: reviewThreads.reviewThreads.map((thread) => ({
+              ...thread,
+              comments: thread.comments.map((comment) => ({
+                ...comment,
+                author: withAvatar(comment.author, reviewThreads.avatarsByLogin),
+              })),
+            })),
             mergeCapabilities,
           }),
         ),
@@ -147,6 +161,28 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(fail("runAction"))),
 
     comment: (input) => cli.commentOnPullRequest(input).pipe(Effect.mapError(fail("comment"))),
+
+    submitReview: (input) => cli.submitReview(input).pipe(Effect.mapError(fail("submitReview"))),
+
+    replyToThread: (input) =>
+      cli
+        .replyToReviewThread({
+          cwd: input.cwd,
+          repository: input.repository,
+          threadId: input.threadId,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("replyToThread"))),
+
+    setThreadResolution: (input) =>
+      cli
+        .setReviewThreadResolution({
+          cwd: input.cwd,
+          repository: input.repository,
+          threadId: input.threadId,
+          resolved: input.resolved,
+        })
+        .pipe(Effect.mapError(fail("setThreadResolution"))),
   };
 
   return provider;

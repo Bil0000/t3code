@@ -9,11 +9,14 @@ import type {
   PullRequestListState,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
+  PullRequestReviewCommentDraft,
+  PullRequestReviewVerdict,
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import {
   ACTOR_AVATARS_GRAPHQL_QUERY,
+  buildReviewSubmissionJson,
   decodeActorAvatarsJson,
   decodePullRequestDetailJson,
   decodePullRequestListJson,
@@ -22,7 +25,10 @@ import {
   PULL_REQUEST_DETAIL_JSON_FIELDS,
   PULL_REQUEST_LIST_JSON_FIELDS,
   REPOSITORY_MERGE_CAPABILITIES_JSON_FIELDS,
+  RESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
+  REVIEW_THREAD_REPLY_GRAPHQL_MUTATION,
   REVIEW_THREADS_GRAPHQL_QUERY,
+  UNRESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
   type GitHubPullRequestDetail,
   type GitHubPullRequestListItem,
   type GitHubReviewThreadComments,
@@ -144,6 +150,29 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
       readonly body: string;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
+
+    readonly submitReview: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly verdict: PullRequestReviewVerdict;
+      readonly body: string;
+      readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+
+    readonly replyToReviewThread: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly threadId: string;
+      readonly body: string;
+    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+
+    readonly setReviewThreadResolution: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly threadId: string;
+      readonly resolved: boolean;
+    }) => Effect.Effect<void, GitHubPullRequestCliError>;
   }
 >()("t3/pullRequest/GitHubPullRequestCli") {}
 
@@ -201,6 +230,32 @@ export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
 
   const repositoryArgs = (repository: string) => ["--repo", repository];
+
+  /**
+   * A GraphQL mutation whose answer is not read back. `gh` exits non-zero on a GraphQL error,
+   * so a failed mutation is already a failed command rather than a body to inspect.
+   */
+  const graphql = (
+    cwd: string,
+    repository: string,
+    query: string,
+    variables: ReadonlyArray<readonly [string, string]>,
+  ) => {
+    const { host } = parseRepositorySelector(repository);
+    return github
+      .execute({
+        cwd,
+        args: [
+          "api",
+          "graphql",
+          ...(host === null ? [] : ["--hostname", host]),
+          ...variables.flatMap(([flag, value]) => [flag, value]),
+          "-f",
+          `query=${query}`,
+        ],
+      })
+      .pipe(Effect.asVoid);
+  };
 
   return GitHubPullRequestCli.of({
     getViewerLogin: (input) =>
@@ -439,6 +494,48 @@ export const make = Effect.gen(function* () {
           stdin: input.body,
         })
         .pipe(Effect.asVoid),
+
+    submitReview: (input) => {
+      const { host, owner, name } = parseRepositorySelector(input.repository);
+      return github
+        .execute({
+          cwd: input.cwd,
+          // The whole review is one request, so nothing is visible to anyone else until the
+          // verdict is sent. The payload travels over stdin for the same reason a comment
+          // body does: argv is visible in process listings and echoed back in failures.
+          args: [
+            "api",
+            "--method",
+            "POST",
+            ...(host === null ? [] : ["--hostname", host]),
+            `repos/${owner}/${name}/pulls/${input.number}/reviews`,
+            "--input",
+            "-",
+          ],
+          stdin: buildReviewSubmissionJson({
+            verdict: input.verdict,
+            body: input.body,
+            comments: input.comments,
+          }),
+        })
+        .pipe(Effect.asVoid);
+    },
+
+    replyToReviewThread: (input) =>
+      graphql(input.cwd, input.repository, REVIEW_THREAD_REPLY_GRAPHQL_MUTATION, [
+        ["-f", `threadId=${input.threadId}`],
+        ["-f", `body=${input.body}`],
+      ]),
+
+    setReviewThreadResolution: (input) =>
+      graphql(
+        input.cwd,
+        input.repository,
+        input.resolved
+          ? RESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION
+          : UNRESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
+        [["-f", `threadId=${input.threadId}`]],
+      ),
   });
 });
 

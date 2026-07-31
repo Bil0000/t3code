@@ -1,11 +1,19 @@
+import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import { CodeView, type CodeViewDiffItem } from "@pierre/diffs/react";
-import type { EnvironmentId, PullRequestRef } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  PullRequestDetail,
+  PullRequestDiffSide,
+  PullRequestRef,
+  PullRequestReviewThread,
+} from "@t3tools/contracts";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
 import {
   buildFileDiffRenderKey,
+  fnv1a32,
   getDiffLineStat,
   getRenderablePatch,
   resolveDiffThemeName,
@@ -14,29 +22,99 @@ import {
 import { cn } from "~/lib/utils";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
+import { useAtomCommand } from "~/state/use-atom-command";
 
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { Skeleton } from "../ui/skeleton";
+import { toastManager } from "../ui/toast";
+import {
+  PendingReviewCommentCard,
+  ReviewCommentComposer,
+  ReviewThreadCard,
+} from "./PullRequestReviewAnnotation";
+import { PullRequestReviewBar } from "./PullRequestReviewBar";
 import { PullRequestDiffStat, PullRequestMetaLine } from "./pullRequestPresentation";
+import {
+  pullRequestReviewKey,
+  usePendingReviewComments,
+  usePullRequestReviewStore,
+  type PendingReviewComment,
+} from "./pullRequestReviewStore";
+
+/** Everything pinned to one line of one file: what is already there, and what is being added. */
+interface ReviewAnnotationGroup {
+  readonly threads: ReadonlyArray<PullRequestReviewThread>;
+  readonly pending: ReadonlyArray<PendingReviewComment>;
+  readonly draft: boolean;
+}
+
+type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
+
+/** A group while it is still gathering what belongs on its line. */
+interface MutableAnnotationGroup {
+  readonly side: PullRequestDiffSide;
+  readonly line: number;
+  readonly threads: PullRequestReviewThread[];
+  readonly pending: PendingReviewComment[];
+  draft: boolean;
+}
+
+interface DraftAnchor {
+  readonly fileKey: string;
+  readonly path: string;
+  readonly line: number;
+  readonly side: PullRequestDiffSide;
+}
+
+/** The contract's sides named the way the diff viewer names them, and back again. */
+function toViewerSide(side: PullRequestDiffSide) {
+  return side === "left" ? ("deletions" as const) : ("additions" as const);
+}
+
+function fromViewerSide(side: string | undefined): PullRequestDiffSide {
+  return side === "deletions" ? "left" : "right";
+}
 
 /**
- * The pull request's patch, rendered with the same viewer as the thread diff panel. It renders
- * the remote patch only — review comments belong to a thread's composer, which this page has
- * no equivalent of, so the annotatable wrapper is deliberately not used here.
+ * The pull request's patch, with the review written against it. Conversations already on the
+ * host sit under the line they were written on, and a new comment joins the review being
+ * drafted rather than being posted as it is typed.
  */
 export function PullRequestCodeTab({
   environmentId,
   reference,
+  detail,
+  onRefresh,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
+  detail: PullRequestDetail;
+  onRefresh: () => void;
 }) {
   const { resolvedTheme } = useTheme();
   const [collapsedFiles, setCollapsedFiles] = useState<ReadonlySet<string>>(() => new Set());
+  const [selectedLines, setSelectedLines] = useState<{
+    id: string;
+    range: SelectedLineRange;
+  } | null>(null);
+  const [draft, setDraft] = useState<DraftAnchor | null>(null);
+  const [threadPending, setThreadPending] = useState(false);
+
   const diffQuery = useEnvironmentQuery(
     pullRequestEnvironment.diff({ environmentId, input: reference }),
   );
+  const reviewKey = pullRequestReviewKey(reference);
+  const pendingComments = usePendingReviewComments(reference);
+  const addComment = usePullRequestReviewStore((store) => store.addComment);
+  const removeComment = usePullRequestReviewStore((store) => store.removeComment);
+  const replyToThread = useAtomCommand(pullRequestEnvironment.replyToThread, {
+    reportFailure: false,
+  });
+  const setThreadResolution = useAtomCommand(pullRequestEnvironment.setThreadResolution, {
+    reportFailure: false,
+  });
 
+  const review = detail.capabilities.review;
   const renderablePatch = useMemo(
     () =>
       getRenderablePatch(
@@ -54,22 +132,72 @@ export function PullRequestCodeTab({
         : [],
     [renderablePatch],
   );
-  const items = useMemo<CodeViewDiffItem[]>(
+
+  const items = useMemo<CodeViewDiffItem<ReviewAnnotationGroup>[]>(
     () =>
       files.map((fileDiff) => {
         const fileKey = buildFileDiffRenderKey(fileDiff);
+        const path = resolveFileDiffPath(fileDiff);
         const collapsed = collapsedFiles.has(fileKey);
+        // One annotation per line, so a line that already carries a conversation shows a new
+        // comment underneath it rather than in place of it.
+        const groups = new Map<string, MutableAnnotationGroup>();
+        const groupAt = (side: PullRequestDiffSide, line: number) => {
+          const key = `${side}:${line}`;
+          const existing = groups.get(key);
+          if (existing) return existing;
+          const created: MutableAnnotationGroup = {
+            side,
+            line,
+            threads: [],
+            pending: [],
+            draft: false,
+          };
+          groups.set(key, created);
+          return created;
+        };
+
+        for (const thread of detail.reviewThreads) {
+          if (thread.path !== path || thread.line === null) continue;
+          groupAt(thread.side, thread.line).threads.push(thread);
+        }
+        for (const comment of pendingComments) {
+          if (comment.path !== path) continue;
+          groupAt(comment.side, comment.line).pending.push(comment);
+        }
+        if (draft?.fileKey === fileKey) groupAt(draft.side, draft.line).draft = true;
+
+        const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
+          side: toViewerSide(group.side),
+          lineNumber: group.line,
+          metadata: { threads: group.threads, pending: group.pending, draft: group.draft },
+        }));
         return {
           id: fileKey,
-          type: "diff",
+          type: "diff" as const,
           fileDiff,
+          annotations,
           collapsed,
-          // The viewer re-renders an item only when its version changes, and collapsing is
-          // the only thing that varies for a patch this page never edits.
-          version: collapsed ? 1 : 0,
+          // The viewer re-renders an item only when its version changes, so everything the
+          // annotations show has to be part of it.
+          version: fnv1a32(
+            `${collapsed ? "1" : "0"}:${annotations
+              .map(
+                ({ side, lineNumber, metadata }) =>
+                  `${side}:${lineNumber}:${metadata.draft ? "d" : ""}:${metadata.pending
+                    .map((comment) => `${comment.id}:${comment.body}`)
+                    .join(",")}:${metadata.threads
+                    .map(
+                      (thread) =>
+                        `${thread.id}:${thread.isResolved ? "r" : ""}:${thread.comments.length}`,
+                    )
+                    .join(",")}`,
+              )
+              .join("|")}`,
+          ),
         };
       }),
-    [collapsedFiles, files],
+    [collapsedFiles, detail.reviewThreads, draft, files, pendingComments],
   );
   const lineStat = useMemo(() => getDiffLineStat(files), [files]);
 
@@ -80,6 +208,37 @@ export function PullRequestCodeTab({
       else next.add(fileKey);
       return next;
     });
+
+  const beginComment = useCallback(
+    (range: SelectedLineRange | null, context: { item: CodeViewItem<ReviewAnnotationGroup> }) => {
+      if (!range || !review.inlineComment) return;
+      const item = context.item;
+      if (item.type !== "diff") return;
+      const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === item.id);
+      if (!file) return;
+      // A range collapses to its last line: only GitHub carries a multi-line comment, and one
+      // that silently lost its first line on the other hosts would be worse than one line.
+      setDraft({
+        fileKey: item.id,
+        path: resolveFileDiffPath(file),
+        line: range.end,
+        side: fromViewerSide(range.endSide ?? range.side),
+      });
+    },
+    [files, review.inlineComment],
+  );
+
+  const runThreadCommand = async (label: string, run: () => Promise<{ readonly _tag: string }>) => {
+    if (threadPending) return;
+    setThreadPending(true);
+    const result = await run();
+    setThreadPending(false);
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: label });
+      return;
+    }
+    onRefresh();
+  };
 
   if (diffQuery.isPending && !diffQuery.data) {
     return (
@@ -113,6 +272,11 @@ export function PullRequestCodeTab({
     );
   }
 
+  const orphanThreads = detail.reviewThreads.filter(
+    (thread) =>
+      thread.line === null || !files.some((file) => resolveFileDiffPath(file) === thread.path),
+  );
+
   return (
     <DiffWorkerPoolProvider>
       <div className="flex h-full min-h-0 flex-col">
@@ -122,13 +286,16 @@ export function PullRequestCodeTab({
           </span>
           <PullRequestDiffStat additions={lineStat.additions} deletions={lineStat.deletions} />
           {diffQuery.data?.truncated ? <span>diff truncated</span> : null}
+          {review.inlineComment ? <span>select lines to comment</span> : null}
         </PullRequestMetaLine>
         {/* The viewer renders at its natural height, so its host element is what scrolls —
             the same contract the thread diff panel uses. */}
-        <div className="min-h-0 flex-1">
-          <CodeView
-            className="diff-render-surface h-full min-h-0 overflow-auto"
+        <div className="min-h-0 flex-1 overflow-auto">
+          <CodeView<ReviewAnnotationGroup>
+            className="diff-render-surface"
             items={items}
+            selectedLines={selectedLines}
+            onSelectedLinesChange={setSelectedLines}
             options={{
               diffStyle: "unified",
               lineDiffType: "none",
@@ -138,6 +305,9 @@ export function PullRequestCodeTab({
               stickyHeaders: true,
               itemMetrics: { diffHeaderHeight: 33 },
               layout: { paddingTop: 0, paddingBottom: 8, gap: 8 },
+              enableGutterUtility: review.inlineComment && draft === null,
+              enableLineSelection: review.inlineComment && draft === null,
+              onLineSelectionEnd: beginComment,
             }}
             renderHeaderPrefix={(item) => {
               const collapsed = collapsedFiles.has(item.id);
@@ -162,8 +332,120 @@ export function PullRequestCodeTab({
                 </button>
               );
             }}
+            renderAnnotation={(annotation) => (
+              <div className="py-1">
+                {annotation.metadata.threads.map((thread) => (
+                  <ReviewThreadCard
+                    key={thread.id}
+                    thread={thread}
+                    workspaceRoot={detail.workspaceRoot}
+                    canReply={review.reply}
+                    canResolve={review.resolve}
+                    pending={threadPending}
+                    onReply={(body) =>
+                      void runThreadCommand("Reply could not be posted", () =>
+                        replyToThread({
+                          environmentId,
+                          input: { ...reference, threadId: thread.id, body },
+                        }),
+                      )
+                    }
+                    onToggleResolved={() =>
+                      void runThreadCommand("The conversation could not be updated", () =>
+                        setThreadResolution({
+                          environmentId,
+                          input: {
+                            ...reference,
+                            threadId: thread.id,
+                            resolved: !thread.isResolved,
+                          },
+                        }),
+                      )
+                    }
+                  />
+                ))}
+                {annotation.metadata.pending.map((comment) => (
+                  <PendingReviewCommentCard
+                    key={comment.id}
+                    comment={comment}
+                    onRemove={() => removeComment(reviewKey, comment.id)}
+                  />
+                ))}
+                {annotation.metadata.draft && draft ? (
+                  <ReviewCommentComposer
+                    lineLabel={`${draft.path}:${draft.line}`}
+                    pending={false}
+                    onCancel={() => {
+                      setDraft(null);
+                      setSelectedLines(null);
+                    }}
+                    onSubmit={(body) => {
+                      addComment(reviewKey, {
+                        id: `${draft.side}:${draft.path}:${draft.line}:${body.length}:${pendingComments.length}`,
+                        path: draft.path,
+                        line: draft.line,
+                        side: draft.side,
+                        body,
+                      });
+                      setDraft(null);
+                      setSelectedLines(null);
+                    }}
+                  />
+                ) : null}
+              </div>
+            )}
           />
+          {orphanThreads.length > 0 ? (
+            <section className="border-t border-border/60 px-5 py-4">
+              <h2 className="text-xs font-medium text-muted-foreground">
+                Conversations not on the current diff
+              </h2>
+              <div className="mt-2 space-y-2">
+                {orphanThreads.map((thread) => (
+                  <div key={thread.id}>
+                    <p className="px-3 text-xs text-muted-foreground">
+                      {thread.path}
+                      {thread.line === null ? "" : `:${thread.line}`}
+                    </p>
+                    <ReviewThreadCard
+                      thread={thread}
+                      workspaceRoot={detail.workspaceRoot}
+                      canReply={review.reply}
+                      canResolve={review.resolve}
+                      pending={threadPending}
+                      onReply={(body) =>
+                        void runThreadCommand("Reply could not be posted", () =>
+                          replyToThread({
+                            environmentId,
+                            input: { ...reference, threadId: thread.id, body },
+                          }),
+                        )
+                      }
+                      onToggleResolved={() =>
+                        void runThreadCommand("The conversation could not be updated", () =>
+                          setThreadResolution({
+                            environmentId,
+                            input: {
+                              ...reference,
+                              threadId: thread.id,
+                              resolved: !thread.isResolved,
+                            },
+                          }),
+                        )
+                      }
+                    />
+                  </div>
+                ))}
+              </div>
+            </section>
+          ) : null}
         </div>
+        <PullRequestReviewBar
+          environmentId={environmentId}
+          reference={reference}
+          verdicts={review.verdicts}
+          onSubmitted={onRefresh}
+        />
       </div>
     </DiffWorkerPoolProvider>
   );

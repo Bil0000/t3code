@@ -13,6 +13,9 @@ import type {
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
   PullRequestMergeability,
+  PullRequestReviewCommentDraft,
+  PullRequestReviewThread,
+  PullRequestReviewVerdict,
   PullRequestState,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
@@ -75,6 +78,7 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
   readonly checks: ReadonlyArray<PullRequestCheck>;
   readonly comments: ReadonlyArray<PullRequestComment>;
   readonly commentsTruncated: boolean;
+  readonly reviewThreads: ReadonlyArray<PullRequestReviewThread>;
   readonly commits: ReadonlyArray<PullRequestCommit>;
   readonly mergeCapabilities: PullRequestMergeCapabilities;
 }
@@ -130,5 +134,37 @@ export interface PullRequestProviderApi {
 
   readonly comment: (
     input: ProviderRepositoryRef & { readonly number: number; readonly body: string },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /**
+   * Sends a whole review at once. Only called for a verdict the host declared in
+   * `capabilities.review.verdicts`, and with line comments only where it declared
+   * `inlineComment`.
+   */
+  readonly submitReview: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly verdict: PullRequestReviewVerdict;
+      readonly body: string;
+      readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+    },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /** Only called when `capabilities.review.reply` is true. */
+  readonly replyToThread: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly threadId: string;
+      readonly body: string;
+    },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /** Only called when `capabilities.review.resolve` is true. */
+  readonly setThreadResolution: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly threadId: string;
+      readonly resolved: boolean;
+    },
   ) => Effect.Effect<void, PullRequestProviderError>;
 }

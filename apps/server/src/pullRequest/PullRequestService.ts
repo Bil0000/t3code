@@ -16,6 +16,10 @@ import {
   type PullRequestListResult,
   type PullRequestProviderSummary,
   type PullRequestRef,
+  type PullRequestReviewVerdict,
+  type PullRequestSubmitReviewInput,
+  type PullRequestThreadReplyInput,
+  type PullRequestThreadResolutionInput,
   type SourceControlProviderKind,
 } from "@t3tools/contracts";
 
@@ -49,8 +53,24 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<PullRequestDiffResult, PullRequestError>;
     readonly runAction: (input: PullRequestActionInput) => Effect.Effect<void, PullRequestError>;
     readonly comment: (input: PullRequestCommentInput) => Effect.Effect<void, PullRequestError>;
+    readonly submitReview: (
+      input: PullRequestSubmitReviewInput,
+    ) => Effect.Effect<void, PullRequestError>;
+    readonly replyToThread: (
+      input: PullRequestThreadReplyInput,
+    ) => Effect.Effect<void, PullRequestError>;
+    readonly setThreadResolution: (
+      input: PullRequestThreadResolutionInput,
+    ) => Effect.Effect<void, PullRequestError>;
   }
 >()("t3/pullRequest/PullRequestService") {}
+
+/** What a verdict is called when refusing it, so the sentence reads as an action. */
+const VERDICT_LABELS: Record<PullRequestReviewVerdict, string> = {
+  comment: "review",
+  approve: "approve",
+  "request-changes": "request changes on",
+};
 
 /** A project this page can read: its remote is on a host with an implementation. */
 interface SupportedProject {
@@ -427,6 +447,7 @@ export const make = Effect.gen(function* () {
                 checks: changeRequest.checks,
                 comments: changeRequest.comments,
                 commentsTruncated: changeRequest.commentsTruncated,
+                reviewThreads: changeRequest.reviewThreads,
                 commits: changeRequest.commits,
                 mergeCapabilities: changeRequest.mergeCapabilities,
               }),
@@ -512,7 +533,106 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  return PullRequestService.of({ list, detail, diff, runAction, comment });
+  const submitReview: PullRequestService["Service"]["submitReview"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        const review = project.api.capabilities.review;
+        const refuse = (detail: string) =>
+          Effect.fail(new PullRequestOperationError({ operation: "submitReview", detail }));
+        // The surface hides what a host cannot do, and this refuses it as well: a request that
+        // reached here anyway must not be handed to a provider that never claimed it.
+        if (!review.verdicts.includes(input.verdict)) {
+          return refuse(`This host cannot ${VERDICT_LABELS[input.verdict]} a change request.`);
+        }
+        if (input.comments.length > 0 && !review.inlineComment) {
+          return refuse("This host cannot comment on a line of a change request.");
+        }
+        // A verdict with nothing attached to it is a request every host rejects, and doing so
+        // here says which of the two is missing rather than reporting the host's refusal.
+        if (
+          input.verdict !== "approve" &&
+          input.body.trim().length === 0 &&
+          input.comments.length === 0
+        ) {
+          return refuse("A review needs a summary or at least one comment.");
+        }
+        return project.api
+          .submitReview({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            number: input.number,
+            verdict: input.verdict,
+            body: input.body,
+            comments: input.comments,
+          })
+          .pipe(Effect.mapError(toPullRequestError("submitReview")));
+      }),
+    );
+
+  const replyToThread: PullRequestService["Service"]["replyToThread"] = (input) =>
+    (input.body.trim().length === 0
+      ? Effect.fail(
+          new PullRequestOperationError({
+            operation: "replyToThread",
+            detail: "A reply cannot be empty.",
+          }),
+        )
+      : requireProject(input)
+    ).pipe(
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        if (!project.api.capabilities.review.reply) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "replyToThread",
+              detail: "This host cannot reply to a review conversation.",
+            }),
+          );
+        }
+        return project.api
+          .replyToThread({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            number: input.number,
+            threadId: input.threadId,
+            body: input.body,
+          })
+          .pipe(Effect.mapError(toPullRequestError("replyToThread")));
+      }),
+    );
+
+  const setThreadResolution: PullRequestService["Service"]["setThreadResolution"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        if (!project.api.capabilities.review.resolve) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "setThreadResolution",
+              detail: "This host cannot resolve a review conversation.",
+            }),
+          );
+        }
+        return project.api
+          .setThreadResolution({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            number: input.number,
+            threadId: input.threadId,
+            resolved: input.resolved,
+          })
+          .pipe(Effect.mapError(toPullRequestError("setThreadResolution")));
+      }),
+    );
+
+  return PullRequestService.of({
+    list,
+    detail,
+    diff,
+    runAction,
+    comment,
+    submitReview,
+    replyToThread,
+    setThreadResolution,
+  });
 });
 
 export const layer = Layer.effect(PullRequestService, make);

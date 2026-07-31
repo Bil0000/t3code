@@ -11,6 +11,7 @@ import type {
   PullRequestComment,
   PullRequestCommit,
   PullRequestMergeability,
+  PullRequestReviewThread,
   PullRequestState,
 } from "@t3tools/contracts";
 import { TrimmedNonEmptyString } from "@t3tools/contracts";
@@ -91,9 +92,22 @@ const RawCommentSchema = Schema.Struct({
   deleted: Schema.optional(Schema.Boolean),
   /** A comment still being drafted by its author. */
   pending: Schema.optional(Schema.Boolean),
+  /** Set on a reply, to the comment it answers — which may itself be a reply. */
+  parent: Schema.optional(Schema.NullOr(Schema.Struct({ id: Schema.Int }))),
   inline: Schema.optional(
-    Schema.NullOr(Schema.Struct({ path: Schema.optional(Schema.NullOr(Schema.String)) })),
+    Schema.NullOr(
+      Schema.Struct({
+        path: Schema.optional(Schema.NullOr(Schema.String)),
+        /** The line in the file as it was; set instead of `to` on a removed line. */
+        from: Schema.optional(Schema.NullOr(Schema.Int)),
+        /** The line in the file as it is now. */
+        to: Schema.optional(Schema.NullOr(Schema.Int)),
+        outdated: Schema.optional(Schema.NullOr(Schema.Boolean)),
+      }),
+    ),
   ),
+  /** Non-null once someone has marked the thread resolved. */
+  resolution: Schema.optional(Schema.NullOr(Schema.Unknown)),
   links: Schema.optional(
     Schema.NullOr(Schema.Struct({ html: Schema.optional(Schema.NullOr(RawLinkSchema)) })),
   ),
@@ -308,7 +322,71 @@ export function decodeViewerJson(raw: string): Result.Result<string | null, Deco
 
 export interface BitbucketComments {
   readonly comments: ReadonlyArray<PullRequestComment>;
+  /** The same page read as conversations, so the diff can pin them to their line. */
+  readonly threads: ReadonlyArray<PullRequestReviewThread>;
   readonly next: string | null;
+}
+
+/**
+ * Bitbucket returns one flat list, so a thread is reassembled from it: a comment pinned to a
+ * line opens a thread, and every reply that leads back to it belongs in it. A reply whose
+ * parent is on a page that was not read has nowhere to go, and is left out rather than shown
+ * as a thread of its own.
+ */
+function toReviewThreads(
+  comments: ReadonlyArray<Schema.Schema.Type<typeof RawCommentSchema>>,
+): ReadonlyArray<PullRequestReviewThread> {
+  const byId = new Map(comments.map((comment) => [comment.id, comment]));
+  const rootOf = (comment: Schema.Schema.Type<typeof RawCommentSchema>) => {
+    // Bounded by the number of comments read, so a parent cycle cannot spin here.
+    let current = comment;
+    for (let step = 0; step < byId.size; step += 1) {
+      const parent = current.parent === null ? undefined : byId.get(current.parent?.id ?? -1);
+      if (parent === undefined) return current;
+      current = parent;
+    }
+    return current;
+  };
+
+  const threads = new Map<number, PullRequestReviewThread>();
+  const replies = new Map<number, Array<Schema.Schema.Type<typeof RawCommentSchema>>>();
+  for (const comment of comments) {
+    const root = rootOf(comment);
+    const inline = root.inline;
+    const path = trimmed(inline?.path);
+    if (path === null) continue;
+    if (root.id === comment.id) {
+      // `to` is the line as the file stands now, `from` the line it replaced; a comment that
+      // carries only `from` was written against the removed side.
+      const side = inline?.to === null || inline?.to === undefined ? "left" : "right";
+      const line = side === "left" ? inline?.from : inline?.to;
+      threads.set(root.id, {
+        id: String(root.id),
+        path,
+        line: typeof line === "number" && line > 0 ? line : null,
+        side,
+        isResolved: root.resolution !== null && root.resolution !== undefined,
+        isOutdated: inline?.outdated === true,
+        comments: [],
+      });
+    }
+    const bucket = replies.get(root.id);
+    if (bucket === undefined) replies.set(root.id, [comment]);
+    else bucket.push(comment);
+  }
+
+  return [...threads.values()].flatMap((thread) => {
+    const entries = (replies.get(Number(thread.id)) ?? [])
+      .toSorted((left, right) => left.created_on.localeCompare(right.created_on))
+      .map((comment) => ({
+        id: String(comment.id),
+        author: toActor(comment.user),
+        body: comment.content?.raw ?? "",
+        createdAt: toIsoUtc(comment.created_on),
+        url: trimmed(comment.links?.html?.href),
+      }));
+    return entries.length === 0 ? [] : [{ ...thread, comments: entries }];
+  });
 }
 
 /**
@@ -321,6 +399,7 @@ export function decodeCommentsJson(raw: string): Result.Result<BitbucketComments
     return Result.fail(decoded.failure);
   }
   const comments: PullRequestComment[] = [];
+  const kept: Array<Schema.Schema.Type<typeof RawCommentSchema>> = [];
   for (const entry of decoded.success.values) {
     const decodedComment = decodeCommentEntry(entry);
     if (Exit.isFailure(decodedComment)) continue;
@@ -328,6 +407,7 @@ export function decodeCommentsJson(raw: string): Result.Result<BitbucketComments
     if (comment.deleted === true || comment.pending === true) continue;
     const body = comment.content?.raw ?? "";
     if (body.trim().length === 0) continue;
+    kept.push(comment);
     const path = trimmed(comment.inline?.path);
     comments.push({
       id: String(comment.id),
@@ -340,7 +420,11 @@ export function decodeCommentsJson(raw: string): Result.Result<BitbucketComments
       reviewState: null,
     });
   }
-  return Result.succeed({ comments, next: trimmed(decoded.success.next) });
+  return Result.succeed({
+    comments,
+    threads: toReviewThreads(kept),
+    next: trimmed(decoded.success.next),
+  });
 }
 
 export function decodeCommitsJson(

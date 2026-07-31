@@ -11,6 +11,9 @@ import type {
   PullRequestLabel,
   PullRequestMergeCapabilities,
   PullRequestMergeability,
+  PullRequestReviewCommentDraft,
+  PullRequestReviewThread,
+  PullRequestReviewVerdict,
   PullRequestState,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -118,9 +121,17 @@ const RawReviewThreadsSchema = Schema.Struct({
           totalCount: Schema.optional(Schema.Int),
           nodes: Schema.Array(
             Schema.Struct({
+              id: Schema.optional(Schema.NullOr(Schema.String)),
               isResolved: Schema.optional(Schema.Boolean),
+              isOutdated: Schema.optional(Schema.Boolean),
               path: Schema.optional(Schema.NullOr(Schema.String)),
-              comments: Schema.Struct({ nodes: Schema.Array(RawCommentSchema) }),
+              /** Null once the thread's line has left the diff, which `isOutdated` reports. */
+              line: Schema.optional(Schema.NullOr(Schema.Int)),
+              diffSide: Schema.optional(Schema.NullOr(Schema.String)),
+              comments: Schema.Struct({
+                totalCount: Schema.optional(Schema.Int),
+                nodes: Schema.Array(RawCommentSchema),
+              }),
             }),
           ),
         }),
@@ -220,9 +231,14 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
       reviewThreads(first: 50) {
         totalCount
         nodes {
+          id
           isResolved
+          isOutdated
           path
-          comments(first: 1) {
+          line
+          diffSide
+          comments(first: 50) {
+            totalCount
             nodes { id author { login avatarUrl } body createdAt url }
           }
         }
@@ -243,6 +259,60 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
     }
   }
 }`;
+
+export const REVIEW_THREAD_REPLY_GRAPHQL_MUTATION = `mutation($threadId: ID!, $body: String!) {
+  addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
+    comment { id }
+  }
+}`;
+
+export const RESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION = `mutation($threadId: ID!) {
+  resolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } }
+}`;
+
+export const UNRESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION = `mutation($threadId: ID!) {
+  unresolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } }
+}`;
+
+/** The body of `POST /repos/{owner}/{repo}/pulls/{number}/reviews`, which sends a review whole. */
+const ReviewSubmissionSchema = Schema.Struct({
+  event: Schema.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),
+  body: Schema.String,
+  comments: Schema.Array(
+    Schema.Struct({
+      path: Schema.String,
+      line: Schema.Int,
+      side: Schema.Literals(["LEFT", "RIGHT"]),
+      body: Schema.String,
+    }),
+  ),
+});
+
+const encodeReviewSubmission = Schema.encodeSync(Schema.fromJsonString(ReviewSubmissionSchema));
+
+const REVIEW_EVENTS: Record<PullRequestReviewVerdict, "COMMENT" | "APPROVE" | "REQUEST_CHANGES"> = {
+  comment: "COMMENT",
+  approve: "APPROVE",
+  "request-changes": "REQUEST_CHANGES",
+};
+
+/** The whole review as one request body, which is how GitHub keeps it invisible until sent. */
+export function buildReviewSubmissionJson(input: {
+  readonly verdict: PullRequestReviewVerdict;
+  readonly body: string;
+  readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+}): string {
+  return encodeReviewSubmission({
+    event: REVIEW_EVENTS[input.verdict],
+    body: input.body,
+    comments: input.comments.map((comment) => ({
+      path: comment.path,
+      line: comment.line,
+      side: comment.side === "left" ? ("LEFT" as const) : ("RIGHT" as const),
+      body: comment.body,
+    })),
+  });
+}
 
 export const REPOSITORY_MERGE_CAPABILITIES_JSON_FIELDS =
   "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed";
@@ -520,6 +590,8 @@ export function decodePullRequestDetailJson(
 
 export interface GitHubReviewThreadComments {
   readonly comments: ReadonlyArray<PullRequestComment>;
+  /** Whole conversations, kept anchored so the diff can pin them to their line. */
+  readonly reviewThreads: ReadonlyArray<PullRequestReviewThread>;
   readonly truncated: boolean;
   /**
    * Everyone on the review: those still asked and those who have already answered. Whoever has
@@ -563,6 +635,31 @@ export function decodeReviewThreadsJson(
       },
     ];
   });
+  const reviewThreads = threads.nodes.flatMap((thread): ReadonlyArray<PullRequestReviewThread> => {
+    const path = trimmed(thread.path);
+    const id = trimmed(thread.id);
+    if (path === null || id === null || thread.comments.nodes.length === 0) return [];
+    return [
+      {
+        id,
+        path,
+        // Null once the thread's line has left the diff, which is exactly when GitHub reports
+        // it outdated. Such a thread is listed rather than pinned to a line it no longer has.
+        line:
+          thread.line !== null && thread.line !== undefined && thread.line > 0 ? thread.line : null,
+        side: thread.diffSide?.toUpperCase() === "LEFT" ? "left" : "right",
+        isResolved: thread.isResolved === true,
+        isOutdated: thread.isOutdated === true,
+        comments: thread.comments.nodes.map((comment) => ({
+          id: comment.id,
+          author: toActor(comment.author),
+          body: comment.body ?? "",
+          createdAt: comment.createdAt,
+          url: trimmed(comment.url),
+        })),
+      },
+    ];
+  });
   const pullRequest = decoded.success.data.repository.pullRequest;
   const avatarsByLogin = new Map<string, string>();
   for (const raw of [
@@ -587,6 +684,7 @@ export function decodeReviewThreadsJson(
   }
   return Result.succeed({
     comments,
+    reviewThreads,
     truncated: (threads.totalCount ?? threads.nodes.length) > threads.nodes.length,
     reviewers: [...reviewers.values()],
     avatarsByLogin,

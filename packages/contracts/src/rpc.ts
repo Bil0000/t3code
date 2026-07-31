@@ -73,6 +73,9 @@ import {
   PullRequestListResult,
   PullRequestOperationError,
   PullRequestRef,
+  PullRequestSubmitReviewInput,
+  PullRequestThreadReplyInput,
+  PullRequestThreadResolutionInput,
   PullRequestUnavailableError,
 } from "./pullRequest.ts";
 import {
@@ -262,6 +265,9 @@ export const WS_METHODS = {
   pullRequestsDiff: "pullRequests.diff",
   pullRequestsRunAction: "pullRequests.runAction",
   pullRequestsComment: "pullRequests.comment",
+  pullRequestsSubmitReview: "pullRequests.submitReview",
+  pullRequestsReplyToThread: "pullRequests.replyToThread",
+  pullRequestsSetThreadResolution: "pullRequests.setThreadResolution",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -465,6 +471,27 @@ export const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment,
   success: Schema.Void,
   error: PullRequestRpcError,
 });
+
+export const WsPullRequestsSubmitReviewRpc = Rpc.make(WS_METHODS.pullRequestsSubmitReview, {
+  payload: PullRequestSubmitReviewInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsReplyToThreadRpc = Rpc.make(WS_METHODS.pullRequestsReplyToThread, {
+  payload: PullRequestThreadReplyInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsSetThreadResolutionRpc = Rpc.make(
+  WS_METHODS.pullRequestsSetThreadResolution,
+  {
+    payload: PullRequestThreadResolutionInput,
+    success: Schema.Void,
+    error: PullRequestRpcError,
+  },
+);
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
   WS_METHODS.sourceControlLookupRepository,
@@ -865,6 +892,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsDiffRpc,
   WsPullRequestsRunActionRpc,
   WsPullRequestsCommentRpc,
+  WsPullRequestsSubmitReviewRpc,
+  WsPullRequestsReplyToThreadRpc,
+  WsPullRequestsSetThreadResolutionRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
