@@ -151,37 +151,27 @@ export function PullRequestActorLabel({
   );
 }
 
+/** Added and removed lines, coloured the way every host colours them. */
 export function PullRequestDiffStat({
   additions,
   deletions,
-  tone,
   className,
 }: {
   additions: number;
   deletions: number;
-  tone?: "muted" | "diff";
   className?: string;
 }) {
-  const diffTone = tone === "diff";
   // Not every host reports line counts. Showing "+0 -0" would read as an empty change set
   // rather than as a missing one, so the stat is left out instead.
   if (additions === 0 && deletions === 0) {
     return null;
   }
   return (
-    <span
-      className={cn(
-        "inline-flex items-baseline gap-1 tabular-nums",
-        !diffTone && "text-muted-foreground/70",
-        className,
-      )}
-    >
-      <span className={diffTone ? "text-emerald-600 dark:text-emerald-300/90" : undefined}>
+    <span className={cn("inline-flex items-baseline gap-1 tabular-nums", className)}>
+      <span className="text-emerald-600 dark:text-emerald-300/90">
         +{additions.toLocaleString()}
       </span>
-      <span className={diffTone ? "text-destructive" : undefined}>
-        -{deletions.toLocaleString()}
-      </span>
+      <span className="text-destructive">-{deletions.toLocaleString()}</span>
     </span>
   );
 }

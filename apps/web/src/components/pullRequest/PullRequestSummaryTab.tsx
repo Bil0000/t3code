@@ -185,7 +185,6 @@ export function PullRequestSummaryTab({
               <PullRequestDiffStat
                 additions={detail.additions}
                 deletions={detail.deletions}
-                tone="diff"
                 className="ml-1 shrink-0"
               />
             </span>

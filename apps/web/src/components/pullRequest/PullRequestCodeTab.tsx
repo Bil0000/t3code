@@ -120,11 +120,7 @@ export function PullRequestCodeTab({
           <span>
             {files.length} {files.length === 1 ? "file" : "files"}
           </span>
-          <PullRequestDiffStat
-            additions={lineStat.additions}
-            deletions={lineStat.deletions}
-            tone="diff"
-          />
+          <PullRequestDiffStat additions={lineStat.additions} deletions={lineStat.deletions} />
           {diffQuery.data?.truncated ? <span>diff truncated</span> : null}
         </PullRequestMetaLine>
         {/* The viewer renders at its natural height, so its host element is what scrolls —
