@@ -304,7 +304,7 @@ function PullRequestsRouteView() {
               COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
             )}
           >
-            <h1 className="truncate text-sm font-medium">Pull requests</h1>
+            <h1 className="truncate text-sm font-medium">Pull Requests</h1>
             <div className="min-w-0 flex-1" />
             <Button
               size="icon-sm"

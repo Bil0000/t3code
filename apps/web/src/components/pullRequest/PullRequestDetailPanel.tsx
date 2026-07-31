@@ -253,8 +253,12 @@ export function PullRequestDetailPanel({
                           >
                             {allowedMergeMethods.map((method) => (
                               <MenuRadioItem key={method} value={method} disabled={actionPending}>
-                                <GitMergeIcon className="size-3.5" />
-                                <span className="capitalize">{method}</span>
+                                {/* The radio item lays its children out as one block, so the
+                                    icon and the label need their own row to share a line. */}
+                                <span className="flex min-w-0 items-center gap-2">
+                                  <GitMergeIcon className="size-3.5" />
+                                  <span className="capitalize">{method}</span>
+                                </span>
                               </MenuRadioItem>
                             ))}
                           </MenuRadioGroup>

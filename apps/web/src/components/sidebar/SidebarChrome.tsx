@@ -133,7 +133,7 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
         <SidebarMenuItem>
           <SidebarMenuButton onClick={handlePullRequestsClick}>
             <GitPullRequestIcon />
-            <span>Pull requests</span>
+            <span>Pull Requests</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
