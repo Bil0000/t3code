@@ -617,10 +617,9 @@ export const make = Effect.gen(function* () {
                     start_sha: refs.startSha,
                     position_type: "text",
                     // Both paths are sent because GitLab resolves a position against both
-                    // sides of the diff. A renamed file is the one case this gets wrong, and
-                    // GitLab answers that with a position it cannot resolve rather than a
-                    // comment in the wrong place.
-                    old_path: comment.path,
+                    // sides of the diff. They differ only for a renamed file, which is why the
+                    // draft carries the name the file had before the change.
+                    old_path: comment.oldPath ?? comment.path,
                     new_path: comment.path,
                     ...(comment.side === "left"
                       ? { old_line: comment.line }

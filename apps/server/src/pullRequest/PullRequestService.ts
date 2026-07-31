@@ -362,6 +362,7 @@ export const make = Effect.gen(function* () {
             .listChangeRequests({
               cwd: project.project.workspaceRoot,
               repository: project.repository,
+              host: project.host,
               state: input.state,
               involvement,
               viewer,
@@ -413,6 +414,7 @@ export const make = Effect.gen(function* () {
           .getChangeRequest({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
+            host: project.host,
             number: input.number,
           })
           .pipe(
@@ -464,6 +466,7 @@ export const make = Effect.gen(function* () {
               .getDiff({
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
+                host: project.host,
                 number: input.number,
               })
               .pipe(Effect.mapError(toPullRequestError("diff")))
@@ -489,10 +492,25 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
+        // A strategy the host does not offer must be refused rather than passed on: every
+        // provider maps an unrecognised method to its own default, so asking Azure DevOps to
+        // rebase would quietly merge instead of failing.
+        if (
+          input.mergeMethod !== undefined &&
+          !project.api.capabilities.mergeMethods.includes(input.mergeMethod)
+        ) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "runAction",
+              detail: `This host cannot merge with the ${input.mergeMethod} strategy.`,
+            }),
+          );
+        }
         return project.api
           .runAction({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
+            host: project.host,
             number: input.number,
             action: input.action,
             ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
@@ -526,6 +544,7 @@ export const make = Effect.gen(function* () {
           .comment({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
+            host: project.host,
             number: input.number,
             body: input.body,
           })
@@ -560,6 +579,7 @@ export const make = Effect.gen(function* () {
           .submitReview({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
+            host: project.host,
             number: input.number,
             verdict: input.verdict,
             body: input.body,
@@ -592,6 +612,7 @@ export const make = Effect.gen(function* () {
           .replyToThread({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
+            host: project.host,
             number: input.number,
             threadId: input.threadId,
             body: input.body,
@@ -615,6 +636,7 @@ export const make = Effect.gen(function* () {
           .setThreadResolution({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
+            host: project.host,
             number: input.number,
             threadId: input.threadId,
             resolved: input.resolved,

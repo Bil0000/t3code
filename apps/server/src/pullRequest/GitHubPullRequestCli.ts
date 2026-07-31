@@ -22,6 +22,7 @@ import {
   decodePullRequestListJson,
   decodeRepositoryMergeCapabilitiesJson,
   decodeReviewThreadsJson,
+  encodeGraphQlRequestJson,
   PULL_REQUEST_DETAIL_JSON_FIELDS,
   PULL_REQUEST_LIST_JSON_FIELDS,
   REPOSITORY_MERGE_CAPABILITIES_JSON_FIELDS,
@@ -97,6 +98,7 @@ export class GitHubPullRequestCli extends Context.Service<
     readonly listPullRequests: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
       readonly state: PullRequestListState;
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
@@ -106,12 +108,14 @@ export class GitHubPullRequestCli extends Context.Service<
     readonly getPullRequestDetail: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
       readonly number: number;
     }) => Effect.Effect<GitHubPullRequestDetail, GitHubPullRequestCliError>;
 
     readonly getPullRequestDiff: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
       readonly number: number;
     }) => Effect.Effect<
       { readonly patch: string; readonly truncated: boolean },
@@ -121,6 +125,7 @@ export class GitHubPullRequestCli extends Context.Service<
     readonly listReviewThreadComments: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
       readonly number: number;
     }) => Effect.Effect<GitHubReviewThreadComments, GitHubPullRequestCliError>;
 
@@ -128,17 +133,20 @@ export class GitHubPullRequestCli extends Context.Service<
     readonly listActorAvatars: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
       readonly ids: ReadonlyArray<string>;
     }) => Effect.Effect<ReadonlyMap<string, string>, GitHubPullRequestCliError>;
 
     readonly getRepositoryMergeCapabilities: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
     }) => Effect.Effect<PullRequestMergeCapabilities, GitHubPullRequestCliError>;
 
     readonly runPullRequestAction: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
       readonly number: number;
       readonly action: PullRequestAction;
       readonly mergeMethod?: PullRequestMergeMethod;
@@ -147,6 +155,7 @@ export class GitHubPullRequestCli extends Context.Service<
     readonly commentOnPullRequest: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
       readonly number: number;
       readonly body: string;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
@@ -154,6 +163,7 @@ export class GitHubPullRequestCli extends Context.Service<
     readonly submitReview: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
       readonly number: number;
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
@@ -163,6 +173,7 @@ export class GitHubPullRequestCli extends Context.Service<
     readonly replyToReviewThread: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
       readonly threadId: string;
       readonly body: string;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
@@ -170,6 +181,7 @@ export class GitHubPullRequestCli extends Context.Service<
     readonly setReviewThreadResolution: (input: {
       readonly cwd: string;
       readonly repository: string;
+      readonly host: string;
       readonly threadId: string;
       readonly resolved: boolean;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
@@ -177,18 +189,16 @@ export class GitHubPullRequestCli extends Context.Service<
 >()("t3/pullRequest/GitHubPullRequestCli") {}
 
 /**
- * `gh --repo` accepts the host-qualified form directly, but the GraphQL API takes owner and
- * name as separate arguments and the host as a flag, so the selector is split here.
+ * The GraphQL API takes owner and name as separate arguments, so `owner/repo` is split here.
+ * The host is not read off the identity: it travels alongside it, because the identity a
+ * project records is the path below its host and never names the host itself.
  */
 export function parseRepositorySelector(value: string): {
-  readonly host: string | null;
   readonly owner: string;
   readonly name: string;
 } {
   const parts = value.trim().split("/").filter(Boolean);
-  const name = parts.at(-1) ?? "";
-  const owner = parts.at(-2) ?? "";
-  return { host: parts.length > 2 ? (parts.at(-3) ?? null) : null, owner, name };
+  return { name: parts.at(-1) ?? "", owner: parts.at(-2) ?? "" };
 }
 
 function involvementArgs(input: {
@@ -229,33 +239,35 @@ function actionArgs(
 export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
 
-  const repositoryArgs = (repository: string) => ["--repo", repository];
+  // `gh` resolves a bare `owner/repo` against whichever host it defaults to, which is
+  // github.com. Naming the host makes a GitHub Enterprise repository resolve to its own
+  // install rather than to a same-named repository on github.com.
+  const repositoryArgs = (input: { readonly host: string; readonly repository: string }) => [
+    "--repo",
+    `${input.host}/${input.repository}`,
+  ];
 
   /**
    * A GraphQL mutation whose answer is not read back. `gh` exits non-zero on a GraphQL error,
    * so a failed mutation is already a failed command rather than a body to inspect.
+   *
+   * The query and its variables travel over stdin as one document: a variable can carry a
+   * body the reader wrote, and argv is visible in process listings and echoed back inside
+   * process-runner failure messages.
    */
-  const graphql = (
-    cwd: string,
-    repository: string,
-    query: string,
-    variables: ReadonlyArray<readonly [string, string]>,
-  ) => {
-    const { host } = parseRepositorySelector(repository);
-    return github
+  const graphql = (input: {
+    readonly cwd: string;
+    readonly host: string;
+    readonly query: string;
+    readonly variables: Readonly<Record<string, string>>;
+  }) =>
+    github
       .execute({
-        cwd,
-        args: [
-          "api",
-          "graphql",
-          ...(host === null ? [] : ["--hostname", host]),
-          ...variables.flatMap(([flag, value]) => [flag, value]),
-          "-f",
-          `query=${query}`,
-        ],
+        cwd: input.cwd,
+        args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
+        stdin: encodeGraphQlRequestJson({ query: input.query, variables: input.variables }),
       })
       .pipe(Effect.asVoid);
-  };
 
   return GitHubPullRequestCli.of({
     getViewerLogin: (input) =>
@@ -275,7 +287,7 @@ export const make = Effect.gen(function* () {
           args: [
             "pr",
             "list",
-            ...repositoryArgs(input.repository),
+            ...repositoryArgs(input),
             ...involvementArgs(input),
             "--state",
             input.state,
@@ -319,7 +331,7 @@ export const make = Effect.gen(function* () {
             "pr",
             "view",
             String(input.number),
-            ...repositoryArgs(input.repository),
+            ...repositoryArgs(input),
             "--json",
             PULL_REQUEST_DETAIL_JSON_FIELDS,
           ],
@@ -348,7 +360,7 @@ export const make = Effect.gen(function* () {
             "pr",
             "diff",
             String(input.number),
-            ...repositoryArgs(input.repository),
+            ...repositoryArgs(input),
             "--color",
             "never",
             "--patch",
@@ -364,14 +376,15 @@ export const make = Effect.gen(function* () {
         ),
 
     listReviewThreadComments: (input) => {
-      const { host, owner, name } = parseRepositorySelector(input.repository);
+      const { owner, name } = parseRepositorySelector(input.repository);
       return github
         .execute({
           cwd: input.cwd,
           args: [
             "api",
             "graphql",
-            ...(host === null ? [] : ["--hostname", host]),
+            "--hostname",
+            input.host,
             "-f",
             `owner=${owner}`,
             "-f",
@@ -403,14 +416,14 @@ export const make = Effect.gen(function* () {
       if (input.ids.length === 0) {
         return Effect.succeed(new Map<string, string>());
       }
-      const { host } = parseRepositorySelector(input.repository);
       return github
         .execute({
           cwd: input.cwd,
           args: [
             "api",
             "graphql",
-            ...(host === null ? [] : ["--hostname", host]),
+            "--hostname",
+            input.host,
             ...input.ids.flatMap((id) => ["-f", `ids[]=${id}`]),
             "-f",
             `query=${ACTOR_AVATARS_GRAPHQL_QUERY}`,
@@ -440,7 +453,7 @@ export const make = Effect.gen(function* () {
           args: [
             "repo",
             "view",
-            input.repository,
+            `${input.host}/${input.repository}`,
             "--json",
             REPOSITORY_MERGE_CAPABILITIES_JSON_FIELDS,
           ],
@@ -466,13 +479,7 @@ export const make = Effect.gen(function* () {
       return github
         .execute({
           cwd: input.cwd,
-          args: [
-            "pr",
-            subcommand!,
-            String(input.number),
-            ...repositoryArgs(input.repository),
-            ...flags,
-          ],
+          args: ["pr", subcommand!, String(input.number), ...repositoryArgs(input), ...flags],
         })
         .pipe(Effect.asVoid);
     },
@@ -487,7 +494,7 @@ export const make = Effect.gen(function* () {
             "pr",
             "comment",
             String(input.number),
-            ...repositoryArgs(input.repository),
+            ...repositoryArgs(input),
             "--body-file",
             "-",
           ],
@@ -496,7 +503,7 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.asVoid),
 
     submitReview: (input) => {
-      const { host, owner, name } = parseRepositorySelector(input.repository);
+      const { owner, name } = parseRepositorySelector(input.repository);
       return github
         .execute({
           cwd: input.cwd,
@@ -507,7 +514,8 @@ export const make = Effect.gen(function* () {
             "api",
             "--method",
             "POST",
-            ...(host === null ? [] : ["--hostname", host]),
+            "--hostname",
+            input.host,
             `repos/${owner}/${name}/pulls/${input.number}/reviews`,
             "--input",
             "-",
@@ -522,20 +530,22 @@ export const make = Effect.gen(function* () {
     },
 
     replyToReviewThread: (input) =>
-      graphql(input.cwd, input.repository, REVIEW_THREAD_REPLY_GRAPHQL_MUTATION, [
-        ["-f", `threadId=${input.threadId}`],
-        ["-f", `body=${input.body}`],
-      ]),
+      graphql({
+        cwd: input.cwd,
+        host: input.host,
+        query: REVIEW_THREAD_REPLY_GRAPHQL_MUTATION,
+        variables: { threadId: input.threadId, body: input.body },
+      }),
 
     setReviewThreadResolution: (input) =>
-      graphql(
-        input.cwd,
-        input.repository,
-        input.resolved
+      graphql({
+        cwd: input.cwd,
+        host: input.host,
+        query: input.resolved
           ? RESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION
           : UNRESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
-        [["-f", `threadId=${input.threadId}`]],
-      ),
+        variables: { threadId: input.threadId },
+      }),
   });
 });
 

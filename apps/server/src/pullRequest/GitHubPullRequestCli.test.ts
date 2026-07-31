@@ -63,6 +63,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         state: "open",
         involvement: "all",
         viewer: "bilal",
@@ -73,7 +74,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       assert.isFalse(batch.truncated);
       const args = callAt(0).args;
       expect(args).toContain("--repo");
-      expect(args).toContain("acme/web");
+      expect(args).toContain("github.com/acme/web");
       expect(args).toContain("--state");
       expect(args).toContain("open");
       expect(args).toContain("--limit");
@@ -89,6 +90,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       const batch = yield* cli.listPullRequests({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         state: "open",
         involvement: "all",
         viewer: "bilal",
@@ -108,6 +110,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* cli.listPullRequests({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         state: "closed",
         involvement: "all",
         viewer: "bilal",
@@ -127,6 +130,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* cli.listPullRequests({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         state: "open",
         involvement: "authored",
         viewer: "bilal",
@@ -147,6 +151,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* cli.listPullRequests({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         state: "open",
         involvement: "reviewing",
         viewer: "bilal",
@@ -165,12 +170,20 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* cli.runPullRequestAction({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         number: 7,
         action: "merge",
         mergeMethod: "squash",
       });
 
-      expect(callAt(0).args).toEqual(["pr", "merge", "7", "--repo", "acme/web", "--squash"]);
+      expect(callAt(0).args).toEqual([
+        "pr",
+        "merge",
+        "7",
+        "--repo",
+        "github.com/acme/web",
+        "--squash",
+      ]);
     }),
   );
 
@@ -182,12 +195,20 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* cli.runPullRequestAction({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         number: 7,
         action: "draft",
       });
 
       // gh has no `draft` command; going back is `ready --undo`.
-      expect(callAt(0).args).toEqual(["pr", "ready", "7", "--repo", "acme/web", "--undo"]);
+      expect(callAt(0).args).toEqual([
+        "pr",
+        "ready",
+        "7",
+        "--repo",
+        "github.com/acme/web",
+        "--undo",
+      ]);
     }),
   );
 
@@ -199,6 +220,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* cli.commentOnPullRequest({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         number: 7,
         body: "Looks good.",
       });
@@ -209,12 +231,32 @@ layer("GitHubPullRequestCli.layer", (it) => {
         "comment",
         "7",
         "--repo",
-        "acme/web",
+        "github.com/acme/web",
         "--body-file",
         "-",
       ]);
       expect(callAt(0).stdin).toBe("Looks good.");
       expect(callAt(0).args).not.toContain("Looks good.");
+    }),
+  );
+
+  it.effect("names the host on every repository it addresses", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.acme.dev",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+      });
+
+      // A bare `owner/repo` resolves against github.com, which is a different repository.
+      expect(callAt(0).args).toContain("github.acme.dev/acme/web");
     }),
   );
 
@@ -236,7 +278,8 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       yield* cli.listReviewThreadComments({
         cwd: "/w",
-        repository: "github.acme.dev/acme/web",
+        repository: "acme/web",
+        host: "github.acme.dev",
         number: 7,
       });
 
@@ -256,6 +299,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       const diff = yield* cli.getPullRequestDiff({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         number: 7,
       });
 
@@ -267,7 +311,12 @@ layer("GitHubPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
-      const avatars = yield* cli.listActorAvatars({ cwd: "/w", repository: "acme/web", ids: [] });
+      const avatars = yield* cli.listActorAvatars({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        ids: [],
+      });
 
       assert.strictEqual(avatars.size, 0);
       assert.strictEqual(mockedExecute.mock.calls.length, 0);
@@ -293,6 +342,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* cli.submitReview({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         number: 7,
         verdict: "approve",
         body: "Looks right.",
@@ -303,6 +353,8 @@ layer("GitHubPullRequestCli.layer", (it) => {
         "api",
         "--method",
         "POST",
+        "--hostname",
+        "github.com",
         "repos/acme/web/pulls/7/reviews",
         "--input",
         "-",
@@ -318,7 +370,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("replies to a thread by its node id", () =>
+  it.effect("sends a reply body over stdin, never in argv", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
@@ -326,14 +378,28 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* cli.replyToReviewThread({
         cwd: "/w",
         repository: "acme/web",
+        host: "github.com",
         threadId: "PRRT_1",
-        body: "Fixed.",
+        body: "Fixed in 42ff8ec.",
       });
 
-      const args = callAt(0).args;
-      expect(args).toContain("threadId=PRRT_1");
-      expect(args).toContain("body=Fixed.");
-      expect(args.join(" ")).toContain("addPullRequestReviewThreadReply");
+      // A reply is the reader's own words, so it travels the same way a comment body does.
+      expect(callAt(0).args).toEqual([
+        "api",
+        "graphql",
+        "--hostname",
+        "github.com",
+        "--input",
+        "-",
+      ]);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const request = JSON.parse(callAt(0).stdin ?? "") as {
+        query: string;
+        variables: Record<string, string>;
+      };
+      expect(request.query).toContain("addPullRequestReviewThreadReply");
+      expect(request.variables).toEqual({ threadId: "PRRT_1", body: "Fixed in 42ff8ec." });
+      expect(callAt(0).args.join(" ")).not.toContain("Fixed in 42ff8ec.");
     }),
   );
 
@@ -344,19 +410,23 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       yield* cli.setReviewThreadResolution({
         cwd: "/w",
-        repository: "github.acme.dev/acme/web",
+        repository: "acme/web",
+        host: "github.acme.dev",
         threadId: "PRRT_1",
         resolved: true,
       });
       yield* cli.setReviewThreadResolution({
         cwd: "/w",
-        repository: "github.acme.dev/acme/web",
+        repository: "acme/web",
+        host: "github.acme.dev",
         threadId: "PRRT_1",
         resolved: false,
       });
 
-      expect(callAt(0).args.join(" ")).toContain("resolveReviewThread(");
-      expect(callAt(1).args.join(" ")).toContain("unresolveReviewThread(");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const parse = (index: number) => JSON.parse(callAt(index).stdin ?? "") as { query: string };
+      expect(parse(0).query).toContain("resolveReviewThread(");
+      expect(parse(1).query).toContain("unresolveReviewThread(");
       // A GitHub Enterprise thread is resolved on its own host, not on github.com.
       expect(callAt(0).args).toContain("github.acme.dev");
     }),
@@ -368,7 +438,12 @@ layer("GitHubPullRequestCli.layer", (it) => {
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const error = yield* Effect.flip(
-        cli.getPullRequestDetail({ cwd: "/w", repository: "acme/web", number: 7 }),
+        cli.getPullRequestDetail({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+        }),
       );
 
       assert.strictEqual(error._tag, "GitHubPullRequestReadError");

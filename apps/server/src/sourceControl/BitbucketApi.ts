@@ -830,7 +830,7 @@ export const make = Effect.gen(function* () {
         : input.method === "POST"
           ? HttpClientRequest.post(url)
           : input.method === "DELETE"
-            ? HttpClientRequest.del(url)
+            ? HttpClientRequest.make("DELETE")(url)
             : HttpClientRequest.put(url);
     // No `Accept: application/json`: the diff endpoints answer with a patch, not JSON.
     const withBody =

@@ -133,14 +133,6 @@ export const PullRequestCommit = Schema.Struct({
 export type PullRequestCommit = typeof PullRequestCommit.Type;
 
 /**
- * What a provider can actually do, so a surface can hide what is missing rather than offer an
- * action that would fail. Every provider fills this in for itself; nothing is assumed.
- *
- * Hosts differ more than they look: Azure DevOps exposes no patch through its CLI, and
- * Bitbucket has no endpoint that reopens a declined pull request. Both would otherwise be dead
- * buttons.
- */
-/**
  * What a host can do with a review, which is where the four differ most. GitLab has no way to
  * say "changes requested", and Azure DevOps exposes no diff through its CLI, so it has no lines
  * to write against at all.
@@ -157,6 +149,14 @@ export const PullRequestReviewCapabilities = Schema.Struct({
 });
 export type PullRequestReviewCapabilities = typeof PullRequestReviewCapabilities.Type;
 
+/**
+ * What a provider can actually do, so a surface can hide what is missing rather than offer an
+ * action that would fail. Every provider fills this in for itself; nothing is assumed.
+ *
+ * Hosts differ more than they look: Azure DevOps exposes no patch through its CLI, and
+ * Bitbucket has no endpoint that reopens a declined pull request. Both would otherwise be dead
+ * buttons.
+ */
 export const PullRequestCapabilities = Schema.Struct({
   /** A unified patch can be fetched for the change request. */
   diff: Schema.Boolean,
@@ -323,6 +323,12 @@ export type PullRequestCommentInput = typeof PullRequestCommentInput.Type;
 /** One remark in a review that has not been sent yet, anchored to a line of the diff. */
 export const PullRequestReviewCommentDraft = Schema.Struct({
   path: TrimmedNonEmptyString,
+  /**
+   * What the file was called before the change, sent only when it differs. GitLab resolves a
+   * position against both sides of the diff, so a comment on a renamed file needs both names;
+   * the hosts that address a comment by one path ignore this.
+   */
+  oldPath: Schema.optional(TrimmedNonEmptyString),
   line: PositiveInt,
   side: PullRequestDiffSide,
   body: CommentBody,

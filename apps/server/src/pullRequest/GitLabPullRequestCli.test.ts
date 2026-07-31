@@ -506,7 +506,9 @@ layer("GitLabPullRequestCli.layer", (it) => {
         number: 7,
         verdict: "approve",
         body: "Looks right.",
-        comments: [{ path: "src/a.ts", line: 4, side: "left", body: "why remove?" }],
+        comments: [
+          { path: "src/b.ts", oldPath: "src/a.ts", line: 4, side: "left", body: "why remove?" },
+        ],
       });
 
       // The diff revisions first, because a positioned comment cannot be placed without them.
@@ -520,8 +522,10 @@ layer("GitLabPullRequestCli.layer", (it) => {
           head_sha: "head",
           start_sha: "start",
           position_type: "text",
+          // A renamed file is the only case the two differ, and GitLab cannot place a
+          // position that names the same path on both sides of the rename.
           old_path: "src/a.ts",
-          new_path: "src/a.ts",
+          new_path: "src/b.ts",
           old_line: 4,
         },
       });

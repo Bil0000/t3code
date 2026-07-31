@@ -70,6 +70,7 @@ export const make = Effect.gen(function* () {
         .listPullRequests({
           cwd: input.cwd,
           repository: input.repository,
+          host: input.host,
           state: input.state,
           involvement: input.involvement,
           viewer: input.viewer,
@@ -82,6 +83,7 @@ export const make = Effect.gen(function* () {
               .listActorAvatars({
                 cwd: input.cwd,
                 repository: input.repository,
+                host: input.host,
                 ids: [...new Set(page.items.flatMap((item) => item.authorId ?? []))],
               })
               // A listing without faces is still a listing, so a failed lookup falls back to
@@ -103,7 +105,11 @@ export const make = Effect.gen(function* () {
       Effect.all(
         [
           cli.getPullRequestDetail(input),
-          cli.getRepositoryMergeCapabilities({ cwd: input.cwd, repository: input.repository }),
+          cli.getRepositoryMergeCapabilities({
+            cwd: input.cwd,
+            repository: input.repository,
+            host: input.host,
+          }),
           // Line comments live on review threads, which `gh pr view --json` cannot reach. A
           // GraphQL hiccup must not blank the whole detail, so it degrades to "none" — marked
           // truncated, because an unread thread is a missing comment, not an absent one.
@@ -154,6 +160,7 @@ export const make = Effect.gen(function* () {
         .runPullRequestAction({
           cwd: input.cwd,
           repository: input.repository,
+          host: input.host,
           number: input.number,
           action: input.action,
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
@@ -169,6 +176,7 @@ export const make = Effect.gen(function* () {
         .replyToReviewThread({
           cwd: input.cwd,
           repository: input.repository,
+          host: input.host,
           threadId: input.threadId,
           body: input.body,
         })
@@ -179,6 +187,7 @@ export const make = Effect.gen(function* () {
         .setReviewThreadResolution({
           cwd: input.cwd,
           repository: input.repository,
+          host: input.host,
           threadId: input.threadId,
           resolved: input.resolved,
         })

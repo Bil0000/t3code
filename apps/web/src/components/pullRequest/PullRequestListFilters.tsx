@@ -3,7 +3,7 @@ import type {
   PullRequestProviderSummary,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { ListFilterIcon, SearchIcon } from "lucide-react";
+import { ListFilterIcon, SearchIcon, type LucideIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
@@ -25,6 +25,16 @@ const filterOptionClass = (selected: boolean, disabled = false) =>
     disabled ? "cursor-not-allowed opacity-45" : !selected && "hover:text-foreground",
   );
 
+export interface PullRequestFilterOption<Value extends string> {
+  readonly value: Value;
+  readonly label: string;
+  /**
+   * Carries the option's own tone, so an icon reads the same here as it does on a row. Left
+   * uncoloured, which lets the pill's selected state stay the thing the eye follows.
+   */
+  readonly Icon: LucideIcon;
+}
+
 export function PullRequestFilterPills<Value extends string>({
   value,
   options,
@@ -32,7 +42,7 @@ export function PullRequestFilterPills<Value extends string>({
   onChange,
 }: {
   value: Value;
-  options: ReadonlyArray<{ readonly value: Value; readonly label: string }>;
+  options: ReadonlyArray<PullRequestFilterOption<Value>>;
   label: string;
   onChange: (value: Value) => void;
 }) {
@@ -46,6 +56,7 @@ export function PullRequestFilterPills<Value extends string>({
           onClick={() => onChange(option.value)}
           className={filterOptionClass(option.value === value)}
         >
+          <option.Icon aria-hidden className="size-3.5" />
           {option.label}
         </button>
       ))}

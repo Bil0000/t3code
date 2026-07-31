@@ -274,6 +274,24 @@ export const UNRESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION = `mutation($threadId: ID!
   unresolveReviewThread(input: { threadId: $threadId }) { thread { isResolved } }
 }`;
 
+/**
+ * A GraphQL request as `gh api graphql --input -` takes it. Variables travel in the document
+ * rather than as `-f name=value` flags, so a reader's own words never reach argv.
+ */
+const GraphQlRequestSchema = Schema.Struct({
+  query: Schema.String,
+  variables: Schema.Record(Schema.String, Schema.String),
+});
+
+const encodeGraphQlRequest = Schema.encodeSync(Schema.fromJsonString(GraphQlRequestSchema));
+
+export function encodeGraphQlRequestJson(input: {
+  readonly query: string;
+  readonly variables: Readonly<Record<string, string>>;
+}): string {
+  return encodeGraphQlRequest({ query: input.query, variables: { ...input.variables } });
+}
+
 /** The body of `POST /repos/{owner}/{repo}/pulls/{number}/reviews`, which sends a review whole. */
 const ReviewSubmissionSchema = Schema.Struct({
   event: Schema.Literals(["COMMENT", "APPROVE", "REQUEST_CHANGES"]),

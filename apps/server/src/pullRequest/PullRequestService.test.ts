@@ -946,3 +946,77 @@ it.effect("refuses an empty reply before it reaches the host", () =>
     assert.strictEqual(error._tag, "PullRequestOperationError");
   }),
 );
+
+it.effect("refuses a merge strategy the host does not offer", () =>
+  Effect.gen(function* () {
+    let ranWith: string | null = null;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            // Azure DevOps's shape: it squashes as a completion option and has no rebase.
+            mergeMethods: ["merge", "squash"],
+            review: FULL_REVIEW,
+          },
+          runAction: (input) => {
+            ranWith = input.mergeMethod ?? "merge";
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reference = {
+      projectId: "p1" as ProjectId,
+      repository: "pingdotgg/t3code",
+      number: 1,
+    };
+
+    // Every provider maps an unrecognised strategy to its own default, so letting this through
+    // would merge with the wrong one rather than fail.
+    const error = yield* Effect.flip(
+      service.runAction({ ...reference, action: "merge", mergeMethod: "rebase" }),
+    );
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.strictEqual(ranWith, null);
+
+    yield* service.runAction({ ...reference, action: "merge", mergeMethod: "squash" });
+    assert.strictEqual(ranWith, "squash");
+  }),
+);
+
+it.effect("hands the provider the host its repository lives on", () =>
+  Effect.gen(function* () {
+    const hosts: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "enterprise",
+          workspaceRoot: "/a",
+          repository: "acme/web",
+          host: "github.acme.dev",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: (input) => {
+            hosts.push(input.host);
+            return Effect.succeed({ items: [], truncated: false });
+          },
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+
+    // The identity a project records is the path below its host, so the host has to travel
+    // separately or a GitHub Enterprise repository is read off github.com instead.
+    assert.deepStrictEqual(hosts, ["github.acme.dev"]);
+  }),
+);

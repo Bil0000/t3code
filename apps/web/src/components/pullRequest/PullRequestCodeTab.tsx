@@ -8,7 +8,7 @@ import type {
   PullRequestReviewThread,
 } from "@t3tools/contracts";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
 import {
@@ -18,6 +18,7 @@ import {
   getRenderablePatch,
   resolveDiffThemeName,
   resolveFileDiffPath,
+  resolveFileDiffPreviousPath,
 } from "~/lib/diffRendering";
 import { cn } from "~/lib/utils";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -62,6 +63,8 @@ interface MutableAnnotationGroup {
 interface DraftAnchor {
   readonly fileKey: string;
   readonly path: string;
+  /** What the file was called before the change, for the hosts that resolve a position by both. */
+  readonly oldPath: string | null;
   readonly line: number;
   readonly side: PullRequestDiffSide;
 }
@@ -100,10 +103,19 @@ export function PullRequestCodeTab({
   const [draft, setDraft] = useState<DraftAnchor | null>(null);
   const [threadPending, setThreadPending] = useState(false);
 
+  // The panel keeps this mounted across pull requests, so an open composer would otherwise
+  // survive the switch and attach its comment to whichever one is on screen when it is sent.
+  const referenceKey = pullRequestReviewKey(reference);
+  useEffect(() => {
+    setDraft(null);
+    setSelectedLines(null);
+    setCollapsedFiles(new Set());
+  }, [referenceKey]);
+
   const diffQuery = useEnvironmentQuery(
     pullRequestEnvironment.diff({ environmentId, input: reference }),
   );
-  const reviewKey = pullRequestReviewKey(reference);
+  const reviewKey = referenceKey;
   const pendingComments = usePendingReviewComments(reference);
   const addComment = usePullRequestReviewStore((store) => store.addComment);
   const removeComment = usePullRequestReviewStore((store) => store.removeComment);
@@ -218,9 +230,12 @@ export function PullRequestCodeTab({
       if (!file) return;
       // A range collapses to its last line: only GitHub carries a multi-line comment, and one
       // that silently lost its first line on the other hosts would be worse than one line.
+      const path = resolveFileDiffPath(file);
+      const previousPath = resolveFileDiffPreviousPath(file);
       setDraft({
         fileKey: item.id,
-        path: resolveFileDiffPath(file),
+        path,
+        oldPath: previousPath === path ? null : previousPath,
         line: range.end,
         side: fromViewerSide(range.endSide ?? range.side),
       });
@@ -388,6 +403,7 @@ export function PullRequestCodeTab({
                       addComment(reviewKey, {
                         id: `${draft.side}:${draft.path}:${draft.line}:${body.length}:${pendingComments.length}`,
                         path: draft.path,
+                        ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
                         line: draft.line,
                         side: draft.side,
                         body,

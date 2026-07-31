@@ -87,6 +87,12 @@ export interface ProviderRepositoryRef {
   readonly cwd: string;
   /** Provider-native repository identity, e.g. `owner/repo` or `group/subgroup/project`. */
   readonly repository: string;
+  /**
+   * The host it lives on, which `repository` deliberately leaves out — the same `owner/repo`
+   * exists on github.com and on a GitHub Enterprise install, and only the caller knows which
+   * one a project's remote points at.
+   */
+  readonly host: string;
 }
 
 /**

@@ -7,7 +7,15 @@ import type {
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { RefreshCwIcon } from "lucide-react";
+import {
+  EyeIcon,
+  GitMergeIcon,
+  GitPullRequestClosedIcon,
+  GitPullRequestIcon,
+  LayersIcon,
+  PenLineIcon,
+  RefreshCwIcon,
+} from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import {
@@ -22,6 +30,7 @@ import {
   PullRequestProjectFilter,
   PullRequestProviderFilter,
   PullRequestSearchInput,
+  type PullRequestFilterOption,
 } from "../components/pullRequest/PullRequestListFilters";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
@@ -51,18 +60,19 @@ export interface PullRequestsSearch {
   readonly q?: string;
 }
 
+// The state filters wear the same glyphs the rows do, so the two read as one vocabulary.
 const INVOLVEMENT_TABS = [
-  { value: "all", label: "All" },
-  { value: "reviewing", label: "Reviewing" },
-  { value: "authored", label: "Authored" },
-] as const satisfies ReadonlyArray<{ value: PullRequestInvolvement; label: string }>;
+  { value: "all", label: "All", Icon: LayersIcon },
+  { value: "reviewing", label: "Reviewing", Icon: EyeIcon },
+  { value: "authored", label: "Authored", Icon: PenLineIcon },
+] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestInvolvement>>;
 
 const STATE_TABS = [
-  { value: "all", label: "All" },
-  { value: "open", label: "Open" },
-  { value: "closed", label: "Closed" },
-  { value: "merged", label: "Merged" },
-] as const satisfies ReadonlyArray<{ value: PullRequestListState; label: string }>;
+  { value: "all", label: "All", Icon: LayersIcon },
+  { value: "open", label: "Open", Icon: GitPullRequestIcon },
+  { value: "closed", label: "Closed", Icon: GitPullRequestClosedIcon },
+  { value: "merged", label: "Merged", Icon: GitMergeIcon },
+] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
 
 /** Accepted `provider` values in the URL, so an unknown one is dropped rather than sent on. */
 const PROVIDER_KINDS = new Set<string>([

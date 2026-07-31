@@ -4,7 +4,7 @@
  */
 import type { EnvironmentId, PullRequestRef, PullRequestReviewVerdict } from "@t3tools/contracts";
 import { CheckIcon, MessageSquareIcon, XCircleIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -58,6 +58,10 @@ export function PullRequestReviewBar({
   const [body, setBody] = useState("");
   const [pending, setPending] = useState(false);
   const comments = usePendingReviewComments(reference);
+  // The panel keeps this mounted across pull requests, so a summary typed for one would
+  // otherwise be sent with the next.
+  const reviewKey = pullRequestReviewKey(reference);
+  useEffect(() => setBody(""), [reviewKey]);
   const clear = usePullRequestReviewStore((store) => store.clear);
   const submitReview = useAtomCommand(pullRequestEnvironment.submitReview, {
     reportFailure: false,
@@ -79,7 +83,7 @@ export function PullRequestReviewBar({
       toastManager.add({ type: "error", title: "The review could not be submitted" });
       return;
     }
-    clear(pullRequestReviewKey(reference));
+    clear(reviewKey);
     setBody("");
     toastManager.add({ type: "success", title: verdict.sent });
     onSubmitted();
@@ -98,12 +102,7 @@ export function PullRequestReviewBar({
             : `${comments.length} ${comments.length === 1 ? "comment" : "comments"} pending`}
         </span>
         {comments.length > 0 ? (
-          <Button
-            size="xs"
-            variant="ghost"
-            disabled={pending}
-            onClick={() => clear(pullRequestReviewKey(reference))}
-          >
+          <Button size="xs" variant="ghost" disabled={pending} onClick={() => clear(reviewKey)}>
             Discard
           </Button>
         ) : null}
