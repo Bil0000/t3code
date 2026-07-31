@@ -21,11 +21,11 @@ import {
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
-  PullRequestProviderRegistry,
   type ProviderChangeRequest,
   type PullRequestProviderApi,
   type PullRequestProviderError,
 } from "./PullRequestProvider.ts";
+import { PullRequestProviderRegistry } from "./PullRequestProviderRegistry.ts";
 
 /**
  * Rows per repository when the client does not ask for a page size. None of the provider tools

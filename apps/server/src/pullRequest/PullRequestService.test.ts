@@ -10,11 +10,10 @@ import type {
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   PullRequestProviderError,
-  PullRequestProviderRegistry,
-  makeRegistry,
   type ProviderChangeRequest,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
+import { PullRequestProviderRegistry, fromProviders } from "./PullRequestProviderRegistry.ts";
 import * as PullRequestService from "./PullRequestService.ts";
 
 function project(input: {
@@ -119,7 +118,7 @@ function makeService(input: {
   return PullRequestService.make.pipe(
     Effect.provide(
       Layer.mergeAll(
-        Layer.succeed(PullRequestProviderRegistry, makeRegistry(input.providers)),
+        Layer.succeed(PullRequestProviderRegistry, fromProviders(input.providers)),
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
           getShellSnapshot: () =>
             Effect.succeed({

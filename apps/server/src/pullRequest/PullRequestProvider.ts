@@ -1,4 +1,3 @@
-import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type {
@@ -132,23 +131,4 @@ export interface PullRequestProviderApi {
   readonly comment: (
     input: ProviderRepositoryRef & { readonly number: number; readonly body: string },
   ) => Effect.Effect<void, PullRequestProviderError>;
-}
-
-export class PullRequestProviderRegistry extends Context.Service<
-  PullRequestProviderRegistry,
-  {
-    /** Null for a host with no implementation, which the service reports as unsupported. */
-    readonly get: (kind: SourceControlProviderKind) => PullRequestProviderApi | null;
-    readonly kinds: ReadonlyArray<SourceControlProviderKind>;
-  }
->()("t3/pullRequest/PullRequestProvider/PullRequestProviderRegistry") {}
-
-export function makeRegistry(
-  providers: ReadonlyArray<PullRequestProviderApi>,
-): PullRequestProviderRegistry["Service"] {
-  const byKind = new Map(providers.map((provider) => [provider.kind, provider]));
-  return {
-    get: (kind) => byKind.get(kind) ?? null,
-    kinds: providers.map((provider) => provider.kind),
-  };
 }
