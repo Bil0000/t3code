@@ -21,7 +21,7 @@ const LIST_RESULT: PullRequestListResult = {
       number: 1,
       title: "Add a pull requests page",
       url: "https://github.com/pingdotgg/t3code/pull/1",
-      author: { login: "octocat", name: null },
+      author: { login: "octocat", name: null, avatarUrl: null },
       headBranch: "feat/page",
       baseBranch: "main",
       state: "open",

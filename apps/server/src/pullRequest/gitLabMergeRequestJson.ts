@@ -22,6 +22,7 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 const RawUserSchema = Schema.Struct({
   username: Schema.String,
   name: Schema.optional(Schema.NullOr(Schema.String)),
+  avatar_url: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawPipelineSchema = Schema.Struct({
@@ -142,7 +143,9 @@ function trimmed(value: string | null | undefined): string | null {
 
 function toActor(raw: Schema.Schema.Type<typeof RawUserSchema> | null | undefined) {
   const login = trimmed(raw?.username);
-  return login === null ? null : { login, name: trimmed(raw?.name) };
+  return login === null
+    ? null
+    : { login, name: trimmed(raw?.name), avatarUrl: trimmed(raw?.avatar_url) };
 }
 
 function toState(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): PullRequestState {
@@ -262,7 +265,11 @@ function toDetail(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): GitLab
     changedFiles: toChangedFiles(raw.changes_count),
     mergedAt: trimmed(raw.merged_at),
     closedAt: trimmed(raw.closed_at),
-    reviewers: listItem.reviewRequestLogins.map((login) => ({ login, name: null })),
+    // Built from the reviewers themselves rather than from their logins, so the avatars survive.
+    reviewers: (raw.reviewers ?? []).flatMap((reviewer) => {
+      const actor = toActor(reviewer);
+      return actor === null ? [] : [actor];
+    }),
     checks: toChecks(raw),
   };
 }

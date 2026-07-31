@@ -19,7 +19,7 @@ function entry(overrides: Partial<PullRequestListEntry> & Pick<PullRequestListEn
     repository: "pingdotgg/t3code",
     title: "Add the pull requests page",
     url: `https://github.com/pingdotgg/t3code/pull/${overrides.number}`,
-    author: { login: "octocat", name: null },
+    author: { login: "octocat", name: null, avatarUrl: null },
     headBranch: `feat/branch-${overrides.number}`,
     baseBranch: "main",
     state: "open",
@@ -37,7 +37,7 @@ function entry(overrides: Partial<PullRequestListEntry> & Pick<PullRequestListEn
 
 describe("pull request involvement filtering", () => {
   const entries = [
-    entry({ number: 1, author: { login: "Bilal", name: null } }),
+    entry({ number: 1, author: { login: "Bilal", name: null, avatarUrl: null } }),
     entry({ number: 2, viewerReviewRequested: true }),
     entry({ number: 3 }),
   ];
@@ -61,12 +61,12 @@ describe("pull request involvement filtering", () => {
   it("does not treat a matching login on another host as the viewer", () => {
     // The same name on GitLab is a different account, and its viewer is unknown here.
     const mixed = [
-      entry({ number: 1, author: { login: "Bilal", name: null } }),
+      entry({ number: 1, author: { login: "Bilal", name: null, avatarUrl: null } }),
       entry({
         number: 2,
         provider: "gitlab",
         host: "gitlab.com",
-        author: { login: "Bilal", name: null },
+        author: { login: "Bilal", name: null, avatarUrl: null },
       }),
     ];
     expect(
@@ -82,8 +82,12 @@ describe("pull request involvement filtering", () => {
     // A GitHub Enterprise install is a different account from github.com, so the viewer for
     // one must not claim authorship of the other's change requests.
     const mixed = [
-      entry({ number: 1, author: { login: "Bilal", name: null } }),
-      entry({ number: 2, host: "github.acme.dev", author: { login: "Bilal", name: null } }),
+      entry({ number: 1, author: { login: "Bilal", name: null, avatarUrl: null } }),
+      entry({
+        number: 2,
+        host: "github.acme.dev",
+        author: { login: "Bilal", name: null, avatarUrl: null },
+      }),
     ];
     expect(
       filterPullRequestsByInvolvement(mixed, VIEWERS, "authored").map((item) => item.number),
@@ -95,7 +99,7 @@ describe("pull request grouping", () => {
   it("buckets authored above review-requested and drops empty groups", () => {
     const groups = groupPullRequestsByInvolvement(
       [
-        entry({ number: 1, author: { login: "bilal", name: null } }),
+        entry({ number: 1, author: { login: "bilal", name: null, avatarUrl: null } }),
         entry({ number: 2, viewerReviewRequested: true }),
       ],
       VIEWERS,
@@ -113,7 +117,13 @@ describe("pull request grouping", () => {
 
   it("counts an authored pull request once, even with a review request on it", () => {
     const groups = groupPullRequestsByInvolvement(
-      [entry({ number: 1, author: { login: "bilal", name: null }, viewerReviewRequested: true })],
+      [
+        entry({
+          number: 1,
+          author: { login: "bilal", name: null, avatarUrl: null },
+          viewerReviewRequested: true,
+        }),
+      ],
       VIEWERS,
     );
     expect(groups.map((group) => group.key)).toEqual(["authored"]);

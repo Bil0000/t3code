@@ -25,6 +25,15 @@ const RawUserSchema = Schema.Struct({
   /** Absent on an app account, which is why `display_name` has to stand in for it. */
   nickname: Schema.optional(Schema.NullOr(Schema.String)),
   display_name: Schema.optional(Schema.NullOr(Schema.String)),
+  links: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        avatar: Schema.optional(
+          Schema.NullOr(Schema.Struct({ href: Schema.optional(Schema.String) })),
+        ),
+      }),
+    ),
+  ),
 });
 
 /**
@@ -157,7 +166,13 @@ function toIsoUtc(value: string): string {
 /** An app account has no nickname, so the display name is the only handle it has. */
 function toActor(raw: Schema.Schema.Type<typeof RawUserSchema> | null | undefined) {
   const login = trimmed(raw?.nickname) ?? trimmed(raw?.display_name);
-  return login === null ? null : { login, name: trimmed(raw?.display_name) };
+  return login === null
+    ? null
+    : {
+        login,
+        name: trimmed(raw?.display_name),
+        avatarUrl: trimmed(raw?.links?.avatar?.href),
+      };
 }
 
 function toState(raw: Schema.Schema.Type<typeof RawPullRequestSchema>): PullRequestState {

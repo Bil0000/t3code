@@ -32,10 +32,11 @@ export type PullRequestMergeMethod = typeof PullRequestMergeMethod.Type;
 export const PullRequestAction = Schema.Literals(["merge", "ready", "draft", "close", "reopen"]);
 export type PullRequestAction = typeof PullRequestAction.Type;
 
-/** GitHub CLI JSON exposes no avatar URL, so actors render as login plus initials. */
 export const PullRequestActor = Schema.Struct({
   login: TrimmedNonEmptyString,
   name: Schema.NullOr(Schema.String),
+  /** Null where a host does not report one, which is what the initials fall back to. */
+  avatarUrl: Schema.NullOr(Schema.String),
 });
 export type PullRequestActor = typeof PullRequestActor.Type;
 

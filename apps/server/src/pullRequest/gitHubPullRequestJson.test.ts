@@ -128,6 +128,63 @@ describe("review thread decoding", () => {
       data: { repository: { pullRequest: { reviewThreads: { totalCount, nodes } } } },
     });
 
+  /** The same query carries the review roster, so it is built alongside the threads. */
+  const reviewJson = (input: {
+    readonly requested?: ReadonlyArray<unknown>;
+    readonly reviewed?: ReadonlyArray<unknown>;
+  }): string =>
+    // @effect-diagnostics-next-line preferSchemaOverJson:off
+    JSON.stringify({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: { totalCount: 0, nodes: [] },
+            reviewRequests: {
+              nodes: (input.requested ?? []).map((r) => ({ requestedReviewer: r })),
+            },
+            latestReviews: { nodes: (input.reviewed ?? []).map((a) => ({ author: a })) },
+          },
+        },
+      },
+    });
+
+  it("keeps a reviewer who has already reviewed, app or person, with their avatar", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        reviewJson({
+          requested: [{ login: "julius", name: "Julius", avatarUrl: "https://avatars/j.png" }],
+          // An app that has reviewed is no longer an outstanding request, which is why asking
+          // only for requests reported nobody on a pull request a bot had reviewed.
+          reviewed: [{ login: "macroscopeapp", avatarUrl: "https://avatars/in/900172.png" }],
+        }),
+      ),
+    );
+
+    expect(result.reviewers).toEqual([
+      { login: "julius", name: "Julius", avatarUrl: "https://avatars/j.png" },
+      { login: "macroscopeapp", name: null, avatarUrl: "https://avatars/in/900172.png" },
+    ]);
+  });
+
+  it("lists someone who was asked and then answered only once", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        reviewJson({
+          requested: [{ login: "julius", avatarUrl: "https://avatars/j.png" }],
+          reviewed: [{ login: "julius", avatarUrl: "https://avatars/j.png" }],
+        }),
+      ),
+    );
+
+    expect(result.reviewers).toHaveLength(1);
+  });
+
+  it("skips a team request, which names nobody to show", () => {
+    const result = expectSuccess(decodeReviewThreadsJson(reviewJson({ requested: [null] })));
+
+    expect(result.reviewers).toEqual([]);
+  });
+
   it("keeps unresolved threads and carries their file path", () => {
     const result = expectSuccess(
       decodeReviewThreadsJson(

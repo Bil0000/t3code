@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type {
   PullRequestAction,
+  PullRequestActor,
   PullRequestCapabilities,
   PullRequestCheck,
   PullRequestComment,
@@ -45,7 +46,7 @@ export interface ProviderChangeRequest {
   readonly number: number;
   readonly title: string;
   readonly url: string;
-  readonly author: { readonly login: string; readonly name: string | null } | null;
+  readonly author: PullRequestActor | null;
   readonly headBranch: string;
   readonly baseBranch: string;
   readonly state: PullRequestState;
@@ -71,7 +72,7 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
   readonly changedFiles: number;
   readonly mergedAt: string | null;
   readonly closedAt: string | null;
-  readonly reviewers: ReadonlyArray<{ readonly login: string; readonly name: string | null }>;
+  readonly reviewers: ReadonlyArray<PullRequestActor>;
   readonly checks: ReadonlyArray<PullRequestCheck>;
   readonly comments: ReadonlyArray<PullRequestComment>;
   readonly commentsTruncated: boolean;

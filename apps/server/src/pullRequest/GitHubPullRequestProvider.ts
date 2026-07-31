@@ -68,7 +68,7 @@ export const make = Effect.gen(function* () {
           // truncated, because an unread thread is a missing comment, not an absent one.
           cli
             .listReviewThreadComments(input)
-            .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: true }))),
+            .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: true, reviewers: [] }))),
         ],
         { concurrency: 3 },
       ).pipe(
@@ -76,7 +76,9 @@ export const make = Effect.gen(function* () {
         Effect.map(
           ([pullRequest, mergeCapabilities, reviewThreads]): ProviderChangeRequestDetail => ({
             ...pullRequest,
-            reviewers: pullRequest.reviewRequestLogins.map((login) => ({ login, name: null })),
+            // From the review itself rather than from the listing's outstanding requests, which
+            // hold no avatar and drop anyone who has already reviewed.
+            reviewers: reviewThreads.reviewers,
             comments: [...pullRequest.comments, ...reviewThreads.comments].toSorted((left, right) =>
               left.createdAt.localeCompare(right.createdAt),
             ),

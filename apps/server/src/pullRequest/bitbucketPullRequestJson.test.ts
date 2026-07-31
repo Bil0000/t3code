@@ -119,7 +119,7 @@ describe("decodePullRequestJson", () => {
     );
 
     expect(decoded.reviewRequestLogins).toEqual(["julius"]);
-    expect(decoded.reviewers).toEqual([{ login: "julius", name: "Julius" }]);
+    expect(decoded.reviewers).toEqual([{ login: "julius", name: "Julius", avatarUrl: null }]);
   });
 
   it("reads a participant's vote as a review", () => {

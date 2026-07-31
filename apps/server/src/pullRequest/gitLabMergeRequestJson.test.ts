@@ -151,7 +151,7 @@ describe("decodeMergeRequestDetailJson", () => {
 
     expect(detail.body).toBe("Ships the page.");
     expect(detail.changedFiles).toBe(3);
-    expect(detail.reviewers).toEqual([{ login: "julius", name: null }]);
+    expect(detail.reviewers).toEqual([{ login: "julius", name: "Julius", avatarUrl: null }]);
     expect(detail.checks).toEqual([
       {
         name: "Pipeline",

@@ -12,7 +12,7 @@ const TIMELINE_SOURCE: Pick<
   "createdAt" | "author" | "commits" | "comments" | "mergedAt" | "closedAt"
 > = {
   createdAt: "2026-07-01T00:00:00Z",
-  author: { login: "octocat", name: null },
+  author: { login: "octocat", name: null, avatarUrl: null },
   commits: [
     { oid: "1baf7bdcafe", messageHeadline: "add the page", committedDate: "2026-07-02T00:00:00Z" },
   ],
@@ -20,7 +20,7 @@ const TIMELINE_SOURCE: Pick<
     {
       id: "c1",
       kind: "issue-comment",
-      author: { login: "bilal", name: null },
+      author: { login: "bilal", name: null, avatarUrl: null },
       body: "looks good",
       createdAt: "2026-07-03T00:00:00Z",
       url: null,
@@ -75,7 +75,7 @@ describe("fix findings prompt", () => {
     return {
       id: "r1",
       kind: "review",
-      author: { login: "reviewer", name: null },
+      author: { login: "reviewer", name: null, avatarUrl: null },
       body,
       createdAt: "2026-07-03T00:00:00Z",
       url: null,

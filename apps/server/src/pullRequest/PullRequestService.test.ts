@@ -58,7 +58,7 @@ function changeRequest(number: number, updatedAt: string): ProviderChangeRequest
     number,
     title: `Change request ${number}`,
     url: `https://host/pull/${number}`,
-    author: { login: "octocat", name: null },
+    author: { login: "octocat", name: null, avatarUrl: null },
     headBranch: `feat/${number}`,
     baseBranch: "main",
     state: "open",
@@ -651,7 +651,7 @@ it.effect("flags a review request for the viewer but not on their own change req
                 { ...changeRequest(1, "2026-07-02T00:00:00Z"), reviewRequestLogins: ["Bilal"] },
                 {
                   ...changeRequest(2, "2026-07-02T00:00:00Z"),
-                  author: { login: "bilal", name: null },
+                  author: { login: "bilal", name: null, avatarUrl: null },
                   reviewRequestLogins: ["bilal"],
                 },
               ],

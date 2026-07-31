@@ -139,7 +139,9 @@ describe("decodePullRequestJson", () => {
     );
 
     expect(detail?.reviewRequestLogins).toEqual(["julius@acme.dev"]);
-    expect(detail?.reviewers).toEqual([{ login: "julius@acme.dev", name: "Julius" }]);
+    expect(detail?.reviewers).toEqual([
+      { login: "julius@acme.dev", name: "Julius", avatarUrl: null },
+    ]);
   });
 
   it("works out where the conversation lives from what Azure returned", () => {

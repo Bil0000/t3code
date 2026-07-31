@@ -22,6 +22,8 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 const RawActorSchema = Schema.Struct({
   login: Schema.String,
   name: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Only the GraphQL API reports one; `gh pr view --json` has no avatar to give. */
+  avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawLabelSchema = Schema.Struct({
@@ -115,6 +117,27 @@ const RawReviewThreadsSchema = Schema.Struct({
             }),
           ),
         }),
+        reviewRequests: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              nodes: Schema.Array(
+                Schema.Struct({
+                  // Null for a team, which is a request nobody in particular owns.
+                  requestedReviewer: Schema.optional(Schema.NullOr(RawActorSchema)),
+                }),
+              ),
+            }),
+          ),
+        ),
+        latestReviews: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              nodes: Schema.Array(
+                Schema.Struct({ author: Schema.optional(Schema.NullOr(RawActorSchema)) }),
+              ),
+            }),
+          ),
+        ),
       }),
     }),
   }),
@@ -133,7 +156,15 @@ export const PULL_REQUEST_LIST_JSON_FIELDS =
 
 export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,statusCheckRollup,comments,reviews,commits`;
 
-/** Root comments of the first page of review threads; deeper replies stay on GitHub. */
+/**
+ * Root comments of the first page of review threads, and the people on the review — deeper
+ * replies stay on GitHub.
+ *
+ * Reviewers come from here rather than from `gh pr view --json reviewRequests` for two reasons:
+ * that field holds only requests still outstanding, so anyone who has already reviewed drops off
+ * it, and neither it nor any other `gh` JSON field carries an avatar. A reviewer can be a person
+ * or an app, and both are asked for by name because they are different GraphQL types.
+ */
 export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
@@ -143,9 +174,20 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
           isResolved
           path
           comments(first: 1) {
-            nodes { id author { login } body createdAt url }
+            nodes { id author { login avatarUrl } body createdAt url }
           }
         }
+      }
+      reviewRequests(first: 50) {
+        nodes {
+          requestedReviewer {
+            ... on User { login name avatarUrl }
+            ... on Bot { login avatarUrl }
+          }
+        }
+      }
+      latestReviews(first: 50) {
+        nodes { author { login avatarUrl } }
       }
     }
   }
@@ -189,7 +231,9 @@ function trimmed(value: string | null | undefined): string | null {
 
 function toActor(raw: Schema.Schema.Type<typeof RawActorSchema> | null | undefined) {
   const login = trimmed(raw?.login);
-  return login === null ? null : { login, name: trimmed(raw?.name) };
+  return login === null
+    ? null
+    : { login, name: trimmed(raw?.name), avatarUrl: trimmed(raw?.avatarUrl) };
 }
 
 function toState(raw: {
@@ -406,6 +450,12 @@ export function decodePullRequestDetailJson(
 export interface GitHubReviewThreadComments {
   readonly comments: ReadonlyArray<PullRequestComment>;
   readonly truncated: boolean;
+  /**
+   * Everyone on the review: those still asked and those who have already answered. Whoever has
+   * reviewed is no longer an outstanding request, so asking only for requests reports nobody on
+   * a pull request that has in fact been reviewed.
+   */
+  readonly reviewers: ReadonlyArray<PullRequestActor>;
 }
 
 /**
@@ -436,9 +486,20 @@ export function decodeReviewThreadsJson(
       },
     ];
   });
+  const pullRequest = decoded.success.data.repository.pullRequest;
+  const reviewers = new Map<string, PullRequestActor>();
+  for (const raw of [
+    ...(pullRequest.reviewRequests?.nodes ?? []).map((node) => node.requestedReviewer),
+    ...(pullRequest.latestReviews?.nodes ?? []).map((node) => node.author),
+  ]) {
+    const actor = toActor(raw);
+    // Keyed by login, so someone who was asked and then answered appears once.
+    if (actor !== null && !reviewers.has(actor.login)) reviewers.set(actor.login, actor);
+  }
   return Result.succeed({
     comments,
     truncated: (threads.totalCount ?? threads.nodes.length) > threads.nodes.length,
+    reviewers: [...reviewers.values()],
   });
 }
 

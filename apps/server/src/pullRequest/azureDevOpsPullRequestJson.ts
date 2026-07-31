@@ -26,6 +26,7 @@ const RawIdentitySchema = Schema.Struct({
   displayName: Schema.optional(Schema.NullOr(Schema.String)),
   /** An email or UPN, which is what `az account show` reports for the signed-in user. */
   uniqueName: Schema.optional(Schema.NullOr(Schema.String)),
+  imageUrl: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawPullRequestSchema = Schema.Struct({
@@ -137,7 +138,9 @@ function normalizeRefName(refName: string): string {
 /** A login has to compare against `az account show`, which reports an email. */
 function toActor(raw: Schema.Schema.Type<typeof RawIdentitySchema> | null | undefined) {
   const login = trimmed(raw?.uniqueName) ?? trimmed(raw?.displayName);
-  return login === null ? null : { login, name: trimmed(raw?.displayName) };
+  return login === null
+    ? null
+    : { login, name: trimmed(raw?.displayName), avatarUrl: trimmed(raw?.imageUrl) };
 }
 
 function toState(raw: Schema.Schema.Type<typeof RawPullRequestSchema>): PullRequestState {
