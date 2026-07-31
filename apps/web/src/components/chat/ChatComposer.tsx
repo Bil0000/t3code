@@ -64,6 +64,7 @@ import {
 } from "../../promptStashStore";
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
+import { shouldAutoSendStashedPrompt } from "./composerStashAutoSend";
 import { compressImageForStash, compressImageToByteLimit } from "../../lib/imageCompression";
 import { isCommandPaletteOpen } from "../../commandPaletteBus";
 import { getTerminalFocusOwner } from "../../lib/terminalFocus";
@@ -973,6 +974,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFocused, setIsComposerFocused] = useState(false);
   const [composerMenuAnchor, setComposerMenuAnchor] = useState<HTMLDivElement | null>(null);
   const [isStashMenuOpen, setIsStashMenuOpen] = useState(false);
+  const [isAutoSendPending, setIsAutoSendPending] = useState(false);
   const [stashPulse, setStashPulse] = useState<{ key: number; active: boolean }>({
     key: 0,
     active: false,
@@ -998,6 +1000,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const dragDepthRef = useRef(0);
   const stashPulseKeyRef = useRef(0);
   const stashPulseTimeoutRef = useRef<number | null>(null);
+  /**
+   * Whether the thread was mid-turn at the last auto-send evaluation. Starts
+   * false so the first pass only records the state it found — opening a
+   * thread that is already idle must not count as a turn having just ended.
+   */
+  const wasThreadWorkingRef = useRef(false);
   /**
    * Snapshots currently being encoded, keyed by target+prompt+image ids.
    * Keyed rather than boolean so a genuinely different prompt (or a different
@@ -2288,6 +2296,64 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     stashCurrentPrompt,
     terminalOpen,
   ]);
+
+  // ------------------------------------------------------------------
+  // Prompt stash: auto-send
+  // ------------------------------------------------------------------
+  // Opt-in. With it on, each finished turn takes the oldest stashed prompt
+  // and sends it, so prompts written while the agent was busy go out in the
+  // order they were stashed — one per turn, never in a batch.
+  const isThreadWorking = phase === "running" || isSendBusy || isConnecting;
+  // Mirrors the ⌘S gate, plus the states that refuse a plain send.
+  const isAutoSendBlocked =
+    isSendDisabled ||
+    noProviderAvailable ||
+    projectSelectionRequired ||
+    environmentUnavailable !== null ||
+    isComposerApprovalState ||
+    pendingUserInputs.length > 0 ||
+    activePendingProgress !== null ||
+    showPlanFollowUpPrompt;
+
+  useEffect(() => {
+    const wasWorking = wasThreadWorkingRef.current;
+    wasThreadWorkingRef.current = isThreadWorking;
+    if (
+      !shouldAutoSendStashedPrompt({
+        enabled: settings.autoSendStashedPrompts,
+        hasStashedPrompt: stashQueue.length > 0,
+        wasWorking,
+        isWorking: isThreadWorking,
+        phase,
+        hasComposerContent: composerSendState.hasSendableContent,
+        sendBlocked: isAutoSendBlocked,
+      })
+    ) {
+      return;
+    }
+    const oldestEntry = stashQueue.at(-1);
+    if (!oldestEntry) return;
+    restoreStashEntry(oldestEntry);
+    setIsAutoSendPending(true);
+  }, [
+    composerSendState.hasSendableContent,
+    isAutoSendBlocked,
+    isThreadWorking,
+    phase,
+    restoreStashEntry,
+    settings.autoSendStashedPrompts,
+    stashQueue,
+  ]);
+
+  // The send is deferred by a commit: `restoreStashEntry` writes through the
+  // draft store, and the image ref `onSend` reads is only synced from it in
+  // an effect. Sending in the same pass would ship the prompt without its
+  // attachments.
+  useEffect(() => {
+    if (!isAutoSendPending) return;
+    setIsAutoSendPending(false);
+    submitComposer();
+  }, [isAutoSendPending, submitComposer]);
 
   // ------------------------------------------------------------------
   // Callbacks: images

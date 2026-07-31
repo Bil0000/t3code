@@ -592,6 +592,9 @@ export function useSettingsRestore(onRestored?: () => void) {
       ...(settings.autoOpenPlanSidebar !== DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar
         ? ["Auto-open task panel"]
         : []),
+      ...(settings.autoSendStashedPrompts !== DEFAULT_UNIFIED_SETTINGS.autoSendStashedPrompts
+        ? ["Stashed prompts"]
+        : []),
       ...(settings.enableAssistantStreaming !== DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming
         ? ["Assistant output"]
         : []),
@@ -622,6 +625,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       isTextGenerationModelDirty,
       isBackgroundActivityDirty,
       settings.autoOpenPlanSidebar,
+      settings.autoSendStashedPrompts,
       settings.confirmThreadArchive,
       settings.confirmThreadDelete,
       settings.addProjectBaseDirectory,
@@ -660,6 +664,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       sidebarThreadPreviewCount: DEFAULT_UNIFIED_SETTINGS.sidebarThreadPreviewCount,
       sidebarProjectGroupingMode: DEFAULT_UNIFIED_SETTINGS.sidebarProjectGroupingMode,
       autoOpenPlanSidebar: DEFAULT_UNIFIED_SETTINGS.autoOpenPlanSidebar,
+      autoSendStashedPrompts: DEFAULT_UNIFIED_SETTINGS.autoSendStashedPrompts,
       enableAssistantStreaming: DEFAULT_UNIFIED_SETTINGS.enableAssistantStreaming,
       enableProviderUpdateChecks: DEFAULT_UNIFIED_SETTINGS.enableProviderUpdateChecks,
       backgroundActivity: DEFAULT_UNIFIED_SETTINGS.backgroundActivity,
@@ -1432,6 +1437,32 @@ export function GeneralSettingsPanel() {
                 updateSettings({ autoOpenPlanSidebar: Boolean(checked) })
               }
               aria-label="Open the task panel automatically"
+            />
+          }
+        />
+
+        <SettingsRow
+          {...searchableSetting("stashed-prompts")}
+          description="Send the oldest stashed prompt automatically when the open thread finishes a turn."
+          resetAction={
+            settings.autoSendStashedPrompts !== DEFAULT_UNIFIED_SETTINGS.autoSendStashedPrompts ? (
+              <SettingResetButton
+                label="stashed prompts"
+                onClick={() =>
+                  updateSettings({
+                    autoSendStashedPrompts: DEFAULT_UNIFIED_SETTINGS.autoSendStashedPrompts,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Switch
+              checked={settings.autoSendStashedPrompts}
+              onCheckedChange={(checked) =>
+                updateSettings({ autoSendStashedPrompts: Boolean(checked) })
+              }
+              aria-label="Send stashed prompts automatically"
             />
           }
         />

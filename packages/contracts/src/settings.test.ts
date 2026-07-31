@@ -111,6 +111,15 @@ describe("ClientSettings sidebar v2", () => {
   });
 });
 
+describe("ClientSettings stash auto-send", () => {
+  it("leaves stashed prompts parked until the user opts in", () => {
+    expect(decodeClientSettings({}).autoSendStashedPrompts).toBe(false);
+    expect(decodeClientSettingsPatch({ autoSendStashedPrompts: true }).autoSendStashedPrompts).toBe(
+      true,
+    );
+  });
+});
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});
