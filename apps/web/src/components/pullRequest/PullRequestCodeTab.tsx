@@ -8,7 +8,7 @@ import type {
   PullRequestReviewThread,
 } from "@t3tools/contracts";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
 import {
@@ -264,26 +264,46 @@ export function PullRequestCodeTab({
     );
   }
 
+  /**
+   * The review bar belongs to the pull request, not to the patch: a change whose diff cannot
+   * be structured — or read at all — is still one a reviewer can approve or reject, so it
+   * survives every branch below.
+   */
+  const reviewBar = (
+    <PullRequestReviewBar
+      environmentId={environmentId}
+      reference={reference}
+      verdicts={review.verdicts}
+      onSubmitted={onRefresh}
+    />
+  );
+  const withReviewBar = (body: ReactNode) => (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="min-h-0 flex-1 overflow-auto">{body}</div>
+      {reviewBar}
+    </div>
+  );
+
   if (diffQuery.error) {
-    return <p className="p-5 text-sm text-muted-foreground">{diffQuery.error}</p>;
+    return withReviewBar(<p className="p-5 text-sm text-muted-foreground">{diffQuery.error}</p>);
   }
 
   // A patch the viewer cannot structure (binary, or a format it does not parse) still has to
   // be readable, so it falls back to the raw text rather than an empty tab.
   if (renderablePatch?.kind === "raw") {
-    return (
-      <div className="h-full space-y-2 overflow-auto p-5">
+    return withReviewBar(
+      <div className="space-y-2 p-5">
         <p className="text-xs text-muted-foreground">{renderablePatch.reason}</p>
         <pre className="whitespace-pre-wrap break-words font-mono text-xs">
           {renderablePatch.text}
         </pre>
-      </div>
+      </div>,
     );
   }
 
   if (items.length === 0) {
-    return (
-      <p className="p-5 text-sm text-muted-foreground">This pull request has no file changes.</p>
+    return withReviewBar(
+      <p className="p-5 text-sm text-muted-foreground">This pull request has no file changes.</p>,
     );
   }
 
@@ -461,12 +481,7 @@ export function PullRequestCodeTab({
             </section>
           ) : null}
         </div>
-        <PullRequestReviewBar
-          environmentId={environmentId}
-          reference={reference}
-          verdicts={review.verdicts}
-          onSubmitted={onRefresh}
-        />
+        {reviewBar}
       </div>
     </DiffWorkerPoolProvider>
   );

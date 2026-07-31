@@ -574,4 +574,42 @@ layer("GitLabPullRequestCli.layer", (it) => {
       expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({ resolved: true });
     }),
   );
+
+  it.effect("names a merge request with no diff revisions rather than calling it unreadable", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          // @effect-diagnostics-next-line preferSchemaOverJson:off
+          output(
+            JSON.stringify({
+              iid: 7,
+              title: "t",
+              web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+              source_branch: "feat",
+              target_branch: "main",
+              created_at: "2026-07-01T00:00:00Z",
+              updated_at: "2026-07-01T00:00:00Z",
+              diff_refs: null,
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.submitReview({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          verdict: "comment",
+          body: "",
+          comments: [{ path: "src/a.ts", line: 4, side: "right", body: "nit" }],
+        }),
+      );
+
+      // Nothing failed to decode: GitLab answered, and the answer has nowhere to put a
+      // positioned comment.
+      assert.strictEqual(error._tag, "GitLabDiffRefsUnavailableError");
+    }),
+  );
 });

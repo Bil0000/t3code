@@ -71,9 +71,29 @@ export class GitLabViewerUnavailableError extends Schema.TaggedErrorClass<GitLab
   }
 }
 
+/** Not a decode failure: GitLab answered, the merge request just has no revisions to place a
+ *  comment against. */
+export class GitLabDiffRefsUnavailableError extends Schema.TaggedErrorClass<GitLabDiffRefsUnavailableError>()(
+  "GitLabDiffRefsUnavailableError",
+  {
+    command: Schema.Literal("glab"),
+    cwd: Schema.String,
+    number: Schema.Int,
+  },
+) {
+  get detail(): string {
+    return "The merge request reported no diff revisions.";
+  }
+
+  override get message(): string {
+    return `GitLab CLI failed in getDiffRefs: ${this.detail}`;
+  }
+}
+
 export type GitLabPullRequestCliError =
   | GitLabCli.GitLabCliError
   | GitLabMergeRequestReadError
+  | GitLabDiffRefsUnavailableError
   | GitLabViewerUnavailableError;
 
 /** GitLab's own ceiling on `per_page`, so a larger page has to be walked. */
@@ -408,20 +428,27 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.flatMap((result) => {
         const decoded = decodeDiffRefsJson(result.stdout.trim());
-        // A merge request with no diff refs cannot carry a positioned comment at all, which
-        // is the same dead end as a response that could not be read.
-        return Result.isSuccess(decoded) && decoded.success !== null
-          ? Effect.succeed(decoded.success)
-          : Effect.fail(
-              new GitLabMergeRequestReadError({
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            new GitLabMergeRequestReadError({
+              command: "glab",
+              cwd: input.cwd,
+              operation: "getDiffRefs",
+              cause: decoded.failure,
+            }),
+          );
+        }
+        // A merge request with no diff refs is a well-formed answer that cannot carry a
+        // positioned comment — a dead end, but not something that failed to be read.
+        return decoded.success === null
+          ? Effect.fail(
+              new GitLabDiffRefsUnavailableError({
                 command: "glab",
                 cwd: input.cwd,
-                operation: "getDiffRefs",
-                cause: Result.isSuccess(decoded)
-                  ? new Error("The merge request reported no diff revisions.")
-                  : decoded.failure,
+                number: input.number,
               }),
-            );
+            )
+          : Effect.succeed(decoded.success);
       }),
     );
 
