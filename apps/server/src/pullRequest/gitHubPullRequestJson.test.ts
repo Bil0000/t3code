@@ -105,6 +105,47 @@ describe("pull request detail decoding", () => {
     expect(detail.comments.at(-1)?.reviewState).toBe("APPROVED");
   });
 
+  it("drops the bodyless review GitHub opens to hold line comments", () => {
+    const raw = JSON.parse(detailJson) as Record<string, unknown>;
+    const detail = expectSuccess(
+      decodePullRequestDetailJson(
+        JSON.stringify({
+          ...raw,
+          reviews: [
+            // What a reviewer leaving inline comments produces: a container with a state but
+            // nothing to read. Its comments come from the review threads instead.
+            { id: "r4", body: "", state: "COMMENTED", submittedAt: "2026-07-07T00:00:00Z" },
+            {
+              id: "r5",
+              body: "Looks good.",
+              state: "COMMENTED",
+              submittedAt: "2026-07-08T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(detail.comments.map((comment) => comment.id)).toEqual(["c1", "r5"]);
+  });
+
+  it.each(["APPROVED", "CHANGES_REQUESTED", "DISMISSED"])(
+    "keeps a bodyless %s review, which is the event itself",
+    (state) => {
+      const raw = JSON.parse(detailJson) as Record<string, unknown>;
+      const detail = expectSuccess(
+        decodePullRequestDetailJson(
+          JSON.stringify({
+            ...raw,
+            reviews: [{ id: "r6", body: "", state, submittedAt: "2026-07-07T00:00:00Z" }],
+          }),
+        ),
+      );
+
+      expect(detail.comments.map((comment) => comment.id)).toContain("r6");
+    },
+  );
+
   it("drops a review that carries neither a body nor a state", () => {
     const raw = JSON.parse(detailJson) as Record<string, unknown>;
     const detail = expectSuccess(

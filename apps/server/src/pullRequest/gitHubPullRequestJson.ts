@@ -380,6 +380,18 @@ function toChecks(
   });
 }
 
+/** The states that are a verdict in themselves, rather than a wrapper around line comments. */
+function isReviewVerdict(reviewState: string | null): boolean {
+  switch (reviewState?.toUpperCase()) {
+    case "APPROVED":
+    case "CHANGES_REQUESTED":
+    case "DISMISSED":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function toComments(
   raw: Schema.Schema.Type<typeof RawDetailSchema>,
 ): ReadonlyArray<PullRequestComment> {
@@ -395,12 +407,17 @@ function toComments(
       reviewState: null,
     }),
   );
-  // A review with neither a body nor a state carries nothing to show. One with a state but no
-  // body is an approval or a change request, which is the whole event and is kept.
+  // A review with no body is kept only when its state is the event itself — an approval, a
+  // request for changes, a dismissal. GitHub also opens a bodiless `COMMENTED` review as the
+  // container for line comments, and those comments are read from the review threads, so
+  // keeping the container too would show a row with a name and nothing under it.
   const reviews = (raw.reviews ?? []).flatMap((review): ReadonlyArray<PullRequestComment> => {
     const submittedAt = trimmed(review.submittedAt);
     const reviewState = trimmed(review.state);
-    if (submittedAt === null || ((review.body ?? "").trim().length === 0 && reviewState === null)) {
+    if (
+      submittedAt === null ||
+      ((review.body ?? "").trim().length === 0 && !isReviewVerdict(reviewState))
+    ) {
       return [];
     }
     return [
