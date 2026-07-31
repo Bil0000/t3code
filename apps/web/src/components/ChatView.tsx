@@ -138,6 +138,7 @@ import {
   selectThreadPreviewMiniPlayer,
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
+import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { RightPanelTabs } from "./RightPanelTabs";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
@@ -3064,6 +3065,20 @@ function ChatViewContent(props: ChatViewProps) {
     },
     [activeProject, activeThreadRef],
   );
+  // The thread's own change request, placed against the project it belongs to. Without a
+  // project there is nothing to resolve it against, so the caller falls back to the browser.
+  const threadRepository = activeProject?.repositoryIdentity?.displayName ?? null;
+  const openThreadPullRequest = useCallback(
+    (number: number) => {
+      if (!activeThreadRef || !activeProject || threadRepository === null) return;
+      useRightPanelStore.getState().openPullRequest(activeThreadRef, {
+        projectId: activeProject.id,
+        repository: threadRepository,
+        number,
+      });
+    },
+    [activeProject, activeThreadRef, threadRepository],
+  );
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
     if (previewPanelOpen) {
@@ -5618,6 +5633,21 @@ function ChatViewContent(props: ChatViewProps) {
           initialGitScope={initialDiffPanelGitScope}
         />
       </Suspense>
+    ) : activeRightPanelSurface?.kind === "pull-request" ? (
+      <PullRequestDetailPanel
+        key={`${activeRightPanelSurface.repository}#${activeRightPanelSurface.number}`}
+        environmentId={activeThread.environmentId}
+        reference={{
+          projectId: activeRightPanelSurface.projectId as ProjectId,
+          repository: activeRightPanelSurface.repository,
+          number: activeRightPanelSurface.number,
+        }}
+        onClose={() => {
+          if (activeThreadRef) {
+            useRightPanelStore.getState().closeSurface(activeThreadRef, "pull-request");
+          }
+        }}
+      />
     ) : activeRightPanelSurface?.kind === "plan" ? (
       <PlanSidebar
         activePlan={activePlan}
@@ -5683,6 +5713,7 @@ function ChatViewContent(props: ChatViewProps) {
         >
           {!rightPanelOpen ? panelLayoutControls : null}
           <ChatHeader
+            {...(threadRepository === null ? {} : { onOpenPullRequest: openThreadPullRequest })}
             activeThreadEnvironmentId={activeThread.environmentId}
             activeThreadId={activeThread.id}
             {...(routeKind === "draft" && draftId ? { draftId } : {})}

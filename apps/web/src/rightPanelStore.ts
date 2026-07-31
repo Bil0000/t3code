@@ -14,7 +14,15 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { resolveStorage } from "./lib/storage";
 
-export const RIGHT_PANEL_KINDS = ["plan", "diff", "files", "file", "preview", "terminal"] as const;
+export const RIGHT_PANEL_KINDS = [
+  "plan",
+  "diff",
+  "files",
+  "file",
+  "preview",
+  "terminal",
+  "pull-request",
+] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
 
 export type RightPanelSurface =
@@ -37,10 +45,21 @@ export type RightPanelSurface =
       revealLine: number | null;
       revealRequestId: number;
     }
+  | {
+      /**
+       * The thread's own change request, opened beside it rather than on the page, the way the
+       * browser opens beside it. One per thread, so its id carries no reference.
+       */
+      id: "pull-request";
+      kind: "pull-request";
+      projectId: string;
+      repository: string;
+      number: number;
+    }
   | { id: "plan"; kind: "plan" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
-const RIGHT_PANEL_STORAGE_VERSION = 7;
+const RIGHT_PANEL_STORAGE_VERSION = 8;
 
 export interface ThreadRightPanelState {
   isOpen: boolean;
@@ -50,9 +69,16 @@ export interface ThreadRightPanelState {
 
 interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
-  open: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "terminal">) => void;
+  open: (
+    ref: ScopedThreadRef,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+  ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
+  openPullRequest: (
+    ref: ScopedThreadRef,
+    target: { projectId: string; repository: string; number: number },
+  ) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
     ref: ScopedThreadRef,
@@ -72,7 +98,10 @@ interface RightPanelStoreState {
   show: (ref: ScopedThreadRef) => void;
   close: (ref: ScopedThreadRef) => void;
   toggleVisibility: (ref: ScopedThreadRef) => void;
-  toggle: (ref: ScopedThreadRef, kind: Exclude<RightPanelKind, "file" | "terminal">) => void;
+  toggle: (
+    ref: ScopedThreadRef,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request">,
+  ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
 
@@ -83,7 +112,7 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal">,
+  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request">,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -257,6 +286,27 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
               ? current.surfaces.filter((entry) => entry.id !== "browser:new")
               : current.surfaces;
             return upsertSurface({ ...current, surfaces: withoutPlaceholder }, surface);
+          }),
+        })),
+      openPullRequest: (ref, target) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
+            const surface = {
+              id: "pull-request",
+              kind: "pull-request",
+              projectId: target.projectId,
+              repository: target.repository,
+              number: target.number,
+            } as const;
+            // Replaced rather than added to: a thread has one change request, and reopening it
+            // for a different one should not leave the old tab behind.
+            return {
+              isOpen: true,
+              activeSurfaceId: surface.id,
+              surfaces: current.surfaces.some((entry) => entry.id === surface.id)
+                ? current.surfaces.map((entry) => (entry.id === surface.id ? surface : entry))
+                : [...current.surfaces, surface],
+            };
           }),
         })),
       openFile: (ref, relativePath, line) =>
