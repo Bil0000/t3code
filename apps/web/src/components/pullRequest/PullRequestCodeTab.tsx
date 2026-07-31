@@ -307,6 +307,11 @@ export function PullRequestCodeTab({
               layout: { paddingTop: 0, paddingBottom: 8, gap: 8 },
               enableGutterUtility: review.inlineComment && draft === null,
               enableLineSelection: review.inlineComment && draft === null,
+              // Two gestures reach the same place: dragging the line numbers selects a range,
+              // and the gutter's own button comments on the one line it sits on. They are
+              // separate callbacks in the viewer, so a reader who only ever presses the button
+              // gets nothing unless both are wired.
+              onGutterUtilityClick: beginComment,
               onLineSelectionEnd: beginComment,
             }}
             renderHeaderPrefix={(item) => {
