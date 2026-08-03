@@ -71,6 +71,7 @@ const UPDATE: ProviderMaintenanceCapabilitiesResolver = {
 
 export type GrokDriverEnv =
   | GrokAdapterV2DriverEnv
+  | BackgroundPolicy.BackgroundPolicy
   | ChildProcessSpawner.ChildProcessSpawner
   | Crypto.Crypto
   | FileSystem.FileSystem
