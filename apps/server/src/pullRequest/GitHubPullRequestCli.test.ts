@@ -43,6 +43,24 @@ function pullRequests(count: number, firstNumber: number): string {
   );
 }
 
+function pullRequestFiles(count: number, firstIndex: number): string {
+  // @effect-diagnostics-next-line preferSchemaOverJson:off
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => ({
+      filename: `src/file${firstIndex + index}.ts`,
+      status: "modified",
+      patch: "@@ -1 +1 @@\n-old\n+new",
+    })),
+  );
+}
+
+/** What `gh pr diff` answers on a pull request GitHub will not serve a diff for. */
+const diffRefused = new GitHubCli.GitHubCliCommandError({
+  command: "gh",
+  cwd: "/w",
+  cause: new Error("HTTP 406: the diff exceeded the maximum number of files (300)"),
+});
+
 /** The whole invocation the nth call made, so both argv and stdin can be asserted. */
 function callAt(index: number) {
   const call = mockedExecute.mock.calls[index];
@@ -304,6 +322,74 @@ layer("GitHubPullRequestCli.layer", (it) => {
       });
 
       assert.isTrue(diff.truncated);
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("assembles the patch from the files API when GitHub refuses the diff", () =>
+    Effect.gen(function* () {
+      // GitHub answers 406 rather than a diff past 300 changed files.
+      mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(2, 1))));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const diff = yield* cli.getPullRequestDiff({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.acme.dev",
+        number: 7,
+      });
+
+      assert.isFalse(diff.truncated);
+      expect(diff.patch).toContain("diff --git a/src/file1.ts b/src/file1.ts");
+      expect(diff.patch).toContain("diff --git a/src/file2.ts b/src/file2.ts");
+      const args = callAt(1).args;
+      expect(args).toContain("--hostname");
+      expect(args).toContain("github.acme.dev");
+      expect(args).toContain("repos/acme/web/pulls/7/files?per_page=100&page=1");
+    }),
+  );
+
+  it.effect("stops the files walk at three pages and reports the files left behind", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
+      for (const page of [0, 1, 2]) {
+        mockedExecute.mockReturnValueOnce(
+          Effect.succeed(output(pullRequestFiles(100, page * 100))),
+        );
+      }
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const diff = yield* cli.getPullRequestDiff({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      assert.isTrue(diff.truncated);
+      // 300 files is the same ceiling GitHub's own diff endpoint refuses past.
+      assert.strictEqual(mockedExecute.mock.calls.length, 4);
+      expect(callAt(3).args).toContain("repos/acme/web/pulls/7/files?per_page=100&page=3");
+    }),
+  );
+
+  it.effect("reports the refused diff when the files API cannot answer either", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("not json")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getPullRequestDiff({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+        }),
+      );
+
+      assert.strictEqual(error, diffRefused);
     }),
   );
 

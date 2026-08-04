@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildReviewSubmissionJson,
   decodePullRequestDetailJson,
+  decodePullRequestFilesJson,
   decodePullRequestListJson,
   decodeRepositoryMergeCapabilitiesJson,
   decodeReviewThreadsJson,
@@ -444,5 +445,132 @@ describe("review submission payload", () => {
     expect(
       JSON.parse(buildReviewSubmissionJson({ verdict: "approve", body: "", comments: [] })),
     ).toEqual({ event: "APPROVE", body: "", comments: [] });
+  });
+});
+
+describe("decodePullRequestFilesJson", () => {
+  it("assembles a unified patch the files API does not return", () => {
+    const result = expectSuccess(
+      decodePullRequestFilesJson(
+        JSON.stringify([
+          { filename: "src/app.ts", status: "modified", patch: "@@ -1 +1 @@\n-old\n+new" },
+        ]),
+      ),
+    );
+
+    expect(result.patch).toBe(
+      [
+        "diff --git a/src/app.ts b/src/app.ts",
+        "--- a/src/app.ts",
+        "+++ b/src/app.ts",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "",
+      ].join("\n"),
+    );
+    expect(result.truncated).toBe(false);
+    expect(result.rawCount).toBe(1);
+  });
+
+  it("points an added file at /dev/null on the left and a removed one on the right", () => {
+    const result = expectSuccess(
+      decodePullRequestFilesJson(
+        JSON.stringify([
+          { filename: "src/new.ts", status: "added", patch: "@@ -0,0 +1 @@\n+hello" },
+          { filename: "src/gone.ts", status: "removed", patch: "@@ -1 +0,0 @@\n-bye" },
+        ]),
+      ),
+    );
+
+    expect(result.patch).toBe(
+      [
+        "diff --git a/src/new.ts b/src/new.ts",
+        "new file mode 100644",
+        "--- /dev/null",
+        "+++ b/src/new.ts",
+        "@@ -0,0 +1 @@",
+        "+hello",
+        "diff --git a/src/gone.ts b/src/gone.ts",
+        "deleted file mode 100644",
+        "--- a/src/gone.ts",
+        "+++ /dev/null",
+        "@@ -1 +0,0 @@",
+        "-bye",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("names both paths of a rename, counting its hunks against the old one", () => {
+    const result = expectSuccess(
+      decodePullRequestFilesJson(
+        JSON.stringify([
+          {
+            filename: "src/new.ts",
+            status: "renamed",
+            previous_filename: "src/old.ts",
+            patch: "@@ -1 +1 @@\n-old\n+new",
+          },
+        ]),
+      ),
+    );
+
+    expect(result.patch).toBe(
+      [
+        "diff --git a/src/old.ts b/src/new.ts",
+        "rename from src/old.ts",
+        "rename to src/new.ts",
+        "--- a/src/old.ts",
+        "+++ b/src/new.ts",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("still lists a file GitHub sent no hunks for, and says what was withheld", () => {
+    const result = expectSuccess(
+      decodePullRequestFilesJson(
+        JSON.stringify([
+          // Binary: it changed, and none of it can be shown.
+          { filename: "logo.png", status: "modified", additions: 4, deletions: 2 },
+          {
+            filename: "src/app.ts",
+            status: "modified",
+            additions: 1,
+            deletions: 1,
+            patch: "@@ -1 +1 @@\n-old\n+new",
+          },
+        ]),
+      ),
+    );
+
+    // Dropping it would take the file out of the change altogether, not just its contents.
+    expect(result.patch).toContain("diff --git a/logo.png b/logo.png");
+    expect(result.patch).toContain("diff --git a/src/app.ts b/src/app.ts");
+    expect(result.truncated).toBe(true);
+    expect(result.rawCount).toBe(2);
+  });
+
+  it("does not call a pure rename incomplete, since it has no hunks to withhold", () => {
+    const result = expectSuccess(
+      decodePullRequestFilesJson(
+        JSON.stringify([
+          {
+            filename: "src/new.ts",
+            previous_filename: "src/old.ts",
+            status: "renamed",
+            additions: 0,
+            deletions: 0,
+          },
+        ]),
+      ),
+    );
+
+    expect(result.patch).toContain("rename from src/old.ts");
+    expect(result.truncated).toBe(false);
   });
 });

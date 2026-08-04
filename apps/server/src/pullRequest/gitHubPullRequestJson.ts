@@ -179,6 +179,18 @@ const RawMergeCapabilitiesSchema = Schema.Struct({
   rebaseMergeAllowed: Schema.Boolean,
 });
 
+const RawPullRequestFileSchema = Schema.Struct({
+  filename: Schema.String,
+  status: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Only on a rename, where it names the file the hunks are counted against. */
+  previous_filename: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Absent for a binary file, and for one whose diff GitHub considers too large. */
+  patch: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Whether anything was withheld is the difference between a binary file and a pure rename. */
+  additions: Schema.optional(Schema.NullOr(Schema.Int)),
+  deletions: Schema.optional(Schema.NullOr(Schema.Int)),
+});
+
 /** Resolves a listing's authors to avatars, which no `gh` JSON field carries. */
 export const ACTOR_AVATARS_GRAPHQL_QUERY = `query($ids: [ID!]!) {
   nodes(ids: $ids) {
@@ -568,6 +580,7 @@ const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeListEntry = Schema.decodeUnknownExit(RawListItemSchema);
 const decodeDetail = decodeJsonResult(RawDetailSchema);
 const decodeMergeCapabilities = decodeJsonResult(RawMergeCapabilitiesSchema);
+const decodeFileEntry = Schema.decodeUnknownExit(RawPullRequestFileSchema);
 const decodeReviewThreads = decodeJsonResult(RawReviewThreadsSchema);
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
@@ -720,4 +733,60 @@ export function decodeRepositoryMergeCapabilitiesJson(
         rebase: decoded.success.rebaseMergeAllowed,
       })
     : Result.fail(decoded.failure);
+}
+
+export interface GitHubPullRequestFilesPatch {
+  readonly patch: string;
+  /** At least one file's hunks were withheld by GitHub, so they are missing from the patch. */
+  readonly truncated: boolean;
+  /** Files GitHub returned, counted before decoding, so the caller can page. */
+  readonly rawCount: number;
+}
+
+/**
+ * The files API returns hunks per file with no `diff --git` header, so the unified patch every
+ * diff viewer expects is assembled here. This decodes one page; walking pages is the caller's
+ * job, which is why the raw file count comes back with the patch.
+ */
+export function decodePullRequestFilesJson(
+  raw: string,
+): Result.Result<GitHubPullRequestFilesPatch, DecodeFailure> {
+  const decoded = decodeUnknownList(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const sections: string[] = [];
+  let truncated = false;
+  for (const entry of decoded.success) {
+    const file = decodeFileEntry(entry);
+    if (Exit.isFailure(file)) continue;
+    const value = file.value;
+    const hunks = value.patch ?? "";
+    const status = value.status?.trim().toLowerCase();
+    if (hunks.length === 0) {
+      // A file with no hunks is still a file that changed: a pure rename has none to give, and
+      // a binary one has none that can be shown. Both are listed, and only the second is a hole
+      // in the patch — leaving them out entirely would drop them from the change altogether.
+      if ((value.additions ?? 0) + (value.deletions ?? 0) > 0) truncated = true;
+    }
+    // A rename counts its hunks against the old path, which is the only place it is named.
+    const oldPath =
+      status === "renamed" ? (trimmed(value.previous_filename) ?? value.filename) : value.filename;
+    const header = [
+      `diff --git a/${oldPath} b/${value.filename}`,
+      // The files API reports no file mode, so the ordinary one stands in: the viewer reads
+      // these lines as "added" and "removed" rather than for the mode they carry.
+      ...(status === "added" ? ["new file mode 100644"] : []),
+      ...(status === "removed" ? ["deleted file mode 100644"] : []),
+      ...(status === "renamed" ? [`rename from ${oldPath}`, `rename to ${value.filename}`] : []),
+      `--- ${status === "added" ? "/dev/null" : `a/${oldPath}`}`,
+      `+++ ${status === "removed" ? "/dev/null" : `b/${value.filename}`}`,
+    ].join("\n");
+    sections.push(hunks.length === 0 ? `${header}\n` : `${header}\n${hunks.replace(/\n?$/, "\n")}`);
+  }
+  return Result.succeed({
+    patch: sections.join(""),
+    truncated,
+    rawCount: decoded.success.length,
+  });
 }
