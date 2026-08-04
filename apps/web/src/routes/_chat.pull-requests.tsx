@@ -205,6 +205,7 @@ function PullRequestsRouteView() {
   }, [filterKey, listQuery.data]);
   const listData = listQuery.data ?? (loaded?.key === filterKey ? loaded.data : null);
   const loadingMore = listQuery.isPending && listData !== null;
+  const firstLoad = listQuery.isPending && listData === null;
 
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -344,11 +345,22 @@ function PullRequestsRouteView() {
                     options={STATE_TABS}
                     onChange={(state) => updateSearch({ state, ...clearedSelection })}
                   />
-                  <PullRequestProviderFilter
-                    providers={hosts}
-                    value={search.provider}
-                    onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
-                  />
+                  {/* Only while the hosts are genuinely unknown. Every filter change starts a
+                      fresh query whose data is null again, and swapping the switcher for a
+                      placeholder there would take away the "All" pill a reader just used to
+                      scope the list — the one control that gets them back out. */}
+                  {firstLoad && hosts.length === 0 ? (
+                    // Holds the switcher's place until the hosts land, so the search row and the
+                    // list below do not jump. Deliberately blank rather than pills: a host drawn
+                    // from guesswork could turn out to be one this workspace cannot use.
+                    <Skeleton className="h-8 w-56 rounded-lg" />
+                  ) : (
+                    <PullRequestProviderFilter
+                      providers={hosts}
+                      value={search.provider}
+                      onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
+                    />
+                  )}
                 </div>
                 <div className="flex items-center gap-2">
                   <PullRequestSearchInput
@@ -363,7 +375,7 @@ function PullRequestsRouteView() {
                 </div>
               </div>
 
-              {listQuery.isPending && listData === null ? (
+              {firstLoad ? (
                 <div className="space-y-1">
                   {Array.from({ length: 7 }, (_, index) => (
                     <Skeleton key={index} className="h-13 w-full rounded-lg" />
