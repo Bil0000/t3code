@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
+import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
 import {
   buildFileDiffRenderKey,
   fnv1a32,
@@ -140,11 +141,16 @@ export function PullRequestCodeTab({
   environmentId,
   reference,
   detail,
+  pendingFinding,
+  onFixFinding,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   detail: PullRequestDetail;
+  /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
+  pendingFinding?: string | null;
+  onFixFinding?: (finding: PullRequestFinding) => void;
   onRefresh: () => void;
 }) {
   const { resolvedTheme } = useTheme();
@@ -530,6 +536,8 @@ export function PullRequestCodeTab({
       canReply={review.reply}
       canResolve={review.resolve}
       pending={threadPending}
+      fixPending={pendingFinding === pullRequestFindingKey({ kind: "thread", thread })}
+      {...(onFixFinding ? { onFix: () => onFixFinding({ kind: "thread", thread }) } : {})}
       onReply={(body) =>
         runThreadCommand("Reply could not be posted", () =>
           replyToThread({

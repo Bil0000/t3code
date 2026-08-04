@@ -4,6 +4,7 @@ import {
   CircleDotIcon,
   GitBranchIcon,
   GitMergeIcon,
+  HammerIcon,
   MessageSquareIcon,
   SendIcon,
   UsersIcon,
@@ -28,7 +29,11 @@ import {
   pullRequestCheckStatusLabel,
   summarizePullRequestChecks,
 } from "./pullRequestPresentation";
-import { describePullRequestState } from "./pullRequestDetail.logic";
+import {
+  describePullRequestState,
+  pullRequestFindingKey,
+  type PullRequestFinding,
+} from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 
 function MetaRow({
@@ -149,10 +154,15 @@ function CommentComposer({
 export function PullRequestSummaryTab({
   environmentId,
   detail,
+  pendingFinding,
+  onFixFinding,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
   detail: PullRequestDetail;
+  /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
+  pendingFinding?: string | null;
+  onFixFinding?: (finding: PullRequestFinding) => void;
   onRefresh: () => void;
 }) {
   const openCheck = (url: string) => {
@@ -226,24 +236,46 @@ export function PullRequestSummaryTab({
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
           <div className="space-y-0.5">
-            {detail.checks.map((check) => (
-              <button
-                key={`${check.name}:${check.url ?? ""}`}
-                type="button"
-                disabled={!check.url}
-                onClick={() => check.url && openCheck(check.url)}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs",
-                  check.url ? "hover:bg-accent/60" : "cursor-default",
-                )}
-              >
-                <PullRequestCheckStatusIcon status={check.status} />
-                <span className="min-w-0 flex-1 truncate">{check.name}</span>
-                <span className="shrink-0 text-muted-foreground">
-                  {pullRequestCheckStatusLabel(check.status)}
-                </span>
-              </button>
-            ))}
+            {detail.checks.map((check) => {
+              const finding = { kind: "check", check } as const;
+              const failing = check.status === "failure" || check.status === "cancelled";
+              return (
+                <div
+                  key={`${check.name}:${check.url ?? ""}`}
+                  className="group flex items-center gap-1 rounded-md pr-1 hover:bg-accent/60"
+                >
+                  <button
+                    type="button"
+                    disabled={!check.url}
+                    onClick={() => check.url && openCheck(check.url)}
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs",
+                      check.url ? undefined : "cursor-default",
+                    )}
+                  >
+                    <PullRequestCheckStatusIcon status={check.status} />
+                    <span className="min-w-0 flex-1 truncate">{check.name}</span>
+                    <span className="shrink-0 text-muted-foreground">
+                      {pullRequestCheckStatusLabel(check.status)}
+                    </span>
+                  </button>
+                  {/* Only where there is something to fix. A passing check has no failure to
+                      reproduce, and the button would be an invitation to waste a thread. */}
+                  {onFixFinding && failing ? (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="shrink-0"
+                      disabled={pendingFinding !== null && pendingFinding !== undefined}
+                      onClick={() => onFixFinding(finding)}
+                    >
+                      <HammerIcon className="size-3" />
+                      {pendingFinding === pullRequestFindingKey(finding) ? "Preparing..." : "Fix"}
+                    </Button>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
         )}
       </Section>
@@ -260,14 +292,33 @@ export function PullRequestSummaryTab({
           <div className="space-y-3">
             {detail.comments.map((comment) => (
               <article key={comment.id} className="rounded-lg border border-border/60 p-3">
-                <PullRequestMetaLine className="text-xs text-muted-foreground">
-                  <PullRequestActorLabel
-                    actor={comment.author}
-                    className="font-medium text-foreground"
-                  />
-                  <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
-                  {comment.reviewState ? <span>{comment.reviewState.toLowerCase()}</span> : null}
-                </PullRequestMetaLine>
+                <div className="flex items-start gap-2">
+                  <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
+                    <PullRequestActorLabel
+                      actor={comment.author}
+                      className="font-medium text-foreground"
+                    />
+                    <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
+                    {comment.reviewState ? <span>{comment.reviewState.toLowerCase()}</span> : null}
+                  </PullRequestMetaLine>
+                  {/* Review remarks only. A plain conversation comment is talk, not a finding,
+                      and offering to fix one would promise more than it says. */}
+                  {onFixFinding &&
+                  (comment.kind === "review" || comment.kind === "review-comment") ? (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="-mt-1 shrink-0"
+                      disabled={pendingFinding !== null && pendingFinding !== undefined}
+                      onClick={() => onFixFinding({ kind: "comment", comment })}
+                    >
+                      <HammerIcon className="size-3" />
+                      {pendingFinding === pullRequestFindingKey({ kind: "comment", comment })
+                        ? "Preparing..."
+                        : "Fix in a thread"}
+                    </Button>
+                  ) : null}
+                </div>
                 {comment.path ? (
                   <p className="mt-1 truncate text-xs text-muted-foreground" title={comment.path}>
                     {comment.path}

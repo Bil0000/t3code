@@ -54,7 +54,13 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
-import { buildFixFindingsHandoff, buildResolveConflictsPrompt } from "./pullRequestDetail.logic";
+import {
+  buildFixFindingHandoff,
+  buildFixFindingsHandoff,
+  buildResolveConflictsPrompt,
+  pullRequestFindingKey,
+  type PullRequestFinding,
+} from "./pullRequestDetail.logic";
 import { PullRequestStateGlyph } from "./pullRequestPresentation";
 
 type DetailTab = "summary" | "timeline" | "code";
@@ -89,7 +95,9 @@ export function PullRequestDetailPanel({
   const [codeMounted, setCodeMounted] = useState(false);
   const [mergeMethod, setMergeMethod] = useState<PullRequestMergeMethod>("merge");
   const [confirmAction, setConfirmAction] = useState<"merge" | "close" | null>(null);
-  const [handoff, setHandoff] = useState<"findings" | "conflicts" | null>(null);
+  // Which handoff is preparing, keyed so a per-finding button can say "Preparing..." on itself
+  // alone. One at a time whatever the key: they all check the same pull request out.
+  const [handoff, setHandoff] = useState<string | null>(null);
 
   const detailQuery = useEnvironmentQuery(
     pullRequestEnvironment.detail({ environmentId, input: reference }),
@@ -122,7 +130,7 @@ export function PullRequestDetailPanel({
   // Both handoffs work the same way: check the pull request out into its own worktree, open a
   // thread there, and put the task in its composer for the user to read before sending.
   const startHandoff = async (
-    kind: "findings" | "conflicts",
+    kind: string,
     task: { prompt: string; reviewComments?: ReadonlyArray<ReviewCommentContext> },
   ) => {
     if (!detail || handoff !== null) return;
@@ -184,6 +192,22 @@ export function PullRequestDetailPanel({
       title: "Checkout ready",
       description: "The task is in the composer — read it over, then send.",
     });
+  };
+
+  /** One finding, handed over on its own — the surfaces that show findings call this. */
+  const startFixFinding = (finding: PullRequestFinding) => {
+    if (!detail) return;
+    void startHandoff(
+      pullRequestFindingKey(finding),
+      buildFixFindingHandoff({
+        number: detail.number,
+        title: detail.title,
+        url: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+        finding,
+      }),
+    );
   };
 
   const startFixFindings = () => {
@@ -434,6 +458,8 @@ export function PullRequestDetailPanel({
               <PullRequestSummaryTab
                 environmentId={environmentId}
                 detail={detail}
+                pendingFinding={handoff}
+                onFixFinding={startFixFinding}
                 onRefresh={() => detailQuery.refresh()}
               />
             ) : tab === "timeline" ? (
@@ -451,6 +477,8 @@ export function PullRequestDetailPanel({
                     environmentId={environmentId}
                     reference={reference}
                     detail={detail}
+                    pendingFinding={handoff}
+                    onFixFinding={startFixFinding}
                     onRefresh={() => detailQuery.refresh()}
                   />
                 </Suspense>

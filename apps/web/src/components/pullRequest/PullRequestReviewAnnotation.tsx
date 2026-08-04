@@ -3,7 +3,13 @@
  * the review being written, or the box that writes one.
  */
 import type { PullRequestReviewThread } from "@t3tools/contracts";
-import { CheckCircle2Icon, CircleIcon, MessageSquareIcon, Trash2Icon } from "lucide-react";
+import {
+  CheckCircle2Icon,
+  CircleIcon,
+  HammerIcon,
+  MessageSquareIcon,
+  Trash2Icon,
+} from "lucide-react";
 import { useState } from "react";
 
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -124,6 +130,8 @@ export function ReviewThreadCard({
   canReply,
   canResolve,
   pending,
+  fixPending,
+  onFix,
   onReply,
   onToggleResolved,
 }: {
@@ -132,6 +140,10 @@ export function ReviewThreadCard({
   canReply: boolean;
   canResolve: boolean;
   pending: boolean;
+  /** True while this thread's own hand-off is preparing, so only its button says so. */
+  fixPending?: boolean;
+  /** Absent where a thread is shown outside the pull request page's reach. */
+  onFix?: () => void;
   /** Resolves to whether the host took it, so a reply that failed keeps the words it was given. */
   onReply: (body: string) => Promise<boolean>;
   onToggleResolved: () => void;
@@ -174,11 +186,23 @@ export function ReviewThreadCard({
           {thread.comments.length === 1 ? "comment" : "comments"}
         </button>
         {thread.isOutdated ? <span>outdated</span> : null}
-        {canResolve ? (
+        {onFix ? (
           <Button
             size="xs"
             variant="ghost"
             className="ml-auto"
+            disabled={pending || fixPending}
+            onClick={onFix}
+          >
+            <HammerIcon className="size-3" />
+            {fixPending ? "Preparing..." : "Fix in a thread"}
+          </Button>
+        ) : null}
+        {canResolve ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            className={onFix ? undefined : "ml-auto"}
             disabled={pending}
             onClick={onToggleResolved}
           >
