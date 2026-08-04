@@ -297,6 +297,12 @@ function PullRequestsRouteView() {
     );
   }, [listData, search.provider]);
   const showProvider = hosts.length > 1;
+  // The workspace's own projects already name their hosts, so the row's shape is known before
+  // the list is. Only its shape: which hosts can actually be read still comes from the server.
+  const expectedHostCount = useMemo(
+    () => new Set(projects.flatMap((project) => project.repositoryIdentity?.provider ?? [])).size,
+    [projects],
+  );
 
   const selectEntry = (entry: PullRequestListEntry) =>
     updateSearch({
@@ -345,22 +351,12 @@ function PullRequestsRouteView() {
                     options={STATE_TABS}
                     onChange={(state) => updateSearch({ state, ...clearedSelection })}
                   />
-                  {/* Only while the hosts are genuinely unknown. Every filter change starts a
-                      fresh query whose data is null again, and swapping the switcher for a
-                      placeholder there would take away the "All" pill a reader just used to
-                      scope the list — the one control that gets them back out. */}
-                  {firstLoad && hosts.length === 0 ? (
-                    // Holds the switcher's place until the hosts land, so the search row and the
-                    // list below do not jump. Deliberately blank rather than pills: a host drawn
-                    // from guesswork could turn out to be one this workspace cannot use.
-                    <Skeleton className="h-8 w-56 rounded-lg" />
-                  ) : (
-                    <PullRequestProviderFilter
-                      providers={hosts}
-                      value={search.provider}
-                      onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
-                    />
-                  )}
+                  <PullRequestProviderFilter
+                    providers={hosts}
+                    value={search.provider}
+                    expectedHostCount={expectedHostCount}
+                    onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
+                  />
                 </div>
                 <div className="flex items-center gap-2">
                   <PullRequestSearchInput

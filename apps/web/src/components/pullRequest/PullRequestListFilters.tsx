@@ -9,6 +9,7 @@ import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
+import { Skeleton } from "../ui/skeleton";
 
 /**
  * The shell every filter group shares: an inset track that groups its options into one control,
@@ -78,12 +79,29 @@ export function PullRequestFilterPills<Value extends string>({
 export function PullRequestProviderFilter({
   providers,
   value,
+  expectedHostCount,
   onChange,
 }: {
   providers: ReadonlyArray<PullRequestProviderSummary>;
   value: SourceControlProviderKind | undefined;
+  /**
+   * How many hosts the workspace's own projects point at, which is known before the list is.
+   * Used only to hold this row's place while it loads, so the row does not appear from nowhere
+   * and push the page down — never to claim a host is usable before the server has said so.
+   */
+  expectedHostCount: number;
   onChange: (provider: SourceControlProviderKind | undefined) => void;
 }) {
+  if (providers.length === 0 && value === undefined) {
+    return expectedHostCount < 2 ? null : (
+      <div className={FILTER_GROUP_CLASS} aria-hidden>
+        {/* One more than the hosts, for the "All" pill that will sit in front of them. */}
+        {Array.from({ length: expectedHostCount + 1 }, (_, index) => (
+          <Skeleton key={index} className="h-7 w-20 rounded-[7px]" />
+        ))}
+      </div>
+    );
+  }
   if (providers.length < 2 && value === undefined) {
     return null;
   }
