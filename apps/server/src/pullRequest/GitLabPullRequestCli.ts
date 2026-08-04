@@ -752,6 +752,9 @@ export const make = Effect.gen(function* () {
             cwd: input.cwd,
             path: `${mergeRequest}/notes`,
             method: "POST",
+            // A JSON body rather than a `--raw-field`, for the reason the plain comment gives:
+            // glab coerces a field that reads as a literal `true` or a number.
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
             stdin: JSON.stringify({ body: input.body }),
           });
         }

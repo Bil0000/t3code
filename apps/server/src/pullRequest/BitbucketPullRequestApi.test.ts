@@ -23,7 +23,6 @@ function response(body: string) {
 }
 
 function page(count: number, firstNumber: number, next?: string): string {
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
   return JSON.stringify({
     pagelen: 50,
     size: count,

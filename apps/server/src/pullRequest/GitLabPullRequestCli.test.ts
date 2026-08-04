@@ -29,7 +29,6 @@ function output(stdout: string) {
 }
 
 function mergeRequests(count: number, firstNumber: number): string {
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
   return JSON.stringify(
     Array.from({ length: count }, (_, index) => ({
       iid: firstNumber + index,
@@ -45,7 +44,6 @@ function mergeRequests(count: number, firstNumber: number): string {
 
 /** A page of `/diffs` as GitLab serves it, a full one unless the count says otherwise. */
 function diffPage(firstIndex: number, count = 100): string {
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
   return JSON.stringify(
     Array.from({ length: count }, (_, index) => ({
       old_path: `src/${firstIndex + index}.ts`,
@@ -488,8 +486,8 @@ layer("GitLabPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
           output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify([
               {
                 id: "abc123",
@@ -547,8 +545,8 @@ layer("GitLabPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
           output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               iid: 7,
               title: "t",
@@ -644,8 +642,8 @@ layer("GitLabPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
           output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               iid: 7,
               title: "t",

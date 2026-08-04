@@ -29,7 +29,6 @@ function output(stdout: string, stdoutTruncated = false) {
 }
 
 function pullRequests(count: number, firstNumber: number): string {
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
   return JSON.stringify(
     Array.from({ length: count }, (_, index) => ({
       number: firstNumber + index,
@@ -44,7 +43,6 @@ function pullRequests(count: number, firstNumber: number): string {
 }
 
 function pullRequestFiles(count: number, firstIndex: number): string {
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
   return JSON.stringify(
     Array.from({ length: count }, (_, index) => ({
       filename: `src/file${firstIndex + index}.ts`,
@@ -280,10 +278,10 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
   it.effect("asks a GitHub Enterprise host for its own review threads", () =>
     Effect.gen(function* () {
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(
           output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
             JSON.stringify({
               data: {
                 repository: { pullRequest: { reviewThreads: { totalCount: 0, nodes: [] } } },
@@ -633,7 +631,6 @@ layer("GitHubPullRequestCli.layer", (it) => {
         resolved: false,
       });
 
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       const parse = (index: number) => JSON.parse(callAt(index).stdin ?? "") as { query: string };
       expect(parse(0).query).toContain("resolveReviewThread(");
       expect(parse(1).query).toContain("unresolveReviewThread(");

@@ -457,7 +457,6 @@ export const make = Effect.gen(function* () {
             .request({
               method: "POST",
               url: `${pullRequest}/merge`,
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
               body: JSON.stringify({ merge_strategy: mergeStrategy(input.mergeMethod) }),
             })
             .pipe(Effect.asVoid);
@@ -474,7 +473,6 @@ export const make = Effect.gen(function* () {
             method: "POST",
             url: `${path}/pullrequests/${input.number}/comments`,
             // A JSON document rather than a form field, so the body stays text whatever it says.
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             body: JSON.stringify({ content: { raw: input.body } }),
           })
           .pipe(Effect.asVoid),
@@ -493,7 +491,6 @@ export const make = Effect.gen(function* () {
               bitbucket.request({
                 method: "POST",
                 url: `${pullRequest}/comments`,
-                // @effect-diagnostics-next-line preferSchemaOverJson:off
                 body: JSON.stringify({
                   content: { raw: comment.body },
                   inline: {
@@ -527,7 +524,6 @@ export const make = Effect.gen(function* () {
           .request({
             method: "POST",
             url: `${path}/pullrequests/${input.number}/comments`,
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             body: JSON.stringify({
               content: { raw: input.body },
               parent: { id: Number(input.commentId) },

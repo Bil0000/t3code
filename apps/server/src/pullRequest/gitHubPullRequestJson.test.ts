@@ -176,7 +176,6 @@ describe("review thread decoding", () => {
     readonly requested?: ReadonlyArray<unknown>;
     readonly reviewed?: ReadonlyArray<unknown>;
   }): string =>
-    // @effect-diagnostics-next-line preferSchemaOverJson:off
     JSON.stringify({
       data: {
         repository: {

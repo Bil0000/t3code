@@ -31,7 +31,6 @@ function pullRequest(overrides: Record<string, unknown> = {}): Record<string, un
 }
 
 function page(values: ReadonlyArray<unknown>, extra: Record<string, unknown> = {}): string {
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
   return JSON.stringify({ pagelen: 50, page: 1, size: values.length, values, ...extra });
 }
 
@@ -98,7 +97,6 @@ describe("decodePullRequestPageJson", () => {
   });
 
   it("fails when Bitbucket did not answer with a page", () => {
-    // @effect-diagnostics-next-line preferSchemaOverJson:off
     expect(Result.isFailure(decodePullRequestPageJson(JSON.stringify({ error: "nope" })))).toBe(
       true,
     );
@@ -108,7 +106,6 @@ describe("decodePullRequestPageJson", () => {
 describe("decodePullRequestJson", () => {
   it("reads reviewers as review requests", () => {
     const decoded = expectSuccess(
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       decodePullRequestJson(
         JSON.stringify(
           pullRequest({
@@ -124,7 +121,6 @@ describe("decodePullRequestJson", () => {
 
   it("reads a participant's vote as a review", () => {
     const decoded = expectSuccess(
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       decodePullRequestJson(
         JSON.stringify(
           pullRequest({
@@ -162,21 +158,18 @@ describe("decodePullRequestJson", () => {
 
 describe("decodeViewerJson", () => {
   it("reads the signed-in nickname", () => {
-    // @effect-diagnostics-next-line preferSchemaOverJson:off
     const decoded = decodeViewerJson(JSON.stringify({ nickname: "bilal", display_name: "Bilal" }));
 
     expect(expectSuccess(decoded)).toBe("bilal");
   });
 
   it("falls back to the display name, which app accounts have instead", () => {
-    // @effect-diagnostics-next-line preferSchemaOverJson:off
     const decoded = decodeViewerJson(JSON.stringify({ display_name: "Release Bot" }));
 
     expect(expectSuccess(decoded)).toBe("Release Bot");
   });
 
   it("returns nothing when the account has neither", () => {
-    // @effect-diagnostics-next-line preferSchemaOverJson:off
     expect(expectSuccess(decodeViewerJson(JSON.stringify({})))).toBeNull();
   });
 });

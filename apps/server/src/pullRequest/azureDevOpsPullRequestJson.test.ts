@@ -36,7 +36,6 @@ function expectSuccess<A>(result: Result.Result<A, unknown>): A {
   return result.success;
 }
 
-// @effect-diagnostics-next-line preferSchemaOverJson:off
 const asJson = (value: unknown) => JSON.stringify(value);
 
 describe("decodePullRequestListJson", () => {

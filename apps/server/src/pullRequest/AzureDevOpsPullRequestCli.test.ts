@@ -29,7 +29,6 @@ function output(stdout: string) {
 }
 
 function pullRequests(count: number, firstNumber: number): string {
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
   return JSON.stringify(
     Array.from({ length: count }, (_, index) => ({
       pullRequestId: firstNumber + index,
