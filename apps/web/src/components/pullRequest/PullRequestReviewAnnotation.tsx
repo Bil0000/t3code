@@ -132,7 +132,8 @@ export function ReviewThreadCard({
   canReply: boolean;
   canResolve: boolean;
   pending: boolean;
-  onReply: (body: string) => void;
+  /** Resolves to whether the host took it, so a reply that failed keeps the words it was given. */
+  onReply: (body: string) => Promise<boolean>;
   onToggleResolved: () => void;
 }) {
   // A resolved thread is finished work, so it opens collapsed and stays one line until asked for.
@@ -140,12 +141,15 @@ export function ReviewThreadCard({
   const [replying, setReplying] = useState(false);
   const [reply, setReply] = useState("");
 
-  const send = () => {
+  const send = async () => {
     const trimmed = reply.trim();
     if (trimmed.length === 0) return;
-    onReply(trimmed);
-    setReply("");
-    setReplying(false);
+    // Cleared only once the host has it. Otherwise a failed reply leaves an error toast and an
+    // empty box, and the words have to be written again.
+    if (await onReply(trimmed)) {
+      setReply("");
+      setReplying(false);
+    }
   };
 
   return (
@@ -213,7 +217,7 @@ export function ReviewThreadCard({
                   onChange={(event) => setReply(event.target.value)}
                   onKeyDown={submitKeys({
                     value: reply,
-                    onSubmit: send,
+                    onSubmit: () => void send(),
                     onCancel: () => setReplying(false),
                   })}
                 />
@@ -221,7 +225,11 @@ export function ReviewThreadCard({
                   <Button size="xs" variant="ghost" onClick={() => setReplying(false)}>
                     Cancel
                   </Button>
-                  <Button size="xs" disabled={pending || reply.trim().length === 0} onClick={send}>
+                  <Button
+                    size="xs"
+                    disabled={pending || reply.trim().length === 0}
+                    onClick={() => void send()}
+                  >
                     Reply
                   </Button>
                 </div>

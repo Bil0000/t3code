@@ -259,16 +259,20 @@ export function PullRequestCodeTab({
     [files, review.inlineComment],
   );
 
-  const runThreadCommand = async (label: string, run: () => Promise<{ readonly _tag: string }>) => {
-    if (threadPending) return;
+  const runThreadCommand = async (
+    label: string,
+    run: () => Promise<{ readonly _tag: string }>,
+  ): Promise<boolean> => {
+    if (threadPending) return false;
     setThreadPending(true);
     const result = await run();
     setThreadPending(false);
     if (result._tag === "Failure") {
       toastManager.add({ type: "error", title: label });
-      return;
+      return false;
     }
     onRefresh();
+    return true;
   };
 
   // A conversation is the same card wired to the same commands whether it sits on its line or
@@ -282,7 +286,7 @@ export function PullRequestCodeTab({
       canResolve={review.resolve}
       pending={threadPending}
       onReply={(body) =>
-        void runThreadCommand("Reply could not be posted", () =>
+        runThreadCommand("Reply could not be posted", () =>
           replyToThread({
             environmentId,
             input: { ...reference, threadId: thread.id, body },
