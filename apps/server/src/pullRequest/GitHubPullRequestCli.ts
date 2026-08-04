@@ -75,25 +75,47 @@ export class GitHubViewerLoginUnavailableError extends Schema.TaggedErrorClass<G
   }
 }
 
+/** Not a decode failure: the reader asked to carry on from a cursor this walk never handed out. */
+export class GitHubDiffCursorError extends Schema.TaggedErrorClass<GitHubDiffCursorError>()(
+  "GitHubDiffCursorError",
+  {
+    command: Schema.Literal("gh"),
+    cwd: Schema.String,
+  },
+) {
+  get detail(): string {
+    return "The diff cursor was not one this pull request handed out.";
+  }
+
+  override get message(): string {
+    return `GitHub CLI failed in getPullRequestDiff: ${this.detail}`;
+  }
+}
+
 export type GitHubPullRequestCliError =
   | GitHubCli.GitHubCliError
   | GitHubPullRequestReadError
+  | GitHubDiffCursorError
   | GitHubViewerLoginUnavailableError;
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
 
-/**
- * Three pages of a hundred files, which is the same 300-file ceiling GitHub's own diff endpoint
- * refuses past. Paging further would trade the bound the fallback exists to respect.
- */
+/** What the files API serves at most in one response, which is what one slice is made of. */
 const DIFF_FILES_PAGE_SIZE = 100;
-const DIFF_FILES_MAX_PAGES = 3;
 
 export interface GitHubPullRequestListBatch {
   readonly items: ReadonlyArray<GitHubPullRequestListItem>;
   readonly truncated: boolean;
+}
+
+export interface GitHubPullRequestDiffSlice {
+  readonly patch: string;
+  /** Files in this slice had their hunks withheld, as opposed to there being more slices. */
+  readonly truncated: boolean;
+  /** Where the next slice starts, or null once the patch is whole. */
+  readonly nextCursor: string | null;
 }
 
 export class GitHubPullRequestCli extends Context.Service<
@@ -125,10 +147,9 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
-    }) => Effect.Effect<
-      { readonly patch: string; readonly truncated: boolean },
-      GitHubPullRequestCliError
-    >;
+      /** Absent asks for the first slice; anything else is a cursor a slice handed back. */
+      readonly cursor?: string | undefined;
+    }) => Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestCliError>;
 
     readonly listReviewThreadComments: (input: {
       readonly cwd: string;
@@ -209,6 +230,15 @@ export function parseRepositorySelector(value: string): {
   return { name: parts.at(-1) ?? "", owner: parts.at(-2) ?? "" };
 }
 
+/**
+ * The page a diff cursor names, or null for anything this walk cannot have issued. The cursor
+ * arrives from the reader as a string and goes straight into a request path, so it is parsed
+ * rather than trusted; the length bound keeps a page number out of exponential notation.
+ */
+function diffCursorPage(cursor: string): number | null {
+  return /^[1-9][0-9]{0,6}$/.test(cursor) ? Number(cursor) : null;
+}
+
 function involvementArgs(input: {
   readonly state: PullRequestListState;
   readonly involvement: PullRequestInvolvement;
@@ -278,11 +308,11 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.asVoid);
 
   /**
-   * The patch assembled from the files API, one page at a time. GitHub refuses `pr diff`
-   * outright past 300 changed files, and still serves those files' hunks here.
+   * One page of the patch, read from the files API. GitHub refuses `pr diff` outright past 300
+   * changed files, and still serves those files' hunks here.
    *
-   * The walk stops on a short page or at `DIFF_FILES_MAX_PAGES`; stopping on a full page means
-   * files were left behind, which is what `truncated` tells the caller.
+   * A page is a whole number of files, so each one parses on its own; the caller carries on from
+   * `nextCursor` for as long as GitHub keeps handing pages back.
    */
   const diffFilesPage = (input: {
     readonly cwd: string;
@@ -290,13 +320,7 @@ export const make = Effect.gen(function* () {
     readonly host: string;
     readonly number: number;
     readonly page: number;
-    readonly sections: ReadonlyArray<string>;
-    /** GitHub withheld some file's hunks, so that file is missing from the patch. */
-    readonly withheld: boolean;
-  }): Effect.Effect<
-    { readonly patch: string; readonly truncated: boolean },
-    GitHubPullRequestCliError
-  > => {
+  }): Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestCliError> => {
     const { owner, name } = parseRepositorySelector(input.repository);
     return github
       .execute({
@@ -313,20 +337,18 @@ export const make = Effect.gen(function* () {
       .pipe(
         Effect.flatMap((result) => {
           // Checked before decoding: a byte-truncated response is a JSON prefix, which would
-          // fail to parse and lose the pages already read. What was read is worth returning —
-          // unless nothing has been read yet, because an empty patch renders as a change with
-          // no files rather than as the refusal that sent us here.
+          // fail to parse. Nothing of this page can be shown, and an empty patch would render
+          // as a change with no files rather than as the failure it is; slices already handed
+          // over stay with the reader either way.
           if (result.stdoutTruncated) {
-            return input.sections.length === 0
-              ? Effect.fail(
-                  new GitHubPullRequestReadError({
-                    command: "gh",
-                    cwd: input.cwd,
-                    operation: "getPullRequestDiff",
-                    cause: new Error("The first page of changed files was too large to read."),
-                  }),
-                )
-              : Effect.succeed({ patch: input.sections.join(""), truncated: true });
+            return Effect.fail(
+              new GitHubPullRequestReadError({
+                command: "gh",
+                cwd: input.cwd,
+                operation: "getPullRequestDiff",
+                cause: new Error(`Page ${input.page} of the changed files was too large to read.`),
+              }),
+            );
           }
           const decoded = decodePullRequestFilesJson(result.stdout.trim());
           if (!Result.isSuccess(decoded)) {
@@ -339,16 +361,14 @@ export const make = Effect.gen(function* () {
               }),
             );
           }
-          const sections = [...input.sections, decoded.success.patch];
-          const withheld = input.withheld || decoded.success.truncated;
+          // Counted before decoding, so a page whose files all failed to decode still moves on
+          // rather than pointing the reader back at the page it just read.
           const morePages = decoded.success.rawCount >= DIFF_FILES_PAGE_SIZE;
-          if (!morePages || input.page >= DIFF_FILES_MAX_PAGES) {
-            return Effect.succeed({
-              patch: sections.join(""),
-              truncated: withheld || morePages,
-            });
-          }
-          return diffFilesPage({ ...input, page: input.page + 1, sections, withheld });
+          return Effect.succeed({
+            patch: decoded.success.patch,
+            truncated: decoded.success.truncated,
+            nextCursor: morePages ? String(input.page + 1) : null,
+          });
         }),
       );
   };
@@ -436,8 +456,24 @@ export const make = Effect.gen(function* () {
           }),
         ),
 
-    getPullRequestDiff: (input) =>
-      github
+    getPullRequestDiff: (input) => {
+      const filesPage = (page: number) =>
+        diffFilesPage({
+          cwd: input.cwd,
+          repository: input.repository,
+          host: input.host,
+          number: input.number,
+          page,
+        });
+      // A cursor only ever comes from the files walk, so a reader carrying one is already past
+      // the point where `gh pr diff` had anything to say.
+      if (input.cursor !== undefined) {
+        const page = diffCursorPage(input.cursor);
+        return page === null
+          ? Effect.fail(new GitHubDiffCursorError({ command: "gh", cwd: input.cwd }))
+          : filesPage(page);
+      }
+      return github
         .execute({
           cwd: input.cwd,
           args: [
@@ -453,29 +489,26 @@ export const make = Effect.gen(function* () {
           timeoutMs: DIFF_TIMEOUT_MS,
         })
         .pipe(
-          Effect.map((result) => ({
-            patch: result.stdout,
-            truncated: result.stdoutTruncated,
-          })),
-          // GitHub answers 406 rather than a diff past 300 changed files, so the patch is
-          // assembled from the files API instead. Only once the direct read has failed: a pull
-          // request GitHub will serve a diff for must not pay for the extra requests. A fallback
-          // that fails too reports the original refusal, which is the one that explains the page.
-          // Narrowed to a command that ran and was refused: a missing `gh` or a signed-out one
-          // fails the same way for every request, and retrying it three more times only makes
-          // the reader wait minutes for the same answer.
-          Effect.catchTag("GitHubCliCommandError", (error) =>
-            diffFilesPage({
-              cwd: input.cwd,
-              repository: input.repository,
-              host: input.host,
-              number: input.number,
-              page: 1,
-              sections: [],
-              withheld: false,
-            }).pipe(Effect.catch(() => Effect.fail(error))),
+          Effect.flatMap((result) =>
+            // A patch cut at a byte boundary ends mid-file, which is neither a whole slice nor
+            // something the reader can carry on from. The files API can serve the same change a
+            // whole number of files at a time, so an oversized patch takes that road as well.
+            result.stdoutTruncated
+              ? filesPage(1)
+              : // One read served the whole patch, so there is no next slice to ask for.
+                Effect.succeed({ patch: result.stdout, truncated: false, nextCursor: null }),
           ),
-        ),
+          // GitHub answers 406 rather than a diff past 300 changed files, so the patch is read
+          // from the files API instead, a page per call. Only once the direct read has failed: a
+          // pull request GitHub will serve a diff for must not pay for a second request. A
+          // fallback that fails too reports the original refusal, which is the one that explains
+          // the page. Narrowed to a command that ran and was refused: a missing `gh` or a
+          // signed-out one fails the same way for every request.
+          Effect.catchTag("GitHubCliCommandError", (error) =>
+            filesPage(1).pipe(Effect.catch(() => Effect.fail(error))),
+          ),
+        );
+    },
 
     listReviewThreadComments: (input) => {
       const { owner, name } = parseRepositorySelector(input.repository);

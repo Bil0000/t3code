@@ -309,9 +309,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("reports a truncated diff rather than presenting it as whole", () =>
+  it.effect("serves a diff GitHub hands over whole in one request, with no next slice", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output("diff --git a/a b/a", true)));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("diff --git a/a b/a")));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const diff = yield* cli.getPullRequestDiff({
@@ -321,12 +321,14 @@ layer("GitHubPullRequestCli.layer", (it) => {
         number: 7,
       });
 
-      assert.isTrue(diff.truncated);
+      assert.isNull(diff.nextCursor);
+      assert.isFalse(diff.truncated);
+      // The common case pays for one request and not the files API on top of it.
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
     }),
   );
 
-  it.effect("assembles the patch from the files API when GitHub refuses the diff", () =>
+  it.effect("reads one files page when GitHub refuses the diff, and says it is the last", () =>
     Effect.gen(function* () {
       // GitHub answers 406 rather than a diff past 300 changed files.
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
@@ -341,6 +343,8 @@ layer("GitHubPullRequestCli.layer", (it) => {
       });
 
       assert.isFalse(diff.truncated);
+      // A short page is the end of the change set, so there is nothing to carry on from.
+      assert.isNull(diff.nextCursor);
       expect(diff.patch).toContain("diff --git a/src/file1.ts b/src/file1.ts");
       expect(diff.patch).toContain("diff --git a/src/file2.ts b/src/file2.ts");
       const args = callAt(1).args;
@@ -350,14 +354,10 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("stops the files walk at three pages and reports the files left behind", () =>
+  it.effect("hands back a cursor for the next page rather than walking on by itself", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
-      for (const page of [0, 1, 2]) {
-        mockedExecute.mockReturnValueOnce(
-          Effect.succeed(output(pullRequestFiles(100, page * 100))),
-        );
-      }
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(100, 0))));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const diff = yield* cli.getPullRequestDiff({
@@ -367,10 +367,67 @@ layer("GitHubPullRequestCli.layer", (it) => {
         number: 7,
       });
 
-      assert.isTrue(diff.truncated);
-      // 300 files is the same ceiling GitHub's own diff endpoint refuses past.
-      assert.strictEqual(mockedExecute.mock.calls.length, 4);
-      expect(callAt(3).args).toContain("repos/acme/web/pulls/7/files?per_page=100&page=3");
+      // A full page means more files, which the reader asks for; it is not a truncated slice.
+      assert.isFalse(diff.truncated);
+      assert.isNotNull(diff.nextCursor);
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+    }),
+  );
+
+  it.effect("carries on from a cursor without asking `gh pr diff` again", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(100, 0))));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const target = { cwd: "/w", repository: "acme/web", host: "github.com", number: 7 };
+
+      const first = yield* cli.getPullRequestDiff(target);
+      assert.isNotNull(first.nextCursor);
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(4, 100))));
+      const second = yield* cli.getPullRequestDiff({ ...target, cursor: first.nextCursor });
+
+      assert.isNull(second.nextCursor);
+      expect(second.patch).toContain("diff --git a/src/file100.ts b/src/file100.ts");
+      // The second slice is one request: the cursor already says where to read.
+      assert.strictEqual(mockedExecute.mock.calls.length, 3);
+      expect(callAt(2).args).toContain("repos/acme/web/pulls/7/files?per_page=100&page=2");
+    }),
+  );
+
+  it.effect("refuses a cursor it never handed out rather than reading it into a request", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getPullRequestDiff({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          cursor: "1&per_page=1",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitHubDiffCursorError");
+      assert.strictEqual(mockedExecute.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("ends the diff on a page with no files rather than asking for it again", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const diff = yield* cli.getPullRequestDiff({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        cursor: "4",
+      });
+
+      assert.strictEqual(diff.patch, "");
+      assert.isNull(diff.nextCursor);
     }),
   );
 
@@ -533,6 +590,51 @@ layer("GitHubPullRequestCli.layer", (it) => {
       );
 
       assert.strictEqual(error._tag, "GitHubPullRequestReadError");
+    }),
+  );
+
+  it.effect("fails a files page too large to read rather than calling the diff whole", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(1, 1), true)));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getPullRequestDiff({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+        }),
+      );
+
+      // What matters is that it fails at all: an empty patch with no cursor would render as a
+      // change with no files and report the rest of it as already read. The refusal that sent
+      // the read down this road is the one reported, by design.
+      assert.strictEqual(error._tag, "GitHubCliCommandError");
+    }),
+  );
+
+  it.effect("pages an oversized patch by file rather than handing back a severed one", () =>
+    Effect.gen(function* () {
+      // `gh pr diff` succeeded but its output was cut at a byte, which lands mid-file.
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output("diff --git a/a b/a\n@@ -1 +1 @@", true)),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(1, 1))));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const slice = yield* cli.getPullRequestDiff({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      // The severed patch is thrown away; what comes back is assembled from whole files.
+      expect(callAt(1).args.join(" ")).toContain("/pulls/7/files");
+      expect(slice.patch).toContain("src/file1.ts");
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
     }),
   );
 });

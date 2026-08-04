@@ -295,9 +295,31 @@ export const PullRequestDetail = Schema.Struct({
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 
+/**
+ * A diff arrives a slice at a time, because a large change is more than any host will hand over
+ * at once — GitHub refuses outright past 300 files — and more than a viewer can lay out in one
+ * go. A slice is a whole number of files, never a file cut in half, so each one parses on its
+ * own and the reader can start on the first while the rest is still coming.
+ */
+export const PullRequestDiffInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  /**
+   * Where to carry on from. Absent asks for the first slice. Opaque to the reader: each host
+   * counts its files its own way, and only the provider that issued one knows what it means.
+   */
+  cursor: Schema.optional(TrimmedNonEmptyString),
+});
+export type PullRequestDiffInput = typeof PullRequestDiffInput.Type;
+
 export const PullRequestDiffResult = Schema.Struct({
   patch: Schema.String,
+  /**
+   * Something inside this slice could not be shown — a binary file, or a hunk the host declined
+   * to inline. Not the same as there being more slices, which `nextCursor` answers.
+   */
   truncated: Schema.Boolean,
+  /** Where the next slice starts, or null once the diff is whole. */
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
 });
 export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;
 

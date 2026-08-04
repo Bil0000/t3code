@@ -9,6 +9,7 @@ import {
   type PullRequestActionInput,
   type PullRequestCommentInput,
   type PullRequestDetail,
+  type PullRequestDiffInput,
   type PullRequestDiffResult,
   type PullRequestListEntry,
   type PullRequestListInput,
@@ -49,7 +50,7 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<PullRequestListResult, PullRequestError>;
     readonly detail: (input: PullRequestRef) => Effect.Effect<PullRequestDetail, PullRequestError>;
     readonly diff: (
-      input: PullRequestRef,
+      input: PullRequestDiffInput,
     ) => Effect.Effect<PullRequestDiffResult, PullRequestError>;
     readonly runAction: (input: PullRequestActionInput) => Effect.Effect<void, PullRequestError>;
     readonly comment: (input: PullRequestCommentInput) => Effect.Effect<void, PullRequestError>;
@@ -468,6 +469,7 @@ export const make = Effect.gen(function* () {
                 repository: project.repository,
                 host: project.host,
                 number: input.number,
+                ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
               })
               .pipe(Effect.mapError(toPullRequestError("diff")))
           : Effect.fail(

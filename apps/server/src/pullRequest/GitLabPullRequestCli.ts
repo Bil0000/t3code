@@ -90,9 +90,27 @@ export class GitLabDiffRefsUnavailableError extends Schema.TaggedErrorClass<GitL
   }
 }
 
+/** Not a decode failure: the reader asked to carry on from a cursor this walk never handed out. */
+export class GitLabDiffCursorError extends Schema.TaggedErrorClass<GitLabDiffCursorError>()(
+  "GitLabDiffCursorError",
+  {
+    command: Schema.Literal("glab"),
+    cwd: Schema.String,
+  },
+) {
+  get detail(): string {
+    return "The diff cursor was not one this merge request handed out.";
+  }
+
+  override get message(): string {
+    return `GitLab CLI failed in getMergeRequestDiff: ${this.detail}`;
+  }
+}
+
 export type GitLabPullRequestCliError =
   | GitLabCli.GitLabCliError
   | GitLabMergeRequestReadError
+  | GitLabDiffCursorError
   | GitLabDiffRefsUnavailableError
   | GitLabViewerUnavailableError;
 
@@ -100,14 +118,20 @@ export type GitLabPullRequestCliError =
 const MAX_PAGE_SIZE = 100;
 /** Conversation and commit history are read one page deep; the rest stays on GitLab. */
 const CONVERSATION_PAGE_SIZE = 100;
-/** Diff pages to walk before a change set is reported as truncated. */
-const DIFF_MAX_PAGES = 3;
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
 
 export interface GitLabMergeRequestListBatch {
   readonly items: ReadonlyArray<GitLabMergeRequestListItem>;
   readonly truncated: boolean;
+}
+
+export interface GitLabMergeRequestDiffSlice {
+  readonly patch: string;
+  /** Files in this slice had their hunks withheld, as opposed to there being more slices. */
+  readonly truncated: boolean;
+  /** Where the next slice starts, or null once the patch is whole. */
+  readonly nextCursor: string | null;
 }
 
 export class GitLabPullRequestCli extends Context.Service<
@@ -151,10 +175,9 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
       readonly number: number;
-    }) => Effect.Effect<
-      { readonly patch: string; readonly truncated: boolean },
-      GitLabPullRequestCliError
-    >;
+      /** Absent asks for the first slice; anything else is a cursor a slice handed back. */
+      readonly cursor?: string | undefined;
+    }) => Effect.Effect<GitLabMergeRequestDiffSlice, GitLabPullRequestCliError>;
 
     readonly getProjectMergeCapabilities: (input: {
       readonly cwd: string;
@@ -235,6 +258,15 @@ function involvementParams(input: {
     case "all":
       return [];
   }
+}
+
+/**
+ * The page a diff cursor names, or null for anything this walk cannot have issued. The cursor
+ * arrives from the reader as a string and goes straight into a query, so it is parsed rather
+ * than trusted; the length bound keeps a page number out of exponential notation.
+ */
+function diffCursorPage(cursor: string): number | null {
+  return /^[1-9][0-9]{0,6}$/.test(cursor) ? Number(cursor) : null;
 }
 
 function query(params: ReadonlyArray<readonly [string, string]>): string {
@@ -357,22 +389,16 @@ export const make = Effect.gen(function* () {
   };
 
   /**
-   * A merge request's files come one page at a time, so the patch is assembled across pages.
-   * The walk stops on a short page or at `DIFF_MAX_PAGES`; stopping on a full page means files
-   * were left behind, which is what `truncated` tells the caller.
+   * One page of a merge request's files, as a patch that stands on its own. GitLab pages
+   * `/diffs` by offset and has no cursor of its own, so the page number is the cursor; the
+   * caller carries on from it for as long as GitLab keeps handing full pages back.
    */
   const diffPage = (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
     readonly page: number;
-    readonly sections: ReadonlyArray<string>;
-    /** GitLab withheld some file's hunks as too large to inline. */
-    readonly withheld: boolean;
-  }): Effect.Effect<
-    { readonly patch: string; readonly truncated: boolean },
-    GitLabPullRequestCliError
-  > =>
+  }): Effect.Effect<GitLabMergeRequestDiffSlice, GitLabPullRequestCliError> =>
     api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/diffs?${query(
@@ -385,12 +411,20 @@ export const make = Effect.gen(function* () {
       timeoutMs: DIFF_TIMEOUT_MS,
     }).pipe(
       Effect.flatMap((result) => {
-        const joined = (sections: ReadonlyArray<string>) =>
-          sections.filter((section) => section.length > 0).join("\n");
-        // Checked before decoding: a byte-truncated response is a JSON prefix, which would
-        // fail to parse and lose the pages already read. What was read is worth returning.
+        // A byte-truncated response is a JSON prefix, so this page cannot be read at all.
+        // Answering with no cursor would call the diff whole while silently dropping this page
+        // and every one after it, so the read fails and says which page could not be had.
         if (result.stdoutTruncated) {
-          return Effect.succeed({ patch: joined(input.sections), truncated: true });
+          return Effect.fail(
+            new GitLabMergeRequestReadError({
+              command: "glab",
+              cwd: input.cwd,
+              operation: "getMergeRequestDiff",
+              cause: new Error(
+                `Page ${input.page} of the merge request diff was too large to read.`,
+              ),
+            }),
+          );
         }
         const decoded = decodeMergeRequestDiffsJson(result.stdout.trim());
         if (!Result.isSuccess(decoded)) {
@@ -403,13 +437,17 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        const sections = [...input.sections, decoded.success.patch];
-        const withheld = input.withheld || decoded.success.truncated;
+        const patch = decoded.success.patch;
+        // Counted before decoding, so a page whose files all failed to decode still moves on
+        // rather than pointing the reader back at the page it just read.
         const morePages = decoded.success.rawCount >= MAX_PAGE_SIZE;
-        if (!morePages || input.page >= DIFF_MAX_PAGES) {
-          return Effect.succeed({ patch: joined(sections), truncated: withheld || morePages });
-        }
-        return diffPage({ ...input, page: input.page + 1, sections, withheld });
+        return Effect.succeed({
+          // The slice ends on a newline, so a file GitLab gave a header and no hunks for does
+          // not run into the first line of the next slice.
+          patch: patch.length === 0 ? patch : patch.replace(/\n?$/, "\n"),
+          truncated: decoded.success.truncated,
+          nextCursor: morePages ? String(input.page + 1) : null,
+        });
       }),
     );
 
@@ -549,7 +587,16 @@ export const make = Effect.gen(function* () {
         }),
       ),
 
-    getMergeRequestDiff: (input) => diffPage({ ...input, page: 1, sections: [], withheld: false }),
+    getMergeRequestDiff: (input) => {
+      const target = { cwd: input.cwd, repository: input.repository, number: input.number };
+      if (input.cursor === undefined) {
+        return diffPage({ ...target, page: 1 });
+      }
+      const page = diffCursorPage(input.cursor);
+      return page === null
+        ? Effect.fail(new GitLabDiffCursorError({ command: "glab", cwd: input.cwd }))
+        : diffPage({ ...target, page });
+    },
 
     getProjectMergeCapabilities: (input) =>
       api({

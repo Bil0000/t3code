@@ -83,6 +83,13 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
   readonly mergeCapabilities: PullRequestMergeCapabilities;
 }
 
+export interface ProviderDiffSlice {
+  readonly patch: string;
+  /** Something in this slice could not be shown, as opposed to there being more slices. */
+  readonly truncated: boolean;
+  readonly nextCursor: string | null;
+}
+
 export interface ProviderRepositoryRef {
   readonly cwd: string;
   /** Provider-native repository identity, e.g. `owner/repo` or `group/subgroup/project`. */
@@ -122,13 +129,17 @@ export interface PullRequestProviderApi {
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderChangeRequestDetail, PullRequestProviderError>;
 
-  /** Only called when `capabilities.diff` is true. */
+  /**
+   * One slice of the patch. Only called when `capabilities.diff` is true. A provider that can
+   * serve the whole diff at once answers with `nextCursor: null` and is done; one that pages
+   * hands back whatever it needs to find the next slice.
+   */
   readonly getDiff: (
-    input: ProviderRepositoryRef & { readonly number: number },
-  ) => Effect.Effect<
-    { readonly patch: string; readonly truncated: boolean },
-    PullRequestProviderError
-  >;
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly cursor?: string | undefined;
+    },
+  ) => Effect.Effect<ProviderDiffSlice, PullRequestProviderError>;
 
   readonly runAction: (
     input: ProviderRepositoryRef & {

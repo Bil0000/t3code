@@ -68,6 +68,7 @@ import {
   PullRequestActionInput,
   PullRequestCommentInput,
   PullRequestDetail,
+  PullRequestDiffInput,
   PullRequestDiffResult,
   PullRequestListInput,
   PullRequestListResult,
@@ -455,7 +456,7 @@ export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
 });
 
 export const WsPullRequestsDiffRpc = Rpc.make(WS_METHODS.pullRequestsDiff, {
-  payload: PullRequestRef,
+  payload: PullRequestDiffInput,
   success: PullRequestDiffResult,
   error: PullRequestRpcError,
 });

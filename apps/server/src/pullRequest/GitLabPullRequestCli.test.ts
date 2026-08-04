@@ -43,6 +43,18 @@ function mergeRequests(count: number, firstNumber: number): string {
   );
 }
 
+/** A page of `/diffs` as GitLab serves it, a full one unless the count says otherwise. */
+function diffPage(firstIndex: number, count = 100): string {
+  // @effect-diagnostics-next-line preferSchemaOverJson:off
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => ({
+      old_path: `src/${firstIndex + index}.ts`,
+      new_path: `src/${firstIndex + index}.ts`,
+      diff: "@@ -1 +1 @@\n-a\n+b\n",
+    })),
+  );
+}
+
 /** The endpoint or subcommand of the nth glab invocation. */
 function argsOfCall(index: number): ReadonlyArray<string> {
   return callAt(index).args;
@@ -276,18 +288,9 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("walks diff pages and reports files it had to leave behind", () =>
+  it.effect("reads one diff page and hands back the cursor for the next", () =>
     Effect.gen(function* () {
-      const page = (start: number) =>
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
-        JSON.stringify(
-          Array.from({ length: 100 }, (_, index) => ({
-            old_path: `src/${start + index}.ts`,
-            new_path: `src/${start + index}.ts`,
-            diff: "@@ -1 +1 @@\n-a\n+b\n",
-          })),
-        );
-      mockedExecute.mockReturnValue(Effect.succeed(output(page(0))));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(diffPage(0))));
       const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
 
       const diff = yield* cli.getMergeRequestDiff({
@@ -296,67 +299,84 @@ layer("GitLabPullRequestCli.layer", (it) => {
         number: 7,
       });
 
-      // Three full pages, then it stops and says the change set was cut short.
-      assert.strictEqual(mockedExecute.mock.calls.length, 3);
-      assert.isTrue(diff.truncated);
-      expect(argsOfCall(2)[1]).toContain("page=3");
+      // One page per call: the reader asks for the rest, the walk does not run on by itself.
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      assert.isNotNull(diff.nextCursor);
+      // A full page means more files, not a slice with something missing from it.
+      assert.isFalse(diff.truncated);
+      expect(argsOfCall(0)[1]).toContain("page=1");
     }),
   );
 
-  it.effect("stops walking diffs on a short page and calls the patch complete", () =>
+  it.effect("carries on from a cursor at the page it names", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(diffPage(0))))
+        .mockReturnValueOnce(Effect.succeed(output(diffPage(100, 3))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      const target = { cwd: "/w", repository: "acme/web", number: 7 };
+
+      const first = yield* cli.getMergeRequestDiff(target);
+      assert.isNotNull(first.nextCursor);
+      const second = yield* cli.getMergeRequestDiff({ ...target, cursor: first.nextCursor });
+
+      expect(argsOfCall(1)[1]).toContain("page=2");
+      // A short page is the end of the change set, so there is nothing to carry on from.
+      assert.isNull(second.nextCursor);
+      expect(second.patch).toContain("diff --git a/src/100.ts b/src/100.ts");
+    }),
+  );
+
+  it.effect("refuses a cursor it never handed out rather than reading it into a query", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getMergeRequestDiff({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          cursor: "1&per_page=1",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitLabDiffCursorError");
+      assert.strictEqual(mockedExecute.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("ends the diff on a page with no files rather than asking for it again", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const diff = yield* cli.getMergeRequestDiff({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        cursor: "4",
+      });
+
+      assert.strictEqual(diff.patch, "");
+      assert.isNull(diff.nextCursor);
+    }),
+  );
+
+  it.effect("fails a diff page cut off mid-JSON rather than calling the diff whole", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
-            JSON.stringify([
-              { old_path: "src/a.ts", new_path: "src/a.ts", diff: "@@ -1 +1 @@\n-a\n+b\n" },
-            ]),
-          ),
-        ),
+        // A byte-truncated prefix: valid JSON never survives the cut.
+        Effect.succeed({ ...output('[{"old_path":"src/x.ts","new_p'), stdoutTruncated: true }),
       );
       const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
 
-      const diff = yield* cli.getMergeRequestDiff({
-        cwd: "/w",
-        repository: "acme/web",
-        number: 7,
-      });
+      const error = yield* Effect.flip(
+        cli.getMergeRequestDiff({ cwd: "/w", repository: "acme/web", number: 7 }),
+      );
 
-      assert.strictEqual(mockedExecute.mock.calls.length, 1);
-      assert.isFalse(diff.truncated);
-      expect(diff.patch).toContain("diff --git a/src/a.ts b/src/a.ts");
-    }),
-  );
-
-  it.effect("returns what it read when the diff response was cut off mid-JSON", () =>
-    Effect.gen(function* () {
-      const fullPage = (start: number) =>
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
-        JSON.stringify(
-          Array.from({ length: 100 }, (_, index) => ({
-            old_path: `src/${start + index}.ts`,
-            new_path: `src/${start + index}.ts`,
-            diff: "@@ -1 +1 @@\n-a\n+b\n",
-          })),
-        );
-      mockedExecute
-        .mockReturnValueOnce(Effect.succeed(output(fullPage(0))))
-        // A byte-truncated prefix: valid JSON never survives the cut.
-        .mockReturnValueOnce(
-          Effect.succeed({ ...output('[{"old_path":"src/x.ts","new_p'), stdoutTruncated: true }),
-        );
-      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
-
-      const diff = yield* cli.getMergeRequestDiff({
-        cwd: "/w",
-        repository: "acme/web",
-        number: 7,
-      });
-
-      assert.isTrue(diff.truncated);
-      // The first page survives rather than the whole read failing.
-      expect(diff.patch).toContain("diff --git a/src/0.ts b/src/0.ts");
+      // An empty slice with no cursor would report every file from this page on as already
+      // read, which is the one answer that loses a change without saying so.
+      assert.strictEqual(error._tag, "GitLabMergeRequestReadError");
     }),
   );
 
