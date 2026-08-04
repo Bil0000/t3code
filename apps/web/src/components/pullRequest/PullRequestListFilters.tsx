@@ -3,7 +3,7 @@ import type {
   PullRequestProviderSummary,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { ListFilterIcon, SearchIcon, type LucideIcon } from "lucide-react";
+import { ListFilterIcon, LoaderIcon, SearchIcon, type LucideIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
@@ -175,17 +175,27 @@ export function PullRequestProviderFilter({
 
 export function PullRequestSearchInput({
   value,
+  busy,
   onChange,
 }: {
   value: string;
+  /** A search is on its way to the hosts, said where the typing is rather than over the list. */
+  busy?: boolean;
   onChange: (value: string) => void;
 }) {
   return (
     <div className="relative min-w-0 flex-1">
-      <SearchIcon
-        aria-hidden
-        className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-      />
+      {busy ? (
+        <LoaderIcon
+          aria-hidden
+          className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 animate-spin text-muted-foreground"
+        />
+      ) : (
+        <SearchIcon
+          aria-hidden
+          className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+        />
+      )}
       <input
         type="text"
         value={value}
@@ -209,10 +219,17 @@ const ALL_PROJECTS_VALUE = "all";
 export function PullRequestProjectFilter({
   projects,
   value,
+  unavailable,
   onChange,
 }: {
   projects: ReadonlyArray<{ readonly id: ProjectId; readonly title: string }>;
   value: ProjectId | undefined;
+  /**
+   * Projects whose repository could not be read this time round. They are named here, where
+   * the reader is already choosing between projects, rather than as a count above the list
+   * that says something is missing without saying which.
+   */
+  unavailable: ReadonlyMap<ProjectId, string>;
   onChange: (projectId: ProjectId | undefined) => void;
 }) {
   const selectedTitle = projects.find((project) => project.id === value)?.title;
@@ -242,11 +259,26 @@ export function PullRequestProjectFilter({
           }
         >
           <MenuRadioItem value={ALL_PROJECTS_VALUE}>All projects</MenuRadioItem>
-          {projects.map((project) => (
-            <MenuRadioItem key={project.id} value={project.id}>
-              <span className="min-w-0 truncate">{project.title}</span>
-            </MenuRadioItem>
-          ))}
+          {projects.map((project) => {
+            const reason = unavailable.get(project.id);
+            return (
+              <MenuRadioItem
+                key={project.id}
+                value={project.id}
+                disabled={reason !== undefined}
+                title={reason}
+              >
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span className="min-w-0 flex-1 truncate">{project.title}</span>
+                  {reason === undefined ? null : (
+                    <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
+                      Unavailable
+                    </span>
+                  )}
+                </span>
+              </MenuRadioItem>
+            );
+          })}
         </MenuRadioGroup>
       </MenuPopup>
     </Menu>

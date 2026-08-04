@@ -15,6 +15,7 @@ import {
   GitPullRequestIcon,
   LayersIcon,
   PenLineIcon,
+  LoaderIcon,
   RefreshCwIcon,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -35,20 +36,15 @@ import {
   type PullRequestExpectedHost,
   type PullRequestFilterOption,
 } from "../components/pullRequest/PullRequestListFilters";
+import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { RightPanelResizeHandle } from "../components/preview/RightPanelResizeHandle";
 import { Button } from "../components/ui/button";
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
 import { useResizableWidth } from "../hooks/useResizableWidth";
+import { useDebouncedValue } from "../state/queries";
 import { useProjects } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { pullRequestEnvironment } from "../state/pullRequests";
@@ -86,7 +82,9 @@ const STATE_TABS = [
   { value: "merged", label: "Merged", Icon: GitMergeIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
 
-const PAGE_SIZE = 50;
+/** Long enough that a keystroke does not become a request, short enough to feel answered. */
+const SEARCH_DEBOUNCE_MS = 250;
+const PAGE_SIZE = 100;
 /** The largest page the listing accepts; past it the request is refused outright. */
 const MAX_PAGE_SIZE = 500;
 /** Stable empty map so the memos below do not see a new object on every render. */
@@ -183,8 +181,16 @@ function PullRequestsRouteView() {
     selectedProjectId: undefined,
   };
 
+  // Searching asks the hosts, which takes a round trip, so the text is held for a moment before
+  // it is sent. Until it lands, the rows already on screen are narrowed locally: the answer is
+  // late but the page is not.
+  const typedQuery = (search.q ?? "").trim();
+  const sentQuery = useDebouncedValue(typedQuery, SEARCH_DEBOUNCE_MS);
+  const querySettled = typedQuery === sentQuery;
+
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const filterKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
+  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
+  const filterKey = `${scopeKey}:${sentQuery}`;
   const [page, setPage] = useState({ key: filterKey, size: PAGE_SIZE });
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
   const loadMore = () =>
@@ -200,29 +206,76 @@ function PullRequestsRouteView() {
             limit: pageSize,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
+            ...(sentQuery ? { query: sentQuery } : {}),
           },
         }),
   );
 
-  // Raising the page size targets a different query, which starts empty. Holding the last
-  // result for the same filters keeps the rows on screen so a longer page reads as growth
-  // rather than a reload.
-  const [loaded, setLoaded] = useState<{ key: string; data: PullRequestListResult } | null>(null);
+  // Every page size and every search is its own query, and a new one starts empty. The last
+  // answer for these filters is held so the page grows and narrows in place rather than blanking
+  // out: a longer page reads as growth, and a search shows the rows it already has, narrowed
+  // here, until the hosts answer for themselves.
+  const [loaded, setLoaded] = useState<{
+    scope: string;
+    query: string;
+    data: PullRequestListResult;
+  } | null>(null);
   useEffect(() => {
-    if (listQuery.data) setLoaded({ key: filterKey, data: listQuery.data });
-  }, [filterKey, listQuery.data]);
-  const listData = listQuery.data ?? (loaded?.key === filterKey ? loaded.data : null);
+    if (listQuery.data) setLoaded({ scope: scopeKey, query: sentQuery, data: listQuery.data });
+  }, [scopeKey, sentQuery, listQuery.data]);
+  const answered =
+    listQuery.data ??
+    (loaded?.scope === scopeKey && loaded.query === sentQuery ? loaded.data : null);
+  const carried = loaded?.scope === scopeKey ? loaded.data : null;
+  const listData = answered ?? carried;
+  /** The rows on screen are the previous search's, held while this one is on its way. */
+  const showingCarried = answered === null && carried !== null;
   const loadingMore = listQuery.isPending && listData !== null;
   const firstLoad = listQuery.isPending && listData === null;
 
+  // A longer page is the same list with more on the end, so the rows already read stay where
+  // they were read: each answer is merged onto the last rather than replacing it, and anything
+  // new lands at the bottom. Only a different question — other filters, another search — starts
+  // the order again.
+  const [ordered, setOrdered] = useState<{
+    key: string;
+    entries: ReadonlyArray<PullRequestListEntry>;
+  } | null>(null);
+  useEffect(() => {
+    if (!answered) return;
+    setOrdered((previous) => {
+      if (previous === null || previous.key !== filterKey) {
+        return { key: filterKey, entries: answered.entries };
+      }
+      const arriving = new Map(
+        answered.entries.map((entry) => [pullRequestEntryKey(entry), entry] as const),
+      );
+      const kept = previous.entries.flatMap((entry) => {
+        const key = pullRequestEntryKey(entry);
+        const fresh = arriving.get(key);
+        if (fresh === undefined) return [];
+        arriving.delete(key);
+        // The row's own contents are the newest ones; only its place is inherited.
+        return [fresh];
+      });
+      return { key: filterKey, entries: [...kept, ...arriving.values()] };
+    });
+  }, [answered, filterKey]);
+
   const entries = useMemo(() => {
+    const known = ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []);
     const involvementEntries = filterPullRequestsByInvolvement(
-      listData?.entries ?? [],
+      known,
       listData?.viewers ?? EMPTY_VIEWERS,
       search.involvement,
     );
-    return involvementEntries.filter((entry) => matchesPullRequestQuery(entry, search.q ?? ""));
-  }, [listData, search.involvement, search.q]);
+    // The hosts search more than the row shows — a body, a review, a commit message — so once
+    // their answer is in, narrowing it again here would throw away matches the reader asked for.
+    // The local pass only stands in for the answer that has not arrived yet.
+    return querySettled && !showingCarried
+      ? involvementEntries
+      : involvementEntries.filter((entry) => matchesPullRequestQuery(entry, typedQuery));
+  }, [filterKey, listData, ordered, querySettled, search.involvement, showingCarried, typedQuery]);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -348,6 +401,13 @@ function PullRequestsRouteView() {
     return [...byHost.values()];
   }, [projects]);
 
+  /** Reported per project rather than as a count, so the reader can see which one it was. */
+  const unavailableProjects = useMemo(
+    () =>
+      new Map((listData?.errors ?? []).map((error) => [error.projectId, error.message] as const)),
+    [listData?.errors],
+  );
+
   const selectEntry = (entry: PullRequestListEntry) =>
     updateSearch({
       repository: entry.repository,
@@ -405,11 +465,13 @@ function PullRequestsRouteView() {
                 <div className="flex items-center gap-2">
                   <PullRequestSearchInput
                     value={search.q ?? ""}
+                    busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
                     onChange={(query) => updateSearch({ q: query || undefined })}
                   />
                   <PullRequestProjectFilter
                     projects={scopedProjects}
                     value={scopedProjectId}
+                    unavailable={unavailableProjects}
                     onChange={(projectId) => updateSearch({ ...clearedSelection, projectId })}
                   />
                 </div>
@@ -427,33 +489,20 @@ function PullRequestsRouteView() {
                   onRetry={() => listQuery.refresh()}
                 />
               ) : entries.length === 0 ? (
-                <Empty className="py-16">
-                  <EmptyHeader>
-                    <EmptyTitle>No pull requests found</EmptyTitle>
-                    <EmptyDescription>
-                      Try another involvement, state, or search filter. Only projects on a host this
-                      page can read are listed.
-                    </EmptyDescription>
-                  </EmptyHeader>
-                  {listData?.truncated ? (
-                    // Searching reads the pull requests already loaded, so an empty result can
-                    // mean "not loaded yet" rather than "not there". Saying how far the search
-                    // reached is what makes the button below an answer to that.
-                    <EmptyContent>
-                      <p className="text-xs text-muted-foreground">
-                        Searched the {listData.entries.length} pull requests loaded so far.
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={pageSize >= MAX_PAGE_SIZE || listQuery.isPending}
-                        onClick={loadMore}
-                      >
-                        {loadingMore ? "Loading more..." : "Load more pull requests"}
-                      </Button>
-                    </EmptyContent>
-                  ) : null}
-                </Empty>
+                <PullRequestListEmptyState
+                  query={typedQuery}
+                  filtered={
+                    search.state !== "open" ||
+                    search.involvement !== "all" ||
+                    scopedProjectId !== undefined ||
+                    search.host !== undefined
+                  }
+                  searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
+                  canLoadMore={listData?.truncated === true && pageSize < MAX_PAGE_SIZE}
+                  loadingMore={loadingMore}
+                  onClearQuery={() => updateSearch({ q: undefined })}
+                  onLoadMore={loadMore}
+                />
               ) : (
                 <div className="space-y-3">
                   {groups.map((group) => (
@@ -489,19 +538,17 @@ function PullRequestsRouteView() {
                   </Button>
                 </div>
               ) : null}
-              {listData?.errors.length ? (
-                <p className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
-                  {listData.errors.length}{" "}
-                  {listData.errors.length === 1 ? "repository was" : "repositories were"}{" "}
-                  unavailable. Healthy repositories are still shown.
-                </p>
-              ) : null}
               {listData?.truncated && entries.length > 0 ? (
                 <div
                   ref={sentinelRef}
                   className="flex justify-center py-2 text-xs text-muted-foreground"
                 >
-                  {loadingMore ? "Loading more pull requests..." : null}
+                  {loadingMore ? (
+                    <span className="flex items-center gap-2">
+                      <LoaderIcon aria-hidden className="size-3.5 animate-spin" />
+                      Loading more
+                    </span>
+                  ) : null}
                 </div>
               ) : null}
             </div>
