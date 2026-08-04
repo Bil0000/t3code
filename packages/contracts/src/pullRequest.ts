@@ -209,18 +209,27 @@ export const PullRequestListInput = Schema.Struct({
   state: PullRequestListState,
   involvement: Schema.optional(PullRequestInvolvement),
   projectId: Schema.optional(ProjectId),
-  /** Narrows the listing to one host. Absent means every configured provider. */
-  provider: Schema.optional(SourceControlProviderKind),
+  /**
+   * Narrows the listing to one host, named as the host itself rather than as its provider kind:
+   * github.com and a GitHub Enterprise install are two accounts, and a kind cannot tell them
+   * apart. Absent means every host the workspace has.
+   */
+  host: Schema.optional(TrimmedNonEmptyString),
   /** Rows to return per repository. The page raises it to load further results. */
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
 });
 export type PullRequestListInput = typeof PullRequestListInput.Type;
 
 /**
- * A provider the workspace has projects on, and whether it can be read right now. Drives the
- * provider switcher and explains projects the list leaves out.
+ * A host the workspace has projects on, and whether it can be read right now. Drives the host
+ * switcher and explains projects the list leaves out.
+ *
+ * One per host rather than per provider kind, because signing in is a question about the host:
+ * a workspace can hold repositories on github.com and on a GitHub Enterprise install at once,
+ * and the two are separate accounts that succeed and fail independently.
  */
 export const PullRequestProviderSummary = Schema.Struct({
+  host: TrimmedNonEmptyString,
   kind: SourceControlProviderKind,
   projectCount: PositiveInt,
   /** False when the provider's CLI or credentials are missing, with `detail` saying which. */
@@ -427,6 +436,22 @@ const PROVIDER_REQUIREMENT: Partial<
       "Bitbucket rejected the configured credentials. Check T3CODE_BITBUCKET_EMAIL and T3CODE_BITBUCKET_API_TOKEN.",
   },
 };
+
+/**
+ * The host a project's repository is addressed below. `canonicalKey` is the normalized remote,
+ * `host/owner/repo`, so its first segment is the host; the provider kind stands in when there is
+ * no key to read, which keeps one bucket per kind for identities recorded before it existed.
+ *
+ * Shared between the server and the page so both bucket a workspace the same way — the page
+ * knows its hosts before the listing answers, and the two must agree on what they are called.
+ */
+export function pullRequestHostOf(
+  identity: { readonly canonicalKey?: string | undefined } | null | undefined,
+  kind: SourceControlProviderKind,
+): string {
+  const host = identity?.canonicalKey?.split("/")[0]?.trim();
+  return host === undefined || host.length === 0 ? kind : host.toLowerCase();
+}
 
 /**
  * What a host needs before it can be read, as a sentence to show wherever that host is reported

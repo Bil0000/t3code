@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import {
   PullRequestOperationError,
   PullRequestUnavailableError,
+  pullRequestHostOf,
   pullRequestProviderRequirement,
   type OrchestrationProjectShell,
   type PullRequestActionInput,
@@ -89,7 +90,11 @@ interface SupportedProject {
  */
 interface WorkspaceProjects {
   readonly supported: ReadonlyArray<SupportedProject>;
-  readonly unimplemented: ReadonlyMap<SourceControlProviderKind, number>;
+  /** Keyed by host, as the readable ones are: an unimplemented host is its own switcher entry. */
+  readonly unimplemented: ReadonlyMap<
+    string,
+    { readonly kind: SourceControlProviderKind; readonly projectCount: number }
+  >;
   /**
    * Every checkout on a host, including the ones the listing de-duplicated away. Asking who is
    * signed in is a question about the host rather than about a repository, and any checkout can
@@ -143,16 +148,6 @@ function toPullRequestError(
 }
 
 /**
- * The host below which the repository is addressed. `canonicalKey` is the normalized remote,
- * `host/owner/repo`, so its first segment is the host; the provider kind stands in when there
- * is no canonical key to read, which keeps one bucket per kind as before.
- */
-function hostOf(project: OrchestrationProjectShell, kind: SourceControlProviderKind): string {
-  const host = project.repositoryIdentity?.canonicalKey?.split("/")[0]?.trim();
-  return host === undefined || host.length === 0 ? kind : host.toLowerCase();
-}
-
-/**
  * The provider-native repository identity. `displayName` is the full path below the host, which
  * is what nested GitLab groups and Azure project paths need; owner/name is the two-segment
  * fallback for identities recorded before that field existed.
@@ -169,7 +164,7 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
 
   const listWorkspaceProjects = (
-    filter: Pick<PullRequestListInput, "projectId" | "provider">,
+    filter: Pick<PullRequestListInput, "projectId" | "host">,
   ): Effect.Effect<WorkspaceProjects, PullRequestError> =>
     projections.getShellSnapshot().pipe(
       Effect.mapError(
@@ -182,7 +177,10 @@ export const make = Effect.gen(function* () {
       ),
       Effect.map((snapshot) => {
         const supported: SupportedProject[] = [];
-        const unimplemented = new Map<SourceControlProviderKind, number>();
+        const unimplemented = new Map<
+          string,
+          { kind: SourceControlProviderKind; projectCount: number }
+        >();
         const viewerRoots = new Map<string, string[]>();
         const seen = new Set<string>();
         for (const project of snapshot.projects) {
@@ -192,11 +190,11 @@ export const make = Effect.gen(function* () {
             | undefined;
           const repository = repositoryIdentityOf(project);
           if (kind === undefined || repository === null) continue;
-          if (filter.provider !== undefined && kind !== filter.provider) continue;
           // Worktrees of one repository are separate projects; reading the remote once keeps
           // the page from repeating every change request per local checkout. The host is part
           // of the key, so the same `owner/repo` on two hosts stays two repositories.
-          const host = hostOf(project, kind);
+          const host = pullRequestHostOf(project.repositoryIdentity, kind);
+          if (filter.host !== undefined && host !== filter.host.toLowerCase()) continue;
           const api = registry.get(kind);
           // Recorded before the de-duplication below, so the viewer lookup keeps the alternates
           // the listing is about to drop.
@@ -209,7 +207,9 @@ export const make = Effect.gen(function* () {
           if (seen.has(key)) continue;
           seen.add(key);
           if (api === null) {
-            unimplemented.set(kind, (unimplemented.get(kind) ?? 0) + 1);
+            const counted = unimplemented.get(host);
+            if (counted === undefined) unimplemented.set(host, { kind, projectCount: 1 });
+            else counted.projectCount += 1;
             continue;
           }
           supported.push({ project, api, repository, host });
@@ -312,9 +312,9 @@ export const make = Effect.gen(function* () {
         unimplemented,
         viewerRoots,
       } = yield* listWorkspaceProjects(input);
-      const projectCounts = new Map<SourceControlProviderKind, number>();
-      for (const { api } of projects) {
-        projectCounts.set(api.kind, (projectCounts.get(api.kind) ?? 0) + 1);
+      const projectCounts = new Map<string, number>();
+      for (const { host } of projects) {
+        projectCounts.set(host, (projectCounts.get(host) ?? 0) + 1);
       }
 
       const viewerResults = yield* resolveViewers(projects, viewerRoots);
@@ -323,22 +323,18 @@ export const make = Effect.gen(function* () {
         if (result.viewer !== null) viewers[result.host] = result.viewer;
       }
 
-      // The switcher filters by provider kind, so several hosts of one kind collapse into one
-      // summary: configured when any of them could be read, and detail from one that could not.
+      // One summary per host, which is what the viewer lookup already answers for: two GitHub
+      // hosts sign in separately, so collapsing them by kind would report one as the other.
       const providers: ReadonlyArray<PullRequestProviderSummary> = [
-        ...[...new Set(viewerResults.map((result) => result.kind))].map((kind) => {
-          const forKind = viewerResults.filter((result) => result.kind === kind);
-          const failing = forKind.flatMap((result) =>
-            result.error === null ? [] : [result.error],
-          )[0];
-          return {
-            kind,
-            projectCount: projectCounts.get(kind) ?? 1,
-            configured: forKind.some((result) => result.viewer !== null),
-            detail: failing === undefined ? null : providerDetail(failing),
-          };
-        }),
-        ...[...unimplemented].map(([kind, projectCount]) => ({
+        ...viewerResults.map((result) => ({
+          host: result.host,
+          kind: result.kind,
+          projectCount: projectCounts.get(result.host) ?? 1,
+          configured: result.viewer !== null,
+          detail: result.error === null ? null : providerDetail(result.error),
+        })),
+        ...[...unimplemented].map(([host, { kind, projectCount }]) => ({
+          host,
           kind,
           projectCount,
           configured: false,

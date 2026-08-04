@@ -1,3 +1,4 @@
+import { pullRequestHostOf } from "@t3tools/contracts";
 import type {
   ProjectId,
   PullRequestInvolvement,
@@ -30,6 +31,7 @@ import {
   PullRequestProjectFilter,
   PullRequestProviderFilter,
   PullRequestSearchInput,
+  type PullRequestExpectedHost,
   type PullRequestFilterOption,
 } from "../components/pullRequest/PullRequestListFilters";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
@@ -52,8 +54,11 @@ export interface PullRequestsSearch {
   readonly state: PullRequestListState;
   /** Scopes the list. Separate from the selection so one cannot silently change the other. */
   readonly projectId?: ProjectId;
-  /** Narrows the list to one host. Absent means every host the workspace has. */
-  readonly provider?: SourceControlProviderKind;
+  /**
+   * Narrows the list to one host, named as the host itself: two GitHub installs are two
+   * accounts, and their shared provider kind cannot tell them apart. Absent means every host.
+   */
+  readonly host?: string;
   readonly repository?: string;
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
@@ -73,15 +78,6 @@ const STATE_TABS = [
   { value: "closed", label: "Closed", Icon: GitPullRequestClosedIcon },
   { value: "merged", label: "Merged", Icon: GitMergeIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
-
-/** Accepted `provider` values in the URL, so an unknown one is dropped rather than sent on. */
-const PROVIDER_KINDS = new Set<string>([
-  "github",
-  "gitlab",
-  "azure-devops",
-  "bitbucket",
-  "unknown",
-]);
 
 const PAGE_SIZE = 50;
 /** The largest page the listing accepts; past it the request is refused outright. */
@@ -110,9 +106,7 @@ export const Route = createFileRoute("/_chat/pull-requests")({
     ...(typeof raw.projectId === "string" && raw.projectId
       ? { projectId: raw.projectId as ProjectId }
       : {}),
-    ...(typeof raw.provider === "string" && PROVIDER_KINDS.has(raw.provider)
-      ? { provider: raw.provider as SourceControlProviderKind }
-      : {}),
+    ...(typeof raw.host === "string" && raw.host ? { host: raw.host.slice(0, 200) } : {}),
     ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
       : {}),
@@ -161,7 +155,7 @@ function PullRequestsRouteView() {
           ...(next.repository ? { repository: next.repository } : {}),
           ...(next.number ? { number: next.number } : {}),
           ...(next.projectId ? { projectId: next.projectId } : {}),
-          ...(next.provider ? { provider: next.provider } : {}),
+          ...(next.host ? { host: next.host } : {}),
           ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
           ...(next.q ? { q: next.q } : {}),
         };
@@ -178,7 +172,7 @@ function PullRequestsRouteView() {
   };
 
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const filterKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${search.projectId ?? ""}:${search.provider ?? ""}`;
+  const filterKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${search.projectId ?? ""}:${search.host ?? ""}`;
   const [page, setPage] = useState({ key: filterKey, size: PAGE_SIZE });
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
 
@@ -191,7 +185,7 @@ function PullRequestsRouteView() {
             state: search.state,
             limit: pageSize,
             ...(search.projectId ? { projectId: search.projectId } : {}),
-            ...(search.provider ? { provider: search.provider } : {}),
+            ...(search.host ? { host: search.host } : {}),
           },
         }),
   );
@@ -266,10 +260,14 @@ function PullRequestsRouteView() {
           repository &&
         // The same `owner/name` can exist on two hosts. Without this the first match wins, and
         // a link that named its host opens the pull request from the other one.
-        (search.provider === undefined || project.repositoryIdentity.provider === search.provider),
+        (search.host === undefined ||
+          pullRequestHostOf(
+            project.repositoryIdentity,
+            project.repositoryIdentity.provider as SourceControlProviderKind,
+          ) === search.host.toLowerCase()),
     );
     return identity?.id;
-  }, [projects, search.provider, search.repository]);
+  }, [projects, search.host, search.repository]);
 
   // A project id in the URL outlives the environment it came from, and one from elsewhere can
   // never be read here — so it is dropped rather than passed on to fail every load.
@@ -306,22 +304,22 @@ function PullRequestsRouteView() {
     // An unfiltered response is the full set of hosts. A filtered one only seeds the switcher
     // when there is nothing to seed it with, which is a link that arrived already scoped.
     setHosts((previous) =>
-      search.provider === undefined || previous.length === 0 ? listData.providers : previous,
+      search.host === undefined || previous.length === 0 ? listData.providers : previous,
     );
-  }, [listData, search.provider]);
+  }, [listData, search.host]);
   const showProvider = hosts.length > 1;
   // The workspace's own projects already name their hosts, so the row's shape is known before
   // the list is. Only its shape: which hosts can actually be read still comes from the server.
-  const expectedHosts = useMemo(
-    () => [
-      ...new Set(
-        projects.flatMap(
-          (project) => (project.repositoryIdentity?.provider as SourceControlProviderKind) ?? [],
-        ),
-      ),
-    ],
-    [projects],
-  );
+  const expectedHosts = useMemo(() => {
+    const byHost = new Map<string, PullRequestExpectedHost>();
+    for (const project of projects) {
+      const kind = project.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
+      if (kind === undefined) continue;
+      const host = pullRequestHostOf(project.repositoryIdentity, kind);
+      if (!byHost.has(host)) byHost.set(host, { host, kind });
+    }
+    return [...byHost.values()];
+  }, [projects]);
 
   const selectEntry = (entry: PullRequestListEntry) =>
     updateSearch({
@@ -372,9 +370,9 @@ function PullRequestsRouteView() {
                   />
                   <PullRequestProviderFilter
                     providers={hosts}
-                    value={search.provider}
+                    value={search.host}
                     expectedHosts={expectedHosts}
-                    onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
+                    onChange={(host) => updateSearch({ host, ...clearedSelection })}
                   />
                 </div>
                 <div className="flex items-center gap-2">

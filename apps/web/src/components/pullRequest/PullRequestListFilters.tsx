@@ -75,6 +75,27 @@ export function PullRequestFilterPills<Value extends string>({
  * title — the projects on it are missing from the list either way, and a dimmed pill explains
  * that where an absent one would not.
  */
+export interface PullRequestExpectedHost {
+  readonly host: string;
+  readonly kind: SourceControlProviderKind;
+}
+
+/**
+ * What to call a host in the row. The provider's own name reads best — "GitHub" over
+ * "github.com" — but it stops naming anything once a workspace has two hosts of one kind, so
+ * those wear the host itself instead. Only the ambiguous ones: a lone GitLab beside two GitHub
+ * installs is still "GitLab".
+ */
+function hostLabel(
+  entries: ReadonlyArray<{ readonly host: string; readonly kind: SourceControlProviderKind }>,
+  entry: { readonly host: string; readonly kind: SourceControlProviderKind },
+): string {
+  const sharing = entries.filter((candidate) => candidate.kind === entry.kind);
+  return sharing.length > 1
+    ? entry.host
+    : getSourceControlPresentationForKind(entry.kind).providerName;
+}
+
 export function PullRequestProviderFilter({
   providers,
   value,
@@ -82,30 +103,30 @@ export function PullRequestProviderFilter({
   onChange,
 }: {
   providers: ReadonlyArray<PullRequestProviderSummary>;
-  value: SourceControlProviderKind | undefined;
+  value: string | undefined;
   /**
    * The hosts the workspace's own projects point at, which is known before the list is. The row
    * shows them while it loads so it does not appear from nowhere and push the page down; none of
    * them can be picked until the server has said which can actually be read.
    */
-  expectedHosts: ReadonlyArray<SourceControlProviderKind>;
-  onChange: (provider: SourceControlProviderKind | undefined) => void;
+  expectedHosts: ReadonlyArray<PullRequestExpectedHost>;
+  onChange: (host: string | undefined) => void;
 }) {
   if (providers.length === 0 && value === undefined) {
-    // The real row, locked on "All" until the hosts land. Shimmering placeholders draw the eye
-    // to the one part of the page with nothing to say yet, and the row's shape is already known
-    // — only which of these can be read has to wait for the server.
+    // The real row, locked until the hosts land. Shimmering placeholders draw the eye to the one
+    // part of the page with nothing to say yet, and the row's shape is already known — only which
+    // of these can be read has to wait for the server.
     return expectedHosts.length < 2 ? null : (
       <div className={FILTER_GROUP_CLASS} role="group" aria-label="Filter by host">
         <button type="button" disabled aria-pressed className={filterOptionClass(true)}>
           All
         </button>
-        {expectedHosts.map((kind) => {
-          const { Icon, providerName } = getSourceControlPresentationForKind(kind);
+        {expectedHosts.map((expected) => {
+          const { Icon } = getSourceControlPresentationForKind(expected.kind);
           return (
-            <button key={kind} type="button" disabled className={filterOptionClass(false)}>
+            <button key={expected.host} type="button" disabled className={filterOptionClass(false)}>
               <Icon className="size-3.5" />
-              {providerName}
+              {hostLabel(expectedHosts, expected)}
             </button>
           );
         })}
@@ -126,22 +147,25 @@ export function PullRequestProviderFilter({
         All
       </button>
       {providers.map((provider) => {
-        const { Icon, providerName } = getSourceControlPresentationForKind(provider.kind);
-        const active = provider.kind === value;
+        const { Icon } = getSourceControlPresentationForKind(provider.kind);
+        const label = hostLabel(providers, provider);
+        const active = provider.host === value;
         return (
           <button
-            key={provider.kind}
+            key={provider.host}
             type="button"
             aria-pressed={active}
             disabled={!provider.configured}
-            title={provider.configured ? providerName : (provider.detail ?? undefined)}
-            onClick={() => onChange(provider.kind)}
+            // The host itself when it reads as a provider name, so a switcher showing "GitHub"
+            // still says which install it means.
+            title={provider.configured ? provider.host : (provider.detail ?? undefined)}
+            onClick={() => onChange(provider.host)}
             // Opacity rather than a muted colour: the icons are brand-coloured, so text colour
             // alone would leave a disabled host looking active.
             className={filterOptionClass(active, !provider.configured)}
           >
             <Icon className="size-3.5" />
-            {providerName}
+            {label}
           </button>
         );
       })}

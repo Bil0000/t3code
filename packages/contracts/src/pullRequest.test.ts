@@ -8,8 +8,14 @@ const decodeListResult = Schema.decodeUnknownSync(PullRequestListResult);
 const LIST_RESULT: PullRequestListResult = {
   viewers: { "github.com": "bilal", "gitlab.com": "bilal.hassan" },
   providers: [
-    { kind: "github", projectCount: 1, configured: true, detail: null },
-    { kind: "gitlab", projectCount: 1, configured: false, detail: "glab is not installed." },
+    { host: "github.com", kind: "github", projectCount: 1, configured: true, detail: null },
+    {
+      host: "gitlab.com",
+      kind: "gitlab",
+      projectCount: 1,
+      configured: false,
+      detail: "glab is not installed.",
+    },
   ],
   entries: [
     {

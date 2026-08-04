@@ -330,11 +330,54 @@ it.effect("narrows the listing to one host when asked", () =>
       ],
     });
 
-    const result = yield* service.list({ state: "open", provider: "gitlab" });
+    const result = yield* service.list({ state: "open", host: "gitlab.com" });
 
     assert.deepStrictEqual(
       result.entries.map((entry) => entry.provider),
       ["gitlab"],
+    );
+  }),
+);
+
+it.effect("tells two hosts of one kind apart in the switcher and the filter", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "on github.com", workspaceRoot: "/a", repository: "ping/one" }),
+        project({
+          id: "p2",
+          title: "on the enterprise install",
+          workspaceRoot: "/b",
+          repository: "ping/two",
+          host: "ghe.example.com",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: ({ host }) =>
+            Effect.succeed({
+              items: host === "ghe.example.com" ? [changeRequest(2, "2026-07-05T00:00:00Z")] : [],
+              truncated: false,
+            }),
+        }),
+      ],
+    });
+
+    // Both hosts are GitHub, so a switcher keyed by provider kind would offer one pill for the
+    // two of them and no way to ask for either.
+    const all = yield* service.list({ state: "open" });
+    assert.deepStrictEqual(
+      all.providers.map((summary) => [summary.host, summary.kind, summary.projectCount]),
+      [
+        ["github.com", "github", 1],
+        ["ghe.example.com", "github", 1],
+      ],
+    );
+
+    const scoped = yield* service.list({ state: "open", host: "ghe.example.com" });
+    assert.deepStrictEqual(
+      scoped.entries.map((entry) => [entry.host, entry.number]),
+      [["ghe.example.com", 2]],
     );
   }),
 );
