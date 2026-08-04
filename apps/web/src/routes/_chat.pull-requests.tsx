@@ -39,7 +39,13 @@ import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { RightPanelResizeHandle } from "../components/preview/RightPanelResizeHandle";
 import { Button } from "../components/ui/button";
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from "../components/ui/empty";
+import {
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "../components/ui/empty";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
 import { useResizableWidth } from "../hooks/useResizableWidth";
@@ -181,6 +187,8 @@ function PullRequestsRouteView() {
   const filterKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
   const [page, setPage] = useState({ key: filterKey, size: PAGE_SIZE });
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
+  const loadMore = () =>
+    setPage({ key: filterKey, size: Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE) });
 
   const listQuery = useEnvironmentQuery(
     environmentId === null
@@ -207,13 +215,29 @@ function PullRequestsRouteView() {
   const loadingMore = listQuery.isPending && listData !== null;
   const firstLoad = listQuery.isPending && listData === null;
 
+  const entries = useMemo(() => {
+    const involvementEntries = filterPullRequestsByInvolvement(
+      listData?.entries ?? [],
+      listData?.viewers ?? EMPTY_VIEWERS,
+      search.involvement,
+    );
+    return involvementEntries.filter((entry) => matchesPullRequestQuery(entry, search.q ?? ""));
+  }, [listData, search.involvement, search.q]);
+
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const sentinel = sentinelRef.current;
     // A failed page must stop the observer. Retained rows keep the sentinel on screen, so
     // re-arming it after a failure would ask for the next page again, forever.
+    //
+    // Rows on screen are also what makes reaching the sentinel mean anything: with none, it
+    // sits directly below the empty state and is always in view, so a search that matches
+    // nothing would page through the whole host on its own — one listing of every repository
+    // per step — while the reader looks at an empty page. With nothing to scroll past, the
+    // next page is asked for rather than assumed.
     if (
       !sentinel ||
+      entries.length === 0 ||
       listData?.truncated !== true ||
       listQuery.isPending ||
       listQuery.error !== null ||
@@ -226,7 +250,7 @@ function PullRequestsRouteView() {
     const observer = new IntersectionObserver(
       (observed) => {
         if (observed.some((entry) => entry.isIntersecting)) {
-          setPage({ key: filterKey, size: Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE) });
+          loadMore();
         }
       },
       // Start the next page slightly before the sentinel is on screen.
@@ -234,16 +258,17 @@ function PullRequestsRouteView() {
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [filterKey, listData?.truncated, listQuery.error, listQuery.isPending, pageSize]);
-
-  const entries = useMemo(() => {
-    const involvementEntries = filterPullRequestsByInvolvement(
-      listData?.entries ?? [],
-      listData?.viewers ?? EMPTY_VIEWERS,
-      search.involvement,
-    );
-    return involvementEntries.filter((entry) => matchesPullRequestQuery(entry, search.q ?? ""));
-  }, [listData, search.involvement, search.q]);
+    // `loadMore` closes over the page state it advances, which the rest of the list already
+    // depends on.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    entries.length,
+    filterKey,
+    listData?.truncated,
+    listQuery.error,
+    listQuery.isPending,
+    pageSize,
+  ]);
 
   const groups = useMemo(
     () =>
@@ -410,6 +435,24 @@ function PullRequestsRouteView() {
                       page can read are listed.
                     </EmptyDescription>
                   </EmptyHeader>
+                  {listData?.truncated ? (
+                    // Searching reads the pull requests already loaded, so an empty result can
+                    // mean "not loaded yet" rather than "not there". Saying how far the search
+                    // reached is what makes the button below an answer to that.
+                    <EmptyContent>
+                      <p className="text-xs text-muted-foreground">
+                        Searched the {listData.entries.length} pull requests loaded so far.
+                      </p>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={pageSize >= MAX_PAGE_SIZE || listQuery.isPending}
+                        onClick={loadMore}
+                      >
+                        {loadingMore ? "Loading more..." : "Load more pull requests"}
+                      </Button>
+                    </EmptyContent>
+                  ) : null}
                 </Empty>
               ) : (
                 <div className="space-y-3">
@@ -453,7 +496,7 @@ function PullRequestsRouteView() {
                   unavailable. Healthy repositories are still shown.
                 </p>
               ) : null}
-              {listData?.truncated ? (
+              {listData?.truncated && entries.length > 0 ? (
                 <div
                   ref={sentinelRef}
                   className="flex justify-center py-2 text-xs text-muted-foreground"
