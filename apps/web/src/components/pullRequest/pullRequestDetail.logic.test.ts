@@ -119,20 +119,6 @@ describe("fix findings handoff", () => {
     commentsTruncated: false,
   };
 
-  function remark(overrides: Partial<PullRequestComment> = {}): PullRequestComment {
-    return {
-      id: "c1",
-      kind: "review",
-      author: { login: "julius", name: null, avatarUrl: null },
-      body: "This breaks SSO auth, revert the middleware change.",
-      createdAt: "2026-07-01T00:00:00Z",
-      url: null,
-      path: null,
-      reviewState: "CHANGES_REQUESTED",
-      ...overrides,
-    };
-  }
-
   function thread(
     body: string,
     overrides: Partial<PullRequestReviewThread> = {},

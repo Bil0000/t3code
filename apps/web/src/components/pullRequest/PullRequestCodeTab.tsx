@@ -1,9 +1,4 @@
-import type {
-  CodeViewItem,
-  DiffLineAnnotation,
-  FileDiffMetadata,
-  SelectedLineRange,
-} from "@pierre/diffs";
+import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
 import { CodeView, type CodeViewDiffItem } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
@@ -27,7 +22,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
-import { areAllDiffFilesCollapsed, toggleAllDiffFiles } from "~/lib/diffCollapse";
+import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
 import {
   buildFileDiffRenderKey,
   fnv1a32,
