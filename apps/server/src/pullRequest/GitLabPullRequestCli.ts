@@ -426,7 +426,7 @@ export const make = Effect.gen(function* () {
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
     }).pipe(
-      Effect.flatMap((result) => {
+      Effect.flatMap((result): Effect.Effect<GitLabDiffRefs, GitLabPullRequestCliError> => {
         const decoded = decodeDiffRefsJson(result.stdout.trim());
         if (!Result.isSuccess(decoded)) {
           return Effect.fail(
