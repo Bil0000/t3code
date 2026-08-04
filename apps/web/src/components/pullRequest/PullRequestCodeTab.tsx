@@ -18,8 +18,10 @@ import {
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
   Columns2Icon,
+  MessageSquareOffIcon,
   Rows3Icon,
   TextWrapIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -86,6 +88,9 @@ type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
  */
 const AUTO_COLLAPSE_FILE_COUNT = 20;
 
+/** Commits per press of "Show more" in the scope menu. */
+const COMMIT_PAGE_SIZE = 10;
+
 /** One answer from the host: a whole number of files, and where the next one carries on. */
 interface DiffSlice {
   /** What was asked for, null being the first slice. Identifies the slice among the loaded ones. */
@@ -150,6 +155,9 @@ export function PullRequestCodeTab({
   const { resolvedTheme } = useTheme();
   const settings = useClientSettings();
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
+  // A change of any size can carry hundreds of commits, and a menu that long is a scroll rather
+  // than a choice. The rest arrive ten at a time, on request.
+  const [visibleCommitCount, setVisibleCommitCount] = useState(COMMIT_PAGE_SIZE);
   /** Set once the reader has asked for every file at once, until they pick a file apart again. */
   const [foldOverride, setFoldOverride] = useState<"expanded" | "folded" | null>(null);
   const [diffRenderMode, setDiffRenderMode] = useState<"stacked" | "split">("stacked");
@@ -189,6 +197,7 @@ export function PullRequestCodeTab({
     setSelectedLines(null);
     setToggledFiles(new Set());
     setFoldOverride(null);
+    setVisibleCommitCount(COMMIT_PAGE_SIZE);
     setOrphansOpen(false);
     setSliceState({ key: scopeKey, cursor: null, slices: NO_SLICES });
     parseCache.current.clear();
@@ -594,7 +603,7 @@ export function PullRequestCodeTab({
               >
                 <span>All commits</span>
               </DropdownMenuItem>
-              {orderedCommits.map((entry) => (
+              {orderedCommits.slice(0, visibleCommitCount).map((entry) => (
                 <DropdownMenuItem
                   key={entry.oid}
                   className={entry.oid === commit ? "bg-foreground/[0.08]" : undefined}
@@ -610,23 +619,54 @@ export function PullRequestCodeTab({
                   </span>
                 </DropdownMenuItem>
               ))}
+              {orderedCommits.length > visibleCommitCount ? (
+                // Kept out of the radio group: it changes how much of the list is on screen
+                // rather than what the diff is scoped to.
+                <DropdownMenuItem
+                  closeOnClick={false}
+                  onClick={() => setVisibleCommitCount((count) => count + COMMIT_PAGE_SIZE)}
+                >
+                  <span className="text-muted-foreground">
+                    Show more ({orderedCommits.length - visibleCommitCount} left)
+                  </span>
+                </DropdownMenuItem>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
+        {/* One count, and the caveats as icons that carry their own words. Spelled out they
+            competed for a strip this narrow and every one of them truncated to nothing. */}
         <PullRequestMetaLine>
-          {/* The count is what is in hand rather than what the change contains: on a diff that
-              arrives in slices it keeps growing, and only the last one settles it. */}
-          <span className="shrink-0">
+          <span className="shrink-0 tabular-nums">
             {files.length} {files.length === 1 ? "file" : "files"}
-            {nextCursor !== null ? " so far" : loadedSlices.length > 1 ? ", all loaded" : ""}
+            {nextCursor === null ? "" : "+"}
           </span>
-          {withheldContent ? <span className="truncate">some content not shown</span> : null}
-          {/* Otherwise a wall of folded headers reads as a diff that failed to load. */}
-          {largeDiff ? <span className="truncate">large diff, files start folded</span> : null}
-          {canCommentOnLines ? (
-            <span className="truncate">select lines to comment</span>
-          ) : commit !== null && review.inlineComment ? (
-            <span className="truncate">comment from all commits</span>
+          {withheldContent ? (
+            <Tooltip>
+              <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
+                <TriangleAlertIcon
+                  aria-label="Some of this diff was not shown"
+                  className="size-3.5 text-amber-600 dark:text-amber-500"
+                />
+              </TooltipTrigger>
+              <TooltipPopup side="bottom">
+                The host withheld part of this diff — a binary file, or a change too large to
+                inline.
+              </TooltipPopup>
+            </Tooltip>
+          ) : null}
+          {commit !== null && review.inlineComment ? (
+            <Tooltip>
+              <TooltipTrigger render={<span className="flex shrink-0 items-center" />}>
+                <MessageSquareOffIcon
+                  aria-label="Line comments are written from the whole change"
+                  className="size-3.5"
+                />
+              </TooltipTrigger>
+              <TooltipPopup side="bottom">
+                A comment is anchored to the whole change, so switch to All commits to write one.
+              </TooltipPopup>
+            </Tooltip>
           ) : null}
         </PullRequestMetaLine>
       </div>
