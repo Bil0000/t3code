@@ -158,7 +158,9 @@ export function PullRequestSearchInput({
         onChange={(event) => onChange(event.currentTarget.value)}
         placeholder="Search pull requests"
         aria-label="Search pull requests"
-        className="h-9 w-full rounded-lg border border-input bg-background pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24"
+        // Tracks the shared input's height at both widths, so it stays level with the icon
+        // button beside it rather than towering over it on wide screens.
+        className="h-9 w-full rounded-lg border border-input bg-background pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 sm:h-8"
       />
     </div>
   );
@@ -184,7 +186,8 @@ export function PullRequestProjectFilter({
     <Menu>
       <MenuTrigger
         className={cn(
-          "relative inline-flex size-8 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground sm:size-7",
+          // The icon-button size that pairs with a full-height input, so the two read as one strip.
+          "relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground sm:size-8",
           value !== undefined && "text-foreground",
         )}
         aria-label={`Filter by project: ${selectedTitle ?? "All projects"}`}
