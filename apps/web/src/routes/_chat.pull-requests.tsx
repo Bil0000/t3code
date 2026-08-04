@@ -312,8 +312,14 @@ function PullRequestsRouteView() {
   const showProvider = hosts.length > 1;
   // The workspace's own projects already name their hosts, so the row's shape is known before
   // the list is. Only its shape: which hosts can actually be read still comes from the server.
-  const expectedHostCount = useMemo(
-    () => new Set(projects.flatMap((project) => project.repositoryIdentity?.provider ?? [])).size,
+  const expectedHosts = useMemo(
+    () => [
+      ...new Set(
+        projects.flatMap(
+          (project) => (project.repositoryIdentity?.provider as SourceControlProviderKind) ?? [],
+        ),
+      ),
+    ],
     [projects],
   );
 
@@ -367,7 +373,7 @@ function PullRequestsRouteView() {
                   <PullRequestProviderFilter
                     providers={hosts}
                     value={search.provider}
-                    expectedHostCount={expectedHostCount}
+                    expectedHosts={expectedHosts}
                     onChange={(provider) => updateSearch({ provider, ...clearedSelection })}
                   />
                 </div>

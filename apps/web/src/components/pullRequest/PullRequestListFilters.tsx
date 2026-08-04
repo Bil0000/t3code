@@ -9,7 +9,6 @@ import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
-import { Skeleton } from "../ui/skeleton";
 
 /**
  * The shell every filter group shares: an inset track that groups its options into one control,
@@ -21,7 +20,7 @@ const FILTER_GROUP_CLASS =
 /** The option itself, with the selected one lifted onto the surface rather than tinted. */
 const filterOptionClass = (selected: boolean, disabled = false) =>
   cn(
-    "inline-flex items-center gap-1.5 rounded-[7px] px-2.5 py-1 text-sm whitespace-nowrap transition-colors",
+    "inline-flex items-center gap-1.5 rounded-[7px] px-2.5 py-0.5 text-sm whitespace-nowrap transition-colors",
     selected ? "bg-background text-foreground shadow-sm dark:bg-white/10" : "text-muted-foreground",
     disabled ? "cursor-not-allowed opacity-45" : !selected && "hover:text-foreground",
   );
@@ -79,26 +78,37 @@ export function PullRequestFilterPills<Value extends string>({
 export function PullRequestProviderFilter({
   providers,
   value,
-  expectedHostCount,
+  expectedHosts,
   onChange,
 }: {
   providers: ReadonlyArray<PullRequestProviderSummary>;
   value: SourceControlProviderKind | undefined;
   /**
-   * How many hosts the workspace's own projects point at, which is known before the list is.
-   * Used only to hold this row's place while it loads, so the row does not appear from nowhere
-   * and push the page down — never to claim a host is usable before the server has said so.
+   * The hosts the workspace's own projects point at, which is known before the list is. The row
+   * shows them while it loads so it does not appear from nowhere and push the page down; none of
+   * them can be picked until the server has said which can actually be read.
    */
-  expectedHostCount: number;
+  expectedHosts: ReadonlyArray<SourceControlProviderKind>;
   onChange: (provider: SourceControlProviderKind | undefined) => void;
 }) {
   if (providers.length === 0 && value === undefined) {
-    return expectedHostCount < 2 ? null : (
-      <div className={FILTER_GROUP_CLASS} aria-hidden>
-        {/* One more than the hosts, for the "All" pill that will sit in front of them. */}
-        {Array.from({ length: expectedHostCount + 1 }, (_, index) => (
-          <Skeleton key={index} className="h-7 w-20 rounded-[7px]" />
-        ))}
+    // The real row, locked on "All" until the hosts land. Shimmering placeholders draw the eye
+    // to the one part of the page with nothing to say yet, and the row's shape is already known
+    // — only which of these can be read has to wait for the server.
+    return expectedHosts.length < 2 ? null : (
+      <div className={FILTER_GROUP_CLASS} role="group" aria-label="Filter by host">
+        <button type="button" disabled aria-pressed className={filterOptionClass(true)}>
+          All
+        </button>
+        {expectedHosts.map((kind) => {
+          const { Icon, providerName } = getSourceControlPresentationForKind(kind);
+          return (
+            <button key={kind} type="button" disabled className={filterOptionClass(false)}>
+              <Icon className="size-3.5" />
+              {providerName}
+            </button>
+          );
+        })}
       </div>
     );
   }
