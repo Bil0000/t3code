@@ -149,15 +149,26 @@ export function PullRequestDetailPanel({
     // script only runs for a checkout that knows which thread it is for — and a worktree with no
     // dependencies installed is not something anyone can test.
     const opened = await newThread(projectRef).then(
-      () => true,
-      () => false,
+      (session) => session,
+      () => null,
     );
+    if (opened === null) {
+      setHandoff(null);
+      // Without a thread there is nowhere for the checkout to belong: its setup script would not
+      // run and its task would have no composer to land in. Better to stop before touching the
+      // working tree than to prepare a worktree nobody asked for.
+      toastManager.update(toastId, {
+        type: "error",
+        title: "Could not open a thread for the checkout",
+        description: "Try again from the project, or open a thread first.",
+      });
+      return;
+    }
     const store = useComposerDraftStore.getState();
-    const session = opened ? store.getDraftSessionByProjectRef(projectRef) : null;
     const prepared = await prepareThread.run({
       reference: detail.url,
       mode: "worktree",
-      ...(session ? { threadId: session.threadId } : {}),
+      threadId: opened.threadId,
     });
     if (prepared._tag === "Failure") {
       setHandoff(null);
@@ -181,8 +192,7 @@ export function PullRequestDetailPanel({
       () => true,
       () => false,
     );
-    const draftId =
-      session?.draftId ?? store.getDraftSessionByProjectRef(projectRef)?.draftId ?? null;
+    const draftId = opened.draftId;
     // Released here whatever happened next: a loading toast never expires on its own, so leaving
     // this set would spin forever and lock every handoff behind it until a reload.
     setHandoff(null);
@@ -206,16 +216,6 @@ export function PullRequestDetailPanel({
             }
           : staleCheckoutToast,
       );
-      return;
-    }
-    if (draftId === null) {
-      // The checkout and the thread exist either way, so this reports only the part that did
-      // not happen rather than presenting the whole handoff as failed.
-      toastManager.update(toastId, {
-        type: "error",
-        title: "Checkout ready, but the task could not be written",
-        description: "Describe the task in the composer to start.",
-      });
       return;
     }
     // Appended rather than assigned: the composer may already hold something the user typed,
