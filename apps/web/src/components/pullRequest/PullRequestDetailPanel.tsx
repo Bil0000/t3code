@@ -7,6 +7,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   ExternalLinkIcon,
+  GitBranchIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
   GitPullRequestDraftIcon,
@@ -127,11 +128,12 @@ export function PullRequestDetailPanel({
     detailQuery.refresh();
   };
 
-  // Both handoffs work the same way: check the pull request out into its own worktree, open a
-  // thread there, and put the task in its composer for the user to read before sending.
+  // Every handoff works the same way: check the pull request out into its own worktree, open a
+  // thread there, and — when it carries a task — put that in the composer for the user to read
+  // before sending. Checking out is the whole point of the ones that carry nothing.
   const startHandoff = async (
     kind: string,
-    task: { prompt: string; reviewComments?: ReadonlyArray<ReviewCommentContext> },
+    task: { prompt: string; reviewComments?: ReadonlyArray<ReviewCommentContext> } | null,
   ) => {
     if (!detail || handoff !== null) return;
     setHandoff(kind);
@@ -142,17 +144,36 @@ export function PullRequestDetailPanel({
       type: "loading",
       title: "Preparing the pull request checkout...",
     });
-    const prepared = await prepareThread.run({ reference: detail.url, mode: "worktree" });
+    const projectRef = scopeProjectRef(environmentId, detail.projectId);
+    // The thread is opened before the checkout rather than after it, because the project's setup
+    // script only runs for a checkout that knows which thread it is for — and a worktree with no
+    // dependencies installed is not something anyone can test.
+    const opened = await newThread(projectRef).then(
+      () => true,
+      () => false,
+    );
+    const store = useComposerDraftStore.getState();
+    const session = opened ? store.getDraftSessionByProjectRef(projectRef) : null;
+    const prepared = await prepareThread.run({
+      reference: detail.url,
+      mode: "worktree",
+      ...(session ? { threadId: session.threadId } : {}),
+    });
     if (prepared._tag === "Failure") {
       setHandoff(null);
+      // The server says what to do about it — that the branch is already checked out in the main
+      // repository, say — and that sentence is the only way out of the failure.
+      const detailMessage =
+        prepareThread.error instanceof Error ? prepareThread.error.message : null;
       toastManager.update(toastId, {
         type: "error",
         title: "Could not prepare the pull request checkout",
+        ...(detailMessage ? { description: detailMessage } : {}),
       });
       return;
     }
-    const projectRef = scopeProjectRef(environmentId, detail.projectId);
-    const opened = await newThread(projectRef, {
+    // The same thread again, now that there is a worktree to point it at.
+    await newThread(projectRef, {
       branch: prepared.value.branch,
       worktreePath: prepared.value.worktreePath,
       envMode: "worktree",
@@ -160,13 +181,19 @@ export function PullRequestDetailPanel({
       () => true,
       () => false,
     );
-    const store = useComposerDraftStore.getState();
-    const draftId = opened
-      ? (store.getDraftSessionByProjectRef(projectRef)?.draftId ?? null)
-      : null;
+    const draftId =
+      session?.draftId ?? store.getDraftSessionByProjectRef(projectRef)?.draftId ?? null;
     // Released here whatever happened next: a loading toast never expires on its own, so leaving
     // this set would spin forever and lock every handoff behind it until a reload.
     setHandoff(null);
+    if (task === null) {
+      toastManager.update(toastId, {
+        type: "success",
+        title: "Checked out",
+        description: "The pull request is in its own worktree, with a thread open on it.",
+      });
+      return;
+    }
     if (draftId === null) {
       // The checkout and the thread exist either way, so this reports only the part that did
       // not happen rather than presenting the whole handoff as failed.
@@ -192,6 +219,11 @@ export function PullRequestDetailPanel({
       title: "Checkout ready",
       description: "The task is in the composer — read it over, then send.",
     });
+  };
+
+  const startCheckout = () => {
+    if (!detail) return;
+    void startHandoff("checkout", null);
   };
 
   /** One finding, handed over on its own — the surfaces that show findings call this. */
@@ -320,6 +352,32 @@ export function PullRequestDetailPanel({
                   <ExternalLinkIcon className="size-3" />
                 </TooltipTrigger>
                 <TooltipPopup side="bottom">Open on GitHub</TooltipPopup>
+              </Tooltip>
+              {/* Checking a pull request out is the reason to open one here at all, so it is a
+                  button of its own rather than a side effect of asking an agent for something. */}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={handoff !== null}
+                      onClick={startCheckout}
+                    >
+                      {handoff === "checkout" ? (
+                        "Checking out..."
+                      ) : (
+                        <>
+                          <GitBranchIcon className="size-3" />
+                          Check out
+                        </>
+                      )}
+                    </Button>
+                  }
+                />
+                <TooltipPopup side="bottom">
+                  Check this pull request out into its own worktree and open a thread on it
+                </TooltipPopup>
               </Tooltip>
               <Menu>
                 <MenuTrigger
