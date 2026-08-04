@@ -18,6 +18,19 @@ export interface PendingReviewComment {
   readonly body: string;
 }
 
+/**
+ * A counter rather than anything derived from the comment: two remarks on one line can be the
+ * same length, and an id built from the draft's own contents would collide with a comment that
+ * was already removed — which shares a React key with it and, worse, makes discarding one card
+ * delete both.
+ */
+let pendingCommentSequence = 0;
+
+export function nextPendingReviewCommentId(): string {
+  pendingCommentSequence += 1;
+  return `pending-review-comment-${pendingCommentSequence}`;
+}
+
 /** One pull request's draft, scoped by project as well as repository: a repository can be checked out twice. */
 export function pullRequestReviewKey(reference: PullRequestRef): string {
   return `${reference.projectId}/${reference.repository}#${reference.number}`;

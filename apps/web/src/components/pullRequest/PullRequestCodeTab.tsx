@@ -37,6 +37,7 @@ import {
 import { PullRequestReviewBar } from "./PullRequestReviewBar";
 import { PullRequestDiffStat, PullRequestMetaLine } from "./pullRequestPresentation";
 import {
+  nextPendingReviewCommentId,
   pullRequestReviewKey,
   usePendingReviewComments,
   usePullRequestReviewStore,
@@ -502,7 +503,7 @@ export function PullRequestCodeTab({
                   }}
                   onSubmit={(body) => {
                     addComment(reviewKey, {
-                      id: `${draft.side}:${draft.path}:${draft.line}:${body.length}:${pendingComments.length}`,
+                      id: nextPendingReviewCommentId(),
                       path: draft.path,
                       ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
                       line: draft.line,
