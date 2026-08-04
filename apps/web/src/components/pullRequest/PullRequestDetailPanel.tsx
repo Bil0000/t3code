@@ -24,6 +24,7 @@ import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
+import type { ReviewCommentContext } from "~/reviewCommentContext";
 import { useEnvironmentQuery } from "~/state/query";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -53,7 +54,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
-import { buildFixFindingsPrompt, buildResolveConflictsPrompt } from "./pullRequestDetail.logic";
+import { buildFixFindingsHandoff, buildResolveConflictsPrompt } from "./pullRequestDetail.logic";
 import { PullRequestStateGlyph } from "./pullRequestPresentation";
 
 type DetailTab = "summary" | "timeline" | "code";
@@ -120,28 +121,48 @@ export function PullRequestDetailPanel({
 
   // Both handoffs work the same way: check the pull request out into its own worktree, open a
   // thread there, and put the task in its composer for the user to read before sending.
-  const startHandoff = async (kind: "findings" | "conflicts", prompt: string) => {
+  const startHandoff = async (
+    kind: "findings" | "conflicts",
+    task: { prompt: string; reviewComments?: ReadonlyArray<ReviewCommentContext> },
+  ) => {
     if (!detail || handoff !== null) return;
     setHandoff(kind);
+    // The menu closes on the press and takes its "Preparing..." label with it, so this is the
+    // only thing answering for the checkout. It carries no timeout of its own: a loading toast
+    // never expires, and an explicit one would survive the update and pin the result on screen.
+    const toastId = toastManager.add({
+      type: "loading",
+      title: "Preparing the pull request checkout...",
+    });
     const prepared = await prepareThread.run({ reference: detail.url, mode: "worktree" });
     if (prepared._tag === "Failure") {
       setHandoff(null);
-      toastManager.add({ type: "error", title: "Could not prepare the pull request checkout" });
+      toastManager.update(toastId, {
+        type: "error",
+        title: "Could not prepare the pull request checkout",
+      });
       return;
     }
     const projectRef = scopeProjectRef(environmentId, detail.projectId);
-    await newThread(projectRef, {
+    const opened = await newThread(projectRef, {
       branch: prepared.value.branch,
       worktreePath: prepared.value.worktreePath,
       envMode: "worktree",
-    });
+    }).then(
+      () => true,
+      () => false,
+    );
     const store = useComposerDraftStore.getState();
-    const draftId = store.getDraftSessionByProjectRef(projectRef)?.draftId ?? null;
+    const draftId = opened
+      ? (store.getDraftSessionByProjectRef(projectRef)?.draftId ?? null)
+      : null;
+    // Released here whatever happened next: a loading toast never expires on its own, so leaving
+    // this set would spin forever and lock every handoff behind it until a reload.
     setHandoff(null);
     if (draftId === null) {
       // The checkout and the thread exist either way, so this reports only the part that did
       // not happen rather than presenting the whole handoff as failed.
-      toastManager.add({
+      toastManager.update(toastId, {
         type: "error",
         title: "Checkout ready, but the task could not be written",
         description: "Describe the task in the composer to start.",
@@ -151,11 +172,47 @@ export function PullRequestDetailPanel({
     // Appended rather than assigned: the composer may already hold something the user typed,
     // and losing it would be worse than a prompt they have to scroll.
     const existing = store.getComposerDraft(draftId)?.prompt ?? "";
-    store.setPrompt(draftId, existing.trim().length === 0 ? prompt : `${existing}\n\n${prompt}`);
-    toastManager.add({
+    store.setPrompt(
+      draftId,
+      existing.trim().length === 0 ? task.prompt : `${existing}\n\n${task.prompt}`,
+    );
+    for (const comment of task.reviewComments ?? []) {
+      store.addReviewComment(draftId, comment);
+    }
+    toastManager.update(toastId, {
       type: "success",
       title: "Checkout ready",
       description: "The task is in the composer — read it over, then send.",
+    });
+  };
+
+  const startFixFindings = () => {
+    if (!detail) return;
+    void startHandoff(
+      "findings",
+      buildFixFindingsHandoff({
+        number: detail.number,
+        title: detail.title,
+        url: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+        reviewThreads: detail.reviewThreads,
+        comments: detail.comments,
+        checks: detail.checks,
+        commentsTruncated: detail.commentsTruncated,
+      }),
+    );
+  };
+
+  const startResolveConflicts = () => {
+    if (!detail) return;
+    void startHandoff("conflicts", {
+      prompt: buildResolveConflictsPrompt({
+        number: detail.number,
+        url: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+      }),
     });
   };
 
@@ -174,6 +231,20 @@ export function PullRequestDetailPanel({
     (item) => item.value !== "code" || detail === null || detail.capabilities.diff,
   );
   const can = (action: PullRequestAction) => detail?.capabilities.actions.includes(action) === true;
+  // One live action holds the slot. A conflicting change cannot be merged now, so the slot goes
+  // to the thing that would help instead of a Merge button that only ever says no.
+  const primaryAction =
+    detail === null || detail.state !== "open"
+      ? null
+      : detail.isDraft && can("ready")
+        ? "ready"
+        : !can("merge")
+          ? null
+          : conflicting
+            ? "resolve"
+            : allowedMergeMethods.length > 0
+              ? "merge"
+              : null;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -281,42 +352,13 @@ export function PullRequestDetailPanel({
                     <LinkIcon className="size-3.5" />
                     Copy link
                   </MenuItem>
-                  <MenuItem
-                    disabled={handoff !== null}
-                    onClick={() =>
-                      void startHandoff(
-                        "findings",
-                        buildFixFindingsPrompt({
-                          number: detail.number,
-                          title: detail.title,
-                          url: detail.url,
-                          headBranch: detail.headBranch,
-                          baseBranch: detail.baseBranch,
-                          comments: detail.comments,
-                          checks: detail.checks,
-                          commentsTruncated: detail.commentsTruncated,
-                        }),
-                      )
-                    }
-                  >
+                  <MenuItem disabled={handoff !== null} onClick={startFixFindings}>
                     <HammerIcon className="size-3.5" />
                     {handoff === "findings" ? "Preparing..." : "Fix findings in a thread"}
                   </MenuItem>
-                  {conflicting ? (
-                    <MenuItem
-                      disabled={handoff !== null}
-                      onClick={() =>
-                        void startHandoff(
-                          "conflicts",
-                          buildResolveConflictsPrompt({
-                            number: detail.number,
-                            url: detail.url,
-                            headBranch: detail.headBranch,
-                            baseBranch: detail.baseBranch,
-                          }),
-                        )
-                      }
-                    >
+                  {/* Only where the button row could not take it, so it is never offered twice. */}
+                  {conflicting && primaryAction !== "resolve" ? (
+                    <MenuItem disabled={handoff !== null} onClick={startResolveConflicts}>
                       <GitMergeIcon className="size-3.5" />
                       {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts in a thread"}
                     </MenuItem>
@@ -344,22 +386,15 @@ export function PullRequestDetailPanel({
                   ) : null}
                 </MenuPopup>
               </Menu>
-              {detail.state === "open" && detail.isDraft && can("ready") ? (
+              {primaryAction === "ready" ? (
                 <Button size="xs" disabled={actionPending} onClick={() => void perform("ready")}>
                   Ready for review
                 </Button>
-              ) : detail.state === "open" && can("merge") && conflicting ? (
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button size="xs" aria-disabled className="cursor-not-allowed opacity-60" />
-                    }
-                  >
-                    Merge
-                  </TooltipTrigger>
-                  <TooltipPopup side="bottom">Resolve merge conflicts before merging</TooltipPopup>
-                </Tooltip>
-              ) : detail.state === "open" && can("merge") && allowedMergeMethods.length > 0 ? (
+              ) : primaryAction === "resolve" ? (
+                <Button size="xs" disabled={handoff !== null} onClick={startResolveConflicts}>
+                  {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts"}
+                </Button>
+              ) : primaryAction === "merge" ? (
                 <Button
                   size="xs"
                   disabled={actionPending}

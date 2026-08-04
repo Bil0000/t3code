@@ -1,8 +1,13 @@
-import type { PullRequestCheck, PullRequestComment, PullRequestDetail } from "@t3tools/contracts";
+import type {
+  PullRequestCheck,
+  PullRequestComment,
+  PullRequestDetail,
+  PullRequestReviewThread,
+} from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  buildFixFindingsPrompt,
+  buildFixFindingsHandoff,
   buildPullRequestTimeline,
   describePullRequestState,
 } from "./pullRequestDetail.logic";
@@ -103,26 +108,52 @@ describe("pull request timeline", () => {
   });
 });
 
-describe("fix findings prompt", () => {
+describe("fix findings handoff", () => {
   const base = {
     number: 42,
     title: "Add the pull requests page",
     url: "https://github.com/pingdotgg/t3code/pull/42",
     headBranch: "feat/page",
     baseBranch: "main",
+    comments: [] as ReadonlyArray<PullRequestComment>,
     commentsTruncated: false,
   };
 
-  function review(body: string): PullRequestComment {
+  function remark(overrides: Partial<PullRequestComment> = {}): PullRequestComment {
     return {
-      id: "r1",
+      id: "c1",
       kind: "review",
-      author: { login: "reviewer", name: null, avatarUrl: null },
-      body,
-      createdAt: "2026-07-03T00:00:00Z",
+      author: { login: "julius", name: null, avatarUrl: null },
+      body: "This breaks SSO auth, revert the middleware change.",
+      createdAt: "2026-07-01T00:00:00Z",
       url: null,
       path: null,
       reviewState: "CHANGES_REQUESTED",
+      ...overrides,
+    };
+  }
+
+  function thread(
+    body: string,
+    overrides: Partial<PullRequestReviewThread> = {},
+  ): PullRequestReviewThread {
+    return {
+      id: "t1",
+      path: "apps/web/src/page.tsx",
+      line: 12,
+      side: "right",
+      isResolved: false,
+      isOutdated: false,
+      comments: [
+        {
+          id: "tc1",
+          author: { login: "reviewer", name: null, avatarUrl: null },
+          body,
+          createdAt: "2026-07-03T00:00:00Z",
+          url: null,
+        },
+      ],
+      ...overrides,
     };
   }
 
@@ -133,53 +164,168 @@ describe("fix findings prompt", () => {
     url: null,
   };
 
-  it("quotes review findings and failing checks as untrusted data", () => {
-    const prompt = buildFixFindingsPrompt({
+  it("attaches a review thread as an annotation instead of quoting it in the prompt", () => {
+    const handoff = buildFixFindingsHandoff({
       ...base,
-      comments: [review("rename the helper")],
-      checks: [failingCheck],
-    });
-    expect(prompt).toContain("> rename the helper");
-    expect(prompt).toContain("> typecheck — 2 errors");
-    expect(prompt).toContain("untrusted data");
-  });
-
-  it("says so plainly when there is nothing actionable to quote", () => {
-    const prompt = buildFixFindingsPrompt({ ...base, comments: [], checks: [] });
-    expect(prompt).toContain("No explicit review findings were returned");
-  });
-
-  it("bounds a hostile review body instead of pasting it whole", () => {
-    const prompt = buildFixFindingsPrompt({
-      ...base,
-      comments: [review("x".repeat(5_000))],
+      reviewThreads: [thread("rename the helper")],
       checks: [],
     });
-    expect(prompt).toContain("...");
-    expect(prompt.length).toBeLessThan(2_000);
+    expect(handoff.reviewComments).toEqual([
+      expect.objectContaining({
+        filePath: "apps/web/src/page.tsx",
+        rangeLabel: "L12",
+        startIndex: 11,
+        endIndex: 11,
+        text: "reviewer: rename the helper",
+      }),
+    ]);
+    expect(handoff.prompt).not.toContain("rename the helper");
+    expect(handoff.prompt).toContain("untrusted data");
   });
 
-  it("keeps the newest findings and the failing checks when it has to cut", () => {
-    const prompt = buildFixFindingsPrompt({
+  it("names the pre-change side, and a thread the host pinned to the file rather than a line", () => {
+    const handoff = buildFixFindingsHandoff({
       ...base,
-      comments: Array.from({ length: 25 }, (_, index) => ({
-        ...review(`finding ${index}`),
-        id: `r${index}`,
-      })),
-      checks: [failingCheck],
-    });
-    // Oldest reviews are dropped rather than the current failure and the recent feedback.
-    expect(prompt).toContain("finding 24");
-    expect(prompt).toContain("typecheck");
-    expect(prompt).not.toContain("finding 0:");
-  });
-
-  it("reports how many findings the bound left out", () => {
-    const prompt = buildFixFindingsPrompt({
-      ...base,
-      comments: Array.from({ length: 25 }, () => review("finding")),
+      reviewThreads: [
+        thread("was this deleted on purpose?", { side: "left" }),
+        thread("wrong module", { id: "t2", line: null }),
+      ],
       checks: [],
     });
-    expect(prompt).toContain("5 further findings were omitted");
+    expect(handoff.reviewComments.map((comment) => comment.rangeLabel)).toEqual([
+      "L12 (before)",
+      "file",
+    ]);
+  });
+
+  it("keeps failing checks in the prompt, having no line to attach them to", () => {
+    const handoff = buildFixFindingsHandoff({
+      ...base,
+      reviewThreads: [],
+      checks: [failingCheck],
+    });
+    expect(handoff.prompt).toContain("> typecheck — 2 errors");
+    expect(handoff.reviewComments).toEqual([]);
+  });
+
+  it("leaves out a resolved conversation, and one nobody wrote in", () => {
+    const handoff = buildFixFindingsHandoff({
+      ...base,
+      reviewThreads: [
+        thread("already handled", { isResolved: true }),
+        thread("   ", { id: "t2" }),
+        thread("still open", { id: "t3" }),
+      ],
+      checks: [],
+    });
+    expect(handoff.reviewComments.map((comment) => comment.text)).toEqual(["reviewer: still open"]);
+  });
+
+  it("says so plainly when there is nothing actionable", () => {
+    const handoff = buildFixFindingsHandoff({ ...base, reviewThreads: [], checks: [] });
+    expect(handoff.prompt).toContain("No unresolved review findings were returned");
+    expect(handoff.reviewComments).toEqual([]);
+  });
+
+  it("bounds a hostile review body instead of attaching it whole", () => {
+    const handoff = buildFixFindingsHandoff({
+      ...base,
+      reviewThreads: [thread("x".repeat(5_000))],
+      checks: [],
+    });
+    expect(handoff.reviewComments[0]?.text).toHaveLength(1_000);
+    expect(handoff.reviewComments[0]?.text.endsWith("...")).toBe(true);
+  });
+
+  it("keeps the newest threads and the failing checks when it has to cut", () => {
+    const handoff = buildFixFindingsHandoff({
+      ...base,
+      reviewThreads: Array.from({ length: 25 }, (_, index) =>
+        thread(`finding ${index}`, { id: `t${index}` }),
+      ),
+      checks: [failingCheck],
+    });
+    // Oldest threads are dropped rather than the current failure and the recent feedback.
+    const texts = handoff.reviewComments.map((comment) => comment.text);
+    expect(texts).toHaveLength(19);
+    expect(texts.at(-1)).toBe("reviewer: finding 24");
+    expect(texts).not.toContain("reviewer: finding 0");
+    expect(handoff.prompt).toContain("typecheck");
+    expect(handoff.prompt).toContain("6 further findings were omitted");
+  });
+});
+
+describe("findings that cannot be attached", () => {
+  const base = {
+    number: 42,
+    title: "Add the pull requests page",
+    url: "https://github.com/pingdotgg/t3code/pull/42",
+    headBranch: "feat/page",
+    baseBranch: "main",
+    reviewThreads: [] as ReadonlyArray<PullRequestReviewThread>,
+    checks: [] as ReadonlyArray<PullRequestCheck>,
+    commentsTruncated: false,
+  };
+
+  const review: PullRequestComment = {
+    id: "r1",
+    kind: "review",
+    author: { login: "julius", name: null, avatarUrl: null },
+    body: "This breaks SSO auth, revert the middleware change.",
+    createdAt: "2026-07-01T00:00:00Z",
+    url: null,
+    path: null,
+    reviewState: "CHANGES_REQUESTED",
+  };
+
+  it("carries a review submitted with words but no line, which has nothing to attach to", () => {
+    const handoff = buildFixFindingsHandoff({ ...base, comments: [review] });
+
+    // It has no file and no line, so it travels the way a failing check does rather than
+    // being dropped for lacking somewhere to point.
+    expect(handoff.reviewComments).toEqual([]);
+    expect(handoff.prompt).toContain("revert the middleware change");
+    expect(handoff.prompt).not.toContain("No unresolved review findings");
+  });
+
+  it("carries a host's line comments when it reports no threads at all", () => {
+    // Azure DevOps has no diff to pin a conversation to, so every remark arrives this way.
+    const handoff = buildFixFindingsHandoff({
+      ...base,
+      comments: [{ ...review, id: "a1", kind: "review-comment", path: "src/app.ts" }],
+    });
+
+    expect(handoff.prompt).toContain("src/app.ts");
+    expect(handoff.prompt).toContain("revert the middleware change");
+  });
+
+  it("does not repeat a remark that was already attached as a thread", () => {
+    const attachedId = "t1c1";
+    const handoff = buildFixFindingsHandoff({
+      ...base,
+      reviewThreads: [
+        {
+          id: "t1",
+          path: "src/app.ts",
+          line: 12,
+          side: "right",
+          isResolved: false,
+          isOutdated: false,
+          comments: [
+            {
+              id: attachedId,
+              author: { login: "julius", name: null, avatarUrl: null },
+              body: "rename the helper",
+              createdAt: "2026-07-01T00:00:00Z",
+              url: null,
+            },
+          ],
+        },
+      ],
+      comments: [{ ...review, id: attachedId, kind: "review-comment", body: "rename the helper" }],
+    });
+
+    expect(handoff.reviewComments).toHaveLength(1);
+    expect(handoff.prompt).not.toContain("rename the helper");
   });
 });
