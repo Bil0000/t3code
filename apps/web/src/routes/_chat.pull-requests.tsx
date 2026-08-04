@@ -24,6 +24,7 @@ import {
   groupPullRequestsByInvolvement,
   matchesPullRequestQuery,
   pullRequestEntryKey,
+  resolveProjectScope,
 } from "../components/pullRequest/pullRequestList.logic";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
@@ -133,6 +134,11 @@ function PullRequestsRouteView() {
         .toSorted((left, right) => left.title.localeCompare(right.title)),
     [projects],
   );
+  // The scope the URL asks for, once the environment has had its say about whether it exists.
+  const scopedProjectId = useMemo(
+    () => resolveProjectScope(search.projectId, projects),
+    [projects, search.projectId],
+  );
   const detailPanel = useResizableWidth({
     storageKey: DETAIL_WIDTH_STORAGE_KEY,
     defaultWidth: DETAIL_DEFAULT_WIDTH,
@@ -172,7 +178,7 @@ function PullRequestsRouteView() {
   };
 
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const filterKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${search.projectId ?? ""}:${search.host ?? ""}`;
+  const filterKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
   const [page, setPage] = useState({ key: filterKey, size: PAGE_SIZE });
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
 
@@ -184,7 +190,7 @@ function PullRequestsRouteView() {
           input: {
             state: search.state,
             limit: pageSize,
-            ...(search.projectId ? { projectId: search.projectId } : {}),
+            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
           },
         }),
@@ -269,14 +275,10 @@ function PullRequestsRouteView() {
     return identity?.id;
   }, [projects, search.host, search.repository]);
 
-  // A project id in the URL outlives the environment it came from, and one from elsewhere can
-  // never be read here — so it is dropped rather than passed on to fail every load.
+  // The selection is resolved the same way the scope is: an id from another environment can
+  // never be read here, and one that arrived before the projects did is not yet wrong.
   const linkedProjectId = useMemo(
-    () =>
-      search.selectedProjectId !== undefined &&
-      projects.some((project) => project.id === search.selectedProjectId)
-        ? search.selectedProjectId
-        : undefined,
+    () => resolveProjectScope(search.selectedProjectId, projects),
     [projects, search.selectedProjectId],
   );
   const selectedProjectId = linkedProjectId ?? projectIdForRepository;
@@ -382,7 +384,7 @@ function PullRequestsRouteView() {
                   />
                   <PullRequestProjectFilter
                     projects={scopedProjects}
-                    value={search.projectId}
+                    value={scopedProjectId}
                     onChange={(projectId) => updateSearch({ ...clearedSelection, projectId })}
                   />
                 </div>

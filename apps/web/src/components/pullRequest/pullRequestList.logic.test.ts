@@ -5,6 +5,7 @@ import {
   filterPullRequestsByInvolvement,
   groupPullRequestsByInvolvement,
   matchesPullRequestQuery,
+  resolveProjectScope,
 } from "./pullRequestList.logic";
 
 const VIEWERS = { "github.com": "Bilal" } as const;
@@ -151,5 +152,22 @@ describe("pull request search", () => {
   it("ignores surrounding whitespace and rejects non-matches", () => {
     expect(matchesPullRequestQuery(target, "   ")).toBe(true);
     expect(matchesPullRequestQuery(target, "kanban")).toBe(false);
+  });
+});
+
+describe("resolveProjectScope", () => {
+  const projects = [{ id: "p1" }, { id: "p2" }];
+
+  it("keeps an id the environment has", () => {
+    expect(resolveProjectScope("p2", projects)).toBe("p2");
+  });
+
+  it("drops an id from another environment", () => {
+    expect(resolveProjectScope("p9", projects)).toBeUndefined();
+  });
+
+  it("keeps an id while the projects are still unknown", () => {
+    // Dropping here would list every project for a moment before narrowing back down.
+    expect(resolveProjectScope("p9", [])).toBe("p9");
   });
 });
