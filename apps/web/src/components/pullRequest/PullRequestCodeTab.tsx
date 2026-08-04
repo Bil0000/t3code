@@ -51,6 +51,13 @@ interface ReviewAnnotationGroup {
 
 type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
 
+/**
+ * Past this many files the viewer spends tens of seconds laying every one of them out before
+ * the tab is usable, so a change this size opens folded and the reader unfolds what they came
+ * for. A file already carrying a conversation is never folded — that is the part worth reading.
+ */
+const AUTO_COLLAPSE_FILE_COUNT = 20;
+
 /** A group while it is still gathering what belongs on its line. */
 interface MutableAnnotationGroup {
   readonly side: PullRequestDiffSide;
@@ -95,7 +102,7 @@ export function PullRequestCodeTab({
   onRefresh: () => void;
 }) {
   const { resolvedTheme } = useTheme();
-  const [collapsedFiles, setCollapsedFiles] = useState<ReadonlySet<string>>(() => new Set());
+  const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
   const [selectedLines, setSelectedLines] = useState<{
     id: string;
     range: SelectedLineRange;
@@ -109,7 +116,7 @@ export function PullRequestCodeTab({
   useEffect(() => {
     setDraft(null);
     setSelectedLines(null);
-    setCollapsedFiles(new Set());
+    setToggledFiles(new Set());
   }, [referenceKey]);
 
   const diffQuery = useEnvironmentQuery(
@@ -150,7 +157,6 @@ export function PullRequestCodeTab({
       files.map((fileDiff) => {
         const fileKey = buildFileDiffRenderKey(fileDiff);
         const path = resolveFileDiffPath(fileDiff);
-        const collapsed = collapsedFiles.has(fileKey);
         // One annotation per line, so a line that already carries a conversation shows a new
         // comment underneath it rather than in place of it.
         const groups = new Map<string, MutableAnnotationGroup>();
@@ -178,6 +184,12 @@ export function PullRequestCodeTab({
           groupAt(comment.side, comment.line).pending.push(comment);
         }
         if (draft?.fileKey === fileKey) groupAt(draft.side, draft.line).draft = true;
+
+        // The reader's toggles are held as the difference from the default rather than as the
+        // set itself, so a big diff can open folded without a seeding pass that would have to
+        // race the patch arriving.
+        const foldedByDefault = files.length > AUTO_COLLAPSE_FILE_COUNT && groups.size === 0;
+        const collapsed = toggledFiles.has(fileKey) ? !foldedByDefault : foldedByDefault;
 
         const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
           side: toViewerSide(group.side),
@@ -209,12 +221,12 @@ export function PullRequestCodeTab({
           ),
         };
       }),
-    [collapsedFiles, detail.reviewThreads, draft, files, pendingComments],
+    [detail.reviewThreads, draft, files, pendingComments, toggledFiles],
   );
   const lineStat = useMemo(() => getDiffLineStat(files), [files]);
 
   const toggleFile = (fileKey: string) =>
-    setCollapsedFiles((current) => {
+    setToggledFiles((current) => {
       const next = new Set(current);
       if (next.has(fileKey)) next.delete(fileKey);
       else next.add(fileKey);
@@ -321,6 +333,10 @@ export function PullRequestCodeTab({
           </span>
           <PullRequestDiffStat additions={lineStat.additions} deletions={lineStat.deletions} />
           {diffQuery.data?.truncated ? <span>diff truncated</span> : null}
+          {/* Otherwise a wall of folded headers reads as a diff that failed to load. */}
+          {files.length > AUTO_COLLAPSE_FILE_COUNT ? (
+            <span>large diff, files start folded</span>
+          ) : null}
           {review.inlineComment ? <span>select lines to comment</span> : null}
         </PullRequestMetaLine>
         {/* The viewer renders at its natural height, so its host element is what scrolls —
@@ -350,7 +366,9 @@ export function PullRequestCodeTab({
               onLineSelectionEnd: beginComment,
             }}
             renderHeaderPrefix={(item) => {
-              const collapsed = collapsedFiles.has(item.id);
+              // The item the viewer is drawing already carries the state the memo settled on,
+              // so the chevron follows it rather than recomputing the default here.
+              const collapsed = item.collapsed === true;
               return (
                 <button
                   type="button"
