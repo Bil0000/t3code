@@ -1020,3 +1020,54 @@ it.effect("hands the provider the host its repository lives on", () =>
     assert.deepStrictEqual(hosts, ["github.acme.dev"]);
   }),
 );
+
+it.effect("asks another checkout who is signed in when the first one cannot answer", () =>
+  Effect.gen(function* () {
+    const asked: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        // One repository, checked out twice. The listing reads it once; the viewer lookup has
+        // two places to ask.
+        project({
+          id: "p1",
+          title: "t3code (stale worktree)",
+          workspaceRoot: "/gone",
+          repository: "pingdotgg/t3code",
+        }),
+        project({
+          id: "p2",
+          title: "t3code",
+          workspaceRoot: "/healthy",
+          repository: "pingdotgg/t3code",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getViewer: (input) => {
+            asked.push(input.cwd);
+            return input.cwd === "/gone"
+              ? Effect.fail(
+                  new PullRequestProviderError({
+                    provider: "github",
+                    operation: "getViewer",
+                    reason: "failed",
+                    detail: "not a git repository",
+                  }),
+                )
+              : Effect.succeed("bilal");
+          },
+          listChangeRequests: () =>
+            Effect.succeed({ items: [changeRequest(1, "2026-07-02T00:00:00Z")], truncated: false }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    // De-duplicating the listing must not throw away the checkouts the fallback needs: the
+    // host is readable, so it is read.
+    assert.deepStrictEqual(asked, ["/gone", "/healthy"]);
+    assert.strictEqual(result.entries.length, 1);
+    assert.strictEqual(result.providers[0]?.configured, true);
+  }),
+);

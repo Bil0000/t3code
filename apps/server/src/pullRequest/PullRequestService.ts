@@ -90,6 +90,13 @@ interface SupportedProject {
 interface WorkspaceProjects {
   readonly supported: ReadonlyArray<SupportedProject>;
   readonly unimplemented: ReadonlyMap<SourceControlProviderKind, number>;
+  /**
+   * Every checkout on a host, including the ones the listing de-duplicated away. Asking who is
+   * signed in is a question about the host rather than about a repository, and any checkout can
+   * answer it — so a broken worktree is not allowed to take the host down with it just because
+   * it happened to be the one the listing kept.
+   */
+  readonly viewerRoots: ReadonlyMap<string, ReadonlyArray<string>>;
 }
 
 interface RepositoryBatch {
@@ -176,6 +183,7 @@ export const make = Effect.gen(function* () {
       Effect.map((snapshot) => {
         const supported: SupportedProject[] = [];
         const unimplemented = new Map<SourceControlProviderKind, number>();
+        const viewerRoots = new Map<string, string[]>();
         const seen = new Set<string>();
         for (const project of snapshot.projects) {
           if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
@@ -189,17 +197,24 @@ export const make = Effect.gen(function* () {
           // the page from repeating every change request per local checkout. The host is part
           // of the key, so the same `owner/repo` on two hosts stays two repositories.
           const host = hostOf(project, kind);
+          const api = registry.get(kind);
+          // Recorded before the de-duplication below, so the viewer lookup keeps the alternates
+          // the listing is about to drop.
+          if (api !== null) {
+            const roots = viewerRoots.get(host);
+            if (roots === undefined) viewerRoots.set(host, [project.workspaceRoot]);
+            else if (!roots.includes(project.workspaceRoot)) roots.push(project.workspaceRoot);
+          }
           const key = `${host} ${repository.toLowerCase()}`;
           if (seen.has(key)) continue;
           seen.add(key);
-          const api = registry.get(kind);
           if (api === null) {
             unimplemented.set(kind, (unimplemented.get(kind) ?? 0) + 1);
             continue;
           }
           supported.push({ project, api, repository, host });
         }
-        return { supported, unimplemented };
+        return { supported, unimplemented, viewerRoots };
       }),
     );
 
@@ -232,15 +247,19 @@ export const make = Effect.gen(function* () {
    * Its failure doubles as the answer to "is this host set up", which is what the provider
    * switcher shows.
    */
-  const resolveViewers = (projects: ReadonlyArray<SupportedProject>) =>
+  const resolveViewers = (
+    projects: ReadonlyArray<SupportedProject>,
+    viewerRoots: WorkspaceProjects["viewerRoots"],
+  ) =>
     Effect.forEach(
       [...new Set(projects.map(({ host }) => host))],
       (host) => {
         const forHost = projects.filter((project) => project.host === host);
         const api = forHost[0]!.api;
-        return Effect.firstSuccessOf(
-          forHost.map(({ project }) => api.getViewer({ cwd: project.workspaceRoot })),
-        ).pipe(
+        // Every checkout on the host, not just the ones that survived de-duplication: one
+        // unreadable worktree would otherwise report the whole host as signed out.
+        const roots = viewerRoots.get(host) ?? forHost.map(({ project }) => project.workspaceRoot);
+        return Effect.firstSuccessOf(roots.map((cwd) => api.getViewer({ cwd }))).pipe(
           Effect.map((viewer) => ({
             host,
             kind: api.kind,
@@ -288,13 +307,17 @@ export const make = Effect.gen(function* () {
   const list: PullRequestService["Service"]["list"] = (input) =>
     Effect.gen(function* () {
       const involvement = input.involvement ?? "all";
-      const { supported: projects, unimplemented } = yield* listWorkspaceProjects(input);
+      const {
+        supported: projects,
+        unimplemented,
+        viewerRoots,
+      } = yield* listWorkspaceProjects(input);
       const projectCounts = new Map<SourceControlProviderKind, number>();
       for (const { api } of projects) {
         projectCounts.set(api.kind, (projectCounts.get(api.kind) ?? 0) + 1);
       }
 
-      const viewerResults = yield* resolveViewers(projects);
+      const viewerResults = yield* resolveViewers(projects, viewerRoots);
       const viewers: Record<string, string> = {};
       for (const result of viewerResults) {
         if (result.viewer !== null) viewers[result.host] = result.viewer;
