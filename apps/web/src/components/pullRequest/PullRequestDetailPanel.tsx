@@ -17,7 +17,7 @@ import {
   MoreHorizontalIcon,
   XIcon,
 } from "lucide-react";
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -305,6 +305,12 @@ export function PullRequestDetailPanel({
   const visibleTabs = TABS.filter(
     (item) => item.value !== "code" || detail === null || detail.capabilities.diff,
   );
+  // The Code tab can be opened while the detail is still on its way, and the detail may then say
+  // this host has no patch to show. The tab goes, so whoever was standing on it is moved back to
+  // the summary rather than left looking at a panel that is no longer reachable.
+  useEffect(() => {
+    if (!visibleTabs.some((item) => item.value === tab)) setTab("summary");
+  }, [tab, visibleTabs]);
   const can = (action: PullRequestAction) => detail?.capabilities.actions.includes(action) === true;
   // One live action holds the slot. A conflicting change cannot be merged now, so the slot goes
   // to the thing that would help instead of a Merge button that only ever says no.
