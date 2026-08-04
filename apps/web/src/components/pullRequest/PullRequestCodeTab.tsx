@@ -26,6 +26,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
+import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import {
@@ -109,6 +110,7 @@ export function PullRequestCodeTab({
   } | null>(null);
   const [draft, setDraft] = useState<DraftAnchor | null>(null);
   const [threadPending, setThreadPending] = useState(false);
+  const [orphansOpen, setOrphansOpen] = useState(false);
 
   // The panel keeps this mounted across pull requests, so an open composer would otherwise
   // survive the switch and attach its comment to whichever one is on screen when it is sent.
@@ -117,6 +119,7 @@ export function PullRequestCodeTab({
     setDraft(null);
     setSelectedLines(null);
     setToggledFiles(new Set());
+    setOrphansOpen(false);
   }, [referenceKey]);
 
   const diffQuery = useEnvironmentQuery(
@@ -267,6 +270,35 @@ export function PullRequestCodeTab({
     onRefresh();
   };
 
+  // A conversation is the same card wired to the same commands whether it sits on its line or
+  // was stranded off the diff; only where it is drawn differs.
+  const renderThreadCard = (thread: PullRequestReviewThread) => (
+    <ReviewThreadCard
+      key={thread.id}
+      thread={thread}
+      workspaceRoot={detail.workspaceRoot}
+      canReply={review.reply}
+      canResolve={review.resolve}
+      pending={threadPending}
+      onReply={(body) =>
+        void runThreadCommand("Reply could not be posted", () =>
+          replyToThread({
+            environmentId,
+            input: { ...reference, threadId: thread.id, body },
+          }),
+        )
+      }
+      onToggleResolved={() =>
+        void runThreadCommand("The conversation could not be updated", () =>
+          setThreadResolution({
+            environmentId,
+            input: { ...reference, threadId: thread.id, resolved: !thread.isResolved },
+          }),
+        )
+      }
+    />
+  );
+
   if (diffQuery.isPending && !diffQuery.data) {
     return (
       <div className="space-y-2 p-5">
@@ -323,6 +355,14 @@ export function PullRequestCodeTab({
     (thread) =>
       thread.line === null || !files.some((file) => resolveFileDiffPath(file) === thread.path),
   );
+  // A file carrying five stranded conversations should read as that file once rather than as
+  // five copies of its path.
+  const orphanFiles = new Map<string, PullRequestReviewThread[]>();
+  for (const thread of orphanThreads) {
+    const existing = orphanFiles.get(thread.path);
+    if (existing) existing.push(thread);
+    else orphanFiles.set(thread.path, [thread]);
+  }
 
   return (
     <DiffWorkerPoolProvider>
@@ -339,166 +379,144 @@ export function PullRequestCodeTab({
           ) : null}
           {review.inlineComment ? <span>select lines to comment</span> : null}
         </PullRequestMetaLine>
-        {/* The viewer renders at its natural height, so its host element is what scrolls —
-            the same contract the thread diff panel uses. */}
-        <div className="min-h-0 flex-1 overflow-auto">
-          <CodeView<ReviewAnnotationGroup>
-            className="diff-render-surface"
-            items={items}
-            selectedLines={selectedLines}
-            onSelectedLinesChange={setSelectedLines}
-            options={{
-              diffStyle: "unified",
-              lineDiffType: "none",
-              overflow: "wrap",
-              theme: resolveDiffThemeName(resolvedTheme),
-              themeType: resolvedTheme,
-              stickyHeaders: true,
-              itemMetrics: { diffHeaderHeight: 33 },
-              layout: { paddingTop: 0, paddingBottom: 8, gap: 8 },
-              enableGutterUtility: review.inlineComment && draft === null,
-              enableLineSelection: review.inlineComment && draft === null,
-              // Two gestures reach the same place: dragging the line numbers selects a range,
-              // and the gutter's own button comments on the one line it sits on. They are
-              // separate callbacks in the viewer, so a reader who only ever presses the button
-              // gets nothing unless both are wired.
-              onGutterUtilityClick: beginComment,
-              onLineSelectionEnd: beginComment,
-            }}
-            renderHeaderPrefix={(item) => {
-              // The item the viewer is drawing already carries the state the memo settled on,
-              // so the chevron follows it rather than recomputing the default here.
-              const collapsed = item.collapsed === true;
-              return (
-                <button
-                  type="button"
-                  aria-expanded={!collapsed}
-                  aria-label={collapsed ? "Expand diff" : "Collapse diff"}
-                  className={cn(
-                    "mr-1 inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground",
-                  )}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleFile(item.id);
-                  }}
-                >
-                  {collapsed ? (
-                    <ChevronRightIcon className="size-4" />
-                  ) : (
-                    <ChevronDownIcon className="size-4" />
-                  )}
-                </button>
-              );
-            }}
-            renderAnnotation={(annotation) => (
-              <div className="py-1">
-                {annotation.metadata.threads.map((thread) => (
-                  <ReviewThreadCard
-                    key={thread.id}
-                    thread={thread}
-                    workspaceRoot={detail.workspaceRoot}
-                    canReply={review.reply}
-                    canResolve={review.resolve}
-                    pending={threadPending}
-                    onReply={(body) =>
-                      void runThreadCommand("Reply could not be posted", () =>
-                        replyToThread({
-                          environmentId,
-                          input: { ...reference, threadId: thread.id, body },
-                        }),
-                      )
-                    }
-                    onToggleResolved={() =>
-                      void runThreadCommand("The conversation could not be updated", () =>
-                        setThreadResolution({
-                          environmentId,
-                          input: {
-                            ...reference,
-                            threadId: thread.id,
-                            resolved: !thread.isResolved,
-                          },
-                        }),
-                      )
-                    }
-                  />
-                ))}
-                {annotation.metadata.pending.map((comment) => (
-                  <PendingReviewCommentCard
-                    key={comment.id}
-                    comment={comment}
-                    onRemove={() => removeComment(reviewKey, comment.id)}
-                  />
-                ))}
-                {annotation.metadata.draft && draft ? (
-                  <ReviewCommentComposer
-                    lineLabel={`${draft.path}:${draft.line}`}
-                    pending={false}
-                    onCancel={() => {
-                      setDraft(null);
-                      setSelectedLines(null);
-                    }}
-                    onSubmit={(body) => {
-                      addComment(reviewKey, {
-                        id: `${draft.side}:${draft.path}:${draft.line}:${body.length}:${pendingComments.length}`,
-                        path: draft.path,
-                        ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
-                        line: draft.line,
-                        side: draft.side,
-                        body,
-                      });
-                      setDraft(null);
-                      setSelectedLines(null);
-                    }}
-                  />
-                ) : null}
-              </div>
-            )}
-          />
-          {orphanThreads.length > 0 ? (
-            <section className="border-t border-border/60 px-5 py-4">
-              <h2 className="text-xs font-medium text-muted-foreground">
-                Conversations not on the current diff
-              </h2>
-              <div className="mt-2 space-y-2">
-                {orphanThreads.map((thread) => (
-                  <div key={thread.id}>
-                    <p className="px-3 text-xs text-muted-foreground">
-                      {thread.path}
-                      {thread.line === null ? "" : `:${thread.line}`}
+        {/* Above the code, closed, and counted: these belong to the change rather than to any
+            line of it, and in the stream they read as cards dropped into the patch. */}
+        {orphanFiles.size > 0 ? (
+          <Collapsible
+            className="shrink-0 border-b border-border/60"
+            open={orphansOpen}
+            onOpenChange={setOrphansOpen}
+          >
+            {/* Still a heading, so the section keeps its place in a screen reader's outline;
+                the count is spelled out there rather than left as a bare number. */}
+            <h2>
+              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-5 py-2 text-left text-xs text-muted-foreground">
+                <span>Conversations not on the current diff</span>
+                <ChevronRightIcon
+                  aria-hidden
+                  className={cn("size-3.5 transition-transform", orphansOpen && "rotate-90")}
+                />
+                <span aria-hidden className="tabular-nums">
+                  {orphanThreads.length}
+                </span>
+                <span className="sr-only">
+                  {orphanThreads.length === 1
+                    ? "1 conversation"
+                    : `${orphanThreads.length} conversations`}
+                </span>
+              </CollapsibleTrigger>
+            </h2>
+            <CollapsiblePanel>
+              {/* Capped: opened on a change with dozens of them, this would otherwise leave no
+                  room for the diff it sits above. */}
+              <div className="max-h-64 space-y-3 overflow-auto px-5 pb-3">
+                {[...orphanFiles].map(([path, threads]) => (
+                  <div key={path}>
+                    <p className="truncate px-3 text-xs text-muted-foreground" title={path}>
+                      {path}
                     </p>
-                    <ReviewThreadCard
-                      thread={thread}
-                      workspaceRoot={detail.workspaceRoot}
-                      canReply={review.reply}
-                      canResolve={review.resolve}
-                      pending={threadPending}
-                      onReply={(body) =>
-                        void runThreadCommand("Reply could not be posted", () =>
-                          replyToThread({
-                            environmentId,
-                            input: { ...reference, threadId: thread.id, body },
-                          }),
-                        )
-                      }
-                      onToggleResolved={() =>
-                        void runThreadCommand("The conversation could not be updated", () =>
-                          setThreadResolution({
-                            environmentId,
-                            input: {
-                              ...reference,
-                              threadId: thread.id,
-                              resolved: !thread.isResolved,
-                            },
-                          }),
-                        )
-                      }
-                    />
+                    <div className="mt-1 space-y-2">
+                      {threads.map((thread) => (
+                        <div key={thread.id}>
+                          {thread.line === null ? null : (
+                            <p className="px-3 text-xs text-muted-foreground">Line {thread.line}</p>
+                          )}
+                          {renderThreadCard(thread)}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 ))}
               </div>
-            </section>
-          ) : null}
-        </div>
+            </CollapsiblePanel>
+          </Collapsible>
+        ) : null}
+        {/* The viewer virtualizes against the element it is told is scrolling and places its
+            rows absolutely, so it has to own that element — the thread diff panel hands it the
+            same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
+        <CodeView<ReviewAnnotationGroup>
+          className="diff-render-surface min-h-0 flex-1 overflow-auto"
+          items={items}
+          selectedLines={selectedLines}
+          onSelectedLinesChange={setSelectedLines}
+          options={{
+            diffStyle: "unified",
+            lineDiffType: "none",
+            overflow: "wrap",
+            theme: resolveDiffThemeName(resolvedTheme),
+            themeType: resolvedTheme,
+            stickyHeaders: true,
+            itemMetrics: { diffHeaderHeight: 33 },
+            layout: { paddingTop: 0, paddingBottom: 8, gap: 8 },
+            enableGutterUtility: review.inlineComment && draft === null,
+            enableLineSelection: review.inlineComment && draft === null,
+            // Two gestures reach the same place: dragging the line numbers selects a range,
+            // and the gutter's own button comments on the one line it sits on. They are
+            // separate callbacks in the viewer, so a reader who only ever presses the button
+            // gets nothing unless both are wired.
+            onGutterUtilityClick: beginComment,
+            onLineSelectionEnd: beginComment,
+          }}
+          renderHeaderPrefix={(item) => {
+            // The item the viewer is drawing already carries the state the memo settled on,
+            // so the chevron follows it rather than recomputing the default here.
+            const collapsed = item.collapsed === true;
+            return (
+              <button
+                type="button"
+                aria-expanded={!collapsed}
+                aria-label={collapsed ? "Expand diff" : "Collapse diff"}
+                className={cn(
+                  "mr-1 inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground",
+                )}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  toggleFile(item.id);
+                }}
+              >
+                {collapsed ? (
+                  <ChevronRightIcon className="size-4" />
+                ) : (
+                  <ChevronDownIcon className="size-4" />
+                )}
+              </button>
+            );
+          }}
+          renderAnnotation={(annotation) => (
+            <div className="py-1">
+              {annotation.metadata.threads.map(renderThreadCard)}
+              {annotation.metadata.pending.map((comment) => (
+                <PendingReviewCommentCard
+                  key={comment.id}
+                  comment={comment}
+                  onRemove={() => removeComment(reviewKey, comment.id)}
+                />
+              ))}
+              {annotation.metadata.draft && draft ? (
+                <ReviewCommentComposer
+                  lineLabel={`${draft.path}:${draft.line}`}
+                  pending={false}
+                  onCancel={() => {
+                    setDraft(null);
+                    setSelectedLines(null);
+                  }}
+                  onSubmit={(body) => {
+                    addComment(reviewKey, {
+                      id: `${draft.side}:${draft.path}:${draft.line}:${body.length}:${pendingComments.length}`,
+                      path: draft.path,
+                      ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
+                      line: draft.line,
+                      side: draft.side,
+                      body,
+                    });
+                    setDraft(null);
+                    setSelectedLines(null);
+                  }}
+                />
+              ) : null}
+            </div>
+          )}
+        />
         {reviewBar}
       </div>
     </DiffWorkerPoolProvider>
