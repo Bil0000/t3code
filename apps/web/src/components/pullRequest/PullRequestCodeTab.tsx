@@ -1,4 +1,9 @@
-import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
+import type {
+  CodeViewItem,
+  DiffLineAnnotation,
+  FileDiffMetadata,
+  SelectedLineRange,
+} from "@pierre/diffs";
 import { CodeView, type CodeViewDiffItem } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
@@ -8,7 +13,7 @@ import type {
   PullRequestReviewThread,
 } from "@t3tools/contracts";
 import { ChevronDownIcon, ChevronRightIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
 import {
@@ -19,6 +24,7 @@ import {
   resolveDiffThemeName,
   resolveFileDiffPath,
   resolveFileDiffPreviousPath,
+  type RenderablePatch,
 } from "~/lib/diffRendering";
 import { cn } from "~/lib/utils";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -26,6 +32,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
+import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
@@ -35,6 +42,7 @@ import {
   ReviewThreadCard,
 } from "./PullRequestReviewAnnotation";
 import { PullRequestReviewBar } from "./PullRequestReviewBar";
+import { isLineInFileDiff } from "./pullRequestDiff.logic";
 import { PullRequestDiffStat, PullRequestMetaLine } from "./pullRequestPresentation";
 import {
   nextPendingReviewCommentId,
@@ -59,6 +67,18 @@ type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
  * for. A file already carrying a conversation is never folded — that is the part worth reading.
  */
 const AUTO_COLLAPSE_FILE_COUNT = 20;
+
+/** One answer from the host: a whole number of files, and where the next one carries on. */
+interface DiffSlice {
+  /** What was asked for, null being the first slice. Identifies the slice among the loaded ones. */
+  readonly cursor: string | null;
+  readonly patch: string;
+  readonly truncated: boolean;
+  readonly nextCursor: string | null;
+}
+
+/** Nothing loaded yet, as one identity, so the memos below do not see a new array every render. */
+const NO_SLICES: ReadonlyArray<DiffSlice> = [];
 
 /** A group while it is still gathering what belongs on its line. */
 interface MutableAnnotationGroup {
@@ -88,6 +108,12 @@ function fromViewerSide(side: string | undefined): PullRequestDiffSide {
 }
 
 /**
+ * Whether the viewer draws this line at all. A line counts the new file on the right and the old
+ * one on the left, and each hunk covers one run of each; a line outside every run — a
+ * conversation the host could not mark outdated, or one under a hunk it withheld — has no row to
+ * be pinned to, however much its file looks like a match.
+ */
+/**
  * The pull request's patch, with the review written against it. Conversations already on the
  * host sit under the line they were written on, and a new comment joins the review being
  * drafted rather than being posted as it is typed.
@@ -112,6 +138,14 @@ export function PullRequestCodeTab({
   const [draft, setDraft] = useState<DraftAnchor | null>(null);
   const [threadPending, setThreadPending] = useState(false);
   const [orphansOpen, setOrphansOpen] = useState(false);
+  // Which pull request the slices belong to travels with them, so a render taken before the
+  // reset below cannot read the previous one's slices — or send its cursor to the host.
+  const [sliceState, setSliceState] = useState<{
+    readonly key: string;
+    readonly cursor: string | null;
+    readonly slices: ReadonlyArray<DiffSlice>;
+  }>({ key: "", cursor: null, slices: NO_SLICES });
+  const parseCache = useRef(new Map<string, RenderablePatch>());
 
   // The panel keeps this mounted across pull requests, so an open composer would otherwise
   // survive the switch and attach its comment to whichever one is on screen when it is sent.
@@ -121,11 +155,41 @@ export function PullRequestCodeTab({
     setSelectedLines(null);
     setToggledFiles(new Set());
     setOrphansOpen(false);
+    setSliceState({ key: referenceKey, cursor: null, slices: NO_SLICES });
+    parseCache.current.clear();
   }, [referenceKey]);
 
+  const loadedSlices = sliceState.key === referenceKey ? sliceState.slices : NO_SLICES;
+  const cursor = sliceState.key === referenceKey ? sliceState.cursor : null;
   const diffQuery = useEnvironmentQuery(
-    pullRequestEnvironment.diff({ environmentId, input: reference }),
+    pullRequestEnvironment.diff({
+      environmentId,
+      input: cursor === null ? reference : { ...reference, cursor },
+    }),
   );
+  // Each answer is kept as its own slice. Concatenating the patches and re-parsing the growing
+  // text would cost more with every slice, which is the wall the slicing exists to remove.
+  useEffect(() => {
+    const data = diffQuery.data;
+    if (data === null) return;
+    setSliceState((previous) => {
+      const slices = previous.key === referenceKey ? previous.slices : NO_SLICES;
+      if (slices.some((slice) => slice.cursor === cursor)) return previous;
+      return {
+        key: referenceKey,
+        cursor,
+        slices: [
+          ...slices,
+          {
+            cursor,
+            patch: data.patch,
+            truncated: data.truncated,
+            nextCursor: data.nextCursor,
+          },
+        ],
+      };
+    });
+  }, [cursor, diffQuery.data, referenceKey]);
   const reviewKey = referenceKey;
   const pendingComments = usePendingReviewComments(reference);
   const addComment = usePullRequestReviewStore((store) => store.addComment);
@@ -138,23 +202,68 @@ export function PullRequestCodeTab({
   });
 
   const review = detail.capabilities.review;
-  const renderablePatch = useMemo(
+  // Every slice is parsed on its own and the result held, so a slice arriving costs one parse
+  // rather than one per slice already on screen. Its cache key carries the theme, which is what
+  // the tokenizer caches against, so a theme change is still a fresh parse.
+  const parsedSlices = useMemo(
     () =>
-      getRenderablePatch(
-        diffQuery.data?.patch,
-        `pull-request:${reference.repository}#${reference.number}:${resolvedTheme}`,
-      ),
-    [diffQuery.data?.patch, reference.number, reference.repository, resolvedTheme],
+      loadedSlices.map((slice) => {
+        const cacheKey = `pull-request:${referenceKey}:${resolvedTheme}:${slice.cursor ?? "first"}`;
+        const cached = parseCache.current.get(cacheKey);
+        if (cached) return cached;
+        const parsed = getRenderablePatch(slice.patch, cacheKey);
+        if (parsed) parseCache.current.set(cacheKey, parsed);
+        return parsed;
+      }),
+    [loadedSlices, referenceKey, resolvedTheme],
   );
+  // Sorted within a slice rather than across them: sorting the accumulated set would let a late
+  // slice push a file the reader is part way through further down the page.
   const files = useMemo(
     () =>
-      renderablePatch?.kind === "files"
-        ? renderablePatch.files.toSorted((left, right) =>
-            resolveFileDiffPath(left).localeCompare(resolveFileDiffPath(right)),
-          )
-        : [],
-    [renderablePatch],
+      parsedSlices.flatMap((parsed) =>
+        parsed?.kind === "files"
+          ? parsed.files.toSorted((left, right) =>
+              resolveFileDiffPath(left).localeCompare(resolveFileDiffPath(right)),
+            )
+          : [],
+      ),
+    [parsedSlices],
   );
+  const nextCursor = loadedSlices.at(-1)?.nextCursor ?? null;
+  /**
+   * A change the host had to slice is a large one whatever the count in hand says, so the
+   * folding default is settled by the first answer. Both halves only ever go from false to true:
+   * a default that flipped mid-scroll would refold the file the reader had just opened.
+   */
+  const largeDiff =
+    files.length > AUTO_COLLAPSE_FILE_COUNT ||
+    loadedSlices.some((slice) => slice.nextCursor !== null);
+  // What a slice withheld: the host declining to inline part of it, or a patch the viewer could
+  // not structure and so dropped. Neither says anything about there being more to fetch.
+  const withheldContent =
+    loadedSlices.some((slice) => slice.truncated) ||
+    parsedSlices.some((parsed) => parsed?.kind === "raw");
+
+  // Placing a conversation takes more than its file being in the diff: its line has to fall
+  // inside a hunk that was rendered. One that does not is drawn nowhere, so it belongs in the
+  // off-diff list rather than disappearing between the two.
+  const placedThreadIds = useMemo(() => {
+    const placed = new Set<string>();
+    for (const file of files) {
+      const path = resolveFileDiffPath(file);
+      for (const thread of detail.reviewThreads) {
+        if (
+          thread.path === path &&
+          thread.line !== null &&
+          isLineInFileDiff(file, thread.side, thread.line)
+        ) {
+          placed.add(thread.id);
+        }
+      }
+    }
+    return placed;
+  }, [detail.reviewThreads, files]);
 
   const items = useMemo<CodeViewDiffItem<ReviewAnnotationGroup>[]>(
     () =>
@@ -179,8 +288,11 @@ export function PullRequestCodeTab({
           return created;
         };
 
+        let carriesConversation = false;
         for (const thread of detail.reviewThreads) {
           if (thread.path !== path || thread.line === null) continue;
+          if (!placedThreadIds.has(thread.id)) continue;
+          carriesConversation = true;
           groupAt(thread.side, thread.line).threads.push(thread);
         }
         for (const comment of pendingComments) {
@@ -191,8 +303,10 @@ export function PullRequestCodeTab({
 
         // The reader's toggles are held as the difference from the default rather than as the
         // set itself, so a big diff can open folded without a seeding pass that would have to
-        // race the patch arriving.
-        const foldedByDefault = files.length > AUTO_COLLAPSE_FILE_COUNT && groups.size === 0;
+        // race the patch arriving. That only works while the default holds still: it is decided
+        // by what the host already has, never by a comment being written, because a default that
+        // moved would invert the toggle and fold the very file the reader opened to write in.
+        const foldedByDefault = largeDiff && !carriesConversation;
         const collapsed = toggledFiles.has(fileKey) ? !foldedByDefault : foldedByDefault;
 
         const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
@@ -225,9 +339,37 @@ export function PullRequestCodeTab({
           ),
         };
       }),
-    [detail.reviewThreads, draft, files, pendingComments, toggledFiles],
+    [detail.reviewThreads, draft, files, largeDiff, pendingComments, placedThreadIds, toggledFiles],
   );
   const lineStat = useMemo(() => getDiffLineStat(files), [files]);
+
+  // The sentinel is held as state rather than a ref because the viewer mounts its own footer:
+  // an effect reading a ref could run before that node exists and would never arm the observer.
+  const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // A failed slice must stop the observer. The files already loaded keep the sentinel on
+    // screen, so re-arming it after a failure would ask for the same slice again, forever.
+    if (
+      sentinel === null ||
+      nextCursor === null ||
+      nextCursor === cursor ||
+      diffQuery.isPending ||
+      diffQuery.error !== null
+    ) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (observed) => {
+        if (observed.some((entry) => entry.isIntersecting)) {
+          setSliceState((previous) => ({ ...previous, cursor: nextCursor }));
+        }
+      },
+      // Start the next slice slightly before the sentinel is on screen.
+      { rootMargin: "240px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [cursor, diffQuery.error, diffQuery.isPending, nextCursor, sentinel]);
 
   const toggleFile = (fileKey: string) =>
     setToggledFiles((current) => {
@@ -304,7 +446,7 @@ export function PullRequestCodeTab({
     />
   );
 
-  if (diffQuery.isPending && !diffQuery.data) {
+  if (diffQuery.isPending && loadedSlices.length === 0) {
     return (
       <div className="space-y-2 p-5">
         <Skeleton className="h-4 w-40" />
@@ -333,33 +475,33 @@ export function PullRequestCodeTab({
     </div>
   );
 
-  if (diffQuery.error) {
+  // A slice that fails once there are files on screen is reported at the end of them instead:
+  // the diff already read is worth more than the error that stopped it growing.
+  if (diffQuery.error && loadedSlices.length === 0) {
     return withReviewBar(<p className="p-5 text-sm text-muted-foreground">{diffQuery.error}</p>);
   }
 
   // A patch the viewer cannot structure (binary, or a format it does not parse) still has to
-  // be readable, so it falls back to the raw text rather than an empty tab.
-  if (renderablePatch?.kind === "raw") {
+  // be readable, so it falls back to the raw text rather than an empty tab. Only once the diff
+  // is whole: returning here while a cursor is outstanding would take the sentinel off screen
+  // and end the walk, leaving the rest of the change unasked for.
+  const rawSlice = parsedSlices.find((parsed) => parsed?.kind === "raw");
+  if (files.length === 0 && nextCursor === null && rawSlice?.kind === "raw") {
     return withReviewBar(
       <div className="space-y-2 p-5">
-        <p className="text-xs text-muted-foreground">{renderablePatch.reason}</p>
-        <pre className="whitespace-pre-wrap break-words font-mono text-xs">
-          {renderablePatch.text}
-        </pre>
+        <p className="text-xs text-muted-foreground">{rawSlice.reason}</p>
+        <pre className="whitespace-pre-wrap break-words font-mono text-xs">{rawSlice.text}</pre>
       </div>,
     );
   }
 
-  if (items.length === 0) {
+  if (items.length === 0 && nextCursor === null) {
     return withReviewBar(
       <p className="p-5 text-sm text-muted-foreground">This pull request has no file changes.</p>,
     );
   }
 
-  const orphanThreads = detail.reviewThreads.filter(
-    (thread) =>
-      thread.line === null || !files.some((file) => resolveFileDiffPath(file) === thread.path),
-  );
+  const orphanThreads = detail.reviewThreads.filter((thread) => !placedThreadIds.has(thread.id));
   // A file carrying five stranded conversations should read as that file once rather than as
   // five copies of its path.
   const orphanFiles = new Map<string, PullRequestReviewThread[]>();
@@ -373,15 +515,16 @@ export function PullRequestCodeTab({
     <DiffWorkerPoolProvider>
       <div className="flex h-full min-h-0 flex-col">
         <PullRequestMetaLine className="shrink-0 border-b border-border/60 px-5 py-2 text-xs text-muted-foreground">
+          {/* The count is what is in hand rather than what the change contains: on a diff that
+              arrives in slices it keeps growing, and only the last one settles it. */}
           <span>
             {files.length} {files.length === 1 ? "file" : "files"}
+            {nextCursor !== null ? " so far" : loadedSlices.length > 1 ? ", all loaded" : ""}
           </span>
           <PullRequestDiffStat additions={lineStat.additions} deletions={lineStat.deletions} />
-          {diffQuery.data?.truncated ? <span>diff truncated</span> : null}
+          {withheldContent ? <span>some content not shown</span> : null}
           {/* Otherwise a wall of folded headers reads as a diff that failed to load. */}
-          {files.length > AUTO_COLLAPSE_FILE_COUNT ? (
-            <span>large diff, files start folded</span>
-          ) : null}
+          {largeDiff ? <span>large diff, files start folded</span> : null}
           {review.inlineComment ? <span>select lines to comment</span> : null}
         </PullRequestMetaLine>
         {/* Above the code, closed, and counted: these belong to the change rather than to any
@@ -396,7 +539,13 @@ export function PullRequestCodeTab({
                 the count is spelled out there rather than left as a bare number. */}
             <h2>
               <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-5 py-2 text-left text-xs text-muted-foreground">
-                <span>Conversations not on the current diff</span>
+                {/* While slices are still arriving a conversation may simply belong to a file
+                    that has not landed yet, which is not the same as being off the diff. */}
+                <span>
+                  {nextCursor === null
+                    ? "Conversations not on the current diff"
+                    : "Conversations not on the diff loaded so far"}
+                </span>
                 <ChevronRightIcon
                   aria-hidden
                   className={cn("size-3.5 transition-transform", orphansOpen && "rotate-90")}
@@ -462,6 +611,31 @@ export function PullRequestCodeTab({
             onGutterUtilityClick: beginComment,
             onLineSelectionEnd: beginComment,
           }}
+          // The viewer owns the scroll container, so the sentinel that asks for the next slice
+          // has to live inside it — at the end of the files, where reaching it means the reader
+          // is running out of diff.
+          renderCodeViewFooter={() =>
+            // Only while something is still owed. A finished diff whose query fails on a later
+            // refresh — a reconnect re-runs every one of them — is whole on screen already, and
+            // saying otherwise sends the reader looking for files that are all there.
+            nextCursor === null ? null : (
+              <div
+                ref={setSentinel}
+                className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground"
+              >
+                {diffQuery.error !== null ? (
+                  <>
+                    <span>The rest of this diff could not be loaded.</span>
+                    <Button size="xs" variant="outline" onClick={() => diffQuery.refresh()}>
+                      Retry
+                    </Button>
+                  </>
+                ) : diffQuery.isPending ? (
+                  "Loading more files..."
+                ) : null}
+              </div>
+            )
+          }
           renderHeaderPrefix={(item) => {
             // The item the viewer is drawing already carries the state the memo settled on,
             // so the chevron follows it rather than recomputing the default here.
