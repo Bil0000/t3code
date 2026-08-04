@@ -132,7 +132,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
 @theme inline {
   --color-zinc-25: oklch(99.2% 0 0);
-  --animate-skeleton: skeleton 2s -1s infinite linear;
+  --animate-skeleton: skeleton 2s infinite linear;
   /* Duty-cycled indicator animations: long holds with stepped ramps, so the
      compositor updates discrete frames instead of every vsync. */
   --animate-status-pulse: status-pulse 2s infinite;
@@ -185,8 +185,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
   @keyframes skeleton {
-    to {
-      background-position: -200% 0;
+    /* Transform-only so the highlight sweep stays on the compositor, then a
+       long hold with the band parked off-screen instead of a constant shimmer. */
+    0% {
+      transform: translateX(-100%);
+    }
+    60%,
+    100% {
+      transform: translateX(100%);
     }
   }
   @keyframes status-pulse {
@@ -1539,6 +1545,9 @@ label:has(> select#reasoning-effort) select {
 @media (prefers-reduced-motion: reduce) {
   .prompt-stash-count-enter {
     animation: none;
+  }
+  [data-slot="skeleton"]::after {
+    content: none;
   }
 }
 
