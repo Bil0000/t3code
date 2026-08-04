@@ -263,10 +263,13 @@ function PullRequestsRouteView() {
         project.repositoryIdentity?.owner &&
         project.repositoryIdentity.name &&
         `${project.repositoryIdentity.owner}/${project.repositoryIdentity.name}`.toLowerCase() ===
-          repository,
+          repository &&
+        // The same `owner/name` can exist on two hosts. Without this the first match wins, and
+        // a link that named its host opens the pull request from the other one.
+        (search.provider === undefined || project.repositoryIdentity.provider === search.provider),
     );
     return identity?.id;
-  }, [projects, search.repository]);
+  }, [projects, search.provider, search.repository]);
 
   // A project id in the URL outlives the environment it came from, and one from elsewhere can
   // never be read here — so it is dropped rather than passed on to fail every load.
