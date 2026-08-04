@@ -268,7 +268,17 @@ function PullRequestsRouteView() {
     return identity?.id;
   }, [projects, search.repository]);
 
-  const selectedProjectId = search.selectedProjectId ?? projectIdForRepository;
+  // A project id in the URL outlives the environment it came from, and one from elsewhere can
+  // never be read here — so it is dropped rather than passed on to fail every load.
+  const linkedProjectId = useMemo(
+    () =>
+      search.selectedProjectId !== undefined &&
+      projects.some((project) => project.id === search.selectedProjectId)
+        ? search.selectedProjectId
+        : undefined,
+    [projects, search.selectedProjectId],
+  );
+  const selectedProjectId = linkedProjectId ?? projectIdForRepository;
   const selected =
     search.repository && search.number && selectedProjectId
       ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
