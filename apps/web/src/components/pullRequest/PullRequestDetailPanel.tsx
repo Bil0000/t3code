@@ -186,12 +186,26 @@ export function PullRequestDetailPanel({
     // Released here whatever happened next: a loading toast never expires on its own, so leaving
     // this set would spin forever and lock every handoff behind it until a reload.
     setHandoff(null);
+    // A worktree that was already there and had been worked in keeps whatever it holds, so the
+    // thread opens on older code than the pull request carries. Said once, in place of the
+    // success, because everything else about the handoff did happen.
+    const staleCheckoutToast = {
+      type: "warning",
+      title: "Checked out, but not on the latest commits",
+      description:
+        "The worktree could not be moved onto the pull request's latest commits, so the code there is older than the pull request.",
+    } as const;
     if (task === null) {
-      toastManager.update(toastId, {
-        type: "success",
-        title: "Checked out",
-        description: "The pull request is in its own worktree, with a thread open on it.",
-      });
+      toastManager.update(
+        toastId,
+        prepared.value.isOnPullRequestHead
+          ? {
+              type: "success",
+              title: "Checked out",
+              description: "The pull request is in its own worktree, with a thread open on it.",
+            }
+          : staleCheckoutToast,
+      );
       return;
     }
     if (draftId === null) {
@@ -214,11 +228,16 @@ export function PullRequestDetailPanel({
     for (const comment of task.reviewComments ?? []) {
       store.addReviewComment(draftId, comment);
     }
-    toastManager.update(toastId, {
-      type: "success",
-      title: "Checkout ready",
-      description: "The task is in the composer — read it over, then send.",
-    });
+    toastManager.update(
+      toastId,
+      prepared.value.isOnPullRequestHead
+        ? {
+            type: "success",
+            title: "Checkout ready",
+            description: "The task is in the composer — read it over, then send.",
+          }
+        : staleCheckoutToast,
+    );
   };
 
   const startCheckout = () => {
