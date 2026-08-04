@@ -80,11 +80,26 @@ export class BitbucketRepositoryUnsupportedError extends Schema.TaggedErrorClass
   }
 }
 
+/** Not a decode failure: the reader named a commit that is not a sha this repository could hold. */
+export class BitbucketDiffCommitError extends Schema.TaggedErrorClass<BitbucketDiffCommitError>()(
+  "BitbucketDiffCommitError",
+  {},
+) {
+  get detail(): string {
+    return "The named commit was not a commit sha.";
+  }
+
+  override get message(): string {
+    return `Bitbucket failed in getPullRequestDiff: ${this.detail}`;
+  }
+}
+
 export type BitbucketPullRequestApiError =
   | BitbucketApi.BitbucketApiError
   | BitbucketPullRequestReadError
   | BitbucketViewerUnavailableError
-  | BitbucketRepositoryUnsupportedError;
+  | BitbucketRepositoryUnsupportedError
+  | BitbucketDiffCommitError;
 
 /**
  * Bitbucket's own ceiling. Asking for more does not fail — it answers with an empty page and no
@@ -123,6 +138,8 @@ export class BitbucketPullRequestApi extends Context.Service<
     readonly getPullRequestDiff: (input: {
       readonly repository: string;
       readonly number: number;
+      /** One commit's own changes, rather than everything the pull request carries. */
+      readonly commit?: string | undefined;
     }) => Effect.Effect<
       { readonly patch: string; readonly truncated: boolean },
       BitbucketPullRequestApiError
@@ -212,6 +229,15 @@ function repositoryPath(
   return Result.succeed(
     `/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(slug)}`,
   );
+}
+
+/**
+ * A commit sha arrives from the reader and goes straight into a request path, so it is checked
+ * rather than trusted: hexadecimal only, from the shortest abbreviation a host prints up to a
+ * whole sha.
+ */
+function isCommitSha(value: string): boolean {
+  return /^[0-9a-f]{7,64}$/i.test(value);
 }
 
 /**
@@ -348,19 +374,25 @@ export const make = Effect.gen(function* () {
       ),
 
     getPullRequestDiff: (input) =>
-      withRepository(input.repository, (path) =>
-        // Already a unified patch, so it needs no decoding at all — only a bound, which a diff
-        // of any size would otherwise ignore.
-        bitbucket
-          .request({
-            method: "GET",
-            url: `${path}/pullrequests/${input.number}/diff`,
-            maxBytes: DIFF_MAX_BYTES,
-          })
-          .pipe(
-            Effect.map((response) => ({ patch: response.body, truncated: response.truncated })),
+      input.commit !== undefined && !isCommitSha(input.commit)
+        ? Effect.fail(new BitbucketDiffCommitError())
+        : withRepository(input.repository, (path) =>
+            // Already a unified patch, so it needs no decoding at all — only a bound, which a
+            // diff of any size would otherwise ignore. A commit's own patch sits beside the pull
+            // request's at `/diff/{sha}` and reads the same way.
+            bitbucket
+              .request({
+                method: "GET",
+                url:
+                  input.commit === undefined
+                    ? `${path}/pullrequests/${input.number}/diff`
+                    : `${path}/diff/${input.commit}`,
+                maxBytes: DIFF_MAX_BYTES,
+              })
+              .pipe(
+                Effect.map((response) => ({ patch: response.body, truncated: response.truncated })),
+              ),
           ),
-      ),
 
     getDiffStat: (input) =>
       withRepository(input.repository, (path) =>

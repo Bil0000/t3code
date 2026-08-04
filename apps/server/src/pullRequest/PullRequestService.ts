@@ -470,6 +470,7 @@ export const make = Effect.gen(function* () {
                 host: project.host,
                 number: input.number,
                 ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+                ...(input.commit === undefined ? {} : { commit: input.commit }),
               })
               .pipe(Effect.mapError(toPullRequestError("diff")))
           : Effect.fail(

@@ -304,7 +304,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
       assert.isNotNull(diff.nextCursor);
       // A full page means more files, not a slice with something missing from it.
       assert.isFalse(diff.truncated);
-      expect(argsOfCall(0)[1]).toContain("page=1");
+      expect(argsOfCall(0)[1]).toContain("merge_requests/7/diffs?per_page=100&page=1");
     }),
   );
 
@@ -341,6 +341,51 @@ layer("GitLabPullRequestCli.layer", (it) => {
       );
 
       assert.strictEqual(error._tag, "GitLabDiffCursorError");
+      assert.strictEqual(mockedExecute.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("reads a named commit from its own diff, and pages inside it", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(diffPage(0))))
+        .mockReturnValueOnce(Effect.succeed(output(diffPage(100, 3))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      const target = {
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        commit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+      };
+
+      const first = yield* cli.getMergeRequestDiff(target);
+      assert.isNotNull(first.nextCursor);
+      const second = yield* cli.getMergeRequestDiff({ ...target, cursor: first.nextCursor });
+
+      const commitPath =
+        "projects/acme%2Fweb/repository/commits/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0/diff";
+      expect(argsOfCall(0)[1]).toBe(`${commitPath}?per_page=100&page=1`);
+      // The whole path, not just the page: a cursor branch that dropped the commit would still
+      // ask for page 2, of the merge request's own diff.
+      expect(argsOfCall(1)[1]).toBe(`${commitPath}?per_page=100&page=2`);
+      assert.isNull(second.nextCursor);
+    }),
+  );
+
+  it.effect("refuses a commit that is not a sha rather than reading it into a path", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getMergeRequestDiff({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          commit: "../../merge_requests/8/diffs",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitLabDiffCommitError");
       assert.strictEqual(mockedExecute.mock.calls.length, 0);
     }),
   );

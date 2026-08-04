@@ -92,10 +92,28 @@ export class GitHubDiffCursorError extends Schema.TaggedErrorClass<GitHubDiffCur
   }
 }
 
+/** Not a decode failure: the reader named a commit that is not a sha this repository could hold. */
+export class GitHubDiffCommitError extends Schema.TaggedErrorClass<GitHubDiffCommitError>()(
+  "GitHubDiffCommitError",
+  {
+    command: Schema.Literal("gh"),
+    cwd: Schema.String,
+  },
+) {
+  get detail(): string {
+    return "The named commit was not a commit sha.";
+  }
+
+  override get message(): string {
+    return `GitHub CLI failed in getPullRequestDiff: ${this.detail}`;
+  }
+}
+
 export type GitHubPullRequestCliError =
   | GitHubCli.GitHubCliError
   | GitHubPullRequestReadError
   | GitHubDiffCursorError
+  | GitHubDiffCommitError
   | GitHubViewerLoginUnavailableError;
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
@@ -149,6 +167,8 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
       /** Absent asks for the first slice; anything else is a cursor a slice handed back. */
       readonly cursor?: string | undefined;
+      /** One commit's own changes, rather than everything the pull request carries. */
+      readonly commit?: string | undefined;
     }) => Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestCliError>;
 
     readonly listReviewThreadComments: (input: {
@@ -239,6 +259,15 @@ function diffCursorPage(cursor: string): number | null {
   return /^[1-9][0-9]{0,6}$/.test(cursor) ? Number(cursor) : null;
 }
 
+/**
+ * A commit sha arrives from the reader and goes straight into a request path, so it is checked
+ * rather than trusted: hexadecimal only, from the shortest abbreviation a host prints up to a
+ * whole sha.
+ */
+function isCommitSha(value: string): boolean {
+  return /^[0-9a-f]{7,64}$/i.test(value);
+}
+
 function involvementArgs(input: {
   readonly state: PullRequestListState;
   readonly involvement: PullRequestInvolvement;
@@ -313,6 +342,9 @@ export const make = Effect.gen(function* () {
    *
    * A page is a whole number of files, so each one parses on its own; the caller carries on from
    * `nextCursor` for as long as GitHub keeps handing pages back.
+   *
+   * A named commit is read from the commit endpoint, which lists the same file entries and pages
+   * them the same way — only wrapped in an object, which jq unwraps before they are decoded.
    */
   const diffFilesPage = (input: {
     readonly cwd: string;
@@ -320,8 +352,10 @@ export const make = Effect.gen(function* () {
     readonly host: string;
     readonly number: number;
     readonly page: number;
+    readonly commit?: string | undefined;
   }): Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestCliError> => {
     const { owner, name } = parseRepositorySelector(input.repository);
+    const paging = `per_page=${DIFF_FILES_PAGE_SIZE}&page=${input.page}`;
     return github
       .execute({
         cwd: input.cwd,
@@ -329,7 +363,12 @@ export const make = Effect.gen(function* () {
           "api",
           "--hostname",
           input.host,
-          `repos/${owner}/${name}/pulls/${input.number}/files?per_page=${DIFF_FILES_PAGE_SIZE}&page=${input.page}`,
+          input.commit === undefined
+            ? `repos/${owner}/${name}/pulls/${input.number}/files?${paging}`
+            : `repos/${owner}/${name}/commits/${input.commit}?${paging}`,
+          // An empty commit carries no `files` at all, which is a commit with nothing in it
+          // rather than an answer that could not be read.
+          ...(input.commit === undefined ? [] : ["--jq", ".files // []"]),
         ],
         maxOutputBytes: DIFF_MAX_OUTPUT_BYTES,
         timeoutMs: DIFF_TIMEOUT_MS,
@@ -464,7 +503,11 @@ export const make = Effect.gen(function* () {
           host: input.host,
           number: input.number,
           page,
+          ...(input.commit === undefined ? {} : { commit: input.commit }),
         });
+      if (input.commit !== undefined && !isCommitSha(input.commit)) {
+        return Effect.fail(new GitHubDiffCommitError({ command: "gh", cwd: input.cwd }));
+      }
       // A cursor only ever comes from the files walk, so a reader carrying one is already past
       // the point where `gh pr diff` had anything to say.
       if (input.cursor !== undefined) {
@@ -472,6 +515,10 @@ export const make = Effect.gen(function* () {
         return page === null
           ? Effect.fail(new GitHubDiffCursorError({ command: "gh", cwd: input.cwd }))
           : filesPage(page);
+      }
+      // `gh pr diff` speaks for the whole pull request and has no way to name one commit of it.
+      if (input.commit !== undefined) {
+        return filesPage(1);
       }
       return github
         .execute({

@@ -152,10 +152,16 @@ export const make = Effect.gen(function* () {
 
     // `/diff` answers with the whole patch and pages nothing, so the first slice is the last.
     getDiff: (input) =>
-      api.getPullRequestDiff({ repository: input.repository, number: input.number }).pipe(
-        Effect.mapError(fail("getDiff")),
-        Effect.map((diff) => ({ ...diff, nextCursor: null })),
-      ),
+      api
+        .getPullRequestDiff({
+          repository: input.repository,
+          number: input.number,
+          ...(input.commit === undefined ? {} : { commit: input.commit }),
+        })
+        .pipe(
+          Effect.mapError(fail("getDiff")),
+          Effect.map((diff) => ({ ...diff, nextCursor: null })),
+        ),
 
     runAction: (input) =>
       api

@@ -413,6 +413,73 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("reads a named commit from the commit endpoint rather than from `gh pr diff`", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(2, 1))));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const diff = yield* cli.getPullRequestDiff({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        commit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+      });
+
+      // One request: the commit's own changes never take the `gh pr diff` road.
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      assert.isNull(diff.nextCursor);
+      expect(diff.patch).toContain("diff --git a/src/file1.ts b/src/file1.ts");
+      const args = callAt(0).args;
+      expect(args).toContain(
+        "repos/acme/web/commits/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0?per_page=100&page=1",
+      );
+      // The commit endpoint wraps its files in an object, which jq unwraps for the decoder.
+      expect(args).toContain(".files // []");
+    }),
+  );
+
+  it.effect("pages inside a commit the way it pages the pull request's own files", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(100, 0))));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const target = {
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        commit: "a1b2c3d",
+      };
+
+      const first = yield* cli.getPullRequestDiff(target);
+      assert.isNotNull(first.nextCursor);
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequestFiles(4, 100))));
+      const second = yield* cli.getPullRequestDiff({ ...target, cursor: first.nextCursor });
+
+      assert.isNull(second.nextCursor);
+      expect(callAt(1).args).toContain("repos/acme/web/commits/a1b2c3d?per_page=100&page=2");
+    }),
+  );
+
+  it.effect("refuses a commit that is not a sha rather than reading it into a request", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getPullRequestDiff({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          commit: "../../pulls/8/files",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitHubDiffCommitError");
+      assert.strictEqual(mockedExecute.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("ends the diff on a page with no files rather than asking for it again", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));

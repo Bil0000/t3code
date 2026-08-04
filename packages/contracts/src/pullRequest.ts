@@ -308,6 +308,11 @@ export const PullRequestDiffInput = Schema.Struct({
    * counts its files its own way, and only the provider that issued one knows what it means.
    */
   cursor: Schema.optional(TrimmedNonEmptyString),
+  /**
+   * One commit of the change rather than the whole of it. A large pull request is easier to
+   * read a commit at a time, and the author's own commits are the boundaries they chose.
+   */
+  commit: Schema.optional(TrimmedNonEmptyString),
 });
 export type PullRequestDiffInput = typeof PullRequestDiffInput.Type;
 

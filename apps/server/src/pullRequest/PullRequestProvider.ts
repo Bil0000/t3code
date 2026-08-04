@@ -138,6 +138,8 @@ export interface PullRequestProviderApi {
     input: ProviderRepositoryRef & {
       readonly number: number;
       readonly cursor?: string | undefined;
+      /** One commit's own changes, rather than everything the change request carries. */
+      readonly commit?: string | undefined;
     },
   ) => Effect.Effect<ProviderDiffSlice, PullRequestProviderError>;
 

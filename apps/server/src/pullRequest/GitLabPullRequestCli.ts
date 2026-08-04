@@ -107,10 +107,28 @@ export class GitLabDiffCursorError extends Schema.TaggedErrorClass<GitLabDiffCur
   }
 }
 
+/** Not a decode failure: the reader named a commit that is not a sha this project could hold. */
+export class GitLabDiffCommitError extends Schema.TaggedErrorClass<GitLabDiffCommitError>()(
+  "GitLabDiffCommitError",
+  {
+    command: Schema.Literal("glab"),
+    cwd: Schema.String,
+  },
+) {
+  get detail(): string {
+    return "The named commit was not a commit sha.";
+  }
+
+  override get message(): string {
+    return `GitLab CLI failed in getMergeRequestDiff: ${this.detail}`;
+  }
+}
+
 export type GitLabPullRequestCliError =
   | GitLabCli.GitLabCliError
   | GitLabMergeRequestReadError
   | GitLabDiffCursorError
+  | GitLabDiffCommitError
   | GitLabDiffRefsUnavailableError
   | GitLabViewerUnavailableError;
 
@@ -177,6 +195,8 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly number: number;
       /** Absent asks for the first slice; anything else is a cursor a slice handed back. */
       readonly cursor?: string | undefined;
+      /** One commit's own changes, rather than everything the merge request carries. */
+      readonly commit?: string | undefined;
     }) => Effect.Effect<GitLabMergeRequestDiffSlice, GitLabPullRequestCliError>;
 
     readonly getProjectMergeCapabilities: (input: {
@@ -267,6 +287,15 @@ function involvementParams(input: {
  */
 function diffCursorPage(cursor: string): number | null {
   return /^[1-9][0-9]{0,6}$/.test(cursor) ? Number(cursor) : null;
+}
+
+/**
+ * A commit sha arrives from the reader and goes straight into a request path, so it is checked
+ * rather than trusted: hexadecimal only, from the shortest abbreviation a host prints up to a
+ * whole sha.
+ */
+function isCommitSha(value: string): boolean {
+  return /^[0-9a-f]{7,64}$/i.test(value);
 }
 
 function query(params: ReadonlyArray<readonly [string, string]>): string {
@@ -392,21 +421,27 @@ export const make = Effect.gen(function* () {
    * One page of a merge request's files, as a patch that stands on its own. GitLab pages
    * `/diffs` by offset and has no cursor of its own, so the page number is the cursor; the
    * caller carries on from it for as long as GitLab keeps handing full pages back.
+   *
+   * A named commit is read from the commit's own diff, which answers in the same shape and pages
+   * the same way.
    */
   const diffPage = (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
     readonly page: number;
+    readonly commit?: string | undefined;
   }): Effect.Effect<GitLabMergeRequestDiffSlice, GitLabPullRequestCliError> =>
     api({
       cwd: input.cwd,
-      path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/diffs?${query(
-        [
-          ["per_page", String(MAX_PAGE_SIZE)],
-          ["page", String(input.page)],
-        ],
-      )}`,
+      path: `projects/${projectPath(input.repository)}/${
+        input.commit === undefined
+          ? `merge_requests/${input.number}/diffs`
+          : `repository/commits/${input.commit}/diff`
+      }?${query([
+        ["per_page", String(MAX_PAGE_SIZE)],
+        ["page", String(input.page)],
+      ])}`,
       maxOutputBytes: DIFF_MAX_OUTPUT_BYTES,
       timeoutMs: DIFF_TIMEOUT_MS,
     }).pipe(
@@ -588,7 +623,15 @@ export const make = Effect.gen(function* () {
       ),
 
     getMergeRequestDiff: (input) => {
-      const target = { cwd: input.cwd, repository: input.repository, number: input.number };
+      if (input.commit !== undefined && !isCommitSha(input.commit)) {
+        return Effect.fail(new GitLabDiffCommitError({ command: "glab", cwd: input.cwd }));
+      }
+      const target = {
+        cwd: input.cwd,
+        repository: input.repository,
+        number: input.number,
+        ...(input.commit === undefined ? {} : { commit: input.commit }),
+      };
       if (input.cursor === undefined) {
         return diffPage({ ...target, page: 1 });
       }

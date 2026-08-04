@@ -183,6 +183,43 @@ layer("BitbucketPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("reads a named commit's own patch, which pages no further than the whole of it", () =>
+    Effect.gen(function* () {
+      const patch = "diff --git a/a.ts b/a.ts\n--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-a\n+b\n";
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(patch)));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      const diff = yield* api.getPullRequestDiff({
+        repository: "acme/web",
+        number: 7,
+        commit: "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+      });
+
+      assert.strictEqual(diff.patch, patch);
+      expect(callAt(0)).toMatchObject({
+        url: "/repositories/acme/web/diff/a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+        maxBytes: 8 * 1024 * 1024,
+      });
+    }),
+  );
+
+  it.effect("refuses a commit that is not a sha rather than reading it into a URL", () =>
+    Effect.gen(function* () {
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      const error = yield* Effect.flip(
+        api.getPullRequestDiff({
+          repository: "acme/web",
+          number: 7,
+          commit: "../../acme/other/diff/deadbeef",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "BitbucketDiffCommitError");
+      assert.strictEqual(mockedRequest.mock.calls.length, 0);
+    }),
+  );
+
   it.effect("reads an empty conflict list as mergeable", () =>
     Effect.gen(function* () {
       mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(0, 1))));
