@@ -776,12 +776,19 @@ export function PullRequestCodeTab({
   // be readable, so it falls back to the raw text rather than an empty tab. Only once the diff
   // is whole: returning here while a cursor is outstanding would take the sentinel off screen
   // and end the walk, leaving the rest of the change unasked for.
-  const rawSlice = parsedSlices.find((parsed) => parsed?.kind === "raw");
-  if (files.length === 0 && nextCursor === null && rawSlice?.kind === "raw") {
+  const rawSlices =
+    nextCursor === null
+      ? parsedSlices.flatMap((parsed) => (parsed?.kind === "raw" ? [parsed] : []))
+      : [];
+  if (files.length === 0 && rawSlices.length > 0) {
     return withReviewBar(
-      <div className="space-y-2 p-5">
-        <p className="text-xs text-muted-foreground">{rawSlice.reason}</p>
-        <pre className="whitespace-pre-wrap break-words font-mono text-xs">{rawSlice.text}</pre>
+      <div className="space-y-4 p-5">
+        {rawSlices.map((slice) => (
+          <div key={`${slice.reason}:${slice.text.slice(0, 64)}`} className="space-y-2">
+            <p className="text-xs text-muted-foreground">{slice.reason}</p>
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs">{slice.text}</pre>
+          </div>
+        ))}
       </div>,
     );
   }
@@ -805,6 +812,21 @@ export function PullRequestCodeTab({
     if (existing) existing.push(thread);
     else orphanFiles.set(thread.path, [thread]);
   }
+
+  const unstructured =
+    rawSlices.length === 0 ? null : (
+      // A slice the viewer cannot structure is still part of the change. Shown under the files
+      // that did parse rather than dropped, because the alternative is a diff that silently
+      // omits whatever the viewer could not read.
+      <div className="space-y-4 border-t border-border/60 p-5">
+        {rawSlices.map((slice) => (
+          <div key={`${slice.reason}:${slice.text.slice(0, 64)}`} className="space-y-2">
+            <p className="text-xs text-muted-foreground">{slice.reason}</p>
+            <pre className="whitespace-pre-wrap break-words font-mono text-xs">{slice.text}</pre>
+          </div>
+        ))}
+      </div>
+    );
 
   return (
     <DiffWorkerPoolProvider>
@@ -979,6 +1001,7 @@ export function PullRequestCodeTab({
             </div>
           )}
         />
+        {unstructured}
         {reviewBar}
       </div>
     </DiffWorkerPoolProvider>
