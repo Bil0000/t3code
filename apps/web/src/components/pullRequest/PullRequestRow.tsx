@@ -4,6 +4,7 @@ import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   PullRequestActorLabel,
   PullRequestDiffStat,
@@ -40,13 +41,21 @@ export function PullRequestRow({
         state={entry.state}
         isDraft={entry.isDraft}
         mergeability={entry.mergeability}
+        baseBranch={entry.baseBranch}
       />
       <span className="min-w-0">
         <span className="block truncate text-sm font-medium text-foreground">{entry.title}</span>
         <PullRequestMetaLine className="mt-0.5 text-xs text-muted-foreground/70">
           <span className="flex shrink-0 items-center gap-1">
-            {showProvider ? <Icon aria-label={providerName} className="size-3" /> : null}#
-            {entry.number}
+            {showProvider ? (
+              <Tooltip>
+                <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+                  <Icon aria-label={providerName} className="size-3" />
+                </TooltipTrigger>
+                <TooltipPopup>{providerName}</TooltipPopup>
+              </Tooltip>
+            ) : null}
+            #{entry.number}
           </span>
           {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
           <PullRequestActorLabel actor={entry.author} className="max-w-40 shrink-0" />

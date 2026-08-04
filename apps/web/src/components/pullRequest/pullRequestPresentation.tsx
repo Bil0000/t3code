@@ -20,6 +20,8 @@ import { Children, isValidElement, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+
 interface StatePresentation {
   readonly label: string;
   readonly toneClassName: string;
@@ -38,6 +40,7 @@ export function resolvePullRequestState(input: {
   readonly state: PullRequestState;
   readonly isDraft: boolean;
   readonly mergeability?: PullRequestMergeability;
+  readonly baseBranch?: string;
 }): StatePresentation {
   if (input.state === "merged") {
     return {
@@ -62,7 +65,9 @@ export function resolvePullRequestState(input: {
   }
   if (input.mergeability === "conflicting") {
     return {
-      label: "Has conflicts",
+      // "Has conflicts" leaves out the one thing a reader wants when the warning triangle catches
+      // their eye, so name the branch it collides with wherever the caller knows it.
+      label: input.baseBranch ? `Conflicts with ${input.baseBranch}` : "Has conflicts",
       toneClassName: "text-destructive",
       Icon: TriangleAlertIcon,
     };
@@ -78,24 +83,34 @@ export function PullRequestStateGlyph({
   state,
   isDraft,
   mergeability,
+  baseBranch,
   className,
 }: {
   state: PullRequestState;
   isDraft: boolean;
   mergeability?: PullRequestMergeability;
+  baseBranch?: string;
   className?: string;
 }) {
   const presentation = resolvePullRequestState({
     state,
     isDraft,
     ...(mergeability ? { mergeability } : {}),
+    ...(baseBranch ? { baseBranch } : {}),
   });
   return (
-    <presentation.Icon
-      role="img"
-      aria-label={presentation.label}
-      className={cn("size-4 shrink-0", presentation.toneClassName, className)}
-    />
+    <Tooltip>
+      {/* The list row is itself a button, so the trigger stays a span: an interactive one would
+          nest a control inside that button and steal the row's click target. */}
+      <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+        <presentation.Icon
+          role="img"
+          aria-label={presentation.label}
+          className={cn("size-4 shrink-0", presentation.toneClassName, className)}
+        />
+      </TooltipTrigger>
+      <TooltipPopup>{presentation.label}</TooltipPopup>
+    </Tooltip>
   );
 }
 

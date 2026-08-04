@@ -17,6 +17,20 @@ export interface PullRequestTimelineEvent {
   readonly at: string;
   readonly title: string;
   readonly body: string | null;
+  /** Whether `body` is markdown. A commit headline is plain text and must not be parsed as one. */
+  readonly markdown: boolean;
+  /** Where the entry can be read on the host. Null for events the host gives no page of its own. */
+  readonly url: string | null;
+}
+
+/**
+ * Review bots keep their bookkeeping in HTML comments, which the markdown renderer drops. A body
+ * that is nothing but a marker therefore renders as an empty block, so it is treated as no body
+ * at all. The stripped text decides that and nothing else: the body itself is passed on whole,
+ * because a comment demonstrating an HTML comment inside a code fence still has to show it.
+ */
+function visibleBody(body: string): string | null {
+  return body.replace(/<!--[\s\S]*?-->/gu, "").trim().length === 0 ? null : body.trim();
 }
 
 /**
@@ -36,12 +50,16 @@ export function buildPullRequestTimeline(
       at: detail.createdAt,
       title: `${detail.author?.login ?? "Someone"} opened this pull request`,
       body: null,
+      markdown: false,
+      url: null,
     },
     ...detail.commits.map((commit) => ({
       id: commit.oid,
       at: commit.committedDate,
       title: `Commit ${commit.oid.slice(0, 7)}`,
       body: commit.messageHeadline || null,
+      markdown: false,
+      url: null,
     })),
     ...detail.comments.map((comment) => ({
       id: comment.id,
@@ -49,13 +67,33 @@ export function buildPullRequestTimeline(
       title: `${comment.author?.login ?? "Someone"} ${
         comment.kind === "review" ? "reviewed" : "commented"
       }`,
-      body: comment.body.trim() || null,
+      body: visibleBody(comment.body),
+      markdown: true,
+      url: comment.url,
     })),
     ...(detail.mergedAt
-      ? [{ id: "merged", at: detail.mergedAt, title: "Pull request merged", body: null }]
+      ? [
+          {
+            id: "merged",
+            at: detail.mergedAt,
+            title: "Pull request merged",
+            body: null,
+            markdown: false,
+            url: null,
+          },
+        ]
       : []),
     ...(detail.closedAt && !detail.mergedAt
-      ? [{ id: "closed", at: detail.closedAt, title: "Pull request closed", body: null }]
+      ? [
+          {
+            id: "closed",
+            at: detail.closedAt,
+            title: "Pull request closed",
+            body: null,
+            markdown: false,
+            url: null,
+          },
+        ]
       : []),
   ].toSorted((left, right) => left.at.localeCompare(right.at));
 }

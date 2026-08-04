@@ -50,6 +50,48 @@ describe("pull request timeline", () => {
     ]);
   });
 
+  it("carries the comment url, and leaves the events the host cannot address without one", () => {
+    const events = buildPullRequestTimeline({
+      ...TIMELINE_SOURCE,
+      comments: [{ ...TIMELINE_SOURCE.comments[0]!, url: "https://example.test/pull/1#c1" }],
+    });
+    expect(events.map((event) => event.url)).toEqual([
+      null,
+      null,
+      "https://example.test/pull/1#c1",
+    ]);
+  });
+
+  it("drops a body that is nothing but a bot's HTML comment, and keeps one that says more", () => {
+    const events = buildPullRequestTimeline({
+      ...TIMELINE_SOURCE,
+      comments: [
+        { ...TIMELINE_SOURCE.comments[0]!, body: "<!-- MURMUR_IGNORE -->" },
+        {
+          ...TIMELINE_SOURCE.comments[0]!,
+          id: "c2",
+          body: "<!-- summarize by coderabbit.ai -->\nNeeds a test.",
+          createdAt: "2026-07-04T00:00:00Z",
+        },
+      ],
+    });
+    expect(events.find((event) => event.id === "c1")?.body).toBeNull();
+    // Kept whole: the renderer drops the marker itself, and stripping it here would also
+    // strip an HTML comment a reviewer quoted inside a code fence.
+    expect(events.find((event) => event.id === "c2")?.body).toBe(
+      "<!-- summarize by coderabbit.ai -->\nNeeds a test.",
+    );
+  });
+
+  it("calls a comment markdown and a commit headline plain text", () => {
+    const events = buildPullRequestTimeline(TIMELINE_SOURCE);
+    // A headline reading `fix: drop *legacy* path` is not asking for emphasis.
+    expect(events.map((event) => [event.title.startsWith("Commit"), event.markdown])).toEqual(
+      expect.arrayContaining([[true, false]]),
+    );
+    expect(events.find((event) => event.id === "c1")?.markdown).toBe(true);
+  });
+
   it("reports a merge rather than the close GitHub records alongside it", () => {
     const events = buildPullRequestTimeline({
       ...TIMELINE_SOURCE,

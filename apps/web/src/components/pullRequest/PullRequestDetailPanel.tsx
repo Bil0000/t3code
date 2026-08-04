@@ -85,6 +85,7 @@ export function PullRequestDetailPanel({
   onClose: () => void;
 }) {
   const [tab, setTab] = useState<DetailTab>("summary");
+  const [codeMounted, setCodeMounted] = useState(false);
   const [mergeMethod, setMergeMethod] = useState<PullRequestMergeMethod>("merge");
   const [confirmAction, setConfirmAction] = useState<"merge" | "close" | null>(null);
   const [handoff, setHandoff] = useState<"findings" | "conflicts" | null>(null);
@@ -182,6 +183,7 @@ export function PullRequestDetailPanel({
             state={detail.state}
             isDraft={detail.isDraft}
             mergeability={detail.mergeability}
+            baseBranch={detail.baseBranch}
           />
         ) : null}
         <nav className="flex min-w-0 items-center gap-0.5" aria-label="Pull request tabs">
@@ -190,7 +192,11 @@ export function PullRequestDetailPanel({
               key={item.value}
               type="button"
               aria-pressed={tab === item.value}
-              onClick={() => setTab(item.value)}
+              onClick={() => {
+                // Once opened, the diff viewer is kept alive for the rest of the panel's life.
+                if (item.value === "code") setCodeMounted(true);
+                setTab(item.value);
+              }}
               className={cn(
                 "rounded-md px-2 py-1 text-xs transition-colors",
                 tab === item.value
@@ -375,7 +381,7 @@ export function PullRequestDetailPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden">
+      <div className="relative min-h-0 flex-1 overflow-hidden">
         {detailQuery.isPending && !detail ? (
           <div className="space-y-4 p-5">
             <Skeleton className="h-6 w-4/5" />
@@ -388,24 +394,34 @@ export function PullRequestDetailPanel({
             onRetry={() => detailQuery.refresh()}
           />
         ) : detail ? (
-          tab === "summary" ? (
-            <PullRequestSummaryTab
-              environmentId={environmentId}
-              detail={detail}
-              onRefresh={() => detailQuery.refresh()}
-            />
-          ) : tab === "timeline" ? (
-            <PullRequestTimelineTab detail={detail} />
-          ) : (
-            <Suspense fallback={<Skeleton className="m-5 h-48" />}>
-              <PullRequestCodeTab
+          <>
+            {tab === "summary" ? (
+              <PullRequestSummaryTab
                 environmentId={environmentId}
-                reference={reference}
                 detail={detail}
                 onRefresh={() => detailQuery.refresh()}
               />
-            </Suspense>
-          )
+            ) : tab === "timeline" ? (
+              <PullRequestTimelineTab detail={detail} />
+            ) : null}
+            {/* Summary and Timeline are cheap enough to rebuild; the diff viewer is not, so it
+                stays mounted behind them once opened. It virtualizes against its own scroll
+                position and measures its host, both of which `display: none` would throw away —
+                `visibility` keeps the box, its size and its scroll offset intact, and takes the
+                content out of the tab order and the accessibility tree while it is hidden. */}
+            {codeMounted ? (
+              <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
+                <Suspense fallback={<Skeleton className="m-5 h-48" />}>
+                  <PullRequestCodeTab
+                    environmentId={environmentId}
+                    reference={reference}
+                    detail={detail}
+                    onRefresh={() => detailQuery.refresh()}
+                  />
+                </Suspense>
+              </div>
+            ) : null}
+          </>
         ) : null}
       </div>
 
