@@ -1,5 +1,6 @@
 import { pullRequestHostOf } from "@t3tools/contracts";
 import type {
+  EnvironmentId,
   ProjectId,
   PullRequestInvolvement,
   PullRequestListEntry,
@@ -26,6 +27,7 @@ import {
   filterPullRequestsByInvolvement,
   groupPullRequestsByInvolvement,
   matchesPullRequestQuery,
+  narrowPullRequestsToFilters,
   pullRequestEntryKey,
   rankPullRequestMatches,
   resolveProjectScope,
@@ -304,6 +306,7 @@ function PullRequestsRouteView() {
   // out: a longer page reads as growth, and a search shows the rows it already has, narrowed
   // here, until the hosts answer for themselves.
   const [loaded, setLoaded] = useState<{
+    environmentId: EnvironmentId | null;
     scope: string;
     query: string;
     data: PullRequestListResult;
@@ -314,8 +317,25 @@ function PullRequestsRouteView() {
     // answer under the new question — which is how a search's answer came to speak for the
     // workspace after the search was cleared.
     if (!listQuery.data || listQuery.isPending) return;
-    setLoaded({ scope: scopeKey, query: sentQuery, data: listQuery.data });
-  }, [scopeKey, sentQuery, listQuery.data, listQuery.isPending]);
+    setLoaded({ environmentId, scope: scopeKey, query: sentQuery, data: listQuery.data });
+  }, [environmentId, scopeKey, sentQuery, listQuery.data, listQuery.isPending]);
+  // Changing a filter asks a question nothing has answered yet, and the page is already holding
+  // perfectly good rows for the last one. Rather than blank out for the round trip, those rows
+  // are narrowed to the new filters and stay until the answer lands — a subset of it, never a
+  // row it excludes. Narrowed to nothing there is nothing to carry, and the skeletons below are
+  // right after all. Another environment's rows are dropped rather than narrowed: nothing on a
+  // row says which environment read it.
+  const narrowed = useMemo(() => {
+    if (loaded === null || loaded.environmentId !== environmentId || loaded.scope === scopeKey) {
+      return null;
+    }
+    const entries = narrowPullRequestsToFilters(loaded.data.entries, {
+      state: search.state,
+      projectId: scopedProjectId,
+      host: search.host,
+    });
+    return entries.length === 0 ? null : { ...loaded.data, entries };
+  }, [environmentId, loaded, scopeKey, scopedProjectId, search.host, search.state]);
   // With nothing typed and nothing to carry on from, the answer is taken from the read that is
   // keyed to exactly that question. Otherwise a search's answer lingers for a render after the
   // text has gone — the data cannot say which question it belongs to, but the read it came from
@@ -327,11 +347,13 @@ function PullRequestsRouteView() {
   // rather than after another round trip: the search was the temporary state, not the list.
   const carried =
     (sentQuery.length === 0 ? baselineQuery.data : undefined) ??
-    (loaded?.scope === scopeKey ? loaded.data : null);
+    (loaded?.scope === scopeKey ? loaded.data : null) ??
+    narrowed;
   const listData = answered ?? carried;
-  /** The rows on screen are the previous search's, held while this one is on its way. */
+  /** The rows on screen answer the previous question, held while this one is on its way. */
   const showingCarried = answered === null && carried !== null;
   const loadingMore = listQuery.isPending && listData !== null;
+  /** Nothing read and nothing to carry, which is the one thing skeletons are for. */
   const firstLoad = listQuery.isPending && listData === null;
 
   // A longer page is the same list with more on the end, so the rows already read stay where
@@ -579,13 +601,16 @@ function PullRequestsRouteView() {
   // cannot make the switcher that got you there disappear.
   const [hosts, setHosts] = useState<PullRequestListResult["providers"]>([]);
   useEffect(() => {
-    if (listData === null) return;
+    // Only from an answer to these filters. Rows carried over from the previous ones bring the
+    // host summaries of the question they answered, and coming back from one host to all of them
+    // would take the switcher's other hosts out of it on the strength of the narrowed answer.
+    if (answered === null) return;
     // An unfiltered response is the full set of hosts. A filtered one only seeds the switcher
     // when there is nothing to seed it with, which is a link that arrived already scoped.
     setHosts((previous) =>
-      search.host === undefined || previous.length === 0 ? listData.providers : previous,
+      search.host === undefined || previous.length === 0 ? answered.providers : previous,
     );
-  }, [listData, search.host]);
+  }, [answered, search.host]);
   const showProvider = hosts.length > 1;
   // The workspace's own projects already name their hosts, so the row's shape is known before
   // the list is. Only its shape: which hosts can actually be read still comes from the server.
@@ -652,16 +677,29 @@ function PullRequestsRouteView() {
       onChange={(projectId) => updateSearch({ ...clearedSelection, projectId })}
     />
   );
+  // The rows carried over from the last filters can also narrow to nothing one step further on,
+  // where involvement is applied against the viewers of the answer they came from. "Nothing under
+  // these filters" is a claim, and it is the wrong one to make about a question still in flight,
+  // so that case waits with the skeletons rather than answering for the hosts. A search says so
+  // in its own words and is left to.
+  /** The list has nothing to show yet, and says so as itself rather than as a sentence. */
+  const skeletonRows = (
+    <div className="space-y-1">
+      {Array.from({ length: 7 }, (_, index) => (
+        <Skeleton key={index} className="h-13 w-full rounded-lg" />
+      ))}
+    </div>
+  );
+  const carriedToNothing =
+    showingCarried && listQuery.isPending && entries.length === 0 && typedQuery.length === 0;
   const listBody = (
     <>
       {firstLoad ? (
-        <div className="space-y-1">
-          {Array.from({ length: 7 }, (_, index) => (
-            <Skeleton key={index} className="h-13 w-full rounded-lg" />
-          ))}
-        </div>
+        skeletonRows
       ) : listQuery.error && listData === null ? (
         <PullRequestsUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
+      ) : carriedToNothing ? (
+        skeletonRows
       ) : entries.length === 0 ? (
         <PullRequestListEmptyState
           hasProjects={!projectsKnown || projects.length > 0}

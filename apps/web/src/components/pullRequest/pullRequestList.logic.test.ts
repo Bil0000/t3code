@@ -5,6 +5,7 @@ import {
   filterPullRequestsByInvolvement,
   groupPullRequestsByInvolvement,
   matchesPullRequestQuery,
+  narrowPullRequestsToFilters,
   rankPullRequestMatches,
   scorePullRequestMatch,
   withDiffStat,
@@ -155,6 +156,51 @@ describe("pull request search", () => {
   it("ignores surrounding whitespace and rejects non-matches", () => {
     expect(matchesPullRequestQuery(target, "   ")).toBe(true);
     expect(matchesPullRequestQuery(target, "kanban")).toBe(false);
+  });
+});
+
+describe("carrying rows already read into filters nothing has answered yet", () => {
+  const rows = [
+    entry({ number: 1 }),
+    entry({ number: 2, state: "merged" }),
+    entry({ number: 3, state: "closed" }),
+    entry({ number: 4, host: "github.acme.dev" }),
+    entry({ number: 5, projectId: "project-2" as PullRequestListEntry["projectId"] }),
+  ];
+  const everything = { state: "all", projectId: undefined, host: undefined } as const;
+
+  it("never lets a merged pull request sit under Open", () => {
+    expect(
+      narrowPullRequestsToFilters(rows, { ...everything, state: "open" }).map((row) => row.number),
+    ).toEqual([1, 4, 5]);
+  });
+
+  it("keeps only the state that was asked for", () => {
+    expect(
+      narrowPullRequestsToFilters(rows, { ...everything, state: "merged" }).map(
+        (row) => row.number,
+      ),
+    ).toEqual([2]);
+  });
+
+  it("narrows to one host, which two installs of one kind cannot share", () => {
+    expect(
+      narrowPullRequestsToFilters(rows, { ...everything, host: "github.acme.dev" }).map(
+        (row) => row.number,
+      ),
+    ).toEqual([4]);
+  });
+
+  it("narrows to one project", () => {
+    expect(
+      narrowPullRequestsToFilters(rows, { ...everything, projectId: "project-2" }).map(
+        (row) => row.number,
+      ),
+    ).toEqual([5]);
+  });
+
+  it("holds on to everything when nothing narrows it", () => {
+    expect(narrowPullRequestsToFilters(rows, everything)).toEqual(rows);
   });
 });
 

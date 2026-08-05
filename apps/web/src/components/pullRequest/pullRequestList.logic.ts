@@ -2,6 +2,7 @@ import type {
   PullRequestInvolvement,
   PullRequestListEntry,
   PullRequestListResult,
+  PullRequestListState,
 } from "@t3tools/contracts";
 
 export type PullRequestGroupKey = "reviewRequested" | "authored" | "others";
@@ -61,6 +62,35 @@ export function filterPullRequestsByInvolvement(
     return entries.filter((entry) => isAuthoredByViewer(entry, viewers));
   }
   return entries;
+}
+
+/**
+ * The rows already read, kept only where the filters now being asked about would keep them.
+ *
+ * Every combination of filters is its own question to the hosts, and asking a new one is no
+ * reason to blank the page: what has been read is narrowed here and stays until the answer for
+ * the new question replaces it. So this may only ever drop rows — a merged pull request cannot
+ * sit under "Open" for the round trip — and what it leaves is a subset of the answer rather than
+ * the answer itself.
+ *
+ * Only the filters a row can be judged by from its own fields. Involvement is left out because
+ * it needs to know who is signed in on each host, and the search text because searching is the
+ * hosts' own answer; both are narrowed where that knowledge already lives.
+ */
+export function narrowPullRequestsToFilters(
+  entries: ReadonlyArray<PullRequestListEntry>,
+  filters: {
+    readonly state: PullRequestListState;
+    readonly projectId: string | undefined;
+    readonly host: string | undefined;
+  },
+): ReadonlyArray<PullRequestListEntry> {
+  return entries.filter(
+    (entry) =>
+      (filters.state === "all" || entry.state === filters.state) &&
+      (filters.projectId === undefined || entry.projectId === filters.projectId) &&
+      (filters.host === undefined || entry.host === filters.host),
+  );
 }
 
 /**
