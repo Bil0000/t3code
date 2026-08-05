@@ -36,6 +36,7 @@ import {
   type RenderablePatch,
 } from "~/lib/diffRendering";
 import { cn } from "~/lib/utils";
+import { buildDiffReviewComment, type ReviewCommentContext } from "~/reviewCommentContext";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -113,6 +114,16 @@ interface DraftAnchor {
   readonly oldPath: string | null;
   readonly line: number;
   readonly side: PullRequestDiffSide;
+  /** The whole selection, which the comment collapses to one line but a question keeps. */
+  readonly range: SelectedLineRange;
+}
+
+/** A range of the diff, and whatever the reader wants to know about it. */
+export interface PullRequestAskSelectionInput {
+  /** The marked lines, already in the shape the composer draws and the agent reads. */
+  readonly comment: ReviewCommentContext;
+  /** Empty where the reader pressed Ask without typing: the lines are the question. */
+  readonly question: string;
 }
 
 /** The contract's sides named the way the diff viewer names them, and back again. */
@@ -141,6 +152,7 @@ export function PullRequestCodeTab({
   detail,
   pendingFinding,
   onFixFinding,
+  onAskAboutSelection,
   onRefresh,
   refreshToken = 0,
 }: {
@@ -150,6 +162,8 @@ export function PullRequestCodeTab({
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
   onFixFinding?: (finding: PullRequestFinding) => void;
+  /** Absent where a selection has no agent to go to, which takes the Ask button off the box. */
+  onAskAboutSelection?: (input: PullRequestAskSelectionInput) => void;
   onRefresh: () => void;
   /** Bumped by the panel's refresh button: drop the accumulated pages and re-read the diff. */
   refreshToken?: number;
@@ -510,10 +524,34 @@ export function PullRequestCodeTab({
         oldPath: previousPath === path ? null : previousPath,
         line: range.end,
         side: fromViewerSide(range.endSide ?? range.side),
+        range,
       });
     },
     [canCommentOnLines, files],
   );
+
+  // Built here because the parsed diff only lives here, and built by the same function the
+  // thread panel's own line selection uses — the gesture is the same one, so a second reading of
+  // the hunks would only be a second place for it to drift.
+  const askAboutSelection = (anchor: DraftAnchor, question: string) => {
+    const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === anchor.fileKey);
+    const comment =
+      file === undefined
+        ? null
+        : buildDiffReviewComment({
+            id: `pull-request-selection:${anchor.fileKey}:${anchor.range.start}:${anchor.range.end}`,
+            sectionId: `pull-request:${detail.number}`,
+            sectionTitle: `PR #${detail.number} review`,
+            filePath: anchor.path,
+            fileDiff: file,
+            range: anchor.range,
+            text: question,
+          });
+    setDraft(null);
+    setSelectedLines(null);
+    if (comment === null || !onAskAboutSelection) return;
+    onAskAboutSelection({ comment, question });
+  };
 
   const runThreadCommand = async (
     label: string,
@@ -989,6 +1027,9 @@ export function PullRequestCodeTab({
                 <ReviewCommentComposer
                   lineLabel={`${draft.path}:${draft.line}`}
                   pending={false}
+                  {...(onAskAboutSelection
+                    ? { onAsk: (question: string) => askAboutSelection(draft, question) }
+                    : {})}
                   onCancel={() => {
                     setDraft(null);
                     setSelectedLines(null);

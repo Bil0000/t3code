@@ -7,6 +7,7 @@ import type {
   PullRequestRef,
 } from "@t3tools/contracts";
 import {
+  BookOpenIcon,
   ChevronDownIcon,
   ExternalLinkIcon,
   FolderGit2Icon,
@@ -16,6 +17,7 @@ import {
   GitPullRequestDraftIcon,
   GitPullRequestIcon,
   HammerIcon,
+  MessageCircleQuestionIcon,
   LinkIcon,
   MoreHorizontalIcon,
   PanelRightIcon,
@@ -23,7 +25,7 @@ import {
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 
-import { useComposerDraftStore } from "~/composerDraftStore";
+import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
@@ -57,9 +59,13 @@ import {
 import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
+import type { PullRequestAskSelectionInput } from "./PullRequestCodeTab";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import {
+  buildAskAboutLinesHandoff,
+  buildAskAboutPullRequestPrompt,
+  buildExplainPullRequestPrompt,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
   buildResolveConflictsPrompt,
@@ -194,6 +200,67 @@ export function PullRequestDetailPanel({
     detailQuery.refresh();
   };
 
+  type ThreadTask = {
+    prompt: string;
+    reviewComments?: ReadonlyArray<ReviewCommentContext>;
+  };
+
+  /**
+   * Opens a thread on this project and leaves the task in its composer for the reader to send.
+   *
+   * Nothing is checked out: asking a question is not a reason to move somebody's working tree or
+   * to make a worktree they did not ask for. The two hand-offs that do need the code call this
+   * after preparing it, so there is one path from "a task" to "a thread holding it".
+   */
+  const openThreadWithTask = async (
+    projectRef: ReturnType<typeof scopeProjectRef>,
+    task: ThreadTask | null,
+    opened?: { draftId: DraftId },
+  ): Promise<{ draftId: DraftId } | null> => {
+    const session =
+      opened ??
+      (await newThread(projectRef).then(
+        (result) => result,
+        () => null,
+      ));
+    if (session === null) return null;
+    const store = useComposerDraftStore.getState();
+    if (task === null) return session;
+    // Appended rather than assigned: the composer may already hold something the user typed,
+    // and losing it would be worse than a prompt they have to scroll.
+    const existing = store.getComposerDraft(session.draftId)?.prompt ?? "";
+    store.setPrompt(
+      session.draftId,
+      existing.trim().length === 0 ? task.prompt : `${existing}\n\n${task.prompt}`,
+    );
+    for (const comment of task.reviewComments ?? []) {
+      store.addReviewComment(session.draftId, comment);
+    }
+    return session;
+  };
+
+  /** A question about the change, which needs a thread and nothing else. */
+  const startAsk = async (kind: string, task: ThreadTask) => {
+    if (!detail || handoff !== null) return;
+    setHandoff(kind);
+    const projectRef = scopeProjectRef(environmentId, detail.projectId);
+    const opened = await openThreadWithTask(projectRef, task);
+    setHandoff(null);
+    if (opened === null) {
+      toastManager.add({
+        type: "error",
+        title: "Could not open a thread",
+        description: "Try again from the project, or open a thread first.",
+      });
+      return;
+    }
+    toastManager.add({
+      type: "success",
+      title: "Asked in a thread",
+      description: "The question is in the composer — read it over, then send.",
+    });
+  };
+
   // Every handoff works the same way: check the pull request out into its own worktree, open a
   // thread there, and — when it carries a task — put that in the composer for the user to read
   // before sending. Checking out is the whole point of the ones that carry nothing.
@@ -234,7 +301,6 @@ export function PullRequestDetailPanel({
       });
       return;
     }
-    const store = useComposerDraftStore.getState();
     const prepared = await prepareThread.run({
       reference: detail.url,
       mode,
@@ -263,7 +329,6 @@ export function PullRequestDetailPanel({
       () => true,
       () => false,
     );
-    const draftId = opened.draftId;
     // Released here whatever happened next: a loading toast never expires on its own, so leaving
     // this set would spin forever and lock every handoff behind it until a reload.
     setHandoff(null);
@@ -292,16 +357,7 @@ export function PullRequestDetailPanel({
       );
       return;
     }
-    // Appended rather than assigned: the composer may already hold something the user typed,
-    // and losing it would be worse than a prompt they have to scroll.
-    const existing = store.getComposerDraft(draftId)?.prompt ?? "";
-    store.setPrompt(
-      draftId,
-      existing.trim().length === 0 ? task.prompt : `${existing}\n\n${task.prompt}`,
-    );
-    for (const comment of task.reviewComments ?? []) {
-      store.addReviewComment(draftId, comment);
-    }
+    await openThreadWithTask(projectRef, task, opened);
     toastManager.update(
       toastId,
       prepared.value.isOnPullRequestHead
@@ -312,6 +368,49 @@ export function PullRequestDetailPanel({
           }
         : staleCheckoutToast,
     );
+  };
+
+  const askAboutPullRequest = () => {
+    if (!detail) return;
+    void startAsk("ask", {
+      prompt: buildAskAboutPullRequestPrompt({
+        number: detail.number,
+        title: detail.title,
+        url: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+        question: "",
+      }),
+    });
+  };
+
+  const explainPullRequest = () => {
+    if (!detail) return;
+    void startAsk("explain", {
+      prompt: buildExplainPullRequestPrompt({
+        number: detail.number,
+        title: detail.title,
+        url: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+      }),
+    });
+  };
+
+  /** Lines the reader marked in the diff, asked about rather than commented on. */
+  const askAboutSelection = (selection: PullRequestAskSelectionInput) => {
+    if (!detail) return;
+    void startAsk(`ask:${selection.comment.id}`, {
+      ...buildAskAboutLinesHandoff({
+        number: detail.number,
+        title: detail.title,
+        url: detail.url,
+        headBranch: detail.headBranch,
+        baseBranch: detail.baseBranch,
+        comment: selection.comment,
+        question: selection.question,
+      }),
+    });
   };
 
   const startCheckout = (mode: "worktree" | "local") => {
@@ -590,6 +689,49 @@ export function PullRequestDetailPanel({
                   </MenuPopup>
                 </Menu>
               ) : null}
+              {/* Beside checking out, because they are the two things somebody opening a pull
+                  request wants: the code, or an answer about it. Asking takes no checkout — a
+                  question is not a reason to move the working tree or to make a worktree nobody
+                  asked for — which is what keeps it a separate press rather than a mode of the
+                  one next to it. */}
+              <Menu>
+                <MenuTrigger
+                  disabled={handoff !== null}
+                  render={
+                    <Button size="xs" variant="outline">
+                      {handoff === "ask" || handoff === "explain" ? (
+                        "Opening..."
+                      ) : (
+                        <>
+                          <MessageCircleQuestionIcon className="size-3" />
+                          Ask
+                          <ChevronDownIcon className="size-3 text-muted-foreground" />
+                        </>
+                      )}
+                    </Button>
+                  }
+                />
+                <MenuPopup align="end" side="bottom" className="min-w-72">
+                  <MenuItem onClick={askAboutPullRequest}>
+                    <MessageCircleQuestionIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>Ask a question</span>
+                      <span className="text-xs text-muted-foreground">
+                        Opens a thread that knows which pull request you mean.
+                      </span>
+                    </span>
+                  </MenuItem>
+                  <MenuItem onClick={explainPullRequest}>
+                    <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>Explain this change</span>
+                      <span className="text-xs text-muted-foreground">
+                        A walk through the diff: what it is for, and what to read closely.
+                      </span>
+                    </span>
+                  </MenuItem>
+                </MenuPopup>
+              </Menu>
               {primaryAction === "ready" ? (
                 <Button size="xs" disabled={actionPending} onClick={() => void perform("ready")}>
                   Ready for review
@@ -659,6 +801,7 @@ export function PullRequestDetailPanel({
               <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
                 <Suspense fallback={<Skeleton className="m-5 h-48" />}>
                   <PullRequestCodeTab
+                    onAskAboutSelection={askAboutSelection}
                     environmentId={environmentId}
                     reference={reference}
                     detail={detail}

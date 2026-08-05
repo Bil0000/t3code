@@ -369,6 +369,83 @@ export function buildResolveConflictsPrompt(input: {
 }
 
 /**
+ * A question about the change, rather than a task to carry out on it. The words matter: an agent
+ * handed a pull request assumes it is meant to work on it, and the reader who pressed Ask wants
+ * an answer, not a branch full of edits.
+ *
+ * No checkout goes with this, so the prompt says where the code is rather than pretending it is
+ * already to hand.
+ */
+export function buildAskAboutPullRequestPrompt(input: {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  readonly question: string;
+}): string {
+  const question = bounded(input.question);
+  return [
+    question.length > 0
+      ? question
+      : "I have a question about the pull request below. Read it, then answer.",
+    "",
+    ...handoffPreamble(input),
+    "Answer the question. Do not change any code, and do not check anything out unless I ask you to.",
+  ].join("\n");
+}
+
+/**
+ * A tour of the change, which is what somebody opening an unfamiliar pull request wants before
+ * they can review a line of it. Ordered by what a reader needs first — what it is for, then how
+ * it was done, then what to look at closely — rather than by the order the files happen to be in.
+ */
+export function buildExplainPullRequestPrompt(input: {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+}): string {
+  return [
+    "Walk me through this pull request as if I am reviewing it for the first time.",
+    "",
+    ...handoffPreamble(input),
+    "Cover, in this order: what the change is for; how it goes about it, file by file where that matters; anything surprising or risky in it; and what is worth reading closely before approving. Read the diff before answering, and say plainly where you are unsure rather than filling the gap.",
+    "Explain only. Do not change any code.",
+  ].join("\n");
+}
+
+/**
+ * A question about the lines somebody selected in the diff. The lines arrive as the annotation
+ * chip the composer already draws and the agent already knows how to read — built where the
+ * parsed diff lives, by the same function the thread panel's own selection uses.
+ */
+export function buildAskAboutLinesHandoff(input: {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly headBranch: string;
+  readonly baseBranch: string;
+  readonly comment: ReviewCommentContext;
+  readonly question: string;
+}): FixFindingsHandoff {
+  const question = bounded(input.question);
+  return {
+    prompt: [
+      question.length > 0
+        ? question
+        : "I have a question about the lines attached to this message. Read them, then answer.",
+      "",
+      ...handoffPreamble(input),
+      "The lines in question are attached, with the file and line numbers they came from.",
+      "Answer the question. Do not change any code unless I ask you to.",
+    ].join("\n"),
+    reviewComments: [input.comment],
+  };
+}
+
+/**
  * The internal wrapper every failed operation arrives in: which operation ran, and which tool
  * said no. A reader has no use for either.
  */

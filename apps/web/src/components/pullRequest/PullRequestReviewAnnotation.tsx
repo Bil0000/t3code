@@ -8,6 +8,7 @@ import {
   CircleIcon,
   HammerIcon,
   MessageSquareIcon,
+  SparklesIcon,
   Trash2Icon,
 } from "lucide-react";
 import { useState } from "react";
@@ -46,11 +47,17 @@ function submitKeys(input: {
 export function ReviewCommentComposer({
   lineLabel,
   pending,
+  onAsk,
   onCancel,
   onSubmit,
 }: {
   lineLabel: string;
   pending: boolean;
+  /**
+   * Hands the whole selection to an agent instead of the host. Absent where there is nothing to
+   * hand it to, since a button that cannot do its one thing is worse than no button.
+   */
+  onAsk?: ((question: string) => void) | undefined;
   onCancel: () => void;
   onSubmit: (body: string) => void;
 }) {
@@ -83,6 +90,14 @@ export function ReviewCommentComposer({
         <Button size="xs" variant="ghost" onClick={onCancel}>
           Cancel
         </Button>
+        {/* Empty is allowed: handing the agent the lines and no question yet is a fair way to
+            start, and the words can follow in the composer the selection lands in. */}
+        {onAsk ? (
+          <Button size="xs" variant="outline" onClick={() => onAsk(body.trim())}>
+            <SparklesIcon className="size-3" />
+            Ask
+          </Button>
+        ) : null}
         <Button size="xs" disabled={pending || body.trim().length === 0} onClick={submit}>
           Add to review
         </Button>
