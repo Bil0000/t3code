@@ -9,7 +9,9 @@ describe("pull request body segmentation", () => {
     ]);
   });
 
-  it("plays a dropped attachment link and keeps the prose around it", () => {
+  // GitHub writes a dropped image into the body as an `<img>` tag, so a bare attachment link on
+  // its own line is the shape it uses for a video — every one sampled in the wild was one.
+  it("lifts a dropped video out and keeps the prose around it", () => {
     expect(
       splitPullRequestBody(
         "Before\n\nhttps://github.com/user-attachments/assets/2f8c1a90-1b2c-4d5e-8f90-abcdef123456\n\nAfter",
@@ -17,17 +19,23 @@ describe("pull request body segmentation", () => {
     ).toEqual([
       { id: "markdown:0", kind: "markdown", text: "Before" },
       {
-        id: "video:1",
-        kind: "video",
+        id: "attachment:1",
+        kind: "attachment",
         url: "https://github.com/user-attachments/assets/2f8c1a90-1b2c-4d5e-8f90-abcdef123456",
+        media: "video",
       },
       { id: "markdown:2", kind: "markdown", text: "After" },
     ]);
   });
 
-  it("plays a bare link to a video file", () => {
+  it("names a bare link to a video file a video", () => {
     expect(splitPullRequestBody("https://example.com/demo.mp4?raw=1")).toEqual([
-      { id: "video:0", kind: "video", url: "https://example.com/demo.mp4?raw=1" },
+      {
+        id: "attachment:0",
+        kind: "attachment",
+        url: "https://example.com/demo.mp4?raw=1",
+        media: "video",
+      },
     ]);
   });
 
@@ -36,7 +44,14 @@ describe("pull request body segmentation", () => {
       splitPullRequestBody(
         '<video controls>\n  <source src="https://example.com/a.webm">\n</video>',
       ),
-    ).toEqual([{ id: "video:0", kind: "video", url: "https://example.com/a.webm" }]);
+    ).toEqual([
+      {
+        id: "attachment:0",
+        kind: "attachment",
+        url: "https://example.com/a.webm",
+        media: "video",
+      },
+    ]);
   });
 
   it("leaves a dropped image as markdown so it still renders as an image", () => {
@@ -46,7 +61,22 @@ describe("pull request body segmentation", () => {
     ]);
   });
 
-  it("never turns a link inside fenced code into a player", () => {
+  it("leaves the img tag GitHub writes for a dropped image as markdown", () => {
+    const body =
+      '<img width="1414" alt="image" src="https://github.com/user-attachments/assets/7195f963-51a9-4331-be74-3e06be760422" />';
+    expect(splitPullRequestBody(body)).toEqual([
+      { id: "markdown:0", kind: "markdown", text: body },
+    ]);
+  });
+
+  it("leaves an ordinary link alone, whether it is bare or written as markdown", () => {
+    const body = "https://example.com/page\n\n[the docs](https://example.com/docs)";
+    expect(splitPullRequestBody(body)).toEqual([
+      { id: "markdown:0", kind: "markdown", text: body },
+    ]);
+  });
+
+  it("never lifts a link inside fenced code out of it", () => {
     const body = "```\nhttps://example.com/demo.mp4\n```";
     expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body },
@@ -107,7 +137,7 @@ describe("pull request body segmentation", () => {
     expect(performance.now() - startedAt).toBeLessThan(1_000);
   });
 
-  it("refuses a non-http source rather than putting it in a player", () => {
+  it("refuses a non-http source rather than making a link out of it", () => {
     const body = '<video src="javascript:alert(1)"></video>';
     expect(splitPullRequestBody(body)).toEqual([
       { id: "markdown:0", kind: "markdown", text: body },
