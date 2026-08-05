@@ -194,6 +194,32 @@ it.effect("reads nothing from a host with no implementation, but reports it", ()
   }),
 );
 
+it.effect("asks for a whole page of a host, and for the reader's own size when given one", () =>
+  Effect.gen(function* () {
+    const limits: number[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: (input) => {
+            limits.push(input.limit);
+            return Effect.succeed({ items: [], truncated: false });
+          },
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+    yield* service.list({ state: "open", limit: 10 });
+
+    // Providers probe with one row over this, so 99 asks a host for 100 — the most GitHub and
+    // GitLab serve in one request. 100 here would cost a second round trip for a single row.
+    assert.deepStrictEqual(limits, [99, 10]);
+  }),
+);
+
 it.effect("calls a transient viewer failure a failed operation, not a signed-out CLI", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

@@ -44,14 +44,14 @@ import { PullRequestProviderRegistry } from "./PullRequestProviderRegistry.ts";
  * caps `per_page` at. Asking for 100 here would request 101 and buy a whole second round trip for
  * one row (measured: `gh pr list --limit 100` makes 1 HTTP request, `--limit 101` makes 2).
  */
-const DEFAULT_REPOSITORY_LIST_LIMIT = 50;
+const DEFAULT_REPOSITORY_LIST_LIMIT = 99;
 /**
  * Repositories read at once. Each one is a CLI process that spends nearly all its wall clock
  * waiting on the host, so the useful ceiling is far above the core count; measured over 12
  * repositories on this listing's own command, 4 took ~12.7s, 8 ~8.9s and 12 ~4.9s, with 16 and 24
  * no faster because 12 already reads every repository in one wave.
  */
-const REPOSITORY_CONCURRENCY = 4;
+const REPOSITORY_CONCURRENCY = 12;
 
 export type PullRequestError = PullRequestUnavailableError | PullRequestOperationError;
 

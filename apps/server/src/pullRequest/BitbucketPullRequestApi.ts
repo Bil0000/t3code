@@ -328,7 +328,10 @@ export const make = Effect.gen(function* () {
         if (next === null || collected.length >= input.limit || input.page >= MAX_LIST_PAGES) {
           return Effect.succeed({
             items: collected.slice(0, input.limit),
-            truncated: next !== null,
+            // Bitbucket pages in fifties whatever was asked for, so a walk that stopped on the
+            // count rather than on the last page is holding rows it is about to drop. Those are
+            // more results just as surely as another page would be.
+            truncated: next !== null || collected.length > input.limit,
           });
         }
         return listPage({ ...input, url: next, page: input.page + 1, collected });

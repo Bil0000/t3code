@@ -119,6 +119,28 @@ layer("BitbucketPullRequestApi.layer", (it) => {
     }),
   );
 
+  it.effect("counts the rows it walked past as more to come", () =>
+    Effect.gen(function* () {
+      // Bitbucket pages in fifties whatever was asked for, so a request for ninety-nine reads a
+      // hundred and drops one. That row is more results, and saying otherwise takes the "load
+      // more" away from a listing that has not finished.
+      const next = "https://api.bitbucket.org/2.0/repositories/acme/web/pullrequests?page=2";
+      mockedRequest
+        .mockReturnValueOnce(Effect.succeed(response(page(50, 1, next))))
+        .mockReturnValueOnce(Effect.succeed(response(page(50, 51))));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      const batch = yield* api.listPullRequests({
+        repository: "acme/web",
+        state: "open",
+        limit: 99,
+      });
+
+      assert.strictEqual(batch.items.length, 99);
+      assert.isTrue(batch.truncated);
+    }),
+  );
+
   it.effect("searches with a filter expression, which is all Bitbucket offers", () =>
     Effect.gen(function* () {
       mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(0, 1))));

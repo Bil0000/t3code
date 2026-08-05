@@ -84,7 +84,12 @@ const STATE_TABS = [
 
 /** Long enough that a keystroke does not become a request, short enough to feel answered. */
 const SEARCH_DEBOUNCE_MS = 250;
-const PAGE_SIZE = 50;
+/**
+ * One whole page from the host and no more: every provider asks for one row beyond the page as
+ * its "is there more" probe, and GitHub serves a hundred per request — so asking for ninety-nine
+ * costs one round trip where a hundred costs two.
+ */
+const PAGE_SIZE = 99;
 /** The largest page the listing accepts; past it the request is refused outright. */
 const MAX_PAGE_SIZE = 500;
 /** Stable empty map so the memos below do not see a new object on every render. */
