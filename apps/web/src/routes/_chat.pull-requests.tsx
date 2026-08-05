@@ -208,6 +208,10 @@ function PullRequestsRouteView() {
           environmentId,
           input: {
             state: search.state,
+            // The hosts narrow by involvement themselves — GitHub by author and review request,
+            // and so on — so asking them is the difference between a page of results and a page
+            // of everything with the answer somewhere further down it.
+            involvement: search.involvement,
             limit: pageSize,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
