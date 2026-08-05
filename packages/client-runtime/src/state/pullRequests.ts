@@ -27,6 +27,17 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       tag: WS_METHODS.pullRequestsList,
       staleTimeMs: 30_000,
     }),
+    /**
+     * The line counts for rows the listing has already handed over. Its own query because the
+     * listing is quicker without them — measured over twelve repositories, ~4.0s against ~7.1s —
+     * so the rows arrive first and their stats a moment later. Kept longer than the listing:
+     * a change request's size only moves when somebody pushes to it.
+     */
+    listStats: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:list-stats",
+      tag: WS_METHODS.pullRequestsListStats,
+      staleTimeMs: 60_000,
+    }),
     detail: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:detail",
       tag: WS_METHODS.pullRequestsDetail,

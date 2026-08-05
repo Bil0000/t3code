@@ -128,6 +128,36 @@ function searchOfCall(index: number): string | undefined {
   return flag === -1 ? undefined : args[flag + 1];
 }
 
+/** One row as a search answers it, which is the listing's row one connection deeper. */
+function searchItem(number: number, repository: string, updatedAt: string) {
+  return {
+    number,
+    title: `Pull request ${number}`,
+    url: `https://github.com/${repository}/pull/${number}`,
+    author: { login: "octocat", avatarUrl: "https://avatars/octocat" },
+    headRefName: "feat/page",
+    baseRefName: "main",
+    state: "OPEN",
+    isDraft: false,
+    mergeable: "MERGEABLE",
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt,
+    repository: { nameWithOwner: repository },
+    reviewRequests: { nodes: [{ requestedReviewer: { login: "hubot" } }] },
+    labels: { nodes: [{ name: "bug", color: "ff0000" }] },
+  };
+}
+
+function searchPage(nodes: ReadonlyArray<unknown>, hasNextPage = false) {
+  return output(JSON.stringify({ data: { search: { pageInfo: { hasNextPage }, nodes } } }));
+}
+
+/** The search a batched read sent, which travels in the request body rather than in argv. */
+function searchQueryOfCall(index: number): string | undefined {
+  const body = JSON.parse(callAt(index).stdin ?? "{}") as { variables?: { q?: string } };
+  return body.variables?.q;
+}
+
 afterEach(() => {
   mockedExecute.mockReset();
 });
@@ -237,6 +267,236 @@ layer("GitHubPullRequestCli.layer", (it) => {
       });
 
       expect(searchOfCall(0)).toBe("review-requested:bilal sort:updated-desc");
+    }),
+  );
+
+  it.effect("carries every repository and every qualifier into one search", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.searchPullRequests({
+        cwd: "/w",
+        host: "github.com",
+        repositories: ["acme/web", "pingdotgg/t3code"],
+        state: "closed",
+        involvement: "reviewing",
+        viewer: "bilal",
+        limit: 10,
+        query: "pull requests page",
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 10 },
+      });
+
+      // One request for both repositories, carrying everything the per-repository read expresses
+      // as a flag: the tab, the involvement, the reader's words, where to carry on from, and the
+      // order the page reads in.
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      assert.strictEqual(
+        searchQueryOfCall(0),
+        'is:pr is:closed is:unmerged review-requested:bilal "pull requests page" ' +
+          "updated:<=2026-07-02T00:00:00Z sort:updated-desc repo:acme/web repo:pingdotgg/t3code",
+      );
+    }),
+  );
+
+  it.effect("narrows a search to the author, and to merged on the merged tab", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.searchPullRequests({
+        cwd: "/w",
+        host: "github.com",
+        repositories: ["acme/web"],
+        state: "merged",
+        involvement: "authored",
+        viewer: "bilal",
+        limit: 10,
+      });
+
+      assert.strictEqual(
+        searchQueryOfCall(0),
+        "is:pr is:merged author:bilal sort:updated-desc repo:acme/web",
+      );
+    }),
+  );
+
+  it.effect("keeps a searched-for qualifier inside the phrase, and out of argv", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.searchPullRequests({
+        cwd: "/w",
+        host: "github.com",
+        repositories: ["acme/web"],
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        query: 'x" is:merged repo:evil/repo',
+      });
+
+      // Quoted and escaped, so the words a reader typed narrow the listing rather than widening
+      // it — and the whole document travels over stdin rather than in a visible argv.
+      assert.strictEqual(
+        searchQueryOfCall(0),
+        'is:pr is:open "x\\" is:merged repo:evil/repo" sort:updated-desc repo:acme/web',
+      );
+      expect(callAt(0).args).not.toContain("-f");
+    }),
+  );
+
+  it.effect("refuses to search for a repository GitHub cannot address", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const failure = yield* Effect.flip(
+        cli.searchPullRequests({
+          cwd: "/w",
+          host: "github.com",
+          repositories: ["acme/web", "acme/web is:merged"],
+          state: "open",
+          involvement: "all",
+          viewer: "bilal",
+          limit: 10,
+        }),
+      );
+
+      // Nothing is sent: a name that could end its own qualifier is refused rather than escaped.
+      assert.strictEqual(failure._tag, "GitHubRepositorySelectorError");
+      assert.strictEqual(mockedExecute.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("files each searched row under the repository it came from", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(
+        Effect.succeed(
+          searchPage([
+            searchItem(7, "acme/web", "2026-07-03T00:00:00Z"),
+            searchItem(9, "pingdotgg/t3code", "2026-07-02T00:00:00Z"),
+            // Not a pull request, which `is:pr` excludes and a decode skips rather than fails on.
+            {},
+          ]),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const batch = yield* cli.searchPullRequests({
+        cwd: "/w",
+        host: "github.com",
+        repositories: ["acme/web", "pingdotgg/t3code"],
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+      });
+
+      assert.deepStrictEqual(
+        batch.items.map((item) => [item.repository, item.number, item.author?.avatarUrl]),
+        [
+          ["acme/web", 7, "https://avatars/octocat"],
+          ["pingdotgg/t3code", 9, "https://avatars/octocat"],
+        ],
+      );
+      // The listing leaves the line counts to a read of their own.
+      assert.deepStrictEqual(
+        batch.items.map((item) => [item.additions, item.deletions]),
+        [
+          [0, 0],
+          [0, 0],
+        ],
+      );
+      assert.isFalse(batch.truncated);
+    }),
+  );
+
+  it.effect("reports truncation from the extra row, and from a page GitHub says has more", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            searchPage([
+              searchItem(1, "acme/web", "2026-07-03T00:00:00Z"),
+              searchItem(2, "acme/web", "2026-07-02T00:00:00Z"),
+              searchItem(3, "acme/web", "2026-07-01T00:00:00Z"),
+            ]),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(searchPage([searchItem(1, "acme/web", "2026-07-03T00:00:00Z")], true)),
+        );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const read = () =>
+        cli.searchPullRequests({
+          cwd: "/w",
+          host: "github.com",
+          repositories: ["acme/web"],
+          state: "open",
+          involvement: "all",
+          viewer: "bilal",
+          limit: 2,
+        });
+
+      const overflowing = yield* read();
+      const capped = yield* read();
+
+      // The extra row is the probe, and it is not handed on.
+      assert.strictEqual(overflowing.items.length, 2);
+      assert.isTrue(overflowing.truncated);
+      // A slice at GitHub's own ceiling has no extra row to probe with, so `hasNextPage` answers.
+      assert.isTrue(capped.truncated);
+    }),
+  );
+
+  it.effect("reads the line counts in chunks, and files them back by position", () =>
+    Effect.gen(function* () {
+      const changeRequests = Array.from({ length: 26 }, (_, index) => ({
+        repository: "acme/web",
+        number: index + 1,
+      }));
+      mockedExecute.mockImplementation(() =>
+        // Every chunk answers for its first alias only, so a row GitHub said nothing about is
+        // dropped rather than shown as a change of no size.
+        Effect.succeed(
+          output(JSON.stringify({ data: { s0: { pullRequest: { additions: 4, deletions: 1 } } } })),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const stats = yield* cli.listPullRequestStats({
+        cwd: "/w",
+        host: "github.com",
+        changeRequests,
+      });
+
+      // Twenty-five aliases a request, so twenty-six rows are two requests.
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      assert.deepStrictEqual(stats, [
+        { repository: "acme/web", number: 1, additions: 4, deletions: 1 },
+        { repository: "acme/web", number: 26, additions: 4, deletions: 1 },
+      ]);
+      const document = callAt(0).args.at(-1) ?? "";
+      expect(document).toContain('s0: repository(owner: "acme", name: "web")');
+      expect(document).toContain("pullRequest(number: 25)");
+    }),
+  );
+
+  it.effect("refuses to look up counts for a repository GitHub cannot address", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const failure = yield* Effect.flip(
+        cli.listPullRequestStats({
+          cwd: "/w",
+          host: "github.com",
+          changeRequests: [{ repository: 'acme/web") { x } #', number: 1 }],
+        }),
+      );
+
+      assert.strictEqual(failure._tag, "GitHubRepositorySelectorError");
+      assert.strictEqual(mockedExecute.mock.calls.length, 0);
     }),
   );
 

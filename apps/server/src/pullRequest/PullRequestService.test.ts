@@ -1728,3 +1728,333 @@ it.effect("hands the host's own candidate list back, and asks for it with the ch
     );
   }),
 );
+
+/** A row as a host that reads several repositories at once hands it over. */
+function batchedChangeRequest(number: number, repository: string, updatedAt: string) {
+  return { ...changeRequest(number, updatedAt), repository };
+}
+
+it.effect("reads a host's repositories in one search, and files the rows back under each", () =>
+  Effect.gen(function* () {
+    const asked: Array<ReadonlyArray<string>> = [];
+    const separately: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({ id: "p2", title: "web", workspaceRoot: "/b", repository: "acme/web" }),
+        project({
+          id: "p3",
+          title: "on gitlab",
+          workspaceRoot: "/c",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: ({ repository }) => {
+            separately.push(repository);
+            return Effect.succeed({ items: [], truncated: false, continues: true });
+          },
+          listChangeRequestsAcross: (input) => {
+            asked.push(input.repositories);
+            return Effect.succeed({
+              items: [
+                batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z"),
+                batchedChangeRequest(2, "pingdotgg/t3code", "2026-07-02T00:00:00Z"),
+              ],
+              truncated: false,
+            });
+          },
+        }),
+        // A host with no search across repositories keeps being asked one at a time.
+        fakeProvider("gitlab", {
+          listChangeRequests: ({ repository }) => {
+            separately.push(repository);
+            return Effect.succeed({
+              items: [changeRequest(3, "2026-07-01T00:00:00Z")],
+              truncated: false,
+              continues: true,
+            });
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(asked, [["pingdotgg/t3code", "acme/web"]]);
+    assert.deepStrictEqual(separately, ["group/project"]);
+    // Ordered by update across every host, and each row under the project whose repository it
+    // came from.
+    assert.deepStrictEqual(
+      result.entries.map((entry) => [entry.projectId, entry.number]),
+      [
+        ["p2", 1],
+        ["p1", 2],
+        ["p3", 3],
+      ],
+    );
+  }),
+);
+
+it.effect("carries every repository of a slice on from the oldest row in it", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({ id: "p2", title: "web", workspaceRoot: "/b", repository: "acme/web" }),
+        project({ id: "p3", title: "docs", workspaceRoot: "/c", repository: "acme/docs" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequestsAcross: () =>
+            Effect.succeed({
+              items: [
+                batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z"),
+                batchedChangeRequest(2, "pingdotgg/t3code", "2026-07-02T00:00:00Z"),
+                batchedChangeRequest(3, "acme/web", "2026-07-02T00:00:00Z"),
+              ],
+              truncated: true,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    // The boundary is the oldest row of the whole slice, not of each repository: `acme/web` has
+    // been read past its newest row, so only the rows sent at the boundary are named for it.
+    // `acme/docs`, which the slice holds nothing of, is not believed on silence alone — it is
+    // read on its own, and that read is what says whether it has anything at all.
+    assert.isTrue(result.truncated);
+    assert.deepStrictEqual(result.nextCursors, {
+      "github.com pingdotgg/t3code": "2026-07-02T00:00:00Z|1|2",
+      "github.com acme/web": "2026-07-02T00:00:00Z|2|3",
+    });
+  }),
+);
+
+it.effect("carries a slice on without sending the rows it already sent", () =>
+  Effect.gen(function* () {
+    const cursors: Array<unknown> = [];
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequestsAcross: (input) => {
+            cursors.push(input.cursor);
+            return Effect.succeed({
+              items: [
+                batchedChangeRequest(3, "acme/web", "2026-07-02T00:00:00Z"),
+                batchedChangeRequest(4, "acme/web", "2026-07-02T00:00:00Z"),
+              ],
+              truncated: true,
+            });
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.list({
+      state: "open",
+      cursors: { "github.com acme/web": "2026-07-02T00:00:00Z|1|3" },
+    });
+
+    // The boundary instant is asked for inclusively, so the row already sent at it comes back and
+    // is dropped here — and stays named in the next cursor, which has not moved off that instant.
+    assert.deepStrictEqual(cursors, [{ updatedBefore: "2026-07-02T00:00:00Z", delivered: 1 }]);
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.number),
+      [4],
+    );
+    assert.deepStrictEqual(result.nextCursors, {
+      "github.com acme/web": "2026-07-02T00:00:00Z|2|3,3,4",
+    });
+  }),
+);
+
+it.effect("reads a workspace larger than one search in chunks, and merges them", () =>
+  Effect.gen(function* () {
+    const asked: Array<number> = [];
+    const service = yield* makeService({
+      projects: Array.from({ length: 101 }, (_, index) =>
+        project({
+          id: `p${index}`,
+          title: `repo ${index}`,
+          workspaceRoot: `/w${index}`,
+          repository: `acme/repo${index}`,
+        }),
+      ),
+      providers: [
+        fakeProvider("github", {
+          listChangeRequestsAcross: (input) => {
+            asked.push(input.repositories.length);
+            return Effect.succeed({
+              items: input.repositories.map((repository, index) =>
+                batchedChangeRequest(index + 1, repository, "2026-07-02T00:00:00Z"),
+              ),
+              truncated: false,
+            });
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(asked, [100, 1]);
+    assert.strictEqual(result.entries.length, 101);
+  }),
+);
+
+it.effect("asks on its own for a repository a search answered nothing for", () =>
+  Effect.gen(function* () {
+    const separately: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: ({ repository }) => {
+            separately.push(repository);
+            return repository === "acme/docs"
+              ? Effect.fail(requestFailed)
+              : Effect.succeed({ items: [], truncated: false, continues: true });
+          },
+          listChangeRequestsAcross: () =>
+            Effect.succeed({
+              items: [batchedChangeRequest(1, "acme/web", "2026-07-03T00:00:00Z")],
+              truncated: false,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    // The slice had room and still held nothing of `acme/docs`, which is what a repository GitHub
+    // will not search looks like — so it is read the old way, and its failure is still reported
+    // against its own project.
+    assert.deepStrictEqual(separately, ["acme/docs"]);
+    assert.deepStrictEqual(result.errors, [
+      {
+        projectId: "p2" as ProjectId,
+        projectTitle: "docs",
+        message: "acme/docs could not be read.",
+      },
+    ]);
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.number),
+      [1],
+    );
+  }),
+);
+
+it.effect("reads the repositories one at a time when the search itself fails", () =>
+  Effect.gen(function* () {
+    const separately: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: ({ repository }) => {
+            separately.push(repository);
+            return Effect.succeed({
+              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+              truncated: false,
+              continues: true,
+            });
+          },
+          listChangeRequestsAcross: () => Effect.fail(requestFailed),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    // One failed question about two repositories is not two unreadable repositories.
+    assert.deepStrictEqual(separately.toSorted(), ["acme/docs", "acme/web"]);
+    assert.deepStrictEqual(result.errors, []);
+    assert.strictEqual(result.entries.length, 2);
+  }),
+);
+
+it.effect("fills in the line counts for the rows it is given", () =>
+  Effect.gen(function* () {
+    const asked: Array<unknown> = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        project({
+          id: "p2",
+          title: "on gitlab",
+          workspaceRoot: "/b",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequestStats: (input) => {
+            asked.push(input.changeRequests);
+            return Effect.succeed([
+              { repository: "acme/web", number: 1, additions: 12, deletions: 3 },
+            ]);
+          },
+        }),
+        // Its listing carries the counts already, so it has nothing to be asked.
+        fakeProvider("gitlab"),
+      ],
+    });
+
+    const result = yield* service.listStats({
+      refs: [
+        { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 },
+        { projectId: "p1" as ProjectId, repository: "acme/web", number: 2 },
+        { projectId: "p2" as ProjectId, repository: "group/project", number: 3 },
+        // Not the repository this project's remote points at, so it is dropped rather than asked.
+        { projectId: "p1" as ProjectId, repository: "evil/repo", number: 4 },
+      ],
+    });
+
+    assert.deepStrictEqual(asked, [
+      [
+        { repository: "acme/web", number: 1 },
+        { repository: "acme/web", number: 2 },
+      ],
+    ]);
+    // Only the rows the host answered for; the other is left with whatever the listing had.
+    assert.deepStrictEqual(result.stats, [
+      {
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        additions: 12,
+        deletions: 3,
+      },
+    ]);
+  }),
+);
+
+it.effect("keeps the rows when the line counts cannot be read", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", { listChangeRequestStats: () => Effect.fail(requestFailed) }),
+      ],
+    });
+
+    const result = yield* service.listStats({
+      refs: [{ projectId: "p1" as ProjectId, repository: "acme/web", number: 1 }],
+    });
+
+    assert.deepStrictEqual(result.stats, []);
+  }),
+);

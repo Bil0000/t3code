@@ -70,6 +70,85 @@ const RawListItemSchema = Schema.Struct({
   labels: Schema.optional(Schema.Array(RawLabelSchema)),
 });
 
+/**
+ * A search's own answer, which is the listing's row one connection deeper: `gh pr list --json`
+ * flattens reviewers and labels, and GraphQL does not. Everything below the row is optional
+ * because a node that is not a pull request decodes as an empty object, which is skipped.
+ */
+const RawSearchItemSchema = Schema.Struct({
+  number: Schema.Int,
+  title: Schema.String,
+  url: Schema.String,
+  author: Schema.optional(Schema.NullOr(RawActorSchema)),
+  headRefName: Schema.String,
+  baseRefName: Schema.String,
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+  isDraft: Schema.optional(Schema.Boolean),
+  mergeable: Schema.optional(Schema.NullOr(Schema.String)),
+  createdAt: Schema.String,
+  updatedAt: Schema.String,
+  mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  repository: Schema.optional(Schema.NullOr(Schema.Struct({ nameWithOwner: Schema.String }))),
+  reviewRequests: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.optional(
+          Schema.NullOr(
+            Schema.Array(
+              Schema.NullOr(
+                Schema.Struct({
+                  requestedReviewer: Schema.optional(Schema.NullOr(RawActorSchema)),
+                }),
+              ),
+            ),
+          ),
+        ),
+      }),
+    ),
+  ),
+  labels: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawLabelSchema)))),
+      }),
+    ),
+  ),
+});
+
+const RawSearchSchema = Schema.Struct({
+  data: Schema.Struct({
+    search: Schema.Struct({
+      pageInfo: Schema.optional(Schema.NullOr(Schema.Struct({ hasNextPage: Schema.Boolean }))),
+      // Row by row, like the listing's own: a node that is not a pull request — or one field
+      // GitHub changes — is skipped rather than blanking every repository at once.
+      nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+    }),
+  }),
+});
+
+/** One aliased lookup per row, so the response is keyed by the position it was asked in. */
+const RawStatsSchema = Schema.Struct({
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Record(
+        Schema.String,
+        Schema.NullOr(
+          Schema.Struct({
+            pullRequest: Schema.optional(
+              Schema.NullOr(
+                Schema.Struct({
+                  additions: Schema.optional(Schema.NullOr(Schema.Int)),
+                  deletions: Schema.optional(Schema.NullOr(Schema.Int)),
+                }),
+              ),
+            ),
+          }),
+        ),
+      ),
+    ),
+  ),
+});
+
 const RawCheckSchema = Schema.Struct({
   __typename: Schema.optional(Schema.String),
   name: Schema.optional(Schema.NullOr(Schema.String)),
@@ -261,6 +340,55 @@ export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS}
 
 /** GitHub's own ceiling on a connection page, which is what both thread reads ask for. */
 const GRAPHQL_PAGE_SIZE = 100;
+
+/**
+ * The ceiling on `search`, which refuses anything larger with EXCESSIVE_PAGINATION (measured:
+ * `first: 101` is an error, `first: 100` is not).
+ */
+export const PULL_REQUEST_SEARCH_MAX_ROWS = GRAPHQL_PAGE_SIZE;
+
+/**
+ * Every repository of a host in one read, which is what makes a listing one request rather than
+ * one process per repository.
+ *
+ * `additions` and `deletions` are deliberately absent: measured over twelve repositories at a
+ * hundred rows, this query answers in ~4.0s with them left out and ~7.1s with them in, for two
+ * numbers at the end of a row. They are read afterwards, by `buildPullRequestStatsGraphQlQuery`.
+ *
+ * The row count is written into the document rather than sent as a variable because every
+ * variable here travels as a string — and it is this module's own number, clamped by the caller,
+ * never a reader's.
+ *
+ * `first` on the two inner connections is a bound rather than a page: a pull request with more
+ * than twenty labels shows twenty, and one that has asked more than twenty people for a review
+ * is already past what a row can say.
+ */
+export function pullRequestSearchGraphQlQuery(rows: number): string {
+  return `query($q: String!) {
+  search(query: $q, type: ISSUE, first: ${Math.min(Math.max(Math.trunc(rows), 1), PULL_REQUEST_SEARCH_MAX_ROWS)}) {
+    pageInfo { hasNextPage }
+    nodes {
+      ... on PullRequest {
+        number
+        title
+        url
+        author { login avatarUrl ... on User { name } }
+        headRefName
+        baseRefName
+        state
+        isDraft
+        mergeable
+        createdAt
+        updatedAt
+        mergedAt
+        repository { nameWithOwner }
+        reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
+        labels(first: 20) { nodes { name color } }
+      }
+    }
+  }
+}`;
+}
 
 /**
  * One page of review threads with their comments, and the people on the review. `$cursor` is
@@ -674,6 +802,9 @@ function toDetail(raw: Schema.Schema.Type<typeof RawDetailSchema>): GitHubPullRe
 
 const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeListEntry = Schema.decodeUnknownExit(RawListItemSchema);
+const decodeSearch = decodeJsonResult(RawSearchSchema);
+const decodeSearchItem = Schema.decodeUnknownExit(RawSearchItemSchema);
+const decodeStats = decodeJsonResult(RawStatsSchema);
 const decodeDetail = decodeJsonResult(RawDetailSchema);
 const decodeFileEntry = Schema.decodeUnknownExit(RawPullRequestFileSchema);
 const decodeRepositoryAccess = decodeJsonResult(RawRepositoryAccessSchema);
@@ -705,6 +836,118 @@ export function decodePullRequestListJson(
     }
   }
   return Result.succeed({ items, rawCount: decoded.success.length });
+}
+
+export interface GitHubPullRequestSearchItem extends GitHubPullRequestListItem {
+  /** `owner/name` as GitHub spells it, which is how a row from a search finds its repository. */
+  readonly repository: string;
+}
+
+export interface GitHubPullRequestSearchBatch {
+  readonly items: ReadonlyArray<GitHubPullRequestSearchItem>;
+  /** Rows the search returned, counted before decoding, so a skipped row cannot hide a next page. */
+  readonly rawCount: number;
+  /** More rows than this slice asked for, which is truncation for every repository in it. */
+  readonly hasNextPage: boolean;
+}
+
+/**
+ * A search answers with the same pull request the listing does, one connection deeper: reviewers
+ * and labels arrive as connections, and the row names the repository it came from. Flattened to
+ * the shape `gh pr list --json` hands over so both reads decode into one type.
+ *
+ * Rows that are not pull requests decode as empty and are skipped, the way a malformed listing
+ * row is — `is:pr` already excludes them, and one surprise must not blank a whole host.
+ */
+export function decodePullRequestSearchJson(
+  raw: string,
+): Result.Result<GitHubPullRequestSearchBatch, DecodeFailure> {
+  const decoded = decodeSearch(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const nodes = decoded.success.data.search.nodes ?? [];
+  const items: GitHubPullRequestSearchItem[] = [];
+  for (const entry of nodes) {
+    const decodedNode = decodeSearchItem(entry);
+    if (!Exit.isSuccess(decodedNode)) continue;
+    const node = decodedNode.value;
+    const repository = trimmed(node.repository?.nameWithOwner);
+    if (repository === null) continue;
+    items.push({
+      ...toListItem({
+        ...node,
+        reviewRequests: (node.reviewRequests?.nodes ?? []).flatMap((request) => {
+          const login = trimmed(request?.requestedReviewer?.login);
+          return login === null ? [] : [{ login }];
+        }),
+        labels: (node.labels?.nodes ?? []).flatMap((label) => (label === null ? [] : [label])),
+      }),
+      repository,
+    });
+  }
+  return Result.succeed({
+    items,
+    rawCount: nodes.length,
+    hasNextPage: decoded.success.data.search.pageInfo?.hasNextPage ?? false,
+  });
+}
+
+/** What a repository selector may hold before it is written into a GraphQL document unquoted. */
+const REPOSITORY_PART = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * The line counts for rows a listing already handed over, as one aliased lookup each.
+ *
+ * Aliases rather than `nodes(ids:)` because the caller asks in the terms the page holds — a
+ * repository and a number — and never sees a node id. Owner, name and number are written into
+ * the document, so each is checked against what GitHub can actually name first: null for anything
+ * else, which the caller reports rather than sends.
+ *
+ * Null too for an empty request, since a GraphQL document with no selection is not a document.
+ */
+export function buildPullRequestStatsGraphQlQuery(
+  changeRequests: ReadonlyArray<{ readonly repository: string; readonly number: number }>,
+): string | null {
+  if (changeRequests.length === 0) return null;
+  const selections: string[] = [];
+  for (const [index, changeRequest] of changeRequests.entries()) {
+    const [owner, name, ...rest] = changeRequest.repository.trim().split("/");
+    if (rest.length > 0 || owner === undefined || name === undefined) return null;
+    if (!REPOSITORY_PART.test(owner) || !REPOSITORY_PART.test(name)) return null;
+    if (!Number.isSafeInteger(changeRequest.number) || changeRequest.number <= 0) return null;
+    selections.push(
+      `  s${index}: repository(owner: "${owner}", name: "${name}") { pullRequest(number: ${changeRequest.number}) { additions deletions } }`,
+    );
+  }
+  return `query {\n${selections.join("\n")}\n}`;
+}
+
+/**
+ * The counts by the position they were asked in. A repository or a pull request GitHub answered
+ * nothing for is simply absent, which leaves the row with whatever it already had.
+ */
+export function decodePullRequestStatsJson(
+  raw: string,
+): Result.Result<
+  ReadonlyMap<number, { readonly additions: number; readonly deletions: number }>,
+  DecodeFailure
+> {
+  const decoded = decodeStats(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const stats = new Map<number, { readonly additions: number; readonly deletions: number }>();
+  for (const [alias, value] of Object.entries(decoded.success.data ?? {})) {
+    const index = /^s(\d+)$/.exec(alias)?.[1];
+    const pullRequest = value?.pullRequest;
+    if (index === undefined || pullRequest == null) continue;
+    stats.set(Number(index), {
+      additions: pullRequest.additions ?? 0,
+      deletions: pullRequest.deletions ?? 0,
+    });
+  }
+  return Result.succeed(stats);
 }
 
 export function decodePullRequestDetailJson(

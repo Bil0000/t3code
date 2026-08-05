@@ -1581,6 +1581,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.pullRequestsList, pullRequests.list(input), {
             "rpc.aggregate": "pull-requests",
           }),
+        [WS_METHODS.pullRequestsListStats]: (input) =>
+          observeRpcEffect(WS_METHODS.pullRequestsListStats, pullRequests.listStats(input), {
+            "rpc.aggregate": "pull-requests",
+          }),
         [WS_METHODS.pullRequestsDetail]: (input) =>
           observeRpcEffect(WS_METHODS.pullRequestsDetail, pullRequests.detail(input), {
             "rpc.aggregate": "pull-requests",

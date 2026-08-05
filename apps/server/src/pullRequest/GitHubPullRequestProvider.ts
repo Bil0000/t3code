@@ -154,6 +154,44 @@ export const make = Effect.gen(function* () {
           ),
         ),
 
+    /**
+     * The same listing for a whole host in one search. The avatar lookup the per-repository read
+     * needs is not here: a search reports an author's picture itself, so a face costs no request
+     * of its own — `withAvatar` still stands behind it for the login GitHub answered nothing for.
+     */
+    listChangeRequestsAcross: (input) =>
+      cli
+        .searchPullRequests({
+          cwd: input.cwd,
+          host: input.host,
+          repositories: input.repositories,
+          state: input.state,
+          involvement: input.involvement,
+          viewer: input.viewer,
+          limit: input.limit,
+          query: input.query,
+          cursor: input.cursor,
+        })
+        .pipe(
+          Effect.mapError(fail("listChangeRequestsAcross")),
+          Effect.map((batch) => ({
+            truncated: batch.truncated,
+            items: batch.items.map((item) => ({
+              ...item,
+              author: withAvatar(item.author, new Map<string, string>(), input.host),
+            })),
+          })),
+        ),
+
+    listChangeRequestStats: (input) =>
+      cli
+        .listPullRequestStats({
+          cwd: input.cwd,
+          host: input.host,
+          changeRequests: input.changeRequests,
+        })
+        .pipe(Effect.mapError(fail("listChangeRequestStats"))),
+
     getChangeRequest: (input) =>
       Effect.all(
         [

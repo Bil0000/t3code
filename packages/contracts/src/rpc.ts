@@ -74,6 +74,8 @@ import {
   PullRequestDiffResult,
   PullRequestListInput,
   PullRequestListResult,
+  PullRequestListStatsInput,
+  PullRequestListStatsResult,
   PullRequestOperationError,
   PullRequestRef,
   PullRequestReviewerCandidateList,
@@ -267,6 +269,7 @@ export const WS_METHODS = {
 
   // Pull request methods
   pullRequestsList: "pullRequests.list",
+  pullRequestsListStats: "pullRequests.listStats",
   pullRequestsDetail: "pullRequests.detail",
   pullRequestsDiff: "pullRequests.diff",
   pullRequestsRunAction: "pullRequests.runAction",
@@ -453,6 +456,17 @@ const PullRequestRpcError = Schema.Union([
 export const WsPullRequestsListRpc = Rpc.make(WS_METHODS.pullRequestsList, {
   payload: PullRequestListInput,
   success: PullRequestListResult,
+  error: PullRequestRpcError,
+});
+
+/**
+ * The line counts for rows already on the page. Its own call because on GitHub the pair costs
+ * 40-60% of the listing read that answers everything else on the row, so the rows arrive first
+ * and their stats a moment later.
+ */
+export const WsPullRequestsListStatsRpc = Rpc.make(WS_METHODS.pullRequestsListStats, {
+  payload: PullRequestListStatsInput,
+  success: PullRequestListStatsResult,
   error: PullRequestRpcError,
 });
 
@@ -922,6 +936,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsCloudGetRelayClientStatusRpc,
   WsCloudInstallRelayClientRpc,
   WsPullRequestsListRpc,
+  WsPullRequestsListStatsRpc,
   WsPullRequestsDetailRpc,
   WsPullRequestsDiffRpc,
   WsPullRequestsRunActionRpc,

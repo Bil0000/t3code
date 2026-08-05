@@ -99,6 +99,32 @@ export interface ProviderListCursor {
   readonly delivered: number;
 }
 
+/** One repository's row inside an answer that spans several of them. */
+export interface ProviderBatchedChangeRequest extends ProviderChangeRequest {
+  /** Provider-native identity, exactly as it was asked for, so the caller can file the row. */
+  readonly repository: string;
+}
+
+/**
+ * One slice of a host read across several repositories at once, newest update first across all
+ * of them. There is no per-repository page here because the host was asked one question: the
+ * caller splits the rows by `repository` and works out where each of them carries on from the
+ * oldest row in the slice, which every repository the slice covers is now read up to.
+ */
+export interface ProviderBatchedChangeRequestPage {
+  readonly items: ReadonlyArray<ProviderBatchedChangeRequest>;
+  /** True when the host has more rows than the slice asked for, for any of the repositories. */
+  readonly truncated: boolean;
+}
+
+/** The line counts for one change request, which a listing may leave for a second read. */
+export interface ProviderChangeRequestStat {
+  readonly repository: string;
+  readonly number: number;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
 export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
   readonly body: string;
   readonly changedFiles: number;
@@ -177,6 +203,47 @@ export interface PullRequestProviderApi {
       readonly cursor?: ProviderListCursor | undefined;
     },
   ) => Effect.Effect<ProviderChangeRequestPage, PullRequestProviderError>;
+
+  /**
+   * The same listing for a whole host in one request, for a host that has a search across
+   * repositories. Optional: three of the four hosts here have no such API, and breaking the port
+   * for them to spare GitHub a fan-out would be paying for the fix with everyone else's clarity.
+   * The caller falls back to `listChangeRequests` per repository where this is absent, and where
+   * it fails.
+   *
+   * `limit` is the whole slice rather than a size per repository, because that is the shape of
+   * the answer: the newest `limit` rows across every repository named, which is exactly the rows
+   * a page ordered by update shows.
+   *
+   * `cursor` is one boundary for all of them, so a caller with repositories standing at different
+   * boundaries asks in groups rather than in one call.
+   */
+  readonly listChangeRequestsAcross?: (input: {
+    /** Any checkout on the host, which is what the tool is run in. */
+    readonly cwd: string;
+    readonly host: string;
+    readonly repositories: ReadonlyArray<string>;
+    readonly state: PullRequestListState;
+    readonly involvement: PullRequestInvolvement;
+    readonly viewer: string;
+    readonly limit: number;
+    readonly query?: string | undefined;
+    readonly cursor?: ProviderListCursor | undefined;
+  }) => Effect.Effect<ProviderBatchedChangeRequestPage, PullRequestProviderError>;
+
+  /**
+   * The line counts for rows a listing has already handed over. Only implemented by a provider
+   * whose listing leaves them out — for everyone else the numbers arrived with the row, and the
+   * caller has nothing to ask for.
+   */
+  readonly listChangeRequestStats?: (input: {
+    readonly cwd: string;
+    readonly host: string;
+    readonly changeRequests: ReadonlyArray<{
+      readonly repository: string;
+      readonly number: number;
+    }>;
+  }) => Effect.Effect<ReadonlyArray<ProviderChangeRequestStat>, PullRequestProviderError>;
 
   readonly getChangeRequest: (
     input: ProviderRepositoryRef & { readonly number: number },

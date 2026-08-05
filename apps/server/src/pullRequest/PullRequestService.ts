@@ -11,12 +11,15 @@ import {
   type PullRequestActionInput,
   type PullRequestCommentInput,
   type PullRequestDetail,
+  type PullRequestDiffStat,
   type PullRequestDiffInput,
   type PullRequestDiffResult,
   type PullRequestListEntry,
   type PullRequestListInput,
   type PullRequestListProjectError,
   type PullRequestListResult,
+  type PullRequestListStatsInput,
+  type PullRequestListStatsResult,
   type PullRequestProviderSummary,
   type PullRequestRef,
   type PullRequestReviewVerdict,
@@ -55,6 +58,14 @@ const DEFAULT_REPOSITORY_LIST_LIMIT = 99;
  * no faster because 12 already reads every repository in one wave.
  */
 const REPOSITORY_CONCURRENCY = 12;
+/**
+ * Repositories named in one read across a host. Measured against GitHub's search: six hundred
+ * `repo:` qualifiers in one query — 14.7KB of it — were all still honoured, and the answer took
+ * the same three to six seconds at twelve repositories as at four hundred. A hundred is well
+ * inside that and past the size of a workspace anyone opens, so a larger one reads in a handful
+ * of searches rather than in a request per repository.
+ */
+const REPOSITORY_SEARCH_CHUNK = 100;
 
 export type PullRequestError = PullRequestUnavailableError | PullRequestOperationError;
 
@@ -64,6 +75,9 @@ export class PullRequestService extends Context.Service<
     readonly list: (
       input: PullRequestListInput,
     ) => Effect.Effect<PullRequestListResult, PullRequestError>;
+    readonly listStats: (
+      input: PullRequestListStatsInput,
+    ) => Effect.Effect<PullRequestListStatsResult, PullRequestError>;
     readonly detail: (input: PullRequestRef) => Effect.Effect<PullRequestDetail, PullRequestError>;
     readonly diff: (
       input: PullRequestDiffInput,
@@ -219,11 +233,28 @@ function nextListCursor(
   // repository's boring afternoon — and reading "nothing new" as "nothing left" would end the
   // walk on the instant it was stuck on, with everything older unreachable for good.
   const oldest = fetched.reduce((left, right) => (right.updatedAt < left.updatedAt ? right : left));
+  return listCursorAt(previous, oldest.updatedAt, fetched, delivered.length);
+}
+
+/**
+ * The same cursor against a boundary chosen elsewhere, which is what a slice read across several
+ * repositories at once needs: every repository in it is read up to the oldest row of the whole
+ * slice, including the ones that contributed nothing to it — their rows are simply all older, and
+ * a repository that carried on from its own oldest row would be right about where it stopped and
+ * silent about the ones that never appeared.
+ */
+function listCursorAt(
+  previous: ListCursor | undefined,
+  boundary: string,
+  /** This repository's own rows in the slice, before the ones already sent were dropped. */
+  fetched: ReadonlyArray<ProviderChangeRequest>,
+  deliveredCount: number,
+): string {
   const seenAt = [
-    ...(previous?.updatedBefore === oldest.updatedAt ? previous.seenAt : []),
-    ...fetched.filter((item) => item.updatedAt === oldest.updatedAt).map((item) => item.number),
+    ...(previous?.updatedBefore === boundary ? previous.seenAt : []),
+    ...fetched.filter((item) => item.updatedAt === boundary).map((item) => item.number),
   ];
-  return `${oldest.updatedAt}|${(previous?.delivered ?? 0) + delivered.length}|${seenAt.join(",")}`;
+  return `${boundary}|${(previous?.delivered ?? 0) + deliveredCount}|${seenAt.join(",")}`;
 }
 
 /** A host that cannot be read at all, as opposed to one request that failed. */
@@ -556,12 +587,19 @@ export const make = Effect.gen(function* () {
         };
       }
 
-      const batches = yield* Effect.forEach(
-        readable,
-        (project): Effect.Effect<RepositoryBatch> => {
+      const limit = input.limit ?? DEFAULT_REPOSITORY_LIST_LIMIT;
+      const cursorOf = (project: SupportedProject): ListCursor | undefined =>
+        continuation?.get(listCursorKey(project.host, project.repository));
+
+      /**
+       * One repository asked on its own. What every host without a search across repositories
+       * does, and what a batched read falls back to for a repository it could not answer for.
+       */
+      const readRepository = (project: SupportedProject): Effect.Effect<RepositoryBatch> => {
+        {
           const viewer = viewers[project.host]!;
           const key = listCursorKey(project.host, project.repository);
-          const cursor = continuation?.get(key);
+          const cursor = cursorOf(project);
           return project.api
             .listChangeRequests({
               cwd: project.project.workspaceRoot,
@@ -570,7 +608,7 @@ export const make = Effect.gen(function* () {
               state: input.state,
               involvement,
               viewer,
-              limit: input.limit ?? DEFAULT_REPOSITORY_LIST_LIMIT,
+              limit,
               // Each host matches this its own way, and one that cannot match text at all
               // answers unnarrowed rather than failing.
               query: input.query,
@@ -624,9 +662,122 @@ export const make = Effect.gen(function* () {
                 }),
               ),
             );
-        },
-        { concurrency: REPOSITORY_CONCURRENCY },
+        }
+      };
+
+      /**
+       * One host's repositories in one read. The slice is the newest `limit` rows across all of
+       * them, so it is split back up by repository here: the page still reports per project, and
+       * each repository still carries on from a cursor of its own.
+       *
+       * A read that fails is read the long way instead. The batch is an optimisation, and a host
+       * that could not answer one question about twelve repositories should not report twelve
+       * repositories as unreadable before anyone has asked it about them one at a time.
+       */
+      const readTogether = (
+        chunk: ReadonlyArray<SupportedProject>,
+      ): Effect.Effect<ReadonlyArray<RepositoryBatch>> => {
+        const first = chunk[0]!;
+        const readAcross = first.api.listChangeRequestsAcross;
+        const separately = () =>
+          Effect.forEach(chunk, readRepository, { concurrency: REPOSITORY_CONCURRENCY });
+        if (readAcross === undefined) return separately();
+        const viewer = viewers[first.host]!;
+        const cursor = cursorOf(first);
+        return readAcross({
+          cwd: first.project.workspaceRoot,
+          host: first.host,
+          repositories: chunk.map((project) => project.repository),
+          state: input.state,
+          involvement,
+          viewer,
+          limit,
+          query: input.query,
+          ...(cursor === undefined
+            ? {}
+            : { cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered } }),
+        }).pipe(
+          Effect.flatMap((page) => {
+            const rows = new Map<string, Array<ProviderChangeRequest>>();
+            for (const item of page.items) {
+              const key = item.repository.trim().toLowerCase();
+              const held = rows.get(key);
+              if (held === undefined) rows.set(key, [item]);
+              else held.push(item);
+            }
+            // The oldest row of the whole slice, which is how far every repository in it has now
+            // been read — including the ones that contributed nothing to it.
+            const boundary = page.items.reduce<string | null>(
+              (oldest, item) =>
+                oldest === null || item.updatedAt < oldest ? item.updatedAt : oldest,
+              null,
+            );
+            return Effect.forEach(
+              chunk,
+              (project): Effect.Effect<RepositoryBatch> => {
+                const fetched = rows.get(project.repository.trim().toLowerCase()) ?? [];
+                // GitHub does not index every repository for search — a renamed one answers for
+                // its old name with silence rather than with an error — so a repository the
+                // search said nothing at all about is read on its own, once, before it is
+                // believed. Only on its first slice: after that it has a boundary to carry on
+                // from, and silence past one means the rows are older rather than absent. That
+                // keeps a search-invisible repository from disappearing on a busy host, at the
+                // price of one request per repository with nothing in the first slice — which
+                // run together, and only there.
+                if (fetched.length === 0 && cursorOf(project) === undefined) {
+                  return readRepository(project);
+                }
+                const cursorHere = cursorOf(project);
+                const items =
+                  cursorHere === undefined
+                    ? fetched
+                    : fetched.filter(
+                        (item) =>
+                          item.updatedAt !== cursorHere.updatedBefore ||
+                          !cursorHere.seenAt.includes(item.number),
+                      );
+                return Effect.succeed({
+                  key: listCursorKey(project.host, project.repository),
+                  entries: items.map((item) => toEntry({ project, item, viewer })),
+                  errors: [],
+                  truncated: page.truncated,
+                  nextCursor:
+                    page.truncated && boundary !== null
+                      ? listCursorAt(cursorHere, boundary, fetched, items.length)
+                      : null,
+                });
+              },
+              { concurrency: REPOSITORY_CONCURRENCY },
+            );
+          }),
+          Effect.catch(separately),
+        );
+      };
+
+      // A host with a search across repositories is asked once for all of them; everyone else is
+      // asked once each. Repositories standing at different points of the same listing are
+      // different questions, so they are grouped by the boundary they carry on from.
+      const together = new Map<string, Array<SupportedProject>>();
+      const separate: Array<SupportedProject> = [];
+      for (const project of readable) {
+        if (project.api.listChangeRequestsAcross === undefined) {
+          separate.push(project);
+          continue;
+        }
+        const key = `${project.host}\n${cursorOf(project)?.updatedBefore ?? ""}`;
+        const group = together.get(key);
+        if (group === undefined) together.set(key, [project]);
+        else group.push(project);
+      }
+      const reads: Array<Effect.Effect<ReadonlyArray<RepositoryBatch>>> = separate.map((project) =>
+        readRepository(project).pipe(Effect.map((batch) => [batch])),
       );
+      for (const group of together.values()) {
+        for (let start = 0; start < group.length; start += REPOSITORY_SEARCH_CHUNK) {
+          reads.push(readTogether(group.slice(start, start + REPOSITORY_SEARCH_CHUNK)));
+        }
+      }
+      const batches = (yield* Effect.all(reads, { concurrency: REPOSITORY_CONCURRENCY })).flat();
 
       const nextCursors: Record<string, string> = {};
       for (const batch of batches) {
@@ -1034,8 +1185,96 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * The line counts for rows already on the page, which the listing left out because on GitHub
+   * they cost more than everything else on the row put together.
+   *
+   * One read per host rather than per row, and only for a host whose listing defers them; a row
+   * whose host answered with the counts in the first place is not here to be asked about. A ref
+   * that names no project this workspace has, or a repository that is not the one the project's
+   * remote points at, is dropped rather than refused: it is one row's two numbers, and the page
+   * that asked has already moved on.
+   */
+  const listStats: PullRequestService["Service"]["listStats"] = (input) =>
+    Effect.gen(function* () {
+      if (input.refs.length === 0) return { stats: [] };
+      const { supported } = yield* listWorkspaceProjects({});
+      const byProject = new Map(supported.map((project) => [project.project.id, project]));
+      const wanted = new Map<
+        string,
+        { readonly project: SupportedProject; readonly number: number }
+      >();
+      for (const ref of input.refs) {
+        const project = byProject.get(ref.projectId);
+        // The repository travels through the client, so it is checked against the project's own
+        // remote rather than being handed to a provider verbatim.
+        if (
+          project === undefined ||
+          project.api.listChangeRequestStats === undefined ||
+          project.repository.toLowerCase() !== ref.repository.trim().toLowerCase()
+        ) {
+          continue;
+        }
+        wanted.set(`${project.project.id} ${ref.number}`, { project, number: ref.number });
+      }
+      const byHost = new Map<string, Array<{ project: SupportedProject; number: number }>>();
+      for (const entry of wanted.values()) {
+        const held = byHost.get(entry.project.host);
+        if (held === undefined) byHost.set(entry.project.host, [entry]);
+        else held.push(entry);
+      }
+      const stats = yield* Effect.forEach(
+        [...byHost.values()],
+        (entries) => {
+          const first = entries[0]!;
+          const readStats = first.project.api.listChangeRequestStats;
+          if (readStats === undefined)
+            return Effect.succeed<ReadonlyArray<PullRequestDiffStat>>([]);
+          const projectsByRepository = new Map(
+            entries.map((entry) => [
+              `${entry.project.repository.toLowerCase()} ${entry.number}`,
+              entry.project,
+            ]),
+          );
+          return readStats({
+            cwd: first.project.project.workspaceRoot,
+            host: first.project.host,
+            changeRequests: entries.map((entry) => ({
+              repository: entry.project.repository,
+              number: entry.number,
+            })),
+          }).pipe(
+            Effect.map((read) =>
+              read.flatMap((stat): ReadonlyArray<PullRequestDiffStat> => {
+                const project = projectsByRepository.get(
+                  `${stat.repository.toLowerCase()} ${stat.number}`,
+                );
+                return project === undefined
+                  ? []
+                  : [
+                      {
+                        projectId: project.project.id,
+                        repository: project.repository,
+                        number: stat.number,
+                        additions: stat.additions,
+                        deletions: stat.deletions,
+                      },
+                    ];
+              }),
+            ),
+            // A row without its counts is a row the page already draws without them, so a host
+            // that could not answer costs the numbers rather than the answer.
+            Effect.orElseSucceed((): ReadonlyArray<PullRequestDiffStat> => []),
+          );
+        },
+        { concurrency: REPOSITORY_CONCURRENCY },
+      );
+      return { stats: stats.flat() };
+    });
+
   return PullRequestService.of({
     list,
+    listStats,
     detail,
     diff,
     runAction,

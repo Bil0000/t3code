@@ -25,11 +25,16 @@ import {
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
   decodePullRequestListJson,
+  decodePullRequestSearchJson,
+  decodePullRequestStatsJson,
   decodeRepositoryAccessJson,
   decodeReviewerCandidatesJson,
   decodeReviewThreadCommentsJson,
   decodeReviewThreadsJson,
+  buildPullRequestStatsGraphQlQuery,
   encodeGraphQlRequestJson,
+  pullRequestSearchGraphQlQuery,
+  PULL_REQUEST_SEARCH_MAX_ROWS,
   PULL_REQUEST_DETAIL_JSON_FIELDS,
   PULL_REQUEST_LIST_JSON_FIELDS,
   REPOSITORY_ACCESS_JSON_FIELDS,
@@ -44,6 +49,7 @@ import {
   decodeViewerPermissionsJson,
   type GitHubPullRequestDetail,
   type GitHubPullRequestListItem,
+  type GitHubPullRequestSearchItem,
   type GitHubReviewThreadComments,
   type GitHubRepositoryAccess,
   type GitHubReviewThreadEntry,
@@ -125,11 +131,35 @@ export class GitHubDiffCommitError extends Schema.TaggedErrorClass<GitHubDiffCom
   }
 }
 
+/**
+ * Not a decode failure: a repository was named that cannot go into a search or into a GraphQL
+ * document as itself. Every qualifier and every alias below is composed from `owner/name`, so a
+ * name that is not one is refused here rather than escaped into something GitHub might read as a
+ * qualifier of its own.
+ */
+export class GitHubRepositorySelectorError extends Schema.TaggedErrorClass<GitHubRepositorySelectorError>()(
+  "GitHubRepositorySelectorError",
+  {
+    command: Schema.Literal("gh"),
+    cwd: Schema.String,
+    operation: Schema.String,
+  },
+) {
+  get detail(): string {
+    return "A repository was named that GitHub cannot address.";
+  }
+
+  override get message(): string {
+    return `GitHub CLI failed in ${this.operation}: ${this.detail}`;
+  }
+}
+
 export type GitHubPullRequestCliError =
   | GitHubCli.GitHubCliError
   | GitHubPullRequestReadError
   | GitHubDiffCursorError
   | GitHubDiffCommitError
+  | GitHubRepositorySelectorError
   | GitHubViewerLoginUnavailableError;
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
@@ -162,6 +192,26 @@ export interface GitHubPullRequestListBatch {
   readonly continues: boolean;
 }
 
+export interface GitHubPullRequestStat {
+  readonly repository: string;
+  readonly number: number;
+  readonly additions: number;
+  readonly deletions: number;
+}
+
+/**
+ * Aliased lookups per request, and requests at once. Measured over a hundred rows: one request
+ * carrying all hundred takes ~5.2s, four of twenty-five in parallel ~2.1s.
+ */
+const STAT_ALIASES_PER_REQUEST = 25;
+const STAT_REQUEST_CONCURRENCY = 4;
+
+export interface GitHubPullRequestSearchBatch {
+  /** Rows across every repository asked for, newest update first, each naming its own. */
+  readonly items: ReadonlyArray<GitHubPullRequestSearchItem>;
+  readonly truncated: boolean;
+}
+
 export interface GitHubPullRequestDiffSlice {
   readonly patch: string;
   /** Files in this slice had their hunks withheld, as opposed to there being more slices. */
@@ -190,6 +240,34 @@ export class GitHubPullRequestCli extends Context.Service<
       /** Where to carry on from, as a `updated:` qualifier on the same search. */
       readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestCliError>;
+
+    /**
+     * The same listing for a whole host in one search. `limit` is the size of the slice across
+     * all of the repositories rather than per repository, because that is what a search answers:
+     * the newest rows of the lot, which is exactly the page.
+     */
+    readonly searchPullRequests: (input: {
+      /** Any checkout on the host; the search names its repositories itself. */
+      readonly cwd: string;
+      readonly host: string;
+      readonly repositories: ReadonlyArray<string>;
+      readonly state: PullRequestListState;
+      readonly involvement: PullRequestInvolvement;
+      readonly viewer: string;
+      readonly limit: number;
+      readonly query?: string | undefined;
+      readonly cursor?: ProviderListCursor | undefined;
+    }) => Effect.Effect<GitHubPullRequestSearchBatch, GitHubPullRequestCliError>;
+
+    /** The line counts the search leaves out, for rows already on the page. */
+    readonly listPullRequestStats: (input: {
+      readonly cwd: string;
+      readonly host: string;
+      readonly changeRequests: ReadonlyArray<{
+        readonly repository: string;
+        readonly number: number;
+      }>;
+    }) => Effect.Effect<ReadonlyArray<GitHubPullRequestStat>, GitHubPullRequestCliError>;
 
     readonly getPullRequestDetail: (input: {
       readonly cwd: string;
@@ -392,6 +470,52 @@ function involvementArgs(input: {
   ];
 }
 
+/** What a repository selector may hold before it goes into a search as itself. */
+const SEARCH_REPOSITORY = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+/**
+ * The same listing as one GitHub search across several repositories, which is the only way to
+ * read a whole host in one request.
+ *
+ * Every narrowing `involvementArgs` hands to `gh pr list` as a flag is a qualifier here instead,
+ * because a search has no flags to borrow: `--author X` is `author:X`, `--state open` is
+ * `is:open`, and `--state closed` — which includes merged pull requests — is `is:closed
+ * is:unmerged`. The two belong together; a tab added to one wants adding to the other.
+ *
+ * Null where a repository is not `owner/name`. A name is written into the query as itself, and a
+ * name holding a space could otherwise end the `repo:` qualifier and start a qualifier of its
+ * own — so an unaddressable one refuses the whole read rather than being escaped into something
+ * GitHub might still read.
+ */
+function searchQuery(input: {
+  readonly repositories: ReadonlyArray<string>;
+  readonly state: PullRequestListState;
+  readonly involvement: PullRequestInvolvement;
+  readonly viewer: string;
+  readonly query?: string | undefined;
+  readonly cursor?: ProviderListCursor | undefined;
+}): string | null {
+  if (input.repositories.length === 0) return null;
+  const repositories = input.repositories.map((repository) => repository.trim());
+  if (!repositories.every((repository) => SEARCH_REPOSITORY.test(repository))) return null;
+  const query = input.query?.trim() ?? "";
+  return [
+    "is:pr",
+    // "all" is every state, which `is:pr` already is.
+    ...(input.state === "open" ? ["is:open"] : []),
+    ...(input.state === "closed" ? ["is:closed", "is:unmerged"] : []),
+    ...(input.state === "merged" ? ["is:merged"] : []),
+    ...(input.involvement === "authored" ? [`author:${input.viewer}`] : []),
+    ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
+    ...(query.length === 0 ? [] : [searchPhrase(query)]),
+    // Inclusive, and de-duplicated by the caller, for the reason the per-repository read gives.
+    ...(input.cursor === undefined ? [] : [`updated:<=${input.cursor.updatedBefore}`]),
+    // The order the page reads its rows in, and the only order a continuation can carry on from.
+    "sort:updated-desc",
+    ...repositories.map((repository) => `repo:${repository}`),
+  ].join(" ");
+}
+
 /**
  * The `after` a paged read carries. gh sends a JSON null only through a typed field, and an
  * untyped `cursor=` would send the empty string, which GitHub refuses as a cursor rather than
@@ -457,23 +581,41 @@ export const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly host: string;
     readonly operation: string;
-    readonly variables: ReadonlyArray<readonly [string, string]>;
+    /** Variables as `-f` flags, for values this module composed itself. */
+    readonly variables?: ReadonlyArray<readonly [string, string]>;
+    /**
+     * Variables carrying words the reader typed. Document and variables travel over stdin
+     * together, because argv is visible in process listings and is echoed back inside a
+     * process-runner failure message.
+     */
+    readonly privateVariables?: Readonly<Record<string, string>>;
     readonly query: string;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
   }): Effect.Effect<A, GitHubPullRequestCliError> =>
     github
-      .execute({
-        cwd: input.cwd,
-        args: [
-          "api",
-          "graphql",
-          "--hostname",
-          input.host,
-          ...input.variables.flat(),
-          "-f",
-          `query=${input.query}`,
-        ],
-      })
+      .execute(
+        input.privateVariables === undefined
+          ? {
+              cwd: input.cwd,
+              args: [
+                "api",
+                "graphql",
+                "--hostname",
+                input.host,
+                ...(input.variables ?? []).flat(),
+                "-f",
+                `query=${input.query}`,
+              ],
+            }
+          : {
+              cwd: input.cwd,
+              args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
+              stdin: encodeGraphQlRequestJson({
+                query: input.query,
+                variables: input.privateVariables,
+              }),
+            },
+      )
       .pipe(
         Effect.flatMap((result) => {
           const decoded = input.decode(result.stdout.trim());
@@ -643,6 +785,75 @@ export const make = Effect.gen(function* () {
             : Effect.succeed(batch),
         ),
       );
+    },
+
+    searchPullRequests: (input) => {
+      const query = searchQuery(input);
+      if (query === null) {
+        return Effect.fail(
+          new GitHubRepositorySelectorError({
+            command: "gh",
+            cwd: input.cwd,
+            operation: "searchPullRequests",
+          }),
+        );
+      }
+      // One extra row reveals that the host has more than the slice shows, the way the
+      // per-repository read does — up to GitHub's own ceiling on a search page, past which
+      // `hasNextPage` is what says there is more.
+      const rows = Math.min(input.limit + 1, PULL_REQUEST_SEARCH_MAX_ROWS);
+      return graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "searchPullRequests",
+        // The reader's own words are in the query, so it travels over stdin rather than in argv.
+        privateVariables: { q: query },
+        query: pullRequestSearchGraphQlQuery(rows),
+        decode: decodePullRequestSearchJson,
+      }).pipe(
+        Effect.map((batch) => ({
+          items: batch.items.slice(0, input.limit),
+          truncated: batch.rawCount > input.limit || batch.hasNextPage,
+        })),
+      );
+    },
+
+    listPullRequestStats: (input) => {
+      const chunks: Array<ReadonlyArray<{ readonly repository: string; readonly number: number }>> =
+        [];
+      for (let start = 0; start < input.changeRequests.length; start += STAT_ALIASES_PER_REQUEST) {
+        chunks.push(input.changeRequests.slice(start, start + STAT_ALIASES_PER_REQUEST));
+      }
+      return Effect.forEach(
+        chunks,
+        (chunk) => {
+          const query = buildPullRequestStatsGraphQlQuery(chunk);
+          if (query === null) {
+            return Effect.fail(
+              new GitHubRepositorySelectorError({
+                command: "gh",
+                cwd: input.cwd,
+                operation: "listPullRequestStats",
+              }),
+            );
+          }
+          return graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "listPullRequestStats",
+            query,
+            decode: decodePullRequestStatsJson,
+          }).pipe(
+            Effect.map((stats) =>
+              chunk.flatMap((changeRequest, index) => {
+                const stat = stats.get(index);
+                return stat === undefined ? [] : [{ ...changeRequest, ...stat }];
+              }),
+            ),
+          );
+        },
+        { concurrency: STAT_REQUEST_CONCURRENCY },
+      ).pipe(Effect.map((results) => results.flat()));
     },
 
     getPullRequestDetail: (input) =>

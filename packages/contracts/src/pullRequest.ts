@@ -281,6 +281,12 @@ export const PullRequestListEntry = Schema.Struct({
   state: PullRequestState,
   isDraft: Schema.Boolean,
   mergeability: PullRequestMergeability,
+  /**
+   * Zero where the host has not been asked for the counts yet, which on GitHub is every row a
+   * listing hands over: they are read afterwards, through `PullRequestListStatsInput`. Zero is
+   * what a host that reports no counts at all has always sent, and what the page already draws
+   * as no stat rather than as an empty change.
+   */
   additions: NonNegativeInt,
   deletions: NonNegativeInt,
   createdAt: IsoDateTime,
@@ -403,6 +409,44 @@ export const PullRequestRef = Schema.Struct({
   number: PositiveInt,
 });
 export type PullRequestRef = typeof PullRequestRef.Type;
+
+/**
+ * One row's line counts, read after the listing rather than inside it. On GitHub the pair is
+ * 40-60% of the wall clock of the search that answers the whole page — measured over twelve
+ * repositories, 7.1s with it and 4.0s without — for two small numbers at the end of a row.
+ *
+ * So the listing answers without them and the page asks for them next, which is what puts the
+ * rows on screen at the speed of everything else on them.
+ */
+export const PullRequestDiffStat = Schema.Struct({
+  projectId: ProjectId,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  additions: NonNegativeInt,
+  deletions: NonNegativeInt,
+});
+export type PullRequestDiffStat = typeof PullRequestDiffStat.Type;
+
+/**
+ * The rows whose line counts are wanted, which is the rows the page is showing.
+ *
+ * Bounded at the largest listing a page can hold, since each ref becomes a lookup of its own on
+ * the host.
+ */
+export const PullRequestListStatsInput = Schema.Struct({
+  refs: Schema.Array(PullRequestRef).check(Schema.isMaxLength(500)),
+});
+export type PullRequestListStatsInput = typeof PullRequestListStatsInput.Type;
+
+/**
+ * Only the rows that could be answered for. A host with no batched stat read of its own — every
+ * one but GitHub, which all report the counts in the listing itself — is simply absent here, and
+ * the numbers its listing already carried stand.
+ */
+export const PullRequestListStatsResult = Schema.Struct({
+  stats: Schema.Array(PullRequestDiffStat),
+});
+export type PullRequestListStatsResult = typeof PullRequestListStatsResult.Type;
 
 export const PullRequestDetail = Schema.Struct({
   provider: SourceControlProviderKind,
