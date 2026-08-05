@@ -1325,6 +1325,12 @@ label:has(> select#reasoning-effort) select {
   vertical-align: middle;
 }
 
+/* Markdown assumes inline images — GitHub comments lay button images out in a row — and the
+   Tailwind preflight's block-level img would stack them one per line. */
+.chat-markdown img {
+  display: inline-block;
+}
+
 .chat-markdown a {
   color: var(--info-foreground);
   text-decoration: none;

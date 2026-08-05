@@ -67,5 +67,16 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),
+    /**
+     * Explicit refresh: forget the server's cached answers, then re-run the reads. A separate
+     * request rather than a flag on a read, so only a person's refresh spends host requests
+     * while every silent re-read shares the cache.
+     */
+    invalidate: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:invalidate",
+      tag: WS_METHODS.pullRequestsInvalidate,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
   };
 }

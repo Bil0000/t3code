@@ -341,6 +341,8 @@ layer("GitLabPullRequestCli.layer", (it) => {
         "POST",
         "--input",
         "-",
+        "--header",
+        "Content-Type: application/json",
       ]);
       // A JSON body, so a comment reading as a literal `true` stays text.
       expect(call[0].stdin).toBe('{"body":"true"}');

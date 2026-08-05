@@ -1203,3 +1203,113 @@ it.effect("asks another checkout who is signed in when the first one cannot answ
     assert.strictEqual(result.providers[0]?.configured, true);
   }),
 );
+
+it.effect("answers a repeated listing from cache, and concurrent readers share one request", () =>
+  Effect.gen(function* () {
+    let hostCalls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () => {
+            hostCalls += 1;
+            return Effect.succeed({
+              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+              truncated: false,
+            });
+          },
+        }),
+      ],
+    });
+
+    yield* Effect.all([service.list({ state: "open" }), service.list({ state: "open" })], {
+      concurrency: "unbounded",
+    });
+    yield* service.list({ state: "open" });
+    assert.strictEqual(hostCalls, 1);
+
+    // A different filter is a different answer, not a cache hit.
+    yield* service.list({ state: "all" });
+    assert.strictEqual(hostCalls, 2);
+  }),
+);
+
+it.effect("an explicit invalidation makes the next listing ask the host again", () =>
+  Effect.gen(function* () {
+    let hostCalls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () => {
+            hostCalls += 1;
+            return Effect.succeed({ items: [], truncated: false });
+          },
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+    yield* service.invalidate({});
+    yield* service.list({ state: "open" });
+    assert.strictEqual(hostCalls, 2);
+
+    // Forgetting one change request leaves the listings shared.
+    yield* service.invalidate({
+      reference: { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 },
+    });
+    yield* service.list({ state: "open" });
+    assert.strictEqual(hostCalls, 2);
+  }),
+);
+
+it.effect("a mutation makes the next listing ask the host again, with no client asking", () =>
+  Effect.gen(function* () {
+    let hostCalls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () => {
+            hostCalls += 1;
+            return Effect.succeed({ items: [], truncated: false });
+          },
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+    yield* service.runAction({
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+      action: "close",
+    });
+    yield* service.list({ state: "open" });
+    assert.strictEqual(hostCalls, 2);
+  }),
+);
+
+it.effect("does not cache a failed listing", () =>
+  Effect.gen(function* () {
+    let hostCalls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          // The viewer lookup is what fails the whole listing rather than one repository.
+          getViewer: () => {
+            hostCalls += 1;
+            return hostCalls === 1 ? Effect.fail(requestFailed) : Effect.succeed("bilal");
+          },
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(service.list({ state: "open" }));
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    const second = yield* service.list({ state: "open" });
+    assert.strictEqual(hostCalls, 2);
+    assert.strictEqual(second.providers[0]?.configured, true);
+  }),
+);

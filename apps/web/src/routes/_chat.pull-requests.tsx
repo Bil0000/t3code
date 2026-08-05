@@ -49,6 +49,7 @@ import { useProjects } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { pullRequestEnvironment } from "../state/pullRequests";
 import { useEnvironmentQuery } from "../state/query";
+import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
@@ -94,8 +95,6 @@ const PAGE_SIZE = 99;
 const MAX_PAGE_SIZE = 500;
 /** Stable empty map so the memos below do not see a new object on every render. */
 const EMPTY_VIEWERS: PullRequestListResult["viewers"] = {};
-/** Matches the panel's transition so it can animate out before it leaves the tree. */
-const DETAIL_CLOSE_ANIMATION_MS = 200;
 const DETAIL_WIDTH_STORAGE_KEY = "t3code:pull-requests-detail-width";
 const DETAIL_MIN_WIDTH = 420;
 const DETAIL_DEFAULT_WIDTH = 640;
@@ -219,6 +218,15 @@ function PullRequestsRouteView() {
           },
         }),
   );
+  // The header's refresh punches through the server's cache before re-reading; the error and
+  // empty states retry plainly, because a failure is never cached.
+  const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
+  const refreshFromHost = async () => {
+    if (environmentId !== null) {
+      await invalidate({ environmentId, input: {} });
+    }
+    listQuery.refresh();
+  };
 
   // Every page size and every search is its own query, and a new one starts empty. The last
   // answer for these filters is held so the page grows and narrows in place rather than blanking
@@ -400,17 +408,6 @@ function PullRequestsRouteView() {
       ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
       : null;
 
-  const [renderedSelection, setRenderedSelection] = useState(selected);
-  useEffect(() => {
-    if (selected !== null) {
-      setRenderedSelection(selected);
-      return;
-    }
-    const timeout = window.setTimeout(() => setRenderedSelection(null), DETAIL_CLOSE_ANIMATION_MS);
-    return () => window.clearTimeout(timeout);
-    // Depend on the identity fields: `selected` is a fresh object on every render.
-  }, [selected?.projectId, selected?.repository, selected?.number]);
-
   // The provider list is the workspace's hosts, not the filtered ones, so switching to a host
   // cannot make the switcher that got you there disappear.
   const [hosts, setHosts] = useState<PullRequestListResult["providers"]>([]);
@@ -466,7 +463,7 @@ function PullRequestsRouteView() {
               size="icon-sm"
               variant="ghost"
               aria-label="Refresh pull requests"
-              onClick={() => listQuery.refresh()}
+              onClick={() => void refreshFromHost()}
             >
               <RefreshCwIcon className={cn("size-4", listQuery.isPending && "animate-spin")} />
             </Button>
@@ -590,22 +587,16 @@ function PullRequestsRouteView() {
           </div>
         </div>
 
-        {renderedSelection && environmentId !== null ? (
+        {selected && environmentId !== null ? (
           <aside
-            data-open={selected !== null}
-            className={cn(
-              "relative flex shrink-0 border-l border-border",
-              "transition-[opacity,translate] duration-200 ease-out",
-              "starting:translate-x-4 starting:opacity-0",
-              "data-[open=false]:pointer-events-none data-[open=false]:translate-x-4 data-[open=false]:opacity-0",
-            )}
+            className="relative flex shrink-0 border-l border-border"
             style={{ width: `${detailPanel.width}px` }}
           >
             <RightPanelResizeHandle handlers={detailPanel.handlers} />
             <PullRequestDetailPanel
-              key={`${renderedSelection.repository}#${renderedSelection.number}`}
+              key={`${selected.repository}#${selected.number}`}
               environmentId={environmentId}
-              reference={renderedSelection}
+              reference={selected}
               onClose={() => updateSearch(clearedSelection)}
             />
           </aside>

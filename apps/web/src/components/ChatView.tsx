@@ -5768,6 +5768,9 @@ function ChatViewContent(props: ChatViewProps) {
         />
       </Suspense>
     ) : activeRightPanelSurface?.kind === "pull-request" ? (
+      // No onClose: the surface tab's own X owns closing here, and a second X in the header
+      // would be the same action twice. The thread context also drops the checkout button —
+      // this is the thread's own pull request, so its branch is already checked out here.
       <PullRequestDetailPanel
         key={`${activeRightPanelSurface.repository}#${activeRightPanelSurface.number}`}
         environmentId={activeThread.environmentId}
@@ -5776,11 +5779,7 @@ function ChatViewContent(props: ChatViewProps) {
           repository: activeRightPanelSurface.repository,
           number: activeRightPanelSurface.number,
         }}
-        onClose={() => {
-          if (activeThreadRef) {
-            useRightPanelStore.getState().closeSurface(activeThreadRef, "pull-request");
-          }
-        }}
+        context="thread"
       />
     ) : activeRightPanelSurface?.kind === "plan" ? (
       <PlanSidebar

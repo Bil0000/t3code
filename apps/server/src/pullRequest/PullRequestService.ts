@@ -1,5 +1,8 @@
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import {
   PullRequestOperationError,
@@ -12,6 +15,7 @@ import {
   type PullRequestDetail,
   type PullRequestDiffInput,
   type PullRequestDiffResult,
+  type PullRequestInvalidateInput,
   type PullRequestListEntry,
   type PullRequestListInput,
   type PullRequestListProjectError,
@@ -53,6 +57,24 @@ const DEFAULT_REPOSITORY_LIST_LIMIT = 99;
  */
 const REPOSITORY_CONCURRENCY = 12;
 
+/**
+ * Every read leaves the process — a CLI per repository, against hosts whose limits are low
+ * (GitHub's search API allows ~30 requests a minute) — so answers are shared for a short
+ * while and concurrent identical reads share one request. The windows sit near the clients'
+ * own stale times: long enough that two people opening the same page cost one round trip,
+ * short enough that "cached" and "fresh" never need telling apart on screen. Reads that
+ * must not share — the refresh button, a client reloading after its own action — go through
+ * `invalidate` rather than a flag on the read, so an ordinary read can never opt out.
+ */
+const LIST_CACHE_TTL = Duration.seconds(30);
+const DETAIL_CACHE_TTL = Duration.seconds(15);
+const DIFF_CACHE_TTL = Duration.seconds(60);
+/** A commit is content-addressed, so its own diff cannot change under its key. */
+const COMMIT_DIFF_CACHE_TTL = Duration.minutes(10);
+const LIST_CACHE_CAPACITY = 64;
+const DETAIL_CACHE_CAPACITY = 128;
+const DIFF_CACHE_CAPACITY = 128;
+
 export type PullRequestError = PullRequestUnavailableError | PullRequestOperationError;
 
 export class PullRequestService extends Context.Service<
@@ -76,6 +98,7 @@ export class PullRequestService extends Context.Service<
     readonly setThreadResolution: (
       input: PullRequestThreadResolutionInput,
     ) => Effect.Effect<void, PullRequestError>;
+    readonly invalidate: (input: PullRequestInvalidateInput) => Effect.Effect<void>;
   }
 >()("t3/pullRequest/PullRequestService") {}
 
@@ -316,7 +339,7 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  const list: PullRequestService["Service"]["list"] = (input) =>
+  const listUncached: PullRequestService["Service"]["list"] = (input) =>
     Effect.gen(function* () {
       const involvement = input.involvement ?? "all";
       const {
@@ -446,7 +469,7 @@ export const make = Effect.gen(function* () {
       };
     });
 
-  const detail: PullRequestService["Service"]["detail"] = (input) =>
+  const detailUncached: PullRequestService["Service"]["detail"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
         project.api
@@ -497,7 +520,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const diff: PullRequestService["Service"]["diff"] = (input) =>
+  const diffUncached: PullRequestService["Service"]["diff"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
         project.api.capabilities.diff
@@ -686,15 +709,160 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  // Epochs are the invalidation mechanism: a key carries its scope's epoch, so bumping the
+  // epoch strands every entry made under the old one — no enumerating a cache whose keys
+  // (cursors, commits) nothing holds a list of. The counter is shared and monotonic so a
+  // scope re-entering `refEpochs` after eviction can never mint a key an old entry still has.
+  let epochCounter = 0;
+  let listingsEpoch = 0;
+  const refEpochs = new Map<string, number>();
+  const REF_EPOCH_CAPACITY = 2_048;
+  const refScope = (ref: PullRequestRef) => `${ref.projectId} ${ref.repository} ${ref.number}`;
+  const refEpoch = (ref: PullRequestRef) => refEpochs.get(refScope(ref)) ?? 0;
+  const bumpRefEpoch = (ref: PullRequestRef) => {
+    const scope = refScope(ref);
+    if (!refEpochs.has(scope) && refEpochs.size >= REF_EPOCH_CAPACITY) {
+      const oldest = refEpochs.keys().next().value;
+      if (oldest !== undefined) refEpochs.delete(oldest);
+    }
+    refEpochs.set(scope, ++epochCounter);
+  };
+
+  // Keys serialize positionally and parse back in the lookup, so the cache is the only holder
+  // of in-flight state: concurrent identical reads coalesce on the key into one host request.
+  const listCache = yield* Cache.makeWith(
+    (key: string) => {
+      // The parse undoes this module's own serialization, so the shapes are known exactly;
+      // the cast restores the branded field types JSON cannot carry.
+      const [, state, involvement, projectId, host, limit, query] = JSON.parse(key) as [
+        number,
+        string,
+        string | null,
+        string | null,
+        string | null,
+        number | null,
+        string | null,
+      ];
+      return listUncached({
+        state,
+        ...(involvement === null ? {} : { involvement }),
+        ...(projectId === null ? {} : { projectId }),
+        ...(host === null ? {} : { host }),
+        ...(limit === null ? {} : { limit }),
+        ...(query === null ? {} : { query }),
+      } as PullRequestListInput);
+    },
+    {
+      capacity: LIST_CACHE_CAPACITY,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? LIST_CACHE_TTL : Duration.zero),
+    },
+  );
+  const list: PullRequestService["Service"]["list"] = (input) =>
+    Cache.get(
+      listCache,
+      JSON.stringify([
+        listingsEpoch,
+        input.state,
+        input.involvement ?? null,
+        input.projectId ?? null,
+        input.host ?? null,
+        input.limit ?? null,
+        input.query ?? null,
+      ]),
+    );
+
+  const detailCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [, projectId, repository, number] = JSON.parse(key) as [number, string, string, number];
+      return detailUncached({ projectId, repository, number } as PullRequestRef);
+    },
+    {
+      capacity: DETAIL_CACHE_CAPACITY,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? DETAIL_CACHE_TTL : Duration.zero),
+    },
+  );
+  const detail: PullRequestService["Service"]["detail"] = (input) =>
+    Cache.get(
+      detailCache,
+      JSON.stringify([refEpoch(input), input.projectId, input.repository, input.number]),
+    );
+
+  const diffCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [, projectId, repository, number, cursor, commit] = JSON.parse(key) as [
+        number,
+        string,
+        string,
+        number,
+        string | null,
+        string | null,
+      ];
+      return diffUncached({
+        projectId,
+        repository,
+        number,
+        ...(cursor === null ? {} : { cursor }),
+        ...(commit === null ? {} : { commit }),
+      } as PullRequestDiffInput);
+    },
+    {
+      capacity: DIFF_CACHE_CAPACITY,
+      timeToLive: (exit, key) => {
+        if (!Exit.isSuccess(exit)) return Duration.zero;
+        const commit = (JSON.parse(key) as ReadonlyArray<unknown>)[5];
+        return commit === null ? DIFF_CACHE_TTL : COMMIT_DIFF_CACHE_TTL;
+      },
+    },
+  );
+  const diff: PullRequestService["Service"]["diff"] = (input) =>
+    Cache.get(
+      diffCache,
+      JSON.stringify([
+        refEpoch(input),
+        input.projectId,
+        input.repository,
+        input.number,
+        input.cursor ?? null,
+        input.commit ?? null,
+      ]),
+    );
+
+  const invalidate: PullRequestService["Service"]["invalidate"] = (input) =>
+    Effect.sync(() => {
+      if (input.reference === undefined) {
+        listingsEpoch = ++epochCounter;
+        return;
+      }
+      bumpRefEpoch(input.reference);
+    });
+
+  // A mutation's own client re-reads right after it, and every other client's next read must
+  // see the action too — so a write forgets the change request it touched and the listings its
+  // state change reorders, for everyone, without any client asking.
+  const invalidatedByMutation =
+    <I extends PullRequestRef>(
+      method: (input: I) => Effect.Effect<void, PullRequestError>,
+    ): ((input: I) => Effect.Effect<void, PullRequestError>) =>
+    (input) =>
+      method(input).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            bumpRefEpoch(input);
+            listingsEpoch = ++epochCounter;
+          }),
+        ),
+      );
+
   return PullRequestService.of({
     list,
     detail,
     diff,
-    runAction,
-    comment,
-    submitReview,
-    replyToThread,
-    setThreadResolution,
+    runAction: invalidatedByMutation(runAction),
+    comment: invalidatedByMutation(comment),
+    submitReview: invalidatedByMutation(submitReview),
+    replyToThread: invalidatedByMutation(replyToThread),
+    setThreadResolution: invalidatedByMutation(setThreadResolution),
+    invalidate,
   });
 });
 

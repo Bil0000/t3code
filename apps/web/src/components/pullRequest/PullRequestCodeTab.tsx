@@ -18,6 +18,7 @@ import {
   TextWrapIcon,
   TriangleAlertIcon,
 } from "lucide-react";
+import { useAtomRefresh } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useClientSettings } from "~/hooks/useSettings";
@@ -141,6 +142,7 @@ export function PullRequestCodeTab({
   pendingFinding,
   onFixFinding,
   onRefresh,
+  refreshToken = 0,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
@@ -149,6 +151,8 @@ export function PullRequestCodeTab({
   pendingFinding?: string | null;
   onFixFinding?: (finding: PullRequestFinding) => void;
   onRefresh: () => void;
+  /** Bumped by the panel's refresh button: drop the accumulated pages and re-read the diff. */
+  refreshToken?: number;
 }) {
   const { resolvedTheme } = useTheme();
   const settings = useClientSettings();
@@ -220,22 +224,45 @@ export function PullRequestCodeTab({
     if (data === null) return;
     setSliceState((previous) => {
       const slices = previous.key === scopeKey ? previous.slices : NO_SLICES;
-      if (slices.some((slice) => slice.cursor === cursor)) return previous;
-      return {
-        key: scopeKey,
+      const next = {
         cursor,
-        slices: [
-          ...slices,
-          {
-            cursor,
-            patch: data.patch,
-            truncated: data.truncated,
-            nextCursor: data.nextCursor,
-          },
-        ],
+        patch: data.patch,
+        truncated: data.truncated,
+        nextCursor: data.nextCursor,
       };
+      const index = slices.findIndex((slice) => slice.cursor === cursor);
+      if (index === -1) {
+        return { key: scopeKey, cursor, slices: [...slices, next] };
+      }
+      const existing = slices[index];
+      if (
+        existing !== undefined &&
+        existing.patch === next.patch &&
+        existing.truncated === next.truncated &&
+        existing.nextCursor === next.nextCursor
+      ) {
+        return previous;
+      }
+      // A page that came back different means the diff moved under the review. The slices
+      // after it go with the replacement: their cursors were positions in the old diff.
+      return { key: scopeKey, cursor, slices: [...slices.slice(0, index), next] };
     });
   }, [cursor, diffQuery.data, scopeKey]);
+  // The refresh button rereads from the first page rather than the page the reader is on:
+  // pages are positions in one snapshot of the diff, and a fresh snapshot starts over.
+  const refreshFirstDiffPage = useAtomRefresh(
+    pullRequestEnvironment.diff({
+      environmentId,
+      input: { ...reference, ...(commit === null ? {} : { commit }) },
+    }),
+  );
+  const appliedRefreshToken = useRef(refreshToken);
+  useEffect(() => {
+    if (appliedRefreshToken.current === refreshToken) return;
+    appliedRefreshToken.current = refreshToken;
+    setSliceState({ key: scopeKey, cursor: null, slices: NO_SLICES });
+    refreshFirstDiffPage();
+  }, [refreshToken, scopeKey, refreshFirstDiffPage]);
   const reviewKey = referenceKey;
   const pendingComments = usePendingReviewComments(reference);
   const addComment = usePullRequestReviewStore((store) => store.addComment);
@@ -257,7 +284,9 @@ export function PullRequestCodeTab({
   const parsedSlices = useMemo(
     () =>
       loadedSlices.map((slice) => {
-        const cacheKey = `pull-request:${scopeKey}:${resolvedTheme}:${slice.cursor ?? "first"}`;
+        // The patch's own hash is part of the key: a refreshed page reuses its cursor, and a
+        // key of position alone would keep handing back the parse of the patch it replaced.
+        const cacheKey = `pull-request:${scopeKey}:${resolvedTheme}:${slice.cursor ?? "first"}:${fnv1a32(slice.patch)}`;
         const cached = parseCache.current.get(cacheKey);
         if (cached) return cached;
         const parsed = getRenderablePatch(slice.patch, cacheKey);

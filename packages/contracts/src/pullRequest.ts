@@ -288,6 +288,17 @@ export const PullRequestRef = Schema.Struct({
 });
 export type PullRequestRef = typeof PullRequestRef.Type;
 
+/**
+ * Forget what the server has cached, so the next read asks the host. With a reference it
+ * forgets that one change request's detail and diff; without one it forgets the listings.
+ * A separate request rather than a flag on the reads, so an explicit "refresh" one person
+ * presses is the only thing that spends host requests — every ordinary read shares.
+ */
+export const PullRequestInvalidateInput = Schema.Struct({
+  reference: Schema.optional(PullRequestRef),
+});
+export type PullRequestInvalidateInput = typeof PullRequestInvalidateInput.Type;
+
 export const PullRequestDetail = Schema.Struct({
   provider: SourceControlProviderKind,
   capabilities: PullRequestCapabilities,
