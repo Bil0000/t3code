@@ -15,6 +15,7 @@ import { PlusIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 
 import { openCommandPalette } from "../../commandPaletteBus";
 import { Button } from "../ui/button";
+import { PullRequestListGhost } from "./PullRequestGhosts";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 
 /**
@@ -117,17 +118,13 @@ export function PullRequestListEmptyState({
   }
 
   if (searching) {
+    // The same ghost the first load wears, so a search on its way and a list on its way are
+    // one state to the eye — with the question named where the group headers usually speak.
     return (
-      <Empty className="py-16">
-        <BranchMark joined />
-        <EmptyHeader>
-          <EmptyTitle>Searching every host</EmptyTitle>
-          <EmptyDescription>
-            Looking for “{query.length > 48 ? `${query.slice(0, 48)}…` : query}” across the
-            repositories this page can read.
-          </EmptyDescription>
-        </EmptyHeader>
-      </Empty>
+      <PullRequestListGhost
+        rows={5}
+        caption={`Searching every host for “${query.length > 48 ? `${query.slice(0, 48)}…` : query}”`}
+      />
     );
   }
 

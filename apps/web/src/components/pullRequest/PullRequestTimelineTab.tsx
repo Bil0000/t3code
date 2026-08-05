@@ -76,7 +76,10 @@ export function PullRequestTimelineTab({ detail }: { detail: PullRequestDetail }
     <div className="h-full overflow-y-auto px-5 py-5">
       <div className="relative ml-2 border-l border-border/70 pl-5">
         {events.map((event) => (
-          <article key={event.id} className="relative pb-5 text-sm">
+          <article
+            key={event.id}
+            className="relative pb-5 text-sm [contain-intrinsic-block-size:56px] [content-visibility:auto]"
+          >
             <span
               aria-hidden
               className="absolute -left-[1.55rem] top-1 size-2 rounded-full border border-border bg-background"

@@ -1,5 +1,7 @@
 import type { PullRequestListEntry } from "@t3tools/contracts";
 
+import { memo } from "react";
+
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -12,7 +14,7 @@ import {
   PullRequestStateGlyph,
 } from "./pullRequestPresentation";
 
-export function PullRequestRow({
+function PullRequestRowImpl({
   entry,
   selected,
   showProjectTitle,
@@ -40,6 +42,10 @@ export function PullRequestRow({
       onClick={() => onSelect(entry)}
       className={cn(
         "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        // Offscreen rows are skipped for style, layout and paint: a long list costs what the
+        // viewport shows, not what the pages have loaded. The intrinsic size keeps the
+        // scrollbar honest while a row is skipped.
+        "[contain-intrinsic-block-size:54px] [content-visibility:auto]",
         selected ? "bg-accent" : "hover:bg-accent/60",
       )}
     >
@@ -82,3 +88,10 @@ export function PullRequestRow({
     </button>
   );
 }
+
+/**
+ * Memoized: the list re-renders on every keystroke of a search and every status poll, and a
+ * row whose entry, selection and match state are unchanged has nothing new to say. Effective
+ * because the route hands it a stable `onSelect`.
+ */
+export const PullRequestRow = memo(PullRequestRowImpl);

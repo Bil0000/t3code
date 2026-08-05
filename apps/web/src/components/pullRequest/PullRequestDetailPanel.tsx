@@ -61,8 +61,12 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
-import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
+import {
+  PullRequestDetailGhost,
+  PullRequestDiffGhost,
+  PullRequestTimelineGhost,
+} from "./PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAskSelectionInput } from "./PullRequestCodeTab";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
@@ -181,7 +185,19 @@ export function PullRequestDetailPanel({
   context?: "page" | "thread";
 }) {
   const [tab, setTab] = useState<DetailTab>("summary");
-  const [codeMounted, setCodeMounted] = useState(false);
+  // Every tab the reader has opened stays mounted behind the active one. The diff viewer
+  // always needed this (it virtualizes against its own scroll position); the trace showed the
+  // summary needs it too — a large description re-parses its whole markdown on every return
+  // to the tab. `visibility` keeps boxes, sizes and scroll offsets, and takes hidden content
+  // out of the tab order and the accessibility tree.
+  const [mountedTabs, setMountedTabs] = useState<ReadonlySet<DetailTab>>(
+    () => new Set<DetailTab>(["summary"]),
+  );
+  useEffect(() => {
+    setMountedTabs((previous) =>
+      previous.has(tab) ? previous : new Set<DetailTab>(previous).add(tab),
+    );
+  }, [tab]);
   const [mergeMethod, setMergeMethod] = useState<PullRequestMergeMethod>("merge");
   const [confirmAction, setConfirmAction] = useState<"merge" | "close" | null>(null);
   // Which handoff is preparing, keyed so a per-finding button can say "Preparing..." on itself
@@ -912,11 +928,7 @@ export function PullRequestDetailPanel({
               key={item.value}
               type="button"
               aria-pressed={tab === item.value}
-              onClick={() => {
-                // Once opened, the diff viewer is kept alive for the rest of the panel's life.
-                if (item.value === "code") setCodeMounted(true);
-                setTab(item.value);
-              }}
+              onClick={() => setTab(item.value)}
               className={cn(
                 "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors",
                 tab === item.value
@@ -932,11 +944,15 @@ export function PullRequestDetailPanel({
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
         {detailQuery.isPending && !detail ? (
-          <div className="space-y-4 p-5">
-            <Skeleton className="h-6 w-4/5" />
-            <Skeleton className="h-4 w-2/5" />
-            <Skeleton className="h-28 w-full" />
-          </div>
+          // The ghost wears the shape of the tab being waited on, so switching tabs mid-load
+          // does not flash a summary outline under a timeline heading.
+          tab === "timeline" ? (
+            <PullRequestTimelineGhost />
+          ) : tab === "code" ? (
+            <PullRequestDiffGhost className="p-5" />
+          ) : (
+            <PullRequestDetailGhost />
+          )
         ) : detailQuery.error && !detail ? (
           <PullRequestsUnavailableState
             error={detailQuery.error}
@@ -944,26 +960,26 @@ export function PullRequestDetailPanel({
           />
         ) : detail ? (
           <>
-            {tab === "summary" ? (
-              <PullRequestSummaryTab
-                environmentId={environmentId}
-                reference={reference}
-                detail={detail}
-                pendingFinding={handoff}
-                onFixFinding={startFixFinding}
-                onRefresh={() => detailQuery.refresh()}
-              />
-            ) : tab === "timeline" ? (
-              <PullRequestTimelineTab detail={detail} />
+            {mountedTabs.has("summary") ? (
+              <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
+                <PullRequestSummaryTab
+                  environmentId={environmentId}
+                  reference={reference}
+                  detail={detail}
+                  pendingFinding={handoff}
+                  onFixFinding={startFixFinding}
+                  onRefresh={() => detailQuery.refresh()}
+                />
+              </div>
             ) : null}
-            {/* Summary and Timeline are cheap enough to rebuild; the diff viewer is not, so it
-                stays mounted behind them once opened. It virtualizes against its own scroll
-                position and measures its host, both of which `display: none` would throw away —
-                `visibility` keeps the box, its size and its scroll offset intact, and takes the
-                content out of the tab order and the accessibility tree while it is hidden. */}
-            {codeMounted ? (
+            {mountedTabs.has("timeline") ? (
+              <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
+                <PullRequestTimelineTab detail={detail} />
+              </div>
+            ) : null}
+            {mountedTabs.has("code") ? (
               <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
-                <Suspense fallback={<Skeleton className="m-5 h-48" />}>
+                <Suspense fallback={<PullRequestDiffGhost className="p-5" />}>
                   <PullRequestCodeTab
                     onAskAboutSelection={askAboutSelection}
                     environmentId={environmentId}

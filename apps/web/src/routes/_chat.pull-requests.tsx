@@ -22,7 +22,15 @@ import {
   RefreshCwIcon,
   SearchIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ElementType,
+  type ReactNode,
+} from "react";
 
 import {
   filterPullRequestsByInvolvement,
@@ -44,6 +52,7 @@ import {
   type PullRequestFilterOption,
 } from "../components/pullRequest/PullRequestListFilters";
 import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
+import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhosts";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
@@ -51,7 +60,6 @@ import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
-import { Skeleton } from "../components/ui/skeleton";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import {
   pullRequestSurfaceId,
@@ -201,27 +209,30 @@ function PullRequestsRouteView() {
     );
   }, []);
 
-  const updateSearch = (patch: {
-    [Key in keyof PullRequestsSearch]?: PullRequestsSearch[Key] | undefined;
-  }) =>
-    void navigate({
-      // Rebuilt rather than spread so a cleared field leaves the URL instead of
-      // lingering as an explicit `undefined`.
-      search: (previous: PullRequestsSearch): PullRequestsSearch => {
-        const next = { ...previous, ...patch };
-        return {
-          involvement: next.involvement ?? previous.involvement,
-          state: next.state ?? previous.state,
-          ...(next.repository ? { repository: next.repository } : {}),
-          ...(next.number ? { number: next.number } : {}),
-          ...(next.projectId ? { projectId: next.projectId } : {}),
-          ...(next.host ? { host: next.host } : {}),
-          ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
-          ...(next.q ? { q: next.q } : {}),
-        };
-      },
-      replace: true,
-    });
+  const updateSearch = useCallback(
+    (patch: {
+      [Key in keyof PullRequestsSearch]?: PullRequestsSearch[Key] | undefined;
+    }) =>
+      void navigate({
+        // Rebuilt rather than spread so a cleared field leaves the URL instead of
+        // lingering as an explicit `undefined`.
+        search: (previous: PullRequestsSearch): PullRequestsSearch => {
+          const next = { ...previous, ...patch };
+          return {
+            involvement: next.involvement ?? previous.involvement,
+            state: next.state ?? previous.state,
+            ...(next.repository ? { repository: next.repository } : {}),
+            ...(next.number ? { number: next.number } : {}),
+            ...(next.projectId ? { projectId: next.projectId } : {}),
+            ...(next.host ? { host: next.host } : {}),
+            ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
+            ...(next.q ? { q: next.q } : {}),
+          };
+        },
+        replace: true,
+      }),
+    [navigate],
+  );
 
   // Changing what the list contains must not leave a selection from the previous view open.
   // The project filter is untouched: it is the user's scope, not part of the selection.
@@ -730,15 +741,19 @@ function PullRequestsRouteView() {
     [listErrors],
   );
 
-  const selectEntry = (entry: PullRequestListEntry) => {
-    if (rightPanelRef === null) return;
-    useRightPanelStore.getState().openPullRequest(rightPanelRef, entry);
-    updateSearch({
-      repository: entry.repository,
-      number: entry.number,
-      selectedProjectId: entry.projectId,
-    });
-  };
+  // Stable so the memoized rows can skip re-rendering when the list around them changes.
+  const selectEntry = useCallback(
+    (entry: PullRequestListEntry) => {
+      if (rightPanelRef === null) return;
+      useRightPanelStore.getState().openPullRequest(rightPanelRef, entry);
+      updateSearch({
+        repository: entry.repository,
+        number: entry.number,
+        selectedProjectId: entry.projectId,
+      });
+    },
+    [rightPanelRef, updateSearch],
+  );
 
   const searchInput = (
     <PullRequestSearchInput
@@ -770,24 +785,16 @@ function PullRequestsRouteView() {
   // these filters" is a claim, and it is the wrong one to make about a question still in flight,
   // so that case waits with the skeletons rather than answering for the hosts. A search says so
   // in its own words and is left to.
-  /** The list has nothing to show yet, and says so as itself rather than as a sentence. */
-  const skeletonRows = (
-    <div className="space-y-1">
-      {Array.from({ length: 7 }, (_, index) => (
-        <Skeleton key={index} className="h-13 w-full rounded-lg" />
-      ))}
-    </div>
-  );
   const carriedToNothing =
     showingCarried && listQuery.isPending && entries.length === 0 && typedQuery.length === 0;
   const listBody = (
     <>
       {firstLoad ? (
-        skeletonRows
+        <PullRequestListGhost rows={7} />
       ) : listQuery.error && listData === null ? (
         <PullRequestsUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
       ) : carriedToNothing ? (
-        skeletonRows
+        <PullRequestListGhost rows={7} />
       ) : entries.length === 0 ? (
         <PullRequestListEmptyState
           hasProjects={!projectsKnown || projects.length > 0}
@@ -951,7 +958,7 @@ function PullRequestsRouteView() {
   };
 
   return (
-    <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground">
+    <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="relative flex min-h-0 flex-1">
         {rightPanelState.isOpen ? openPanelControls : null}
         <PullRequestsColumn {...columnProps} />
@@ -1226,7 +1233,9 @@ function PullRequestsColumn({
   }, [condensed]);
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+    // Painted flat like the chat column: the inset underneath carries the chrome grain, and a
+    // content surface that lets it show reads as a different background than every thread.
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <header
         className={cn(
           "workspace-topbar drag-region gap-1.5 px-3 sm:px-5",
@@ -1291,7 +1300,10 @@ function PullRequestsColumn({
         ref={scrollRef}
         className="pull-requests-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto"
       >
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pb-12 pt-4">
+        {/* The top padding is the fade band's own height (2.5rem, 3rem from `sm:`), the same
+            pairing the settings page makes: at rest the controls sit fully below the mask, and
+            only content actually passing under the chrome fades. */}
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pt-10 pb-12 sm:pt-12">
           <div className="flex flex-col gap-3">
             <div ref={inFlowSearchRef} className="flex items-center gap-2">
               {searchInput}

@@ -20,9 +20,9 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 
 import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
-import { Skeleton } from "../ui/skeleton";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
+import { PullRequestPeopleGhost } from "./PullRequestGhosts";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { readableFailure } from "./pullRequestDetail.logic";
 
@@ -142,11 +142,7 @@ export function PullRequestReviewerPicker({
         </div>
         <div className="max-h-72 overflow-y-auto p-1">
           {candidatesQuery.isPending ? (
-            <div className="space-y-1 p-1">
-              {Array.from({ length: 4 }, (_, index) => (
-                <Skeleton key={index} className="h-7 w-full rounded-md" />
-              ))}
-            </div>
+            <PullRequestPeopleGhost rows={4} />
           ) : candidatesQuery.error !== null ? (
             <p className="p-2 text-xs text-muted-foreground">
               The people with access could not be read. {candidatesQuery.error}

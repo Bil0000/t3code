@@ -43,6 +43,7 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
+import { PullRequestDiffGhost } from "./PullRequestGhosts";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
@@ -54,7 +55,6 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "../ui/menu";
-import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -818,12 +818,7 @@ export function PullRequestCodeTab({
   // Under the toolbar rather than in place of it, so choosing a commit does not take the
   // dropdown that was just used off the screen while its diff loads.
   if (diffQuery.isPending && loadedSlices.length === 0) {
-    return withReviewBar(
-      <div className="space-y-2 p-5">
-        <Skeleton className="h-4 w-40" />
-        <Skeleton className="h-48 w-full" />
-      </div>,
-    );
+    return withReviewBar(<PullRequestDiffGhost className="p-5" />);
   }
 
   // A slice that fails once there are files on screen is reported at the end of them instead:

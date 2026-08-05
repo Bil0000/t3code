@@ -323,7 +323,12 @@ export function PullRequestSummaryTab({
               </Button>
             ) : null}
             {visibleComments.map((comment) => (
-              <article key={comment.id} className="rounded-lg border border-border/60 p-3">
+              <article
+                key={comment.id}
+                // Offscreen comments skip style, layout and paint. Bot comments carry pages of
+                // highlighted code, and the conversation is below the description either way.
+                className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
+              >
                 <div className="flex items-start gap-2">
                   <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
                     <PullRequestActorLabel
