@@ -357,8 +357,11 @@ function PullRequestsRouteView() {
 
   // Carrying on where the last answer stopped, and only raising the page size for the hosts that
   // could not say where that was.
-  const nextCursors = listData?.nextCursors ?? {};
-  const canContinue = Object.keys(nextCursors).length > 0;
+  // From this question's own answer, never from the rows being held while it travels: a
+  // continuation is a boundary in one listing, and carrying one across a search would ask the
+  // new question to start where the old one stopped — skipping its newest matches entirely.
+  const nextCursors = answered?.nextCursors ?? {};
+  const canContinue = !showingCarried && Object.keys(nextCursors).length > 0;
   const loadMore = () => {
     if (canContinue) {
       setPage({ key: filterKey, size: pageSize, cursors: nextCursors });
@@ -434,6 +437,9 @@ function PullRequestsRouteView() {
       listData?.truncated !== true ||
       listQuery.isPending ||
       listQuery.error !== null ||
+      // The rows on screen belong to the previous question, so nothing about them says where
+      // this one carries on from. Growing the page under them would answer neither.
+      showingCarried ||
       // Asking past the cap is refused, which would strand the list on an error the retry
       // could never clear, so growth stops here and the rest stays on the host. A continuation
       // does not grow the page at all, so the cap does not apply to it.
@@ -463,6 +469,7 @@ function PullRequestsRouteView() {
     listQuery.error,
     listQuery.isPending,
     pageSize,
+    showingCarried,
   ]);
 
   /**

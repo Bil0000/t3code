@@ -578,12 +578,16 @@ export function PullRequestCodeTab({
   // A rebase or a force-push can take the scoped commit out of the change. Its diff may still
   // be reachable on the host, but it is no longer part of what is being reviewed, so the scope
   // goes back to the whole change rather than sitting under a name nothing matches.
+  //
+  // Including when the change reports no commits at all: the scope dropdown is the only way back
+  // to the whole diff and it is not drawn without commits to list, so a scope that outlived them
+  // would leave the tab reading one obsolete commit with nothing to press.
   const selectedCommit = orderedCommits.find((entry) => entry.oid === commit);
   useEffect(() => {
-    if (commit !== null && orderedCommits.length > 0 && selectedCommit === undefined) {
+    if (commit !== null && selectedCommit === undefined) {
       setCommitScope({ key: referenceKey, oid: null });
     }
-  }, [commit, orderedCommits, referenceKey, selectedCommit]);
+  }, [commit, referenceKey, selectedCommit]);
   const scopeLabel = selectedCommit ? selectedCommit.messageHeadline : "All commits";
   /**
    * The same controls the thread diff panel carries, in the same order, minus the
