@@ -321,7 +321,7 @@ export function PullRequestDetailPanel({
     }
     // The same thread again, now that there is somewhere to point it at. A local checkout has
     // no worktree of its own, so the thread runs where the repository already is.
-    await newThread(projectRef, {
+    const pointed = await newThread(projectRef, {
       branch: prepared.value.branch,
       worktreePath: prepared.value.worktreePath,
       envMode: prepared.value.worktreePath === null ? "local" : "worktree",
@@ -329,6 +329,18 @@ export function PullRequestDetailPanel({
       () => true,
       () => false,
     );
+    if (!pointed) {
+      setHandoff(null);
+      // The checkout is on disk; only the thread failed to move onto it. Writing the task now
+      // would send the agent at whatever the thread was already open on — which is the one
+      // outcome worth stopping for, since it reads as success and is not.
+      toastManager.update(toastId, {
+        type: "error",
+        title: "Checked out, but the thread stayed where it was",
+        description: `The checkout is ready on \`${prepared.value.branch}\`. Point a thread at it from the branch picker, then ask again.`,
+      });
+      return;
+    }
     // Released here whatever happened next: a loading toast never expires on its own, so leaving
     // this set would spin forever and lock every handoff behind it until a reload.
     setHandoff(null);
