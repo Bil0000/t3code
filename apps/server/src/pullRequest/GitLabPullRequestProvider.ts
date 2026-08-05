@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { PullRequestCapabilities } from "@t3tools/contracts";
+import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
 
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import {
@@ -23,7 +23,34 @@ const CAPABILITIES: PullRequestCapabilities = {
     // says a merge request has been reviewed and rejected.
     verdicts: ["comment", "approve"],
   },
+  reviewers: { request: true, listCandidates: true },
 };
+
+/**
+ * What the signed-in account may do here. GitLab answers exactly one of these questions per
+ * viewer, on the merge request itself: `user.can_merge`, which is why merging is the only thing
+ * narrowed.
+ *
+ * The rest stay granted. GitLab's REST API reports the viewer's role on the project but never
+ * whether they opened this merge request — and its author may close it, reopen it and move it in
+ * and out of draft whatever their role, just as the author of a note may resolve the discussion
+ * it started. Withholding those controls from the one person entitled to them is the worse of the
+ * two mistakes, so they are offered and GitLab explains any refusal itself.
+ *
+ * Asking for a review is granted for the same reason: GitLab takes a reviewer set from the author
+ * and from anyone with the Developer role, and states neither of those two facts here.
+ */
+export function gitLabViewerPermissions(input: {
+  readonly viewerCanMerge: boolean;
+}): PullRequestViewerPermissions {
+  return {
+    actions: CAPABILITIES.actions.filter((action) => action !== "merge" || input.viewerCanMerge),
+    comment: true,
+    resolve: true,
+    verdicts: CAPABILITIES.review.verdicts,
+    requestReviewers: true,
+  };
+}
 
 /** The CLI tags that mean the tool itself is unusable, rather than one request failing. */
 function reasonFor(
@@ -63,8 +90,14 @@ export const make = Effect.gen(function* () {
           viewer: input.viewer,
           limit: input.limit,
           query: input.query,
+          cursor: input.cursor,
         })
-        .pipe(Effect.mapError(fail("listChangeRequests"))),
+        .pipe(
+          Effect.mapError(fail("listChangeRequests")),
+          // GitLab is asked for its merge requests by update, newest first, whether or not it is
+          // being carried on from — so every page it answers is one a cursor can continue.
+          Effect.map((batch) => ({ ...batch, continues: true })),
+        ),
 
     getChangeRequest: (input) =>
       // GitLab splits a merge request across four endpoints, so they are read together.
@@ -96,15 +129,50 @@ export const make = Effect.gen(function* () {
           ]): ProviderChangeRequestDetail => ({
             ...mergeRequest,
             comments: notes.comments,
+            // GitLab reports no count of its own, so the walk's own total is the host's: the
+            // notes endpoint carries every comment on the merge request, including the ones
+            // written under a discussion, and it is read until GitLab runs out.
+            commentCount: notes.comments.length,
             commentsTruncated: notes.truncated || discussions.truncated,
             reviewThreads: discussions.threads,
             commits,
             mergeCapabilities,
+            // Off the merge request read above, which was being made anyway.
+            viewerPermissions: gitLabViewerPermissions(mergeRequest),
           }),
         ),
       ),
 
+    // The same read the detail takes it from, on its own: `user.can_merge` lives on the merge
+    // request, so there is no cheaper thing to ask GitLab.
+    getViewerPermissions: (input) =>
+      cli
+        .getMergeRequestDetail(input)
+        .pipe(Effect.mapError(fail("getViewerPermissions")), Effect.map(gitLabViewerPermissions)),
+
     getDiff: (input) => cli.getMergeRequestDiff(input).pipe(Effect.mapError(fail("getDiff"))),
+
+    // Users only: GitLab requests a review of a person, and the groups that can stand in for one
+    // appear in approval rules rather than in a merge request's reviewers.
+    listReviewerCandidates: (input) =>
+      cli
+        .listReviewerCandidates({
+          cwd: input.cwd,
+          repository: input.repository,
+          number: input.number,
+        })
+        .pipe(Effect.mapError(fail("listReviewerCandidates"))),
+
+    setReviewerRequest: (input) =>
+      cli
+        .setReviewerRequest({
+          cwd: input.cwd,
+          repository: input.repository,
+          number: input.number,
+          reviewers: input.reviewers,
+          requested: input.requested,
+        })
+        .pipe(Effect.mapError(fail("setReviewerRequest"))),
 
     runAction: (input) =>
       cli

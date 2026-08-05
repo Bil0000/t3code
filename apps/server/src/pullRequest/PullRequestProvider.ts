@@ -16,7 +16,10 @@ import type {
   PullRequestReviewCommentDraft,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
+  PullRequestReviewerCandidateList,
+  PullRequestReviewerKind,
   PullRequestState,
+  PullRequestViewerPermissions,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
 import { SourceControlProviderKind as SourceControlProviderKindSchema } from "@t3tools/contracts";
@@ -67,6 +70,33 @@ export interface ProviderChangeRequestPage {
   readonly items: ReadonlyArray<ProviderChangeRequest>;
   /** True when the host has more rows than the page size asked for. */
   readonly truncated: boolean;
+  /**
+   * This page can be carried on from, so the service may hand the caller a cursor for it. False
+   * where the host answered in an order a cursor means nothing in, which leaves a larger `limit`
+   * as the only way to the rest — what every listing did before there were cursors.
+   */
+  readonly continues: boolean;
+}
+
+/**
+ * Where a repository's next slice starts, as the provider that has to ask for it needs it. Built
+ * by the service out of the slice it just handed over, so the boundary that decides whether a row
+ * arrives twice or not at all is decided in one place rather than in four.
+ */
+export interface ProviderListCursor {
+  /**
+   * The instant of the oldest row already handed over, checked against a timestamp's shape before
+   * it gets here because it goes into a host's own filter. Asked for inclusively: several rows
+   * share one instant often enough — a bot that touches eight change requests writes one timestamp
+   * on all eight — and asking for strictly older would lose whichever of them the slice ended
+   * before. The service drops the ones it has already sent.
+   */
+  readonly updatedBefore: string;
+  /**
+   * How many rows this repository has handed over so far, for a host that carries on by counting
+   * rather than by date.
+   */
+  readonly delivered: number;
 }
 
 export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
@@ -77,10 +107,21 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
   readonly reviewers: ReadonlyArray<PullRequestActor>;
   readonly checks: ReadonlyArray<PullRequestCheck>;
   readonly comments: ReadonlyArray<PullRequestComment>;
+  /**
+   * The host's own count of the conversation, which a bounded read can fall short of. A host
+   * that reports no count of its own answers with what it handed over, which is the same number
+   * once the read went to the end.
+   */
+  readonly commentCount: number;
   readonly commentsTruncated: boolean;
   readonly reviewThreads: ReadonlyArray<PullRequestReviewThread>;
   readonly commits: ReadonlyArray<PullRequestCommit>;
   readonly mergeCapabilities: PullRequestMergeCapabilities;
+  /**
+   * What the signed-in account may do with this change request. Read from calls this detail
+   * already makes, so knowing it costs nothing extra.
+   */
+  readonly viewerPermissions: PullRequestViewerPermissions;
 }
 
 export interface ProviderDiffSlice {
@@ -129,12 +170,30 @@ export interface PullRequestProviderApi {
        * rather than a wrong one.
        */
       readonly query?: string | undefined;
+      /**
+       * Where to carry on from, rather than reading this repository from its newest row. Absent
+       * asks for the first slice, which is every listing that has not been continued.
+       */
+      readonly cursor?: ProviderListCursor | undefined;
     },
   ) => Effect.Effect<ProviderChangeRequestPage, PullRequestProviderError>;
 
   readonly getChangeRequest: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderChangeRequestDetail, PullRequestProviderError>;
+
+  /**
+   * The same answer `getChangeRequest` carries, on its own. Asked before anything is written, so
+   * a request that reached the server without going past the page is refused by what the host
+   * says rather than by what the client claimed — and asked freshly, because access granted or
+   * taken away since the page loaded is exactly the case this guards.
+   *
+   * Implementations read the cheapest thing that answers it, which for a host with nothing to say
+   * is no request at all.
+   */
+  readonly getViewerPermissions: (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) => Effect.Effect<PullRequestViewerPermissions, PullRequestProviderError>;
 
   /**
    * One slice of the patch. Only called when `capabilities.diff` is true. A provider that can
@@ -173,6 +232,37 @@ export interface PullRequestProviderApi {
       readonly verdict: PullRequestReviewVerdict;
       readonly body: string;
       readonly comments: ReadonlyArray<PullRequestReviewCommentDraft>;
+    },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /**
+   * The people this viewer may ask for a review, with whoever has already been asked marked as
+   * such. Only called when `capabilities.reviewers.listCandidates` is true.
+   *
+   * The author is left out by each provider rather than by the caller, because only the provider
+   * knows how the host spells the same person in a candidate list and on a pull request.
+   */
+  readonly listReviewerCandidates: (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) => Effect.Effect<PullRequestReviewerCandidateList, PullRequestProviderError>;
+
+  /**
+   * Asks for a review, or takes the request back. Only called when
+   * `capabilities.reviewers.request` is true.
+   *
+   * One call for both directions, because that is what every host does with them: GitHub posts and
+   * deletes the same collection, and GitLab and Bitbucket write the whole reviewer set either way.
+   * Asking again somebody who has already reviewed is a request like any other — which is how a
+   * re-request is made.
+   */
+  readonly setReviewerRequest: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly reviewers: ReadonlyArray<{
+        readonly id: string;
+        readonly kind: PullRequestReviewerKind;
+      }>;
+      readonly requested: boolean;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 

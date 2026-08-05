@@ -14,6 +14,7 @@ import type {
   PullRequestReviewCommentDraft,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
+  PullRequestReviewerCandidateList,
 } from "@t3tools/contracts";
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
@@ -26,11 +27,14 @@ import {
   decodeMergeRequestListJson,
   decodeNotesJson,
   decodeProjectMergeCapabilitiesJson,
+  decodeProjectUsersJson,
   decodeViewerJson,
   type GitLabDiffRefs,
   type GitLabMergeRequestDetail,
   type GitLabMergeRequestListItem,
+  type GitLabProjectUsers,
 } from "./gitLabMergeRequestJson.ts";
+import type { ProviderListCursor } from "./PullRequestProvider.ts";
 
 /**
  * Names the read that produced unusable output, so a failure reports the call it came from
@@ -134,8 +138,14 @@ export type GitLabPullRequestCliError =
 
 /** GitLab's own ceiling on `per_page`, so a larger page has to be walked. */
 const MAX_PAGE_SIZE = 100;
-/** Conversation and commit history are read one page deep; the rest stays on GitLab. */
-const CONVERSATION_PAGE_SIZE = 100;
+/** Commit history is read one page deep; the rest of a long history stays on GitLab. */
+const COMMIT_PAGE_SIZE = 100;
+/**
+ * Pages of the conversation to follow before it is reported as truncated. GitLab caps a page at
+ * a hundred, so this is a thousand notes and a thousand discussions — more than any merge
+ * request a person is reading holds, and a walk that ends whatever the host has.
+ */
+const CONVERSATION_PAGES = 10;
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
 
@@ -168,6 +178,8 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly limit: number;
       /** Free text for GitLab's own `search`, which matches title and description. */
       readonly query?: string | undefined;
+      /** Where to carry on from, as GitLab's own `updated_before`. */
+      readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<GitLabMergeRequestListBatch, GitLabPullRequestCliError>;
 
     readonly getMergeRequestDetail: (input: {
@@ -205,6 +217,25 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
     }) => Effect.Effect<PullRequestMergeCapabilities, GitLabPullRequestCliError>;
+
+    /**
+     * Who this merge request may be sent to, and who it has already been sent to. Two reads at
+     * once, because GitLab keeps the people with access on the project and the reviewers on the
+     * merge request, and neither answers for the other.
+     */
+    readonly listReviewerCandidates: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+    }) => Effect.Effect<PullRequestReviewerCandidateList, GitLabPullRequestCliError>;
+
+    readonly setReviewerRequest: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly reviewers: ReadonlyArray<{ readonly id: string }>;
+      readonly requested: boolean;
+    }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
     readonly runMergeRequestAction: (input: {
       readonly cwd: string;
@@ -375,6 +406,7 @@ export const make = Effect.gen(function* () {
     readonly viewer: string;
     readonly limit: number;
     readonly query?: string | undefined;
+    readonly cursor?: ProviderListCursor | undefined;
     readonly page: number;
     readonly collected: ReadonlyArray<GitLabMergeRequestListItem>;
   }): Effect.Effect<GitLabMergeRequestListBatch, GitLabPullRequestCliError> => {
@@ -392,6 +424,12 @@ export const make = Effect.gen(function* () {
         // matches title and description, and travels URL-encoded like every other value here,
         // so no text in it can become a parameter of its own.
         ...searchParams(input.query),
+        // The instant the last slice ended on, which GitLab reads inclusively — so the rows
+        // already sent at it come back and the caller drops them, rather than the ones beside
+        // them being lost to a strictly-older read.
+        ...(input.cursor === undefined
+          ? []
+          : [["updated_before", input.cursor.updatedBefore] as const]),
         ["order_by", "updated_at"],
         ["sort", "desc"],
         ["per_page", String(perPage)],
@@ -500,6 +538,99 @@ export const make = Effect.gen(function* () {
     );
 
   /**
+   * The conversation, a page at a time. GitLab pages by offset and reports no total, so a short
+   * page is the only thing that says it is done — and the raw count decides, not the kept one:
+   * the notes GitLab wrote itself are dropped, and a whole page of them still means there is
+   * more to read.
+   */
+  const notesPage = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly page: number;
+    readonly collected: ReadonlyArray<PullRequestComment>;
+  }): Effect.Effect<
+    { readonly comments: ReadonlyArray<PullRequestComment>; readonly truncated: boolean },
+    GitLabPullRequestCliError
+  > =>
+    api({
+      cwd: input.cwd,
+      path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/notes?${query(
+        [
+          ["per_page", String(MAX_PAGE_SIZE)],
+          ["page", String(input.page)],
+          ["order_by", "created_at"],
+          ["sort", "asc"],
+        ],
+      )}`,
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeNotesJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            new GitLabMergeRequestReadError({
+              command: "glab",
+              cwd: input.cwd,
+              operation: "listNotes",
+              cause: decoded.failure,
+            }),
+          );
+        }
+        const collected = [...input.collected, ...decoded.success.comments];
+        if (decoded.success.rawCount < MAX_PAGE_SIZE) {
+          return Effect.succeed({ comments: collected, truncated: false });
+        }
+        return input.page >= CONVERSATION_PAGES
+          ? Effect.succeed({ comments: collected, truncated: true })
+          : notesPage({ ...input, page: input.page + 1, collected });
+      }),
+    );
+
+  /** The positioned discussions, walked the same way and stopped by the same bound. */
+  const discussionsPage = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly page: number;
+    readonly collected: ReadonlyArray<PullRequestReviewThread>;
+  }): Effect.Effect<
+    { readonly threads: ReadonlyArray<PullRequestReviewThread>; readonly truncated: boolean },
+    GitLabPullRequestCliError
+  > =>
+    api({
+      cwd: input.cwd,
+      path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/discussions?${query(
+        [
+          ["per_page", String(MAX_PAGE_SIZE)],
+          ["page", String(input.page)],
+        ],
+      )}`,
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeDiscussionsJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            new GitLabMergeRequestReadError({
+              command: "glab",
+              cwd: input.cwd,
+              operation: "listDiscussions",
+              cause: decoded.failure,
+            }),
+          );
+        }
+        const collected = [...input.collected, ...decoded.success.threads];
+        // The raw count again: this endpoint returns the plain notes too, so a full page of
+        // those is not the end of the positioned ones.
+        if (decoded.success.rawCount < MAX_PAGE_SIZE) {
+          return Effect.succeed({ threads: collected, truncated: false });
+        }
+        return input.page >= CONVERSATION_PAGES
+          ? Effect.succeed({ threads: collected, truncated: true })
+          : discussionsPage({ ...input, page: input.page + 1, collected });
+      }),
+    );
+
+  /**
    * The revisions a positioned comment is written against. GitLab resolves a comment's line
    * against these three shas, so a review with line comments cannot be sent without them.
    */
@@ -538,6 +669,60 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * The merge request itself, which several calls need for different parts of it: the detail for
+   * everything, and the reviewer paths for the ids GitLab writes a reviewer set with.
+   */
+  const mergeRequestDetail = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+  }): Effect.Effect<GitLabMergeRequestDetail, GitLabPullRequestCliError> =>
+    api({
+      cwd: input.cwd,
+      path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeMergeRequestDetailJson(result.stdout.trim());
+        return Result.isSuccess(decoded)
+          ? Effect.succeed(decoded.success)
+          : Effect.fail(
+              new GitLabMergeRequestReadError({
+                command: "glab",
+                cwd: input.cwd,
+                operation: "getMergeRequestDetail",
+                cause: decoded.failure,
+              }),
+            );
+      }),
+    );
+
+  /** The people with access to the project, one page deep. */
+  const projectUsers = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+  }): Effect.Effect<GitLabProjectUsers, GitLabPullRequestCliError> =>
+    api({
+      cwd: input.cwd,
+      path: `projects/${projectPath(input.repository)}/users?${query([
+        ["per_page", String(MAX_PAGE_SIZE)],
+      ])}`,
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeProjectUsersJson(result.stdout.trim());
+        return Result.isSuccess(decoded)
+          ? Effect.succeed(decoded.success)
+          : Effect.fail(
+              new GitLabMergeRequestReadError({
+                command: "glab",
+                cwd: input.cwd,
+                operation: "listReviewerCandidates",
+                cause: decoded.failure,
+              }),
+            );
+      }),
+    );
+
   return GitLabPullRequestCli.of({
     getViewerUsername: (input) =>
       api({ cwd: input.cwd, path: "user" }).pipe(
@@ -561,63 +746,15 @@ export const make = Effect.gen(function* () {
 
     listMergeRequests: (input) => listPage({ ...input, page: 1, collected: [] }),
 
-    getMergeRequestDetail: (input) =>
-      api({
-        cwd: input.cwd,
-        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
-      }).pipe(
-        Effect.flatMap((result) => {
-          const decoded = decodeMergeRequestDetailJson(result.stdout.trim());
-          return Result.isSuccess(decoded)
-            ? Effect.succeed(decoded.success)
-            : Effect.fail(
-                new GitLabMergeRequestReadError({
-                  command: "glab",
-                  cwd: input.cwd,
-                  operation: "getMergeRequestDetail",
-                  cause: decoded.failure,
-                }),
-              );
-        }),
-      ),
+    getMergeRequestDetail: mergeRequestDetail,
 
-    listNotes: (input) =>
-      api({
-        cwd: input.cwd,
-        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/notes?${query(
-          [
-            ["per_page", String(CONVERSATION_PAGE_SIZE)],
-            ["order_by", "created_at"],
-            ["sort", "asc"],
-          ],
-        )}`,
-      }).pipe(
-        Effect.flatMap((result) => {
-          const decoded = decodeNotesJson(result.stdout.trim());
-          if (!Result.isSuccess(decoded)) {
-            return Effect.fail(
-              new GitLabMergeRequestReadError({
-                command: "glab",
-                cwd: input.cwd,
-                operation: "listNotes",
-                cause: decoded.failure,
-              }),
-            );
-          }
-          return Effect.succeed({
-            comments: decoded.success.comments,
-            // The raw count, not the kept count: notes GitLab wrote itself are dropped, so a
-            // full page of them would otherwise read as "no more notes".
-            truncated: decoded.success.rawCount >= CONVERSATION_PAGE_SIZE,
-          });
-        }),
-      ),
+    listNotes: (input) => notesPage({ ...input, page: 1, collected: [] }),
 
     listCommits: (input) =>
       api({
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/commits?${query(
-          [["per_page", String(CONVERSATION_PAGE_SIZE)]],
+          [["per_page", String(COMMIT_PAGE_SIZE)]],
         )}`,
       }).pipe(
         Effect.flatMap((result) => {
@@ -674,6 +811,50 @@ export const make = Effect.gen(function* () {
         }),
       ),
 
+    listReviewerCandidates: (input) =>
+      Effect.all([mergeRequestDetail(input), projectUsers(input)], { concurrency: 2 }).pipe(
+        Effect.map(([mergeRequest, users]) => {
+          const author = mergeRequest.author?.login;
+          const requested = new Set(mergeRequest.reviewRequestLogins);
+          return {
+            // The author is dropped rather than shown unusable: GitLab refuses to make the person
+            // who opened a merge request its reviewer.
+            candidates: users.candidates.flatMap((candidate) =>
+              candidate.login === author
+                ? []
+                : [{ ...candidate, isRequested: requested.has(candidate.login) }],
+            ),
+            truncated: users.rawCount >= MAX_PAGE_SIZE,
+          };
+        }),
+      ),
+
+    setReviewerRequest: (input) =>
+      mergeRequestDetail(input).pipe(
+        Effect.flatMap((mergeRequest) => {
+          // GitLab has no endpoint that adds or removes one reviewer: `reviewer_ids` replaces the
+          // whole set, so the set that is already there is read first and the change applied to
+          // it. Asking again for somebody already on it writes the same set back, which is how
+          // GitLab re-requests a review.
+          const ids = new Set(mergeRequest.reviewerIds);
+          for (const reviewer of input.reviewers) {
+            const id = Number(reviewer.id);
+            // A candidate GitLab did not name is not an id it would accept, and sending it would
+            // rewrite the reviewer set around a number nobody chose.
+            if (!Number.isSafeInteger(id) || id <= 0) continue;
+            if (input.requested) ids.add(id);
+            else ids.delete(id);
+          }
+          return api({
+            cwd: input.cwd,
+            path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
+            method: "PUT",
+            stdin: JSON.stringify({ reviewer_ids: [...ids] }),
+          });
+        }),
+        Effect.asVoid,
+      ),
+
     runMergeRequestAction: (input) => {
       const [subcommand, ...flags] = actionArgs(input.action, input.mergeMethod);
       return gitlab
@@ -694,33 +875,7 @@ export const make = Effect.gen(function* () {
         stdin: JSON.stringify({ body: input.body }),
       }).pipe(Effect.asVoid),
 
-    listDiscussions: (input) =>
-      api({
-        cwd: input.cwd,
-        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/discussions?${query(
-          [["per_page", String(CONVERSATION_PAGE_SIZE)]],
-        )}`,
-      }).pipe(
-        Effect.flatMap((result) => {
-          const decoded = decodeDiscussionsJson(result.stdout.trim());
-          if (!Result.isSuccess(decoded)) {
-            return Effect.fail(
-              new GitLabMergeRequestReadError({
-                command: "glab",
-                cwd: input.cwd,
-                operation: "listDiscussions",
-                cause: decoded.failure,
-              }),
-            );
-          }
-          return Effect.succeed({
-            threads: decoded.success.threads,
-            // The raw count, not the kept count: this endpoint returns the plain notes too,
-            // so a full page of those would otherwise read as "no more discussions".
-            truncated: decoded.success.rawCount >= CONVERSATION_PAGE_SIZE,
-          });
-        }),
-      ),
+    listDiscussions: (input) => discussionsPage({ ...input, page: 1, collected: [] }),
 
     submitReview: (input) =>
       Effect.gen(function* () {

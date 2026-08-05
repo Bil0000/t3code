@@ -14,7 +14,11 @@ import type {
   PullRequestReviewCommentDraft,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
+  PullRequestReviewerCandidate,
+  PullRequestReviewerCandidateList,
+  PullRequestReviewerKind,
   PullRequestState,
+  PullRequestThreadComment,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
@@ -112,6 +116,28 @@ const RawDetailSchema = Schema.Struct({
   commits: Schema.optional(Schema.Array(RawCommitSchema)),
 });
 
+/** Where a connection carries on from, which is what every paged read below follows. */
+const RawPageInfoSchema = Schema.Struct({
+  hasNextPage: Schema.optional(Schema.Boolean),
+  endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+/**
+ * What GitHub says the viewer may do with a pull request. Both are optional so that an install
+ * that answers without them still delivers the conversation they travel with; an absent field
+ * reads as granted, which is what an unknown permission is.
+ */
+const RawViewerFieldsSchema = Schema.Struct({
+  viewerCanUpdate: Schema.optional(Schema.Boolean),
+  viewerDidAuthor: Schema.optional(Schema.Boolean),
+});
+
+const RawThreadCommentsSchema = Schema.Struct({
+  totalCount: Schema.optional(Schema.Int),
+  pageInfo: Schema.optional(RawPageInfoSchema),
+  nodes: Schema.Array(RawCommentSchema),
+});
+
 /** `gh pr view --json` cannot reach review threads, so they come from the GraphQL API. */
 const RawReviewThreadsSchema = Schema.Struct({
   data: Schema.Struct({
@@ -119,6 +145,7 @@ const RawReviewThreadsSchema = Schema.Struct({
       pullRequest: Schema.Struct({
         reviewThreads: Schema.Struct({
           totalCount: Schema.optional(Schema.Int),
+          pageInfo: Schema.optional(RawPageInfoSchema),
           nodes: Schema.Array(
             Schema.Struct({
               id: Schema.optional(Schema.NullOr(Schema.String)),
@@ -128,13 +155,11 @@ const RawReviewThreadsSchema = Schema.Struct({
               /** Null once the thread's line has left the diff, which `isOutdated` reports. */
               line: Schema.optional(Schema.NullOr(Schema.Int)),
               diffSide: Schema.optional(Schema.NullOr(Schema.String)),
-              comments: Schema.Struct({
-                totalCount: Schema.optional(Schema.Int),
-                nodes: Schema.Array(RawCommentSchema),
-              }),
+              comments: RawThreadCommentsSchema,
             }),
           ),
         }),
+        ...RawViewerFieldsSchema.fields,
         author: Schema.optional(Schema.NullOr(RawActorSchema)),
         comments: Schema.optional(
           Schema.NullOr(
@@ -173,10 +198,16 @@ const RawReviewThreadsSchema = Schema.Struct({
 
 /** Requested together, so a response missing any of them fails rather than defaulting open:
  *  guessing `true` would offer a merge method the repository forbids. */
-const RawMergeCapabilitiesSchema = Schema.Struct({
+const RawRepositoryAccessSchema = Schema.Struct({
   mergeCommitAllowed: Schema.Boolean,
   squashMergeAllowed: Schema.Boolean,
   rebaseMergeAllowed: Schema.Boolean,
+  /**
+   * ADMIN, MAINTAIN, WRITE, TRIAGE, READ or NONE. Optional rather than required, unlike the
+   * three above: an install that does not report it leaves the viewer's standing unknown, which
+   * is answered by granting rather than by failing the whole detail read.
+   */
+  viewerPermission: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawPullRequestFileSchema = Schema.Struct({
@@ -228,20 +259,29 @@ export const PULL_REQUEST_LIST_JSON_FIELDS =
 
 export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,statusCheckRollup,comments,reviews,commits`;
 
+/** GitHub's own ceiling on a connection page, which is what both thread reads ask for. */
+const GRAPHQL_PAGE_SIZE = 100;
+
 /**
- * Root comments of the first page of review threads, and the people on the review — deeper
- * replies stay on GitHub.
+ * One page of review threads with their comments, and the people on the review. `$cursor` is
+ * null for the first page and the last page's `endCursor` after that, so a pull request with
+ * more threads than one page holds is walked rather than cut off at the first fifty.
  *
  * Reviewers come from here rather than from `gh pr view --json reviewRequests` for two reasons:
  * that field holds only requests still outstanding, so anyone who has already reviewed drops off
  * it, and neither it nor any other `gh` JSON field carries an avatar. A reviewer can be a person
  * or an app, and both are asked for by name because they are different GraphQL types.
+ *
+ * `viewerCanUpdate` and `viewerDidAuthor` ride along here for the same reason: they belong to the
+ * pull request this query is already standing on, so what the reader may do with it arrives with
+ * the conversation rather than costing a request of its own.
  */
-export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      reviewThreads(first: 50) {
+      reviewThreads(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
         totalCount
+        pageInfo { hasNextPage endCursor }
         nodes {
           id
           isResolved
@@ -249,14 +289,17 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
           path
           line
           diffSide
-          comments(first: 50) {
+          comments(first: ${GRAPHQL_PAGE_SIZE}) {
             totalCount
+            pageInfo { hasNextPage endCursor }
             nodes { id author { login avatarUrl } body createdAt url }
           }
         }
       }
+      viewerCanUpdate
+      viewerDidAuthor
       author { login avatarUrl }
-      comments(first: 100) { nodes { author { login avatarUrl } } }
+      comments(first: ${GRAPHQL_PAGE_SIZE}) { nodes { author { login avatarUrl } } }
       reviewRequests(first: 50) {
         nodes {
           requestedReviewer {
@@ -271,6 +314,29 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
     }
   }
 }`;
+
+/**
+ * The rest of one thread's conversation. GraphQL pages a connection nested inside another only
+ * from the inner node itself, so a thread longer than a page is followed on its own — a request
+ * GitHub makes necessary, and one no ordinary pull request ever provokes.
+ */
+export const REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY = `query($threadId: ID!, $cursor: String) {
+  node(id: $threadId) {
+    ... on PullRequestReviewThread {
+      comments(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id author { login avatarUrl } body createdAt url }
+      }
+    }
+  }
+}`;
+
+const RawReviewThreadCommentsSchema = Schema.Struct({
+  data: Schema.Struct({
+    /** Null for an id that names nothing the viewer can read, which is not a thread to page. */
+    node: Schema.NullOr(Schema.Struct({ comments: Schema.optional(RawThreadCommentsSchema) })),
+  }),
+});
 
 export const REVIEW_THREAD_REPLY_GRAPHQL_MUTATION = `mutation($threadId: ID!, $body: String!) {
   addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
@@ -344,8 +410,13 @@ export function buildReviewSubmissionJson(input: {
   });
 }
 
-export const REPOSITORY_MERGE_CAPABILITIES_JSON_FIELDS =
-  "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed";
+/**
+ * `viewerPermission` rides along with the merge settings rather than being asked for on its own:
+ * `gh repo view --json` serves both out of the same GraphQL repository object, so the viewer's
+ * standing on the repository costs no request of its own.
+ */
+export const REPOSITORY_ACCESS_JSON_FIELDS =
+  "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed,viewerPermission";
 
 export interface GitHubPullRequestListItem {
   /** The author's node id, kept so a batch can resolve the avatar the listing does not carry. */
@@ -380,6 +451,28 @@ export interface GitHubPullRequestDetail extends GitHubPullRequestListItem {
 function trimmed(value: string | null | undefined): string | null {
   const text = value?.trim() ?? "";
   return text.length > 0 ? text : null;
+}
+
+/**
+ * Null once a connection has nothing further, which is what ends every walk below. GitHub sends
+ * an `endCursor` on a page that is also the last one, so the flag is what decides, not the
+ * cursor's presence.
+ */
+function nextCursorOf(
+  pageInfo: Schema.Schema.Type<typeof RawPageInfoSchema> | undefined,
+): string | null {
+  return pageInfo?.hasNextPage === true ? trimmed(pageInfo.endCursor) : null;
+}
+
+/**
+ * The viewer's standing on one pull request. A pull request GitHub answered nothing for — an
+ * install without the fields, a node the viewer cannot see — counts as updatable and as theirs,
+ * so an unknown permission is granted and the host's own refusal explains anything that fails.
+ */
+function toPullRequestViewerFields(
+  raw: Schema.Schema.Type<typeof RawViewerFieldsSchema> | null | undefined,
+): { readonly canUpdate: boolean; readonly didAuthor: boolean } {
+  return { canUpdate: raw?.viewerCanUpdate !== false, didAuthor: raw?.viewerDidAuthor !== false };
 }
 
 function toActor(raw: Schema.Schema.Type<typeof RawActorSchema> | null | undefined) {
@@ -579,9 +672,10 @@ function toDetail(raw: Schema.Schema.Type<typeof RawDetailSchema>): GitHubPullRe
 const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeListEntry = Schema.decodeUnknownExit(RawListItemSchema);
 const decodeDetail = decodeJsonResult(RawDetailSchema);
-const decodeMergeCapabilities = decodeJsonResult(RawMergeCapabilitiesSchema);
 const decodeFileEntry = Schema.decodeUnknownExit(RawPullRequestFileSchema);
+const decodeRepositoryAccess = decodeJsonResult(RawRepositoryAccessSchema);
 const decodeReviewThreads = decodeJsonResult(RawReviewThreadsSchema);
+const decodeReviewThreadComments = decodeJsonResult(RawReviewThreadCommentsSchema);
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
 
@@ -623,6 +717,8 @@ export interface GitHubReviewThreadComments {
   readonly comments: ReadonlyArray<PullRequestComment>;
   /** Whole conversations, kept anchored so the diff can pin them to their line. */
   readonly reviewThreads: ReadonlyArray<PullRequestReviewThread>;
+  /** The host's own count of the conversation, which a bounded read can fall short of. */
+  readonly commentCount: number;
   readonly truncated: boolean;
   /**
    * Everyone on the review: those still asked and those who have already answered. Whoever has
@@ -636,58 +732,89 @@ export interface GitHubReviewThreadComments {
    * so an app's avatar arrives the same way a person's does.
    */
   readonly avatarsByLogin: ReadonlyMap<string, string>;
+  /** What GitHub says the reader may do with this pull request, read off the same response. */
+  readonly viewer: { readonly canUpdate: boolean; readonly didAuthor: boolean };
+}
+
+/** One thread as this page found it, with what it takes to finish reading it. */
+export interface GitHubReviewThreadEntry {
+  readonly thread: PullRequestReviewThread;
+  /** How many comments GitHub says the thread holds, read or not. */
+  readonly commentCount: number;
+  /** Where the rest of this thread's comments carry on from, or null once it is whole. */
+  readonly nextCommentCursor: string | null;
+}
+
+export interface GitHubReviewThreadPage {
+  readonly threads: ReadonlyArray<GitHubReviewThreadEntry>;
+  /** Where the next page of threads starts, or null once the host has handed them all over. */
+  readonly nextCursor: string | null;
+  readonly reviewers: ReadonlyArray<PullRequestActor>;
+  readonly avatarsByLogin: ReadonlyMap<string, string>;
+  readonly viewer: { readonly canUpdate: boolean; readonly didAuthor: boolean };
 }
 
 /**
- * Unresolved review threads only: a resolved thread is finished work, and surfacing it
- * again would put stale findings into the "fix findings" prompt.
+ * The threads as one flat conversation, which is what the timeline reads. Every comment of
+ * every thread, resolved or not: a resolved conversation is still what was said, and a reply is
+ * as much of it as the remark it answers.
  */
+export function reviewThreadConversation(
+  threads: ReadonlyArray<PullRequestReviewThread>,
+): ReadonlyArray<PullRequestComment> {
+  return threads.flatMap((thread) =>
+    thread.comments.map(
+      (comment): PullRequestComment => ({
+        id: comment.id,
+        kind: "review-comment",
+        author: comment.author,
+        body: comment.body,
+        createdAt: comment.createdAt,
+        url: comment.url,
+        path: thread.path,
+        reviewState: null,
+      }),
+    ),
+  );
+}
+
+/** One page of review threads. Following the cursors it hands back is the caller's job. */
 export function decodeReviewThreadsJson(
   raw: string,
-): Result.Result<GitHubReviewThreadComments, DecodeFailure> {
+): Result.Result<GitHubReviewThreadPage, DecodeFailure> {
   const decoded = decodeReviewThreads(raw);
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
   }
   const threads = decoded.success.data.repository.pullRequest.reviewThreads;
-  const comments = threads.nodes.flatMap((thread): ReadonlyArray<PullRequestComment> => {
-    const root = thread.comments.nodes[0];
-    if (thread.isResolved === true || root === undefined) return [];
-    return [
-      {
-        id: root.id,
-        kind: "review-comment",
-        author: toActor(root.author),
-        body: root.body ?? "",
-        createdAt: root.createdAt,
-        url: trimmed(root.url),
-        path: trimmed(thread.path),
-        reviewState: null,
-      },
-    ];
-  });
-  const reviewThreads = threads.nodes.flatMap((thread): ReadonlyArray<PullRequestReviewThread> => {
+  const entries = threads.nodes.flatMap((thread): ReadonlyArray<GitHubReviewThreadEntry> => {
     const path = trimmed(thread.path);
     const id = trimmed(thread.id);
     if (path === null || id === null || thread.comments.nodes.length === 0) return [];
     return [
       {
-        id,
-        path,
-        // Null once the thread's line has left the diff, which is exactly when GitHub reports
-        // it outdated. Such a thread is listed rather than pinned to a line it no longer has.
-        line:
-          thread.line !== null && thread.line !== undefined && thread.line > 0 ? thread.line : null,
-        side: thread.diffSide?.toUpperCase() === "LEFT" ? "left" : "right",
-        isResolved: thread.isResolved === true,
-        isOutdated: thread.isOutdated === true,
-        comments: thread.comments.nodes.map((comment) => ({
-          id: comment.id,
-          author: toActor(comment.author),
-          body: comment.body ?? "",
-          createdAt: comment.createdAt,
-          url: trimmed(comment.url),
-        })),
+        thread: {
+          id,
+          path,
+          // Null once the thread's line has left the diff, which is exactly when GitHub reports
+          // it outdated. Such a thread is listed rather than pinned to a line it no longer has.
+          line:
+            thread.line !== null && thread.line !== undefined && thread.line > 0
+              ? thread.line
+              : null,
+          side: thread.diffSide?.toUpperCase() === "LEFT" ? "left" : "right",
+          isResolved: thread.isResolved === true,
+          isOutdated: thread.isOutdated === true,
+          comments: thread.comments.nodes.map((comment) => ({
+            id: comment.id,
+            author: toActor(comment.author),
+            body: comment.body ?? "",
+            createdAt: comment.createdAt,
+            url: trimmed(comment.url),
+          })),
+        },
+        commentCount: thread.comments.totalCount ?? thread.comments.nodes.length,
+        nextCommentCursor: nextCursorOf(thread.comments.pageInfo),
       },
     ];
   });
@@ -714,25 +841,271 @@ export function decodeReviewThreadsJson(
     if (actor !== null && !reviewers.has(actor.login)) reviewers.set(actor.login, actor);
   }
   return Result.succeed({
-    comments,
-    reviewThreads,
-    truncated: (threads.totalCount ?? threads.nodes.length) > threads.nodes.length,
+    threads: entries,
+    nextCursor: nextCursorOf(threads.pageInfo),
     reviewers: [...reviewers.values()],
     avatarsByLogin,
+    viewer: toPullRequestViewerFields(pullRequest),
   });
 }
 
-export function decodeRepositoryMergeCapabilitiesJson(
+/** The rest of one thread's comments, in the shape the first page already delivered them. */
+export function decodeReviewThreadCommentsJson(raw: string): Result.Result<
+  {
+    readonly comments: ReadonlyArray<PullRequestThreadComment>;
+    readonly nextCursor: string | null;
+  },
+  DecodeFailure
+> {
+  const decoded = decodeReviewThreadComments(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const comments = decoded.success.data.node?.comments;
+  return Result.succeed({
+    comments: (comments?.nodes ?? []).map((comment) => ({
+      id: comment.id,
+      author: toActor(comment.author),
+      body: comment.body ?? "",
+      createdAt: comment.createdAt,
+      url: trimmed(comment.url),
+    })),
+    nextCursor: nextCursorOf(comments?.pageInfo),
+  });
+}
+
+/** What one `gh repo view` answers: what the repository allows, and where the viewer stands. */
+export interface GitHubRepositoryAccess {
+  readonly mergeCapabilities: PullRequestMergeCapabilities;
+  readonly canWrite: boolean;
+}
+
+/**
+ * Whether the viewer's role on the repository is one that can push, which is what merging needs.
+ * TRIAGE and READ are not: a triager moves issues about and neither of them lands a commit.
+ *
+ * An install that reports no permission at all counts as write, because an unknown standing is
+ * granted rather than guessed away.
+ */
+function toCanWrite(viewerPermission: string | null | undefined): boolean {
+  switch (viewerPermission?.trim().toUpperCase()) {
+    case "TRIAGE":
+    case "READ":
+    case "NONE":
+      return false;
+    default:
+      return true;
+  }
+}
+
+export function decodeRepositoryAccessJson(
   raw: string,
-): Result.Result<PullRequestMergeCapabilities, DecodeFailure> {
-  const decoded = decodeMergeCapabilities(raw);
+): Result.Result<GitHubRepositoryAccess, DecodeFailure> {
+  const decoded = decodeRepositoryAccess(raw);
   return Result.isSuccess(decoded)
     ? Result.succeed({
-        merge: decoded.success.mergeCommitAllowed,
-        squash: decoded.success.squashMergeAllowed,
-        rebase: decoded.success.rebaseMergeAllowed,
+        mergeCapabilities: {
+          merge: decoded.success.mergeCommitAllowed,
+          squash: decoded.success.squashMergeAllowed,
+          rebase: decoded.success.rebaseMergeAllowed,
+        },
+        canWrite: toCanWrite(decoded.success.viewerPermission),
       })
     : Result.fail(decoded.failure);
+}
+
+/**
+ * Who a review may be asked of, and who it has already been asked of, in one read.
+ *
+ * `assignableUsers` is the list GitHub's own reviewer picker is built from — everyone with access
+ * to the repository — rather than `collaborators`, which the REST API refuses to anyone without
+ * push access and which would therefore be empty for exactly the reader most likely to be looking.
+ *
+ * Teams are asked for only where one has already been requested, so a request to a team can be
+ * taken back. The teams a repository could newly be sent to live on the owning organization and
+ * need `read:org`, which a repository-scoped token need not carry — and a query GitHub refuses
+ * fails whole, taking the people down with the teams.
+ */
+export const REVIEWER_CANDIDATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    assignableUsers(first: ${GRAPHQL_PAGE_SIZE}) {
+      pageInfo { hasNextPage }
+      nodes { login name avatarUrl }
+    }
+    pullRequest(number: $number) {
+      author { login }
+      reviewRequests(first: ${GRAPHQL_PAGE_SIZE}) {
+        nodes {
+          requestedReviewer {
+            ... on User { login name avatarUrl }
+            ... on Team { slug name avatarUrl }
+            ... on Bot { login avatarUrl }
+          }
+        }
+      }
+    }
+  }
+}`;
+
+/** A team answers with a slug where a user answers with a login, and nothing else differs. */
+const RawRequestedReviewerSchema = Schema.Struct({
+  ...RawActorSchema.fields,
+  slug: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+const RawReviewerCandidatesSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      assignableUsers: Schema.Struct({
+        pageInfo: Schema.optional(RawPageInfoSchema),
+        nodes: Schema.Array(Schema.NullOr(RawActorSchema)),
+      }),
+      /** Null for a number that names no pull request the viewer can see. */
+      pullRequest: Schema.NullOr(
+        Schema.Struct({
+          author: Schema.optional(Schema.NullOr(RawActorSchema)),
+          reviewRequests: Schema.optional(
+            Schema.NullOr(
+              Schema.Struct({
+                nodes: Schema.Array(
+                  Schema.Struct({
+                    requestedReviewer: Schema.optional(Schema.NullOr(RawRequestedReviewerSchema)),
+                  }),
+                ),
+              }),
+            ),
+          ),
+        }),
+      ),
+    }),
+  }),
+});
+
+const decodeReviewerCandidates = decodeJsonResult(RawReviewerCandidatesSchema);
+
+/**
+ * The people this pull request may be sent to, with whoever is already on it marked. The author is
+ * dropped rather than shown as an unusable row: GitHub refuses a review request from the person
+ * who opened the pull request, so offering them is offering a failure.
+ *
+ * Whoever has been asked leads the list even where GitHub does not count them assignable — an
+ * outside collaborator, an app — because a request that cannot be seen cannot be taken back.
+ */
+export function decodeReviewerCandidatesJson(
+  raw: string,
+): Result.Result<PullRequestReviewerCandidateList, DecodeFailure> {
+  const decoded = decodeReviewerCandidates(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const repository = decoded.success.data.repository;
+  const pullRequest = repository.pullRequest;
+  const author = trimmed(pullRequest?.author?.login);
+  const candidates = new Map<string, PullRequestReviewerCandidate>();
+  for (const node of pullRequest?.reviewRequests?.nodes ?? []) {
+    const raw = node.requestedReviewer;
+    const slug = trimmed(raw?.slug);
+    const id = slug ?? trimmed(raw?.login);
+    if (id === null) continue;
+    candidates.set(`${slug === null ? "user" : "team"} ${id}`, {
+      id,
+      kind: slug === null ? "user" : "team",
+      login: id,
+      name: trimmed(raw?.name),
+      avatarUrl: trimmed(raw?.avatarUrl),
+      isRequested: true,
+    });
+  }
+  for (const node of repository.assignableUsers.nodes) {
+    const login = trimmed(node?.login);
+    if (login === null || login === author || candidates.has(`user ${login}`)) continue;
+    candidates.set(`user ${login}`, {
+      id: login,
+      kind: "user",
+      login,
+      name: trimmed(node?.name),
+      avatarUrl: trimmed(node?.avatarUrl),
+      isRequested: false,
+    });
+  }
+  return Result.succeed({
+    candidates: [...candidates.values()],
+    truncated: repository.assignableUsers.pageInfo?.hasNextPage === true,
+  });
+}
+
+/**
+ * The body of `POST`/`DELETE /repos/{owner}/{repo}/pulls/{number}/requested_reviewers`, which
+ * takes people and teams in two lists of its own. The same body serves both methods, because
+ * GitHub takes a request back from exactly whoever it was made of.
+ */
+const ReviewerRequestSchema = Schema.Struct({
+  reviewers: Schema.Array(Schema.String),
+  team_reviewers: Schema.Array(Schema.String),
+});
+
+const encodeReviewerRequest = Schema.encodeSync(Schema.fromJsonString(ReviewerRequestSchema));
+
+export function buildReviewerRequestJson(
+  reviewers: ReadonlyArray<{ readonly id: string; readonly kind: PullRequestReviewerKind }>,
+): string {
+  return encodeReviewerRequest({
+    reviewers: reviewers.flatMap((reviewer) => (reviewer.kind === "user" ? [reviewer.id] : [])),
+    team_reviewers: reviewers.flatMap((reviewer) =>
+      reviewer.kind === "team" ? [reviewer.id] : [],
+    ),
+  });
+}
+
+/**
+ * Everything GitHub says about what the signed-in account may do here. `canWrite` is about the
+ * repository, the other two about this pull request in particular — which is why an author with
+ * only read access can still be told apart from a passer-by.
+ */
+export interface GitHubViewerAccess {
+  readonly canWrite: boolean;
+  /** GitHub's own `viewerCanUpdate`, true for the author as well as for anyone with write. */
+  readonly canUpdate: boolean;
+  readonly didAuthor: boolean;
+}
+
+/**
+ * The viewer's standing, asked on its own. Only the write path needs this: reading a pull request
+ * already carries the same three fields on calls it was making anyway, and this exists so that a
+ * merge or a close is decided by what GitHub says now rather than by what the page was told when
+ * it loaded.
+ */
+export const VIEWER_PERMISSIONS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    viewerPermission
+    pullRequest(number: $number) { viewerCanUpdate viewerDidAuthor }
+  }
+}`;
+
+const RawViewerPermissionsSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      viewerPermission: Schema.optional(Schema.NullOr(Schema.String)),
+      /** Null for a number that names no pull request the viewer can see. */
+      pullRequest: Schema.NullOr(RawViewerFieldsSchema),
+    }),
+  }),
+});
+
+const decodeViewerPermissions = decodeJsonResult(RawViewerPermissionsSchema);
+
+export function decodeViewerPermissionsJson(
+  raw: string,
+): Result.Result<GitHubViewerAccess, DecodeFailure> {
+  const decoded = decodeViewerPermissions(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const repository = decoded.success.data.repository;
+  return Result.succeed({
+    canWrite: toCanWrite(repository.viewerPermission),
+    ...toPullRequestViewerFields(repository.pullRequest),
+  });
 }
 
 export interface GitHubPullRequestFilesPatch {

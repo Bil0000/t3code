@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { PullRequestCapabilities } from "@t3tools/contracts";
+import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
 
 import * as BitbucketPullRequestApi from "./BitbucketPullRequestApi.ts";
 import {
@@ -24,7 +24,34 @@ const CAPABILITIES: PullRequestCapabilities = {
     resolve: true,
     verdicts: ["comment", "approve", "request-changes"],
   },
+  reviewers: { request: true, listCandidates: true },
 };
+
+/**
+ * What the configured account may do here, from the one thing Bitbucket states per viewer: the
+ * repository permission. Merging needs `write` or `admin`, so that is what narrows.
+ *
+ * Declining stays offered whatever the permission. Bitbucket lets the author of a pull request
+ * decline their own with no more than read access, and the permission response says nothing about
+ * who opened this one — so withholding the control from the one person entitled to it is the
+ * worse of the two mistakes. Commenting and reviewing are not narrowed either: read access is
+ * enough to say something, to approve and to ask for changes.
+ *
+ * Asking for a review is left open for the same reason: Bitbucket takes a reviewer set from the
+ * author of a pull request as well as from whoever can write, and says nothing here about which
+ * of the two this account is.
+ */
+export function bitbucketViewerPermissions(input: {
+  readonly canWrite: boolean;
+}): PullRequestViewerPermissions {
+  return {
+    actions: CAPABILITIES.actions.filter((action) => action !== "merge" || input.canWrite),
+    comment: true,
+    resolve: true,
+    verdicts: CAPABILITIES.review.verdicts,
+    requestReviewers: true,
+  };
+}
 
 /** The failures that mean the credentials are the problem, rather than one request. */
 function reasonFor(
@@ -90,18 +117,22 @@ export const make = Effect.gen(function* () {
           state: input.state,
           limit: input.limit,
           query: input.query,
+          cursor: input.cursor,
         })
         .pipe(
           Effect.mapError(fail("listChangeRequests")),
           Effect.map((batch) => ({
             items: batch.items.map(toChangeRequest),
             truncated: batch.truncated,
+            // Bitbucket is asked for `-updated_on` whether or not it is being carried on from,
+            // so every page it answers is one a cursor can continue.
+            continues: true,
           })),
         ),
 
     getChangeRequest: (input) => {
       const target = { repository: input.repository, number: input.number };
-      // Bitbucket spreads a pull request over six endpoints, so they are read together.
+      // Bitbucket spreads a pull request over seven endpoints, so they are read together.
       return Effect.all(
         [
           api.getPullRequest(target),
@@ -115,8 +146,12 @@ export const make = Effect.gen(function* () {
             .pipe(Effect.orElseSucceed(() => ({ comments: [], threads: [], truncated: true }))),
           api.listCommits(target).pipe(Effect.orElseSucceed(() => [])),
           api.listChecks(target).pipe(Effect.orElseSucceed(() => [])),
+          // A permission that could not be read is an unknown one, which is granted: a hidden
+          // Merge leaves someone entitled to it with no way through, and one Bitbucket refuses
+          // at least says why.
+          api.getRepositoryPermission(target).pipe(Effect.orElseSucceed(() => true)),
         ],
-        { concurrency: 6 },
+        { concurrency: 7 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
         Effect.map(
@@ -127,6 +162,7 @@ export const make = Effect.gen(function* () {
             comments,
             commits,
             checks,
+            canWrite,
           ]): ProviderChangeRequestDetail => ({
             ...toChangeRequest(pullRequest),
             mergeability,
@@ -141,16 +177,26 @@ export const make = Effect.gen(function* () {
             comments: [...comments.comments, ...pullRequest.reviews].toSorted((left, right) =>
               left.createdAt.localeCompare(right.createdAt),
             ),
+            // Bitbucket's page carries a `size`, but it counts the deleted and unposted comments
+            // this drops, so the walk's own total is the truer count of what was said.
+            commentCount: comments.comments.length + pullRequest.reviews.length,
             commentsTruncated: comments.truncated,
             reviewThreads: comments.threads,
             commits,
             // Bitbucket publishes no per-repository list of allowed strategies, so the ones it
             // supports are all offered and a strategy the repository forbids fails on merge.
             mergeCapabilities: { merge: true, squash: true, rebase: true },
+            viewerPermissions: bitbucketViewerPermissions({ canWrite }),
           }),
         ),
       );
     },
+
+    getViewerPermissions: (input) =>
+      api.getRepositoryPermission({ repository: input.repository }).pipe(
+        Effect.mapError(fail("getViewerPermissions")),
+        Effect.map((canWrite) => bitbucketViewerPermissions({ canWrite })),
+      ),
 
     // `/diff` answers with the whole patch and pages nothing, so the first slice is the last.
     getDiff: (input) =>
@@ -164,6 +210,23 @@ export const make = Effect.gen(function* () {
           Effect.mapError(fail("getDiff")),
           Effect.map((diff) => ({ ...diff, nextCursor: null })),
         ),
+
+    // Users only: Bitbucket requests a review of an account, and has no group that stands in for
+    // one on a pull request.
+    listReviewerCandidates: (input) =>
+      api
+        .listReviewerCandidates({ repository: input.repository, number: input.number })
+        .pipe(Effect.mapError(fail("listReviewerCandidates"))),
+
+    setReviewerRequest: (input) =>
+      api
+        .setReviewerRequest({
+          repository: input.repository,
+          number: input.number,
+          reviewers: input.reviewers,
+          requested: input.requested,
+        })
+        .pipe(Effect.mapError(fail("setReviewerRequest"))),
 
     runAction: (input) =>
       api

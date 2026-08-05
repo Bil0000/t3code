@@ -7,6 +7,7 @@ import {
   pullRequestHostOf,
   pullRequestProviderRequirement,
   type OrchestrationProjectShell,
+  type PullRequestAction,
   type PullRequestActionInput,
   type PullRequestCommentInput,
   type PullRequestDetail,
@@ -19,6 +20,8 @@ import {
   type PullRequestProviderSummary,
   type PullRequestRef,
   type PullRequestReviewVerdict,
+  type PullRequestReviewerCandidateList,
+  type PullRequestReviewerRequestInput,
   type PullRequestSubmitReviewInput,
   type PullRequestThreadReplyInput,
   type PullRequestThreadResolutionInput,
@@ -28,15 +31,15 @@ import {
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
   type ProviderChangeRequest,
+  type ProviderListCursor,
   type PullRequestProviderApi,
   type PullRequestProviderError,
 } from "./PullRequestProvider.ts";
 import { PullRequestProviderRegistry } from "./PullRequestProviderRegistry.ts";
 
 /**
- * Rows per repository when the client does not ask for a page size. None of the provider tools
- * expose a cursor, so "load more" re-reads a larger page rather than continuing from an offset
- * — cheap at the sizes a change request list reaches, and the tools page internally.
+ * Rows per repository when the client does not ask for a page size, and rows per slice when a
+ * listing is carried on from a cursor.
  *
  * 99 and not 100, because every provider asks its host for one row over this to probe for a next
  * page: 99 requests 100, which is exactly what a page of GitHub's API serves — GraphQL refuses
@@ -76,6 +79,12 @@ export class PullRequestService extends Context.Service<
     readonly setThreadResolution: (
       input: PullRequestThreadResolutionInput,
     ) => Effect.Effect<void, PullRequestError>;
+    readonly reviewerCandidates: (
+      input: PullRequestRef,
+    ) => Effect.Effect<PullRequestReviewerCandidateList, PullRequestError>;
+    readonly requestReviewers: (
+      input: PullRequestReviewerRequestInput,
+    ) => Effect.Effect<void, PullRequestError>;
   }
 >()("t3/pullRequest/PullRequestService") {}
 
@@ -85,6 +94,30 @@ const VERDICT_LABELS: Record<PullRequestReviewVerdict, string> = {
   approve: "approve",
   "request-changes": "request changes on",
 };
+
+/**
+ * Why an action is refused to this viewer, said as the access it would take rather than as the
+ * refusal the host would have answered with. Merging is the one that needs write and nothing
+ * else; the other four are also the author's to take, whatever access they have.
+ */
+const ACTION_ACCESS_REFUSALS: Record<PullRequestAction, string> = {
+  merge: "You need write access on this repository to merge.",
+  ready:
+    "You need write access on this repository, or to have opened this change request, to mark it ready for review.",
+  draft:
+    "You need write access on this repository, or to have opened this change request, to return it to a draft.",
+  close:
+    "You need write access on this repository, or to have opened this change request, to close it.",
+  reopen:
+    "You need write access on this repository, or to have opened this change request, to reopen it.",
+};
+
+/**
+ * Why asking for a review is refused, and why the menu behind it is too. Write access is what the
+ * hosts that state anything about this want; the ones that state nothing grant it, so this
+ * sentence is only ever the answer where a host said no.
+ */
+const REVIEWER_REQUEST_REFUSAL = "You need write access on this repository to ask for a review.";
 
 /** A project this page can read: its remote is on a host with an implementation. */
 interface SupportedProject {
@@ -117,9 +150,73 @@ interface WorkspaceProjects {
 }
 
 interface RepositoryBatch {
+  /** Which repository this slice came from, which is what a cursor for it is filed under. */
+  readonly key: string;
   readonly entries: ReadonlyArray<PullRequestListEntry>;
   readonly errors: ReadonlyArray<PullRequestListProjectError>;
   readonly truncated: boolean;
+  readonly nextCursor: string | null;
+}
+
+/** What the providers are told, plus the part only the service acts on. */
+interface ListCursor extends ProviderListCursor {
+  /**
+   * The rows already handed over at exactly `updatedBefore`. The next read asks for that instant
+   * inclusively, so these are what keeps it from sending them a second time.
+   */
+  readonly seenAt: ReadonlyArray<number>;
+}
+
+/**
+ * A continuation as it travels through the page and back. Written out rather than encoded because
+ * it comes back from a client and has to be believed or refused on sight: everything a host is
+ * given is either a timestamp of this shape or a number of this length, which is what lets a
+ * provider drop it into a filter without checking it again.
+ */
+const LIST_CURSOR_PATTERN =
+  /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2}))\|(\d{1,9})\|(\d{1,9}(?:,\d{1,9})*)?$/;
+
+function parseListCursor(raw: string): ListCursor | null {
+  const match = LIST_CURSOR_PATTERN.exec(raw);
+  if (match === null) return null;
+  const seenAt = match[3];
+  return {
+    updatedBefore: match[1]!,
+    delivered: Number(match[2]),
+    seenAt: seenAt === undefined ? [] : seenAt.split(",").map(Number),
+  };
+}
+
+/**
+ * How a listing tells two repositories apart. The host is part of it because the same
+ * `owner/repo` exists on github.com and on an Enterprise install, and they are two repositories.
+ */
+function listCursorKey(host: string, repository: string): string {
+  return `${host} ${repository.toLowerCase()}`;
+}
+
+/**
+ * Where a repository carries on, worked out from the slice just handed over. The boundary is the
+ * instant of the oldest row in it: the next read asks for that instant and everything before it,
+ * and names the rows already sent at it so none of them arrives twice.
+ *
+ * The names carry over when the boundary has not moved. A slice that ends on the same instant it
+ * began on has to keep the earlier rows excluded as well as its own, or the read after it would
+ * hand them over again.
+ */
+function nextListCursor(
+  previous: ListCursor | undefined,
+  items: ReadonlyArray<ProviderChangeRequest>,
+): string | null {
+  // Nothing was handed over, so there is no row to carry on from — and repeating the cursor that
+  // produced the empty slice would ask the same question forever.
+  if (items.length === 0) return null;
+  const oldest = items.reduce((left, right) => (right.updatedAt < left.updatedAt ? right : left));
+  const seenAt = [
+    ...(previous?.updatedBefore === oldest.updatedAt ? previous.seenAt : []),
+    ...items.filter((item) => item.updatedAt === oldest.updatedAt).map((item) => item.number),
+  ];
+  return `${oldest.updatedAt}|${(previous?.delivered ?? 0) + items.length}|${seenAt.join(",")}`;
 }
 
 /** A host that cannot be read at all, as opposed to one request that failed. */
@@ -215,7 +312,7 @@ export const make = Effect.gen(function* () {
             if (roots === undefined) viewerRoots.set(host, [project.workspaceRoot]);
             else if (!roots.includes(project.workspaceRoot)) roots.push(project.workspaceRoot);
           }
-          const key = `${host} ${repository.toLowerCase()}`;
+          const key = listCursorKey(host, repository);
           if (seen.has(key)) continue;
           seen.add(key);
           if (api === null) {
@@ -250,6 +347,47 @@ export const make = Effect.gen(function* () {
         return Effect.succeed(match);
       }),
     );
+
+  /**
+   * What the signed-in account may do with this change request, asked of the host itself. Every
+   * write goes through it: the page hides what a viewer may not do, and a request that arrived
+   * without passing through the page — or after the access behind it was withdrawn — must not be
+   * handed to a provider on the client's word. Read freshly for that reason, rather than taken
+   * from whatever the detail said when the page loaded.
+   */
+  const viewerPermissionsOf = (project: SupportedProject, ref: PullRequestRef, operation: string) =>
+    project.api
+      .getViewerPermissions({
+        cwd: project.project.workspaceRoot,
+        repository: project.repository,
+        host: project.host,
+        number: ref.number,
+      })
+      .pipe(Effect.mapError(toPullRequestError(operation)));
+
+  /**
+   * The cursors the page sent back, read once before any host is asked anything. Null where the
+   * page sent none, which is the listing read from its newest row.
+   */
+  const decodeCursors = (
+    cursors: PullRequestListInput["cursors"],
+  ): Effect.Effect<ReadonlyMap<string, ListCursor> | null, PullRequestError> => {
+    if (cursors === undefined) return Effect.succeed(null);
+    const decoded = new Map<string, ListCursor>();
+    for (const [key, raw] of Object.entries(cursors)) {
+      const cursor = parseListCursor(raw);
+      if (cursor === null) {
+        return Effect.fail(
+          new PullRequestOperationError({
+            operation: "list",
+            detail: "The list could not be carried on from where it left off.",
+          }),
+        );
+      }
+      decoded.set(key, cursor);
+    }
+    return Effect.succeed(decoded);
+  };
 
   /**
    * One viewer lookup per host, tried across that host's workspaces so a single broken checkout
@@ -319,6 +457,10 @@ export const make = Effect.gen(function* () {
   const list: PullRequestService["Service"]["list"] = (input) =>
     Effect.gen(function* () {
       const involvement = input.involvement ?? "all";
+      // Refused whole rather than per repository: a cursor is only ever a value this service
+      // issued, so one that does not read as one means the page is sending something it made up,
+      // and reading part of the listing under that assumption would quietly lose rows.
+      const continuation = yield* decodeCursors(input.cursors);
       const {
         supported: projects,
         unimplemented,
@@ -358,10 +500,20 @@ export const make = Effect.gen(function* () {
         })),
       ];
 
-      const readable = projects.filter(({ host }) => viewers[host] !== undefined);
+      // A continued listing reads only the repositories it was asked to carry on with: every
+      // other one is already on the page, and reading it again is the whole cost this is here to
+      // avoid. The host summaries above stay over the whole workspace, because the switcher they
+      // fill is about the workspace rather than about this slice.
+      const selected =
+        continuation === null
+          ? projects
+          : projects.filter(({ host, repository }) =>
+              continuation.has(listCursorKey(host, repository)),
+            );
+      const readable = selected.filter(({ host }) => viewers[host] !== undefined);
       // A host that could not be read still has projects, and they are absent from the list.
       // Reporting them keeps "N repositories were unavailable" honest instead of dropping them.
-      const unreadable = projects
+      const unreadable = selected
         .filter(({ host }) => viewers[host] === undefined)
         .map(({ project, repository }) => ({
           projectId: project.id,
@@ -373,8 +525,14 @@ export const make = Effect.gen(function* () {
         // unusable host is preferred as the reported cause because it names the fix; a host
         // that merely failed reports as a failed operation rather than as a signed-out CLI,
         // which would send the reader to `auth login` over a transient error.
+        //
+        // Only the hosts this request was actually going to read: a continuation that named
+        // nothing has asked for nothing, and a host it never mentioned being signed out is no
+        // reason to refuse it.
         const errors = viewerResults.flatMap((result) =>
-          result.error === null ? [] : [result.error],
+          result.error === null || !selected.some(({ host }) => host === result.host)
+            ? []
+            : [result.error],
         );
         const blocking = errors.find(isProviderUnusable) ?? errors[0];
         if (blocking) {
@@ -387,6 +545,7 @@ export const make = Effect.gen(function* () {
           entries: [],
           errors: [],
           truncated: false,
+          nextCursors: {},
         };
       }
 
@@ -394,6 +553,8 @@ export const make = Effect.gen(function* () {
         readable,
         (project): Effect.Effect<RepositoryBatch> => {
           const viewer = viewers[project.host]!;
+          const key = listCursorKey(project.host, project.repository);
+          const cursor = continuation?.get(key);
           return project.api
             .listChangeRequests({
               cwd: project.project.workspaceRoot,
@@ -406,19 +567,41 @@ export const make = Effect.gen(function* () {
               // Each host matches this its own way, and one that cannot match text at all
               // answers unnarrowed rather than failing.
               query: input.query,
+              // Only the two fields a host can act on: which rows have already been sent at the
+              // boundary instant is this service's business, not a provider's.
+              ...(cursor === undefined
+                ? {}
+                : {
+                    cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered },
+                  }),
             })
             .pipe(
-              Effect.map(
-                (page): RepositoryBatch => ({
-                  entries: page.items.map((item) => toEntry({ project, item, viewer })),
+              Effect.map((page): RepositoryBatch => {
+                // The boundary instant was asked for inclusively, so the rows already sent at it
+                // come back with the slice. Dropping them here rather than asking for strictly
+                // older is what keeps their neighbours at the same instant from being skipped.
+                const items =
+                  cursor === undefined
+                    ? page.items
+                    : page.items.filter(
+                        (item) =>
+                          item.updatedAt !== cursor.updatedBefore ||
+                          !cursor.seenAt.includes(item.number),
+                      );
+                return {
+                  key,
+                  entries: items.map((item) => toEntry({ project, item, viewer })),
                   errors: [],
                   truncated: page.truncated,
-                }),
-              ),
+                  nextCursor:
+                    page.continues && page.truncated ? nextListCursor(cursor, items) : null,
+                };
+              }),
               // One unreachable repository must not blank the page. A host-level failure is
               // already reported through `providers`, so it degrades the same way here.
               Effect.orElseSucceed(
                 (): RepositoryBatch => ({
+                  key,
                   entries: [],
                   errors: [
                     {
@@ -428,12 +611,18 @@ export const make = Effect.gen(function* () {
                     },
                   ],
                   truncated: false,
+                  nextCursor: null,
                 }),
               ),
             );
         },
         { concurrency: REPOSITORY_CONCURRENCY },
       );
+
+      const nextCursors: Record<string, string> = {};
+      for (const batch of batches) {
+        if (batch.nextCursor !== null) nextCursors[batch.key] = batch.nextCursor;
+      }
 
       return {
         viewers: viewers as PullRequestListResult["viewers"],
@@ -443,6 +632,7 @@ export const make = Effect.gen(function* () {
           .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
         errors: [...unreadable, ...batches.flatMap((batch) => batch.errors)],
         truncated: batches.some((batch) => batch.truncated),
+        nextCursors,
       };
     });
 
@@ -487,10 +677,12 @@ export const make = Effect.gen(function* () {
                 labels: changeRequest.labels,
                 checks: changeRequest.checks,
                 comments: changeRequest.comments,
+                commentCount: changeRequest.commentCount,
                 commentsTruncated: changeRequest.commentsTruncated,
                 reviewThreads: changeRequest.reviewThreads,
                 commits: changeRequest.commits,
                 mergeCapabilities: changeRequest.mergeCapabilities,
+                viewerPermissions: changeRequest.viewerPermissions,
               }),
             ),
           ),
@@ -547,16 +739,31 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        return project.api
-          .runAction({
-            cwd: project.project.workspaceRoot,
-            repository: project.repository,
-            host: project.host,
-            number: input.number,
-            action: input.action,
-            ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
-          })
-          .pipe(Effect.mapError(toPullRequestError("runAction")));
+        // What the host can do and what this account may ask of it are two questions, and both
+        // have to say yes. The second is asked last, because it costs a request and the checks
+        // above do not.
+        return viewerPermissionsOf(project, input, "runAction").pipe(
+          Effect.flatMap((viewer): Effect.Effect<void, PullRequestError> => {
+            if (!viewer.actions.includes(input.action)) {
+              return Effect.fail(
+                new PullRequestOperationError({
+                  operation: "runAction",
+                  detail: ACTION_ACCESS_REFUSALS[input.action],
+                }),
+              );
+            }
+            return project.api
+              .runAction({
+                cwd: project.project.workspaceRoot,
+                repository: project.repository,
+                host: project.host,
+                number: input.number,
+                action: input.action,
+                ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+              })
+              .pipe(Effect.mapError(toPullRequestError("runAction")));
+          }),
+        );
       }),
     );
 
@@ -581,15 +788,28 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        return project.api
-          .comment({
-            cwd: project.project.workspaceRoot,
-            repository: project.repository,
-            host: project.host,
-            number: input.number,
-            body: input.body,
-          })
-          .pipe(Effect.mapError(toPullRequestError("comment")));
+        return viewerPermissionsOf(project, input, "comment").pipe(
+          Effect.flatMap((viewer): Effect.Effect<void, PullRequestError> => {
+            if (!viewer.comment) {
+              return Effect.fail(
+                new PullRequestOperationError({
+                  operation: "comment",
+                  detail:
+                    "You need write access on this repository to comment on a change request.",
+                }),
+              );
+            }
+            return project.api
+              .comment({
+                cwd: project.project.workspaceRoot,
+                repository: project.repository,
+                host: project.host,
+                number: input.number,
+                body: input.body,
+              })
+              .pipe(Effect.mapError(toPullRequestError("comment")));
+          }),
+        );
       }),
     );
 
@@ -616,17 +836,33 @@ export const make = Effect.gen(function* () {
         ) {
           return refuse("A review needs a summary or at least one comment.");
         }
-        return project.api
-          .submitReview({
-            cwd: project.project.workspaceRoot,
-            repository: project.repository,
-            host: project.host,
-            number: input.number,
-            verdict: input.verdict,
-            body: input.body,
-            comments: input.comments,
-          })
-          .pipe(Effect.mapError(toPullRequestError("submitReview")));
+        return viewerPermissionsOf(project, input, "submitReview").pipe(
+          Effect.flatMap((viewer): Effect.Effect<void, PullRequestError> => {
+            if (!viewer.verdicts.includes(input.verdict)) {
+              return refuse(
+                `You need write access on this repository to ${
+                  VERDICT_LABELS[input.verdict]
+                } a change request.`,
+              );
+            }
+            if (input.comments.length > 0 && !viewer.comment) {
+              return refuse(
+                "You need write access on this repository to comment on a line of a change request.",
+              );
+            }
+            return project.api
+              .submitReview({
+                cwd: project.project.workspaceRoot,
+                repository: project.repository,
+                host: project.host,
+                number: input.number,
+                verdict: input.verdict,
+                body: input.body,
+                comments: input.comments,
+              })
+              .pipe(Effect.mapError(toPullRequestError("submitReview")));
+          }),
+        );
       }),
     );
 
@@ -649,16 +885,29 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        return project.api
-          .replyToThread({
-            cwd: project.project.workspaceRoot,
-            repository: project.repository,
-            host: project.host,
-            number: input.number,
-            threadId: input.threadId,
-            body: input.body,
-          })
-          .pipe(Effect.mapError(toPullRequestError("replyToThread")));
+        return viewerPermissionsOf(project, input, "replyToThread").pipe(
+          Effect.flatMap((viewer): Effect.Effect<void, PullRequestError> => {
+            if (!viewer.comment) {
+              return Effect.fail(
+                new PullRequestOperationError({
+                  operation: "replyToThread",
+                  detail:
+                    "You need write access on this repository to reply to a review conversation.",
+                }),
+              );
+            }
+            return project.api
+              .replyToThread({
+                cwd: project.project.workspaceRoot,
+                repository: project.repository,
+                host: project.host,
+                number: input.number,
+                threadId: input.threadId,
+                body: input.body,
+              })
+              .pipe(Effect.mapError(toPullRequestError("replyToThread")));
+          }),
+        );
       }),
     );
 
@@ -673,16 +922,106 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        return project.api
-          .setThreadResolution({
-            cwd: project.project.workspaceRoot,
-            repository: project.repository,
-            host: project.host,
-            number: input.number,
-            threadId: input.threadId,
-            resolved: input.resolved,
-          })
-          .pipe(Effect.mapError(toPullRequestError("setThreadResolution")));
+        return viewerPermissionsOf(project, input, "setThreadResolution").pipe(
+          Effect.flatMap((viewer): Effect.Effect<void, PullRequestError> => {
+            if (!viewer.resolve) {
+              return Effect.fail(
+                new PullRequestOperationError({
+                  operation: "setThreadResolution",
+                  detail:
+                    "You need write access on this repository, or to have opened this change request, to resolve a review conversation.",
+                }),
+              );
+            }
+            return project.api
+              .setThreadResolution({
+                cwd: project.project.workspaceRoot,
+                repository: project.repository,
+                host: project.host,
+                number: input.number,
+                threadId: input.threadId,
+                resolved: input.resolved,
+              })
+              .pipe(Effect.mapError(toPullRequestError("setThreadResolution")));
+          }),
+        );
+      }),
+    );
+
+  /**
+   * Who may be asked is only ever wanted by somebody about to ask, because the menu it fills is
+   * the one the request is made from. So the same permission guards both: a page that could open
+   * the menu without it would offer a list whose every press was going to be turned down.
+   */
+  const reviewerCandidates: PullRequestService["Service"]["reviewerCandidates"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap(
+        (project): Effect.Effect<PullRequestReviewerCandidateList, PullRequestError> => {
+          if (!project.api.capabilities.reviewers.listCandidates) {
+            return Effect.fail(
+              new PullRequestOperationError({
+                operation: "reviewerCandidates",
+                detail: "This host cannot say who may review a change request.",
+              }),
+            );
+          }
+          return viewerPermissionsOf(project, input, "reviewerCandidates").pipe(
+            Effect.flatMap(
+              (viewer): Effect.Effect<PullRequestReviewerCandidateList, PullRequestError> =>
+                viewer.requestReviewers
+                  ? project.api
+                      .listReviewerCandidates({
+                        cwd: project.project.workspaceRoot,
+                        repository: project.repository,
+                        host: project.host,
+                        number: input.number,
+                      })
+                      .pipe(Effect.mapError(toPullRequestError("reviewerCandidates")))
+                  : Effect.fail(
+                      new PullRequestOperationError({
+                        operation: "reviewerCandidates",
+                        detail: REVIEWER_REQUEST_REFUSAL,
+                      }),
+                    ),
+            ),
+          );
+        },
+      ),
+    );
+
+  const requestReviewers: PullRequestService["Service"]["requestReviewers"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        if (!project.api.capabilities.reviewers.request) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "requestReviewers",
+              detail: "This host cannot ask somebody for a review.",
+            }),
+          );
+        }
+        return viewerPermissionsOf(project, input, "requestReviewers").pipe(
+          Effect.flatMap((viewer): Effect.Effect<void, PullRequestError> => {
+            if (!viewer.requestReviewers) {
+              return Effect.fail(
+                new PullRequestOperationError({
+                  operation: "requestReviewers",
+                  detail: REVIEWER_REQUEST_REFUSAL,
+                }),
+              );
+            }
+            return project.api
+              .setReviewerRequest({
+                cwd: project.project.workspaceRoot,
+                repository: project.repository,
+                host: project.host,
+                number: input.number,
+                reviewers: input.reviewers,
+                requested: input.requested,
+              })
+              .pipe(Effect.mapError(toPullRequestError("requestReviewers")));
+          }),
+        );
       }),
     );
 
@@ -695,6 +1034,8 @@ export const make = Effect.gen(function* () {
     submitReview,
     replyToThread,
     setThreadResolution,
+    reviewerCandidates,
+    requestReviewers,
   });
 });
 

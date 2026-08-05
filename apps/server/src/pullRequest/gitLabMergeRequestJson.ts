@@ -12,6 +12,7 @@ import type {
   PullRequestMergeability,
   PullRequestMergeCapabilities,
   PullRequestReviewThread,
+  PullRequestReviewerCandidate,
   PullRequestState,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
@@ -21,6 +22,11 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
  * adds a pipeline status or a merge status must not fail the whole payload.
  */
 const RawUserSchema = Schema.Struct({
+  /**
+   * GitLab writes a merge request's reviewers as numeric ids and takes no usernames there, so the
+   * id is carried alongside the handle rather than looked up again when a review is asked for.
+   */
+  id: Schema.optional(Schema.Int),
   username: Schema.String,
   name: Schema.optional(Schema.NullOr(Schema.String)),
   avatar_url: Schema.optional(Schema.NullOr(Schema.String)),
@@ -54,6 +60,15 @@ const RawMergeRequestSchema = Schema.Struct({
   // A string, and "1000+" past GitLab's counting limit, so it is parsed rather than decoded.
   changes_count: Schema.optional(Schema.NullOr(Schema.String)),
   head_pipeline: Schema.optional(Schema.NullOr(RawPipelineSchema)),
+  /**
+   * What the requesting account may do, which only the single-merge-request endpoint carries.
+   * GitLab answers `can_merge` for this viewer against this merge request, so it already accounts
+   * for the role, the approval rules and a protected target branch — none of which a project's
+   * access level on its own would tell apart.
+   */
+  user: Schema.optional(
+    Schema.NullOr(Schema.Struct({ can_merge: Schema.optional(Schema.Boolean) })),
+  ),
 });
 
 const RawNoteSchema = Schema.Struct({
@@ -178,6 +193,10 @@ export interface GitLabMergeRequestDetail extends GitLabMergeRequestListItem {
   readonly closedAt: string | null;
   readonly reviewers: ReadonlyArray<PullRequestActor>;
   readonly checks: ReadonlyArray<PullRequestCheck>;
+  /** False only where GitLab said so; an answer without the field leaves merging permitted. */
+  readonly viewerCanMerge: boolean;
+  /** The reviewers as GitLab addresses them, which is what writing the set back takes. */
+  readonly reviewerIds: ReadonlyArray<number>;
 }
 
 function trimmed(value: string | null | undefined): string | null {
@@ -315,6 +334,10 @@ function toDetail(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): GitLab
       return actor === null ? [] : [actor];
     }),
     checks: toChecks(raw),
+    viewerCanMerge: raw.user?.can_merge !== false,
+    reviewerIds: (raw.reviewers ?? []).flatMap((reviewer) =>
+      reviewer.id === undefined ? [] : [reviewer.id],
+    ),
   };
 }
 
@@ -322,6 +345,7 @@ const decodeUnknownList = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeMergeRequestEntry = Schema.decodeUnknownExit(RawMergeRequestSchema);
 const decodeMergeRequest = decodeJsonResult(RawMergeRequestSchema);
 const decodeNoteEntry = Schema.decodeUnknownExit(RawNoteSchema);
+const decodeUserEntry = Schema.decodeUnknownExit(RawUserSchema);
 const decodeCommitEntry = Schema.decodeUnknownExit(RawCommitSchema);
 const decodeDiffEntry = Schema.decodeUnknownExit(RawDiffSchema);
 const decodeDiscussionEntry = Schema.decodeUnknownExit(RawDiscussionSchema);
@@ -330,6 +354,12 @@ const decodeViewer = decodeJsonResult(RawViewerSchema);
 const decodeProjectMergeSettings = decodeJsonResult(RawProjectMergeSettingsSchema);
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
+
+export interface GitLabProjectUsers {
+  readonly candidates: ReadonlyArray<PullRequestReviewerCandidate>;
+  /** Rows GitLab returned, counted before decoding, so a skipped row cannot hide a next page. */
+  readonly rawCount: number;
+}
 
 export interface GitLabMergeRequestListBatch {
   readonly items: ReadonlyArray<GitLabMergeRequestListItem>;
@@ -370,6 +400,37 @@ export function decodeViewerJson(raw: string): Result.Result<string | null, Deco
   return Result.isSuccess(decoded)
     ? Result.succeed(trimmed(decoded.success.username))
     : Result.fail(decoded.failure);
+}
+
+/**
+ * The people with access to the project, which `GET /projects/:id/users` answers with — the same
+ * list GitLab's own reviewer field is filled from, including the members a group above the project
+ * lends it. A malformed row is skipped rather than failing the menu it belongs to.
+ *
+ * Nobody is marked requested here: who has been asked lives on the merge request, and only the
+ * caller holds both.
+ */
+export function decodeProjectUsersJson(
+  raw: string,
+): Result.Result<GitLabProjectUsers, DecodeFailure> {
+  const decoded = decodeUnknownList(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const candidates: PullRequestReviewerCandidate[] = [];
+  for (const entry of decoded.success) {
+    const user = decodeUserEntry(entry);
+    if (Exit.isFailure(user) || user.value.id === undefined) continue;
+    const actor = toActor(user.value);
+    if (actor === null) continue;
+    candidates.push({
+      ...actor,
+      id: String(user.value.id),
+      kind: "user",
+      isRequested: false,
+    });
+  }
+  return Result.succeed({ candidates, rawCount: decoded.success.length });
 }
 
 /**

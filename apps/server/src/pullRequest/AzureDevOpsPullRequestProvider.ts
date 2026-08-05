@@ -1,5 +1,5 @@
 import * as Effect from "effect/Effect";
-import type { PullRequestCapabilities } from "@t3tools/contracts";
+import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
 
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import {
@@ -24,6 +24,29 @@ const CAPABILITIES: PullRequestCapabilities = {
   search: false,
   // With no patch to show there are no lines to write against, so nothing here is offered.
   review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
+  // `az repos pr reviewer add` and `remove` name identities, and nothing anywhere in `az repos`
+  // lists the ones this repository could name — that lives behind the identity and graph APIs, a
+  // different service with its own permissions. So the page takes a name here rather than being
+  // handed a menu built out of a guess.
+  reviewers: { request: true, listCandidates: false },
+};
+
+/**
+ * Everything this host offers, granted to whoever is signed in. Azure DevOps states no permission
+ * anywhere `az repos pr show` or `az repos pr list` reach: the answer lives in the security
+ * namespaces, behind identity descriptors and token paths that would be several calls per pull
+ * request to resolve.
+ *
+ * So the actions stay live and a viewer who may not take one is told so by Azure, at the moment
+ * they try. That is the safer half of an unknown: hiding a control from someone entitled to it
+ * leaves them no way through and no reason given.
+ */
+export const AZURE_DEVOPS_VIEWER_PERMISSIONS: PullRequestViewerPermissions = {
+  actions: CAPABILITIES.actions,
+  comment: CAPABILITIES.comment,
+  resolve: CAPABILITIES.review.resolve,
+  verdicts: CAPABILITIES.review.verdicts,
+  requestReviewers: CAPABILITIES.reviewers.request,
 };
 
 /** The CLI tags that mean the tool itself is unusable, rather than one request failing. */
@@ -101,12 +124,16 @@ export const make = Effect.gen(function* () {
           involvement: input.involvement,
           viewer: input.viewer,
           limit: input.limit,
+          cursor: input.cursor,
         })
         .pipe(
           Effect.mapError(fail("listChangeRequests")),
           Effect.map((batch) => ({
             items: batch.items.map(toChangeRequest),
             truncated: batch.truncated,
+            // Azure answers in one order whether or not it is being carried on from, so a slice
+            // can always be stepped past — by counting, which is all Azure offers.
+            continues: true,
           })),
         ),
 
@@ -136,6 +163,9 @@ export const make = Effect.gen(function* () {
                 // read this does not make yet.
                 checks: [],
                 comments: conversation.comments,
+                // Azure hands its whole thread collection over in one response, so a read that
+                // succeeded holds all of it and the count is exact.
+                commentCount: conversation.comments.length,
                 commentsTruncated: conversation.truncated,
                 // No patch to pin a conversation to, so nothing here is anchored to a line.
                 reviewThreads: [],
@@ -149,11 +179,16 @@ export const make = Effect.gen(function* () {
                 // repository would let the control be hidden instead; that is a second call per
                 // pull request for a case the completion error already names.
                 mergeCapabilities: { merge: true, squash: true, rebase: false },
+                viewerPermissions: AZURE_DEVOPS_VIEWER_PERMISSIONS,
               }),
             ),
           ),
         ),
       ),
+
+    // No request at all: Azure has nothing to say about the viewer that a pull request read can
+    // reach, so the answer is the same constant the detail carries.
+    getViewerPermissions: () => Effect.succeed(AZURE_DEVOPS_VIEWER_PERMISSIONS),
 
     // Never called: `capabilities.diff` is false, and the service refuses a diff without it.
     getDiff: () =>
@@ -175,6 +210,30 @@ export const make = Effect.gen(function* () {
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
         })
         .pipe(Effect.mapError(fail("runAction"))),
+
+    // Never called: `capabilities.reviewers.listCandidates` is false, and the service refuses the
+    // list without it.
+    listReviewerCandidates: () =>
+      Effect.fail(
+        new PullRequestProviderError({
+          provider: "azure-devops",
+          operation: "listReviewerCandidates",
+          reason: "failed",
+          detail: "Azure DevOps cannot say who may review a pull request.",
+        }),
+      ),
+
+    setReviewerRequest: (input) =>
+      cli
+        .setPullRequestReviewers({
+          cwd: input.cwd,
+          number: input.number,
+          // Azure names an identity by an email address or a guid, and has no team to ask, so a
+          // candidate's id is the whole of what it takes.
+          reviewers: input.reviewers.map((reviewer) => reviewer.id),
+          requested: input.requested,
+        })
+        .pipe(Effect.mapError(fail("setReviewerRequest"))),
 
     // Never called: `capabilities.comment` is false, and the service refuses a comment without it.
     comment: () => unsupported("comment"),

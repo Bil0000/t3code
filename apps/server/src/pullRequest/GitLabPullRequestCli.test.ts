@@ -53,6 +53,37 @@ function diffPage(firstIndex: number, count = 100): string {
   );
 }
 
+/** A page of merge request notes, which is what the flat conversation is read from. */
+function notes(count: number, firstId: number): string {
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => ({
+      id: firstId + index,
+      body: `note ${firstId + index}`,
+      author: { username: "bilal" },
+      created_at: "2026-07-01T00:00:00Z",
+    })),
+  );
+}
+
+/** Who opened the merge request, and somebody already reviewing it. */
+const author = { id: 1, username: "bilal" };
+const reviewer = { id: 5, username: "octocat" };
+
+/** One merge request as `/merge_requests/:iid` answers with it. */
+function mergeRequestJson(overrides: Record<string, unknown>): string {
+  return JSON.stringify({
+    iid: 7,
+    title: "Merge request 7",
+    web_url: "https://gitlab.com/acme/web/-/merge_requests/7",
+    source_branch: "feat/page",
+    target_branch: "main",
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-02T00:00:00Z",
+    author,
+    ...overrides,
+  });
+}
+
 /** The endpoint or subcommand of the nth glab invocation. */
 function argsOfCall(index: number): ReadonlyArray<string> {
   return callAt(index).args;
@@ -136,6 +167,29 @@ layer("GitLabPullRequestCli.layer", (it) => {
 
       // GitLab matches `search` against title and description, which is more than the row shows.
       expect(argsOfCall(0)[1]).toContain("search=page");
+    }),
+  );
+
+  it.effect("carries on from the instant the last slice ended on", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(mergeRequests(3, 1))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.listMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 10 },
+      });
+
+      // GitLab reads `updated_before` inclusively, so the rows already sent at that instant come
+      // back for the caller to drop rather than the ones beside them being skipped.
+      const path = argsOfCall(0)[1] ?? "";
+      expect(path).toContain("updated_before=2026-07-02T00%3A00%3A00Z");
+      expect(path).toContain("order_by=updated_at");
     }),
   );
 
@@ -543,6 +597,42 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("walks the notes until GitLab answers with a short page", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(notes(100, 1))));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(notes(2, 101))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const { comments, truncated } = yield* cli.listNotes({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      expect(argsOfCall(0).join(" ")).toContain("page=1");
+      expect(argsOfCall(1).join(" ")).toContain("page=2");
+      assert.strictEqual(comments.length, 102);
+      assert.isFalse(truncated);
+    }),
+  );
+
+  it.effect("stops the note walk at its bound and says the conversation was cut short", () =>
+    Effect.gen(function* () {
+      // GitLab that never answers short: the walk has to end itself.
+      mockedExecute.mockReturnValue(Effect.succeed(output(notes(100, 1))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const { truncated } = yield* cli.listNotes({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 10);
+      assert.isTrue(truncated);
+    }),
+  );
+
   it.effect("reads a positioned discussion as a thread anchored to its line", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
@@ -734,6 +824,102 @@ layer("GitLabPullRequestCli.layer", (it) => {
       // Nothing failed to decode: GitLab answered, and the answer has nowhere to put a
       // positioned comment.
       assert.strictEqual(error._tag, "GitLabDiffRefsUnavailableError");
+    }),
+  );
+
+  it.effect("reads who has access to the project and who is already on the merge request", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(mergeRequestJson({ reviewers: [reviewer] }))))
+        .mockReturnValueOnce(
+          Effect.succeed(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            output(JSON.stringify([author, reviewer, { id: 9, username: "hubot" }])),
+          ),
+        );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const list = yield* cli.listReviewerCandidates({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      expect(argsOfCall(1)[1]).toBe("projects/acme%2Fweb/users?per_page=100");
+      // The author is left out, and whoever GitLab already has as a reviewer is marked.
+      expect(list.candidates.map((candidate) => [candidate.id, candidate.isRequested])).toEqual([
+        ["5", true],
+        ["9", false],
+      ]);
+      assert.isFalse(list.truncated);
+    }),
+  );
+
+  it.effect("writes the reviewer set back with the one being asked added to it", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(mergeRequestJson({ reviewers: [reviewer] }))))
+        .mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.setReviewerRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        reviewers: [{ id: "9" }],
+        requested: true,
+      });
+
+      // GitLab replaces the whole set, so the reviewer already on the merge request has to be
+      // sent back with the new one or the request would take them off it.
+      expect(argsOfCall(1)).toContain("PUT");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(1).stdin ?? "")).toEqual({ reviewer_ids: [5, 9] });
+    }),
+  );
+
+  it.effect("takes a reviewer out of the set rather than clearing it", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(mergeRequestJson({ reviewers: [reviewer, { id: 9, username: "hubot" }] })),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.setReviewerRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        reviewers: [{ id: "9" }],
+        requested: false,
+      });
+
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(1).stdin ?? "")).toEqual({ reviewer_ids: [5] });
+    }),
+  );
+
+  it.effect("ignores an id GitLab could not have handed out, which names nobody", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(mergeRequestJson({ reviewers: [reviewer] }))))
+        .mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.setReviewerRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        reviewers: [{ id: "octocat" }],
+        requested: true,
+      });
+
+      // Sending it as a number would rewrite the reviewer set around something nobody chose.
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(1).stdin ?? "")).toEqual({ reviewer_ids: [5] });
     }),
   );
 });
