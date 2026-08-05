@@ -64,8 +64,8 @@ import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import {
   buildAskAboutLinesHandoff,
-  buildAskAboutPullRequestPrompt,
-  buildExplainPullRequestPrompt,
+  buildAskAboutPullRequestHandoff,
+  buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
   buildResolveConflictsPrompt,
@@ -373,13 +373,12 @@ export function PullRequestDetailPanel({
   const askAboutPullRequest = () => {
     if (!detail) return;
     void startAsk("ask", {
-      prompt: buildAskAboutPullRequestPrompt({
+      ...buildAskAboutPullRequestHandoff({
         number: detail.number,
         title: detail.title,
         url: detail.url,
         headBranch: detail.headBranch,
         baseBranch: detail.baseBranch,
-        question: "",
       }),
     });
   };
@@ -387,7 +386,7 @@ export function PullRequestDetailPanel({
   const explainPullRequest = () => {
     if (!detail) return;
     void startAsk("explain", {
-      prompt: buildExplainPullRequestPrompt({
+      ...buildExplainPullRequestHandoff({
         number: detail.number,
         title: detail.title,
         url: detail.url,
