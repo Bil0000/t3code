@@ -247,7 +247,19 @@ export function PullRequestCodeTab({
     reportFailure: false,
   });
 
-  const review = detail.capabilities.review;
+  // What is offered is the intersection of two different questions: what this host can do at
+  // all, and what this account may do on this repository. Either one saying no means a control
+  // that would only ever end in a refusal.
+  const review = useMemo(() => {
+    const hostReview = detail.capabilities.review;
+    const viewer = detail.viewerPermissions;
+    return {
+      inlineComment: hostReview.inlineComment && viewer.comment,
+      reply: hostReview.reply && viewer.comment,
+      resolve: hostReview.resolve && viewer.resolve,
+      verdicts: hostReview.verdicts.filter((verdict) => viewer.verdicts.includes(verdict)),
+    };
+  }, [detail.capabilities.review, detail.viewerPermissions]);
   // A comment is posted against the pull request's head diff, so a line number taken from one
   // commit's own diff would land somewhere else entirely. Commenting waits for the whole change.
   const canCommentOnLines = review.inlineComment && commit === null;

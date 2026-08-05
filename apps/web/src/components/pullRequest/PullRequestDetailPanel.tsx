@@ -352,7 +352,12 @@ export function PullRequestDetailPanel({
   useEffect(() => {
     if (!visibleTabs.some((item) => item.value === tab)) setTab("summary");
   }, [tab, visibleTabs]);
-  const can = (action: PullRequestAction) => detail?.capabilities.actions.includes(action) === true;
+  // Two questions, both of which have to say yes: whether this host can do it at all, and
+  // whether this account may. A reader with read access on someone else's project sees the pull
+  // request and none of the buttons that would only ever be refused.
+  const can = (action: PullRequestAction) =>
+    detail?.capabilities.actions.includes(action) === true &&
+    detail.viewerPermissions.actions.includes(action);
   // One live action holds the slot. A conflicting change cannot be merged now, so the slot goes
   // to the thing that would help instead of a Merge button that only ever says no.
   const primaryAction =
@@ -487,7 +492,12 @@ export function PullRequestDetailPanel({
                       {/* A preference for the merge action rather than a second action, so it
                           is a radio group here instead of a chevron welded to the Merge pill.
                           Hidden while conflicting: every method would fail. */}
-                      {!detail.isDraft && !conflicting && allowedMergeMethods.length > 1 ? (
+                      {/* Only where merging is on offer at all: a strategy to merge with is not
+                          a choice for someone who may not merge. */}
+                      {can("merge") &&
+                      !detail.isDraft &&
+                      !conflicting &&
+                      allowedMergeMethods.length > 1 ? (
                         <>
                           <MenuSeparator />
                           <MenuRadioGroup
@@ -597,6 +607,7 @@ export function PullRequestDetailPanel({
             {tab === "summary" ? (
               <PullRequestSummaryTab
                 environmentId={environmentId}
+                reference={reference}
                 detail={detail}
                 pendingFinding={handoff}
                 onFixFinding={startFixFinding}
