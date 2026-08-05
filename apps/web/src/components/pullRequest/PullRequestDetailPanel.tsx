@@ -18,6 +18,7 @@ import {
   HammerIcon,
   LinkIcon,
   MoreHorizontalIcon,
+  RefreshCwIcon,
   XIcon,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
@@ -30,6 +31,7 @@ import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 import { useEnvironmentQuery } from "~/state/query";
+import { useRefreshOnFocus } from "~/hooks/useRefreshOnFocus";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -128,6 +130,9 @@ export function PullRequestDetailPanel({
     pullRequestEnvironment.detail({ environmentId, input: reference }),
   );
   const detail = detailQuery.data;
+  // A pull request changes while it is open in front of somebody — a push lands, a check
+  // finishes, a review arrives — so coming back to the window reads it again.
+  useRefreshOnFocus(() => detailQuery.refresh());
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
   const [actionPending, setActionPending] = useState(false);
   const newThread = useNewThreadHandler();
@@ -409,6 +414,27 @@ export function PullRequestDetailPanel({
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {detail ? (
             <>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="icon-xs"
+                      variant="outline"
+                      aria-label="Refresh this pull request"
+                      disabled={detailQuery.isPending}
+                      onClick={() => detailQuery.refresh()}
+                    />
+                  }
+                >
+                  <RefreshCwIcon
+                    className={cn("size-3", detailQuery.isPending && "animate-spin")}
+                  />
+                </TooltipTrigger>
+                <TooltipPopup side="bottom">
+                  Read this pull request again. It also refreshes itself when you come back to the
+                  window.
+                </TooltipPopup>
+              </Tooltip>
               <Tooltip>
                 <TooltipTrigger
                   render={
