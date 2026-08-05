@@ -206,17 +206,24 @@ function listCursorKey(host: string, repository: string): string {
  */
 function nextListCursor(
   previous: ListCursor | undefined,
-  items: ReadonlyArray<ProviderChangeRequest>,
+  /** What the host handed over, before the rows already sent were dropped from it. */
+  fetched: ReadonlyArray<ProviderChangeRequest>,
+  /** What is being sent on, which is what the count of delivered rows is about. */
+  delivered: ReadonlyArray<ProviderChangeRequest>,
 ): string | null {
-  // Nothing was handed over, so there is no row to carry on from — and repeating the cursor that
-  // produced the empty slice would ask the same question forever.
-  if (items.length === 0) return null;
-  const oldest = items.reduce((left, right) => (right.updatedAt < left.updatedAt ? right : left));
+  // The host had nothing at all, so there is no row to carry on from — and repeating the cursor
+  // that produced the empty slice would ask the same question forever.
+  if (fetched.length === 0) return null;
+  // Taken from what the host answered rather than from what survived de-duplication: a slice can
+  // be entirely rows already sent — a hundred change requests touched in the same second is one
+  // repository's boring afternoon — and reading "nothing new" as "nothing left" would end the
+  // walk on the instant it was stuck on, with everything older unreachable for good.
+  const oldest = fetched.reduce((left, right) => (right.updatedAt < left.updatedAt ? right : left));
   const seenAt = [
     ...(previous?.updatedBefore === oldest.updatedAt ? previous.seenAt : []),
-    ...items.filter((item) => item.updatedAt === oldest.updatedAt).map((item) => item.number),
+    ...fetched.filter((item) => item.updatedAt === oldest.updatedAt).map((item) => item.number),
   ];
-  return `${oldest.updatedAt}|${(previous?.delivered ?? 0) + items.length}|${seenAt.join(",")}`;
+  return `${oldest.updatedAt}|${(previous?.delivered ?? 0) + delivered.length}|${seenAt.join(",")}`;
 }
 
 /** A host that cannot be read at all, as opposed to one request that failed. */
@@ -594,7 +601,9 @@ export const make = Effect.gen(function* () {
                   errors: [],
                   truncated: page.truncated,
                   nextCursor:
-                    page.continues && page.truncated ? nextListCursor(cursor, items) : null,
+                    page.continues && page.truncated
+                      ? nextListCursor(cursor, page.items, items)
+                      : null,
                 };
               }),
               // One unreachable repository must not blank the page. A host-level failure is

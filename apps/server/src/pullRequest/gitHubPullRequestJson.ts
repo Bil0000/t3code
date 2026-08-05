@@ -465,14 +465,17 @@ function nextCursorOf(
 }
 
 /**
- * The viewer's standing on one pull request. A pull request GitHub answered nothing for — an
- * install without the fields, a node the viewer cannot see — counts as updatable and as theirs,
- * so an unknown permission is granted and the host's own refusal explains anything that fails.
+ * The viewer's standing on one pull request. The two halves take opposite defaults on purpose.
+ *
+ * Updating is a permission, so an install that does not report it grants it and lets the host's
+ * own refusal explain anything that fails. Authorship is not a permission but a fact about who
+ * wrote the thing, and it is read to decide what an author may do to their own change — so an
+ * unknown answer is "not the author", which grants nothing it should not.
  */
 function toPullRequestViewerFields(
   raw: Schema.Schema.Type<typeof RawViewerFieldsSchema> | null | undefined,
 ): { readonly canUpdate: boolean; readonly didAuthor: boolean } {
-  return { canUpdate: raw?.viewerCanUpdate !== false, didAuthor: raw?.viewerDidAuthor !== false };
+  return { canUpdate: raw?.viewerCanUpdate !== false, didAuthor: raw?.viewerDidAuthor === true };
 }
 
 function toActor(raw: Schema.Schema.Type<typeof RawActorSchema> | null | undefined) {
@@ -884,17 +887,20 @@ export interface GitHubRepositoryAccess {
  * Whether the viewer's role on the repository is one that can push, which is what merging needs.
  * TRIAGE and READ are not: a triager moves issues about and neither of them lands a commit.
  *
- * An install that reports no permission at all counts as write, because an unknown standing is
- * granted rather than guessed away.
+ * An install that reports no permission at all does not count as write. This is the exception to
+ * "an unknown permission is granted": write is what merging and closing somebody else's change
+ * need, and offering those to a reader who cannot use them wastes the press and reads as the app
+ * being wrong. Everything softer — commenting, reviewing, resolving — keeps the granting default,
+ * because being unable to say something is the worse failure there.
  */
 function toCanWrite(viewerPermission: string | null | undefined): boolean {
   switch (viewerPermission?.trim().toUpperCase()) {
-    case "TRIAGE":
-    case "READ":
-    case "NONE":
-      return false;
-    default:
+    case "ADMIN":
+    case "MAINTAIN":
+    case "WRITE":
       return true;
+    default:
+      return false;
   }
 }
 

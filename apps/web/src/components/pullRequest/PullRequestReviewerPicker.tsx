@@ -25,7 +25,8 @@ import { toastManager } from "../ui/toast";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { readableFailure } from "./pullRequestDetail.logic";
 
-/** Long lists are common — an organisation repository lists everyone — so the menu can be typed in. */
+/** Long lists are common — an organisation repository lists everyone — so what arrived can be
+ * narrowed here. It narrows only what arrived: the host is asked once, when the menu opens. */
 function matches(candidate: PullRequestReviewerCandidate, query: string): boolean {
   if (query.length === 0) return true;
   const needle = query.toLowerCase();
@@ -154,8 +155,11 @@ export function PullRequestReviewerPicker({
             ))
           )}
           {candidatesQuery.data?.truncated ? (
+            // Typing filters what arrived; it does not ask the host again, so this says what the
+            // list is rather than offering a search that would find nothing further.
             <p className="px-2 py-1.5 text-xs text-muted-foreground">
-              Only the first of a long list is shown. Type to find someone further down it.
+              This repository has more people with access than are listed here. Ask for the rest on
+              the host.
             </p>
           ) : null}
         </div>

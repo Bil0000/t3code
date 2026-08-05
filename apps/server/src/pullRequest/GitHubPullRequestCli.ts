@@ -367,22 +367,25 @@ function involvementArgs(input: {
   // them through search; `--author` and `review-requested:` are GitHub's own filters. `gh`
   // takes one `--search`, so the reader's text joins the qualifiers rather than replacing them.
   const query = input.query?.trim() ?? "";
-  const searchTerms = [
-    ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
-    ...(input.state === "closed" ? ["is:unmerged"] : []),
-    ...(query.length === 0 ? [] : [searchPhrase(query)]),
-    // The instant the last slice ended on, and everything before it. Inclusive, because rows
-    // sharing one instant are ordinary and the caller drops the ones it has already sent —
-    // asking for strictly older would lose the rest of them instead.
-    ...(input.cursor === undefined || !input.sorted
-      ? []
-      : [`updated:<=${input.cursor.updatedBefore}`]),
-    // `gh pr list` answers newest-created first, which is not the order the page reads rows in
-    // and not an order a continuation can carry on from: a change request opened last year and
-    // touched this morning belongs at the top of the list and at the front of the first slice.
-    // Free text would otherwise come back in best-match order, which is worse again.
-    ...(input.sorted ? ["sort:updated-desc"] : []),
-  ];
+  // The fallback read exists because this repository's search index answered nothing, so it goes
+  // nowhere near search: no order, no cursor, and no qualifiers either, since `review-requested:`
+  // and `is:unmerged` are searches too and would come back just as empty.
+  const searchTerms = !input.sorted
+    ? []
+    : [
+        ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
+        ...(input.state === "closed" ? ["is:unmerged"] : []),
+        ...(query.length === 0 ? [] : [searchPhrase(query)]),
+        // The instant the last slice ended on, and everything before it. Inclusive, because rows
+        // sharing one instant are ordinary and the caller drops the ones it has already sent —
+        // asking for strictly older would lose the rest of them instead.
+        ...(input.cursor === undefined ? [] : [`updated:<=${input.cursor.updatedBefore}`]),
+        // `gh pr list` answers newest-created first, which is not the order the page reads rows in
+        // and not an order a continuation can carry on from: a change request opened last year and
+        // touched this morning belongs at the top of the list and at the front of the first slice.
+        // Free text would otherwise come back in best-match order, which is worse again.
+        "sort:updated-desc",
+      ];
   return [
     ...(input.involvement === "authored" ? ["--author", input.viewer] : []),
     ...(searchTerms.length > 0 ? ["--search", searchTerms.join(" ")] : []),

@@ -123,7 +123,9 @@ function callAt(index: number) {
 /** The one argument `--search` carries, which is where every listing filter ends up. */
 function searchOfCall(index: number): string | undefined {
   const args = callAt(index).args;
-  return args[args.indexOf("--search") + 1];
+  const flag = args.indexOf("--search");
+  // Absent is its own answer: a read that carries no `--search` at all is what the fallback is.
+  return flag === -1 ? undefined : args[flag + 1];
 }
 
 afterEach(() => {
@@ -393,9 +395,10 @@ layer("GitHubPullRequestCli.layer", (it) => {
       });
 
       assert.strictEqual(batch.items.length, 3);
-      // The tab's own qualifier stays; only the ordering it cannot have is dropped. Those rows
-      // are in gh's order rather than by update, so nothing can carry on from them.
-      expect(searchOfCall(1)).toBe("is:unmerged");
+      // Nothing of the search survives the fallback, not even the tab's own qualifier: this read
+      // happens precisely because search answered nothing here, and `is:unmerged` is a search
+      // too. Those rows arrive in gh's own order, so nothing can carry on from them.
+      expect(searchOfCall(1)).toBeUndefined();
       assert.isFalse(batch.continues);
     }),
   );

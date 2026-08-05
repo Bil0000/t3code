@@ -395,9 +395,11 @@ describe("repository access decoding", () => {
     }
   });
 
-  it("grants write where gh names no permission, which is a standing it did not say", () => {
-    expect(expectSuccess(decodeRepositoryAccessJson(repositoryJson())).canWrite).toBe(true);
-    expect(expectSuccess(decodeRepositoryAccessJson(repositoryJson(null))).canWrite).toBe(true);
+  it("withholds write where gh names no permission, which is not a standing it gave", () => {
+    // The one place an unknown answer is not granted: a Merge button a reader cannot use wastes
+    // the press, where a missing one still leaves the pull request open on its host.
+    expect(expectSuccess(decodeRepositoryAccessJson(repositoryJson())).canWrite).toBe(false);
+    expect(expectSuccess(decodeRepositoryAccessJson(repositoryJson(null))).canWrite).toBe(false);
   });
 });
 
@@ -431,12 +433,14 @@ describe("viewer permission decoding", () => {
     ).toEqual({ canWrite: false, canUpdate: false, didAuthor: false });
   });
 
-  it("grants everything for a pull request GitHub answered nothing for", () => {
-    // A node the viewer cannot see comes back null, which says nothing about them either way.
+  it("reads silence as permission, but not as authorship", () => {
+    // A node the viewer cannot see comes back null. Updating is a permission, so an unknown
+    // answer grants it and lets the host refuse; authorship is a fact about who wrote the change,
+    // and claiming it for someone who did not is how an author's own rules get handed out.
     expect(expectSuccess(decodeViewerPermissionsJson(viewerJson({ pullRequest: null })))).toEqual({
-      canWrite: true,
+      canWrite: false,
       canUpdate: true,
-      didAuthor: true,
+      didAuthor: false,
     });
   });
 });
@@ -472,7 +476,7 @@ describe("review thread decoding", () => {
     ).toEqual({ canUpdate: false, didAuthor: false });
     expect(expectSuccess(decodeReviewThreadsJson(threadsJson([]))).viewer).toEqual({
       canUpdate: true,
-      didAuthor: true,
+      didAuthor: false,
     });
   });
 
