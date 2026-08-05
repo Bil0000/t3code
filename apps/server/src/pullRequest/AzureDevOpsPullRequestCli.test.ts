@@ -5,6 +5,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
+import * as AzureDevOpsPullRequestProvider from "./AzureDevOpsPullRequestProvider.ts";
 
 const mockedExecute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>();
 
@@ -71,6 +72,46 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
 
       assert.strictEqual(batch.items.length, 3);
       assert.isFalse(batch.truncated);
+      expect(argsOfCall(0)).toEqual([
+        "repos",
+        "pr",
+        "list",
+        "--detect",
+        "true",
+        "--repository",
+        "web",
+        "--status",
+        "active",
+        "--include-links",
+        "--top",
+        "11",
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+    }),
+  );
+
+  it.effect("reads the page unnarrowed when asked to search, having nothing to search with", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(3, 1))));
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+
+      const page = yield* provider.listChangeRequests({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal@acme.dev",
+        limit: 10,
+        query: "page",
+      });
+
+      // `az repos pr list` filters by status, creator, reviewer and branch, and by no text at
+      // all. The rows come back as they would have without a search, for the caller to narrow;
+      // nothing of the search reaches the command, where it could only mean the wrong thing.
+      assert.strictEqual(page.items.length, 3);
       expect(argsOfCall(0)).toEqual([
         "repos",
         "pr",

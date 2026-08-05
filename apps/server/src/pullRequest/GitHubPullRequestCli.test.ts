@@ -66,6 +66,12 @@ function callAt(index: number) {
   return call[0];
 }
 
+/** The one argument `--search` carries, which is where every listing filter ends up. */
+function searchOfCall(index: number): string | undefined {
+  const args = callAt(index).args;
+  return args[args.indexOf("--search") + 1];
+}
+
 afterEach(() => {
   mockedExecute.mockReset();
 });
@@ -175,6 +181,118 @@ layer("GitHubPullRequestCli.layer", (it) => {
       });
 
       expect(callAt(0).args).toContain("review-requested:bilal");
+    }),
+  );
+
+  it.effect("hands a search to GitHub rather than to the rows already read", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        query: "pull requests page",
+      });
+
+      // The recency qualifier rides along, because free text would otherwise reorder the page
+      // by relevance and truncation would drop the newest matches.
+      expect(searchOfCall(0)).toBe('"pull requests page" sort:updated-desc');
+    }),
+  );
+
+  it.effect("joins a search onto the tab's own qualifiers instead of replacing them", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "closed",
+        involvement: "reviewing",
+        viewer: "bilal",
+        limit: 10,
+        query: "page",
+      });
+
+      // One `--search` is all gh reads, so a second would silently drop the first.
+      const args = callAt(0).args;
+      assert.strictEqual(args.filter((arg) => arg === "--search").length, 1);
+      expect(searchOfCall(0)).toBe('review-requested:bilal is:unmerged "page" sort:updated-desc');
+    }),
+  );
+
+  it.effect("quotes a search, so it cannot add a qualifier or a flag of its own", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        query: '-- is:merged label:secret "widen me"',
+      });
+
+      // Every word stays inside one phrase: nothing before it, nothing after it, and the
+      // leading dashes are text rather than the start of another argument.
+      expect(searchOfCall(0)).toBe(
+        String.raw`"-- is:merged label:secret \"widen me\"" sort:updated-desc`,
+      );
+      expect(callAt(0).args).not.toContain("is:merged");
+    }),
+  );
+
+  it.effect("escapes a backslash before the quote it would otherwise let out", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        query: String.raw`a\" is:merged`,
+      });
+
+      // GitHub reads `\\` as one backslash and `\"` as one quote, so the phrase ends where
+      // this says it does; escaping the quote alone would have closed it early.
+      expect(searchOfCall(0)).toBe(String.raw`"a\\\" is:merged" sort:updated-desc`);
+    }),
+  );
+
+  it.effect("asks for no search at all when the reader typed only spaces", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        query: "   ",
+      });
+
+      expect(callAt(0).args).not.toContain("--search");
     }),
   );
 

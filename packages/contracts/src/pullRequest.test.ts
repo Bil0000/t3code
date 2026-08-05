@@ -1,17 +1,26 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { PullRequestListResult } from "./pullRequest.ts";
+import { PullRequestListInput, PullRequestListResult } from "./pullRequest.ts";
 
 const decodeListResult = Schema.decodeUnknownSync(PullRequestListResult);
+const decodeListInput = Schema.decodeUnknownSync(PullRequestListInput);
 
 const LIST_RESULT: PullRequestListResult = {
   viewers: { "github.com": "bilal", "gitlab.com": "bilal.hassan" },
   providers: [
-    { host: "github.com", kind: "github", projectCount: 1, configured: true, detail: null },
+    {
+      host: "github.com",
+      kind: "github",
+      searchesOnHost: true,
+      projectCount: 1,
+      configured: true,
+      detail: null,
+    },
     {
       host: "gitlab.com",
       kind: "gitlab",
+      searchesOnHost: true,
       projectCount: 1,
       configured: false,
       detail: "glab is not installed.",
@@ -67,5 +76,20 @@ describe("PullRequestListResult", () => {
 
     expect(decoded.viewers["github.com"]).toBe("bilal");
     expect(decoded.viewers["github.acme.dev"]).toBe("b.hassan");
+  });
+});
+
+describe("PullRequestListInput", () => {
+  it("trims a search, so what is sent is what was typed", () => {
+    expect(decodeListInput({ state: "open", query: "  page  " }).query).toBe("page");
+  });
+
+  it("has no search when none was asked for", () => {
+    expect(decodeListInput({ state: "open" }).query).toBeUndefined();
+  });
+
+  it("bounds a search, because it travels into a command and a query string", () => {
+    expect(decodeListInput({ state: "open", query: "p".repeat(200) }).query).toHaveLength(200);
+    expect(() => decodeListInput({ state: "open", query: "p".repeat(201) })).toThrow();
   });
 });

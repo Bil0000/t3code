@@ -47,6 +47,12 @@ function callAt(index: number) {
   return call[0];
 }
 
+/** The filter expression of the nth request, read back out of its query string. */
+function filterOfCall(index: number): string | null {
+  const url = callAt(index).url;
+  return new URLSearchParams(url.slice(url.indexOf("?") + 1)).get("q");
+}
+
 afterEach(() => {
   mockedRequest.mockReset();
 });
@@ -110,6 +116,57 @@ layer("BitbucketPullRequestApi.layer", (it) => {
       assert.strictEqual(batch.items.length, 50);
       assert.isTrue(batch.truncated);
       assert.strictEqual(mockedRequest.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("searches with a filter expression, which is all Bitbucket offers", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(0, 1))));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      yield* api.listPullRequests({
+        repository: "acme/web",
+        state: "open",
+        limit: 50,
+        query: "page",
+      });
+
+      expect(filterOfCall(0)).toBe('(title ~ "page" OR description ~ "page")');
+      // The state filter beside it still stands, which the brackets are there to keep.
+      expect(callAt(0).url).toContain("state=OPEN");
+    }),
+  );
+
+  it.effect("escapes a quote and a backslash, so a search cannot reshape the filter", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(0, 1))));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      yield* api.listPullRequests({
+        repository: "acme/web",
+        state: "open",
+        limit: 50,
+        query: String.raw`a\" OR state = "MERGED"`,
+      });
+
+      const literal = String.raw`a\\\" OR state = \"MERGED\"`;
+      expect(filterOfCall(0)).toBe(`(title ~ "${literal}" OR description ~ "${literal}")`);
+    }),
+  );
+
+  it.effect("asks for no filter at all when the reader typed only spaces", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(0, 1))));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+
+      yield* api.listPullRequests({
+        repository: "acme/web",
+        state: "open",
+        limit: 50,
+        query: "   ",
+      });
+
+      assert.isNull(filterOfCall(0));
     }),
   );
 

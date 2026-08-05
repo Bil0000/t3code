@@ -17,6 +17,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   // moves one in or out of draft, so neither is offered rather than failing when pressed.
   actions: ["merge", "close"],
   mergeMethods: ["merge", "squash", "rebase"],
+  search: true,
   review: {
     inlineComment: true,
     reply: true,
@@ -88,6 +89,7 @@ export const make = Effect.gen(function* () {
           repository: input.repository,
           state: input.state,
           limit: input.limit,
+          query: input.query,
         })
         .pipe(
           Effect.mapError(fail("listChangeRequests")),

@@ -20,6 +20,8 @@ const CAPABILITIES: PullRequestCapabilities = {
   actions: ["merge", "ready", "draft", "close", "reopen"],
   // Azure squashes as a completion option; it has no rebase strategy of its own.
   mergeMethods: ["merge", "squash"],
+  // `az repos pr list` filters by status, creator, reviewer and branch, and by no text at all.
+  search: false,
   // With no patch to show there are no lines to write against, so nothing here is offered.
   review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
 };
@@ -87,6 +89,9 @@ export const make = Effect.gen(function* () {
     getViewer: (input) =>
       cli.getViewer({ cwd: input.cwd }).pipe(Effect.mapError(fail("getViewer"))),
 
+    // `input.query` is deliberately dropped: `az repos pr list` filters by status, creator,
+    // reviewer and branch, and has nothing that matches text. Sending it as one of those would
+    // narrow by the wrong thing, so the page comes back unnarrowed and the caller filters it.
     listChangeRequests: (input) =>
       cli
         .listPullRequests({

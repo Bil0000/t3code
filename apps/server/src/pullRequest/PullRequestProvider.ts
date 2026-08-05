@@ -122,6 +122,13 @@ export interface PullRequestProviderApi {
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
+      /**
+       * Free text to narrow the listing by, as the host understands it. A host with no text
+       * filter of its own ignores it and answers with the page it would have answered with
+       * anyway — the caller narrows what it gets, so an unfiltered page is a wider answer
+       * rather than a wrong one.
+       */
+      readonly query?: string | undefined;
     },
   ) => Effect.Effect<ProviderChangeRequestPage, PullRequestProviderError>;
 

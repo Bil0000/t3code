@@ -109,6 +109,7 @@ function fakeProvider(
       comment: true,
       actions: ["merge", "ready", "draft", "close", "reopen"],
       mergeMethods: ["merge"],
+      search: true,
       review: FULL_REVIEW,
     },
     getViewer: () => Effect.succeed("bilal"),
@@ -553,6 +554,7 @@ it.effect("refuses an action the host never claimed it could run", () =>
             // Bitbucket's shape: it can merge and close, but cannot reopen.
             actions: ["merge", "close"],
             mergeMethods: ["merge"],
+            search: true,
             review: FULL_REVIEW,
           },
           runAction: () => {
@@ -589,6 +591,7 @@ it.effect("refuses a comment on a host that cannot post one", () =>
             comment: false,
             actions: ["merge"],
             mergeMethods: ["merge"],
+            search: true,
             review: FULL_REVIEW,
           },
           comment: () => {
@@ -763,6 +766,7 @@ it.effect("refuses a diff on a host that cannot produce one", () =>
             comment: true,
             actions: ["merge", "close"],
             mergeMethods: ["merge"],
+            search: true,
             review: FULL_REVIEW,
           },
           getDiff: () => Effect.die("must not be called"),
@@ -820,6 +824,7 @@ it.effect("refuses a verdict the host never claimed, without asking the provider
             comment: true,
             actions: ["merge"],
             mergeMethods: ["merge"],
+            search: true,
             // GitLab's shape: it approves, and has nothing that rejects.
             review: {
               inlineComment: true,
@@ -865,6 +870,7 @@ it.effect("refuses line comments on a host that takes only a summary", () =>
             comment: true,
             actions: ["merge"],
             mergeMethods: ["merge"],
+            search: true,
             review: { inlineComment: false, reply: false, resolve: false, verdicts: ["comment"] },
           },
           submitReview: () => Effect.die("must not be called"),
@@ -940,6 +946,7 @@ it.effect("refuses to resolve a conversation on a host that cannot", () =>
             comment: true,
             actions: ["merge"],
             mergeMethods: ["merge"],
+            search: true,
             review: { inlineComment: true, reply: false, resolve: false, verdicts: ["comment"] },
           },
           setThreadResolution: () => Effect.die("must not be called"),
@@ -1005,6 +1012,7 @@ it.effect("refuses a merge strategy the host does not offer", () =>
             actions: ["merge"],
             // Azure DevOps's shape: it squashes as a completion option and has no rebase.
             mergeMethods: ["merge", "squash"],
+            search: true,
             review: FULL_REVIEW,
           },
           runAction: (input) => {
@@ -1061,6 +1069,61 @@ it.effect("hands the provider the host its repository lives on", () =>
     // The identity a project records is the path below its host, so the host has to travel
     // separately or a GitHub Enterprise repository is read off github.com instead.
     assert.deepStrictEqual(hosts, ["github.acme.dev"]);
+  }),
+);
+
+it.effect("asks every host the reader's search, rather than filtering what came back", () =>
+  Effect.gen(function* () {
+    const asked: Array<string | undefined> = [];
+    const listing = (input: { readonly query?: string | undefined }) => {
+      asked.push(input.query);
+      return Effect.succeed({ items: [], truncated: false });
+    };
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+        project({
+          id: "p2",
+          title: "on gitlab",
+          workspaceRoot: "/b",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("github", { listChangeRequests: listing }),
+        fakeProvider("gitlab", { listChangeRequests: listing }),
+      ],
+    });
+
+    yield* service.list({ state: "open", query: "pull requests page" });
+
+    // A page holds one page per repository, so a search that stopped at the service could only
+    // find what was already loaded.
+    assert.deepStrictEqual(asked, ["pull requests page", "pull requests page"]);
+  }),
+);
+
+it.effect("asks for no search when the reader has typed nothing", () =>
+  Effect.gen(function* () {
+    const asked: Array<string | undefined> = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: (input) => {
+            asked.push(input.query);
+            return Effect.succeed({ items: [], truncated: false });
+          },
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(asked, [undefined]);
   }),
 );
 

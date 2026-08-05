@@ -166,6 +166,12 @@ export const PullRequestCapabilities = Schema.Struct({
   actions: Schema.Array(PullRequestAction),
   /** Merge strategies the provider itself offers, before repository settings narrow them. */
   mergeMethods: Schema.Array(PullRequestMergeMethod),
+  /**
+   * The host can narrow a listing by free text. False means it answers unnarrowed and whoever
+   * asked has to do the narrowing — which is a different promise, so the page is told rather
+   * than left to show every change request on that host as a search result.
+   */
+  search: Schema.Boolean,
   review: PullRequestReviewCapabilities,
 });
 export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
@@ -217,6 +223,17 @@ export const PullRequestListInput = Schema.Struct({
   host: Schema.optional(TrimmedNonEmptyString),
   /** Rows to return per repository. The page raises it to load further results. */
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
+  /**
+   * Free text the hosts themselves are asked to match, rather than a filter over the rows that
+   * have already arrived: a listing only ever holds a page per repository, so a search that
+   * never leaves the client can only find what happened to be loaded. What a match means is the
+   * host's own business — GitHub reads a body, GitLab a description — and a host with no text
+   * filter answers unnarrowed rather than pretending.
+   *
+   * Bounded because it travels into a CLI argument and a query string, and no host makes
+   * anything of a search term this long.
+   */
+  query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
 });
 export type PullRequestListInput = typeof PullRequestListInput.Type;
 
@@ -231,6 +248,8 @@ export type PullRequestListInput = typeof PullRequestListInput.Type;
 export const PullRequestProviderSummary = Schema.Struct({
   host: TrimmedNonEmptyString,
   kind: SourceControlProviderKind,
+  /** False where a search has to be applied to the rows after they arrive. */
+  searchesOnHost: Schema.Boolean,
   projectCount: PositiveInt,
   /** False when the provider's CLI or credentials are missing, with `detail` saying which. */
   configured: Schema.Boolean,

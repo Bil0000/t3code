@@ -19,8 +19,8 @@ function BranchMark({ joined }: { joined: boolean }) {
   return (
     <svg
       aria-hidden
-      viewBox="0 0 96 64"
-      className="h-16 w-24 text-muted-foreground/40"
+      viewBox="0 0 120 72"
+      className="h-20 w-32 text-muted-foreground/60"
       fill="none"
       stroke="currentColor"
       strokeWidth={2}
@@ -28,21 +28,32 @@ function BranchMark({ joined }: { joined: boolean }) {
       strokeLinejoin="round"
     >
       {/* The base line the change would land on, always whole. */}
-      <path d="M8 52h80" className="text-muted-foreground/25" stroke="currentColor" />
-      <circle cx="8" cy="52" r="4" />
-      <circle cx="88" cy="52" r="4" />
+      <path d="M10 58h100" className="text-muted-foreground/30" stroke="currentColor" />
+      <circle cx="10" cy="58" r="5" fill="currentColor" fillOpacity={0.25} />
+      <circle cx="110" cy="58" r="5" fill="currentColor" fillOpacity={0.25} />
       {joined ? (
         // A branch that leaves the base and comes back: the shape of a change that landed.
-        <path d="M24 52c0-14 6-20 20-20h8c14 0 20 6 20 20" />
+        <path d="M30 58c0-18 8-26 24-26h12c16 0 24 8 24 26" />
       ) : (
         <>
           {/* The same branch, stopped short. What is missing is the join, so that is what the
               drawing withholds. */}
-          <path d="M24 52c0-14 6-20 20-20h4" />
-          <path d="M72 52c0-14-6-20-20-20h-4" strokeDasharray="1 6" />
+          <path d="M30 58c0-18 8-26 24-26h4" />
+          <path
+            d="M90 58c0-18-8-26-24-26h-4"
+            strokeDasharray="2 7"
+            className="text-muted-foreground/50"
+          />
         </>
       )}
-      <circle cx="48" cy="32" r="4" className={joined ? undefined : "text-muted-foreground/30"} />
+      <circle
+        cx="60"
+        cy="32"
+        r={joined ? 5 : 4}
+        fill={joined ? "currentColor" : "none"}
+        fillOpacity={0.25}
+        className={joined ? undefined : "text-muted-foreground/45"}
+      />
     </svg>
   );
 }
@@ -74,7 +85,8 @@ export function PullRequestListEmptyState({
         <EmptyHeader>
           <EmptyTitle>Searching every host</EmptyTitle>
           <EmptyDescription>
-            Looking for “{query}” across the repositories this page can read.
+            Looking for “{query.length > 48 ? `${query.slice(0, 48)}…` : query}” across the
+            repositories this page can read.
           </EmptyDescription>
         </EmptyHeader>
       </Empty>
@@ -86,7 +98,10 @@ export function PullRequestListEmptyState({
       <Empty className="py-16">
         <BranchMark joined={false} />
         <EmptyHeader>
-          <EmptyTitle>Nothing matches “{query}”</EmptyTitle>
+          {/* A pasted paragraph is still a search, but it is not a title. */}
+          <EmptyTitle>
+            Nothing matches “{query.length > 48 ? `${query.slice(0, 48)}…` : query}”
+          </EmptyTitle>
           <EmptyDescription>
             The hosts were searched for it. Try fewer words, or search by number, author or branch.
           </EmptyDescription>

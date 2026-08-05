@@ -37,8 +37,20 @@ import { PullRequestProviderRegistry } from "./PullRequestProviderRegistry.ts";
  * Rows per repository when the client does not ask for a page size. None of the provider tools
  * expose a cursor, so "load more" re-reads a larger page rather than continuing from an offset
  * — cheap at the sizes a change request list reaches, and the tools page internally.
+ *
+ * 99 and not 100, because every provider asks its host for one row over this to probe for a next
+ * page: 99 requests 100, which is exactly what a page of GitHub's API serves — GraphQL refuses
+ * `first` over 100 with EXCESSIVE_PAGINATION and REST clamps `per_page` to it — and what GitLab
+ * caps `per_page` at. Asking for 100 here would request 101 and buy a whole second round trip for
+ * one row (measured: `gh pr list --limit 100` makes 1 HTTP request, `--limit 101` makes 2).
  */
 const DEFAULT_REPOSITORY_LIST_LIMIT = 50;
+/**
+ * Repositories read at once. Each one is a CLI process that spends nearly all its wall clock
+ * waiting on the host, so the useful ceiling is far above the core count; measured over 12
+ * repositories on this listing's own command, 4 took ~12.7s, 8 ~8.9s and 12 ~4.9s, with 16 and 24
+ * no faster because 12 already reads every repository in one wave.
+ */
 const REPOSITORY_CONCURRENCY = 4;
 
 export type PullRequestError = PullRequestUnavailableError | PullRequestOperationError;
@@ -329,6 +341,9 @@ export const make = Effect.gen(function* () {
         ...viewerResults.map((result) => ({
           host: result.host,
           kind: result.kind,
+          searchesOnHost:
+            projects.find((project) => project.host === result.host)?.api.capabilities.search ??
+            false,
           projectCount: projectCounts.get(result.host) ?? 1,
           configured: result.viewer !== null,
           detail: result.error === null ? null : providerDetail(result.error),
@@ -336,6 +351,7 @@ export const make = Effect.gen(function* () {
         ...[...unimplemented].map(([host, { kind, projectCount }]) => ({
           host,
           kind,
+          searchesOnHost: false,
           projectCount,
           configured: false,
           detail: "This host cannot be browsed here yet.",
@@ -387,6 +403,9 @@ export const make = Effect.gen(function* () {
               involvement,
               viewer,
               limit: input.limit ?? DEFAULT_REPOSITORY_LIST_LIMIT,
+              // Each host matches this its own way, and one that cannot match text at all
+              // answers unnarrowed rather than failing.
+              query: input.query,
             })
             .pipe(
               Effect.map(

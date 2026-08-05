@@ -14,6 +14,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   actions: ["merge", "ready", "draft", "close", "reopen"],
   // GitLab offers all three, though a project settles on one; `mergeCapabilities` narrows it.
   mergeMethods: ["merge", "squash", "rebase"],
+  search: true,
   review: {
     inlineComment: true,
     reply: true,
@@ -61,6 +62,7 @@ export const make = Effect.gen(function* () {
           involvement: input.involvement,
           viewer: input.viewer,
           limit: input.limit,
+          query: input.query,
         })
         .pipe(Effect.mapError(fail("listChangeRequests"))),
 

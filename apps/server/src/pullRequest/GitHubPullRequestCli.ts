@@ -151,6 +151,8 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
+      /** Free text for `--search`, matched as one literal phrase. */
+      readonly query?: string | undefined;
     }) => Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestCliError>;
 
     readonly getPullRequestDetail: (input: {
@@ -268,16 +270,39 @@ function isCommitSha(value: string): boolean {
   return /^[0-9a-f]{7,64}$/i.test(value);
 }
 
+/**
+ * The reader's own words as one literal phrase of a GitHub search query. Quoting is the whole
+ * defence: outside quotes GitHub reads `is:merged` as a qualifier and `label:x` as another, so
+ * text typed into a search box could widen the very listing it is meant to narrow — inside them
+ * it is only text. The two characters that could end the phrase early are therefore escaped
+ * first, which GitHub reads back as themselves; an unbalanced quote is dropped instead, which
+ * would let everything after it out of the phrase.
+ *
+ * The phrase is one argv element, so nothing in it can become a flag of its own either.
+ */
+function searchPhrase(query: string): string {
+  return `"${query.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
+}
+
 function involvementArgs(input: {
   readonly state: PullRequestListState;
   readonly involvement: PullRequestInvolvement;
   readonly viewer: string;
+  readonly query?: string | undefined;
 }): ReadonlyArray<string> {
   // `--state closed` includes merged pull requests, so the Closed tab additionally excludes
-  // them through search; `--author` and `review-requested:` are GitHub's own filters.
+  // them through search; `--author` and `review-requested:` are GitHub's own filters. `gh`
+  // takes one `--search`, so the reader's text joins the qualifiers rather than replacing them.
+  const query = input.query?.trim() ?? "";
   const searchTerms = [
     ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
     ...(input.state === "closed" ? ["is:unmerged"] : []),
+    ...(query.length === 0
+      ? []
+      : // Free text puts GitHub into best-match order, and the page keeps the first `limit` rows
+        // — so the newest matching change request can be missing while months-old ones are
+        // shown. Recency is what the list is sorted by, so it is what the host is asked for.
+        [searchPhrase(query), "sort:updated-desc"]),
   ];
   return [
     ...(input.involvement === "authored" ? ["--author", input.viewer] : []),

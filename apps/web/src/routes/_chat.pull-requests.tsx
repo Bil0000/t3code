@@ -84,7 +84,7 @@ const STATE_TABS = [
 
 /** Long enough that a keystroke does not become a request, short enough to feel answered. */
 const SEARCH_DEBOUNCE_MS = 250;
-const PAGE_SIZE = 100;
+const PAGE_SIZE = 50;
 /** The largest page the listing accepts; past it the request is refused outright. */
 const MAX_PAGE_SIZE = 500;
 /** Stable empty map so the memos below do not see a new object on every render. */
@@ -262,6 +262,17 @@ function PullRequestsRouteView() {
     });
   }, [answered, filterKey]);
 
+  /** The hosts that narrowed the listing themselves, so their answer is not narrowed again. */
+  const searchingHosts = useMemo(
+    () =>
+      new Set(
+        (listData?.providers ?? []).flatMap((provider) =>
+          provider.searchesOnHost ? [provider.host] : [],
+        ),
+      ),
+    [listData?.providers],
+  );
+
   const entries = useMemo(() => {
     const known = ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []);
     const involvementEntries = filterPullRequestsByInvolvement(
@@ -271,11 +282,26 @@ function PullRequestsRouteView() {
     );
     // The hosts search more than the row shows — a body, a review, a commit message — so once
     // their answer is in, narrowing it again here would throw away matches the reader asked for.
-    // The local pass only stands in for the answer that has not arrived yet.
-    return querySettled && !showingCarried
-      ? involvementEntries
-      : involvementEntries.filter((entry) => matchesPullRequestQuery(entry, typedQuery));
-  }, [filterKey, listData, ordered, querySettled, search.involvement, showingCarried, typedQuery]);
+    // The local pass stands in for the answer that has not arrived yet, and for the hosts that
+    // answered without searching at all: Azure DevOps has no text filter, so its rows arrive
+    // whole and would otherwise sit under a search that never touched them.
+    if (typedQuery.length === 0) return involvementEntries;
+    const answeredLocally = querySettled && !showingCarried;
+    return involvementEntries.filter(
+      (entry) =>
+        (answeredLocally && searchingHosts.has(entry.host)) ||
+        matchesPullRequestQuery(entry, typedQuery),
+    );
+  }, [
+    filterKey,
+    listData,
+    ordered,
+    querySettled,
+    search.involvement,
+    searchingHosts,
+    showingCarried,
+    typedQuery,
+  ]);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

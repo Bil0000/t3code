@@ -119,6 +119,67 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("hands a search to GitLab's own search parameter", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.listMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        query: "page",
+      });
+
+      // GitLab matches `search` against title and description, which is more than the row shows.
+      expect(argsOfCall(0)[1]).toContain("search=page");
+    }),
+  );
+
+  it.effect("URL-encodes a search, so it cannot add a parameter of its own", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.listMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        query: '-a&per_page=1 "b"',
+      });
+
+      const path = argsOfCall(0)[1] ?? "";
+      expect(path).toContain("search=-a%26per_page%3D1%20%22b%22");
+      // The page size the walk fixed is still the only one in the query.
+      assert.strictEqual(path.match(/per_page=/g)?.length, 1);
+    }),
+  );
+
+  it.effect("asks for no search at all when the reader typed only spaces", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.listMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        query: "   ",
+      });
+
+      expect(argsOfCall(0)[1]).not.toContain("search=");
+    }),
+  );
+
   it.effect("stops walking on a short page", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(mergeRequests(40, 1))));

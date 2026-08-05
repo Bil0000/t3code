@@ -166,6 +166,8 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
+      /** Free text for GitLab's own `search`, which matches title and description. */
+      readonly query?: string | undefined;
     }) => Effect.Effect<GitLabMergeRequestListBatch, GitLabPullRequestCliError>;
 
     readonly getMergeRequestDetail: (input: {
@@ -298,6 +300,11 @@ function isCommitSha(value: string): boolean {
   return /^[0-9a-f]{7,64}$/i.test(value);
 }
 
+function searchParams(search: string | undefined): ReadonlyArray<readonly [string, string]> {
+  const trimmed = search?.trim() ?? "";
+  return trimmed.length === 0 ? [] : [["search", trimmed]];
+}
+
 function query(params: ReadonlyArray<readonly [string, string]>): string {
   return params.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&");
 }
@@ -367,6 +374,7 @@ export const make = Effect.gen(function* () {
     readonly involvement: PullRequestInvolvement;
     readonly viewer: string;
     readonly limit: number;
+    readonly query?: string | undefined;
     readonly page: number;
     readonly collected: ReadonlyArray<GitLabMergeRequestListItem>;
   }): Effect.Effect<GitLabMergeRequestListBatch, GitLabPullRequestCliError> => {
@@ -379,6 +387,11 @@ export const make = Effect.gen(function* () {
       path: `projects/${projectPath(input.repository)}/merge_requests?${query([
         ["state", stateParam(input.state)],
         ...involvementParams(input),
+        // The listing is read through `glab api` rather than `glab mr list`, so the search is
+        // the REST API's own `search` parameter — the one `mr list --search` passes on. It
+        // matches title and description, and travels URL-encoded like every other value here,
+        // so no text in it can become a parameter of its own.
+        ...searchParams(input.query),
         ["order_by", "updated_at"],
         ["sort", "desc"],
         ["per_page", String(perPage)],

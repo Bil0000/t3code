@@ -128,6 +128,8 @@ export class BitbucketPullRequestApi extends Context.Service<
       readonly repository: string;
       readonly state: PullRequestListState;
       readonly limit: number;
+      /** Free text, matched against a pull request's title and description. */
+      readonly query?: string | undefined;
     }) => Effect.Effect<BitbucketPullRequestBatch, BitbucketPullRequestApiError>;
 
     readonly getPullRequest: (input: {
@@ -258,6 +260,23 @@ function stateParams(state: PullRequestListState): ReadonlyArray<string> {
   }
 }
 
+/**
+ * Bitbucket has no search term, only a filter expression, so free text becomes one: a
+ * case-insensitive contains against the two fields a pull request carries words in. The
+ * parentheses matter, because the expression is ANDed with the state filter beside it and an
+ * unbracketed `OR` would swallow it.
+ *
+ * A string literal in that grammar is delimited by double quotes, so the reader's text is
+ * escaped before it goes inside one — a quote would otherwise end the literal and leave the
+ * rest of the text standing as filter syntax. The backslash goes first, or escaping the quote
+ * would only produce a literal backslash followed by a live quote. The whole expression is then
+ * URL-encoded, so nothing in it reaches the query string as a parameter of its own.
+ */
+function searchFilter(query: string): string {
+  const literal = query.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  return `(title ~ "${literal}" OR description ~ "${literal}")`;
+}
+
 /** Bitbucket's merge strategies, named differently from the three the contract carries. */
 function mergeStrategy(method: PullRequestMergeMethod | undefined): string {
   switch (method) {
@@ -352,17 +371,20 @@ export const make = Effect.gen(function* () {
       ),
 
     listPullRequests: (input) =>
-      withRepository(input.repository, (path) =>
-        listPage({
+      withRepository(input.repository, (path) => {
+        const search = input.query?.trim() ?? "";
+        return listPage({
           // Reviewers are not on a listing by default, and `viewerReviewRequested` needs them.
           url: `${path}/pullrequests?${stateParams(input.state)
             .map((state) => `state=${state}`)
-            .join("&")}&pagelen=${MAX_PAGE_SIZE}&sort=-updated_on&fields=%2Bvalues.reviewers`,
+            .join("&")}&pagelen=${MAX_PAGE_SIZE}&sort=-updated_on&fields=%2Bvalues.reviewers${
+            search.length === 0 ? "" : `&q=${encodeURIComponent(searchFilter(search))}`
+          }`,
           limit: input.limit,
           page: 1,
           collected: [],
-        }),
-      ),
+        });
+      }),
 
     getPullRequest: (input) =>
       withRepository(input.repository, (path) =>
