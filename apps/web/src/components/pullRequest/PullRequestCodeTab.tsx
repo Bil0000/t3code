@@ -58,7 +58,11 @@ import {
   ReviewThreadCard,
 } from "./PullRequestReviewAnnotation";
 import { PullRequestReviewBar } from "./PullRequestReviewBar";
-import { isLineInFileDiff } from "./pullRequestDiff.logic";
+import {
+  isFileDiffCollapsed,
+  isLineInFileDiff,
+  type DiffFoldOverride,
+} from "./pullRequestDiff.logic";
 import { PullRequestDiffStat, PullRequestMetaLine } from "./pullRequestPresentation";
 import {
   nextPendingReviewCommentId,
@@ -76,13 +80,6 @@ interface ReviewAnnotationGroup {
 }
 
 type ReviewAnnotation = DiffLineAnnotation<ReviewAnnotationGroup>;
-
-/**
- * Past this many files the viewer spends tens of seconds laying every one of them out before
- * the tab is usable, so a change this size opens folded and the reader unfolds what they came
- * for. A file already carrying a conversation is never folded — that is the part worth reading.
- */
-const AUTO_COLLAPSE_FILE_COUNT = 20;
 
 /** Commits per press of "Show more" in the scope menu. */
 const COMMIT_PAGE_SIZE = 10;
@@ -160,7 +157,7 @@ export function PullRequestCodeTab({
   // than a choice. The rest arrive ten at a time, on request.
   const [visibleCommitCount, setVisibleCommitCount] = useState(COMMIT_PAGE_SIZE);
   /** Set once the reader has asked for every file at once, until they pick a file apart again. */
-  const [foldOverride, setFoldOverride] = useState<"expanded" | "folded" | null>(null);
+  const [foldOverride, setFoldOverride] = useState<DiffFoldOverride>(null);
   const [diffRenderMode, setDiffRenderMode] = useState<"stacked" | "split">("stacked");
   const [wordWrap, setWordWrap] = useState(settings.wordWrap);
   const [selectedLines, setSelectedLines] = useState<{
@@ -283,14 +280,6 @@ export function PullRequestCodeTab({
     [parsedSlices],
   );
   const nextCursor = loadedSlices.at(-1)?.nextCursor ?? null;
-  /**
-   * A change the host had to slice is a large one whatever the count in hand says, so the
-   * folding default is settled by the first answer. Both halves only ever go from false to true:
-   * a default that flipped mid-scroll would refold the file the reader had just opened.
-   */
-  const largeDiff =
-    files.length > AUTO_COLLAPSE_FILE_COUNT ||
-    loadedSlices.some((slice) => slice.nextCursor !== null);
   // What a slice withheld: the host declining to inline part of it, or a patch the viewer could
   // not structure and so dropped. Neither says anything about there being more to fetch.
   const withheldContent =
@@ -321,24 +310,6 @@ export function PullRequestCodeTab({
     }
     return placed;
   }, [commit, detail.reviewThreads, files]);
-
-  /**
-   * Which files open folded before the reader touches anything. Held apart from the items
-   * because the toggles below are the difference from it: collapsing every file means toggling
-   * the ones this set disagrees with, not filling a set of its own.
-   */
-  const defaultCollapsedFileKeys = useMemo(() => {
-    const collapsed = new Set<string>();
-    if (!largeDiff) return collapsed;
-    for (const file of files) {
-      const path = resolveFileDiffPath(file);
-      const carriesConversation = detail.reviewThreads.some(
-        (thread) => thread.path === path && placedThreadIds.has(thread.id),
-      );
-      if (!carriesConversation) collapsed.add(buildFileDiffRenderKey(file));
-    }
-    return collapsed;
-  }, [detail.reviewThreads, files, largeDiff, placedThreadIds]);
 
   const items = useMemo<CodeViewDiffItem<ReviewAnnotationGroup>[]>(
     () =>
@@ -374,14 +345,7 @@ export function PullRequestCodeTab({
         }
         if (draft?.fileKey === fileKey) groupAt(draft.side, draft.line).draft = true;
 
-        // The reader's toggles are held as the difference from the default rather than as the
-        // set itself, so a big diff can open folded without a seeding pass that would have to
-        // race the patch arriving. That only works while the default holds still: it is decided
-        // by what the host already has, never by a comment being written, because a default that
-        // moved would invert the toggle and fold the very file the reader opened to write in.
-        const foldedByDefault =
-          foldOverride === null ? defaultCollapsedFileKeys.has(fileKey) : foldOverride === "folded";
-        const collapsed = toggledFiles.has(fileKey) ? !foldedByDefault : foldedByDefault;
+        const collapsed = isFileDiffCollapsed(fileKey, foldOverride, toggledFiles);
 
         const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
           side: toViewerSide(group.side),
@@ -414,10 +378,10 @@ export function PullRequestCodeTab({
         };
       }),
     [
-      defaultCollapsedFileKeys,
       detail.reviewThreads,
       draft,
       files,
+      foldOverride,
       pendingComments,
       placedThreadIds,
       toggledFiles,
