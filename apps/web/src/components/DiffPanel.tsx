@@ -324,7 +324,7 @@ export default function DiffPanel({
   const codeViewRef = useRef<AnnotatableCodeViewHandle>(null);
   const lastCompletedTurnRefreshRef = useRef<{
     readonly threadKey: string | null;
-    readonly turnId: TurnId | null;
+    readonly runId: RunId | null;
   } | null>(null);
 
   const routeThreadRef = useParams({
@@ -485,7 +485,7 @@ export default function DiffPanel({
     : primaryBranchDiffPreview;
   const refreshBranchDiffPreview = branchDiffPreview.refresh;
   const canRefreshGitDiff =
-    isGitRepo && selectedTurnId === null && activeThread != null && activeCwd != null;
+    isGitRepo && selectedRunId === null && activeThread != null && activeCwd != null;
   const activeThreadRefreshKey = routeThreadRef
     ? `${routeThreadRef.environmentId}:${routeThreadRef.threadId}`
     : null;
@@ -500,7 +500,7 @@ export default function DiffPanel({
   useEffect(() => {
     const current = {
       threadKey: activeThreadRefreshKey,
-      turnId: latestTurn?.turnId ?? null,
+      runId: latestTurn?.runId ?? null,
     };
     const previous = lastCompletedTurnRefreshRef.current;
     if (!canRefreshGitDiff) {
@@ -510,17 +510,17 @@ export default function DiffPanel({
       lastCompletedTurnRefreshRef.current = current;
       return;
     }
-    if (previous.turnId === current.turnId) return;
+    if (previous.runId === current.runId) return;
     refreshBranchDiffPreview();
     lastCompletedTurnRefreshRef.current = current;
-  }, [activeThreadRefreshKey, canRefreshGitDiff, latestTurn?.turnId, refreshBranchDiffPreview]);
+  }, [activeThreadRefreshKey, canRefreshGitDiff, latestTurn?.runId, refreshBranchDiffPreview]);
 
   const selectedGitSource = branchDiffPreview.data?.sources.find(
     (source) => source.kind === (selectedGitScope === "unstaged" ? "working-tree" : "branch-range"),
   );
   const loadDiffFiles = useMemo<FileDiffContentsLoader | undefined>(() => {
     const preview = branchDiffPreview.data;
-    if (selectedTurnId !== null || !activeThread || !preview || !selectedGitSource) {
+    if (selectedRunId !== null || !activeThread || !preview || !selectedGitSource) {
       return undefined;
     }
 
@@ -563,13 +563,7 @@ export default function DiffPanel({
         newFile,
       };
     };
-  }, [
-    activeThread,
-    branchDiffPreview.data,
-    getDiffFileContents,
-    selectedGitSource,
-    selectedTurnId,
-  ]);
+  }, [activeThread, branchDiffPreview.data, getDiffFileContents, selectedGitSource, selectedRunId]);
   const localBranchRefs = useEnvironmentQuery(
     selectedRunId === null &&
       selectedGitScope === "branch" &&
