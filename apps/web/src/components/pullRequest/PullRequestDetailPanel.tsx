@@ -69,6 +69,8 @@ import {
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
   buildResolveConflictsPrompt,
+  handoffPrompt,
+  handoffReviewComments,
   pullRequestFindingKey,
   readableFailure,
   type PullRequestFinding,
@@ -249,16 +251,16 @@ export function PullRequestDetailPanel({
     if (session === null) return null;
     const store = useComposerDraftStore.getState();
     if (task === null) return session;
-    // Appended rather than assigned: the composer may already hold something the user typed,
-    // and losing it would be worse than a prompt they have to scroll.
-    const existing = store.getComposerDraft(session.draftId)?.prompt ?? "";
-    store.setPrompt(
+    // The latest press is the ask: it takes over what an earlier hand-off left, prompt and chips
+    // both, rather than stacking a second one under the first. What the reader typed themselves
+    // survives — the composer they are handed is not always a fresh one.
+    const draft = store.getComposerDraft(session.draftId);
+    const existing = { prompt: draft?.prompt ?? "", reviewComments: draft?.reviewComments ?? [] };
+    store.setPrompt(session.draftId, handoffPrompt(existing, task.prompt));
+    store.setReviewComments(
       session.draftId,
-      existing.trim().length === 0 ? task.prompt : `${existing}\n\n${task.prompt}`,
+      handoffReviewComments(existing.reviewComments, task.reviewComments ?? []),
     );
-    for (const comment of task.reviewComments ?? []) {
-      store.addReviewComment(session.draftId, comment);
-    }
     return session;
   };
 
@@ -280,7 +282,12 @@ export function PullRequestDetailPanel({
     toastManager.add({
       type: "success",
       title: "Asked in a thread",
-      description: "The question is in the composer — read it over, then send.",
+      // "Ask" leaves the composer empty on purpose, so saying the question is in it would send
+      // the reader looking for something that is not there. The chips are what landed.
+      description:
+        task.prompt.length > 0
+          ? "The question is in the composer — read it over, then send."
+          : "The pull request is in the composer — type your question, then send.",
     });
   };
 

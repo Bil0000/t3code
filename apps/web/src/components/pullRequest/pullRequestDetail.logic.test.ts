@@ -12,6 +12,8 @@ import {
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
+  handoffPrompt,
+  handoffReviewComments,
   pullRequestFindingKey,
   readableFailure,
   buildPullRequestTimeline,
@@ -581,5 +583,72 @@ describe("asking about a change rather than working on it", () => {
       question: "   ",
     });
     expect(handoff.prompt).toBe("");
+  });
+});
+
+describe("a second ask into the same composer", () => {
+  const chip = (id: string): ReviewCommentContext => ({
+    id,
+    sectionId: "pull-request:42",
+    sectionTitle: "PR #42",
+    filePath: "PR #42",
+    startIndex: 0,
+    endIndex: 0,
+    rangeLabel: "Add the pull requests page",
+    text: "",
+    diff: "",
+  });
+
+  it("replaces what the last one left, chips included", () => {
+    const next = handoffReviewComments(
+      [chip("pull-request-context:41"), chip("pull-request-selection:page.tsx:1:2")],
+      [chip("pull-request-context:42")],
+    );
+    expect(next.map((comment) => comment.id)).toEqual(["pull-request-context:42"]);
+  });
+
+  it("empties what the last ask left, so the two are never sent as one question", () => {
+    expect(
+      handoffPrompt(
+        { prompt: "Explain this pull request.", reviewComments: [chip("pull-request-context:41")] },
+        "",
+      ),
+    ).toBe("");
+  });
+
+  it("replaces the last ask's prompt with this one's", () => {
+    expect(
+      handoffPrompt(
+        { prompt: "Explain this pull request.", reviewComments: [chip("pull-request-context:41")] },
+        "Why is the cache keyed on the branch?",
+      ),
+    ).toBe("Why is the cache keyed on the branch?");
+  });
+
+  it("leaves a sentence the reader typed themselves where it is", () => {
+    expect(handoffPrompt({ prompt: "check the migration first", reviewComments: [] }, "")).toBe(
+      "check the migration first",
+    );
+  });
+
+  it("puts an ask under what the reader typed rather than over it", () => {
+    expect(
+      handoffPrompt(
+        { prompt: "check the migration first", reviewComments: [] },
+        "Explain this pull request.",
+      ),
+    ).toBe("check the migration first\n\nExplain this pull request.");
+  });
+
+  it("keeps the lines the reader marked up in the thread themselves", () => {
+    const own = chip("file-comment:3");
+    const next = handoffReviewComments(
+      [own, chip("pull-request-finding:t1")],
+      [chip("pull-request-context:42")],
+    );
+    expect(next.map((comment) => comment.id)).toEqual([
+      "file-comment:3",
+      "pull-request-context:42",
+    ]);
   });
 });
