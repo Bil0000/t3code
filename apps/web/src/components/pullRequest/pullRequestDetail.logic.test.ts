@@ -453,3 +453,50 @@ describe("what to say when an action fails", () => {
     expect(long.endsWith("…")).toBe(true);
   });
 });
+
+describe("findings that are already on a line", () => {
+  it("does not quote a resolved thread's comment as a remark with nowhere to hang", () => {
+    const resolved: PullRequestReviewThread = {
+      id: "t-resolved",
+      path: "apps/web/src/page.tsx",
+      line: 4,
+      side: "right",
+      isResolved: true,
+      isOutdated: false,
+      comments: [
+        {
+          id: "settled",
+          author: { login: "reviewer", name: null, avatarUrl: null },
+          body: "this was already fixed",
+          createdAt: "2026-07-02T00:00:00Z",
+          url: null,
+        },
+      ],
+    };
+    const handoff = buildFixFindingsHandoff({
+      number: 42,
+      title: "Add the pull requests page",
+      url: "https://github.com/pingdotgg/t3code/pull/42",
+      headBranch: "feat/page",
+      baseBranch: "main",
+      reviewThreads: [resolved],
+      // The conversation carries every thread's comments now, resolved ones included.
+      comments: [
+        {
+          id: "settled",
+          kind: "review-comment",
+          author: { login: "reviewer", name: null, avatarUrl: null },
+          body: "this was already fixed",
+          createdAt: "2026-07-02T00:00:00Z",
+          url: null,
+          path: "apps/web/src/page.tsx",
+          reviewState: null,
+        },
+      ],
+      checks: [],
+      commentsTruncated: false,
+    });
+    expect(handoff.prompt).not.toContain("this was already fixed");
+    expect(handoff.reviewComments).toEqual([]);
+  });
+});

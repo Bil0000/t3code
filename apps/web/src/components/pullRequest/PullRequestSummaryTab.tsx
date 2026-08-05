@@ -1,4 +1,4 @@
-import type { EnvironmentId, PullRequestDetail } from "@t3tools/contracts";
+import type { EnvironmentId, PullRequestDetail, PullRequestRef } from "@t3tools/contracts";
 import {
   ChevronRightIcon,
   CircleDotIcon,
@@ -29,6 +29,7 @@ import {
   pullRequestCheckStatusLabel,
   summarizePullRequestChecks,
 } from "./pullRequestPresentation";
+import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import {
   describePullRequestState,
   pullRequestFindingKey,
@@ -151,20 +152,37 @@ function CommentComposer({
   );
 }
 
+/**
+ * What a first render of the conversation carries. A pull request with two hundred comments is
+ * two hundred markdown documents, and the ones worth arriving for are the recent ones.
+ */
+const COMMENT_PAGE = 30;
+
 export function PullRequestSummaryTab({
   environmentId,
+  reference,
   detail,
   pendingFinding,
   onFixFinding,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
+  reference: PullRequestRef;
   detail: PullRequestDetail;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
   onFixFinding?: (finding: PullRequestFinding) => void;
   onRefresh: () => void;
 }) {
+  // Keyed by the pull request, so opening another one starts at the end of its conversation
+  // rather than wherever the last one had been read back to.
+  const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
+  const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;
+  const visibleComments = detail.comments.slice(
+    Math.max(0, detail.comments.length - shownComments),
+  );
+  const hiddenCommentCount = detail.comments.length - visibleComments.length;
+
   const openCheck = (url: string) => {
     void readLocalApi()?.shell.openExternal(url);
   };
@@ -205,18 +223,31 @@ export function PullRequestSummaryTab({
             </MetaRow>
           ) : null}
           <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
-            {detail.reviewers.length === 0 ? (
-              <span className="text-muted-foreground">None</span>
-            ) : (
-              <span className="flex flex-wrap items-center gap-1.5">
-                {detail.reviewers.map((actor) => (
+            <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+              {detail.reviewers.length === 0 ? (
+                <span className="text-muted-foreground">None</span>
+              ) : (
+                detail.reviewers.map((actor) => (
                   <PullRequestActorLabel key={actor.login} actor={actor} className="max-w-32" />
-                ))}
-              </span>
-            )}
+                ))
+              )}
+              {/* Both questions again: a host that can take the request, and an account that may
+                  make it. Asking is also only offered where the host can say who could be asked
+                  — Azure DevOps takes a reviewer but will not list one. */}
+              {detail.capabilities.reviewers.request &&
+              detail.capabilities.reviewers.listCandidates &&
+              detail.viewerPermissions.requestReviewers ? (
+                <PullRequestReviewerPicker
+                  environmentId={environmentId}
+                  reference={reference}
+                  onRequested={onRefresh}
+                />
+              ) : null}
+            </span>
           </MetaRow>
           <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
-            {detail.comments.length === 1 ? "1 comment" : `${detail.comments.length} comments`}
+            {/* The host's own count, so this reads the same here as it does there. */}
+            {detail.commentCount === 1 ? "1 comment" : `${detail.commentCount} comments`}
           </MetaRow>
           <MetaRow icon={<CircleDotIcon className="size-3.5" />} label="Checks">
             {summarizePullRequestChecks(detail.checks)}
@@ -280,17 +311,32 @@ export function PullRequestSummaryTab({
         )}
       </Section>
 
-      <Section title="Comments" count={detail.comments.length}>
+      <Section title="Comments" count={detail.commentCount}>
         {detail.commentsTruncated ? (
           <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
-            Some comments could not be shown here. Open the change request to read them all.
+            This conversation is longer than this page reads in one go. The most recent{" "}
+            {detail.comments.length} are here; open it on the host to read the rest.
           </p>
         ) : null}
         {detail.comments.length === 0 ? (
           <p className="py-2 text-xs text-muted-foreground">No comments yet.</p>
         ) : (
           <div className="space-y-3">
-            {detail.comments.map((comment) => (
+            {hiddenCommentCount > 0 ? (
+              // Hundreds of comments are hundreds of markdown renders, and the ones worth
+              // opening a pull request for are the recent ones. The rest are one press away and
+              // stay rendered once asked for.
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full"
+                onClick={() => setShown({ url: detail.url, count: shownComments + COMMENT_PAGE })}
+              >
+                Show {Math.min(hiddenCommentCount, COMMENT_PAGE)} earlier{" "}
+                {hiddenCommentCount === 1 ? "comment" : "comments"}
+              </Button>
+            ) : null}
+            {visibleComments.map((comment) => (
               <article key={comment.id} className="rounded-lg border border-border/60 p-3">
                 <div className="flex items-start gap-2">
                   <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
@@ -334,7 +380,7 @@ export function PullRequestSummaryTab({
           </div>
         )}
         {/* A host that cannot post a comment gets no composer, rather than one that fails. */}
-        {detail.capabilities.comment ? (
+        {detail.capabilities.comment && detail.viewerPermissions.comment ? (
           <CommentComposer environmentId={environmentId} detail={detail} onCommented={onRefresh} />
         ) : null}
       </Section>
