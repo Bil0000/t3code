@@ -1,12 +1,13 @@
-import type { LocalApi } from "@t3tools/contracts";
+import type { LocalApi, ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
-import { type MouseEvent, useCallback } from "react";
+import { type MouseEvent, useCallback, useMemo } from "react";
 
 import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { readLocalApi } from "../localApi";
+import { useRightPanelStore } from "../rightPanelStore";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
 import { useProjects } from "../state/entities";
@@ -165,13 +166,30 @@ export function findProjectForChangeRequest(
  * Resolving the project here rather than on the page is what makes recognising a URL safe: a
  * lookalike hostname matches no project and stays a link, and the page is handed the project
  * rather than a host to narrow its whole list by.
+ *
+ * Given a thread, the link opens beside it in the right panel instead of taking the whole app to
+ * the pull requests page: a reader following a link the agent wrote is reading the thread, and
+ * should still be reading it afterwards. Any change request opens there, not only the thread's
+ * own, since the panel is told which one to show.
  */
-export function useOpenChangeRequestLink(): (
+export function useOpenChangeRequestLink(
+  threadRef?: ScopedThreadRef,
+): (
   event: Pick<MouseEvent<HTMLElement>, "preventDefault" | "stopPropagation">,
   targetUrl: string,
 ) => boolean {
   const navigate = useNavigate();
-  const projects = useProjects();
+  const allProjects = useProjects();
+  // Beside a thread the panel reads on that thread's environment, so a project from another one
+  // could not be read there whatever its remote says: two environments can hold the same
+  // repository, and handing the panel the wrong one's id opens a surface that never loads.
+  const projects = useMemo(
+    () =>
+      threadRef === undefined
+        ? allProjects
+        : allProjects.filter((project) => project.environmentId === threadRef.environmentId),
+    [allProjects, threadRef],
+  );
   return useCallback(
     (event, targetUrl) => {
       const parsed = parseChangeRequestUrl(targetUrl);
@@ -179,6 +197,16 @@ export function useOpenChangeRequestLink(): (
       if (parsed === null || project === undefined) return false;
       event.preventDefault();
       event.stopPropagation();
+      if (threadRef) {
+        useRightPanelStore.getState().openPullRequest(threadRef, {
+          projectId: project.id,
+          // The identity's own spelling, not the one read out of the URL: the panel asks the
+          // provider for this repository, while matching a link only ever compares lower case.
+          repository: project.repositoryIdentity?.displayName ?? parsed.repository,
+          number: parsed.number,
+        });
+        return true;
+      }
       void navigate({
         to: "/pull-requests",
         search: {
@@ -193,7 +221,7 @@ export function useOpenChangeRequestLink(): (
       });
       return true;
     },
-    [navigate, projects],
+    [navigate, projects, threadRef],
   );
 }
 

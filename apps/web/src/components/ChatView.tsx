@@ -3983,6 +3983,13 @@ function ChatViewContent(props: ChatViewProps) {
     threadBranch: activeThread?.branch ?? null,
     gitStatus: gitStatusQuery.data ?? null,
   });
+  // The right panel offers the thread's own change request, so it can only offer it once the
+  // branch has one; until then the picker says so rather than opening an empty panel.
+  const addPullRequestSurface = useCallback(() => {
+    if (activeThreadPr === null) return;
+    openThreadPullRequest(activeThreadPr.number);
+  }, [activeThreadPr, openThreadPullRequest]);
+  const pullRequestSurfaceAvailable = activeThreadPr !== null && threadRepository !== null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
   const supportsSnooze = serverConfig?.environment.capabilities.threadSnooze === true;
   const nowMinute = useNowMinute();
@@ -5769,8 +5776,10 @@ function ChatViewContent(props: ChatViewProps) {
       </Suspense>
     ) : activeRightPanelSurface?.kind === "pull-request" ? (
       // No onClose: the surface tab's own X owns closing here, and a second X in the header
-      // would be the same action twice. The thread context also drops the checkout button —
-      // this is the thread's own pull request, so its branch is already checked out here.
+      // would be the same action twice. The thread context also drops the checkout button, so it
+      // is only right for the thread's own pull request, whose branch is already under the
+      // reader's feet. A link the agent wrote can open any other one here, and that one has to be
+      // checkable out like it is anywhere else.
       <PullRequestDetailPanel
         key={`${activeRightPanelSurface.repository}#${activeRightPanelSurface.number}`}
         environmentId={activeThread.environmentId}
@@ -5779,7 +5788,12 @@ function ChatViewContent(props: ChatViewProps) {
           repository: activeRightPanelSurface.repository,
           number: activeRightPanelSurface.number,
         }}
-        context="thread"
+        context={
+          activeThreadPr?.number === activeRightPanelSurface.number &&
+          threadRepository === activeRightPanelSurface.repository
+            ? "thread"
+            : "page"
+        }
       />
     ) : activeRightPanelSurface?.kind === "plan" ? (
       <PlanSidebar
@@ -6225,9 +6239,11 @@ function ChatViewContent(props: ChatViewProps) {
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
+          onAddPullRequest={addPullRequestSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          pullRequestAvailable={pullRequestSurfaceAvailable}
         >
           {rightPanelContent}
         </RightPanelTabs>
@@ -6252,9 +6268,11 @@ function ChatViewContent(props: ChatViewProps) {
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
+            onAddPullRequest={addPullRequestSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            pullRequestAvailable={pullRequestSurfaceAvailable}
           >
             {rightPanelContent}
           </RightPanelTabs>

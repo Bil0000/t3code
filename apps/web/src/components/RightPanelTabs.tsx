@@ -53,9 +53,11 @@ interface RightPanelTabsProps {
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
+  onAddPullRequest: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  pullRequestAvailable: boolean;
   children: ReactNode;
 }
 
@@ -63,6 +65,7 @@ const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the T3 Code desktop app.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
+  pullRequest: "This thread's branch has no pull request yet.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
@@ -100,9 +103,11 @@ function RightPanelEmptyState(props: {
   onAddTerminal: () => void;
   onAddDiff: () => void;
   onAddFiles: () => void;
+  onAddPullRequest: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  pullRequestAvailable: boolean;
 }) {
   const actions = [
     {
@@ -111,6 +116,7 @@ function RightPanelEmptyState(props: {
       icon: Globe2,
       available: props.browserAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.browser,
+      wide: false,
       onClick: props.onAddBrowser,
     },
     {
@@ -119,6 +125,7 @@ function RightPanelEmptyState(props: {
       icon: TerminalSquare,
       available: true,
       disabledReason: null,
+      wide: false,
       onClick: props.onAddTerminal,
     },
     {
@@ -127,6 +134,7 @@ function RightPanelEmptyState(props: {
       icon: Files,
       available: props.filesAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.files,
+      wide: false,
       onClick: props.onAddFiles,
     },
     {
@@ -135,7 +143,19 @@ function RightPanelEmptyState(props: {
       icon: FileDiff,
       available: props.diffAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.diff,
+      wide: false,
       onClick: props.onAddDiff,
+    },
+    {
+      label: "Pull request",
+      description: "Open the pull request for this thread's branch.",
+      icon: GitPullRequest,
+      available: props.pullRequestAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.pullRequest,
+      // Last and across both columns, because it is the one surface that is about the thread's
+      // work as a whole rather than a tool to look at it with.
+      wide: true,
+      onClick: props.onAddPullRequest,
     },
   ] as const;
 
@@ -151,6 +171,7 @@ function RightPanelEmptyState(props: {
         <div className="grid grid-cols-2 gap-2">
           {actions.map((action) => {
             const Icon = action.icon;
+            const spanClass = action.wide ? "col-span-2" : undefined;
             const content = (
               <>
                 <Icon className="mb-3 size-5" />
@@ -166,7 +187,10 @@ function RightPanelEmptyState(props: {
                   key={action.label}
                   type="button"
                   onClick={action.onClick}
-                  className="flex min-h-28 w-full flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left transition hover:border-border hover:bg-accent/60 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5"
+                  className={cn(
+                    "flex min-h-28 w-full flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left transition hover:border-border hover:bg-accent/60 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5",
+                    spanClass,
+                  )}
                 >
                   {content}
                 </button>
@@ -175,7 +199,10 @@ function RightPanelEmptyState(props: {
             const disabledCard = (
               <button
                 type="button"
-                className="flex min-h-28 w-full cursor-not-allowed flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left opacity-40 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5"
+                className={cn(
+                  "flex min-h-28 w-full cursor-not-allowed flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left opacity-40 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5",
+                  spanClass,
+                )}
                 aria-disabled="true"
               >
                 {content}
@@ -479,6 +506,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <FileDiff />
                     Diff
                   </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.pullRequestAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.pullRequest}
+                    onClick={props.onAddPullRequest}
+                  >
+                    <GitPullRequest />
+                    Pull request
+                  </SurfaceMenuItem>
                 </MenuPopup>
               </Menu>
             ) : null}
@@ -493,9 +528,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
+            onAddPullRequest={props.onAddPullRequest}
             browserAvailable={props.browserAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
+            pullRequestAvailable={props.pullRequestAvailable}
           />
         ) : (
           props.children
