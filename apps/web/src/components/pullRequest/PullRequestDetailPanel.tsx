@@ -7,7 +7,9 @@ import type {
   PullRequestRef,
 } from "@t3tools/contracts";
 import {
+  ChevronDownIcon,
   ExternalLinkIcon,
+  FolderGit2Icon,
   GitBranchIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
@@ -61,6 +63,7 @@ import {
   buildFixFindingsHandoff,
   buildResolveConflictsPrompt,
   pullRequestFindingKey,
+  readableFailure,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
 import { PullRequestStateGlyph } from "./pullRequestPresentation";
@@ -73,6 +76,26 @@ const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string> = {
   draft: "Converted to draft",
   close: "Pull request closed",
   reopen: "Pull request reopened",
+};
+
+/** Said as the thing that did not happen, rather than as the operation that returned an error. */
+const ACTION_FAILURE_LABELS: Record<PullRequestAction, string> = {
+  merge: "Could not merge this pull request",
+  ready: "Could not mark this ready for review",
+  draft: "Could not convert this to a draft",
+  close: "Could not close this pull request",
+  reopen: "Could not reopen this pull request",
+};
+
+/** What to try, for the times the host says only that it refused. */
+const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
+  merge:
+    "The host refused the merge. Check that you have write access, that the checks it requires have passed, and that the branch is not conflicting.",
+  ready: "The host refused it. Check that you have write access to this repository.",
+  draft: "The host refused it. Check that you have write access to this repository.",
+  close: "The host refused it. Check that you have write access, or that you opened it.",
+  reopen:
+    "The host refused it. Check that you have write access, and that the branch still exists.",
 };
 
 const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
@@ -127,12 +150,10 @@ export function PullRequestDetailPanel({
       // publishes no per-strategy availability to hide the control with — so "action failed"
       // would leave the reader pressing the same button again.
       const failure = squashAtomCommandFailure(result);
-      const detailMessage =
-        failure instanceof Error && failure.message.trim().length > 0 ? failure.message : null;
       toastManager.add({
         type: "error",
-        title: "Pull request action failed",
-        ...(detailMessage ? { description: detailMessage } : {}),
+        title: ACTION_FAILURE_LABELS[action],
+        description: readableFailure(failure, ACTION_FAILURE_HINTS[action]),
       });
       return;
     }
@@ -146,6 +167,10 @@ export function PullRequestDetailPanel({
   const startHandoff = async (
     kind: string,
     task: { prompt: string; reviewComments?: ReadonlyArray<ReviewCommentContext> } | null,
+    // A worktree leaves whatever is open alone, which is why it is the default. Checking out in
+    // the repository itself is what you want when the point is to run the thing where you
+    // already work — and it moves the branch under everything else that is open there.
+    mode: "worktree" | "local" = "worktree",
   ) => {
     if (!detail || handoff !== null) return;
     setHandoff(kind);
@@ -179,7 +204,7 @@ export function PullRequestDetailPanel({
     const store = useComposerDraftStore.getState();
     const prepared = await prepareThread.run({
       reference: detail.url,
-      mode: "worktree",
+      mode,
       threadId: opened.threadId,
     });
     if (prepared._tag === "Failure") {
@@ -195,11 +220,12 @@ export function PullRequestDetailPanel({
       });
       return;
     }
-    // The same thread again, now that there is a worktree to point it at.
+    // The same thread again, now that there is somewhere to point it at. A local checkout has
+    // no worktree of its own, so the thread runs where the repository already is.
     await newThread(projectRef, {
       branch: prepared.value.branch,
       worktreePath: prepared.value.worktreePath,
-      envMode: "worktree",
+      envMode: prepared.value.worktreePath === null ? "local" : "worktree",
     }).then(
       () => true,
       () => false,
@@ -215,7 +241,7 @@ export function PullRequestDetailPanel({
       type: "warning",
       title: "Checked out, but not on the latest commits",
       description:
-        "The worktree could not be moved onto the pull request's latest commits, so the code there is older than the pull request.",
+        "The checkout could not be moved onto the pull request's latest commits, so the code there is older than the pull request. Uncommitted work or local commits keep it where it is.",
     } as const;
     if (task === null) {
       toastManager.update(
@@ -223,8 +249,11 @@ export function PullRequestDetailPanel({
         prepared.value.isOnPullRequestHead
           ? {
               type: "success",
-              title: "Checked out",
-              description: "The pull request is in its own worktree, with a thread open on it.",
+              title: mode === "local" ? "Checked out here" : "Checked out",
+              description:
+                mode === "local"
+                  ? "This repository is on the pull request's branch, with a thread open on it."
+                  : "The pull request is in its own worktree, with a thread open on it.",
             }
           : staleCheckoutToast,
       );
@@ -252,9 +281,9 @@ export function PullRequestDetailPanel({
     );
   };
 
-  const startCheckout = () => {
+  const startCheckout = (mode: "worktree" | "local") => {
     if (!detail) return;
-    void startHandoff("checkout", null);
+    void startHandoff(`checkout:${mode}`, null, mode);
   };
 
   /** One finding, handed over on its own — the surfaces that show findings call this. */
@@ -391,31 +420,47 @@ export function PullRequestDetailPanel({
                 <TooltipPopup side="bottom">Open on GitHub</TooltipPopup>
               </Tooltip>
               {/* Checking a pull request out is the reason to open one here at all, so it is a
-                  button of its own rather than a side effect of asking an agent for something. */}
-              <Tooltip>
-                <TooltipTrigger
+                  button of its own rather than a side effect of asking an agent for something.
+                  It asks where, because the two answers are not interchangeable: one leaves your
+                  work where it is, the other moves the repository you are standing in. */}
+              <Menu>
+                <MenuTrigger
+                  disabled={handoff !== null}
                   render={
-                    <Button
-                      size="xs"
-                      variant="outline"
-                      disabled={handoff !== null}
-                      onClick={startCheckout}
-                    >
-                      {handoff === "checkout" ? (
+                    <Button size="xs" variant="outline">
+                      {handoff?.startsWith("checkout") ? (
                         "Checking out..."
                       ) : (
                         <>
                           <GitBranchIcon className="size-3" />
                           Check out
+                          <ChevronDownIcon className="size-3 text-muted-foreground" />
                         </>
                       )}
                     </Button>
                   }
                 />
-                <TooltipPopup side="bottom">
-                  Check this pull request out into its own worktree and open a thread on it
-                </TooltipPopup>
-              </Tooltip>
+                <MenuPopup align="end" side="bottom" className="min-w-72">
+                  <MenuItem onClick={() => startCheckout("worktree")}>
+                    <GitBranchIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>In a separate worktree</span>
+                      <span className="text-xs text-muted-foreground">
+                        Its own folder and thread. Nothing you have open moves.
+                      </span>
+                    </span>
+                  </MenuItem>
+                  <MenuItem onClick={() => startCheckout("local")}>
+                    <FolderGit2Icon className="mt-0.5 size-3.5 shrink-0 self-start" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>In this repository</span>
+                      <span className="text-xs text-muted-foreground">
+                        Switches the branch you are working in, like `gh pr checkout`.
+                      </span>
+                    </span>
+                  </MenuItem>
+                </MenuPopup>
+              </Menu>
               <Menu>
                 <MenuTrigger
                   className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
