@@ -141,8 +141,13 @@ export const make = Effect.gen(function* () {
                 reviewThreads: [],
                 // `az repos pr show` carries no commit list.
                 commits: [],
-                // Which strategies a repository allows lives in its branch policies, so the two
-                // Azure supports are offered and one the policy forbids fails on completion.
+                // Azure publishes no per-strategy availability on the pull request: which
+                // strategies a repository allows lives in its branch policies, which `az repos
+                // pr show` does not read. So both strategies Azure has are offered, and one a
+                // policy forbids is refused at completion — with the host's own sentence, which
+                // is the only place that reason exists. Reading `az repos policy list` per
+                // repository would let the control be hidden instead; that is a second call per
+                // pull request for a case the completion error already names.
                 mergeCapabilities: { merge: true, squash: true, rebase: false },
               }),
             ),

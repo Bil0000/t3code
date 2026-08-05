@@ -1,4 +1,5 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
   PullRequestAction,
@@ -121,7 +122,18 @@ export function PullRequestDetailPanel({
     });
     setActionPending(false);
     if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Pull request action failed" });
+      // The host's own sentence, because it is the only thing that says why. A merge strategy a
+      // branch policy forbids is refused at completion and nowhere earlier — Azure DevOps
+      // publishes no per-strategy availability to hide the control with — so "action failed"
+      // would leave the reader pressing the same button again.
+      const failure = squashAtomCommandFailure(result);
+      const detailMessage =
+        failure instanceof Error && failure.message.trim().length > 0 ? failure.message : null;
+      toastManager.add({
+        type: "error",
+        title: "Pull request action failed",
+        ...(detailMessage ? { description: detailMessage } : {}),
+      });
       return;
     }
     toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
