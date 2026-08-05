@@ -17,6 +17,7 @@ import {
   buildPullRequestTimeline,
   describePullRequestState,
 } from "./pullRequestDetail.logic";
+import type { ReviewCommentContext } from "~/reviewCommentContext";
 
 const TIMELINE_SOURCE: Pick<
   PullRequestDetail,
@@ -515,9 +516,9 @@ describe("asking about a change rather than working on it", () => {
     baseBranch: "main",
   };
 
-  it("leaves the composer holding one sentence, and everything else in the chip", () => {
+  it("leaves the composer empty, and everything the agent needs in the chip", () => {
     const handoff = buildAskAboutPullRequestHandoff(base);
-    expect(handoff.prompt).toBe("Type your question about this pull request here.");
+    expect(handoff.prompt).toBe("");
     expect(handoff.reviewComments).toEqual([
       expect.objectContaining({
         // What the chip reads as: which pull request, and what it is called.
@@ -563,7 +564,7 @@ describe("asking about a change rather than working on it", () => {
     ]);
   });
 
-  it("says what to type where the reader marked lines and typed nothing", () => {
+  it("leaves the composer empty where the reader marked lines and typed nothing", () => {
     const handoff = buildAskAboutLinesHandoff({
       ...base,
       comment: {
@@ -579,6 +580,6 @@ describe("asking about a change rather than working on it", () => {
       },
       question: "   ",
     });
-    expect(handoff.prompt).toBe("Type your question about these lines here.");
+    expect(handoff.prompt).toBe("");
   });
 });

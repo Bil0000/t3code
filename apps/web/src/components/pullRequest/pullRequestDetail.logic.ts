@@ -411,13 +411,10 @@ const ANSWER_INSTRUCTIONS = [
   "Answer the question asked in this message. Do not change any code, and do not check anything out unless asked to.",
 ];
 
-/** The sentence left in the composer, which is the reader's to replace. */
-export const ASK_PULL_REQUEST_PLACEHOLDER = "Type your question about this pull request here.";
-export const ASK_LINES_PLACEHOLDER = "Type your question about these lines here.";
-
 /**
- * A question about the change. The composer is left holding one sentence saying what to type,
- * because the reader has not typed their question yet — everything the agent needs is in the chip.
+ * A question about the change. The composer is left empty, because the question is the reader's
+ * to write and a sentence telling them so is one they would have to delete first — everything the
+ * agent needs is in the chip.
  */
 export function buildAskAboutPullRequestHandoff(input: {
   readonly number: number;
@@ -427,7 +424,7 @@ export function buildAskAboutPullRequestHandoff(input: {
   readonly baseBranch: string;
 }): FixFindingsHandoff {
   return {
-    prompt: ASK_PULL_REQUEST_PLACEHOLDER,
+    prompt: "",
     reviewComments: [pullRequestContextComment(input, ANSWER_INSTRUCTIONS)],
   };
 }
@@ -459,7 +456,7 @@ export function buildExplainPullRequestHandoff(input: {
  * A question about the lines somebody marked in the diff. Two chips, because they answer two
  * questions: which pull request this is, and which lines are being asked about. Anything the
  * reader typed in the comment box is the question, and it goes in the composer where they can
- * still edit it; typing nothing leaves the sentence that says to.
+ * still edit it; typing nothing leaves it empty for them to write in.
  */
 export function buildAskAboutLinesHandoff(input: {
   readonly number: number;
@@ -470,9 +467,8 @@ export function buildAskAboutLinesHandoff(input: {
   readonly comment: ReviewCommentContext;
   readonly question: string;
 }): FixFindingsHandoff {
-  const question = bounded(input.question);
   return {
-    prompt: question.length > 0 ? question : ASK_LINES_PLACEHOLDER,
+    prompt: bounded(input.question),
     reviewComments: [pullRequestContextComment(input, ANSWER_INSTRUCTIONS), input.comment],
   };
 }
