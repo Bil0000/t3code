@@ -75,7 +75,7 @@ export interface PullRequestExpectedHost {
  * those wear the host itself instead. Only the ambiguous ones: a lone GitLab beside two GitHub
  * installs is still "GitLab".
  */
-function hostLabel(
+export function pullRequestHostLabel(
   entries: ReadonlyArray<{ readonly host: string; readonly kind: SourceControlProviderKind }>,
   entry: { readonly host: string; readonly kind: SourceControlProviderKind },
 ): string {
@@ -126,7 +126,7 @@ export function PullRequestProviderFilter({
           return (
             <button key={expected.host} type="button" disabled className={filterOptionClass(false)}>
               <Icon className="size-3.5" />
-              {hostLabel(expectedHosts, expected)}
+              {pullRequestHostLabel(expectedHosts, expected)}
             </button>
           );
         })}
@@ -148,7 +148,7 @@ export function PullRequestProviderFilter({
       </button>
       {providers.map((provider) => {
         const { Icon } = getSourceControlPresentationForKind(provider.kind);
-        const label = hostLabel(providers, provider);
+        const label = pullRequestHostLabel(providers, provider);
         const active = provider.host === value;
         return (
           <button

@@ -9,6 +9,7 @@ import type {
 } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
+  ChevronDownIcon,
   EyeIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
@@ -17,8 +18,9 @@ import {
   PenLineIcon,
   LoaderIcon,
   RefreshCwIcon,
+  SearchIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ElementType, type ReactNode } from "react";
 
 import {
   filterPullRequestsByInvolvement,
@@ -33,6 +35,7 @@ import {
   PullRequestProjectFilter,
   PullRequestProviderFilter,
   PullRequestSearchInput,
+  pullRequestHostLabel,
   type PullRequestExpectedHost,
   type PullRequestFilterOption,
 } from "../components/pullRequest/PullRequestListFilters";
@@ -41,6 +44,7 @@ import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { RightPanelResizeHandle } from "../components/preview/RightPanelResizeHandle";
 import { Button } from "../components/ui/button";
+import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
 import { useResizableWidth } from "../hooks/useResizableWidth";
@@ -51,6 +55,7 @@ import { pullRequestEnvironment } from "../state/pullRequests";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
+import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 export interface PullRequestsSearch {
@@ -447,145 +452,152 @@ function PullRequestsRouteView() {
       selectedProjectId: entry.projectId,
     });
 
+  const involvementPills = (
+    <PullRequestFilterPills
+      label="Filter by involvement"
+      value={search.involvement}
+      options={INVOLVEMENT_TABS}
+      onChange={(involvement) => updateSearch({ involvement, ...clearedSelection })}
+    />
+  );
+  const statePills = (
+    <PullRequestFilterPills
+      label="Filter by state"
+      value={search.state}
+      options={STATE_TABS}
+      onChange={(state) => updateSearch({ state, ...clearedSelection })}
+    />
+  );
+  const providerFilter = (
+    <PullRequestProviderFilter
+      providers={hosts}
+      value={search.host}
+      expectedHosts={expectedHosts}
+      onChange={(host) => updateSearch({ host, ...clearedSelection })}
+    />
+  );
+  const searchInput = (
+    <PullRequestSearchInput
+      value={search.q ?? ""}
+      busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
+      onChange={(query) => updateSearch({ q: query || undefined })}
+    />
+  );
+  const projectFilter = (
+    <PullRequestProjectFilter
+      projects={scopedProjects}
+      value={scopedProjectId}
+      unavailable={unavailableProjects}
+      onChange={(projectId) => updateSearch({ ...clearedSelection, projectId })}
+    />
+  );
+  const listBody = (
+    <>
+      {firstLoad ? (
+        <div className="space-y-1">
+          {Array.from({ length: 7 }, (_, index) => (
+            <Skeleton key={index} className="h-13 w-full rounded-lg" />
+          ))}
+        </div>
+      ) : listQuery.error && listData === null ? (
+        <PullRequestsUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
+      ) : entries.length === 0 ? (
+        <PullRequestListEmptyState
+          query={typedQuery}
+          filtered={
+            search.state !== "open" ||
+            search.involvement !== "all" ||
+            scopedProjectId !== undefined ||
+            search.host !== undefined
+          }
+          searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
+          canLoadMore={listData?.truncated === true && pageSize < MAX_PAGE_SIZE}
+          loadingMore={loadingMore}
+          onClearQuery={() => updateSearch({ q: undefined })}
+          onLoadMore={loadMore}
+        />
+      ) : (
+        <div className="space-y-3">
+          {groups.map((group) => (
+            <div key={group.key} className="space-y-0.5">
+              {group.label ? (
+                <h2 className="px-3 pb-0.5 text-xs font-medium text-muted-foreground/70">
+                  {group.label}
+                </h2>
+              ) : null}
+              {group.entries.map((entry) => (
+                <PullRequestRow
+                  key={pullRequestEntryKey(entry)}
+                  entry={entry}
+                  showProjectTitle
+                  showProvider={showProvider}
+                  selected={
+                    selected?.repository === entry.repository && selected.number === entry.number
+                  }
+                  onSelect={selectEntry}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {listQuery.error && listData !== null ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
+          <span>The latest request failed. Showing the last pull requests loaded.</span>
+          <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+            Retry
+          </Button>
+        </div>
+      ) : null}
+      {listData?.truncated && entries.length > 0 ? (
+        <div ref={sentinelRef} className="flex justify-center py-2 text-xs text-muted-foreground">
+          {loadingMore ? (
+            <span className="flex items-center gap-2">
+              <LoaderIcon aria-hidden className="size-3.5 animate-spin" />
+              Loading more
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+  // The same names and glyphs the host pills wear, so the compact menu and the pills read as
+  // one control: "GitHub" with its mark, never the bare hostname — unless two installs of one
+  // kind force the hostname to tell them apart.
+  const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
+  const hostMenuOptions: ReadonlyArray<CompactFilterOption<string>> = [
+    { value: "", label: "All hosts", Icon: LayersIcon },
+    ...hostEntries.map((entry) => ({
+      value: entry.host,
+      label: pullRequestHostLabel(hostEntries, entry),
+      Icon: getSourceControlPresentationForKind(entry.kind).Icon,
+    })),
+  ];
+  const columnProps = {
+    refreshing: listQuery.isPending,
+    onRefresh: () => void refreshFromHost(),
+    searchValue: search.q ?? "",
+    involvement: search.involvement,
+    state: search.state,
+    host: search.host,
+    hostMenuOptions,
+    onInvolvement: (involvement: PullRequestInvolvement) =>
+      updateSearch({ involvement, ...clearedSelection }),
+    onState: (state: PullRequestListState) => updateSearch({ state, ...clearedSelection }),
+    onHost: (host: string | undefined) => updateSearch({ host, ...clearedSelection }),
+    involvementPills,
+    statePills,
+    providerFilter,
+    searchInput,
+    projectFilter,
+    listBody,
+  };
+
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground">
       <div className="flex min-h-0 flex-1">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <header
-            className={cn(
-              "workspace-topbar gap-2 border-b border-border/60 px-3 sm:px-5",
-              COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-            )}
-          >
-            <h1 className="truncate text-sm font-medium">Pull Requests</h1>
-            <div className="min-w-0 flex-1" />
-            <Button
-              size="icon-sm"
-              variant="ghost"
-              aria-label="Refresh pull requests"
-              onClick={() => void refreshFromHost()}
-            >
-              <RefreshCwIcon className={cn("size-4", listQuery.isPending && "animate-spin")} />
-            </Button>
-          </header>
-
-          <div className="scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto">
-            <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pb-12 pt-4">
-              <div className="flex flex-col gap-3">
-                {/* Each group is its own control, so they can share a row without the two
-                    "All" options reading as one list. */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <PullRequestFilterPills
-                    label="Filter by involvement"
-                    value={search.involvement}
-                    options={INVOLVEMENT_TABS}
-                    onChange={(involvement) => updateSearch({ involvement, ...clearedSelection })}
-                  />
-                  <PullRequestFilterPills
-                    label="Filter by state"
-                    value={search.state}
-                    options={STATE_TABS}
-                    onChange={(state) => updateSearch({ state, ...clearedSelection })}
-                  />
-                  <PullRequestProviderFilter
-                    providers={hosts}
-                    value={search.host}
-                    expectedHosts={expectedHosts}
-                    onChange={(host) => updateSearch({ host, ...clearedSelection })}
-                  />
-                </div>
-                <div className="flex items-center gap-2">
-                  <PullRequestSearchInput
-                    value={search.q ?? ""}
-                    busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
-                    onChange={(query) => updateSearch({ q: query || undefined })}
-                  />
-                  <PullRequestProjectFilter
-                    projects={scopedProjects}
-                    value={scopedProjectId}
-                    unavailable={unavailableProjects}
-                    onChange={(projectId) => updateSearch({ ...clearedSelection, projectId })}
-                  />
-                </div>
-              </div>
-
-              {firstLoad ? (
-                <div className="space-y-1">
-                  {Array.from({ length: 7 }, (_, index) => (
-                    <Skeleton key={index} className="h-13 w-full rounded-lg" />
-                  ))}
-                </div>
-              ) : listQuery.error && listData === null ? (
-                <PullRequestsUnavailableState
-                  error={listQuery.error}
-                  onRetry={() => listQuery.refresh()}
-                />
-              ) : entries.length === 0 ? (
-                <PullRequestListEmptyState
-                  query={typedQuery}
-                  filtered={
-                    search.state !== "open" ||
-                    search.involvement !== "all" ||
-                    scopedProjectId !== undefined ||
-                    search.host !== undefined
-                  }
-                  searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
-                  canLoadMore={listData?.truncated === true && pageSize < MAX_PAGE_SIZE}
-                  loadingMore={loadingMore}
-                  onClearQuery={() => updateSearch({ q: undefined })}
-                  onLoadMore={loadMore}
-                />
-              ) : (
-                <div className="space-y-3">
-                  {groups.map((group) => (
-                    <div key={group.key} className="space-y-0.5">
-                      {group.label ? (
-                        <h2 className="px-3 pb-0.5 text-xs font-medium text-muted-foreground/70">
-                          {group.label}
-                        </h2>
-                      ) : null}
-                      {group.entries.map((entry) => (
-                        <PullRequestRow
-                          key={pullRequestEntryKey(entry)}
-                          entry={entry}
-                          showProjectTitle
-                          showProvider={showProvider}
-                          selected={
-                            selected?.repository === entry.repository &&
-                            selected.number === entry.number
-                          }
-                          onSelect={selectEntry}
-                        />
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {listQuery.error && listData !== null ? (
-                <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
-                  <span>The latest request failed. Showing the last pull requests loaded.</span>
-                  <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
-                    Retry
-                  </Button>
-                </div>
-              ) : null}
-              {listData?.truncated && entries.length > 0 ? (
-                <div
-                  ref={sentinelRef}
-                  className="flex justify-center py-2 text-xs text-muted-foreground"
-                >
-                  {loadingMore ? (
-                    <span className="flex items-center gap-2">
-                      <LoaderIcon aria-hidden className="size-3.5 animate-spin" />
-                      Loading more
-                    </span>
-                  ) : null}
-                </div>
-              ) : null}
-            </div>
-          </div>
-        </div>
+        <PullRequestsColumn {...columnProps} />
 
         {selected && environmentId !== null ? (
           <aside
@@ -603,5 +615,303 @@ function PullRequestsRouteView() {
         ) : null}
       </div>
     </SidebarInset>
+  );
+}
+
+interface CompactFilterOption<Value extends string> {
+  readonly value: Value;
+  readonly label: string;
+  readonly Icon: ElementType<{ className?: string }>;
+}
+
+/**
+ * A compact stand-in for one pill group: the trigger wears the current choice, the choices
+ * live in a menu. Same options, same handler — only the footprint changes.
+ */
+function CompactFilterMenu<Value extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: Value;
+  options: ReadonlyArray<CompactFilterOption<Value>>;
+  onChange: (value: Value) => void;
+}) {
+  const current = options.find((option) => option.value === value) ?? options[0]!;
+  return (
+    <Menu>
+      <MenuTrigger
+        aria-label={label}
+        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+      >
+        {current.label}
+        <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground/70" />
+      </MenuTrigger>
+      <MenuPopup align="start" side="bottom" className="min-w-40">
+        <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as Value)}>
+          {options.map((option) => (
+            <MenuRadioItem key={option.value} value={option.value}>
+              <span className="flex min-w-0 items-center gap-2">
+                <option.Icon aria-hidden className="size-3.5" />
+                {option.label}
+              </span>
+            </MenuRadioItem>
+          ))}
+        </MenuRadioGroup>
+      </MenuPopup>
+    </Menu>
+  );
+}
+
+/**
+ * The search, folded to an icon until asked for. Opening moves focus into the input — the
+ * whole point of pressing it is to type. It stays open while it holds a query, so an active
+ * search is never invisible; empty and blurred, it folds back.
+ */
+function ExpandableSearch({
+  searchInput,
+  searchValue,
+  open,
+  onOpenChange,
+  focusToken,
+  onFocusWithin,
+}: {
+  searchInput: ReactNode;
+  searchValue: string;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Bumped to pull focus into the input while it is already showing — the Mod+F path. */
+  focusToken: number;
+  /**
+   * Focus entering and leaving the expanded input. An unmount fires no blur, which is the
+   * point: whoever unmounted this can still see the reader was mid-typing and move the
+   * focus somewhere that continues the sentence.
+   */
+  onFocusWithin?: (focused: boolean) => void;
+}) {
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    containerRef.current?.querySelector("input")?.focus();
+  }, [open]);
+  const appliedFocusToken = useRef(focusToken);
+  useEffect(() => {
+    if (appliedFocusToken.current === focusToken) return;
+    appliedFocusToken.current = focusToken;
+    const input = containerRef.current?.querySelector("input");
+    input?.focus();
+    input?.select();
+  }, [focusToken]);
+  if (open || searchValue.length > 0) {
+    return (
+      <div
+        ref={containerRef}
+        className="w-56 shrink-0"
+        onFocus={() => onFocusWithin?.(true)}
+        onBlur={() => {
+          onFocusWithin?.(false);
+          if (searchValue.length === 0) onOpenChange(false);
+        }}
+      >
+        {searchInput}
+      </div>
+    );
+  }
+  return (
+    <Button
+      size="icon-sm"
+      variant="ghost"
+      aria-label="Search pull requests"
+      onClick={() => onOpenChange(true)}
+    >
+      <SearchIcon className="size-4" />
+    </Button>
+  );
+}
+
+/**
+ * The pull request list column. The full controls live at the top of the scroll flow; once
+ * they scroll away, the title transforms into the scope itself — "Pull Requests / Open ▾
+ * Authored ▾" — where each segment is the menu for that filter, and a folded search sits on
+ * the right. Scrolled back up, the topbar returns to the plain title. The topbar is the
+ * window drag region throughout; its interactive children opt out through the `.drag-region`
+ * descendant rules.
+ */
+function PullRequestsColumn({
+  refreshing,
+  onRefresh,
+  searchValue,
+  involvement,
+  state,
+  host,
+  hostMenuOptions,
+  onInvolvement,
+  onState,
+  onHost,
+  involvementPills,
+  statePills,
+  providerFilter,
+  searchInput,
+  projectFilter,
+  listBody,
+}: {
+  refreshing: boolean;
+  onRefresh: () => void;
+  searchValue: string;
+  involvement: PullRequestInvolvement;
+  state: PullRequestListState;
+  host: string | undefined;
+  hostMenuOptions: ReadonlyArray<CompactFilterOption<string>>;
+  onInvolvement: (involvement: PullRequestInvolvement) => void;
+  onState: (state: PullRequestListState) => void;
+  onHost: (host: string | undefined) => void;
+  involvementPills: ReactNode;
+  statePills: ReactNode;
+  providerFilter: ReactNode;
+  searchInput: ReactNode;
+  projectFilter: ReactNode;
+  listBody: ReactNode;
+}) {
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const markerRef = useRef<HTMLDivElement | null>(null);
+  const [condensed, setCondensed] = useState(false);
+  useEffect(() => {
+    const marker = markerRef.current;
+    if (!marker) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => setCondensed(entry ? !entry.isIntersecting : false),
+      { root: scrollRef.current },
+    );
+    observer.observe(marker);
+    return () => observer.disconnect();
+  }, []);
+  // Typing into the topbar search narrows the list, and a short enough list un-scrolls the
+  // page — which dissolves the condensed topbar and unmounts the very input being typed in.
+  // The two inputs are one search to the reader, so the focus follows the value into the
+  // in-flow bar, caret at the end, and the sentence continues.
+  const topbarSearchFocusedRef = useRef(false);
+  const inFlowSearchRef = useRef<HTMLDivElement | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchFocusToken, setSearchFocusToken] = useState(0);
+  // Mod+F belongs to this page's own search: the desktop shell binds no find-in-page, so the
+  // shortcut would otherwise do nothing. Condensed, it unfolds the topbar search; at the top,
+  // it focuses the in-flow bar and selects the query the way a find field would.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.defaultPrevented) return;
+      if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
+      if (event.altKey || event.shiftKey) return;
+      event.preventDefault();
+      if (condensed) {
+        setSearchOpen(true);
+        setSearchFocusToken((token) => token + 1);
+        return;
+      }
+      const input = inFlowSearchRef.current?.querySelector("input");
+      input?.focus();
+      input?.select();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [condensed]);
+  useEffect(() => {
+    if (condensed) return;
+    // The fold-out is gone from the chrome; forgetting it open keeps the next condensing
+    // from starting with an empty expanded search nobody asked for.
+    setSearchOpen(false);
+    if (!topbarSearchFocusedRef.current) return;
+    topbarSearchFocusedRef.current = false;
+    const input = inFlowSearchRef.current?.querySelector("input");
+    if (!input) return;
+    input.focus();
+    input.setSelectionRange(input.value.length, input.value.length);
+  }, [condensed]);
+
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <header
+        className={cn(
+          "workspace-topbar drag-region gap-1.5 px-3 sm:px-5",
+          COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
+        )}
+      >
+        {condensed ? (
+          <div className="flex min-w-0 items-center gap-1.5">
+            <h1 className="shrink-0 truncate text-sm font-medium">Pull Requests</h1>
+            <span aria-hidden className="text-muted-foreground/50">
+              /
+            </span>
+            <CompactFilterMenu
+              label="Filter by state"
+              value={state}
+              options={STATE_TABS}
+              onChange={onState}
+            />
+            <CompactFilterMenu
+              label="Filter by involvement"
+              value={involvement}
+              options={INVOLVEMENT_TABS}
+              onChange={onInvolvement}
+            />
+            {hostMenuOptions.length > 2 ? (
+              <CompactFilterMenu
+                label="Filter by host"
+                value={host ?? ""}
+                options={hostMenuOptions}
+                onChange={(next) => onHost(next === "" ? undefined : next)}
+              />
+            ) : null}
+          </div>
+        ) : (
+          <h1 className="min-w-0 shrink truncate text-sm font-medium">Pull Requests</h1>
+        )}
+        <div className="min-w-0 flex-1" />
+        {condensed ? (
+          <ExpandableSearch
+            searchInput={searchInput}
+            searchValue={searchValue}
+            open={searchOpen}
+            onOpenChange={setSearchOpen}
+            focusToken={searchFocusToken}
+            onFocusWithin={(focused) => {
+              topbarSearchFocusedRef.current = focused;
+            }}
+          />
+        ) : null}
+        <Button
+          size="icon-sm"
+          variant="ghost"
+          aria-label="Refresh pull requests"
+          onClick={onRefresh}
+        >
+          <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
+        </Button>
+      </header>
+
+      <div
+        ref={scrollRef}
+        className="pull-requests-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto"
+      >
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pb-12 pt-4">
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {involvementPills}
+              {statePills}
+              {providerFilter}
+            </div>
+            <div ref={inFlowSearchRef} className="flex items-center gap-2">
+              {searchInput}
+              {projectFilter}
+            </div>
+            {/* Scrolled past this marker, the controls are gone and the title takes over. */}
+            <div ref={markerRef} aria-hidden className="-mt-3 h-px w-full" />
+          </div>
+
+          {listBody}
+        </div>
+      </div>
+    </div>
   );
 }
