@@ -23,7 +23,7 @@ import {
   PanelRightIcon,
   RefreshCwIcon,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -33,7 +33,7 @@ import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 import { useEnvironmentQuery } from "~/state/query";
-import { useRefreshOnFocus } from "~/hooks/useRefreshOnFocus";
+import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -125,11 +125,24 @@ const PullRequestCodeTab = lazy(() => import("./PullRequestCodeTab"));
 export function PullRequestDetailPanel({
   environmentId,
   reference,
+  refreshToken: forcedRefreshToken = 0,
+  onActed,
   onClose,
   context = "page",
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
+  /**
+   * Bumped by whatever holds the panel when a reader asks for everything on screen to be read
+   * again. The panel owns its own reads, so the page cannot refresh them for it — it says when,
+   * and this says it.
+   */
+  refreshToken?: number;
+  /**
+   * An action changed this pull request on the host, so a list showing it is now out of date.
+   * Told rather than assumed: only the page knows whether it is showing one.
+   */
+  onActed?: () => void;
   /** Absent when something around the panel already owns closing it — a surface tab's own X. */
   onClose?: () => void;
   /**
@@ -152,14 +165,16 @@ export function PullRequestDetailPanel({
   );
   const detail = detailQuery.data;
   // A pull request changes while it is open in front of somebody — a push lands, a check
-  // finishes, a review arrives — so coming back to the window reads it again. This read goes
-  // through the server's cache rather than around it: freshness bounded by the cache window,
-  // at no extra cost to the host.
-  useRefreshOnFocus(() => detailQuery.refresh());
-  // Refreshing is a button, not a poll or a focus listener: every read here shells out to the
-  // host's API from the server, so only a person should be able to spend those requests. The
-  // invalidation goes first so the re-reads miss the server's cache; if it fails, the reads
-  // still run and at worst answer from that cache.
+  // finishes, a review arrives — so the panel reads it again on the way back to the window and
+  // while a reader sits on it. Keyed by the pull request rather than by the panel, because this
+  // one panel shows a different pull request every time it is opened.
+  useLiveRefresh(() => detailQuery.refresh(), {
+    key: `pull-request:${reference.projectId}:${reference.repository}#${reference.number}`,
+  });
+  // The button, on the other hand, goes around the server's cache rather than through it: it is
+  // the answer for a reader who can see that what they are looking at is behind. The
+  // invalidation goes first so the re-reads miss that cache; if it fails, the reads still run
+  // and at worst answer from it.
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
   const [refreshToken, setRefreshToken] = useState(0);
   const refreshFromHost = async () => {
@@ -167,6 +182,13 @@ export function PullRequestDetailPanel({
     detailQuery.refresh();
     setRefreshToken((token) => token + 1);
   };
+  // A refresh asked for by the page: the detail, and through the token below, the diff with it.
+  const appliedForcedToken = useRef(forcedRefreshToken);
+  useEffect(() => {
+    if (appliedForcedToken.current === forcedRefreshToken) return;
+    appliedForcedToken.current = forcedRefreshToken;
+    void refreshFromHost();
+  }, [forcedRefreshToken]);
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
   const [actionPending, setActionPending] = useState(false);
   const newThread = useNewThreadHandler();
@@ -198,6 +220,7 @@ export function PullRequestDetailPanel({
     }
     toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
     detailQuery.refresh();
+    onActed?.();
   };
 
   type ThreadTask = {

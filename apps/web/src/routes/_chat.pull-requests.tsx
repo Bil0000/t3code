@@ -50,7 +50,7 @@ import { Button } from "../components/ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
-import { useRefreshOnFocus } from "../hooks/useRefreshOnFocus";
+import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import { useResizableWidth } from "../hooks/useResizableWidth";
 import { useDebouncedValue } from "../state/queries";
 import { useProjects } from "../state/entities";
@@ -271,12 +271,29 @@ function PullRequestsRouteView() {
   // The header's refresh punches through the server's cache before re-reading; the error and
   // empty states retry plainly, because a failure is never cached.
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
+  // What the reader pressed refresh for is everything they can see, not the one query that
+  // happens to be theirs: the list, the counts beside its rows, and whatever the panel is
+  // showing. The panel owns its own reads, so it is told to redo them rather than reached into.
+  const [detailRefreshToken, setDetailRefreshToken] = useState(0);
+  // The queries only go pending once the invalidation has come back, so refreshing is tracked
+  // from the first moment rather than the second: a button that stays live through the slow half
+  // of its own work is a button that gets pressed again, and buys the whole cascade twice.
+  const [invalidating, setInvalidating] = useState(false);
   const refreshFromHost = async () => {
-    if (environmentId !== null) {
-      await invalidate({ environmentId, input: {} });
+    setInvalidating(true);
+    try {
+      if (environmentId !== null) {
+        await invalidate({ environmentId, input: {} });
+      }
+    } finally {
+      setInvalidating(false);
     }
     listQuery.refresh();
+    baselineQuery.refresh();
+    statsQuery.refresh();
+    setDetailRefreshToken((token) => token + 1);
   };
+  const refreshing = invalidating || listQuery.isPending;
 
   // Every page size and every search is its own query, and a new one starts empty. The last
   // answer for these filters is held so the page grows and narrows in place rather than blanking
@@ -375,9 +392,17 @@ function PullRequestsRouteView() {
   };
 
   // The list goes stale the same way the detail does: somebody opens a pull request, a check
-  // finishes, a branch is merged. Coming back to the window reads it again. The read goes
-  // through the server's cache, so a window focus costs the host at most one page per window.
-  useRefreshOnFocus(() => listQuery.refresh(), environmentId !== null);
+  // finishes, a branch is merged. So it reads again on the way back to the window, and once a
+  // minute while somebody is reading it. Those reads go through the server's cache and stop
+  // when the reader stops, which is what keeps a page left open from spending a night of the
+  // host's rate limit.
+  useLiveRefresh(
+    () => {
+      listQuery.refresh();
+      baselineQuery.refresh();
+    },
+    { enabled: environmentId !== null },
+  );
 
   const viewers = baselineQuery.data?.viewers ?? listData?.viewers ?? EMPTY_VIEWERS;
   const listErrors = baselineQuery.data?.errors ?? listData?.errors ?? [];
@@ -724,7 +749,7 @@ function PullRequestsRouteView() {
     }),
   ];
   const columnProps = {
-    refreshing: listQuery.isPending,
+    refreshing,
     onRefresh: () => void refreshFromHost(),
     searchValue: search.q ?? "",
     involvement: search.involvement,
@@ -758,6 +783,13 @@ function PullRequestsRouteView() {
               key={`${selected.repository}#${selected.number}`}
               environmentId={environmentId}
               reference={selected}
+              refreshToken={detailRefreshToken}
+              // Merging, closing or reopening changes the row this panel was opened from, so the
+              // list behind it is out of date the moment the host takes the action.
+              onActed={() => {
+                listQuery.refresh();
+                baselineQuery.refresh();
+              }}
               onClose={() => updateSearch(clearedSelection)}
             />
           </aside>
