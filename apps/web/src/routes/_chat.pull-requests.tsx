@@ -340,8 +340,13 @@ function PullRequestsRouteView() {
   // keyed to exactly that question. Otherwise a search's answer lingers for a render after the
   // text has gone — the data cannot say which question it belongs to, but the read it came from
   // can, and that is what stops a cleared search from keeping its own rows.
+  // A grown page is read by the list and nothing else: the baseline always asks for one page, so
+  // a host with no cursor to continue from — where "more" means asking for a longer page — would
+  // have its extra rows thrown away for the ninety-nine the baseline keeps answering with.
   const answered =
-    (sentQuery.length === 0 && sentCursors === null ? baselineQuery.data : listQuery.data) ??
+    (sentQuery.length === 0 && sentCursors === null && pageSize === PAGE_SIZE
+      ? baselineQuery.data
+      : listQuery.data) ??
     (loaded?.scope === scopeKey && loaded.query === sentQuery ? loaded.data : null);
   // Clearing a search returns to a list that has already been read, so it comes back at once
   // rather than after another round trip: the search was the temporary state, not the list.
