@@ -37,14 +37,28 @@ function reasonFor(
 /**
  * `gh pr view --json` reports no avatar for anyone, so the ones the GraphQL read collected are
  * applied here by login. An actor already carrying one keeps it.
+ *
+ * A login GitHub did not answer for falls back to the picture every GitHub install serves at
+ * `/<login>.png`. The lookup is one more request per repository and can be refused — a rate
+ * limit, a slow host — and a face that comes and goes between two loads of the same page reads
+ * as a bug in the page rather than as a request that failed quietly.
  */
 function withAvatar(
   actor: PullRequestActor | null,
   avatarsByLogin: ReadonlyMap<string, string>,
+  host: string,
 ): PullRequestActor | null {
   if (actor === null || actor.avatarUrl !== null) return actor;
-  const avatarUrl = avatarsByLogin.get(actor.login) ?? null;
+  const avatarUrl = avatarsByLogin.get(actor.login) ?? loginAvatarUrl(actor.login, host);
   return avatarUrl === null ? actor : { ...actor, avatarUrl };
+}
+
+/**
+ * Null for anything that is not a plain user login: an app posts as `dependabot[bot]`, which
+ * names no page, and a guessed URL that 404s is worse than the initials it would replace.
+ */
+export function loginAvatarUrl(login: string, host: string): string | null {
+  return /^[a-z0-9][a-z0-9-]{0,38}$/iu.test(login) ? `https://${host}/${login}.png?size=80` : null;
 }
 
 export const make = Effect.gen(function* () {
@@ -96,7 +110,7 @@ export const make = Effect.gen(function* () {
                   ...page,
                   items: page.items.map((item) => ({
                     ...item,
-                    author: withAvatar(item.author, avatarsByLogin),
+                    author: withAvatar(item.author, avatarsByLogin, input.host),
                   })),
                 })),
               ),
@@ -131,14 +145,14 @@ export const make = Effect.gen(function* () {
         Effect.map(
           ([pullRequest, mergeCapabilities, reviewThreads]): ProviderChangeRequestDetail => ({
             ...pullRequest,
-            author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin),
+            author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin, input.host),
             // From the review itself rather than from the listing's outstanding requests, which
             // hold no avatar and drop anyone who has already reviewed.
             reviewers: reviewThreads.reviewers,
             comments: [...pullRequest.comments, ...reviewThreads.comments]
               .map((comment) => ({
                 ...comment,
-                author: withAvatar(comment.author, reviewThreads.avatarsByLogin),
+                author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
               }))
               .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
             commentsTruncated:
@@ -147,7 +161,7 @@ export const make = Effect.gen(function* () {
               ...thread,
               comments: thread.comments.map((comment) => ({
                 ...comment,
-                author: withAvatar(comment.author, reviewThreads.avatarsByLogin),
+                author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
               })),
             })),
             mergeCapabilities,
