@@ -608,33 +608,46 @@ describe("a second ask into the same composer", () => {
   });
 
   it("empties what the last ask left, so the two are never sent as one question", () => {
-    expect(
-      handoffPrompt(
-        { prompt: "Explain this pull request.", reviewComments: [chip("pull-request-context:41")] },
-        "",
-      ),
-    ).toBe("");
+    const handed = "Explain this pull request.";
+    expect(handoffPrompt({ prompt: handed, lastHandoffPrompt: handed }, "")).toBe("");
   });
 
   it("replaces the last ask's prompt with this one's", () => {
-    expect(
-      handoffPrompt(
-        { prompt: "Explain this pull request.", reviewComments: [chip("pull-request-context:41")] },
-        "Why is the cache keyed on the branch?",
-      ),
-    ).toBe("Why is the cache keyed on the branch?");
+    const handed = "Explain this pull request.";
+    expect(handoffPrompt({ prompt: handed, lastHandoffPrompt: handed }, "Why the cache key?")).toBe(
+      "Why the cache key?",
+    );
   });
 
   it("leaves a sentence the reader typed themselves where it is", () => {
-    expect(handoffPrompt({ prompt: "check the migration first", reviewComments: [] }, "")).toBe(
-      "check the migration first",
-    );
+    expect(
+      handoffPrompt({ prompt: "check the migration first", lastHandoffPrompt: undefined }, ""),
+    ).toBe("check the migration first");
+  });
+
+  it("keeps what the reader wrote next to the chip an earlier ask left", () => {
+    // The chip is still there, but these words are not the ones the hand-off wrote.
+    expect(
+      handoffPrompt({ prompt: "why is the cache keyed on the branch?", lastHandoffPrompt: "" }, ""),
+    ).toBe("why is the cache keyed on the branch?");
+  });
+
+  it("keeps an edit the reader made to the sentence they were handed", () => {
+    expect(
+      handoffPrompt(
+        {
+          prompt: "Explain this pull request, the caching especially.",
+          lastHandoffPrompt: "Explain this pull request.",
+        },
+        "",
+      ),
+    ).toBe("Explain this pull request, the caching especially.");
   });
 
   it("puts an ask under what the reader typed rather than over it", () => {
     expect(
       handoffPrompt(
-        { prompt: "check the migration first", reviewComments: [] },
+        { prompt: "check the migration first", lastHandoffPrompt: undefined },
         "Explain this pull request.",
       ),
     ).toBe("check the migration first\n\nExplain this pull request.");

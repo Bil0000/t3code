@@ -124,6 +124,13 @@ const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
 // The diff viewer pulls in its worker pool, so it stays out of the bundle until Code is opened.
 const PullRequestCodeTab = lazy(() => import("./PullRequestCodeTab"));
 
+/**
+ * What the last hand-off wrote into each draft, kept outside React because the panel that wrote it
+ * is closed by the time the next one opens. It is how a prompt the reader has since edited is told
+ * apart from the one they were handed: only the sentence still exactly as written may be replaced.
+ */
+const lastHandoffPromptByDraft = new Map<DraftId, string>();
+
 export function PullRequestDetailPanel({
   environmentId,
   reference,
@@ -253,13 +260,22 @@ export function PullRequestDetailPanel({
     if (task === null) return session;
     // The latest press is the ask: it takes over what an earlier hand-off left, prompt and chips
     // both, rather than stacking a second one under the first. What the reader typed themselves
-    // survives — the composer they are handed is not always a fresh one.
+    // survives — the composer they are handed is not always a fresh one, and a prompt they have
+    // since edited is theirs rather than the hand-off's.
     const draft = store.getComposerDraft(session.draftId);
-    const existing = { prompt: draft?.prompt ?? "", reviewComments: draft?.reviewComments ?? [] };
-    store.setPrompt(session.draftId, handoffPrompt(existing, task.prompt));
+    const existingComments = draft?.reviewComments ?? [];
+    const prompt = handoffPrompt(
+      {
+        prompt: draft?.prompt ?? "",
+        lastHandoffPrompt: lastHandoffPromptByDraft.get(session.draftId),
+      },
+      task.prompt,
+    );
+    lastHandoffPromptByDraft.set(session.draftId, prompt);
+    store.setPrompt(session.draftId, prompt);
     store.setReviewComments(
       session.draftId,
-      handoffReviewComments(existing.reviewComments, task.reviewComments ?? []),
+      handoffReviewComments(existingComments, task.reviewComments ?? []),
     );
     return session;
   };

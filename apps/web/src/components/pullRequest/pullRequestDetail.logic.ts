@@ -191,23 +191,23 @@ const HANDOFF_COMMENT_ID_PREFIX = "pull-request-";
 /**
  * The prompt the composer should hold once a hand-off lands there.
  *
- * A hand-off owns whatever an earlier hand-off left: pressing Ask and then Explain used to stack
- * both in the composer, and the reader sent a question nobody wrote. Its own chips are what say
- * an earlier one wrote what is there. Anything the reader typed themselves is theirs, so it is
- * kept — an empty ask leaves it alone, and one carrying a prompt goes underneath it.
+ * A hand-off owns what an earlier hand-off wrote and nothing else: pressing Ask and then Explain
+ * used to stack both in the composer, and the reader sent a question nobody wrote. What says an
+ * earlier one wrote it is the text itself — the caller remembers what it last put in this draft,
+ * and only that exact sentence is replaced. A reader who typed their own question, or edited the
+ * one they were given, has written something no hand-off may take away: an empty ask leaves it
+ * alone, and one carrying a prompt goes underneath it.
  */
 export function handoffPrompt(
   existing: {
     readonly prompt: string;
-    readonly reviewComments: ReadonlyArray<ReviewCommentContext>;
+    /** What the last hand-off into this draft wrote, if this session put anything there. */
+    readonly lastHandoffPrompt: string | undefined;
   },
   incoming: string,
 ): string {
-  const written = existing.prompt.trim();
-  const fromHandoff = existing.reviewComments.some((comment) =>
-    comment.id.startsWith(HANDOFF_COMMENT_ID_PREFIX),
-  );
-  if (written.length === 0 || fromHandoff) return incoming;
+  if (existing.prompt.trim().length === 0) return incoming;
+  if (existing.prompt === existing.lastHandoffPrompt) return incoming;
   return incoming.length === 0 ? existing.prompt : `${existing.prompt}\n\n${incoming}`;
 }
 
