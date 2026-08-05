@@ -212,6 +212,13 @@ function PullRequestsRouteView() {
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
   const sentCursors = page.key === filterKey ? page.cursors : null;
 
+  // Typing a search, or clearing one, starts the list again at its first page. Without this the
+  // paging state from before the search is still filed under these filters and comes back with
+  // it, so clearing would return to the slice that had been scrolled to rather than to the list.
+  useEffect(() => {
+    setPage({ key: filterKey, size: PAGE_SIZE, cursors: null });
+  }, [filterKey]);
+
   const listQuery = useEnvironmentQuery(
     environmentId === null
       ? null
@@ -232,6 +239,31 @@ function PullRequestsRouteView() {
         }),
   );
 
+  /**
+   * The same filters with nothing typed, read whether or not anything is. It is the same atom the
+   * list itself uses while no search is on, so it costs nothing then; while one is, it is what the
+   * page knows about the workspace — who is signed in, which hosts there are, which repositories
+   * could not be read — and what it shows the moment the search is cleared.
+   *
+   * Kept as its own read rather than remembered from an earlier answer because an answer cannot
+   * say which question it belongs to: mid-switch the text has already changed and the data has
+   * not, and a search's answer would file itself under the workspace.
+   */
+  const baselineQuery = useEnvironmentQuery(
+    environmentId === null
+      ? null
+      : pullRequestEnvironment.list({
+          environmentId,
+          input: {
+            state: search.state,
+            involvement: search.involvement,
+            limit: PAGE_SIZE,
+            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+            ...(search.host ? { host: search.host } : {}),
+          },
+        }),
+  );
+
   // Every page size and every search is its own query, and a new one starts empty. The last
   // answer for these filters is held so the page grows and narrows in place rather than blanking
   // out: a longer page reads as growth, and a search shows the rows it already has, narrowed
@@ -241,25 +273,25 @@ function PullRequestsRouteView() {
     query: string;
     data: PullRequestListResult;
   } | null>(null);
-  /**
-   * The last answer under these filters with nothing typed. Clearing a search is a return to a
-   * list that was already read, so it comes back at once rather than after another round trip —
-   * the search was the temporary state, not the list.
-   */
-  const [unsearched, setUnsearched] = useState<{
-    scope: string;
-    data: PullRequestListResult;
-  } | null>(null);
   useEffect(() => {
-    if (!listQuery.data) return;
+    // Only once this query has settled. While a search is being swapped in or out the text has
+    // already changed and the data has not, so recording them together would file the previous
+    // answer under the new question — which is how a search's answer came to speak for the
+    // workspace after the search was cleared.
+    if (!listQuery.data || listQuery.isPending) return;
     setLoaded({ scope: scopeKey, query: sentQuery, data: listQuery.data });
-    if (sentQuery.length === 0) setUnsearched({ scope: scopeKey, data: listQuery.data });
-  }, [scopeKey, sentQuery, listQuery.data]);
+  }, [scopeKey, sentQuery, listQuery.data, listQuery.isPending]);
+  // With nothing typed and nothing to carry on from, the answer is taken from the read that is
+  // keyed to exactly that question. Otherwise a search's answer lingers for a render after the
+  // text has gone — the data cannot say which question it belongs to, but the read it came from
+  // can, and that is what stops a cleared search from keeping its own rows.
   const answered =
-    listQuery.data ??
+    (sentQuery.length === 0 && sentCursors === null ? baselineQuery.data : listQuery.data) ??
     (loaded?.scope === scopeKey && loaded.query === sentQuery ? loaded.data : null);
+  // Clearing a search returns to a list that has already been read, so it comes back at once
+  // rather than after another round trip: the search was the temporary state, not the list.
   const carried =
-    (sentQuery.length === 0 && unsearched?.scope === scopeKey ? unsearched.data : null) ??
+    (sentQuery.length === 0 ? baselineQuery.data : undefined) ??
     (loaded?.scope === scopeKey ? loaded.data : null);
   const listData = answered ?? carried;
   /** The rows on screen are the previous search's, held while this one is on its way. */
@@ -329,24 +361,23 @@ function PullRequestsRouteView() {
   // finishes, a branch is merged. Coming back to the window reads it again.
   useRefreshOnFocus(() => listQuery.refresh(), environmentId !== null);
 
+  const viewers = baselineQuery.data?.viewers ?? listData?.viewers ?? EMPTY_VIEWERS;
+  const listErrors = baselineQuery.data?.errors ?? listData?.errors ?? [];
+
   /** The hosts that narrowed the listing themselves, so their answer is not narrowed again. */
   const searchingHosts = useMemo(
     () =>
       new Set(
-        (listData?.providers ?? []).flatMap((provider) =>
+        (baselineQuery.data?.providers ?? listData?.providers ?? []).flatMap((provider) =>
           provider.searchesOnHost ? [provider.host] : [],
         ),
       ),
-    [listData?.providers],
+    [baselineQuery.data?.providers, listData?.providers],
   );
 
   const entries = useMemo(() => {
     const known = ordered?.key === filterKey ? ordered.entries : (listData?.entries ?? []);
-    const involvementEntries = filterPullRequestsByInvolvement(
-      known,
-      listData?.viewers ?? EMPTY_VIEWERS,
-      search.involvement,
-    );
+    const involvementEntries = filterPullRequestsByInvolvement(known, viewers, search.involvement);
     // The hosts search more than the row shows — a body, a review, a commit message — so once
     // their answer is in, narrowing it again here would throw away matches the reader asked for.
     // The local pass stands in for the answer that has not arrived yet, and for the hosts that
@@ -368,6 +399,7 @@ function PullRequestsRouteView() {
     searchingHosts,
     showingCarried,
     typedQuery,
+    viewers,
   ]);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
@@ -421,9 +453,9 @@ function PullRequestsRouteView() {
   const groups = useMemo(
     () =>
       search.involvement === "all"
-        ? groupPullRequestsByInvolvement(entries, listData?.viewers ?? EMPTY_VIEWERS)
+        ? groupPullRequestsByInvolvement(entries, viewers)
         : [{ key: "others" as const, label: "", entries }],
-    [entries, listData?.viewers, search.involvement],
+    [entries, search.involvement, viewers],
   );
 
   // A link from a thread or the sidebar only knows the repository, so the owning project is
@@ -498,9 +530,8 @@ function PullRequestsRouteView() {
 
   /** Reported per project rather than as a count, so the reader can see which one it was. */
   const unavailableProjects = useMemo(
-    () =>
-      new Map((listData?.errors ?? []).map((error) => [error.projectId, error.message] as const)),
-    [listData?.errors],
+    () => new Map(listErrors.map((error) => [error.projectId, error.message] as const)),
+    [listErrors],
   );
 
   const selectEntry = (entry: PullRequestListEntry) =>
