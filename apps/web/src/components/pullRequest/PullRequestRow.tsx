@@ -17,6 +17,7 @@ export function PullRequestRow({
   selected,
   showProjectTitle,
   showProvider,
+  matchedElsewhere,
   onSelect,
 }: {
   entry: PullRequestListEntry;
@@ -24,6 +25,11 @@ export function PullRequestRow({
   showProjectTitle: boolean;
   /** Only when the list spans more than one host, where the repository alone is ambiguous. */
   showProvider: boolean;
+  /**
+   * A search found this, but in something the row does not show — a description, a comment, a
+   * commit message. Saying so is the difference between a result and an apparently random row.
+   */
+  matchedElsewhere?: boolean;
   onSelect: (entry: PullRequestListEntry) => void;
 }) {
   const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
@@ -62,6 +68,11 @@ export function PullRequestRow({
           <span className="truncate" title={`${entry.headBranch} to ${entry.baseBranch}`}>
             {entry.headBranch}
           </span>
+          {matchedElsewhere ? (
+            <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px]">
+              matched in the description
+            </span>
+          ) : null}
         </PullRequestMetaLine>
       </span>
       <span className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-muted-foreground/70 tabular-nums">

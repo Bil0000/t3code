@@ -25,7 +25,9 @@ import {
   groupPullRequestsByInvolvement,
   matchesPullRequestQuery,
   pullRequestEntryKey,
+  rankPullRequestMatches,
   resolveProjectScope,
+  scorePullRequestMatch,
 } from "../components/pullRequest/pullRequestList.logic";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
@@ -84,6 +86,8 @@ const STATE_TABS = [
 
 /** Long enough that a keystroke does not become a request, short enough to feel answered. */
 const SEARCH_DEBOUNCE_MS = 250;
+/** What `scorePullRequestMatch` gives a row none of whose own fields carry the search text. */
+const MATCHED_ELSEWHERE_SCORE = 10;
 /**
  * One whole page from the host and no more: every provider asks for one row beyond the page as
  * its "is there more" probe, and GitHub serves a hundred per request — so asking for ninety-nine
@@ -261,7 +265,7 @@ function PullRequestsRouteView() {
     if (!answered) return;
     setOrdered((previous) => {
       if (previous === null || previous.key !== filterKey) {
-        return { key: filterKey, entries: answered.entries };
+        return { key: filterKey, entries: rankPullRequestMatches(answered.entries, sentQuery) };
       }
       const arriving = new Map(
         answered.entries.map((entry) => [pullRequestEntryKey(entry), entry] as const),
@@ -272,9 +276,11 @@ function PullRequestsRouteView() {
         // screen therefore stays, and the slice — ordered among itself, since one repository's
         // next rows can be newer than another's last — lands under it.
         const held = new Set(previous.entries.map(pullRequestEntryKey));
-        const appended = answered.entries
-          .filter((entry) => !held.has(pullRequestEntryKey(entry)))
-          .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        const arrived = answered.entries.filter((entry) => !held.has(pullRequestEntryKey(entry)));
+        const appended = rankPullRequestMatches(
+          arrived.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+          sentQuery,
+        );
         return { key: filterKey, entries: [...previous.entries, ...appended] };
       }
       const kept = previous.entries.flatMap((entry) => {
@@ -287,7 +293,7 @@ function PullRequestsRouteView() {
       });
       return { key: filterKey, entries: [...kept, ...arriving.values()] };
     });
-  }, [answered, filterKey, sentCursors]);
+  }, [answered, filterKey, sentCursors, sentQuery]);
 
   // Carrying on where the last answer stopped, and only raising the page size for the hosts that
   // could not say where that was.
@@ -591,6 +597,12 @@ function PullRequestsRouteView() {
                           entry={entry}
                           showProjectTitle
                           showProvider={showProvider}
+                          // Ten is the floor the ranking gives a row whose own fields say nothing
+                          // about the search: the host matched something this row cannot show.
+                          matchedElsewhere={
+                            typedQuery.length > 0 &&
+                            scorePullRequestMatch(entry, typedQuery) <= MATCHED_ELSEWHERE_SCORE
+                          }
                           selected={
                             selected?.repository === entry.repository &&
                             selected.number === entry.number

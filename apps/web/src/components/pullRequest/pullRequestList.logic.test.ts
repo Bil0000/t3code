@@ -5,6 +5,8 @@ import {
   filterPullRequestsByInvolvement,
   groupPullRequestsByInvolvement,
   matchesPullRequestQuery,
+  rankPullRequestMatches,
+  scorePullRequestMatch,
   resolveProjectScope,
 } from "./pullRequestList.logic";
 
@@ -169,5 +171,57 @@ describe("resolveProjectScope", () => {
   it("keeps an id while the projects are still unknown", () => {
     // Dropping here would list every project for a moment before narrowing back down.
     expect(resolveProjectScope("p9", [])).toBe("p9");
+  });
+});
+
+describe("ranking what a search found", () => {
+  const row = (overrides: Partial<PullRequestListEntry> & { number?: number }) =>
+    entry({ number: 1, ...overrides });
+
+  it("puts the pull request whose title says it above one that merely mentions it", () => {
+    const titled = row({
+      number: 1,
+      title: "Add the welcome wizard",
+      updatedAt: "2026-07-01T00:00:00Z",
+    });
+    const mentioned = row({
+      number: 2,
+      title: "Unrelated work",
+      updatedAt: "2026-08-01T00:00:00Z",
+    });
+    expect(
+      rankPullRequestMatches([mentioned, titled], "welcome wizard").map((entry) => entry.number),
+    ).toEqual([1, 2]);
+  });
+
+  it("finds the words in any order, which is how people type them", () => {
+    // Substrings count, so "welcomes" answers "welcome" — a search is not a spelling test.
+    expect(
+      scorePullRequestMatch(row({ title: "The wizard that welcomes" }), "welcome wizard"),
+    ).toBe(70);
+    expect(
+      scorePullRequestMatch(row({ title: "Wizard for the welcome flow" }), "welcome wizard"),
+    ).toBe(70);
+    // One of the two words is a mention, not an answer, and ranks under both.
+    expect(scorePullRequestMatch(row({ title: "A wizard, of sorts" }), "welcome wizard")).toBe(30);
+  });
+
+  it("answers a number with the pull request that has it, and nothing else", () => {
+    expect(scorePullRequestMatch(row({ number: 42 }), "#42")).toBe(100);
+    expect(scorePullRequestMatch(row({ number: 42 }), "43")).toBe(0);
+  });
+
+  it("keeps recency where nothing tells two results apart", () => {
+    const older = row({ number: 1, title: "no match here", updatedAt: "2026-07-01T00:00:00Z" });
+    const newer = row({ number: 2, title: "none here either", updatedAt: "2026-08-01T00:00:00Z" });
+    expect(rankPullRequestMatches([older, newer], "wizard").map((entry) => entry.number)).toEqual([
+      2, 1,
+    ]);
+  });
+
+  it("leaves a listing with no search in the order it arrived", () => {
+    const first = row({ number: 1, updatedAt: "2026-07-01T00:00:00Z" });
+    const second = row({ number: 2, updatedAt: "2026-08-01T00:00:00Z" });
+    expect(rankPullRequestMatches([first, second], "  ")).toEqual([first, second]);
   });
 });

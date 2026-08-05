@@ -112,3 +112,51 @@ export function resolveProjectScope<Id extends string>(
   if (projectId === undefined || projects.length === 0) return projectId;
   return projects.some((project) => project.id === projectId) ? projectId : undefined;
 }
+
+/**
+ * How well a row answers the text that was searched for, as a number to order by.
+ *
+ * Every host searches more than a row shows — GitHub reads bodies and commit messages, GitLab
+ * and Bitbucket read descriptions — so a result can be a real match with nothing on the row to
+ * show for it. Ordering those by recency alone is what puts an apparently unrelated pull request
+ * between two obvious ones. They are still results, so they are still shown; they are shown last,
+ * under the rows whose own words matched.
+ *
+ * The scale is deliberately coarse. It sorts rows into "this is the one", "this mentions it" and
+ * "the host says so", which is as fine a judgement as the row's own fields support.
+ */
+export function scorePullRequestMatch(entry: PullRequestListEntry, query: string): number {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return 0;
+  const number = needle.replace(/^#/u, "");
+  // Asking for a number is asking for one pull request, and it is the answer or it is not.
+  if (/^\d+$/u.test(number)) return String(entry.number) === number ? 100 : 0;
+
+  const title = entry.title.toLowerCase();
+  const terms = needle.split(/\s+/u).filter((term) => term.length > 0);
+  if (title === needle) return 90;
+  if (title.includes(needle)) return 80;
+  // Every word, in any order: "wizard welcome" is still about the welcome wizard.
+  if (terms.length > 1 && terms.every((term) => title.includes(term))) return 70;
+  if (entry.headBranch.toLowerCase().includes(needle)) return 60;
+  if ((entry.author?.login ?? "").toLowerCase().includes(needle)) return 50;
+  if (entry.repository.toLowerCase().includes(needle)) return 40;
+  if (terms.some((term) => title.includes(term))) return 30;
+  // The host matched something this row does not show — a description, a comment, a commit.
+  return 10;
+}
+
+/**
+ * Search results in the order they answer the question, most convincing first, and by recency
+ * among equals. Only for a search: without one, a listing is a timeline and recency is the order.
+ */
+export function rankPullRequestMatches(
+  entries: ReadonlyArray<PullRequestListEntry>,
+  query: string,
+): ReadonlyArray<PullRequestListEntry> {
+  if (query.trim().length === 0) return entries;
+  return entries.toSorted((left, right) => {
+    const byScore = scorePullRequestMatch(right, query) - scorePullRequestMatch(left, query);
+    return byScore !== 0 ? byScore : right.updatedAt.localeCompare(left.updatedAt);
+  });
+}
