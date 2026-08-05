@@ -10,6 +10,7 @@ import {
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
   pullRequestFindingKey,
+  readableFailure,
   buildPullRequestTimeline,
   describePullRequestState,
 } from "./pullRequestDetail.logic";
@@ -418,5 +419,37 @@ describe("one finding handed over on its own", () => {
         check: { name: "typecheck", status: "failure", description: null, url: null },
       }),
     ).toBe("finding:check:typecheck:");
+  });
+});
+
+describe("what to say when an action fails", () => {
+  const hint = "The host refused the merge. Check that you have write access.";
+
+  it("says the host's own reason, without the operation it arrived wrapped in", () => {
+    expect(
+      readableFailure(
+        new Error(
+          "Pull request operation runAction failed: At least 1 approving review is required.",
+        ),
+        hint,
+      ),
+    ).toBe("At least 1 approving review is required.");
+  });
+
+  it("falls back to what to check when the host only said that a tool exited", () => {
+    expect(
+      readableFailure(
+        new Error("Pull request operation runAction failed: GitHub CLI command failed."),
+        hint,
+      ),
+    ).toBe(hint);
+    expect(readableFailure(new Error("exited with code 1"), hint)).toBe(hint);
+    expect(readableFailure(undefined, hint)).toBe(hint);
+  });
+
+  it("bounds a host that answers with a page of output", () => {
+    const long = readableFailure(new Error("x".repeat(900)), hint);
+    expect(long.length).toBeLessThanOrEqual(320);
+    expect(long.endsWith("…")).toBe(true);
   });
 });
