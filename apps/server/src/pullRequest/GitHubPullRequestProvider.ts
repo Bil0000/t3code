@@ -1,5 +1,9 @@
 import * as Effect from "effect/Effect";
-import type { PullRequestActor, PullRequestCapabilities } from "@t3tools/contracts";
+import type {
+  PullRequestActor,
+  PullRequestCapabilities,
+  PullRequestViewerPermissions,
+} from "@t3tools/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import {
@@ -7,9 +11,7 @@ import {
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
-
-/** `gh pr view --json comments` returns one page; a full page means more exist on GitHub. */
-const CONVERSATION_PAGE_SIZE = 100;
+import type { GitHubViewerAccess } from "./gitHubPullRequestJson.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
@@ -23,7 +25,41 @@ const CAPABILITIES: PullRequestCapabilities = {
     resolve: true,
     verdicts: ["comment", "approve", "request-changes"],
   },
+  reviewers: { request: true, listCandidates: true },
 };
+
+/**
+ * What the signed-in account may do here, from the three things GitHub says about it.
+ *
+ * Merging needs a role that can push, which is the one thing a stranger on an open-source
+ * repository never has. The other four actions go by `viewerCanUpdate`, because the author of a
+ * pull request may close it, reopen it and move it in and out of draft with no more than read
+ * access on the repository it was opened against.
+ *
+ * Commenting and reviewing are not gated at all: read access is enough to say something and
+ * enough to approve or ask for changes, which is what open-source review consists of. Resolving a
+ * conversation is the exception — GitHub allows it to whoever can write, and to the author of the
+ * pull request the conversation is on.
+ *
+ * Asking somebody else for a review needs write access, which is the one thing here an author
+ * cannot do on their own pull request: GitHub shows an outside contributor the reviewer control
+ * and refuses the request behind it.
+ */
+export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequestViewerPermissions {
+  return {
+    actions: [
+      ...(access.canWrite ? (["merge"] as const) : []),
+      ...(access.canUpdate ? (["ready", "draft", "close", "reopen"] as const) : []),
+    ],
+    comment: true,
+    resolve: access.canWrite || access.didAuthor,
+    // Anyone may review a pull request they can see, except their own: GitHub refuses an author's
+    // approval and their request for changes ("Can not approve your own pull request"), and
+    // leaves them commenting, which is what an author has to say about their own change anyway.
+    verdicts: access.didAuthor ? (["comment"] as const) : CAPABILITIES.review.verdicts,
+    requestReviewers: access.canWrite,
+  };
+}
 
 /** The CLI tags that mean the tool itself is unusable, rather than one request failing. */
 function reasonFor(
@@ -91,6 +127,7 @@ export const make = Effect.gen(function* () {
           viewer: input.viewer,
           limit: input.limit,
           query: input.query,
+          cursor: input.cursor,
         })
         .pipe(
           Effect.mapError(fail("listChangeRequests")),
@@ -121,7 +158,7 @@ export const make = Effect.gen(function* () {
       Effect.all(
         [
           cli.getPullRequestDetail(input),
-          cli.getRepositoryMergeCapabilities({
+          cli.getRepositoryAccess({
             cwd: input.cwd,
             repository: input.repository,
             host: input.host,
@@ -133,9 +170,13 @@ export const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => ({
               comments: [],
               reviewThreads: [],
+              commentCount: 0,
               truncated: true,
               reviewers: [],
               avatarsByLogin: new Map<string, string>(),
+              // A read that never happened says nothing about the reader, and an unknown
+              // permission is granted: the controls stay live and GitHub explains any refusal.
+              viewer: { canUpdate: true, didAuthor: true },
             })),
           ),
         ],
@@ -143,7 +184,7 @@ export const make = Effect.gen(function* () {
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
         Effect.map(
-          ([pullRequest, mergeCapabilities, reviewThreads]): ProviderChangeRequestDetail => ({
+          ([pullRequest, repository, reviewThreads]): ProviderChangeRequestDetail => ({
             ...pullRequest,
             author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin, input.host),
             // From the review itself rather than from the listing's outstanding requests, which
@@ -155,8 +196,10 @@ export const make = Effect.gen(function* () {
                 author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
               }))
               .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
-            commentsTruncated:
-              pullRequest.comments.length >= CONVERSATION_PAGE_SIZE || reviewThreads.truncated,
+            // `gh pr view --json comments,reviews` follows GitHub's cursors itself, so those two
+            // are always whole and only the thread walk can stop short of the host.
+            commentCount: pullRequest.comments.length + reviewThreads.commentCount,
+            commentsTruncated: reviewThreads.truncated,
             reviewThreads: reviewThreads.reviewThreads.map((thread) => ({
               ...thread,
               comments: thread.comments.map((comment) => ({
@@ -164,12 +207,38 @@ export const make = Effect.gen(function* () {
                 author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
               })),
             })),
-            mergeCapabilities,
+            mergeCapabilities: repository.mergeCapabilities,
+            // Both reads were being made anyway: `gh repo view` for the merge settings, and the
+            // GraphQL conversation read for the pull request's own viewer fields.
+            viewerPermissions: gitHubViewerPermissions({
+              canWrite: repository.canWrite,
+              ...reviewThreads.viewer,
+            }),
           }),
         ),
       ),
 
+    getViewerPermissions: (input) =>
+      cli
+        .getViewerAccess(input)
+        .pipe(Effect.mapError(fail("getViewerPermissions")), Effect.map(gitHubViewerPermissions)),
+
     getDiff: (input) => cli.getPullRequestDiff(input).pipe(Effect.mapError(fail("getDiff"))),
+
+    listReviewerCandidates: (input) =>
+      cli.listReviewerCandidates(input).pipe(Effect.mapError(fail("listReviewerCandidates"))),
+
+    setReviewerRequest: (input) =>
+      cli
+        .setReviewerRequest({
+          cwd: input.cwd,
+          repository: input.repository,
+          host: input.host,
+          number: input.number,
+          reviewers: input.reviewers,
+          requested: input.requested,
+        })
+        .pipe(Effect.mapError(fail("setReviewerRequest"))),
 
     runAction: (input) =>
       cli

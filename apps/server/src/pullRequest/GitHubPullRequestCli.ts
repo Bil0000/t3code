@@ -5,36 +5,52 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type {
   PullRequestAction,
+  PullRequestActor,
   PullRequestInvolvement,
   PullRequestListState,
-  PullRequestMergeCapabilities,
   PullRequestMergeMethod,
   PullRequestReviewCommentDraft,
   PullRequestReviewVerdict,
+  PullRequestReviewerCandidateList,
+  PullRequestReviewerKind,
+  PullRequestThreadComment,
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import {
   ACTOR_AVATARS_GRAPHQL_QUERY,
   buildReviewSubmissionJson,
+  buildReviewerRequestJson,
   decodeActorAvatarsJson,
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
   decodePullRequestListJson,
-  decodeRepositoryMergeCapabilitiesJson,
+  decodeRepositoryAccessJson,
+  decodeReviewerCandidatesJson,
+  decodeReviewThreadCommentsJson,
   decodeReviewThreadsJson,
   encodeGraphQlRequestJson,
   PULL_REQUEST_DETAIL_JSON_FIELDS,
   PULL_REQUEST_LIST_JSON_FIELDS,
-  REPOSITORY_MERGE_CAPABILITIES_JSON_FIELDS,
+  REPOSITORY_ACCESS_JSON_FIELDS,
   RESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
+  REVIEWER_CANDIDATES_GRAPHQL_QUERY,
+  REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY,
   REVIEW_THREAD_REPLY_GRAPHQL_MUTATION,
   REVIEW_THREADS_GRAPHQL_QUERY,
+  reviewThreadConversation,
   UNRESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
+  VIEWER_PERMISSIONS_GRAPHQL_QUERY,
+  decodeViewerPermissionsJson,
   type GitHubPullRequestDetail,
   type GitHubPullRequestListItem,
   type GitHubReviewThreadComments,
+  type GitHubRepositoryAccess,
+  type GitHubReviewThreadEntry,
+  type GitHubReviewThreadPage,
+  type GitHubViewerAccess,
 } from "./gitHubPullRequestJson.ts";
+import type { ProviderListCursor } from "./PullRequestProvider.ts";
 
 /**
  * Names the read that produced unusable output, so a failure reports the call it came from
@@ -123,9 +139,27 @@ const DIFF_TIMEOUT_MS = 60_000;
 /** What the files API serves at most in one response, which is what one slice is made of. */
 const DIFF_FILES_PAGE_SIZE = 100;
 
+/**
+ * Pages of review threads to follow before the conversation is reported as truncated. GitHub
+ * serves a hundred threads a page, so this is a thousand threads — past anything a pull request
+ * a person is reading has, and short of walking a repository-sized conversation forever.
+ */
+const REVIEW_THREAD_PAGES = 10;
+
+/**
+ * And pages of one thread's own comments, for the rare thread longer than a single page. A
+ * thousand replies under one line is already a conversation nobody finishes reading.
+ */
+const REVIEW_THREAD_COMMENT_PAGES = 10;
+
+/** How many over-long threads are finished at once, so a wide conversation is not read serially. */
+const REVIEW_THREAD_CONCURRENCY = 4;
+
 export interface GitHubPullRequestListBatch {
   readonly items: ReadonlyArray<GitHubPullRequestListItem>;
   readonly truncated: boolean;
+  /** False for a page GitHub would not search, which came back in `gh`'s own order instead. */
+  readonly continues: boolean;
 }
 
 export interface GitHubPullRequestDiffSlice {
@@ -153,6 +187,8 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly limit: number;
       /** Free text for `--search`, matched as one literal phrase. */
       readonly query?: string | undefined;
+      /** Where to carry on from, as a `updated:` qualifier on the same search. */
+      readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestCliError>;
 
     readonly getPullRequestDetail: (input: {
@@ -188,11 +224,41 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly ids: ReadonlyArray<string>;
     }) => Effect.Effect<ReadonlyMap<string, string>, GitHubPullRequestCliError>;
 
-    readonly getRepositoryMergeCapabilities: (input: {
+    /** One `gh repo view`, which answers what the repository allows and where the viewer stands. */
+    readonly getRepositoryAccess: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly host: string;
-    }) => Effect.Effect<PullRequestMergeCapabilities, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubRepositoryAccess, GitHubPullRequestCliError>;
+
+    /** The viewer's standing on its own, for deciding a write without reading the whole detail. */
+    readonly getViewerAccess: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+    }) => Effect.Effect<GitHubViewerAccess, GitHubPullRequestCliError>;
+
+    /** Who this pull request may be sent to, and who it has already been sent to. */
+    readonly listReviewerCandidates: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+    }) => Effect.Effect<PullRequestReviewerCandidateList, GitHubPullRequestCliError>;
+
+    readonly setReviewerRequest: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly reviewers: ReadonlyArray<{
+        readonly id: string;
+        readonly kind: PullRequestReviewerKind;
+      }>;
+      /** False deletes the same collection a request posts to, which takes the request back. */
+      readonly requested: boolean;
+    }) => Effect.Effect<void, GitHubPullRequestCliError>;
 
     readonly runPullRequestAction: (input: {
       readonly cwd: string;
@@ -289,25 +355,50 @@ function involvementArgs(input: {
   readonly involvement: PullRequestInvolvement;
   readonly viewer: string;
   readonly query?: string | undefined;
+  /** Where to carry on from, which only a search can express. */
+  readonly cursor?: ProviderListCursor | undefined;
+  /**
+   * Ask GitHub for the order the page reads its rows in. False on the fallback read, which
+   * cannot use search at all and takes whatever order `gh pr list` answers in.
+   */
+  readonly sorted: boolean;
 }): ReadonlyArray<string> {
   // `--state closed` includes merged pull requests, so the Closed tab additionally excludes
   // them through search; `--author` and `review-requested:` are GitHub's own filters. `gh`
   // takes one `--search`, so the reader's text joins the qualifiers rather than replacing them.
   const query = input.query?.trim() ?? "";
-  const searchTerms = [
-    ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
-    ...(input.state === "closed" ? ["is:unmerged"] : []),
-    ...(query.length === 0
-      ? []
-      : // Free text puts GitHub into best-match order, and the page keeps the first `limit` rows
-        // — so the newest matching change request can be missing while months-old ones are
-        // shown. Recency is what the list is sorted by, so it is what the host is asked for.
-        [searchPhrase(query), "sort:updated-desc"]),
-  ];
+  // The fallback read exists because this repository's search index answered nothing, so it goes
+  // nowhere near search: no order, no cursor, and no qualifiers either, since `review-requested:`
+  // and `is:unmerged` are searches too and would come back just as empty.
+  const searchTerms = !input.sorted
+    ? []
+    : [
+        ...(input.involvement === "reviewing" ? [`review-requested:${input.viewer}`] : []),
+        ...(input.state === "closed" ? ["is:unmerged"] : []),
+        ...(query.length === 0 ? [] : [searchPhrase(query)]),
+        // The instant the last slice ended on, and everything before it. Inclusive, because rows
+        // sharing one instant are ordinary and the caller drops the ones it has already sent —
+        // asking for strictly older would lose the rest of them instead.
+        ...(input.cursor === undefined ? [] : [`updated:<=${input.cursor.updatedBefore}`]),
+        // `gh pr list` answers newest-created first, which is not the order the page reads rows in
+        // and not an order a continuation can carry on from: a change request opened last year and
+        // touched this morning belongs at the top of the list and at the front of the first slice.
+        // Free text would otherwise come back in best-match order, which is worse again.
+        "sort:updated-desc",
+      ];
   return [
     ...(input.involvement === "authored" ? ["--author", input.viewer] : []),
     ...(searchTerms.length > 0 ? ["--search", searchTerms.join(" ")] : []),
   ];
+}
+
+/**
+ * The `after` a paged read carries. gh sends a JSON null only through a typed field, and an
+ * untyped `cursor=` would send the empty string, which GitHub refuses as a cursor rather than
+ * reading as "start at the beginning".
+ */
+function cursorVariable(cursor: string | null): readonly [string, string] {
+  return cursor === null ? ["-F", "cursor=null"] : ["-f", `cursor=${cursor}`];
 }
 
 function actionArgs(
@@ -360,6 +451,44 @@ export const make = Effect.gen(function* () {
         stdin: encodeGraphQlRequestJson({ query: input.query, variables: input.variables }),
       })
       .pipe(Effect.asVoid);
+
+  /** A GraphQL read whose answer is decoded, reporting a failure against the read that made it. */
+  const graphqlRead = <A>(input: {
+    readonly cwd: string;
+    readonly host: string;
+    readonly operation: string;
+    readonly variables: ReadonlyArray<readonly [string, string]>;
+    readonly query: string;
+    readonly decode: (raw: string) => Result.Result<A, unknown>;
+  }): Effect.Effect<A, GitHubPullRequestCliError> =>
+    github
+      .execute({
+        cwd: input.cwd,
+        args: [
+          "api",
+          "graphql",
+          "--hostname",
+          input.host,
+          ...input.variables.flat(),
+          "-f",
+          `query=${input.query}`,
+        ],
+      })
+      .pipe(
+        Effect.flatMap((result) => {
+          const decoded = input.decode(result.stdout.trim());
+          return Result.isSuccess(decoded)
+            ? Effect.succeed(decoded.success)
+            : Effect.fail(
+                new GitHubPullRequestReadError({
+                  command: "gh",
+                  cwd: input.cwd,
+                  operation: input.operation,
+                  cause: decoded.failure,
+                }),
+              );
+        }),
+      );
 
   /**
    * One page of the patch, read from the files API. GitHub refuses `pr diff` outright past 300
@@ -448,48 +577,73 @@ export const make = Effect.gen(function* () {
         }),
       ),
 
-    listPullRequests: (input) =>
-      github
-        .execute({
-          cwd: input.cwd,
-          args: [
-            "pr",
-            "list",
-            ...repositoryArgs(input),
-            ...involvementArgs(input),
-            "--state",
-            input.state,
-            "--limit",
-            // One extra row reveals that the repository has more than the page shows.
-            String(input.limit + 1),
-            "--json",
-            PULL_REQUEST_LIST_JSON_FIELDS,
-          ],
-        })
-        .pipe(
-          Effect.flatMap((result) => {
-            const raw = result.stdout.trim();
-            if (raw.length === 0) {
-              return Effect.succeed({ items: [], truncated: false });
-            }
-            const decoded = decodePullRequestListJson(raw);
-            return Result.isSuccess(decoded)
-              ? Effect.succeed({
-                  items: decoded.success.items.slice(0, input.limit),
-                  // One row over the page size is the probe for a next page, and it is
-                  // counted before decoding: a skipped malformed row must not end paging.
-                  truncated: decoded.success.rawCount > input.limit,
-                })
-              : Effect.fail(
-                  new GitHubPullRequestReadError({
-                    command: "gh",
-                    cwd: input.cwd,
-                    operation: "listPullRequests",
-                    cause: decoded.failure,
-                  }),
-                );
-          }),
+    listPullRequests: (input) => {
+      const read = (
+        continues: boolean,
+      ): Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestCliError> =>
+        github
+          .execute({
+            cwd: input.cwd,
+            args: [
+              "pr",
+              "list",
+              ...repositoryArgs(input),
+              ...involvementArgs({ ...input, sorted: continues }),
+              "--state",
+              input.state,
+              "--limit",
+              // One extra row reveals that the repository has more than the page shows.
+              String(input.limit + 1),
+              "--json",
+              PULL_REQUEST_LIST_JSON_FIELDS,
+            ],
+          })
+          .pipe(
+            Effect.flatMap((result) => {
+              const raw = result.stdout.trim();
+              if (raw.length === 0) {
+                return Effect.succeed({ items: [], truncated: false, continues });
+              }
+              const decoded = decodePullRequestListJson(raw);
+              return Result.isSuccess(decoded)
+                ? Effect.succeed({
+                    items: decoded.success.items.slice(0, input.limit),
+                    // One row over the page size is the probe for a next page, and it is
+                    // counted before decoding: a skipped malformed row must not end paging.
+                    truncated: decoded.success.rawCount > input.limit,
+                    continues,
+                  })
+                : Effect.fail(
+                    new GitHubPullRequestReadError({
+                      command: "gh",
+                      cwd: input.cwd,
+                      operation: "listPullRequests",
+                      cause: decoded.failure,
+                    }),
+                  );
+            }),
+          );
+      // GitHub does not index every repository for search, and one it will not search answers
+      // with no rows rather than with an error — so an empty listing is read again the way `gh`
+      // lists without one. Those rows come back newest-created first, an order no `updated:`
+      // qualifier can carry on from, so that page says it cannot be continued and the reader
+      // reaches the rest of it by asking for a larger page, as every listing used to.
+      //
+      // Only ever the first slice: a repository that answered the search once will answer it
+      // again, so an empty slice under a cursor is a repository that has run out.
+      // A text search that finds nothing has found nothing: falling back would answer it with the
+      // repository's whole list, which is every row the reader did not search for. The fallback
+      // is for a repository the index does not cover, and a listing with no text to match is the
+      // only place an empty answer can mean that.
+      const searched = (input.query?.trim().length ?? 0) > 0;
+      return read(true).pipe(
+        Effect.flatMap((batch) =>
+          batch.items.length === 0 && input.cursor === undefined && !searched
+            ? read(false)
+            : Effect.succeed(batch),
         ),
+      );
+    },
 
     getPullRequestDetail: (input) =>
       github
@@ -582,42 +736,102 @@ export const make = Effect.gen(function* () {
         );
     },
 
-    listReviewThreadComments: (input) => {
-      const { owner, name } = parseRepositorySelector(input.repository);
-      return github
-        .execute({
-          cwd: input.cwd,
-          args: [
-            "api",
-            "graphql",
-            "--hostname",
-            input.host,
-            "-f",
-            `owner=${owner}`,
-            "-f",
-            `name=${name}`,
-            "-F",
-            `number=${input.number}`,
-            "-f",
-            `query=${REVIEW_THREADS_GRAPHQL_QUERY}`,
-          ],
-        })
-        .pipe(
-          Effect.flatMap((result) => {
-            const decoded = decodeReviewThreadsJson(result.stdout.trim());
-            return Result.isSuccess(decoded)
-              ? Effect.succeed(decoded.success)
-              : Effect.fail(
-                  new GitHubPullRequestReadError({
-                    command: "gh",
-                    cwd: input.cwd,
-                    operation: "listReviewThreadComments",
-                    cause: decoded.failure,
-                  }),
-                );
-          }),
+    listReviewThreadComments: (input) =>
+      Effect.gen(function* () {
+        const { owner, name } = parseRepositorySelector(input.repository);
+        const threadPage = (
+          cursor: string | null,
+        ): Effect.Effect<GitHubReviewThreadPage, GitHubPullRequestCliError> =>
+          graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "listReviewThreadComments",
+            variables: [
+              ["-f", `owner=${owner}`],
+              ["-f", `name=${name}`],
+              ["-F", `number=${input.number}`],
+              cursorVariable(cursor),
+            ],
+            query: REVIEW_THREADS_GRAPHQL_QUERY,
+            decode: decodeReviewThreadsJson,
+          });
+        const commentPage = (
+          threadId: string,
+          cursor: string,
+        ): Effect.Effect<
+          {
+            readonly comments: ReadonlyArray<PullRequestThreadComment>;
+            readonly nextCursor: string | null;
+          },
+          GitHubPullRequestCliError
+        > =>
+          graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "listReviewThreadComments",
+            variables: [["-f", `threadId=${threadId}`], cursorVariable(cursor)],
+            query: REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY,
+            decode: decodeReviewThreadCommentsJson,
+          });
+
+        const entries: GitHubReviewThreadEntry[] = [];
+        const avatarsByLogin = new Map<string, string>();
+        let reviewers: ReadonlyArray<PullRequestActor> = [];
+        let viewer: GitHubReviewThreadPage["viewer"] = { canUpdate: true, didAuthor: true };
+        let cursor: string | null = null;
+        let page = 0;
+        do {
+          const read: GitHubReviewThreadPage = yield* threadPage(cursor);
+          entries.push(...read.threads);
+          for (const [login, avatarUrl] of read.avatarsByLogin)
+            avatarsByLogin.set(login, avatarUrl);
+          // The roster and the viewer's standing travel with every page, and the first one
+          // already carries all of both.
+          if (page === 0) {
+            reviewers = read.reviewers;
+            viewer = read.viewer;
+          }
+          cursor = read.nextCursor;
+          page += 1;
+        } while (cursor !== null && page < REVIEW_THREAD_PAGES);
+
+        // Only the threads GitHub said were unfinished cost a request; the rest arrived whole
+        // with the page they were listed on.
+        const finished = yield* Effect.forEach(
+          entries,
+          (entry) =>
+            Effect.gen(function* () {
+              const comments = [...entry.thread.comments];
+              let commentCursor = entry.nextCommentCursor;
+              let commentPageCount = 0;
+              while (commentCursor !== null && commentPageCount < REVIEW_THREAD_COMMENT_PAGES) {
+                const read = yield* commentPage(entry.thread.id, commentCursor);
+                comments.push(...read.comments);
+                commentCursor = read.nextCursor;
+                commentPageCount += 1;
+              }
+              return {
+                thread: { ...entry.thread, comments },
+                commentCount: entry.commentCount,
+                truncated: commentCursor !== null,
+              };
+            }),
+          { concurrency: REVIEW_THREAD_CONCURRENCY },
         );
-    },
+
+        const reviewThreads = finished.map((entry) => entry.thread);
+        return {
+          comments: reviewThreadConversation(reviewThreads),
+          reviewThreads,
+          // GitHub's own count of each thread, so the number the page shows is the host's even
+          // where a bound kept some of the words on GitHub.
+          commentCount: finished.reduce((total, entry) => total + entry.commentCount, 0),
+          truncated: cursor !== null || finished.some((entry) => entry.truncated),
+          reviewers,
+          avatarsByLogin,
+          viewer,
+        };
+      }),
 
     listActorAvatars: (input) => {
       if (input.ids.length === 0) {
@@ -653,7 +867,7 @@ export const make = Effect.gen(function* () {
         );
     },
 
-    getRepositoryMergeCapabilities: (input) =>
+    getRepositoryAccess: (input) =>
       github
         .execute({
           cwd: input.cwd,
@@ -662,24 +876,80 @@ export const make = Effect.gen(function* () {
             "view",
             `${input.host}/${input.repository}`,
             "--json",
-            REPOSITORY_MERGE_CAPABILITIES_JSON_FIELDS,
+            REPOSITORY_ACCESS_JSON_FIELDS,
           ],
         })
         .pipe(
           Effect.flatMap((result) => {
-            const decoded = decodeRepositoryMergeCapabilitiesJson(result.stdout.trim());
+            const decoded = decodeRepositoryAccessJson(result.stdout.trim());
             return Result.isSuccess(decoded)
               ? Effect.succeed(decoded.success)
               : Effect.fail(
                   new GitHubPullRequestReadError({
                     command: "gh",
                     cwd: input.cwd,
-                    operation: "getRepositoryMergeCapabilities",
+                    operation: "getRepositoryAccess",
                     cause: decoded.failure,
                   }),
                 );
           }),
         ),
+
+    getViewerAccess: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "getViewerAccess",
+        variables: [
+          ["-f", `owner=${owner}`],
+          ["-f", `name=${name}`],
+          ["-F", `number=${input.number}`],
+        ],
+        query: VIEWER_PERMISSIONS_GRAPHQL_QUERY,
+        decode: decodeViewerPermissionsJson,
+      });
+    },
+
+    listReviewerCandidates: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "listReviewerCandidates",
+        variables: [
+          ["-f", `owner=${owner}`],
+          ["-f", `name=${name}`],
+          ["-F", `number=${input.number}`],
+        ],
+        query: REVIEWER_CANDIDATES_GRAPHQL_QUERY,
+        decode: decodeReviewerCandidatesJson,
+      });
+    },
+
+    setReviewerRequest: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return github
+        .execute({
+          cwd: input.cwd,
+          // Posting to a login GitHub has already been asked about is what a re-request is, so
+          // there is nothing to say here about somebody who has reviewed once already. The body
+          // travels over stdin for the reason every other one does: argv is visible in process
+          // listings and echoed back inside process-runner failure messages.
+          args: [
+            "api",
+            "--method",
+            input.requested ? "POST" : "DELETE",
+            "--hostname",
+            input.host,
+            `repos/${owner}/${name}/pulls/${input.number}/requested_reviewers`,
+            "--input",
+            "-",
+          ],
+          stdin: buildReviewerRequestJson(input.reviewers),
+        })
+        .pipe(Effect.asVoid);
+    },
 
     runPullRequestAction: (input) => {
       const [subcommand, ...flags] = actionArgs(input.action, input.mergeMethod);

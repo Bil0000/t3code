@@ -61,6 +61,23 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),
+    /**
+     * Its own query rather than part of the detail: the people who may be asked are only wanted
+     * once somebody opens the reviewer menu, so this atom is read then and not before. Kept fresh
+     * for a minute, because who has access to a repository changes far more slowly than the
+     * change request it is being read for.
+     */
+    reviewerCandidates: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:reviewer-candidates",
+      tag: WS_METHODS.pullRequestsReviewerCandidates,
+      staleTimeMs: 60_000,
+    }),
+    requestReviewers: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:request-reviewers",
+      tag: WS_METHODS.pullRequestsRequestReviewers,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     setThreadResolution: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:set-thread-resolution",
       tag: WS_METHODS.pullRequestsSetThreadResolution,

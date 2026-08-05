@@ -3,11 +3,16 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildReviewSubmissionJson,
+  buildReviewerRequestJson,
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
   decodePullRequestListJson,
-  decodeRepositoryMergeCapabilitiesJson,
+  decodeRepositoryAccessJson,
+  decodeReviewerCandidatesJson,
+  decodeReviewThreadCommentsJson,
   decodeReviewThreadsJson,
+  decodeViewerPermissionsJson,
+  reviewThreadConversation,
 } from "./gitHubPullRequestJson.ts";
 
 function listJson(entries: ReadonlyArray<Record<string, unknown>>): string {
@@ -166,9 +171,10 @@ describe("review thread decoding", () => {
   const threadsJson = (
     nodes: ReadonlyArray<Record<string, unknown>>,
     totalCount = nodes.length,
+    pageInfo: Record<string, unknown> = { hasNextPage: false, endCursor: null },
   ): string =>
     JSON.stringify({
-      data: { repository: { pullRequest: { reviewThreads: { totalCount, nodes } } } },
+      data: { repository: { pullRequest: { reviewThreads: { totalCount, pageInfo, nodes } } } },
     });
 
   /** The same query carries the review roster, so it is built alongside the threads. */
@@ -241,11 +247,12 @@ describe("review thread decoding", () => {
     ]);
   });
 
-  it("keeps unresolved threads and carries their file path", () => {
+  it("carries a resolved thread into the conversation, which was still said", () => {
     const result = expectSuccess(
       decodeReviewThreadsJson(
         threadsJson([
           {
+            id: "PRRT_a",
             isResolved: false,
             path: "apps/server/src/ws.ts",
             comments: {
@@ -253,6 +260,7 @@ describe("review thread decoding", () => {
             },
           },
           {
+            id: "PRRT_b",
             isResolved: true,
             path: "apps/web/src/main.tsx",
             comments: { nodes: [{ id: "t2", body: "done", createdAt: "2026-07-01T00:00:00Z" }] },
@@ -260,57 +268,188 @@ describe("review thread decoding", () => {
         ]),
       ),
     );
-    expect(result.comments).toHaveLength(1);
-    expect(result.comments[0]).toMatchObject({
+    const comments = reviewThreadConversation(result.threads.map((entry) => entry.thread));
+    expect(comments.map((comment) => comment.id)).toEqual(["t1", "t2"]);
+    expect(comments[0]).toMatchObject({
       id: "t1",
       kind: "review-comment",
       path: "apps/server/src/ws.ts",
     });
   });
 
-  it("reports truncation when GitHub has more threads than the page returned", () => {
+  it("carries every reply, not only the remark each thread opened with", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        threadsJson([
+          {
+            id: "PRRT_c",
+            isResolved: false,
+            path: "apps/server/src/ws.ts",
+            comments: {
+              nodes: [
+                { id: "t1", body: "fix this", createdAt: "2026-07-01T00:00:00Z" },
+                { id: "t2", body: "fixed", createdAt: "2026-07-01T01:00:00Z" },
+              ],
+            },
+          },
+        ]),
+      ),
+    );
+    const comments = reviewThreadConversation(result.threads.map((entry) => entry.thread));
+    expect(comments.map((comment) => comment.id)).toEqual(["t1", "t2"]);
+  });
+
+  it("hands back the cursor the next page of threads carries on from", () => {
     const result = expectSuccess(
       decodeReviewThreadsJson(
         threadsJson(
           [
             {
+              id: "PRRT_d",
+              path: "apps/server/src/ws.ts",
               isResolved: false,
               comments: { nodes: [{ id: "t1", createdAt: "2026-07-01T00:00:00Z" }] },
             },
           ],
           80,
+          { hasNextPage: true, endCursor: "Y3Vyc29yOjE" },
         ),
       ),
     );
-    expect(result.truncated).toBe(true);
+    expect(result.nextCursor).toBe("Y3Vyc29yOjE");
+  });
+
+  it("keeps GitHub's own count of a thread whose comments were not all read", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        threadsJson([
+          {
+            id: "PRRT_e",
+            path: "apps/server/src/ws.ts",
+            isResolved: false,
+            comments: {
+              totalCount: 140,
+              pageInfo: { hasNextPage: true, endCursor: "Y3Vyc29yOjI" },
+              nodes: [{ id: "t1", createdAt: "2026-07-01T00:00:00Z" }],
+            },
+          },
+        ]),
+      ),
+    );
+    expect(result.threads[0]).toMatchObject({
+      commentCount: 140,
+      nextCommentCursor: "Y3Vyc29yOjI",
+    });
+  });
+
+  it("ends a thread's walk on the last page, which still names a cursor", () => {
+    const decoded = expectSuccess(
+      decodeReviewThreadCommentsJson(
+        JSON.stringify({
+          data: {
+            node: {
+              comments: {
+                pageInfo: { hasNextPage: false, endCursor: "Y3Vyc29yOjk" },
+                nodes: [{ id: "t9", body: "last", createdAt: "2026-07-01T00:00:00Z" }],
+              },
+            },
+          },
+        }),
+      ),
+    );
+    expect(decoded.comments.map((comment) => comment.id)).toEqual(["t9"]);
+    expect(decoded.nextCursor).toBeNull();
   });
 });
 
-describe("repository merge capability decoding", () => {
+describe("repository access decoding", () => {
+  const repositoryJson = (viewerPermission?: string | null) =>
+    JSON.stringify({
+      mergeCommitAllowed: true,
+      squashMergeAllowed: false,
+      rebaseMergeAllowed: true,
+      ...(viewerPermission === undefined ? {} : { viewerPermission }),
+    });
+
   it("reads the three settings gh reports", () => {
     expect(
-      expectSuccess(
-        decodeRepositoryMergeCapabilitiesJson(
-          JSON.stringify({
-            mergeCommitAllowed: true,
-            squashMergeAllowed: false,
-            rebaseMergeAllowed: true,
-          }),
-        ),
-      ),
+      expectSuccess(decodeRepositoryAccessJson(repositoryJson("ADMIN"))).mergeCapabilities,
     ).toEqual({ merge: true, squash: false, rebase: true });
   });
 
   it("fails rather than defaulting open when a setting is missing", () => {
-    const decoded = decodeRepositoryMergeCapabilitiesJson(
-      JSON.stringify({ mergeCommitAllowed: true }),
-    );
+    const decoded = decodeRepositoryAccessJson(JSON.stringify({ mergeCommitAllowed: true }));
     expect(Result.isSuccess(decoded)).toBe(false);
+  });
+
+  it("counts the roles that can push as write, and the ones that cannot as read", () => {
+    for (const permission of ["ADMIN", "MAINTAIN", "WRITE"]) {
+      expect(expectSuccess(decodeRepositoryAccessJson(repositoryJson(permission))).canWrite).toBe(
+        true,
+      );
+    }
+    for (const permission of ["TRIAGE", "READ", "NONE"]) {
+      expect(expectSuccess(decodeRepositoryAccessJson(repositoryJson(permission))).canWrite).toBe(
+        false,
+      );
+    }
+  });
+
+  it("withholds write where gh names no permission, which is not a standing it gave", () => {
+    // The one place an unknown answer is not granted: a Merge button a reader cannot use wastes
+    // the press, where a missing one still leaves the pull request open on its host.
+    expect(expectSuccess(decodeRepositoryAccessJson(repositoryJson())).canWrite).toBe(false);
+    expect(expectSuccess(decodeRepositoryAccessJson(repositoryJson(null))).canWrite).toBe(false);
+  });
+});
+
+describe("viewer permission decoding", () => {
+  const viewerJson = (repository: Record<string, unknown>) =>
+    JSON.stringify({ data: { repository } });
+
+  it("reads the repository's role and the pull request's own viewer fields together", () => {
+    expect(
+      expectSuccess(
+        decodeViewerPermissionsJson(
+          viewerJson({
+            viewerPermission: "READ",
+            pullRequest: { viewerCanUpdate: true, viewerDidAuthor: true },
+          }),
+        ),
+      ),
+    ).toEqual({ canWrite: false, canUpdate: true, didAuthor: true });
+  });
+
+  it("says no to a passer-by on a repository they can only read", () => {
+    expect(
+      expectSuccess(
+        decodeViewerPermissionsJson(
+          viewerJson({
+            viewerPermission: "READ",
+            pullRequest: { viewerCanUpdate: false, viewerDidAuthor: false },
+          }),
+        ),
+      ),
+    ).toEqual({ canWrite: false, canUpdate: false, didAuthor: false });
+  });
+
+  it("reads silence as permission, but not as authorship", () => {
+    // A node the viewer cannot see comes back null. Updating is a permission, so an unknown
+    // answer grants it and lets the host refuse; authorship is a fact about who wrote the change,
+    // and claiming it for someone who did not is how an author's own rules get handed out.
+    expect(expectSuccess(decodeViewerPermissionsJson(viewerJson({ pullRequest: null })))).toEqual({
+      canWrite: false,
+      canUpdate: true,
+      didAuthor: false,
+    });
   });
 });
 
 describe("review thread decoding", () => {
-  const threadsJson = (nodes: ReadonlyArray<Record<string, unknown>>) =>
+  const threadsJson = (
+    nodes: ReadonlyArray<Record<string, unknown>>,
+    pullRequest: Record<string, unknown> = {},
+  ) =>
     JSON.stringify({
       data: {
         repository: {
@@ -320,10 +459,26 @@ describe("review thread decoding", () => {
             comments: { nodes: [] },
             reviewRequests: { nodes: [] },
             latestReviews: { nodes: [] },
+            ...pullRequest,
           },
         },
       },
     });
+
+  it("carries what the reader may do with the pull request, off the conversation read", () => {
+    // The same response the threads arrive in, so knowing this costs no request of its own.
+    expect(
+      expectSuccess(
+        decodeReviewThreadsJson(
+          threadsJson([], { viewerCanUpdate: false, viewerDidAuthor: false }),
+        ),
+      ).viewer,
+    ).toEqual({ canUpdate: false, didAuthor: false });
+    expect(expectSuccess(decodeReviewThreadsJson(threadsJson([]))).viewer).toEqual({
+      canUpdate: true,
+      didAuthor: false,
+    });
+  });
 
   const comment = (id: string, body: string) => ({
     id,
@@ -334,7 +489,7 @@ describe("review thread decoding", () => {
   });
 
   it("anchors a thread to its line and side, keeping the whole conversation", () => {
-    const { reviewThreads } = expectSuccess(
+    const reviewThreads = expectSuccess(
       decodeReviewThreadsJson(
         threadsJson([
           {
@@ -349,7 +504,7 @@ describe("review thread decoding", () => {
         ]),
       ),
     );
-    expect(reviewThreads).toEqual([
+    expect(reviewThreads.threads.map((entry) => entry.thread)).toEqual([
       {
         id: "PRRT_1",
         path: "src/a.ts",
@@ -378,7 +533,7 @@ describe("review thread decoding", () => {
   });
 
   it("leaves an outdated thread without a line rather than pinning it to a stale one", () => {
-    const { reviewThreads } = expectSuccess(
+    const reviewThreads = expectSuccess(
       decodeReviewThreadsJson(
         threadsJson([
           {
@@ -394,10 +549,14 @@ describe("review thread decoding", () => {
         ]),
       ),
     );
-    expect(reviewThreads[0]).toMatchObject({ line: null, isOutdated: true, isResolved: true });
+    expect(reviewThreads.threads[0]?.thread).toMatchObject({
+      line: null,
+      isOutdated: true,
+      isResolved: true,
+    });
   });
 
-  it("keeps resolved threads out of the flat conversation but in the anchored one", () => {
+  it("keeps a resolved thread in the conversation as well as against its line", () => {
     const decoded = expectSuccess(
       decodeReviewThreadsJson(
         threadsJson([
@@ -412,9 +571,135 @@ describe("review thread decoding", () => {
         ]),
       ),
     );
-    // The timeline shows outstanding findings; the diff shows the conversation either way.
-    expect(decoded.comments).toEqual([]);
-    expect(decoded.reviewThreads).toHaveLength(1);
+    // A resolved conversation is finished work, not unsaid work: the timeline reads it and the
+    // diff pins it to its line, the same as any other.
+    const threads = decoded.threads.map((entry) => entry.thread);
+    expect(reviewThreadConversation(threads).map((comment) => comment.id)).toEqual(["c4"]);
+    expect(threads).toHaveLength(1);
+  });
+});
+
+describe("reviewer candidate decoding", () => {
+  const candidatesJson = (input: {
+    readonly assignable: ReadonlyArray<Record<string, unknown> | null>;
+    readonly requested?: ReadonlyArray<Record<string, unknown> | null>;
+    readonly author?: string;
+    readonly hasNextPage?: boolean;
+  }) =>
+    JSON.stringify({
+      data: {
+        repository: {
+          assignableUsers: {
+            pageInfo: { hasNextPage: input.hasNextPage ?? false },
+            nodes: input.assignable,
+          },
+          pullRequest: {
+            author: input.author === undefined ? null : { login: input.author },
+            reviewRequests: {
+              nodes: (input.requested ?? []).map((requestedReviewer) => ({ requestedReviewer })),
+            },
+          },
+        },
+      },
+    });
+
+  it("leaves the author out of the people their own pull request can be sent to", () => {
+    const list = expectSuccess(
+      decodeReviewerCandidatesJson(
+        candidatesJson({
+          assignable: [{ login: "bilal" }, { login: "octocat", name: "The Octocat" }],
+          author: "bilal",
+        }),
+      ),
+    );
+    expect(list.candidates).toEqual([
+      {
+        id: "octocat",
+        kind: "user",
+        login: "octocat",
+        name: "The Octocat",
+        avatarUrl: null,
+        isRequested: false,
+      },
+    ]);
+    expect(list.truncated).toBe(false);
+  });
+
+  it("marks whoever has already been asked, and leaves the rest to be asked", () => {
+    const list = expectSuccess(
+      decodeReviewerCandidatesJson(
+        candidatesJson({
+          assignable: [{ login: "octocat" }, { login: "hubot" }],
+          requested: [{ login: "octocat" }],
+        }),
+      ),
+    );
+    expect(list.candidates.map((candidate) => [candidate.login, candidate.isRequested])).toEqual([
+      ["octocat", true],
+      ["hubot", false],
+    ]);
+  });
+
+  it("keeps a requested team apart from the people, so the request can be taken back", () => {
+    // A team is never among the assignable users, and a request that cannot be seen cannot be
+    // undone — so the ones GitHub reports are carried, marked as the teams they are.
+    const list = expectSuccess(
+      decodeReviewerCandidatesJson(
+        candidatesJson({
+          assignable: [{ login: "octocat" }],
+          requested: [{ slug: "reviewers", name: "Reviewers" }],
+        }),
+      ),
+    );
+    expect(list.candidates).toEqual([
+      {
+        id: "reviewers",
+        kind: "team",
+        login: "reviewers",
+        name: "Reviewers",
+        avatarUrl: null,
+        isRequested: true,
+      },
+      {
+        id: "octocat",
+        kind: "user",
+        login: "octocat",
+        name: null,
+        avatarUrl: null,
+        isRequested: false,
+      },
+    ]);
+  });
+
+  it("says so when the repository has more people than the read asked for", () => {
+    expect(
+      expectSuccess(
+        decodeReviewerCandidatesJson(
+          candidatesJson({ assignable: [{ login: "octocat" }], hasNextPage: true }),
+        ),
+      ).truncated,
+    ).toBe(true);
+  });
+});
+
+describe("reviewer request payload", () => {
+  it("sends people and teams in the two lists GitHub keeps them in", () => {
+    expect(
+      JSON.parse(
+        buildReviewerRequestJson([
+          { id: "octocat", kind: "user" },
+          { id: "reviewers", kind: "team" },
+          { id: "hubot", kind: "user" },
+        ]),
+      ),
+    ).toEqual({ reviewers: ["octocat", "hubot"], team_reviewers: ["reviewers"] });
+  });
+
+  it("sends both lists even where one of them is empty, which is what GitHub reads", () => {
+    expect(JSON.parse(buildReviewerRequestJson([{ id: "octocat", kind: "user" }]))).toEqual({
+      reviewers: ["octocat"],
+      team_reviewers: [],
+    });
   });
 });
 

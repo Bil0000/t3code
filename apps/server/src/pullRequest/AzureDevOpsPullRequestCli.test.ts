@@ -132,6 +132,30 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("steps over what it has already handed over, which is all Azure can be told", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(3, 1))));
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal@acme.dev",
+        limit: 10,
+        // The instant is the same cursor every other host reads; Azure has no filter for it and
+        // takes the count instead.
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 20 },
+      });
+
+      const args = argsOfCall(0);
+      expect(args).toContain("--skip");
+      assert.strictEqual(args[args.indexOf("--skip") + 1], "20");
+      expect(args).not.toContain("2026-07-02T00:00:00Z");
+    }),
+  );
+
   it.effect("reports truncation from the extra row", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(11, 1))));
@@ -370,6 +394,71 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       const error = yield* Effect.flip(cli.getPullRequest({ cwd: "/w", number: 42 }));
 
       assert.strictEqual(error._tag, "AzureDevOpsPullRequestReadError");
+    }),
+  );
+
+  it.effect("adds reviewers with the one command Azure has for it", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      yield* cli.setPullRequestReviewers({
+        cwd: "/w",
+        number: 42,
+        reviewers: ["octocat@acme.test", "hubot@acme.test"],
+        requested: true,
+      });
+
+      expect(argsOfCall(0)).toEqual([
+        "repos",
+        "pr",
+        "reviewer",
+        "add",
+        "--detect",
+        "true",
+        "--id",
+        "42",
+        "--reviewers",
+        "octocat@acme.test",
+        "hubot@acme.test",
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+    }),
+  );
+
+  it.effect("takes a reviewer off the pull request with the same command's counterpart", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      yield* cli.setPullRequestReviewers({
+        cwd: "/w",
+        number: 42,
+        reviewers: ["octocat@acme.test"],
+        requested: false,
+      });
+
+      expect(argsOfCall(0)).toContain("remove");
+    }),
+  );
+
+  it.effect("refuses a reviewer az would read as a flag, before running anything", () =>
+    Effect.gen(function* () {
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.setPullRequestReviewers({
+          cwd: "/w",
+          number: 42,
+          reviewers: ["--query"],
+          requested: true,
+        }),
+      );
+
+      assert.strictEqual(error._tag, "AzureDevOpsReviewerNameError");
+      assert.strictEqual(mockedExecute.mock.calls.length, 0);
     }),
   );
 });

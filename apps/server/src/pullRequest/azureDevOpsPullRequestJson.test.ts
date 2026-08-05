@@ -193,7 +193,7 @@ describe("decodeViewerJson", () => {
 });
 
 describe("decodeThreadsJson", () => {
-  it("takes the first real comment of each thread, oldest first", () => {
+  it("takes every real comment of every thread, oldest first", () => {
     const comments = expectSuccess(
       decodeThreadsJson(
         asJson({
@@ -250,6 +250,28 @@ describe("decodeThreadsJson", () => {
     );
 
     expect(comments[0]).toMatchObject({ kind: "review-comment", path: "/src/app.ts" });
+  });
+
+  it("keeps the replies under a thread, which are as much of the conversation", () => {
+    const comments = expectSuccess(
+      decodeThreadsJson(
+        asJson({
+          value: [
+            {
+              id: 4,
+              threadContext: { filePath: "/src/app.ts" },
+              comments: [
+                { id: 1, content: "Rename this.", publishedDate: "2026-07-02T00:00:00Z" },
+                { id: 2, content: "Renamed.", publishedDate: "2026-07-02T01:00:00Z" },
+                { id: 3, content: "Thanks.", publishedDate: "2026-07-02T02:00:00Z" },
+              ],
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(comments.map((comment) => comment.id)).toEqual(["4:1", "4:2", "4:3"]);
   });
 
   it("drops deleted threads and threads with nothing to show", () => {

@@ -203,8 +203,12 @@ export function buildFixFindingsHandoff(input: {
   // line to hang on, and a host that reports no threads at all — Azure DevOps has no diff to pin
   // one to — has only these. They travel as text, the way a failing check does, rather than
   // being dropped for lacking somewhere to point.
+  // Every thread's comments, not only the unresolved ones the sweep is about to include: the
+  // flat conversation carries resolved threads too, and a comment that is already on a line is
+  // not a remark with nowhere to hang — quoting a settled finding is how a fixed thing gets
+  // fixed twice.
   const attached = new Set(
-    threads.flatMap((thread) => thread.comments.map((comment) => comment.id)),
+    input.reviewThreads.flatMap((thread) => thread.comments.map((comment) => comment.id)),
   );
   const unattachable = input.comments
     .filter(

@@ -8,6 +8,7 @@ import {
   decodeDiffstatJson,
   decodePullRequestJson,
   decodePullRequestPageJson,
+  decodeRepositoryPermissionJson,
   decodeStatusesJson,
   decodeViewerJson,
 } from "./bitbucketPullRequestJson.ts";
@@ -310,5 +311,22 @@ describe("decodeConflictsJson", () => {
 
   it("calls any reported conflict conflicting", () => {
     expect(expectSuccess(decodeConflictsJson(page([{ path: "src/app.ts" }])))).toBe("conflicting");
+  });
+});
+
+describe("repository permission decoding", () => {
+  const permissionPage = (permission: string) =>
+    page([{ type: "repository_permission", permission }]);
+
+  it("counts admin and write as write, and read as not", () => {
+    expect(expectSuccess(decodeRepositoryPermissionJson(permissionPage("admin")))).toBe(true);
+    expect(expectSuccess(decodeRepositoryPermissionJson(permissionPage("write")))).toBe(true);
+    expect(expectSuccess(decodeRepositoryPermissionJson(permissionPage("read")))).toBe(false);
+  });
+
+  it("grants write where Bitbucket named no permission at all", () => {
+    // An empty page is Bitbucket declining to say, which is an unknown standing rather than a
+    // refusal — and an unknown one is granted.
+    expect(expectSuccess(decodeRepositoryPermissionJson(page([])))).toBe(true);
   });
 });

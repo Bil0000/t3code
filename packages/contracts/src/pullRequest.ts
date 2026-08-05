@@ -125,6 +125,44 @@ export const PullRequestReviewThread = Schema.Struct({
 });
 export type PullRequestReviewThread = typeof PullRequestReviewThread.Type;
 
+/**
+ * Whether a reviewer is a person or a group of them the host addresses as one. GitHub is the only
+ * host here that takes a review request for a team; the others name individuals only, so nothing
+ * they report is ever anything but a user.
+ */
+export const PullRequestReviewerKind = Schema.Literals(["user", "team"]);
+export type PullRequestReviewerKind = typeof PullRequestReviewerKind.Type;
+
+/**
+ * Somebody a review may be asked of. Carries the actor fields so the menu shows the same face and
+ * handle the rest of the page does, and a team wears them too — its slug stands in for a login.
+ */
+export const PullRequestReviewerCandidate = Schema.Struct({
+  ...PullRequestActor.fields,
+  /**
+   * How the host addresses this reviewer when a review is requested, which is not always the
+   * handle it shows: GitHub takes a login or a team slug, GitLab a numeric user id, Bitbucket an
+   * account uuid. Opaque to the page, which sends back whatever the candidate arrived with.
+   */
+  id: TrimmedNonEmptyString,
+  kind: PullRequestReviewerKind,
+  /** A review has already been asked of them, so pressing them takes the request back. */
+  isRequested: Schema.Boolean,
+});
+export type PullRequestReviewerCandidate = typeof PullRequestReviewerCandidate.Type;
+
+export const PullRequestReviewerCandidateList = Schema.Struct({
+  /** Never includes the author: nobody is asked to review their own change request. */
+  candidates: Schema.Array(PullRequestReviewerCandidate),
+  /**
+   * The host has more people with access than the read asked for, so somebody missing from the
+   * menu may still be somebody this change request can be sent to. Nothing is wrong with the
+   * list; it is simply not all of it.
+   */
+  truncated: Schema.Boolean,
+});
+export type PullRequestReviewerCandidateList = typeof PullRequestReviewerCandidateList.Type;
+
 export const PullRequestCommit = Schema.Struct({
   oid: TrimmedNonEmptyString,
   messageHeadline: Schema.String,
@@ -150,6 +188,22 @@ export const PullRequestReviewCapabilities = Schema.Struct({
 export type PullRequestReviewCapabilities = typeof PullRequestReviewCapabilities.Type;
 
 /**
+ * What a host can do about who reviews. The two are independent: a host can take a request without
+ * publishing who may receive one, which is Azure DevOps.
+ */
+export const PullRequestReviewerCapabilities = Schema.Struct({
+  /** A review can be asked of somebody, and the request taken back. */
+  request: Schema.Boolean,
+  /**
+   * The people who may be asked can be listed. False where the host has no such list to give,
+   * which leaves the page to take a name rather than offer a menu — a guessed list would be worse,
+   * because a name missing from it reads as a name that cannot be asked.
+   */
+  listCandidates: Schema.Boolean,
+});
+export type PullRequestReviewerCapabilities = typeof PullRequestReviewerCapabilities.Type;
+
+/**
  * What a provider can actually do, so a surface can hide what is missing rather than offer an
  * action that would fail. Every provider fills this in for itself; nothing is assumed.
  *
@@ -173,8 +227,33 @@ export const PullRequestCapabilities = Schema.Struct({
    */
   search: Schema.Boolean,
   review: PullRequestReviewCapabilities,
+  reviewers: PullRequestReviewerCapabilities,
 });
 export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
+
+/**
+ * What the signed-in account may do with this change request, which is a different question from
+ * `capabilities`: that says what the host is able to do at all, and this says whether this viewer
+ * is allowed to ask for it. A host that merges pull requests still will not let a stranger merge
+ * one, so a control belongs on the page only where the two agree.
+ *
+ * A permission the host reports nothing about is granted rather than withheld. Hiding a control
+ * from someone who may in fact use it leaves them no way through and no reason given, while
+ * offering one they may not use ends in the host's own refusal — which at least says why.
+ */
+export const PullRequestViewerPermissions = Schema.Struct({
+  /** Which of the actions this viewer may take; anything absent is theirs to look at only. */
+  actions: Schema.Array(PullRequestAction),
+  /** This viewer may write a remark: a comment, a reply, or a note against a line. */
+  comment: Schema.Boolean,
+  /** This viewer may mark a review conversation resolved, and unresolved again. */
+  resolve: Schema.Boolean,
+  /** The verdicts this viewer may submit a review with. Empty means they may not review. */
+  verdicts: Schema.Array(PullRequestReviewVerdict),
+  /** This viewer may ask somebody for a review, and take the request back again. */
+  requestReviewers: Schema.Boolean,
+});
+export type PullRequestViewerPermissions = typeof PullRequestViewerPermissions.Type;
 
 export const PullRequestMergeCapabilities = Schema.Struct({
   merge: Schema.Boolean,
@@ -211,6 +290,21 @@ export const PullRequestListEntry = Schema.Struct({
 });
 export type PullRequestListEntry = typeof PullRequestListEntry.Type;
 
+/**
+ * Where each repository a listing already reached carries on from, keyed `"<host> <repository>"`
+ * — which is how a listing tells two repositories apart, since the same `owner/repo` exists on
+ * github.com and on an Enterprise install at once.
+ *
+ * Each value is opaque: only the provider that issued one knows what it means, and the page hands
+ * back exactly what it was given rather than composing one.
+ */
+export const PullRequestListCursors = Schema.Record(
+  TrimmedNonEmptyString,
+  // Bounded because it arrives from the page and is unfolded into a host's own filter.
+  TrimmedNonEmptyString.check(Schema.isMaxLength(4096)),
+);
+export type PullRequestListCursors = typeof PullRequestListCursors.Type;
+
 export const PullRequestListInput = Schema.Struct({
   state: PullRequestListState,
   involvement: Schema.optional(PullRequestInvolvement),
@@ -221,8 +315,18 @@ export const PullRequestListInput = Schema.Struct({
    * apart. Absent means every host the workspace has.
    */
   host: Schema.optional(TrimmedNonEmptyString),
-  /** Rows to return per repository. The page raises it to load further results. */
+  /** Rows to return per repository, which with a continuation is rows per slice. */
   limit: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 500 }))),
+  /**
+   * Carry on from an answer already on the page rather than read the listing again. Only the
+   * repositories named here are read, one slice each — which is what makes a further page cost
+   * one slice rather than every repository over again at a larger size. A repository the page has
+   * enough of is simply left out.
+   *
+   * Absent asks for the listing from the top, which is what raising `limit` alone has always
+   * done and still does.
+   */
+  cursors: Schema.optional(PullRequestListCursors),
   /**
    * Free text the hosts themselves are asked to match, rather than a filter over the rows that
    * have already arrived: a listing only ever holds a page per repository, so a search that
@@ -274,10 +378,22 @@ export const PullRequestListResult = Schema.Struct({
    */
   viewers: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString),
   providers: Schema.Array(PullRequestProviderSummary),
+  /**
+   * By update, newest first, across every repository this answer covers. A page that appends a
+   * continuation sorts what it then holds the same way: a repository's next slice is older than
+   * that repository's last row, but can still be newer than another repository's.
+   */
   entries: Schema.Array(PullRequestListEntry),
   errors: Schema.Array(PullRequestListProjectError),
   /** At least one repository hit the per-repository listing cap. */
   truncated: Schema.Boolean,
+  /**
+   * Where each repository carries on, to be sent straight back as `cursors`. A repository is
+   * absent from this once it has nothing more to give, and also where its host could not be asked
+   * in an order a continuation means anything in — so an empty record beside `truncated` means
+   * more rows are only reachable by raising `limit`, the way they always were.
+   */
+  nextCursors: PullRequestListCursors,
 });
 export type PullRequestListResult = typeof PullRequestListResult.Type;
 
@@ -302,6 +418,8 @@ export type PullRequestInvalidateInput = typeof PullRequestInvalidateInput.Type;
 export const PullRequestDetail = Schema.Struct({
   provider: SourceControlProviderKind,
   capabilities: PullRequestCapabilities,
+  /** What this viewer may do, which `capabilities` says nothing about. Both narrow the page. */
+  viewerPermissions: PullRequestViewerPermissions,
   projectId: ProjectId,
   projectTitle: TrimmedNonEmptyString,
   workspaceRoot: TrimmedNonEmptyString,
@@ -327,6 +445,18 @@ export const PullRequestDetail = Schema.Struct({
   labels: Schema.Array(PullRequestLabel),
   checks: Schema.Array(PullRequestCheck),
   comments: Schema.Array(PullRequestComment),
+  /**
+   * How many remarks the host itself counts in the conversation, which is the number a surface
+   * showing a count has to show: `comments` carries what was read, and a reader who can see 225
+   * on the host is not reassured by a page that says 10. Never less than `comments` holds, and
+   * equal to it wherever the host was read to the end.
+   */
+  commentCount: NonNegativeInt,
+  /**
+   * The read stopped at a bound of its own before the host ran out, so `comments` holds less
+   * than `commentCount` counts. Nothing else: a conversation read whole is never truncated,
+   * however long it is.
+   */
   commentsTruncated: Schema.Boolean,
   reviewThreads: Schema.Array(PullRequestReviewThread),
   commits: Schema.Array(PullRequestCommit),
@@ -428,6 +558,24 @@ export const PullRequestThreadResolutionInput = Schema.Struct({
   resolved: Schema.Boolean,
 });
 export type PullRequestThreadResolutionInput = typeof PullRequestThreadResolutionInput.Type;
+
+/**
+ * Asking for a review and taking the request back are one operation with `requested` turned
+ * around, and asking again somebody who has already reviewed is what a re-request is — so that is
+ * the same operation once more rather than a third one.
+ */
+export const PullRequestReviewerRequestInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  /**
+   * Who, as the candidate list named them. Bounded because every host bounds it as well — GitHub
+   * refuses past fifteen — and because these travel into a request body a page composed.
+   */
+  reviewers: Schema.Array(
+    Schema.Struct({ id: TrimmedNonEmptyString, kind: PullRequestReviewerKind }),
+  ).check(Schema.isMinLength(1), Schema.isMaxLength(25)),
+  requested: Schema.Boolean,
+});
+export type PullRequestReviewerRequestInput = typeof PullRequestReviewerRequestInput.Type;
 
 export const PullRequestUnavailableReason = Schema.Literals([
   "cli-missing",

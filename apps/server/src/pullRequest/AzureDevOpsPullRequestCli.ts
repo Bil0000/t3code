@@ -19,6 +19,7 @@ import {
   decodeViewerJson,
   type AzureDevOpsPullRequest,
 } from "./azureDevOpsPullRequestJson.ts";
+import type { ProviderListCursor } from "./PullRequestProvider.ts";
 
 /**
  * Names the read that produced unusable output, so a failure reports the call it came from
@@ -80,10 +81,32 @@ export class AzureDevOpsPullRequestIncompleteError extends Schema.TaggedErrorCla
   }
 }
 
+/**
+ * Not a decode failure: the reader named a reviewer `az` would read as a flag of its own. The
+ * reviewers travel as argv rather than in a request body — `az repos pr reviewer` takes them no
+ * other way — so anything that could leave the value position is refused rather than sent.
+ */
+export class AzureDevOpsReviewerNameError extends Schema.TaggedErrorClass<AzureDevOpsReviewerNameError>()(
+  "AzureDevOpsReviewerNameError",
+  {
+    command: Schema.Literal("az"),
+    cwd: Schema.String,
+  },
+) {
+  get detail(): string {
+    return "A reviewer is named by an email address or an identity id.";
+  }
+
+  override get message(): string {
+    return `Azure CLI failed in setPullRequestReviewers: ${this.detail}`;
+  }
+}
+
 export type AzureDevOpsPullRequestCliError =
   | AzureDevOpsCli.AzureDevOpsCliError
   | AzureDevOpsPullRequestReadError
   | AzureDevOpsPullRequestIncompleteError
+  | AzureDevOpsReviewerNameError
   | AzureDevOpsViewerUnavailableError;
 
 /** The version every REST call below is pinned to, so a new default cannot reshape a response. */
@@ -103,6 +126,11 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
       readonly involvement: PullRequestInvolvement;
       readonly viewer: string;
       readonly limit: number;
+      /**
+       * Where to carry on from. Azure has no date filter for a pull request listing, so the only
+       * part of a cursor it can use is how many rows have already been handed over.
+       */
+      readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<
       { readonly items: ReadonlyArray<AzureDevOpsPullRequest>; readonly truncated: boolean },
       AzureDevOpsPullRequestCliError
@@ -124,6 +152,18 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
       readonly number: number;
       readonly action: PullRequestAction;
       readonly mergeMethod?: PullRequestMergeMethod;
+    }) => Effect.Effect<void, AzureDevOpsPullRequestCliError>;
+
+    /**
+     * Adds reviewers to a pull request, or takes them off it. `az repos pr reviewer` is the whole
+     * of what Azure offers here: it adds and removes named identities, and has no counterpart that
+     * says who could be named.
+     */
+    readonly setPullRequestReviewers: (input: {
+      readonly cwd: string;
+      readonly number: number;
+      readonly reviewers: ReadonlyArray<string>;
+      readonly requested: boolean;
     }) => Effect.Effect<void, AzureDevOpsPullRequestCliError>;
   }
 >()("t3/pullRequest/AzureDevOpsPullRequestCli") {}
@@ -178,6 +218,16 @@ function actionArgs(
   }
 }
 
+/**
+ * A reviewer Azure could be given: an email address, a display name or an identity guid, and
+ * nothing that starts with a dash. The dash is the whole point — these are argv, and a value that
+ * looks like a flag stops being a value.
+ */
+function isReviewerName(value: string): boolean {
+  const name = value.trim();
+  return name.length > 0 && !name.startsWith("-");
+}
+
 export const make = Effect.gen(function* () {
   const azure = yield* AzureDevOpsCli.AzureDevOpsCli;
 
@@ -229,6 +279,11 @@ export const make = Effect.gen(function* () {
           ...involvementArgs(input),
           // A web link per row, which is the only url that needs no assembling.
           "--include-links",
+          // Azure counts rather than filters, so a slice carries on by stepping over what has
+          // already been handed over. That is an offset into a list that can shift underneath
+          // it: a pull request opened between two slices moves everything down one, and the row
+          // on the seam is the one that pays for it.
+          ...(input.cursor === undefined ? [] : ["--skip", String(input.cursor.delivered)]),
           "--top",
           // One row over the page reveals that the repository has more than the page shows.
           String(input.limit + 1),
@@ -315,6 +370,31 @@ export const make = Effect.gen(function* () {
               );
         }),
       ),
+
+    setPullRequestReviewers: (input) =>
+      input.reviewers.some((reviewer) => !isReviewerName(reviewer))
+        ? Effect.fail(new AzureDevOpsReviewerNameError({ command: "az", cwd: input.cwd }))
+        : azure
+            .execute({
+              cwd: input.cwd,
+              args: [
+                "repos",
+                "pr",
+                "reviewer",
+                input.requested ? "add" : "remove",
+                ...detectArgs,
+                "--id",
+                String(input.number),
+                // One `--reviewers` takes them all, because az reads the flag as a list and a
+                // second one would replace the first rather than add to it.
+                "--reviewers",
+                ...input.reviewers,
+                "--only-show-errors",
+                "--output",
+                "json",
+              ],
+            })
+            .pipe(Effect.asVoid),
 
     runPullRequestAction: (input) =>
       azure

@@ -14,21 +14,27 @@ import type {
   PullRequestReviewCommentDraft,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
+  PullRequestReviewerCandidateList,
 } from "@t3tools/contracts";
 
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
 import {
+  buildReviewThreads,
   decodeCommentsJson,
   decodeCommitsJson,
   decodeConflictsJson,
   decodeDiffstatJson,
   decodePullRequestJson,
   decodePullRequestPageJson,
+  decodeRepositoryPermissionJson,
   decodeStatusesJson,
   decodeViewerJson,
+  decodeWorkspaceMembersJson,
   type BitbucketDiffStat,
   type BitbucketPullRequest,
+  type BitbucketRawComment,
 } from "./bitbucketPullRequestJson.ts";
+import type { ProviderListCursor } from "./PullRequestProvider.ts";
 
 /**
  * Names the read that produced unusable output, so a failure reports the call it came from
@@ -108,8 +114,14 @@ export type BitbucketPullRequestApiError =
 const MAX_PAGE_SIZE = 50;
 /** Pages to walk before a listing is reported as truncated. */
 const MAX_LIST_PAGES = 10;
-/** Conversation, commits and checks are read one page deep; the rest stays on Bitbucket. */
+/** Commits and checks are read one page deep; the conversation is walked to its end. */
 const CONVERSATION_PAGE_SIZE = 50;
+/**
+ * Pages of the conversation to follow before it is reported as truncated. Bitbucket serves
+ * fifty comments a page, so this is five hundred — beyond any pull request a person is reading,
+ * and an end to a walk whose only other stop is Bitbucket running out.
+ */
+const CONVERSATION_PAGES = 10;
 /** The same ceiling the gh and glab diff reads use. */
 const DIFF_MAX_BYTES = 8 * 1024 * 1024;
 
@@ -130,12 +142,19 @@ export class BitbucketPullRequestApi extends Context.Service<
       readonly limit: number;
       /** Free text, matched against a pull request's title and description. */
       readonly query?: string | undefined;
+      /** Where to carry on from, as a predicate on `updated_on` beside any other. */
+      readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<BitbucketPullRequestBatch, BitbucketPullRequestApiError>;
 
     readonly getPullRequest: (input: {
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<BitbucketPullRequest, BitbucketPullRequestApiError>;
+
+    /** True where the credentials can write to the repository, which is what merging needs. */
+    readonly getRepositoryPermission: (input: {
+      readonly repository: string;
+    }) => Effect.Effect<boolean, BitbucketPullRequestApiError>;
 
     readonly getPullRequestDiff: (input: {
       readonly repository: string;
@@ -179,6 +198,23 @@ export class BitbucketPullRequestApi extends Context.Service<
       readonly number: number;
     }) => Effect.Effect<ReadonlyArray<PullRequestCheck>, BitbucketPullRequestApiError>;
 
+    /**
+     * Who this pull request may be sent to, and who it has already been sent to. Two reads at
+     * once, because Bitbucket keeps the people on the workspace and the reviewers on the pull
+     * request, and neither answers for the other.
+     */
+    readonly listReviewerCandidates: (input: {
+      readonly repository: string;
+      readonly number: number;
+    }) => Effect.Effect<PullRequestReviewerCandidateList, BitbucketPullRequestApiError>;
+
+    readonly setReviewerRequest: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly reviewers: ReadonlyArray<{ readonly id: string }>;
+      readonly requested: boolean;
+    }) => Effect.Effect<void, BitbucketPullRequestApiError>;
+
     readonly runAction: (input: {
       readonly repository: string;
       readonly number: number;
@@ -217,9 +253,12 @@ export class BitbucketPullRequestApi extends Context.Service<
 >()("t3/pullRequest/BitbucketPullRequestApi") {}
 
 /** `workspace/slug`; Bitbucket has no deeper nesting to address. */
-function repositoryPath(
+function repositorySegments(
   repository: string,
-): Result.Result<string, BitbucketRepositoryUnsupportedError> {
+): Result.Result<
+  { readonly workspace: string; readonly slug: string },
+  BitbucketRepositoryUnsupportedError
+> {
   const segments = repository
     .split("/")
     .map((segment) => segment.trim())
@@ -228,9 +267,13 @@ function repositoryPath(
   if (segments.length !== 2 || workspace === undefined || slug === undefined) {
     return Result.fail(new BitbucketRepositoryUnsupportedError({ repository }));
   }
-  return Result.succeed(
-    `/repositories/${encodeURIComponent(workspace)}/${encodeURIComponent(slug)}`,
-  );
+  return Result.succeed({ workspace, slug });
+}
+
+function repositoryPathOf(segments: { readonly workspace: string; readonly slug: string }): string {
+  return `/repositories/${encodeURIComponent(segments.workspace)}/${encodeURIComponent(
+    segments.slug,
+  )}`;
 }
 
 /**
@@ -268,13 +311,20 @@ function stateParams(state: PullRequestListState): ReadonlyArray<string> {
  *
  * A string literal in that grammar is delimited by double quotes, so the reader's text is
  * escaped before it goes inside one — a quote would otherwise end the literal and leave the
- * rest of the text standing as filter syntax. The backslash goes first, or escaping the quote
- * would only produce a literal backslash followed by a live quote. The whole expression is then
- * URL-encoded, so nothing in it reaches the query string as a parameter of its own.
+ * rest of the text standing as filter syntax. The whole expression is then URL-encoded, so
+ * nothing in it reaches the query string as a parameter of its own.
  */
 function searchFilter(query: string): string {
-  const literal = query.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  const literal = filterLiteral(query);
   return `(title ~ "${literal}" OR description ~ "${literal}")`;
+}
+
+/**
+ * Text as a string literal of Bitbucket's filter grammar. The backslash is escaped first, or
+ * escaping the quote would only produce a literal backslash followed by a live quote.
+ */
+function filterLiteral(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
 }
 
 /** Bitbucket's merge strategies, named differently from the three the contract carries. */
@@ -293,12 +343,18 @@ function mergeStrategy(method: PullRequestMergeMethod | undefined): string {
 export const make = Effect.gen(function* () {
   const bitbucket = yield* BitbucketApi.BitbucketApi;
 
+  /**
+   * The repository's own path, and the workspace above it — which the people who may review are
+   * kept on rather than on the repository, so both are handed over at once.
+   */
   const withRepository = <A>(
     repository: string,
-    use: (path: string) => Effect.Effect<A, BitbucketPullRequestApiError>,
+    use: (path: string, workspace: string) => Effect.Effect<A, BitbucketPullRequestApiError>,
   ): Effect.Effect<A, BitbucketPullRequestApiError> => {
-    const path = repositoryPath(repository);
-    return Result.isSuccess(path) ? use(path.success) : Effect.fail(path.failure);
+    const segments = repositorySegments(repository);
+    return Result.isSuccess(segments)
+      ? use(repositoryPathOf(segments.success), segments.success.workspace)
+      : Effect.fail(segments.failure);
   };
 
   /**
@@ -357,6 +413,39 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * The conversation, following the `next` Bitbucket sends until it sends none. Threads are
+   * assembled once at the end rather than per page, because a reply and the remark it answers
+   * can land either side of a page boundary.
+   */
+  const commentsPage = (input: {
+    readonly url: string;
+    readonly page: number;
+    readonly comments: ReadonlyArray<PullRequestComment>;
+    readonly entries: ReadonlyArray<BitbucketRawComment>;
+  }): Effect.Effect<
+    {
+      readonly comments: ReadonlyArray<PullRequestComment>;
+      readonly threads: ReadonlyArray<PullRequestReviewThread>;
+      readonly truncated: boolean;
+    },
+    BitbucketPullRequestApiError
+  > =>
+    readPage({ operation: "listComments", url: input.url, decode: decodeCommentsJson }).pipe(
+      Effect.flatMap((page) => {
+        const comments = [...input.comments, ...page.comments];
+        const entries = [...input.entries, ...page.entries];
+        if (page.next !== null && input.page < CONVERSATION_PAGES) {
+          return commentsPage({ url: page.next, page: input.page + 1, comments, entries });
+        }
+        return Effect.succeed({
+          comments,
+          threads: buildReviewThreads(entries),
+          truncated: page.next !== null,
+        });
+      }),
+    );
+
   return BitbucketPullRequestApi.of({
     getViewer: () =>
       bitbucket.request({ method: "GET", url: "/user" }).pipe(
@@ -376,12 +465,21 @@ export const make = Effect.gen(function* () {
     listPullRequests: (input) =>
       withRepository(input.repository, (path) => {
         const search = input.query?.trim() ?? "";
+        // Both narrowings share the one `q` Bitbucket takes, so they are ANDed rather than one
+        // replacing the other. The boundary instant is read inclusively — the rows already sent
+        // at it come back and the caller drops them, which is what keeps their neighbours at the
+        // same instant from being skipped. A date is a bare literal in this grammar, and this one
+        // was checked against a timestamp's shape before it got here.
+        const predicates = [
+          ...(search.length === 0 ? [] : [searchFilter(search)]),
+          ...(input.cursor === undefined ? [] : [`updated_on <= ${input.cursor.updatedBefore}`]),
+        ];
         return listPage({
           // Reviewers are not on a listing by default, and `viewerReviewRequested` needs them.
           url: `${path}/pullrequests?${stateParams(input.state)
             .map((state) => `state=${state}`)
             .join("&")}&pagelen=${MAX_PAGE_SIZE}&sort=-updated_on&fields=%2Bvalues.reviewers${
-            search.length === 0 ? "" : `&q=${encodeURIComponent(searchFilter(search))}`
+            predicates.length === 0 ? "" : `&q=${encodeURIComponent(predicates.join(" AND "))}`
           }`,
           limit: input.limit,
           page: 1,
@@ -395,6 +493,20 @@ export const make = Effect.gen(function* () {
           operation: "getPullRequest",
           url: `${path}/pullrequests/${input.number}`,
           decode: decodePullRequestJson,
+        }),
+      ),
+
+    // Nothing on the repository, the pull request or the workspace states what the credentials
+    // may do, so this endpoint is the one request Bitbucket makes unavoidable. It is asked
+    // alongside the reads the detail was already making, so it costs no round trip of its own.
+    getRepositoryPermission: (input) =>
+      withRepository(input.repository, () =>
+        readPage({
+          operation: "getRepositoryPermission",
+          url: `/user/permissions/repositories?q=${encodeURIComponent(
+            `repository.full_name="${filterLiteral(input.repository.trim())}"`,
+          )}`,
+          decode: decodeRepositoryPermissionJson,
         }),
       ),
 
@@ -439,19 +551,12 @@ export const make = Effect.gen(function* () {
 
     listComments: (input) =>
       withRepository(input.repository, (path) =>
-        readPage({
-          operation: "listComments",
+        commentsPage({
           url: `${path}/pullrequests/${input.number}/comments?pagelen=${CONVERSATION_PAGE_SIZE}`,
-          decode: decodeCommentsJson,
-        }).pipe(
-          // Deleted and unposted comments are dropped, so the cursor is the only honest signal
-          // that more remain.
-          Effect.map((page) => ({
-            comments: page.comments,
-            threads: page.threads,
-            truncated: page.next !== null,
-          })),
-        ),
+          page: 1,
+          comments: [],
+          entries: [],
+        }),
       ),
 
     listCommits: (input) =>
@@ -471,6 +576,68 @@ export const make = Effect.gen(function* () {
           decode: decodeStatusesJson,
         }),
       ),
+
+    listReviewerCandidates: (input) =>
+      withRepository(input.repository, (path, workspace) =>
+        Effect.all(
+          [
+            readPage({
+              operation: "getPullRequest",
+              url: `${path}/pullrequests/${input.number}`,
+              decode: decodePullRequestJson,
+            }),
+            readPage({
+              operation: "listReviewerCandidates",
+              url: `/workspaces/${encodeURIComponent(workspace)}/members?pagelen=${MAX_PAGE_SIZE}`,
+              decode: decodeWorkspaceMembersJson,
+            }),
+          ],
+          { concurrency: 2 },
+        ).pipe(
+          Effect.map(([pullRequest, members]) => {
+            const requested = new Set(pullRequest.reviewerIds);
+            const author = pullRequest.author?.login;
+            return {
+              // The author is dropped rather than shown unusable: Bitbucket refuses to make the
+              // person who opened a pull request its reviewer.
+              candidates: members.items.flatMap((candidate) =>
+                candidate.login === author
+                  ? []
+                  : [{ ...candidate, isRequested: requested.has(candidate.id) }],
+              ),
+              truncated: members.next !== null,
+            };
+          }),
+        ),
+      ),
+
+    setReviewerRequest: (input) =>
+      withRepository(input.repository, (path) => {
+        const pullRequest = `${path}/pullrequests/${input.number}`;
+        return readPage({
+          operation: "getPullRequest",
+          url: pullRequest,
+          decode: decodePullRequestJson,
+        }).pipe(
+          Effect.flatMap((current) => {
+            // Bitbucket has no endpoint that adds or removes one reviewer: the pull request's
+            // `reviewers` is written whole, so the set that is already there is read first and
+            // the change applied to it. Everything else about the pull request is left out of
+            // the body, which leaves it as it was.
+            const uuids = new Set(current.reviewerIds);
+            for (const reviewer of input.reviewers) {
+              if (input.requested) uuids.add(reviewer.id);
+              else uuids.delete(reviewer.id);
+            }
+            return bitbucket.request({
+              method: "PUT",
+              url: pullRequest,
+              body: JSON.stringify({ reviewers: [...uuids].map((uuid) => ({ uuid })) }),
+            });
+          }),
+          Effect.asVoid,
+        );
+      }),
 
     runAction: (input) =>
       withRepository(input.repository, (path) => {

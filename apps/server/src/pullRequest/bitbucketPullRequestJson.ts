@@ -12,6 +12,7 @@ import type {
   PullRequestCommit,
   PullRequestMergeability,
   PullRequestReviewThread,
+  PullRequestReviewerCandidate,
   PullRequestState,
 } from "@t3tools/contracts";
 import { TrimmedNonEmptyString } from "@t3tools/contracts";
@@ -23,6 +24,11 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
  * fail a whole payload.
  */
 const RawUserSchema = Schema.Struct({
+  /**
+   * How Bitbucket addresses an account when a reviewer set is written; the handles it shows are
+   * not accepted there. Braced, and sent back exactly as it arrived.
+   */
+  uuid: Schema.optional(Schema.NullOr(Schema.String)),
   /** Absent on an app account, which is why `display_name` has to stand in for it. */
   nickname: Schema.optional(Schema.NullOr(Schema.String)),
   display_name: Schema.optional(Schema.NullOr(Schema.String)),
@@ -132,9 +138,27 @@ const RawDiffstatSchema = Schema.Struct({
   lines_removed: Schema.optional(Schema.NullOr(Schema.Int)),
 });
 
+/** One row of `/workspaces/{workspace}/members`, which wraps the account it is about. */
+const RawMemberSchema = Schema.Struct({
+  user: Schema.optional(Schema.NullOr(RawUserSchema)),
+});
+
 const RawViewerSchema = Schema.Struct({
   nickname: Schema.optional(Schema.NullOr(Schema.String)),
   display_name: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+/**
+ * `/user/permissions/repositories` filtered to one repository, which is the only place Bitbucket
+ * states what the credentials may do with it: nothing on the repository, the pull request or the
+ * workspace carries it. One row, or none where Bitbucket names no permission for this account.
+ */
+const RawRepositoryPermissionsSchema = Schema.Struct({
+  values: Schema.optional(
+    Schema.NullOr(
+      Schema.Array(Schema.Struct({ permission: Schema.optional(Schema.NullOr(Schema.String)) })),
+    ),
+  ),
 });
 
 export interface BitbucketPullRequest {
@@ -156,6 +180,8 @@ export interface BitbucketPullRequest {
   readonly body: string;
   readonly reviewRequestLogins: ReadonlyArray<string>;
   readonly reviewers: ReadonlyArray<PullRequestActor>;
+  /** The reviewers as Bitbucket addresses them, which is what writing the set back takes. */
+  readonly reviewerIds: ReadonlyArray<string>;
   /** Approvals and change requests, which Bitbucket keeps on its participants. */
   readonly reviews: ReadonlyArray<PullRequestComment>;
 }
@@ -264,6 +290,7 @@ function toPullRequest(raw: Schema.Schema.Type<typeof RawPullRequestSchema>): Bi
     body: raw.description ?? "",
     reviewRequestLogins: reviewers.map((reviewer) => reviewer.login),
     reviewers,
+    reviewerIds: (raw.reviewers ?? []).flatMap((reviewer) => trimmed(reviewer.uuid) ?? []),
     reviews: toReviews(raw),
   };
 }
@@ -275,8 +302,10 @@ const decodeCommentEntry = Schema.decodeUnknownExit(RawCommentSchema);
 const decodeCommitEntry = Schema.decodeUnknownExit(RawCommitSchema);
 const decodeStatusEntry = Schema.decodeUnknownExit(RawStatusSchema);
 const decodeDiffstatEntry = Schema.decodeUnknownExit(RawDiffstatSchema);
+const decodeMemberEntry = Schema.decodeUnknownExit(RawMemberSchema);
 const decodeViewer = decodeJsonResult(RawViewerSchema);
 const decodeConflicts = decodeJsonResult(RawPageSchema);
+const decodeRepositoryPermissions = decodeJsonResult(RawRepositoryPermissionsSchema);
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
 
@@ -320,10 +349,58 @@ export function decodeViewerJson(raw: string): Result.Result<string | null, Deco
     : Result.fail(decoded.failure);
 }
 
+/**
+ * Whether the configured credentials can write to the repository, which is what merging needs.
+ * Bitbucket answers `admin`, `write` or `read`, and an empty page means it named no permission at
+ * all for this account — an unknown standing, which is granted rather than guessed away.
+ */
+export function decodeRepositoryPermissionJson(raw: string): Result.Result<boolean, DecodeFailure> {
+  const decoded = decodeRepositoryPermissions(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const permission = trimmed(decoded.success.values?.[0]?.permission)?.toLowerCase() ?? null;
+  return Result.succeed(permission === null || permission === "admin" || permission === "write");
+}
+
+/**
+ * The workspace's members, which is the nearest thing Bitbucket has to "who may review this".
+ * Nothing on a repository lists the people with access to it — `permissions-config/users` is for
+ * administrators only — and a pull request can be sent to anyone in the workspace, so this is the
+ * list Bitbucket's own reviewer field is filled from too.
+ *
+ * Nobody is marked requested here: who has been asked lives on the pull request, and only the
+ * caller holds both.
+ */
+export function decodeWorkspaceMembersJson(
+  raw: string,
+): Result.Result<BitbucketPage<PullRequestReviewerCandidate>, DecodeFailure> {
+  const decoded = decodePage(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const items: PullRequestReviewerCandidate[] = [];
+  for (const entry of decoded.success.values) {
+    const member = decodeMemberEntry(entry);
+    if (Exit.isFailure(member)) continue;
+    const uuid = trimmed(member.value.user?.uuid);
+    const actor = toActor(member.value.user);
+    if (uuid === null || actor === null) continue;
+    items.push({ ...actor, id: uuid, kind: "user", isRequested: false });
+  }
+  return Result.succeed({ items, next: trimmed(decoded.success.next) });
+}
+
+/** One comment as Bitbucket sent it, kept so threads can be assembled across pages. */
+export type BitbucketRawComment = Schema.Schema.Type<typeof RawCommentSchema>;
+
 export interface BitbucketComments {
   readonly comments: ReadonlyArray<PullRequestComment>;
-  /** The same page read as conversations, so the diff can pin them to their line. */
-  readonly threads: ReadonlyArray<PullRequestReviewThread>;
+  /**
+   * The same comments unread, for `buildReviewThreads`. A reply and the remark it answers can
+   * land on different pages, and only the caller holding every page can put them together.
+   */
+  readonly entries: ReadonlyArray<BitbucketRawComment>;
   readonly next: string | null;
 }
 
@@ -331,10 +408,10 @@ export interface BitbucketComments {
  * Bitbucket returns one flat list, so a thread is reassembled from it: a comment pinned to a
  * line opens a thread, and every reply that leads back to it belongs in it. A reply whose
  * parent is on a page that was not read has nowhere to go, and is left out rather than shown
- * as a thread of its own.
+ * as a thread of its own — it still stands in the flat conversation, which needs no parent.
  */
-function toReviewThreads(
-  comments: ReadonlyArray<Schema.Schema.Type<typeof RawCommentSchema>>,
+export function buildReviewThreads(
+  comments: ReadonlyArray<BitbucketRawComment>,
 ): ReadonlyArray<PullRequestReviewThread> {
   const byId = new Map(comments.map((comment) => [comment.id, comment]));
   const rootOf = (comment: Schema.Schema.Type<typeof RawCommentSchema>) => {
@@ -399,7 +476,7 @@ export function decodeCommentsJson(raw: string): Result.Result<BitbucketComments
     return Result.fail(decoded.failure);
   }
   const comments: PullRequestComment[] = [];
-  const kept: Array<Schema.Schema.Type<typeof RawCommentSchema>> = [];
+  const kept: Array<BitbucketRawComment> = [];
   for (const entry of decoded.success.values) {
     const decodedComment = decodeCommentEntry(entry);
     if (Exit.isFailure(decodedComment)) continue;
@@ -420,11 +497,7 @@ export function decodeCommentsJson(raw: string): Result.Result<BitbucketComments
       reviewState: null,
     });
   }
-  return Result.succeed({
-    comments,
-    threads: toReviewThreads(kept),
-    next: trimmed(decoded.success.next),
-  });
+  return Result.succeed({ comments, entries: kept, next: trimmed(decoded.success.next) });
 }
 
 export function decodeCommitsJson(

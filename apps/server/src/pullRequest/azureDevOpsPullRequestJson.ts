@@ -278,9 +278,12 @@ export function decodeViewerJson(raw: string): Result.Result<string | null, Deco
 }
 
 /**
- * Azure keeps its conversation as threads of comments. Only the first comment of each thread is
- * taken, which is the remark itself rather than the replies under it, matching how the GitHub
- * review threads are read. A thread pinned to a file is a line-level review comment.
+ * Azure keeps its conversation as threads of comments, and every one of them is a remark
+ * somebody wrote: a reply under a thread is as much of the conversation as the line that opened
+ * it. A thread pinned to a file is a line-level review comment.
+ *
+ * Azure answers the whole thread collection in one response, with no cursor and no page to
+ * follow, so what this returns is everything the host has.
  */
 export function decodeThreadsJson(
   raw: string,
@@ -295,25 +298,28 @@ export function decodeThreadsJson(
     if (Exit.isFailure(decodedThread)) continue;
     const thread = decodedThread.value;
     if (thread.isDeleted === true) continue;
-    const root = (thread.comments ?? []).find(
-      (comment) =>
-        comment.isDeleted !== true &&
-        comment.commentType?.trim().toLowerCase() !== "system" &&
-        (comment.content ?? "").trim().length > 0,
-    );
-    const publishedDate = trimmed(root?.publishedDate);
-    if (root === undefined || publishedDate === null) continue;
     const path = trimmed(thread.threadContext?.filePath);
-    comments.push({
-      id: `${thread.id}:${root.id ?? 0}`,
-      kind: path === null ? "issue-comment" : "review-comment",
-      author: toActor(root.author),
-      body: root.content ?? "",
-      createdAt: publishedDate,
-      url: null,
-      path,
-      reviewState: null,
-    });
+    for (const comment of thread.comments ?? []) {
+      const publishedDate = trimmed(comment.publishedDate);
+      if (
+        comment.isDeleted === true ||
+        comment.commentType?.trim().toLowerCase() === "system" ||
+        (comment.content ?? "").trim().length === 0 ||
+        publishedDate === null
+      ) {
+        continue;
+      }
+      comments.push({
+        id: `${thread.id}:${comment.id ?? 0}`,
+        kind: path === null ? "issue-comment" : "review-comment",
+        author: toActor(comment.author),
+        body: comment.content ?? "",
+        createdAt: publishedDate,
+        url: null,
+        path,
+        reviewState: null,
+      });
+    }
   }
   return Result.succeed(
     comments.toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),

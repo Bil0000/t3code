@@ -31,6 +31,7 @@ import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 import { useEnvironmentQuery } from "~/state/query";
+import { useRefreshOnFocus } from "~/hooks/useRefreshOnFocus";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -144,6 +145,11 @@ export function PullRequestDetailPanel({
     pullRequestEnvironment.detail({ environmentId, input: reference }),
   );
   const detail = detailQuery.data;
+  // A pull request changes while it is open in front of somebody — a push lands, a check
+  // finishes, a review arrives — so coming back to the window reads it again. This read goes
+  // through the server's cache rather than around it: freshness bounded by the cache window,
+  // at no extra cost to the host.
+  useRefreshOnFocus(() => detailQuery.refresh());
   // Refreshing is a button, not a poll or a focus listener: every read here shells out to the
   // host's API from the server, so only a person should be able to spend those requests. The
   // invalidation goes first so the re-reads miss the server's cache; if it fails, the reads
@@ -379,7 +385,12 @@ export function PullRequestDetailPanel({
   useEffect(() => {
     if (!visibleTabs.some((item) => item.value === tab)) setTab("summary");
   }, [tab, visibleTabs]);
-  const can = (action: PullRequestAction) => detail?.capabilities.actions.includes(action) === true;
+  // Two questions, both of which have to say yes: whether this host can do it at all, and
+  // whether this account may. A reader with read access on someone else's project sees the pull
+  // request and none of the buttons that would only ever be refused.
+  const can = (action: PullRequestAction) =>
+    detail?.capabilities.actions.includes(action) === true &&
+    detail.viewerPermissions.actions.includes(action);
   // One live action holds the slot. A conflicting change cannot be merged now, so the slot goes
   // to the thing that would help instead of a Merge button that only ever says no.
   const primaryAction =
@@ -466,7 +477,12 @@ export function PullRequestDetailPanel({
                       {/* A preference for the merge action rather than a second action, so it
                           is a radio group here instead of a chevron welded to the Merge pill.
                           Hidden while conflicting: every method would fail. */}
-                      {!detail.isDraft && !conflicting && allowedMergeMethods.length > 1 ? (
+                      {/* Only where merging is on offer at all: a strategy to merge with is not
+                          a choice for someone who may not merge. */}
+                      {can("merge") &&
+                      !detail.isDraft &&
+                      !conflicting &&
+                      allowedMergeMethods.length > 1 ? (
                         <>
                           <MenuSeparator />
                           <MenuRadioGroup
@@ -625,6 +641,7 @@ export function PullRequestDetailPanel({
             {tab === "summary" ? (
               <PullRequestSummaryTab
                 environmentId={environmentId}
+                reference={reference}
                 detail={detail}
                 pendingFinding={handoff}
                 onFixFinding={startFixFinding}

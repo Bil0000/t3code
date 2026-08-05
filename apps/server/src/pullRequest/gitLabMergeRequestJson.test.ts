@@ -388,3 +388,25 @@ describe("decodeMergeRequestDiffsJson", () => {
     expect(Result.isFailure(decodeMergeRequestDiffsJson('{"message":"404"}'))).toBe(true);
   });
 });
+
+describe("merge request viewer fields", () => {
+  it("carries GitLab's own answer for whether this viewer can merge", () => {
+    expect(
+      expectSuccess(decodeMergeRequestDetailJson(detailJson({ user: { can_merge: false } })))
+        .viewerCanMerge,
+    ).toBe(false);
+    expect(
+      expectSuccess(decodeMergeRequestDetailJson(detailJson({ user: { can_merge: true } })))
+        .viewerCanMerge,
+    ).toBe(true);
+  });
+
+  it("leaves merging permitted where GitLab answered without the field", () => {
+    // Only the single-merge-request endpoint carries `user`, and an install that answers without
+    // it has said nothing about the viewer rather than said no.
+    expect(expectSuccess(decodeMergeRequestDetailJson(detailJson({}))).viewerCanMerge).toBe(true);
+    expect(
+      expectSuccess(decodeMergeRequestDetailJson(detailJson({ user: null }))).viewerCanMerge,
+    ).toBe(true);
+  });
+});
