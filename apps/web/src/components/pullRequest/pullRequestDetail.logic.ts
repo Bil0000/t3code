@@ -37,9 +37,13 @@ function visibleBody(body: string): string | null {
 }
 
 /**
- * Flattens creation, commits, comments/reviews, and the terminal event into one chronological
- * list. Merged wins over closed: GitHub sets both timestamps on a merge, and reporting
- * "closed" for a merged pull request would misstate what happened.
+ * Flattens creation, commits, comments/reviews, and the terminal event into one list, newest
+ * first. What happened last is what a reader opening the tab is asking about — whether it merged,
+ * what the last review said — and the history reads backwards from there rather than making them
+ * scroll to the bottom to find the present.
+ *
+ * Merged wins over closed: GitHub sets both timestamps on a merge, and reporting "closed" for a
+ * merged pull request would misstate what happened.
  */
 export function buildPullRequestTimeline(
   detail: Pick<
@@ -98,7 +102,7 @@ export function buildPullRequestTimeline(
           },
         ]
       : []),
-  ].toSorted((left, right) => left.at.localeCompare(right.at));
+  ].toSorted((left, right) => right.at.localeCompare(left.at));
 }
 
 const FINDING_LIMIT = 20;

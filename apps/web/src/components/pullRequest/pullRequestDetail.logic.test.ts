@@ -50,11 +50,12 @@ describe("pull request state description", () => {
 });
 
 describe("pull request timeline", () => {
-  it("orders creation, commits and comments chronologically", () => {
+  it("orders creation, commits and comments newest first", () => {
+    // What happened last is what the reader opening the tab is asking about.
     expect(buildPullRequestTimeline(TIMELINE_SOURCE).map((event) => event.id)).toEqual([
-      "created",
-      "1baf7bdcafe",
       "c1",
+      "1baf7bdcafe",
+      "created",
     ]);
   });
 
@@ -64,9 +65,9 @@ describe("pull request timeline", () => {
       comments: [{ ...TIMELINE_SOURCE.comments[0]!, url: "https://example.test/pull/1#c1" }],
     });
     expect(events.map((event) => event.url)).toEqual([
-      null,
-      null,
       "https://example.test/pull/1#c1",
+      null,
+      null,
     ]);
   });
 
@@ -106,7 +107,8 @@ describe("pull request timeline", () => {
       mergedAt: "2026-07-04T00:00:00Z",
       closedAt: "2026-07-04T00:00:00Z",
     });
-    expect(events.at(-1)?.id).toBe("merged");
+    // Newest first, so the terminal event opens the list rather than ending it.
+    expect(events[0]?.id).toBe("merged");
     expect(events.some((event) => event.id === "closed")).toBe(false);
   });
 });
