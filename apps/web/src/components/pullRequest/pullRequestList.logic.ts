@@ -160,3 +160,17 @@ export function rankPullRequestMatches(
     return byScore !== 0 ? byScore : right.updatedAt.localeCompare(left.updatedAt);
   });
 }
+
+/**
+ * A row with the line counts that arrived after it did. Only where the host left them out — a
+ * listing that carried them is not second-guessed — and only where they have arrived, since a row
+ * draws perfectly well without them in the meantime.
+ */
+export function withDiffStat(
+  entry: PullRequestListEntry,
+  statsByRow: ReadonlyMap<string, { readonly additions: number; readonly deletions: number }>,
+): PullRequestListEntry {
+  if (entry.additions !== 0 || entry.deletions !== 0) return entry;
+  const stat = statsByRow.get(`${entry.projectId} ${entry.number}`);
+  return stat === undefined ? entry : { ...entry, ...stat };
+}

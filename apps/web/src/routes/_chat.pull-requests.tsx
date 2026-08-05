@@ -29,6 +29,7 @@ import {
   pullRequestEntryKey,
   rankPullRequestMatches,
   resolveProjectScope,
+  withDiffStat,
   scorePullRequestMatch,
 } from "../components/pullRequest/pullRequestList.logic";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
@@ -464,6 +465,38 @@ function PullRequestsRouteView() {
     pageSize,
   ]);
 
+  /**
+   * The line counts, asked for once the rows are on screen. On GitHub they are forty per cent of
+   * the read that answers the whole page, for two small numbers at the end of a row — so the
+   * listing leaves them out and they arrive a moment later, into rows that already draw without
+   * them. Keyed by the rows being shown, so scrolling further asks only about what is new.
+   */
+  const statsInput = useMemo(
+    () => ({
+      refs: entries.map((entry) => ({
+        projectId: entry.projectId,
+        repository: entry.repository,
+        number: entry.number,
+      })),
+    }),
+    [entries],
+  );
+  const statsQuery = useEnvironmentQuery(
+    environmentId === null || statsInput.refs.length === 0
+      ? null
+      : pullRequestEnvironment.listStats({ environmentId, input: statsInput }),
+  );
+  const statsByRow = useMemo(() => {
+    const found = new Map<string, { additions: number; deletions: number }>();
+    for (const stat of statsQuery.data?.stats ?? []) {
+      found.set(`${stat.projectId} ${stat.number}`, {
+        additions: stat.additions,
+        deletions: stat.deletions,
+      });
+    }
+    return found;
+  }, [statsQuery.data]);
+
   const groups = useMemo(
     () =>
       search.involvement === "all"
@@ -620,7 +653,10 @@ function PullRequestsRouteView() {
               {group.entries.map((entry) => (
                 <PullRequestRow
                   key={pullRequestEntryKey(entry)}
-                  entry={entry}
+                  // A row whose host reported its line counts keeps them; one whose host left
+                  // them for later takes whatever has arrived since, and draws without them
+                  // until it does.
+                  entry={withDiffStat(entry, statsByRow)}
                   showProjectTitle
                   showProvider={showProvider}
                   // Ten is the floor the ranking gives a row whose own fields say nothing

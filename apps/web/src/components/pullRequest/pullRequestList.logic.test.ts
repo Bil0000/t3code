@@ -7,6 +7,7 @@ import {
   matchesPullRequestQuery,
   rankPullRequestMatches,
   scorePullRequestMatch,
+  withDiffStat,
   resolveProjectScope,
 } from "./pullRequestList.logic";
 
@@ -223,5 +224,24 @@ describe("ranking what a search found", () => {
     const first = row({ number: 1, updatedAt: "2026-07-01T00:00:00Z" });
     const second = row({ number: 2, updatedAt: "2026-08-01T00:00:00Z" });
     expect(rankPullRequestMatches([first, second], "  ")).toEqual([first, second]);
+  });
+});
+
+describe("line counts that arrive after the rows", () => {
+  const stats = new Map([["project-1 7", { additions: 42, deletions: 3 }]]);
+
+  it("fills in a row whose host left the counts for later", () => {
+    const row = entry({ number: 7, additions: 0, deletions: 0 });
+    expect(withDiffStat(row, stats)).toEqual({ ...row, additions: 42, deletions: 3 });
+  });
+
+  it("leaves a row the host already counted alone", () => {
+    const row = entry({ number: 7, additions: 1, deletions: 1 });
+    expect(withDiffStat(row, stats)).toBe(row);
+  });
+
+  it("leaves a row whose counts have not arrived as it is", () => {
+    const row = entry({ number: 9, additions: 0, deletions: 0 });
+    expect(withDiffStat(row, stats)).toBe(row);
   });
 });
