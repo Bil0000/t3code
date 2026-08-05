@@ -21,6 +21,7 @@ import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime"
 import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { readableFailure } from "./pullRequestDetail.logic";
@@ -39,10 +40,14 @@ function matches(candidate: PullRequestReviewerCandidate, query: string): boolea
 export function PullRequestReviewerPicker({
   environmentId,
   reference,
+  allowed,
   onRequested,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
+  /** False where the host would refuse this account's request, which is worth saying rather than
+   * hiding: the control disabled with a reason answers the question its absence would raise. */
+  allowed: boolean;
   /** The detail carries who is requested, so it is re-read once the host has taken the change. */
   onRequested: () => void;
 }) {
@@ -97,6 +102,23 @@ export function PullRequestReviewerPicker({
     onRequested();
     candidatesQuery.refresh();
   };
+
+  if (!allowed) {
+    return (
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button size="icon-xs" variant="ghost" disabled aria-label="Request a review">
+              <UserPlusIcon className="size-3.5" />
+            </Button>
+          }
+        />
+        <TooltipPopup side="bottom">
+          Asking someone to review needs write access on this repository
+        </TooltipPopup>
+      </Tooltip>
+    );
+  }
 
   return (
     <Menu open={open} onOpenChange={setOpen}>

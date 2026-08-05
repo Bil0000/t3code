@@ -231,15 +231,17 @@ export function PullRequestSummaryTab({
                   <PullRequestActorLabel key={actor.login} actor={actor} className="max-w-32" />
                 ))
               )}
-              {/* Both questions again: a host that can take the request, and an account that may
-                  make it. Asking is also only offered where the host can say who could be asked
-                  — Azure DevOps takes a reviewer but will not list one. */}
+              {/* Shown wherever the host can take a review request at all, and disabled with the
+                  reason where this account may not make one: a control that vanishes teaches
+                  nobody why, and "you need write access" is the answer to the question a reader
+                  actually has. Azure DevOps is the exception — it takes a reviewer but will not
+                  say who could be one, so there is nothing to open. */}
               {detail.capabilities.reviewers.request &&
-              detail.capabilities.reviewers.listCandidates &&
-              detail.viewerPermissions.requestReviewers ? (
+              detail.capabilities.reviewers.listCandidates ? (
                 <PullRequestReviewerPicker
                   environmentId={environmentId}
                   reference={reference}
+                  allowed={detail.viewerPermissions.requestReviewers}
                   onRequested={onRefresh}
                 />
               ) : null}
