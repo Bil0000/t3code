@@ -377,6 +377,30 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("answers a search that found nothing with nothing, not with the whole repository", () =>
+    Effect.gen(function* () {
+      // The fallback is for a repository the index does not cover. Under a text search an empty
+      // answer means the text matched nothing, and listing everything instead would fill the
+      // page with rows the reader did not search for.
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const batch = yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        query: "fdsfklj",
+      });
+
+      assert.strictEqual(batch.items.length, 0);
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+    }),
+  );
+
   it.effect("reads a repository GitHub will not search the way gh lists one", () =>
     Effect.gen(function* () {
       // GitHub answers for a repository outside its search index with no rows and no error.

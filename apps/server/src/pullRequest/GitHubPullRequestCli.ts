@@ -631,9 +631,14 @@ export const make = Effect.gen(function* () {
       //
       // Only ever the first slice: a repository that answered the search once will answer it
       // again, so an empty slice under a cursor is a repository that has run out.
+      // A text search that finds nothing has found nothing: falling back would answer it with the
+      // repository's whole list, which is every row the reader did not search for. The fallback
+      // is for a repository the index does not cover, and a listing with no text to match is the
+      // only place an empty answer can mean that.
+      const searched = (input.query?.trim().length ?? 0) > 0;
       return read(true).pipe(
         Effect.flatMap((batch) =>
-          batch.items.length === 0 && input.cursor === undefined
+          batch.items.length === 0 && input.cursor === undefined && !searched
             ? read(false)
             : Effect.succeed(batch),
         ),
