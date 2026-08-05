@@ -724,7 +724,7 @@ export function PullRequestDetailPanel({
                   <MenuItem onClick={explainPullRequest}>
                     <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
                     <span className="flex min-w-0 flex-col">
-                      <span>Explain this change</span>
+                      <span>Explain this PR</span>
                       <span className="text-xs text-muted-foreground">
                         A walk through the diff: what it is for, and what to read closely.
                       </span>
