@@ -196,10 +196,16 @@ function PullRequestsRouteView() {
   // Page size is view state, not a URL concern: a shared link should open the first page.
   const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
-  const [page, setPage] = useState({ key: filterKey, size: PAGE_SIZE });
+  // Where the next slice carries on from, per repository, as the server handed it back. Sending
+  // it is what makes a second page cost a second page rather than the whole list again — and a
+  // repository it does not name has run out and is not read a second time.
+  const [page, setPage] = useState<{
+    key: string;
+    size: number;
+    cursors: Record<string, string> | null;
+  }>({ key: filterKey, size: PAGE_SIZE, cursors: null });
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
-  const loadMore = () =>
-    setPage({ key: filterKey, size: Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE) });
+  const sentCursors = page.key === filterKey ? page.cursors : null;
 
   const listQuery = useEnvironmentQuery(
     environmentId === null
@@ -216,6 +222,7 @@ function PullRequestsRouteView() {
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
             ...(sentQuery ? { query: sentQuery } : {}),
+            ...(sentCursors ? { cursors: sentCursors } : {}),
           },
         }),
   );
@@ -259,6 +266,17 @@ function PullRequestsRouteView() {
       const arriving = new Map(
         answered.entries.map((entry) => [pullRequestEntryKey(entry), entry] as const),
       );
+      if (sentCursors !== null) {
+        // A continuation is a slice, not the list: it carries only what comes after the rows
+        // already held, and says nothing about a repository that has run out. Everything on
+        // screen therefore stays, and the slice — ordered among itself, since one repository's
+        // next rows can be newer than another's last — lands under it.
+        const held = new Set(previous.entries.map(pullRequestEntryKey));
+        const appended = answered.entries
+          .filter((entry) => !held.has(pullRequestEntryKey(entry)))
+          .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+        return { key: filterKey, entries: [...previous.entries, ...appended] };
+      }
       const kept = previous.entries.flatMap((entry) => {
         const key = pullRequestEntryKey(entry);
         const fresh = arriving.get(key);
@@ -269,7 +287,23 @@ function PullRequestsRouteView() {
       });
       return { key: filterKey, entries: [...kept, ...arriving.values()] };
     });
-  }, [answered, filterKey]);
+  }, [answered, filterKey, sentCursors]);
+
+  // Carrying on where the last answer stopped, and only raising the page size for the hosts that
+  // could not say where that was.
+  const nextCursors = listData?.nextCursors ?? {};
+  const canContinue = Object.keys(nextCursors).length > 0;
+  const loadMore = () => {
+    if (canContinue) {
+      setPage({ key: filterKey, size: pageSize, cursors: nextCursors });
+      return;
+    }
+    setPage({
+      key: filterKey,
+      size: Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE),
+      cursors: null,
+    });
+  };
 
   /** The hosts that narrowed the listing themselves, so their answer is not narrowed again. */
   const searchingHosts = useMemo(
@@ -330,8 +364,9 @@ function PullRequestsRouteView() {
       listQuery.isPending ||
       listQuery.error !== null ||
       // Asking past the cap is refused, which would strand the list on an error the retry
-      // could never clear, so growth stops here and the rest stays on the host.
-      pageSize >= MAX_PAGE_SIZE
+      // could never clear, so growth stops here and the rest stays on the host. A continuation
+      // does not grow the page at all, so the cap does not apply to it.
+      (!canContinue && pageSize >= MAX_PAGE_SIZE)
     ) {
       return;
     }
@@ -352,6 +387,7 @@ function PullRequestsRouteView() {
   }, [
     entries.length,
     filterKey,
+    canContinue,
     listData?.truncated,
     listQuery.error,
     listQuery.isPending,
@@ -533,7 +569,9 @@ function PullRequestsRouteView() {
                     search.host !== undefined
                   }
                   searching={typedQuery.length > 0 && (!querySettled || showingCarried)}
-                  canLoadMore={listData?.truncated === true && pageSize < MAX_PAGE_SIZE}
+                  canLoadMore={
+                    listData?.truncated === true && (canContinue || pageSize < MAX_PAGE_SIZE)
+                  }
                   loadingMore={loadingMore}
                   onClearQuery={() => updateSearch({ q: undefined })}
                   onLoadMore={loadMore}
