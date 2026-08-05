@@ -71,6 +71,7 @@ import {
   PullRequestCommentInput,
   PullRequestDetail,
   PullRequestDiffInput,
+  PullRequestInvalidateInput,
   PullRequestDiffResult,
   PullRequestListInput,
   PullRequestListResult,
@@ -277,6 +278,7 @@ export const WS_METHODS = {
   pullRequestsSubmitReview: "pullRequests.submitReview",
   pullRequestsReplyToThread: "pullRequests.replyToThread",
   pullRequestsSetThreadResolution: "pullRequests.setThreadResolution",
+  pullRequestsInvalidate: "pullRequests.invalidate",
   pullRequestsReviewerCandidates: "pullRequests.reviewerCandidates",
   pullRequestsRequestReviewers: "pullRequests.requestReviewers",
 
@@ -514,6 +516,12 @@ export const WsPullRequestsSetThreadResolutionRpc = Rpc.make(
     error: PullRequestRpcError,
   },
 );
+
+export const WsPullRequestsInvalidateRpc = Rpc.make(WS_METHODS.pullRequestsInvalidate, {
+  payload: PullRequestInvalidateInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
 
 /**
  * Read on its own rather than as part of the detail: the people who may be asked are only wanted
@@ -944,6 +952,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsSubmitReviewRpc,
   WsPullRequestsReplyToThreadRpc,
   WsPullRequestsSetThreadResolutionRpc,
+  WsPullRequestsInvalidateRpc,
   WsPullRequestsReviewerCandidatesRpc,
   WsPullRequestsRequestReviewersRpc,
   WsSourceControlLookupRepositoryRpc,

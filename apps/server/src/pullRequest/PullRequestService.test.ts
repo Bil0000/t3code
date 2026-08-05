@@ -162,6 +162,11 @@ function makeService(input: {
   );
 }
 
+/** A row as a host that reads several repositories at once hands it over. */
+function batchedChangeRequest(number: number, repository: string, updatedAt: string) {
+  return { ...changeRequest(number, updatedAt), repository };
+}
+
 it.effect("reads nothing from a host with no implementation, but reports it", () =>
   Effect.gen(function* () {
     const listed: string[] = [];
@@ -1729,10 +1734,116 @@ it.effect("hands the host's own candidate list back, and asks for it with the ch
   }),
 );
 
-/** A row as a host that reads several repositories at once hands it over. */
-function batchedChangeRequest(number: number, repository: string, updatedAt: string) {
-  return { ...changeRequest(number, updatedAt), repository };
-}
+it.effect("answers a repeated listing from cache, and concurrent readers share one request", () =>
+  Effect.gen(function* () {
+    let hostCalls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () => {
+            hostCalls += 1;
+            return Effect.succeed({
+              items: [changeRequest(1, "2026-07-02T00:00:00Z")],
+              truncated: false,
+              continues: false,
+            });
+          },
+        }),
+      ],
+    });
+
+    yield* Effect.all([service.list({ state: "open" }), service.list({ state: "open" })], {
+      concurrency: "unbounded",
+    });
+    yield* service.list({ state: "open" });
+    assert.strictEqual(hostCalls, 1);
+
+    // A different filter is a different answer, not a cache hit.
+    yield* service.list({ state: "all" });
+    assert.strictEqual(hostCalls, 2);
+  }),
+);
+
+it.effect("an explicit invalidation makes the next listing ask the host again", () =>
+  Effect.gen(function* () {
+    let hostCalls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () => {
+            hostCalls += 1;
+            return Effect.succeed({ items: [], truncated: false, continues: false });
+          },
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+    yield* service.invalidate({});
+    yield* service.list({ state: "open" });
+    assert.strictEqual(hostCalls, 2);
+
+    // Forgetting one change request leaves the listings shared.
+    yield* service.invalidate({
+      reference: { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 },
+    });
+    yield* service.list({ state: "open" });
+    assert.strictEqual(hostCalls, 2);
+  }),
+);
+
+it.effect("a mutation makes the next listing ask the host again, with no client asking", () =>
+  Effect.gen(function* () {
+    let hostCalls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () => {
+            hostCalls += 1;
+            return Effect.succeed({ items: [], truncated: false, continues: false });
+          },
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+    yield* service.runAction({
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+      action: "close",
+    });
+    yield* service.list({ state: "open" });
+    assert.strictEqual(hostCalls, 2);
+  }),
+);
+
+it.effect("does not cache a failed listing", () =>
+  Effect.gen(function* () {
+    let hostCalls = 0;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          // The viewer lookup is what fails the whole listing rather than one repository.
+          getViewer: () => {
+            hostCalls += 1;
+            return hostCalls === 1 ? Effect.fail(requestFailed) : Effect.succeed("bilal");
+          },
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(service.list({ state: "open" }));
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    const second = yield* service.list({ state: "open" });
+    assert.strictEqual(hostCalls, 2);
+    assert.strictEqual(second.providers[0]?.configured, true);
+  }),
+);
 
 it.effect("reads a host's repositories in one search, and files the rows back under each", () =>
   Effect.gen(function* () {
@@ -1797,7 +1908,6 @@ it.effect("reads a host's repositories in one search, and files the rows back un
     );
   }),
 );
-
 it.effect("carries every repository of a slice on from the oldest row in it", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
@@ -1834,7 +1944,6 @@ it.effect("carries every repository of a slice on from the oldest row in it", ()
     });
   }),
 );
-
 it.effect("carries a slice on without sending the rows it already sent", () =>
   Effect.gen(function* () {
     const cursors: Array<unknown> = [];
@@ -1873,7 +1982,6 @@ it.effect("carries a slice on without sending the rows it already sent", () =>
     });
   }),
 );
-
 it.effect("reads a workspace larger than one search in chunks, and merges them", () =>
   Effect.gen(function* () {
     const asked: Array<number> = [];
@@ -1907,7 +2015,6 @@ it.effect("reads a workspace larger than one search in chunks, and merges them",
     assert.strictEqual(result.entries.length, 101);
   }),
 );
-
 it.effect("asks on its own for a repository a search answered nothing for", () =>
   Effect.gen(function* () {
     const separately: string[] = [];
@@ -1952,7 +2059,6 @@ it.effect("asks on its own for a repository a search answered nothing for", () =
     );
   }),
 );
-
 it.effect("reads the repositories one at a time when the search itself fails", () =>
   Effect.gen(function* () {
     const separately: string[] = [];
@@ -1984,7 +2090,6 @@ it.effect("reads the repositories one at a time when the search itself fails", (
     assert.strictEqual(result.entries.length, 2);
   }),
 );
-
 it.effect("fills in the line counts for the rows it is given", () =>
   Effect.gen(function* () {
     const asked: Array<unknown> = [];
@@ -2041,7 +2146,6 @@ it.effect("fills in the line counts for the rows it is given", () =>
     ]);
   }),
 );
-
 it.effect("keeps the rows when the line counts cannot be read", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

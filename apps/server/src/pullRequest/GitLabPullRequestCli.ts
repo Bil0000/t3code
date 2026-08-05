@@ -383,8 +383,11 @@ export const make = Effect.gen(function* () {
         input.path,
         ...(input.method === undefined ? [] : ["--method", input.method]),
         // A raw body from stdin: argv is visible in process listings and is echoed back
-        // inside process-runner failure messages.
-        ...(input.stdin === undefined ? [] : ["--input", "-"]),
+        // inside process-runner failure messages. Unlike `gh`, `glab api --input` sends no
+        // Content-Type at all, and GitLab answers a bodyless content type with HTTP 415.
+        ...(input.stdin === undefined
+          ? []
+          : ["--input", "-", "--header", "Content-Type: application/json"]),
       ],
       ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
       ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),

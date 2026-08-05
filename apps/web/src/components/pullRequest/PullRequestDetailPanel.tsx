@@ -18,8 +18,8 @@ import {
   HammerIcon,
   LinkIcon,
   MoreHorizontalIcon,
+  PanelRightIcon,
   RefreshCwIcon,
-  XIcon,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useState } from "react";
 
@@ -56,7 +56,6 @@ import {
 } from "../ui/menu";
 import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
@@ -100,6 +99,14 @@ const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
     "The host refused it. Check that you have write access, and that the branch still exists.",
 };
 
+/** Named for the host rather than "externally": the point is where you will land. */
+const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
+  github: "Open on GitHub",
+  gitlab: "Open on GitLab",
+  bitbucket: "Open on Bitbucket",
+  "azure-devops": "Open on Azure DevOps",
+};
+
 const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
   { value: "timeline", label: "Timeline" },
@@ -113,10 +120,18 @@ export function PullRequestDetailPanel({
   environmentId,
   reference,
   onClose,
+  context = "page",
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
-  onClose: () => void;
+  /** Absent when something around the panel already owns closing it — a surface tab's own X. */
+  onClose?: () => void;
+  /**
+   * Beside a thread, the checkout affordance disappears: the panel is showing that thread's
+   * own pull request, so the branch is already under the reader's feet — and checking it out
+   * again is at best a no-op and at worst git refusing a branch two checkouts.
+   */
+  context?: "page" | "thread";
 }) {
   const [tab, setTab] = useState<DetailTab>("summary");
   const [codeMounted, setCodeMounted] = useState(false);
@@ -131,8 +146,21 @@ export function PullRequestDetailPanel({
   );
   const detail = detailQuery.data;
   // A pull request changes while it is open in front of somebody — a push lands, a check
-  // finishes, a review arrives — so coming back to the window reads it again.
+  // finishes, a review arrives — so coming back to the window reads it again. This read goes
+  // through the server's cache rather than around it: freshness bounded by the cache window,
+  // at no extra cost to the host.
   useRefreshOnFocus(() => detailQuery.refresh());
+  // Refreshing is a button, not a poll or a focus listener: every read here shells out to the
+  // host's API from the server, so only a person should be able to spend those requests. The
+  // invalidation goes first so the re-reads miss the server's cache; if it fails, the reads
+  // still run and at worst answer from that cache.
+  const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
+  const [refreshToken, setRefreshToken] = useState(0);
+  const refreshFromHost = async () => {
+    await invalidate({ environmentId, input: { reference } });
+    detailQuery.refresh();
+    setRefreshToken((token) => token + 1);
+  };
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
   const [actionPending, setActionPending] = useState(false);
   const newThread = useNewThreadHandler();
@@ -414,84 +442,6 @@ export function PullRequestDetailPanel({
         <div className="ml-auto flex shrink-0 items-center gap-1">
           {detail ? (
             <>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-xs"
-                      variant="outline"
-                      aria-label="Refresh this pull request"
-                      disabled={detailQuery.isPending}
-                      onClick={() => detailQuery.refresh()}
-                    />
-                  }
-                >
-                  <RefreshCwIcon
-                    className={cn("size-3", detailQuery.isPending && "animate-spin")}
-                  />
-                </TooltipTrigger>
-                <TooltipPopup side="bottom">
-                  Read this pull request again. It also refreshes itself when you come back to the
-                  window.
-                </TooltipPopup>
-              </Tooltip>
-              <Tooltip>
-                <TooltipTrigger
-                  render={
-                    <Button
-                      size="icon-xs"
-                      variant="outline"
-                      aria-label="Open on GitHub"
-                      onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}
-                    />
-                  }
-                >
-                  <ExternalLinkIcon className="size-3" />
-                </TooltipTrigger>
-                <TooltipPopup side="bottom">Open on GitHub</TooltipPopup>
-              </Tooltip>
-              {/* Checking a pull request out is the reason to open one here at all, so it is a
-                  button of its own rather than a side effect of asking an agent for something.
-                  It asks where, because the two answers are not interchangeable: one leaves your
-                  work where it is, the other moves the repository you are standing in. */}
-              <Menu>
-                <MenuTrigger
-                  disabled={handoff !== null}
-                  render={
-                    <Button size="xs" variant="outline">
-                      {handoff?.startsWith("checkout") ? (
-                        "Checking out..."
-                      ) : (
-                        <>
-                          <GitBranchIcon className="size-3" />
-                          Check out
-                          <ChevronDownIcon className="size-3 text-muted-foreground" />
-                        </>
-                      )}
-                    </Button>
-                  }
-                />
-                <MenuPopup align="end" side="bottom" className="min-w-72">
-                  <MenuItem onClick={() => startCheckout("worktree")}>
-                    <GitBranchIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>In a separate worktree</span>
-                      <span className="text-xs text-muted-foreground">
-                        Its own folder and thread. Nothing you have open moves.
-                      </span>
-                    </span>
-                  </MenuItem>
-                  <MenuItem onClick={() => startCheckout("local")}>
-                    <FolderGit2Icon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>In this repository</span>
-                      <span className="text-xs text-muted-foreground">
-                        Switches the branch you are working in, like `gh pr checkout`.
-                      </span>
-                    </span>
-                  </MenuItem>
-                </MenuPopup>
-              </Menu>
               <Menu>
                 <MenuTrigger
                   className="inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -500,6 +450,15 @@ export function PullRequestDetailPanel({
                   <MoreHorizontalIcon className="size-4" />
                 </MenuTrigger>
                 <MenuPopup align="end" side="bottom" className="min-w-52">
+                  <MenuItem disabled={detailQuery.isPending} onClick={() => void refreshFromHost()}>
+                    <RefreshCwIcon className="size-3.5" />
+                    Refresh
+                  </MenuItem>
+                  <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}>
+                    <ExternalLinkIcon className="size-3.5" />
+                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  </MenuItem>
+                  <MenuSeparator />
                   {detail.state === "open" ? (
                     <>
                       {can(detail.isDraft ? "ready" : "draft") ? (
@@ -586,6 +545,51 @@ export function PullRequestDetailPanel({
                   ) : null}
                 </MenuPopup>
               </Menu>
+              {/* Checking a pull request out is the reason to open one here at all, so it is a
+                  button of its own rather than a side effect of asking an agent for something.
+                  It asks where, because the two answers are not interchangeable: one leaves your
+                  work where it is, the other moves the repository you are standing in. Only on
+                  the page: beside a thread the branch is already checked out right there. */}
+              {context === "page" ? (
+                <Menu>
+                  <MenuTrigger
+                    disabled={handoff !== null}
+                    render={
+                      <Button size="xs" variant="outline">
+                        {handoff?.startsWith("checkout") ? (
+                          "Checking out..."
+                        ) : (
+                          <>
+                            <GitBranchIcon className="size-3" />
+                            Check out
+                            <ChevronDownIcon className="size-3 text-muted-foreground" />
+                          </>
+                        )}
+                      </Button>
+                    }
+                  />
+                  <MenuPopup align="end" side="bottom" className="min-w-72">
+                    <MenuItem onClick={() => startCheckout("worktree")}>
+                      <GitBranchIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
+                      <span className="flex min-w-0 flex-col">
+                        <span>In a separate worktree</span>
+                        <span className="text-xs text-muted-foreground">
+                          Its own folder and thread. Nothing you have open moves.
+                        </span>
+                      </span>
+                    </MenuItem>
+                    <MenuItem onClick={() => startCheckout("local")}>
+                      <FolderGit2Icon className="mt-0.5 size-3.5 shrink-0 self-start" />
+                      <span className="flex min-w-0 flex-col">
+                        <span>In this repository</span>
+                        <span className="text-xs text-muted-foreground">
+                          Switches the branch you are working in, like `gh pr checkout`.
+                        </span>
+                      </span>
+                    </MenuItem>
+                  </MenuPopup>
+                </Menu>
+              ) : null}
               {primaryAction === "ready" ? (
                 <Button size="xs" disabled={actionPending} onClick={() => void perform("ready")}>
                   Ready for review
@@ -605,14 +609,18 @@ export function PullRequestDetailPanel({
               ) : null}
             </>
           ) : null}
-          <Button
-            size="icon-xs"
-            variant="outline"
-            aria-label="Close pull request"
-            onClick={onClose}
-          >
-            <XIcon className="size-3" />
-          </Button>
+          {onClose ? (
+            // Panel chrome rather than an action: the same collapse glyph the rest of the app
+            // uses for its right panel, ghosted so it does not compete with the buttons.
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              aria-label="Collapse pull request panel"
+              onClick={onClose}
+            >
+              <PanelRightIcon className="size-3.5" />
+            </Button>
+          ) : null}
         </div>
       </div>
 
@@ -657,6 +665,7 @@ export function PullRequestDetailPanel({
                     pendingFinding={handoff}
                     onFixFinding={startFixFinding}
                     onRefresh={() => detailQuery.refresh()}
+                    refreshToken={refreshToken}
                   />
                 </Suspense>
               </div>

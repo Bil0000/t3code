@@ -340,7 +340,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   /* Fade rows themselves as they pass beneath the top chrome. A mask remains
      visible even when the header and timeline share the same background. */
   .chat-timeline-scroll-fade,
-  .settings-page-scroll-fade {
+  .settings-page-scroll-fade,
+  .pull-requests-scroll-fade {
     --topbar-scroll-fade-height: 2.5rem;
     -webkit-mask-image:
       linear-gradient(
@@ -806,7 +807,8 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   @media (min-width: 40rem) {
     .chat-timeline-scroll-fade,
-    .settings-page-scroll-fade {
+    .settings-page-scroll-fade,
+    .pull-requests-scroll-fade {
       --topbar-scroll-fade-height: 3rem;
     }
 
@@ -1323,6 +1325,12 @@ label:has(> select#reasoning-effort) select {
 .chat-markdown li.task-list-item input[type="checkbox"] {
   margin: 0 0.35em 0.15em -1.25rem;
   vertical-align: middle;
+}
+
+/* Markdown assumes inline images — GitHub comments lay button images out in a row — and the
+   Tailwind preflight's block-level img would stack them one per line. */
+.chat-markdown img {
+  display: inline-block;
 }
 
 .chat-markdown a {
