@@ -53,7 +53,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import { useResizableWidth } from "../hooks/useResizableWidth";
 import { useDebouncedValue } from "../state/queries";
-import { useProjects } from "../state/entities";
+import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 import { pullRequestEnvironment } from "../state/pullRequests";
 import { useEnvironmentQuery } from "../state/query";
@@ -140,6 +140,10 @@ function PullRequestsRouteView() {
   const navigate = useNavigate({ from: Route.fullPath });
   const environmentId = usePrimaryEnvironmentId();
   const allProjects = useProjects();
+  // Whether the workspace has said what it holds yet. Until it has, an empty project list is
+  // "not loaded" rather than "none", and telling a reader to add a project they already have is
+  // the one wrong answer the empty state can give.
+  const projectsKnown = useAllEnvironmentShellsBootstrapped();
   // The page reads one environment, so a project from another one could neither be listed
   // nor acted on: scoping here keeps the filter and the selection honest.
   const projects = useMemo(
@@ -660,6 +664,9 @@ function PullRequestsRouteView() {
         <PullRequestsUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
       ) : entries.length === 0 ? (
         <PullRequestListEmptyState
+          hasProjects={!projectsKnown || projects.length > 0}
+          refreshing={refreshing}
+          onRefresh={() => void refreshFromHost()}
           query={typedQuery}
           filtered={
             search.state !== "open" ||
