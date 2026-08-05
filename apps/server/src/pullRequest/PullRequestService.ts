@@ -87,7 +87,10 @@ const DETAIL_CACHE_TTL = Duration.seconds(15);
 const DIFF_CACHE_TTL = Duration.seconds(60);
 /** A commit is content-addressed, so its own diff cannot change under its key. */
 const COMMIT_DIFF_CACHE_TTL = Duration.minutes(10);
+/** Sized like the client's own stale time; a row's counts move only when somebody pushes. */
+const LIST_STATS_CACHE_TTL = Duration.seconds(60);
 const LIST_CACHE_CAPACITY = 64;
+const LIST_STATS_CACHE_CAPACITY = 32;
 const DETAIL_CACHE_CAPACITY = 128;
 const DIFF_CACHE_CAPACITY = 128;
 
@@ -1249,7 +1252,7 @@ export const make = Effect.gen(function* () {
    * remote points at, is dropped rather than refused: it is one row's two numbers, and the page
    * that asked has already moved on.
    */
-  const listStats: PullRequestService["Service"]["listStats"] = (input) =>
+  const listStatsUncached: PullRequestService["Service"]["listStats"] = (input) =>
     Effect.gen(function* () {
       if (input.refs.length === 0) return { stats: [] };
       const { supported } = yield* listWorkspaceProjects({});
@@ -1452,6 +1455,39 @@ export const make = Effect.gen(function* () {
         input.commit ?? null,
       ]),
     );
+
+  const listStatsCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [, refs] = JSON.parse(key) as [number, ReadonlyArray<[string, string, number]>];
+      return listStatsUncached({
+        refs: refs.map(([projectId, repository, number]) => ({ projectId, repository, number })),
+      } as unknown as PullRequestListStatsInput);
+    },
+    {
+      capacity: LIST_STATS_CACHE_CAPACITY,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? LIST_STATS_CACHE_TTL : Duration.zero),
+    },
+  );
+  // The stats read leans on the host's search API — the scarcest limit of them all — so it
+  // shares between clients like every other read. Refs are sorted so one page's worth of rows
+  // is one key however the client assembled them, and the listings epoch rides along so the
+  // refresh that forgets the listing forgets its decorations with it.
+  const listStats: PullRequestService["Service"]["listStats"] = (input) =>
+    input.refs.length === 0
+      ? Effect.succeed({ stats: [] })
+      : Cache.get(
+          listStatsCache,
+          JSON.stringify([
+            listingsEpoch,
+            input.refs
+              .map((ref) => [ref.projectId, ref.repository, ref.number] as const)
+              .toSorted((left, right) =>
+                `${left[0]} ${left[1]} ${left[2]}`.localeCompare(
+                  `${right[0]} ${right[1]} ${right[2]}`,
+                ),
+              ),
+          ]),
+        );
 
   const invalidate: PullRequestService["Service"]["invalidate"] = (input) =>
     Effect.sync(() => {
