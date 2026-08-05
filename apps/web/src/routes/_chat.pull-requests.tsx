@@ -45,6 +45,7 @@ import { RightPanelResizeHandle } from "../components/preview/RightPanelResizeHa
 import { Button } from "../components/ui/button";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
+import { useRefreshOnFocus } from "../hooks/useRefreshOnFocus";
 import { useResizableWidth } from "../hooks/useResizableWidth";
 import { useDebouncedValue } from "../state/queries";
 import { useProjects } from "../state/entities";
@@ -240,13 +241,26 @@ function PullRequestsRouteView() {
     query: string;
     data: PullRequestListResult;
   } | null>(null);
+  /**
+   * The last answer under these filters with nothing typed. Clearing a search is a return to a
+   * list that was already read, so it comes back at once rather than after another round trip —
+   * the search was the temporary state, not the list.
+   */
+  const [unsearched, setUnsearched] = useState<{
+    scope: string;
+    data: PullRequestListResult;
+  } | null>(null);
   useEffect(() => {
-    if (listQuery.data) setLoaded({ scope: scopeKey, query: sentQuery, data: listQuery.data });
+    if (!listQuery.data) return;
+    setLoaded({ scope: scopeKey, query: sentQuery, data: listQuery.data });
+    if (sentQuery.length === 0) setUnsearched({ scope: scopeKey, data: listQuery.data });
   }, [scopeKey, sentQuery, listQuery.data]);
   const answered =
     listQuery.data ??
     (loaded?.scope === scopeKey && loaded.query === sentQuery ? loaded.data : null);
-  const carried = loaded?.scope === scopeKey ? loaded.data : null;
+  const carried =
+    (sentQuery.length === 0 && unsearched?.scope === scopeKey ? unsearched.data : null) ??
+    (loaded?.scope === scopeKey ? loaded.data : null);
   const listData = answered ?? carried;
   /** The rows on screen are the previous search's, held while this one is on its way. */
   const showingCarried = answered === null && carried !== null;
@@ -310,6 +324,10 @@ function PullRequestsRouteView() {
       cursors: null,
     });
   };
+
+  // The list goes stale the same way the detail does: somebody opens a pull request, a check
+  // finishes, a branch is merged. Coming back to the window reads it again.
+  useRefreshOnFocus(() => listQuery.refresh(), environmentId !== null);
 
   /** The hosts that narrowed the listing themselves, so their answer is not narrowed again. */
   const searchingHosts = useMemo(
