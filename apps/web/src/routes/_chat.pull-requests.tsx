@@ -709,11 +709,19 @@ function PullRequestsRouteView() {
   const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
   const hostMenuOptions: ReadonlyArray<CompactFilterOption<string>> = [
     { value: "", label: "All hosts", Icon: LayersIcon },
-    ...hostEntries.map((entry) => ({
-      value: entry.host,
-      label: pullRequestHostLabel(hostEntries, entry),
-      Icon: getSourceControlPresentationForKind(entry.kind).Icon,
-    })),
+    ...hostEntries.map((entry) => {
+      // `expectedHosts` stands in before the server has answered, and nothing is known to be
+      // unreadable yet; once the summaries arrive they carry whether each one could be read.
+      const summary = hosts.find((host) => host.host === entry.host);
+      return {
+        value: entry.host,
+        label: pullRequestHostLabel(hostEntries, entry),
+        Icon: getSourceControlPresentationForKind(entry.kind).Icon,
+        ...(summary === undefined || summary.configured
+          ? {}
+          : { unavailable: summary.detail ?? "This host could not be read." }),
+      };
+    }),
   ];
   const columnProps = {
     refreshing: listQuery.isPending,
@@ -763,6 +771,8 @@ interface CompactFilterOption<Value extends string> {
   readonly value: Value;
   readonly label: string;
   readonly Icon: ElementType<{ className?: string }>;
+  /** Why it cannot be chosen, which the pills carry as a title and this carries the same way. */
+  readonly unavailable?: string | undefined;
 }
 
 /**
@@ -793,7 +803,15 @@ function CompactFilterMenu<Value extends string>({
       <MenuPopup align="start" side="bottom" className="min-w-40">
         <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as Value)}>
           {options.map((option) => (
-            <MenuRadioItem key={option.value} value={option.value}>
+            <MenuRadioItem
+              key={option.value}
+              value={option.value}
+              // A host the server has already said it cannot read is not a choice here either.
+              // The pills disable it; a menu that offers it would answer the press by replacing
+              // a working list with the same failure the pill row exists to explain.
+              disabled={option.unavailable !== undefined}
+              title={option.unavailable}
+            >
               <span className="flex min-w-0 items-center gap-2">
                 <option.Icon aria-hidden className="size-3.5" />
                 {option.label}
