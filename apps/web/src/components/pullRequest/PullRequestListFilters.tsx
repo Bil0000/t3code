@@ -259,26 +259,32 @@ export function PullRequestProjectFilter({
           }
         >
           <MenuRadioItem value={ALL_PROJECTS_VALUE}>All projects</MenuRadioItem>
-          {projects.map((project) => {
-            const reason = unavailable.get(project.id);
-            return (
-              <MenuRadioItem
-                key={project.id}
-                value={project.id}
-                disabled={reason !== undefined}
-                title={reason}
-              >
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <span className="min-w-0 flex-1 truncate">{project.title}</span>
-                  {reason === undefined ? null : (
-                    <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
-                      Unavailable
-                    </span>
-                  )}
-                </span>
-              </MenuRadioItem>
-            );
-          })}
+          {/* The ones that can be chosen first: a list that opens with three disabled rows reads
+              as a broken menu rather than as a workspace with three unreadable repositories. */}
+          {projects
+            .toSorted(
+              (left, right) => Number(unavailable.has(left.id)) - Number(unavailable.has(right.id)),
+            )
+            .map((project) => {
+              const reason = unavailable.get(project.id);
+              return (
+                <MenuRadioItem
+                  key={project.id}
+                  value={project.id}
+                  disabled={reason !== undefined}
+                  title={reason}
+                >
+                  <span className="flex min-w-0 flex-1 items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate">{project.title}</span>
+                    {reason === undefined ? null : (
+                      <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
+                        Unavailable
+                      </span>
+                    )}
+                  </span>
+                </MenuRadioItem>
+              );
+            })}
         </MenuRadioGroup>
       </MenuPopup>
     </Menu>
