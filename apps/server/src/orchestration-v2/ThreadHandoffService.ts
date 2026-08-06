@@ -97,6 +97,24 @@ export function conversationPayload(projection: OrchestrationV2ThreadProjection)
   };
 }
 
+/**
+ * The window of a staged part a read should return.
+ *
+ * Clamping the offset rather than rejecting a stale one keeps a resumed
+ * transfer from failing on a retry that asks for bytes past the end, and
+ * `complete` is what tells the caller to stop asking rather than making it
+ * compare offsets itself.
+ */
+export function handoffChunkWindow(input: {
+  readonly totalBytes: number;
+  readonly offset: number;
+  readonly chunkBytes: number;
+}): { readonly offset: number; readonly end: number; readonly complete: boolean } {
+  const offset = Math.max(0, Math.min(input.offset, input.totalBytes));
+  const end = Math.min(offset + input.chunkBytes, input.totalBytes);
+  return { offset, end, complete: end >= input.totalBytes };
+}
+
 export interface ThreadHandoffPreparation {
   readonly bundle: OrchestrationV2HandoffBundleV1;
   readonly totalBytes: number;

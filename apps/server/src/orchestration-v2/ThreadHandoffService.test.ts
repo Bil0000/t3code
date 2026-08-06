@@ -7,6 +7,7 @@ import { assert, describe, it } from "@effect/vitest";
 
 import {
   classifyPayloadSize,
+  handoffChunkWindow,
   conversationPayload,
   partFileName,
   sha256,
@@ -94,5 +95,34 @@ describe("conversationPayload", () => {
 
   it("carries every turn item so the far side replays the whole conversation", () => {
     assert.strictEqual(conversationPayload(projection(2, 7)).items.length, 7);
+  });
+});
+
+describe("handoffChunkWindow", () => {
+  const window = (totalBytes: number, offset: number, chunkBytes = 4) =>
+    handoffChunkWindow({ totalBytes, offset, chunkBytes });
+
+  it("returns the first chunk of a part larger than one chunk", () => {
+    assert.deepStrictEqual(window(10, 0), { offset: 0, end: 4, complete: false });
+  });
+
+  it("marks the last chunk complete so a caller knows to stop asking", () => {
+    assert.deepStrictEqual(window(10, 8), { offset: 8, end: 10, complete: true });
+  });
+
+  it("returns the whole part in one chunk when it fits", () => {
+    assert.deepStrictEqual(window(3, 0), { offset: 0, end: 3, complete: true });
+  });
+
+  it("clamps an offset past the end instead of failing a retry", () => {
+    assert.deepStrictEqual(window(10, 99), { offset: 10, end: 10, complete: true });
+  });
+
+  it("clamps a negative offset rather than slicing from the end", () => {
+    assert.deepStrictEqual(window(10, -5), { offset: 0, end: 4, complete: false });
+  });
+
+  it("treats an empty part as immediately complete", () => {
+    assert.deepStrictEqual(window(0, 0), { offset: 0, end: 0, complete: true });
   });
 });
