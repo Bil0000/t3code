@@ -20,10 +20,16 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 
 type AppListeners = Map<string, (...args: readonly unknown[]) => void>;
 
+const mainWindow = { id: 1 } as Electron.BrowserWindow;
+
 interface Harness {
   readonly listeners: AppListeners;
   readonly quitCalls: Array<string>;
-  readonly messageBoxes: Array<Electron.MessageBoxOptions>;
+  readonly messageBoxes: Array<{
+    readonly options: Electron.MessageBoxOptions;
+    readonly owner: Option.Option<Electron.BrowserWindow>;
+  }>;
+  readonly revealedWindows: Array<Electron.BrowserWindow>;
 }
 
 // The before-quit handler resolves through promise callbacks, so tests wait a
@@ -100,9 +106,9 @@ function makeLayer(input: {
     ElectronDialog.ElectronDialog.of({
       pickFolder: () => Effect.succeed(Option.none()),
       confirm: () => Effect.succeed(false),
-      showMessageBox: (options) =>
+      showMessageBox: (options, owner = Option.none()) =>
         Effect.sync(() => {
-          input.harness.messageBoxes.push(options);
+          input.harness.messageBoxes.push({ options, owner });
           return { response: input.confirmResponse, checkboxChecked: false };
         }),
       showErrorBox: () => Effect.void,
@@ -112,9 +118,11 @@ function makeLayer(input: {
   const electronWindowLayer = Layer.succeed(
     ElectronWindow.ElectronWindow,
     ElectronWindow.ElectronWindow.of({
-      currentMainOrFirst: Effect.succeed(
-        input.hasWindow ? Option.some({} as Electron.BrowserWindow) : Option.none(),
-      ),
+      currentMainOrFirst: Effect.succeed(input.hasWindow ? Option.some(mainWindow) : Option.none()),
+      reveal: (window) =>
+        Effect.sync(() => {
+          input.harness.revealedWindows.push(window);
+        }),
     } as ElectronWindow.ElectronWindow["Service"]),
   );
 
@@ -162,7 +170,7 @@ function makeLayer(input: {
 }
 
 function makeHarness(): Harness {
-  return { listeners: new Map(), quitCalls: [], messageBoxes: [] };
+  return { listeners: new Map(), quitCalls: [], messageBoxes: [], revealedWindows: [] };
 }
 
 function emitBeforeQuit(listeners: AppListeners): boolean {
@@ -228,6 +236,8 @@ describe("DesktopLifecycle", () => {
         yield* settle;
 
         assert.lengthOf(harness.messageBoxes, 1);
+        assert.deepEqual(harness.messageBoxes[0]?.owner, Option.some(mainWindow));
+        assert.deepEqual(harness.revealedWindows, [mainWindow]);
         assert.deepEqual(harness.quitCalls, []);
         const state = yield* DesktopState.DesktopState;
         assert.isFalse(yield* Ref.get(state.quitting));
@@ -309,7 +319,7 @@ describe("DesktopLifecycle", () => {
     ).pipe(Effect.provide(layer));
   });
 
-  it.effect("asks once while a confirmation dialog is already open", () => {
+  it.effect("quits without asking again when the user insists mid-confirmation", () => {
     const harness = makeHarness();
     const layer = makeLayer({
       harness,
@@ -329,7 +339,9 @@ describe("DesktopLifecycle", () => {
         yield* settle;
 
         assert.lengthOf(harness.messageBoxes, 1);
-        assert.deepEqual(harness.quitCalls, []);
+        assert.deepEqual(harness.quitCalls, ["quit"]);
+        const state = yield* DesktopState.DesktopState;
+        assert.isTrue(yield* Ref.get(state.quitting));
       }),
     ).pipe(Effect.provide(layer));
   });

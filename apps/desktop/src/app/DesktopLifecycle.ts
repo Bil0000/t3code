@@ -109,7 +109,8 @@ const confirmQuitRequested = Effect.fn("desktop.lifecycle.confirmQuitRequested")
     | ElectronWindow.ElectronWindow
   > {
     const electronWindow = yield* ElectronWindow.ElectronWindow;
-    if (Option.isNone(yield* electronWindow.currentMainOrFirst)) {
+    const owner = yield* electronWindow.currentMainOrFirst;
+    if (Option.isNone(owner)) {
       return true;
     }
 
@@ -120,23 +121,30 @@ const confirmQuitRequested = Effect.fn("desktop.lifecycle.confirmQuitRequested")
       onSome: (value) => value.confirmQuit,
     });
     if (!confirmQuit) {
+      yield* logLifecycleInfo("quit confirmation disabled, quitting");
       return true;
     }
 
     const electronApp = yield* ElectronApp.ElectronApp;
     const electronDialog = yield* ElectronDialog.ElectronDialog;
     const appName = yield* electronApp.name;
+    // The dialog is window-modal: a hidden or minimized owner would hide it
+    // too, leaving a prompt nobody can answer and an app that won't quit.
+    yield* electronWindow.reveal(owner.value);
     const result = yield* electronDialog
-      .showMessageBox({
-        type: "question",
-        title: `Quit ${appName}`,
-        message: `Quit ${appName}?`,
-        detail: "Running agents and terminals will be stopped.",
-        buttons: ["Cancel", "Quit"],
-        defaultId: QUIT_BUTTON_INDEX,
-        cancelId: 0,
-        noLink: true,
-      })
+      .showMessageBox(
+        {
+          type: "question",
+          title: `Quit ${appName}`,
+          message: `Quit ${appName}?`,
+          detail: "Running agents and terminals will be stopped.",
+          buttons: ["Cancel", "Quit"],
+          defaultId: QUIT_BUTTON_INDEX,
+          cancelId: 0,
+          noLink: true,
+        },
+        owner,
+      )
       .pipe(
         Effect.catch((error: ElectronDialog.ElectronDialogShowMessageBoxError) =>
           logLifecycleError("quit confirmation dialog failed", { error }).pipe(
@@ -171,9 +179,10 @@ function handleBeforeQuit(
   }
 
   event.preventDefault();
-  if (gate.confirming) {
-    return;
-  }
+  // Quitting again while a confirmation is still up means the user is
+  // insisting, so honour it instead of asking twice. Swallowing the request
+  // would strand the app for good if the prompt is never answered.
+  const skipConfirmation = gate.confirming;
   gate.confirming = true;
 
   const quitAfterShutdown = () => {
@@ -181,6 +190,7 @@ function handleBeforeQuit(
     void runEffect(
       Effect.gen(function* () {
         const electronApp = yield* ElectronApp.ElectronApp;
+        yield* logLifecycleInfo("shutdown finished, quitting");
         yield* electronApp.quit;
       }).pipe(Effect.withSpan("desktop.lifecycle.quitAfterShutdown")),
     );
@@ -190,7 +200,7 @@ function handleBeforeQuit(
     Effect.gen(function* () {
       const state = yield* DesktopState.DesktopState;
       const wasQuitting = yield* Ref.get(state.quitting);
-      if (!wasQuitting && !(yield* confirmQuitRequested())) {
+      if (!skipConfirmation && !wasQuitting && !(yield* confirmQuitRequested())) {
         yield* logLifecycleInfo("quit cancelled from confirmation dialog");
         return false;
       }
