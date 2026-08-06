@@ -2,8 +2,6 @@ import type { EnvironmentId, PullRequestDetail, PullRequestRef } from "@t3tools/
 import {
   ChevronRightIcon,
   CircleDotIcon,
-  GitBranchIcon,
-  GitMergeIcon,
   HammerIcon,
   MessageSquareIcon,
   SendIcon,
@@ -21,20 +19,16 @@ import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   PullRequestActorLabel,
   PullRequestCheckStatusIcon,
-  PullRequestDiffStat,
   PullRequestMetaLine,
   pullRequestCheckStatusLabel,
   summarizePullRequestChecks,
 } from "./pullRequestPresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
-import {
-  describePullRequestState,
-  pullRequestFindingKey,
-  type PullRequestFinding,
-} from "./pullRequestDetail.logic";
+import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 
 function MetaRow({
@@ -189,47 +183,37 @@ export function PullRequestSummaryTab({
 
   return (
     <div className="h-full overflow-y-auto">
-      <section className="space-y-4 px-5 py-5">
-        <div className="min-w-0">
-          <h1 className="text-base font-semibold leading-snug">{detail.title}</h1>
-          <PullRequestMetaLine className="mt-1.5 text-xs text-muted-foreground">
-            <PullRequestActorLabel actor={detail.author} className="font-medium text-foreground" />
-            <span>{formatRelativeTimeLabel(detail.updatedAt)}</span>
-            <span>{describePullRequestState(detail.state, detail.isDraft)}</span>
-          </PullRequestMetaLine>
-        </div>
+      <section className="px-5 py-3">
         <div>
-          <MetaRow icon={<GitBranchIcon className="size-3.5" />} label="Branch">
-            <span className="flex items-center gap-1.5">
-              <span className="min-w-0 truncate" title={detail.headBranch}>
-                {detail.headBranch}
-              </span>
-              <span aria-hidden className="shrink-0 text-muted-foreground">
-                ›
-              </span>
-              <span className="min-w-0 truncate" title={detail.baseBranch}>
-                {detail.baseBranch}
-              </span>
-              <PullRequestDiffStat
-                additions={detail.additions}
-                deletions={detail.deletions}
-                className="ml-1 shrink-0"
-              />
-            </span>
-          </MetaRow>
-          {detail.state === "open" && detail.mergeability === "conflicting" ? (
-            <MetaRow icon={<GitMergeIcon className="size-3.5 text-destructive" />} label="Merge">
-              Conflicts with {detail.baseBranch}
-            </MetaRow>
-          ) : null}
           <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               {detail.reviewers.length === 0 ? (
                 <span className="text-muted-foreground">None</span>
               ) : (
-                detail.reviewers.map((actor) => (
-                  <PullRequestActorLabel key={actor.login} actor={actor} className="max-w-32" />
-                ))
+                <span className="flex items-center -space-x-1">
+                  {detail.reviewers.map((actor) => (
+                    <Tooltip key={actor.login}>
+                      <TooltipTrigger
+                        render={
+                          <span
+                            className="relative rounded-full hover:z-10"
+                            aria-label={actor.name ?? actor.login}
+                          />
+                        }
+                      >
+                        <PullRequestActorLabel
+                          actor={actor}
+                          className="gap-0 [&>img]:ring-2 [&>img]:ring-background [&>span:first-child]:ring-2 [&>span:first-child]:ring-background [&>span:last-child]:sr-only"
+                        />
+                      </TooltipTrigger>
+                      <TooltipPopup side="bottom">
+                        {actor.name && actor.name !== actor.login
+                          ? `${actor.name} (@${actor.login})`
+                          : actor.login}
+                      </TooltipPopup>
+                    </Tooltip>
+                  ))}
+                </span>
               )}
               {/* Shown wherever the host can take a review request at all, and disabled with the
                   reason where this account may not make one: a control that vanishes teaches

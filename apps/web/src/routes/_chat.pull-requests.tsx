@@ -47,6 +47,7 @@ import {
 import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
+import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { RightPanelResizeHandle } from "../components/preview/RightPanelResizeHandle";
 import { Button } from "../components/ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
@@ -601,6 +602,22 @@ function PullRequestsRouteView() {
     search.repository && search.number && selectedProjectId
       ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
       : null;
+  const lastSelected = useRef<typeof selected>(null);
+  if (selected !== null) lastSelected.current = selected;
+
+  const toggleRightPanel = () => {
+    if (selected !== null) {
+      updateSearch(clearedSelection);
+      return;
+    }
+    const previous = lastSelected.current;
+    if (previous === null) return;
+    updateSearch({
+      repository: previous.repository,
+      number: previous.number,
+      selectedProjectId: previous.projectId,
+    });
+  };
 
   // The provider list is the workspace's hosts, not the filtered ones, so switching to a host
   // cannot make the switcher that got you there disappear.
@@ -680,6 +697,19 @@ function PullRequestsRouteView() {
       value={scopedProjectId}
       unavailable={unavailableProjects}
       onChange={(projectId) => updateSearch({ ...clearedSelection, projectId })}
+    />
+  );
+  const rightPanelControl = (
+    <PanelLayoutControls
+      showTerminalControl={false}
+      terminalAvailable={false}
+      terminalOpen={false}
+      terminalShortcutLabel={null}
+      rightPanelAvailable={selected !== null || lastSelected.current !== null}
+      rightPanelOpen={selected !== null}
+      rightPanelShortcutLabel={null}
+      onToggleTerminal={() => undefined}
+      onToggleRightPanel={toggleRightPanel}
     />
   );
   // The rows carried over from the last filters can also narrow to nothing one step further on,
@@ -815,6 +845,7 @@ function PullRequestsRouteView() {
     providerFilter,
     searchInput,
     projectFilter,
+    rightPanelControl,
     listBody,
   };
 
@@ -996,6 +1027,7 @@ function PullRequestsColumn({
   providerFilter,
   searchInput,
   projectFilter,
+  rightPanelControl,
   listBody,
 }: {
   refreshing: boolean;
@@ -1013,6 +1045,7 @@ function PullRequestsColumn({
   providerFilter: ReactNode;
   searchInput: ReactNode;
   projectFilter: ReactNode;
+  rightPanelControl: ReactNode;
   listBody: ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -1129,6 +1162,7 @@ function PullRequestsColumn({
         >
           <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
         </Button>
+        {rightPanelControl}
       </header>
 
       <div
