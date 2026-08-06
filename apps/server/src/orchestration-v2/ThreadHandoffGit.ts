@@ -1,5 +1,7 @@
 import type { VcsError } from "@t3tools/contracts";
+import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
 import { VcsProcess } from "../vcs/VcsProcess.ts";
 
@@ -123,7 +125,68 @@ export interface ThreadHandoffGitShape {
     readonly ref: string;
     readonly commit: string;
   }) => Effect.Effect<void, VcsError>;
+  /**
+   * Writes a bundle carrying `refs`, excluding anything the receiver already
+   * has. With no exclusions this is full history, which is what lets a
+   * repository the target has never seen arrive without a remote, credentials,
+   * or network.
+   */
+  readonly createBundle: (input: {
+    readonly cwd: string;
+    readonly outputPath: string;
+    readonly refs: ReadonlyArray<string>;
+    readonly excludeTips: ReadonlyArray<string>;
+  }) => Effect.Effect<void, VcsError>;
+  /** Imports a bundle's objects and parks its refs under `refs/handoff-incoming/`. */
+  readonly importBundle: (input: {
+    readonly cwd: string;
+    readonly bundlePath: string;
+  }) => Effect.Effect<void, VcsError>;
+  readonly cloneFromBundle: (input: {
+    readonly bundlePath: string;
+    readonly targetPath: string;
+    readonly branch: string | null;
+  }) => Effect.Effect<void, VcsError>;
+  /**
+   * Applies a tracked-changes patch. `check` runs the same apply as a dry run,
+   * which is what lets a hop refuse before touching the working tree.
+   */
+  readonly applyPatch: (input: {
+    readonly cwd: string;
+    readonly patch: string;
+    readonly check: boolean;
+  }) => Effect.Effect<boolean, VcsError>;
+  readonly checkoutBranchAt: (input: {
+    readonly cwd: string;
+    readonly branch: string;
+    readonly commit: string;
+  }) => Effect.Effect<void, VcsError>;
+  readonly resetHardTo: (input: {
+    readonly cwd: string;
+    readonly commit: string;
+  }) => Effect.Effect<void, VcsError>;
+  readonly listCheckpointRefs: (input: {
+    readonly cwd: string;
+  }) => Effect.Effect<ReadonlyArray<string>, VcsError>;
+  readonly archivePaths: (input: {
+    readonly cwd: string;
+    readonly paths: ReadonlyArray<string>;
+    readonly outputPath: string;
+  }) => Effect.Effect<void, VcsError>;
+  readonly extractArchive: (input: {
+    readonly cwd: string;
+    readonly archivePath: string;
+  }) => Effect.Effect<void, VcsError>;
+  /** Restores a stash this hop created, used when an apply is rolled back. */
+  readonly popStash: (input: {
+    readonly cwd: string;
+    readonly stashRef: string;
+  }) => Effect.Effect<void, VcsError>;
 }
+
+export class ThreadHandoffGit extends Context.Service<ThreadHandoffGit, ThreadHandoffGitShape>()(
+  "t3/orchestration-v2/ThreadHandoffGit",
+) {}
 
 export const make = Effect.gen(function* () {
   const process = yield* VcsProcess;
@@ -242,6 +305,113 @@ export const make = Effect.gen(function* () {
       cwd: input.cwd,
     }).pipe(Effect.asVoid);
 
+  const createBundle: ThreadHandoffGitShape["createBundle"] = (input) =>
+    git({
+      operation: "create-bundle",
+      args: [
+        "bundle",
+        "create",
+        input.outputPath,
+        ...input.refs,
+        ...(input.excludeTips.length === 0 ? [] : ["--not", ...input.excludeTips]),
+      ],
+      cwd: input.cwd,
+    }).pipe(Effect.asVoid);
+
+  const importBundle: ThreadHandoffGitShape["importBundle"] = (input) =>
+    git({
+      operation: "import-bundle",
+      // Fetching from the bundle imports objects and names its refs without
+      // moving any local branch, so classification happens before anything the
+      // user can see changes.
+      args: ["fetch", "--no-tags", input.bundlePath, "+refs/*:refs/handoff-incoming/*"],
+      cwd: input.cwd,
+    }).pipe(Effect.asVoid);
+
+  const cloneFromBundle: ThreadHandoffGitShape["cloneFromBundle"] = (input) =>
+    git({
+      operation: "clone-from-bundle",
+      args: [
+        "clone",
+        ...(input.branch === null ? [] : ["--branch", input.branch]),
+        input.bundlePath,
+        input.targetPath,
+      ],
+      cwd: ".",
+    }).pipe(Effect.asVoid);
+
+  const applyPatch: ThreadHandoffGitShape["applyPatch"] = (input) =>
+    git({
+      operation: input.check ? "apply-patch-check" : "apply-patch",
+      args: ["apply", "--3way", "--binary", ...(input.check ? ["--check"] : []), "-"],
+      cwd: input.cwd,
+      stdin: input.patch,
+      allowNonZeroExit: true,
+    }).pipe(Effect.map((output) => output.exitCode === 0));
+
+  const checkoutBranchAt: ThreadHandoffGitShape["checkoutBranchAt"] = (input) =>
+    git({
+      operation: "checkout-branch-at",
+      args: ["checkout", "-B", input.branch, input.commit],
+      cwd: input.cwd,
+    }).pipe(Effect.asVoid);
+
+  const resetHardTo: ThreadHandoffGitShape["resetHardTo"] = (input) =>
+    git({
+      operation: "reset-hard-to",
+      args: ["reset", "--hard", input.commit],
+      cwd: input.cwd,
+    }).pipe(Effect.asVoid);
+
+  const listCheckpointRefs: ThreadHandoffGitShape["listCheckpointRefs"] = (input) =>
+    git({
+      operation: "list-checkpoint-refs",
+      args: ["for-each-ref", "--format=%(refname)", "refs/t3code"],
+      cwd: input.cwd,
+      allowNonZeroExit: true,
+      maxOutputBytes: Number.MAX_SAFE_INTEGER,
+    }).pipe(
+      Effect.map((output) =>
+        output.exitCode === 0
+          ? output.stdout
+              .split("\n")
+              .map((line) => line.trim())
+              .filter((line) => line.length > 0)
+          : [],
+      ),
+    );
+
+  const archivePaths: ThreadHandoffGitShape["archivePaths"] = (input) =>
+    // A null-delimited file list keeps paths containing spaces or newlines
+    // intact, which is the form `git ls-files -z` already produces.
+    process
+      .run({
+        operation: "thread-handoff.archive-paths",
+        command: "tar",
+        args: ["--null", "--files-from", "-", "-czf", input.outputPath],
+        cwd: input.cwd,
+        stdin: input.paths.length === 0 ? "" : `${input.paths.join("\0")}\0`,
+      })
+      .pipe(Effect.asVoid);
+
+  const extractArchive: ThreadHandoffGitShape["extractArchive"] = (input) =>
+    process
+      .run({
+        operation: "thread-handoff.extract-archive",
+        command: "tar",
+        args: ["-xzf", input.archivePath],
+        cwd: input.cwd,
+      })
+      .pipe(Effect.asVoid);
+
+  const popStash: ThreadHandoffGitShape["popStash"] = (input) =>
+    git({
+      operation: "pop-stash",
+      args: ["stash", "pop", input.stashRef],
+      cwd: input.cwd,
+      allowNonZeroExit: true,
+    }).pipe(Effect.asVoid);
+
   return {
     resolveTip,
     resolveHead,
@@ -255,5 +425,20 @@ export const make = Effect.gen(function* () {
     tagCommit,
     stashWorktree,
     writeRef,
+    createBundle,
+    importBundle,
+    cloneFromBundle,
+    applyPatch,
+    checkoutBranchAt,
+    resetHardTo,
+    listCheckpointRefs,
+    archivePaths,
+    extractArchive,
+    popStash,
   } satisfies ThreadHandoffGitShape;
 });
+
+export const layer: Layer.Layer<ThreadHandoffGit, never, VcsProcess> = Layer.effect(
+  ThreadHandoffGit,
+  make,
+);
