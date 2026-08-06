@@ -2318,6 +2318,8 @@ export const ORCHESTRATION_V2_WS_METHODS = {
   getThreadProjection: "orchestration.getThreadProjection",
   getWorkflowScript: "orchestration.getWorkflowScript",
   launchThread: "orchestration.launchThread",
+  prepareThreadHandoff: "orchestration.prepareThreadHandoff",
+  receiveThreadHandoff: "orchestration.receiveThreadHandoff",
   subscribeArchivedShell: "orchestration.subscribeArchivedShell",
   subscribeShell: "orchestration.subscribeShell",
   subscribeThread: "orchestration.subscribeThread",
@@ -2545,6 +2547,46 @@ export class OrchestrationV2HandoffError extends Schema.TaggedErrorClass<Orchest
 export const ORCHESTRATION_V2_HANDOFF_PAYLOAD_WARN_BYTES = 200 * 1024 * 1024;
 export const ORCHESTRATION_V2_HANDOFF_PAYLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 
+/**
+ * Asks the environment that owns a thread to stage a hop toward
+ * `peerEnvironmentId`. Read-only with respect to anything the user can see:
+ * the thread is not locked until `thread.handoff.depart` is dispatched, so a
+ * preflight the user then declines leaves no trace but staged bytes.
+ */
+export const OrchestrationV2PrepareHandoffInput = Schema.Struct({
+  threadId: ThreadId,
+  peerEnvironmentId: EnvironmentId,
+  /** The destination's tip for this branch, so the bundle carries only what it lacks. */
+  peerBranchTip: Schema.NullOr(TrimmedNonEmptyString),
+  previousHandoffId: Schema.NullOr(ThreadHandoffId),
+  hopCount: NonNegativeInt,
+});
+export type OrchestrationV2PrepareHandoffInput = typeof OrchestrationV2PrepareHandoffInput.Type;
+
+export const OrchestrationV2PrepareHandoffResult = Schema.Struct({
+  bundle: OrchestrationV2HandoffBundleV1,
+  totalBytes: NonNegativeInt,
+  /** "warn" still transfers; the ceiling that refuses is enforced while preparing. */
+  verdict: Schema.Literals(["ok", "warn"]),
+  dirtyFileCount: NonNegativeInt,
+  untrackedFileCount: NonNegativeInt,
+});
+export type OrchestrationV2PrepareHandoffResult = typeof OrchestrationV2PrepareHandoffResult.Type;
+
+export const OrchestrationV2ReceiveHandoffInput = Schema.Struct({
+  bundle: OrchestrationV2HandoffBundleV1,
+  projectId: ProjectId,
+  /** Set when the hop returns to a thread this environment already owns. */
+  returningThreadId: Schema.NullOr(ThreadId),
+});
+export type OrchestrationV2ReceiveHandoffInput = typeof OrchestrationV2ReceiveHandoffInput.Type;
+
+export const OrchestrationV2ReceiveHandoffResult = Schema.Struct({
+  threadId: ThreadId,
+  classification: Schema.Literals(["advance", "absorb"]),
+});
+export type OrchestrationV2ReceiveHandoffResult = typeof OrchestrationV2ReceiveHandoffResult.Type;
+
 export const OrchestrationV2DispatchCommandResult = Schema.Struct({
   sequence: NonNegativeInt,
 });
@@ -2733,6 +2775,14 @@ export const OrchestrationV2RpcSchemas = {
   launchThread: {
     input: OrchestrationV2ThreadLaunchInput,
     output: OrchestrationV2ThreadLaunchResult,
+  },
+  prepareThreadHandoff: {
+    input: OrchestrationV2PrepareHandoffInput,
+    output: OrchestrationV2PrepareHandoffResult,
+  },
+  receiveThreadHandoff: {
+    input: OrchestrationV2ReceiveHandoffInput,
+    output: OrchestrationV2ReceiveHandoffResult,
   },
   subscribeArchivedShell: {
     input: Schema.Struct({}),
