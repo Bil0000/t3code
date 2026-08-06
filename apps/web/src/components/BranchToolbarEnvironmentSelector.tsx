@@ -25,28 +25,145 @@ interface BranchToolbarEnvironmentSelectorProps {
   environmentId: EnvironmentId;
   availableEnvironments: readonly EnvironmentOption[];
   onEnvironmentChange?: (environmentId: EnvironmentId) => void;
+  /**
+   * Offered once the thread is locked to its environment. Picking a device
+   * here moves the thread rather than changing where a draft will start, so it
+   * is a separate group with its own label instead of a silently different
+   * meaning for the same rows.
+   */
+  onMoveThread?: (environmentId: EnvironmentId) => void;
   displayMode?: "toolbar" | "panel";
 }
+
+const MOVE_VALUE_PREFIX = "move:";
 
 export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvironmentSelector({
   envLocked,
   environmentId,
   availableEnvironments,
   onEnvironmentChange,
+  onMoveThread,
   displayMode = "toolbar",
 }: BranchToolbarEnvironmentSelectorProps) {
   const activeEnvironment = useMemo(() => {
     return availableEnvironments.find((env) => env.environmentId === environmentId) ?? null;
   }, [availableEnvironments, environmentId]);
 
+  const moveTargets = useMemo(
+    () => availableEnvironments.filter((env) => env.environmentId !== environmentId),
+    [availableEnvironments, environmentId],
+  );
+
   const environmentItems = useMemo(
-    () =>
-      availableEnvironments.map((env) => ({
+    () => [
+      ...availableEnvironments.map((env) => ({
         value: env.environmentId,
         label: env.label,
       })),
-    [availableEnvironments],
+      ...(onMoveThread === undefined
+        ? []
+        : moveTargets.map((env) => ({
+            value: `${MOVE_VALUE_PREFIX}${env.environmentId}`,
+            label: env.label,
+          }))),
+    ],
+    [availableEnvironments, moveTargets, onMoveThread],
   );
+
+  const handleValueChange = (value: EnvironmentId | null) => {
+    if (value === null) return;
+    if (value.startsWith(MOVE_VALUE_PREFIX)) {
+      onMoveThread?.(value.slice(MOVE_VALUE_PREFIX.length) as EnvironmentId);
+      return;
+    }
+    onEnvironmentChange?.(value);
+  };
+
+  // A thread that is locked to its environment can still be moved to another
+  // one, so the control stays interactive instead of collapsing to a label —
+  // it just offers a different verb.
+  if (envLocked && onMoveThread !== undefined) {
+    return (
+      <Select
+        modal={false}
+        value={environmentId}
+        onValueChange={handleValueChange}
+        items={environmentItems}
+      >
+        <SelectTrigger
+          variant="ghost"
+          size={displayMode === "panel" ? "default" : "xs"}
+          className={cn(
+            "min-w-0 max-w-full font-medium",
+            displayMode === "panel" && THREAD_DETAILS_PANEL_SELECT_ROW_CLASS,
+          )}
+          aria-label="Run on"
+        >
+          {activeEnvironment?.isPrimary ? (
+            <MonitorIcon
+              className={
+                displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
+              }
+            />
+          ) : (
+            <CloudIcon
+              className={
+                displayMode === "panel" ? THREAD_DETAILS_PANEL_ICON_CLASS : "size-3 shrink-0"
+              }
+            />
+          )}
+          <span
+            data-composer-label
+            className="min-w-0 max-w-[240px] truncate transition-[max-width,opacity] duration-300 ease-out group-data-[compact]/composer-context:max-w-0 group-data-[compact]/composer-context:opacity-0"
+          >
+            <SelectValue />
+          </span>
+        </SelectTrigger>
+        <SelectPopup
+          {...(displayMode === "panel"
+            ? {
+                alignItemWithTrigger: false,
+                popupClassName: THREAD_DETAILS_PANEL_ROW_POPUP_CLASS,
+              }
+            : {})}
+        >
+          <SelectGroup>
+            <SelectGroupLabel>Running on</SelectGroupLabel>
+            <SelectItem value={environmentId}>
+              <span className="inline-flex items-center gap-1.5">
+                {activeEnvironment?.isPrimary ? (
+                  <MonitorIcon className="size-3" />
+                ) : (
+                  <CloudIcon className="size-3" />
+                )}
+                {activeEnvironment?.label ?? "This device"}
+              </span>
+            </SelectItem>
+          </SelectGroup>
+          {moveTargets.length === 0 ? null : (
+            <SelectGroup>
+              <SelectGroupLabel>Move thread to</SelectGroupLabel>
+              {moveTargets.map((env) => (
+                <SelectItem
+                  key={env.environmentId}
+                  value={`${MOVE_VALUE_PREFIX}${env.environmentId}`}
+                >
+                  <span className="inline-flex items-center gap-1.5">
+                    {env.isPrimary ? (
+                      <MonitorIcon className="size-3" />
+                    ) : (
+                      <CloudIcon className="size-3" />
+                    )}
+                    {env.label}
+                  </span>
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          )}
+        </SelectPopup>
+      </Select>
+    );
+  }
 
   if (envLocked || onEnvironmentChange === undefined) {
     return (
@@ -83,7 +200,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
     <Select
       modal={false}
       value={environmentId}
-      onValueChange={(value) => onEnvironmentChange(value as EnvironmentId)}
+      onValueChange={handleValueChange}
       items={environmentItems}
     >
       <SelectTrigger
