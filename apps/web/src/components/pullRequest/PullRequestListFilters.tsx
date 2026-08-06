@@ -1,69 +1,35 @@
 import type {
   ProjectId,
-  PullRequestProviderSummary,
+  PullRequestInvolvement,
+  PullRequestListState,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { ListFilterIcon, LoaderIcon, SearchIcon, type LucideIcon } from "lucide-react";
+import { ListFilterIcon, LoaderIcon, SearchIcon } from "lucide-react";
+import type { ElementType } from "react";
 
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
-
-/**
- * The shell every filter group shares: an inset track that groups its options into one control,
- * so a row of them reads as one question with one answer rather than as loose words.
- */
-const FILTER_GROUP_CLASS =
-  "inline-flex items-center gap-0.5 rounded-lg bg-muted/40 p-0.5 dark:bg-white/5";
-
-/** The option itself, with the selected one lifted onto the surface rather than tinted. */
-const filterOptionClass = (selected: boolean, disabled = false) =>
-  cn(
-    "inline-flex items-center gap-1.5 rounded-[7px] px-2.5 py-0.5 text-sm whitespace-nowrap transition-colors",
-    selected ? "bg-background text-foreground shadow-sm dark:bg-white/10" : "text-muted-foreground",
-    disabled ? "cursor-not-allowed opacity-45" : !selected && "hover:text-foreground",
-  );
+import {
+  Menu,
+  MenuGroupLabel,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "../ui/menu";
 
 export interface PullRequestFilterOption<Value extends string> {
   readonly value: Value;
   readonly label: string;
   /**
    * Carries the option's own tone, so an icon reads the same here as it does on a row. Left
-   * uncoloured, which lets the pill's selected state stay the thing the eye follows.
+   * uncoloured, which lets the item's selected state stay the thing the eye follows.
    */
-  readonly Icon: LucideIcon;
-}
-
-export function PullRequestFilterPills<Value extends string>({
-  value,
-  options,
-  label,
-  onChange,
-}: {
-  value: Value;
-  options: ReadonlyArray<PullRequestFilterOption<Value>>;
-  label: string;
-  onChange: (value: Value) => void;
-}) {
-  return (
-    <div className={FILTER_GROUP_CLASS} role="group" aria-label={label}>
-      {options.map((option) => (
-        <button
-          key={option.value}
-          type="button"
-          aria-pressed={option.value === value}
-          onClick={() => {
-            if (option.value !== value) onChange(option.value);
-          }}
-          className={filterOptionClass(option.value === value)}
-        >
-          <option.Icon aria-hidden className="size-3.5" />
-          {option.label}
-        </button>
-      ))}
-    </div>
-  );
+  readonly Icon: ElementType<{ className?: string }>;
+  /** Why it cannot be chosen, carried onto the item as its title. */
+  readonly unavailable?: string | undefined;
 }
 
 export interface PullRequestExpectedHost {
@@ -85,98 +51,6 @@ export function pullRequestHostLabel(
   return sharing.length > 1
     ? entry.host
     : getSourceControlPresentationForKind(entry.kind).providerName;
-}
-
-/**
- * Host switcher, in the same pill chrome as the filters beside it. It only renders once a
- * workspace actually spans more than one host: with a single host there is nothing to switch
- * between, and an always-visible control would only raise the question. It also renders while
- * a host is selected whatever the list says, so a link that arrives already filtered still
- * offers the way back out.
- *
- * A host that cannot be read stays in the row, disabled, carrying the server's reason as its
- * title — the projects on it are missing from the list either way, and a dimmed pill explains
- * that where an absent one would not.
- */
-export function PullRequestProviderFilter({
-  providers,
-  value,
-  expectedHosts,
-  onChange,
-}: {
-  providers: ReadonlyArray<PullRequestProviderSummary>;
-  value: string | undefined;
-  /**
-   * The hosts the workspace's own projects point at, which is known before the list is. The row
-   * shows them while it loads so it does not appear from nowhere and push the page down; none of
-   * them can be picked until the server has said which can actually be read.
-   */
-  expectedHosts: ReadonlyArray<PullRequestExpectedHost>;
-  onChange: (host: string | undefined) => void;
-}) {
-  if (providers.length === 0 && value === undefined) {
-    // The real row, locked until the hosts land. Shimmering placeholders draw the eye to the one
-    // part of the page with nothing to say yet, and the row's shape is already known — only which
-    // of these can be read has to wait for the server.
-    return expectedHosts.length < 2 ? null : (
-      <div className={FILTER_GROUP_CLASS} role="group" aria-label="Filter by host">
-        <button type="button" disabled aria-pressed className={filterOptionClass(true)}>
-          All
-        </button>
-        {expectedHosts.map((expected) => {
-          const { Icon } = getSourceControlPresentationForKind(expected.kind);
-          return (
-            <button key={expected.host} type="button" disabled className={filterOptionClass(false)}>
-              <Icon className="size-3.5" />
-              {pullRequestHostLabel(expectedHosts, expected)}
-            </button>
-          );
-        })}
-      </div>
-    );
-  }
-  if (providers.length < 2 && value === undefined) {
-    return null;
-  }
-  return (
-    <div className={FILTER_GROUP_CLASS} role="group" aria-label="Filter by host">
-      <button
-        type="button"
-        aria-pressed={value === undefined}
-        onClick={() => {
-          if (value !== undefined) onChange(undefined);
-        }}
-        className={filterOptionClass(value === undefined)}
-      >
-        All
-      </button>
-      {providers.map((provider) => {
-        const { Icon } = getSourceControlPresentationForKind(provider.kind);
-        const label = pullRequestHostLabel(providers, provider);
-        const active = provider.host === value;
-        return (
-          <button
-            key={provider.host}
-            type="button"
-            aria-pressed={active}
-            disabled={!provider.configured}
-            // The host itself when it reads as a provider name, so a switcher showing "GitHub"
-            // still says which install it means.
-            title={provider.configured ? provider.host : (provider.detail ?? undefined)}
-            onClick={() => {
-              if (!active) onChange(provider.host);
-            }}
-            // Opacity rather than a muted colour: the icons are brand-coloured, so text colour
-            // alone would leave a disabled host looking active.
-            className={filterOptionClass(active, !provider.configured)}
-          >
-            <Icon className="size-3.5" />
-            {label}
-          </button>
-        );
-      })}
-    </div>
-  );
 }
 
 export function PullRequestSearchInput({
@@ -217,40 +91,105 @@ export function PullRequestSearchInput({
 }
 
 /**
- * Project scope lives behind the filter icon so the row stays two controls wide. It is the
- * same menu chrome as the detail panel's actions, which also owns its own spacing.
+ * Every list filter lives behind the one filter icon so the control row stays two controls
+ * wide: the search and this. The trigger carries a dot whenever any filter is off its
+ * default, so a narrowed list is never a mystery. Same menu chrome as the detail panel's
+ * actions, which also owns its own spacing.
  */
 const ALL_PROJECTS_VALUE = "all";
+/** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
+const ALL_HOSTS_VALUE = "";
 
-export function PullRequestProjectFilter({
-  projects,
+function PullRequestFilterRadioGroup<Value extends string>({
+  label,
   value,
-  unavailable,
+  options,
   onChange,
 }: {
+  label: string;
+  value: Value;
+  options: ReadonlyArray<PullRequestFilterOption<Value>>;
+  onChange: (value: Value) => void;
+}) {
+  return (
+    <MenuRadioGroup
+      value={value}
+      onValueChange={(next) => {
+        if (next !== value) onChange(next as Value);
+      }}
+    >
+      <MenuGroupLabel>{label}</MenuGroupLabel>
+      {options.map((option) => (
+        <MenuRadioItem
+          key={option.value}
+          value={option.value}
+          // A host the server has already said it cannot read is not a choice here: offering
+          // it would answer the press by replacing a working list with that failure.
+          disabled={option.unavailable !== undefined}
+          title={option.unavailable}
+        >
+          <span className="flex min-w-0 items-center gap-2">
+            <option.Icon aria-hidden className="size-3.5" />
+            {option.label}
+          </span>
+        </MenuRadioItem>
+      ))}
+    </MenuRadioGroup>
+  );
+}
+
+export function PullRequestFiltersMenu({
+  state,
+  stateOptions,
+  onState,
+  involvement,
+  involvementOptions,
+  onInvolvement,
+  host,
+  hostOptions,
+  onHost,
+  projects,
+  projectId,
+  unavailable,
+  onProject,
+}: {
+  state: PullRequestListState;
+  stateOptions: ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
+  onState: (state: PullRequestListState) => void;
+  involvement: PullRequestInvolvement;
+  involvementOptions: ReadonlyArray<PullRequestFilterOption<PullRequestInvolvement>>;
+  onInvolvement: (involvement: PullRequestInvolvement) => void;
+  host: string | undefined;
+  /**
+   * Includes the "all hosts" entry, whose value is the empty string. With fewer than two real
+   * hosts there is nothing to switch between, so the whole group stays out of the menu.
+   */
+  hostOptions: ReadonlyArray<PullRequestFilterOption<string>>;
+  onHost: (host: string | undefined) => void;
   projects: ReadonlyArray<{ readonly id: ProjectId; readonly title: string }>;
-  value: ProjectId | undefined;
+  projectId: ProjectId | undefined;
   /**
    * Projects whose repository could not be read this time round. They are named here, where
    * the reader is already choosing between projects, rather than as a count above the list
    * that says something is missing without saying which.
    */
   unavailable: ReadonlyMap<ProjectId, string>;
-  onChange: (projectId: ProjectId | undefined) => void;
+  onProject: (projectId: ProjectId | undefined) => void;
 }) {
-  const selectedTitle = projects.find((project) => project.id === value)?.title;
+  const filtered =
+    state !== "open" || involvement !== "all" || host !== undefined || projectId !== undefined;
   return (
     <Menu>
       <MenuTrigger
         className={cn(
           // The icon-button size that pairs with a full-height input, so the two read as one strip.
           "relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground sm:size-8",
-          value !== undefined && "text-foreground",
+          filtered && "text-foreground",
         )}
-        aria-label={`Filter by project: ${selectedTitle ?? "All projects"}`}
+        aria-label="Filter pull requests"
       >
         <ListFilterIcon className="size-4" />
-        {value !== undefined ? (
+        {filtered ? (
           <span
             aria-hidden
             className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"
@@ -258,13 +197,39 @@ export function PullRequestProjectFilter({
         ) : null}
       </MenuTrigger>
       <MenuPopup align="end" side="bottom" className="min-w-56">
+        <PullRequestFilterRadioGroup
+          label="State"
+          value={state}
+          options={stateOptions}
+          onChange={onState}
+        />
+        <MenuSeparator />
+        <PullRequestFilterRadioGroup
+          label="Involvement"
+          value={involvement}
+          options={involvementOptions}
+          onChange={onInvolvement}
+        />
+        {hostOptions.length > 2 ? (
+          <>
+            <MenuSeparator />
+            <PullRequestFilterRadioGroup
+              label="Host"
+              value={host ?? ALL_HOSTS_VALUE}
+              options={hostOptions}
+              onChange={(next) => onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
+            />
+          </>
+        ) : null}
+        <MenuSeparator />
         <MenuRadioGroup
-          value={value ?? ALL_PROJECTS_VALUE}
+          value={projectId ?? ALL_PROJECTS_VALUE}
           onValueChange={(next) => {
-            const projectId = next === ALL_PROJECTS_VALUE ? undefined : (next as ProjectId);
-            if (projectId !== value) onChange(projectId);
+            const nextProjectId = next === ALL_PROJECTS_VALUE ? undefined : (next as ProjectId);
+            if (nextProjectId !== projectId) onProject(nextProjectId);
           }}
         >
+          <MenuGroupLabel>Project</MenuGroupLabel>
           <MenuRadioItem value={ALL_PROJECTS_VALUE}>All projects</MenuRadioItem>
           {/* The ones that can be chosen first: a list that opens with three disabled rows reads
               as a broken menu rather than as a workspace with three unreadable repositories. */}

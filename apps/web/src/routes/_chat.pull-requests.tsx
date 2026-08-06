@@ -22,15 +22,7 @@ import {
   RefreshCwIcon,
   SearchIcon,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ElementType,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   filterPullRequestsByInvolvement,
@@ -45,9 +37,7 @@ import {
 } from "../components/pullRequest/pullRequestList.logic";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
-  PullRequestFilterPills,
-  PullRequestProjectFilter,
-  PullRequestProviderFilter,
+  PullRequestFiltersMenu,
   PullRequestSearchInput,
   pullRequestHostLabel,
   type PullRequestExpectedHost,
@@ -726,43 +716,11 @@ function PullRequestsRouteView() {
     });
   };
 
-  const involvementPills = (
-    <PullRequestFilterPills
-      label="Filter by involvement"
-      value={search.involvement}
-      options={INVOLVEMENT_TABS}
-      onChange={(involvement) => updateListScope({ involvement })}
-    />
-  );
-  const statePills = (
-    <PullRequestFilterPills
-      label="Filter by state"
-      value={search.state}
-      options={STATE_TABS}
-      onChange={(state) => updateListScope({ state })}
-    />
-  );
-  const providerFilter = (
-    <PullRequestProviderFilter
-      providers={hosts}
-      value={search.host}
-      expectedHosts={expectedHosts}
-      onChange={(host) => updateListScope({ host })}
-    />
-  );
   const searchInput = (
     <PullRequestSearchInput
       value={search.q ?? ""}
       busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
       onChange={(query) => updateSearch({ q: query || undefined })}
-    />
-  );
-  const projectFilter = (
-    <PullRequestProjectFilter
-      projects={scopedProjects}
-      value={scopedProjectId}
-      unavailable={unavailableProjects}
-      onChange={(projectId) => updateListScope({ projectId })}
     />
   );
   const panelToggleControls = (
@@ -883,7 +841,7 @@ function PullRequestsRouteView() {
   // one control: "GitHub" with its mark, never the bare hostname — unless two installs of one
   // kind force the hostname to tell them apart.
   const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
-  const hostMenuOptions: ReadonlyArray<CompactFilterOption<string>> = [
+  const hostMenuOptions: ReadonlyArray<PullRequestFilterOption<string>> = [
     { value: "", label: "All hosts", Icon: LayersIcon },
     ...hostEntries.map((entry) => {
       // `expectedHosts` stands in before the server has answered, and nothing is known to be
@@ -899,6 +857,23 @@ function PullRequestsRouteView() {
       };
     }),
   ];
+  const filtersMenu = (
+    <PullRequestFiltersMenu
+      state={search.state}
+      stateOptions={STATE_TABS}
+      onState={(state) => updateListScope({ state })}
+      involvement={search.involvement}
+      involvementOptions={INVOLVEMENT_TABS}
+      onInvolvement={(involvement) => updateListScope({ involvement })}
+      host={search.host}
+      hostOptions={hostMenuOptions}
+      onHost={(host) => updateListScope({ host })}
+      projects={scopedProjects}
+      projectId={scopedProjectId}
+      unavailable={unavailableProjects}
+      onProject={(projectId) => updateListScope({ projectId })}
+    />
+  );
   const columnProps = {
     refreshing,
     onRefresh: () => void refreshFromHost(),
@@ -910,11 +885,8 @@ function PullRequestsRouteView() {
     onInvolvement: (involvement: PullRequestInvolvement) => updateListScope({ involvement }),
     onState: (state: PullRequestListState) => updateListScope({ state }),
     onHost: (host: string | undefined) => updateListScope({ host }),
-    involvementPills,
-    statePills,
-    providerFilter,
     searchInput,
-    projectFilter,
+    filtersMenu,
     rightPanelControl: rightPanelState.isOpen ? null : panelToggleControls,
     listBody,
   };
@@ -1017,14 +989,6 @@ function PullRequestsRouteView() {
   );
 }
 
-interface CompactFilterOption<Value extends string> {
-  readonly value: Value;
-  readonly label: string;
-  readonly Icon: ElementType<{ className?: string }>;
-  /** Why it cannot be chosen, which the pills carry as a title and this carries the same way. */
-  readonly unavailable?: string | undefined;
-}
-
 /**
  * A compact stand-in for one pill group: the trigger wears the current choice, the choices
  * live in a menu. Same options, same handler — only the footprint changes.
@@ -1037,7 +1001,7 @@ function CompactFilterMenu<Value extends string>({
 }: {
   label: string;
   value: Value;
-  options: ReadonlyArray<CompactFilterOption<Value>>;
+  options: ReadonlyArray<PullRequestFilterOption<Value>>;
   onChange: (value: Value) => void;
 }) {
   const current = options.find((option) => option.value === value) ?? options[0]!;
@@ -1159,11 +1123,8 @@ function PullRequestsColumn({
   onInvolvement,
   onState,
   onHost,
-  involvementPills,
-  statePills,
-  providerFilter,
   searchInput,
-  projectFilter,
+  filtersMenu,
   rightPanelControl,
   listBody,
 }: {
@@ -1173,15 +1134,12 @@ function PullRequestsColumn({
   involvement: PullRequestInvolvement;
   state: PullRequestListState;
   host: string | undefined;
-  hostMenuOptions: ReadonlyArray<CompactFilterOption<string>>;
+  hostMenuOptions: ReadonlyArray<PullRequestFilterOption<string>>;
   onInvolvement: (involvement: PullRequestInvolvement) => void;
   onState: (state: PullRequestListState) => void;
   onHost: (host: string | undefined) => void;
-  involvementPills: ReactNode;
-  statePills: ReactNode;
-  providerFilter: ReactNode;
   searchInput: ReactNode;
-  projectFilter: ReactNode;
+  filtersMenu: ReactNode;
   rightPanelControl: ReactNode;
   listBody: ReactNode;
 }) {
@@ -1308,14 +1266,9 @@ function PullRequestsColumn({
       >
         <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pb-12 pt-4">
           <div className="flex flex-col gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              {involvementPills}
-              {statePills}
-              {providerFilter}
-            </div>
             <div ref={inFlowSearchRef} className="flex items-center gap-2">
               {searchInput}
-              {projectFilter}
+              {filtersMenu}
             </div>
             {/* Scrolled past this marker, the controls are gone and the title takes over. */}
             <div ref={markerRef} aria-hidden className="-mt-3 h-px w-full" />
