@@ -6,6 +6,7 @@ import {
   OrchestrationV2ImportSessionError,
   ProjectId,
   ProviderDriverKind,
+  ProviderInstanceId,
   ThreadId,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
@@ -14,8 +15,8 @@ import {
   type OrchestrationV2ProviderThread,
   type OrchestrationV2ResolveImportSessionInput,
   type OrchestrationV2ResolveImportSessionResult,
-  type ProviderInstanceId,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -34,7 +35,7 @@ import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import {
   SESSION_IMPORT_EVENT_PREFIX,
   buildImportedThreadEvents,
-  importedMessageId,
+  importedEntryEventId,
   isImportableSessionDriver,
   mapClaudeSessionMessages,
   parseCodexRollout,
@@ -101,25 +102,29 @@ const readClaudeTranscript = (externalId: string) =>
       importError(`Could not read the transcript for Claude Code session '${externalId}'.`, cause),
   }).pipe(Effect.map(mapClaudeSessionMessages));
 
+const CODEX_HOME_CONTINUATION_PREFIX = "codex:home:";
+
 /**
  * Locates and reads the rollout transcript for a Codex thread id under
- * `$CODEX_HOME/sessions/**` (`~/.codex/sessions` by default). The sessions
- * directory is shared between the user's own Codex CLI and T3's Codex
- * app-server homes, so a thread started in either is found here.
+ * `<codex home>/sessions/**`. The home comes from the instance's resolved
+ * home layout when available (its continuation key is `codex:home:<path>`),
+ * else `$CODEX_HOME`, else `~/.codex`. The sessions directory is shared
+ * between the user's own Codex CLI and T3's Codex app-server homes, so a
+ * thread started in either is found here.
  */
-// ponytail: honors CODEX_HOME only; a codex instance configured with a custom
-// homePath would need that instance's CodexHomeLayout threaded in instead.
 const makeReadCodexRollout = (deps: {
   readonly fileSystem: FileSystem.FileSystem;
   readonly path: Path.Path;
 }) =>
-  Effect.fnUntraced(function* (externalId: string) {
+  Effect.fnUntraced(function* (externalId: string, instanceHome: string | undefined) {
     const { fileSystem, path } = deps;
-    const home = process.env["CODEX_HOME"]?.trim();
-    const root = path.join(
-      home !== undefined && home.length > 0 ? home : path.join(NodeOS.homedir(), ".codex"),
-      "sessions",
-    );
+    const envHome = process.env["CODEX_HOME"]?.trim();
+    const home =
+      instanceHome ??
+      (envHome !== undefined && envHome.length > 0
+        ? envHome
+        : path.join(NodeOS.homedir(), ".codex"));
+    const root = path.join(home, "sessions");
     const names = yield* fileSystem
       .readDirectory(root, { recursive: true })
       .pipe(Effect.orElseSucceed(() => [] as Array<string>));
@@ -157,9 +162,10 @@ function importedThreadTitle(input: {
 function codexTitleFromEntries(
   entries: ReadonlyArray<ImportedTranscriptEntry>,
 ): string | undefined {
-  return entries
-    .find((entry) => entry.role === "user")
-    ?.text.slice(0, IMPORTED_THREAD_TITLE_MAX_CHARS);
+  const first = entries.find((entry) => entry.kind === "message" && entry.role === "user");
+  return first?.kind === "message"
+    ? first.text.slice(0, IMPORTED_THREAD_TITLE_MAX_CHARS)
+    : undefined;
 }
 
 export const make = Effect.gen(function* () {
@@ -175,6 +181,23 @@ export const make = Effect.gen(function* () {
   const syncExecutor = yield* makeKeyedSerialExecutor<ThreadId>();
   /** Threads confirmed to have no import row; skipped without a query. */
   const nonImportedThreadIds = new Set<ThreadId>();
+
+  /**
+   * Home directory of a codex instance, read from its resolved home layout
+   * (the continuation key is `codex:home:<shared home path>`). Undefined for
+   * registries that do not expose metadata (tests) or non-codex drivers.
+   */
+  const codexInstanceHome = (instanceId: ProviderInstanceId) =>
+    adapters.getMetadata === undefined
+      ? Effect.succeed<string | undefined>(undefined)
+      : adapters.getMetadata(instanceId).pipe(
+          Effect.map((metadata) =>
+            metadata.continuationKey.startsWith(CODEX_HOME_CONTINUATION_PREFIX)
+              ? metadata.continuationKey.slice(CODEX_HOME_CONTINUATION_PREFIX.length)
+              : undefined,
+          ),
+          Effect.orElseSucceed(() => undefined),
+        );
 
   const requireImportableDriver = Effect.fnUntraced(function* (
     instanceId: ProviderInstanceId,
@@ -225,7 +248,10 @@ export const make = Effect.gen(function* () {
           title: title.length > 0 ? title : null,
         };
       }
-      const rollout = yield* readCodexRollout(input.externalId);
+      const rollout = yield* readCodexRollout(
+        input.externalId,
+        yield* codexInstanceHome(input.instanceId),
+      );
       if (rollout === undefined) {
         return yield* codexSessionNotFound(input.externalId);
       }
@@ -270,6 +296,7 @@ export const make = Effect.gen(function* () {
   const readSourceTranscript = Effect.fnUntraced(function* (
     driver: ImportableSessionDriver,
     externalId: string,
+    instanceId: ProviderInstanceId,
   ): Effect.fn.Return<SourceTranscript | undefined, OrchestrationV2ImportSessionError> {
     if (driver === "claudeAgent") {
       const sessionInfo = yield* readClaudeSessionInfo(externalId);
@@ -284,7 +311,7 @@ export const make = Effect.gen(function* () {
         sourceModifiedAt: isoOrNull(sessionInfo.lastModified),
       };
     }
-    const rollout = yield* readCodexRollout(externalId);
+    const rollout = yield* readCodexRollout(externalId, yield* codexInstanceHome(instanceId));
     if (rollout === undefined) {
       return undefined;
     }
@@ -342,7 +369,11 @@ export const make = Effect.gen(function* () {
         );
       }
 
-      const source = yield* readSourceTranscript(driver, input.externalId);
+      const source = yield* readSourceTranscript(
+        driver,
+        input.externalId,
+        input.modelSelection.instanceId,
+      );
       if (source === undefined) {
         return yield* driver === "claudeAgent"
           ? claudeSessionNotFound(input.externalId)
@@ -353,7 +384,8 @@ export const make = Effect.gen(function* () {
           `Session '${input.externalId}' ran in ${source.workspaceRoot}, not in ${project.workspace_root}. Import it from a thread in that project.`,
         );
       }
-      if (source.entries.length === 0) {
+      const messageCount = source.entries.filter((entry) => entry.kind === "message").length;
+      if (messageCount === 0) {
         return yield* importError(`Session '${input.externalId}' has no conversation to import.`);
       }
 
@@ -397,7 +429,7 @@ export const make = Effect.gen(function* () {
         entries: source.entries.map((entry, index) => ({ entry, index })),
         fallbackAt: now,
       });
-      const lastEntry = source.entries[source.entries.length - 1]!;
+      const lastMessageEntry = source.entries.findLast((entry) => entry.kind === "message");
       const providerThread: OrchestrationV2ProviderThread = {
         id: providerThreadId,
         driver: providerDriver,
@@ -416,8 +448,8 @@ export const make = Effect.gen(function* () {
         // ref; without it the first turn opens with `sessionId: <external id>`
         // and the CLI rejects the id as already in use.
         nativeConversationHeadRef:
-          driver === "claudeAgent"
-            ? { driver: providerDriver, nativeId: lastEntry.sourceId, strength: "weak" }
+          driver === "claudeAgent" && lastMessageEntry !== undefined
+            ? { driver: providerDriver, nativeId: lastMessageEntry.sourceId, strength: "weak" }
             : null,
         status: "idle",
         firstRunOrdinal: null,
@@ -478,7 +510,7 @@ export const make = Effect.gen(function* () {
         ${input.externalId},
         ${source.sourceModifiedAt},
         ${syncedAt},
-        ${source.entries.length},
+        ${messageCount},
         NULL
       )
       ON CONFLICT(thread_id) DO NOTHING
@@ -520,7 +552,11 @@ export const make = Effect.gen(function* () {
     if (hasActiveRun) {
       return;
     }
-    const source = yield* readSourceTranscript(driver, row.external_id);
+    const source = yield* readSourceTranscript(
+      driver,
+      row.external_id,
+      ProviderInstanceId.make(row.provider_instance_id),
+    );
     if (source === undefined || source.entries.length === 0) {
       return;
     }
@@ -546,36 +582,46 @@ export const make = Effect.gen(function* () {
       WHERE application_event_version = 2
         AND aggregate_kind = 'thread'
         AND stream_id = ${threadId}
-        AND event_id LIKE ${`${SESSION_IMPORT_EVENT_PREFIX}:message:%`}
+        AND event_id LIKE ${`${SESSION_IMPORT_EVENT_PREFIX}:%`}
     `;
     const existingEventIds = new Set(existingEventRows.map((existing) => existing.event_id));
 
     const missing = source.entries
       .map((entry, index) => ({ entry, index }))
       .filter(({ entry, index }) => {
-        const eventId = `${SESSION_IMPORT_EVENT_PREFIX}:message:${importedMessageId({
-          driver,
-          threadId,
-          index,
-          sourceId: entry.sourceId,
-        })}`;
-        if (existingEventIds.has(eventId)) return false;
+        if (existingEventIds.has(importedEntryEventId({ driver, threadId, index, entry }))) {
+          return false;
+        }
         // Turns T3 itself drove are already in the thread as native run
         // items; the provider transcript echoes them back. Match by native
         // id first, then by exact role+text as a backstop for entries whose
         // native ids the adapter did not record.
         if (knownNativeIds.has(entry.sourceId)) return false;
-        if (knownRunMessages.has(`${entry.role}\n${entry.text.trim()}`)) return false;
+        if (
+          entry.kind === "message" &&
+          knownRunMessages.has(`${entry.role}\n${entry.text.trim()}`)
+        ) {
+          return false;
+        }
         return true;
       });
     const now = yield* DateTime.now;
     if (missing.length > 0) {
+      // New entries happened after everything the thread already shows, so
+      // their positions go after the current maximum — including native run
+      // bands — instead of into the import's original 0-band.
+      const maxOrdinalRows = yield* sql<{ readonly max_ordinal: number | null }>`
+        SELECT MAX(ordinal) AS max_ordinal
+        FROM orchestration_v2_turn_item_positions
+        WHERE thread_id = ${threadId}
+      `;
       const batch = buildImportedThreadEvents({
         driver,
         providerDriver: providerDriverKindOf(driver),
         threadId,
         entries: missing,
         fallbackAt: now,
+        ordinalBase: maxOrdinalRows[0]?.max_ordinal ?? 0,
       });
       yield* insertPositions(threadId, batch.positions);
       yield* eventSink.write({ events: [...batch.events] });
@@ -585,7 +631,7 @@ export const make = Effect.gen(function* () {
       SET
         source_modified_at = ${source.sourceModifiedAt},
         last_synced_at = ${DateTime.formatIso(now)},
-        imported_message_count = imported_message_count + ${missing.length},
+        imported_message_count = imported_message_count + ${missing.filter(({ entry }) => entry.kind === "message").length},
         last_error = NULL
       WHERE thread_id = ${threadId}
     `;
@@ -598,7 +644,7 @@ export const make = Effect.gen(function* () {
           Effect.catchCause((cause) =>
             Effect.logWarning("Failed to sync imported session transcript", {
               threadId,
-              cause,
+              cause: Cause.pretty(cause),
             }).pipe(
               Effect.andThen(
                 sql`
