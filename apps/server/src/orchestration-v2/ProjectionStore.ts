@@ -721,11 +721,22 @@ function makeForkMarkerTurnItem(input: {
 export function isTurnItemAtOrBeforeRun(input: {
   readonly historyOrigin: OrchestrationV2ThreadProjection["thread"]["historyOrigin"];
   readonly itemRunId: OrchestrationV2TurnItem["runId"];
+  readonly itemOrdinal: OrchestrationV2TurnItem["ordinal"];
   readonly runOrdinalById: ReadonlyMap<NonNullable<OrchestrationV2TurnItem["runId"]>, number>;
   readonly sourceRunOrdinal: number;
 }): boolean {
   if (input.itemRunId === null) {
-    return input.historyOrigin === "v1_import" || input.historyOrigin === "provider_import";
+    if (input.historyOrigin === "v1_import") {
+      return true;
+    }
+    // Provider-imported history: the initial import lands in the pre-run
+    // 0-band, while transcript entries synced later take position ordinals
+    // inside the run band they chronologically followed. A fork from an
+    // earlier run must not inherit runless items appended after that run.
+    return (
+      input.historyOrigin === "provider_import" &&
+      input.itemOrdinal < (input.sourceRunOrdinal + 1) * 1_000_000
+    );
   }
   const ordinal = input.runOrdinalById.get(input.itemRunId);
   return ordinal !== undefined && ordinal <= input.sourceRunOrdinal;
@@ -765,6 +776,7 @@ function visibleTurnItemsThroughRun(input: {
       return isTurnItemAtOrBeforeRun({
         historyOrigin: input.sourceProjection.thread.historyOrigin,
         itemRunId: item.runId,
+        itemOrdinal: item.ordinal,
         runOrdinalById,
         sourceRunOrdinal: sourceRun.ordinal,
       });

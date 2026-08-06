@@ -2,6 +2,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   OrchestrationV2ResolveImportSessionResult,
+  ProjectId,
   ScopedProjectRef,
 } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
@@ -62,6 +63,7 @@ export function ImportSessionDialog({
   const importInFlightRef = useRef(false);
   const externalIdRef = useRef("");
   const createProject = useAtomCommand(projectEnvironment.create, { reportFailure: false });
+  const deleteProject = useAtomCommand(projectEnvironment.delete, { reportFailure: false });
   const resolveImportSession = useAtomCommand(threadEnvironment.resolveImportSession, {
     reportFailure: false,
   });
@@ -124,8 +126,9 @@ export function ImportSessionDialog({
     }
 
     let projectId = session.projectId ?? projectRef.projectId;
+    let createdProjectId: ProjectId | null = null;
     if (session.projectId === null && session.workspaceRoot !== null) {
-      const createdProjectId = newProjectId();
+      createdProjectId = newProjectId();
       const createResult = await createProject({
         environmentId: projectRef.environmentId,
         input: {
@@ -154,6 +157,18 @@ export function ImportSessionDialog({
       },
     });
     if (importResult._tag === "Failure") {
+      // "Add project & import" is presented as one action: if the import
+      // half fails, take the freshly created project back out so retrying
+      // does not leave orphan projects behind. Best effort — the import
+      // error is what the user needs to see.
+      if (createdProjectId !== null) {
+        await deleteProject({
+          environmentId: projectRef.environmentId,
+          input: { projectId: createdProjectId },
+        });
+        session = { ...session, projectId: null };
+        setResolved(session);
+      }
       return stopImporting(failureMessage(importResult, "Could not import that session."));
     }
 
@@ -167,6 +182,7 @@ export function ImportSessionDialog({
     });
   }, [
     createProject,
+    deleteProject,
     externalId,
     importSession,
     navigate,

@@ -44,6 +44,7 @@ import {
 } from "./SessionImportTranscript.ts";
 
 const IMPORTED_THREAD_TITLE_MAX_CHARS = 120;
+const CODEX_HOME_CONTINUATION_PREFIX = "codex:home:";
 
 interface SessionImportRow {
   readonly thread_id: string;
@@ -53,95 +54,73 @@ interface SessionImportRow {
   readonly source_modified_at: string | null;
 }
 
-export interface SessionImportServiceShape {
-  readonly resolveImportSession: (
-    input: OrchestrationV2ResolveImportSessionInput,
-  ) => Effect.Effect<OrchestrationV2ResolveImportSessionResult, OrchestrationV2ImportSessionError>;
-  readonly importSession: (
-    input: OrchestrationV2ImportSessionInput,
-  ) => Effect.Effect<OrchestrationV2ImportSessionResult, OrchestrationV2ImportSessionError>;
-  /**
-   * Re-reads the provider's on-disk transcript behind an imported thread and
-   * appends any conversation that happened outside T3 since the last sync.
-   * No-op for threads that were not created by an import. Never fails the
-   * caller: sync problems are logged and surfaced via the imports table.
-   */
-  readonly ensureSynced: (threadId: ThreadId) => Effect.Effect<void>;
-}
-
 export class SessionImportService extends Context.Service<
   SessionImportService,
-  SessionImportServiceShape
+  {
+    readonly resolveImportSession: (
+      input: OrchestrationV2ResolveImportSessionInput,
+    ) => Effect.Effect<
+      OrchestrationV2ResolveImportSessionResult,
+      OrchestrationV2ImportSessionError
+    >;
+    readonly importSession: (
+      input: OrchestrationV2ImportSessionInput,
+    ) => Effect.Effect<OrchestrationV2ImportSessionResult, OrchestrationV2ImportSessionError>;
+    /**
+     * Re-reads the provider's on-disk transcript behind an imported thread and
+     * appends any conversation that happened outside T3 since the last sync.
+     * No-op for threads that were not created by an import. Never fails the
+     * caller: sync problems are logged and surfaced via the imports table.
+     */
+    readonly ensureSynced: (threadId: ThreadId) => Effect.Effect<void>;
+  }
 >()("t3/orchestration-v2/SessionImportService") {}
 
-const importError = (message: string, cause?: unknown) =>
-  cause === undefined
-    ? new OrchestrationV2ImportSessionError({ message })
-    : new OrchestrationV2ImportSessionError({ message, cause });
-
 const claudeSessionNotFound = (externalId: string) =>
-  importError(
-    `No Claude Code session '${externalId}' exists on this machine. Run /status inside the session to copy its id, or pick it from "claude --resume".`,
-  );
+  new OrchestrationV2ImportSessionError({
+    reason: "session_not_found",
+    externalId,
+    message: `No Claude Code session '${externalId}' exists on this machine. Run /status inside the session to copy its id, or pick it from "claude --resume".`,
+  });
 
 const codexSessionNotFound = (externalId: string) =>
-  importError(
-    `No Codex thread '${externalId}' exists on this machine. Run "codex resume" to list thread ids.`,
-  );
+  new OrchestrationV2ImportSessionError({
+    reason: "session_not_found",
+    externalId,
+    message: `No Codex thread '${externalId}' exists on this machine. Run "codex resume" to list thread ids.`,
+  });
 
 const readClaudeSessionInfo = (externalId: string) =>
   Effect.tryPromise({
     try: () => getSessionInfo(externalId, {}),
-    catch: (cause) => importError(`Could not read Claude Code session '${externalId}'.`, cause),
+    catch: (cause) =>
+      new OrchestrationV2ImportSessionError({
+        reason: "read_failed",
+        externalId,
+        message: `Could not read Claude Code session '${externalId}'.`,
+        cause,
+      }),
   });
 
 const readClaudeTranscript = (externalId: string) =>
   Effect.tryPromise({
     try: () => getSessionMessages(externalId, {}),
     catch: (cause) =>
-      importError(`Could not read the transcript for Claude Code session '${externalId}'.`, cause),
+      new OrchestrationV2ImportSessionError({
+        reason: "read_failed",
+        externalId,
+        message: `Could not read the transcript for Claude Code session '${externalId}'.`,
+        cause,
+      }),
   }).pipe(Effect.map(mapClaudeSessionMessages));
 
-const CODEX_HOME_CONTINUATION_PREFIX = "codex:home:";
-
-/**
- * Locates and reads the rollout transcript for a Codex thread id under
- * `<codex home>/sessions/**`. The home comes from the instance's resolved
- * home layout when available (its continuation key is `codex:home:<path>`),
- * else `$CODEX_HOME`, else `~/.codex`. The sessions directory is shared
- * between the user's own Codex CLI and T3's Codex app-server homes, so a
- * thread started in either is found here.
- */
-const makeReadCodexRollout = (deps: {
-  readonly fileSystem: FileSystem.FileSystem;
-  readonly path: Path.Path;
-}) =>
-  Effect.fnUntraced(function* (externalId: string, instanceHome: string | undefined) {
-    const { fileSystem, path } = deps;
-    const envHome = process.env["CODEX_HOME"]?.trim();
-    const home =
-      instanceHome ??
-      (envHome !== undefined && envHome.length > 0
-        ? envHome
-        : path.join(NodeOS.homedir(), ".codex"));
-    const root = path.join(home, "sessions");
-    const names = yield* fileSystem
-      .readDirectory(root, { recursive: true })
-      .pipe(Effect.orElseSucceed(() => [] as Array<string>));
-    const relative = names.find((name) => name.endsWith(`${externalId}.jsonl`));
-    if (relative === undefined) {
-      return undefined;
-    }
-    const rolloutPath = path.isAbsolute(relative) ? relative : path.join(root, relative);
-    const readFailure = (cause: unknown) =>
-      importError(`Could not read the transcript for Codex thread '${externalId}'.`, cause);
-    const content = yield* fileSystem
-      .readFileString(rolloutPath)
-      .pipe(Effect.mapError(readFailure));
-    const stat = yield* fileSystem.stat(rolloutPath).pipe(Effect.mapError(readFailure));
-    const modifiedAtMs = Option.getOrUndefined(Option.map(stat.mtime, (mtime) => mtime.getTime()));
-    return { transcript: parseCodexRollout(content), modifiedAtMs };
-  });
+function isFileNotFound(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { readonly reason?: { readonly _tag?: unknown } }).reason?._tag === "NotFound"
+  );
+}
 
 function isoOrNull(epochMs: number | undefined): string | null {
   return epochMs === undefined || !Number.isFinite(epochMs)
@@ -168,17 +147,19 @@ function codexTitleFromEntries(
     : undefined;
 }
 
+function providerDriverKindOf(driver: ImportableSessionDriver): ProviderDriverKind {
+  return ProviderDriverKind.make(driver);
+}
+
 export const make = Effect.gen(function* () {
   const sql = yield* SqlClient.SqlClient;
   const eventSink = yield* EventSinkV2;
   const adapters = yield* ProviderAdapterRegistryV2;
   const projectionStore = yield* ProjectionStoreV2;
   const ids = yield* IdAllocator.IdAllocatorV2;
-  const readCodexRollout = makeReadCodexRollout({
-    fileSystem: yield* FileSystem.FileSystem,
-    path: yield* Path.Path,
-  });
-  const syncExecutor = yield* makeKeyedSerialExecutor<ThreadId>();
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const importExecutor = yield* makeKeyedSerialExecutor<ThreadId>();
   /** Threads confirmed to have no import row; skipped without a query. */
   const nonImportedThreadIds = new Set<ThreadId>();
 
@@ -196,25 +177,62 @@ export const make = Effect.gen(function* () {
               ? metadata.continuationKey.slice(CODEX_HOME_CONTINUATION_PREFIX.length)
               : undefined,
           ),
-          Effect.orElseSucceed(() => undefined),
+          Effect.orElseSucceed<string | undefined>(() => undefined),
         );
 
-  const requireImportableDriver = Effect.fnUntraced(function* (
-    instanceId: ProviderInstanceId,
-  ): Effect.fn.Return<ImportableSessionDriver, OrchestrationV2ImportSessionError> {
-    const adapter = yield* adapters
-      .get(instanceId)
+  /**
+   * Locates and reads the rollout transcript for a Codex thread id under
+   * `<codex home>/sessions/**`. The home comes from the instance's resolved
+   * home layout when available, else `$CODEX_HOME`, else `~/.codex`. The
+   * sessions directory is shared between the user's own Codex CLI and T3's
+   * Codex app-server homes, so a thread started in either is found here.
+   */
+  const readCodexRollout = Effect.fnUntraced(function* (
+    externalId: string,
+    instanceHome: string | undefined,
+  ) {
+    const envHome = process.env["CODEX_HOME"]?.trim();
+    const home =
+      instanceHome ??
+      (envHome !== undefined && envHome.length > 0
+        ? envHome
+        : path.join(NodeOS.homedir(), ".codex"));
+    const root = path.join(home, "sessions");
+    const readFailure = (cause: unknown) =>
+      new OrchestrationV2ImportSessionError({
+        reason: "read_failed",
+        externalId,
+        message: `Could not read the transcript for Codex thread '${externalId}'.`,
+        cause,
+      });
+    // A missing sessions directory just means "no codex sessions here"; any
+    // other filesystem failure must surface instead of masquerading as
+    // session-not-found.
+    const names = yield* fileSystem
+      .readDirectory(root, { recursive: true })
       .pipe(
-        Effect.mapError((cause) =>
-          importError(`Provider instance '${instanceId}' is not available.`, cause),
+        Effect.catch((error) =>
+          isFileNotFound(error)
+            ? Effect.succeed([] as Array<string>)
+            : Effect.fail(readFailure(error)),
         ),
       );
-    if (isImportableSessionDriver(adapter.driver)) {
-      return adapter.driver;
+    // Match the full `-<id>.jsonl` segment so a shorter id cannot collide
+    // with the tail of another rollout's id.
+    const relative = names.find((name) => name.endsWith(`-${externalId}.jsonl`));
+    if (relative === undefined) {
+      return undefined;
     }
-    return yield* importError(
-      `Importing an existing session is only supported for Claude Code and Codex, not '${adapter.driver}'.`,
-    );
+    const rolloutPath = path.isAbsolute(relative) ? relative : path.join(root, relative);
+    // Stat before reading: if Codex appends between the two operations the
+    // recorded mtime is older than the content, so the next sync re-reads
+    // instead of treating the file as unchanged.
+    const stat = yield* fileSystem.stat(rolloutPath).pipe(Effect.mapError(readFailure));
+    const content = yield* fileSystem
+      .readFileString(rolloutPath)
+      .pipe(Effect.mapError(readFailure));
+    const modifiedAtMs = Option.getOrUndefined(Option.map(stat.mtime, (mtime) => mtime.getTime()));
+    return { transcript: parseCodexRollout(content), modifiedAtMs };
   });
 
   const lookupProjectIdByWorkspaceRoot = (workspaceRoot: string) =>
@@ -225,13 +243,40 @@ export const make = Effect.gen(function* () {
       LIMIT 1
     `.pipe(
       Effect.map((rows) => (rows[0] === undefined ? null : ProjectId.make(rows[0].project_id))),
-      Effect.mapError((cause) =>
-        importError(`Could not look up a project for '${workspaceRoot}'.`, cause),
+      Effect.mapError(
+        (cause) =>
+          new OrchestrationV2ImportSessionError({
+            reason: "read_failed",
+            message: `Could not look up a project for '${workspaceRoot}'.`,
+            cause,
+          }),
       ),
     );
 
-  const resolveImportSession: SessionImportServiceShape["resolveImportSession"] = Effect.fnUntraced(
-    function* (input) {
+  const requireImportableDriver = Effect.fnUntraced(function* (
+    instanceId: ProviderInstanceId,
+  ): Effect.fn.Return<ImportableSessionDriver, OrchestrationV2ImportSessionError> {
+    const adapter = yield* adapters.get(instanceId).pipe(
+      Effect.mapError(
+        (cause) =>
+          new OrchestrationV2ImportSessionError({
+            reason: "provider_unsupported",
+            message: `Provider instance '${instanceId}' is not available.`,
+            cause,
+          }),
+      ),
+    );
+    if (isImportableSessionDriver(adapter.driver)) {
+      return adapter.driver;
+    }
+    return yield* new OrchestrationV2ImportSessionError({
+      reason: "provider_unsupported",
+      message: `Importing an existing session is only supported for Claude Code and Codex, not '${adapter.driver}'.`,
+    });
+  });
+
+  const resolveImportSession: SessionImportService["Service"]["resolveImportSession"] =
+    Effect.fnUntraced(function* (input) {
       const driver = yield* requireImportableDriver(input.instanceId);
       if (driver === "claudeAgent") {
         const sessionInfo = yield* readClaudeSessionInfo(input.externalId);
@@ -264,8 +309,7 @@ export const make = Effect.gen(function* () {
           workspaceRoot === null ? null : yield* lookupProjectIdByWorkspaceRoot(workspaceRoot),
         title,
       };
-    },
-  );
+    });
 
   const insertPositions = (
     threadId: ThreadId,
@@ -323,34 +367,54 @@ export const make = Effect.gen(function* () {
     };
   });
 
-  const importSession: SessionImportServiceShape["importSession"] = Effect.fnUntraced(
+  const importSession: SessionImportService["Service"]["importSession"] = Effect.fnUntraced(
     function* (input) {
       const projectRows = yield* sql<{ readonly workspace_root: string }>`
-      SELECT workspace_root
-      FROM projection_projects
-      WHERE project_id = ${input.projectId} AND deleted_at IS NULL
-      LIMIT 1
-    `.pipe(
-        Effect.mapError((cause) =>
-          importError(`Could not read project '${input.projectId}'.`, cause),
+        SELECT workspace_root
+        FROM projection_projects
+        WHERE project_id = ${input.projectId} AND deleted_at IS NULL
+        LIMIT 1
+      `.pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2ImportSessionError({
+              reason: "read_failed",
+              message: `Could not read project '${input.projectId}'.`,
+              cause,
+            }),
         ),
       );
       const project = projectRows[0];
       if (project === undefined) {
-        return yield* importError(`Project '${input.projectId}' no longer exists.`);
+        return yield* new OrchestrationV2ImportSessionError({
+          reason: "project_missing",
+          message: `Project '${input.projectId}' no longer exists.`,
+        });
       }
       const driver = yield* requireImportableDriver(input.modelSelection.instanceId);
 
       const existingImports = yield* sql<SessionImportRow>`
-      SELECT thread_id, driver, provider_instance_id, external_id, source_modified_at
-      FROM orchestration_v2_session_imports
-      WHERE driver = ${driver} AND external_id = ${input.externalId}
-      LIMIT 1
-    `.pipe(Effect.mapError((cause) => importError("Could not check existing imports.", cause)));
+        SELECT thread_id, driver, provider_instance_id, external_id, source_modified_at
+        FROM orchestration_v2_session_imports
+        WHERE driver = ${driver} AND external_id = ${input.externalId}
+        LIMIT 1
+      `.pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2ImportSessionError({
+              reason: "read_failed",
+              externalId: input.externalId,
+              message: "Could not check existing imports.",
+              cause,
+            }),
+        ),
+      );
       if (existingImports[0] !== undefined) {
-        return yield* importError(
-          `Session '${input.externalId}' is already imported as a thread. Open that thread instead of importing it again.`,
-        );
+        return yield* new OrchestrationV2ImportSessionError({
+          reason: "already_imported",
+          externalId: input.externalId,
+          message: `Session '${input.externalId}' is already imported as a thread. Open that thread instead of importing it again.`,
+        });
       }
 
       const providerThreadId = ids.derive.providerThread({
@@ -358,15 +422,27 @@ export const make = Effect.gen(function* () {
         nativeThreadId: input.externalId,
       });
       const boundProviderThreads = yield* sql<{ readonly provider_thread_id: string }>`
-      SELECT provider_thread_id
-      FROM orchestration_v2_projection_provider_threads
-      WHERE provider_thread_id = ${providerThreadId}
-      LIMIT 1
-    `.pipe(Effect.mapError((cause) => importError("Could not check existing imports.", cause)));
+        SELECT provider_thread_id
+        FROM orchestration_v2_projection_provider_threads
+        WHERE provider_thread_id = ${providerThreadId}
+        LIMIT 1
+      `.pipe(
+        Effect.mapError(
+          (cause) =>
+            new OrchestrationV2ImportSessionError({
+              reason: "read_failed",
+              externalId: input.externalId,
+              message: "Could not check existing imports.",
+              cause,
+            }),
+        ),
+      );
       if (boundProviderThreads[0] !== undefined) {
-        return yield* importError(
-          `Session '${input.externalId}' already belongs to a thread in this workspace.`,
-        );
+        return yield* new OrchestrationV2ImportSessionError({
+          reason: "already_imported",
+          externalId: input.externalId,
+          message: `Session '${input.externalId}' already belongs to a thread in this workspace.`,
+        });
       }
 
       const source = yield* readSourceTranscript(
@@ -380,13 +456,19 @@ export const make = Effect.gen(function* () {
           : codexSessionNotFound(input.externalId);
       }
       if (source.workspaceRoot !== null && source.workspaceRoot !== project.workspace_root) {
-        return yield* importError(
-          `Session '${input.externalId}' ran in ${source.workspaceRoot}, not in ${project.workspace_root}. Import it from a thread in that project.`,
-        );
+        return yield* new OrchestrationV2ImportSessionError({
+          reason: "workspace_mismatch",
+          externalId: input.externalId,
+          message: `Session '${input.externalId}' ran in ${source.workspaceRoot}, not in ${project.workspace_root}. Import it from a thread in that project.`,
+        });
       }
       const messageCount = source.entries.filter((entry) => entry.kind === "message").length;
       if (messageCount === 0) {
-        return yield* importError(`Session '${input.externalId}' has no conversation to import.`);
+        return yield* new OrchestrationV2ImportSessionError({
+          reason: "empty_transcript",
+          externalId: input.externalId,
+          message: `Session '${input.externalId}' has no conversation to import.`,
+        });
       }
 
       const now = yield* DateTime.now;
@@ -481,41 +563,53 @@ export const make = Effect.gen(function* () {
         },
       ];
 
-      yield* insertPositions(threadId, batch.positions).pipe(
-        Effect.mapError((cause) => importError("Could not store the imported transcript.", cause)),
-      );
-      yield* eventSink
-        .write({ events })
-        .pipe(
-          Effect.mapError((cause) =>
-            importError("Could not store the imported transcript.", cause),
+      // The write phase shares the per-thread lock with ensureSynced so a
+      // concurrent sync can neither interleave with the import nor cache the
+      // thread as non-imported between the event write and the imports row.
+      yield* importExecutor.withLock(
+        threadId,
+        sql
+          .withTransaction(
+            Effect.gen(function* () {
+              yield* insertPositions(threadId, batch.positions);
+              yield* eventSink.write({ events });
+              yield* sql`
+                INSERT INTO orchestration_v2_session_imports (
+                  thread_id,
+                  driver,
+                  provider_instance_id,
+                  external_id,
+                  source_modified_at,
+                  last_synced_at,
+                  imported_message_count,
+                  last_error
+                )
+                VALUES (
+                  ${threadId},
+                  ${driver},
+                  ${input.modelSelection.instanceId},
+                  ${input.externalId},
+                  ${source.sourceModifiedAt},
+                  ${DateTime.formatIso(now)},
+                  ${messageCount},
+                  NULL
+                )
+                ON CONFLICT(thread_id) DO NOTHING
+              `;
+              nonImportedThreadIds.delete(threadId);
+            }),
+          )
+          .pipe(
+            Effect.mapError(
+              (cause) =>
+                new OrchestrationV2ImportSessionError({
+                  reason: "store_failed",
+                  externalId: input.externalId,
+                  message: "Could not store the imported transcript.",
+                  cause,
+                }),
+            ),
           ),
-        );
-      const syncedAt = DateTime.formatIso(now);
-      yield* sql`
-      INSERT INTO orchestration_v2_session_imports (
-        thread_id,
-        driver,
-        provider_instance_id,
-        external_id,
-        source_modified_at,
-        last_synced_at,
-        imported_message_count,
-        last_error
-      )
-      VALUES (
-        ${threadId},
-        ${driver},
-        ${input.modelSelection.instanceId},
-        ${input.externalId},
-        ${source.sourceModifiedAt},
-        ${syncedAt},
-        ${messageCount},
-        NULL
-      )
-      ON CONFLICT(thread_id) DO NOTHING
-    `.pipe(
-        Effect.mapError((cause) => importError("Could not record the imported session.", cause)),
       );
       return { threadId };
     },
@@ -530,6 +624,8 @@ export const make = Effect.gen(function* () {
     `;
     const row = rows[0];
     if (row === undefined) {
+      // Safe to cache negatively: import's write phase holds this thread's
+      // lock while inserting the row and clears the cache afterwards.
       nonImportedThreadIds.add(threadId);
       return;
     }
@@ -571,11 +667,14 @@ export const make = Effect.gen(function* () {
         knownNativeIds.add(nativeId);
       }
     }
-    const knownRunMessages = new Set(
-      projection.messages
-        .filter((message) => message.runId !== null)
-        .map((message) => `${message.role}\n${message.text.trim()}`),
-    );
+    // Multiset: each run message can absorb only one transcript echo, so a
+    // user genuinely repeating the same prompt in the CLI still imports.
+    const knownRunMessageCounts = new Map<string, number>();
+    for (const message of projection.messages) {
+      if (message.runId === null) continue;
+      const key = `${message.role}\n${message.text.trim()}`;
+      knownRunMessageCounts.set(key, (knownRunMessageCounts.get(key) ?? 0) + 1);
+    }
     const existingEventRows = yield* sql<{ readonly event_id: string }>`
       SELECT event_id
       FROM orchestration_events
@@ -597,11 +696,13 @@ export const make = Effect.gen(function* () {
         // id first, then by exact role+text as a backstop for entries whose
         // native ids the adapter did not record.
         if (knownNativeIds.has(entry.sourceId)) return false;
-        if (
-          entry.kind === "message" &&
-          knownRunMessages.has(`${entry.role}\n${entry.text.trim()}`)
-        ) {
-          return false;
+        if (entry.kind === "message") {
+          const key = `${entry.role}\n${entry.text.trim()}`;
+          const remaining = knownRunMessageCounts.get(key) ?? 0;
+          if (remaining > 0) {
+            knownRunMessageCounts.set(key, remaining - 1);
+            return false;
+          }
         }
         return true;
       });
@@ -623,8 +724,12 @@ export const make = Effect.gen(function* () {
         fallbackAt: now,
         ordinalBase: maxOrdinalRows[0]?.max_ordinal ?? 0,
       });
-      yield* insertPositions(threadId, batch.positions);
-      yield* eventSink.write({ events: [...batch.events] });
+      yield* sql.withTransaction(
+        Effect.gen(function* () {
+          yield* insertPositions(threadId, batch.positions);
+          yield* eventSink.write({ events: [...batch.events] });
+        }),
+      );
     }
     yield* sql`
       UPDATE orchestration_v2_session_imports
@@ -637,10 +742,10 @@ export const make = Effect.gen(function* () {
     `;
   });
 
-  const ensureSynced: SessionImportServiceShape["ensureSynced"] = (threadId) =>
+  const ensureSynced: SessionImportService["Service"]["ensureSynced"] = (threadId) =>
     nonImportedThreadIds.has(threadId)
       ? Effect.void
-      : syncExecutor.withLock(threadId, syncImportedTranscript(threadId)).pipe(
+      : importExecutor.withLock(threadId, syncImportedTranscript(threadId)).pipe(
           Effect.catchCause((cause) =>
             Effect.logWarning("Failed to sync imported session transcript", {
               threadId,
@@ -648,10 +753,10 @@ export const make = Effect.gen(function* () {
             }).pipe(
               Effect.andThen(
                 sql`
-                    UPDATE orchestration_v2_session_imports
-                    SET last_error = 'Transcript sync failed; retried on next open.'
-                    WHERE thread_id = ${threadId}
-                  `.pipe(Effect.ignore),
+                  UPDATE orchestration_v2_session_imports
+                  SET last_error = 'Transcript sync failed; retried on next open.'
+                  WHERE thread_id = ${threadId}
+                `.pipe(Effect.ignore),
               ),
             ),
           ),
@@ -659,10 +764,6 @@ export const make = Effect.gen(function* () {
 
   return SessionImportService.of({ resolveImportSession, importSession, ensureSynced });
 });
-
-function providerDriverKindOf(driver: ImportableSessionDriver): ProviderDriverKind {
-  return ProviderDriverKind.make(driver);
-}
 
 export const layer: Layer.Layer<
   SessionImportService,

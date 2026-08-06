@@ -2352,9 +2352,24 @@ export const OrchestrationV2ImportSessionResult = Schema.Struct({
 });
 export type OrchestrationV2ImportSessionResult = typeof OrchestrationV2ImportSessionResult.Type;
 
+export const OrchestrationV2ImportSessionErrorReason = Schema.Literals([
+  "provider_unsupported",
+  "project_missing",
+  "session_not_found",
+  "already_imported",
+  "workspace_mismatch",
+  "empty_transcript",
+  "read_failed",
+  "store_failed",
+]);
+export type OrchestrationV2ImportSessionErrorReason =
+  typeof OrchestrationV2ImportSessionErrorReason.Type;
+
 export class OrchestrationV2ImportSessionError extends Schema.TaggedErrorClass<OrchestrationV2ImportSessionError>()(
   "OrchestrationV2ImportSessionError",
   {
+    reason: OrchestrationV2ImportSessionErrorReason,
+    externalId: Schema.optional(TrimmedNonEmptyString),
     message: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
