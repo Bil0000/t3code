@@ -172,6 +172,51 @@ describe("SessionImportService", () => {
         yield* service.ensureSynced(imported.threadId);
         const resynced = yield* projections.getThreadProjection(imported.threadId);
         assert.strictEqual(resynced.messages.length, 4);
+
+        // A command whose output lands in a later append is backfilled in
+        // place on the next sync instead of staying output-less forever.
+        NodeFS.appendFileSync(
+          rolloutPath,
+          `${rolloutLine("response_item", {
+            type: "function_call",
+            call_id: "c9",
+            name: "shell",
+            arguments: JSON.stringify({ command: ["echo", "hi"] }),
+          })}\n`,
+        );
+        const later = new Date(Date.now() + 10_000);
+        NodeFS.utimesSync(rolloutPath, later, later);
+        yield* service.ensureSynced(imported.threadId);
+        const withCommand = yield* projections.getThreadProjection(imported.threadId);
+        const pendingCommand = withCommand.turnItems.find(
+          (item) => item.type === "command_execution" && item.input === "echo hi",
+        );
+        assert.isDefined(pendingCommand);
+        assert.strictEqual(
+          pendingCommand?.type === "command_execution" ? pendingCommand.output : "set",
+          undefined,
+        );
+
+        NodeFS.appendFileSync(
+          rolloutPath,
+          `${rolloutLine("response_item", {
+            type: "function_call_output",
+            call_id: "c9",
+            output: JSON.stringify({ output: "hi" }),
+          })}\n`,
+        );
+        const evenLater = new Date(Date.now() + 20_000);
+        NodeFS.utimesSync(rolloutPath, evenLater, evenLater);
+        yield* service.ensureSynced(imported.threadId);
+        const backfilled = yield* projections.getThreadProjection(imported.threadId);
+        const completedCommand = backfilled.turnItems.find(
+          (item) => item.type === "command_execution" && item.input === "echo hi",
+        );
+        assert.strictEqual(
+          completedCommand?.type === "command_execution" ? completedCommand.output : undefined,
+          "hi",
+        );
+        assert.strictEqual(completedCommand?.ordinal, pendingCommand?.ordinal);
       }),
     );
 

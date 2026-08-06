@@ -468,6 +468,8 @@ export function buildImportedThreadEvents(input: {
   readonly entries: ReadonlyArray<{
     readonly entry: ImportedTranscriptEntry;
     readonly index: number;
+    /** Keeps an existing item's ordinal when re-emitting it with new content. */
+    readonly ordinal?: number;
   }>;
   readonly fallbackAt: DateTime.Utc;
   readonly ordinalBase?: number;
@@ -476,7 +478,7 @@ export function buildImportedThreadEvents(input: {
   const positions: Array<{ readonly turnItemId: TurnItemId; readonly ordinal: number }> = [];
   const ordinalBase = input.ordinalBase ?? 0;
   let sequence = 0;
-  for (const { entry, index } of input.entries) {
+  for (const { entry, index, ordinal: explicitOrdinal } of input.entries) {
     sequence += 1;
     const occurredAt =
       entry.timestamp === undefined
@@ -489,7 +491,7 @@ export function buildImportedThreadEvents(input: {
       sourceId: entry.sourceId,
     });
     const turnItemId = TurnItemId.make(`${SESSION_IMPORT_EVENT_PREFIX}:turn-item:${entryKey}`);
-    const ordinal = ordinalBase + sequence;
+    const ordinal = explicitOrdinal ?? ordinalBase + sequence;
     const baseTurnItem = {
       id: turnItemId,
       threadId: input.threadId,

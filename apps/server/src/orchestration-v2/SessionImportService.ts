@@ -8,6 +8,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ThreadId,
+  TurnItemId,
   type OrchestrationV2AppThread,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ImportSessionInput,
@@ -36,6 +37,7 @@ import {
   SESSION_IMPORT_EVENT_PREFIX,
   buildImportedThreadEvents,
   importedEntryEventId,
+  importedMessageId,
   isImportableSessionDriver,
   mapClaudeSessionMessages,
   parseCodexRollout,
@@ -706,8 +708,38 @@ export const make = Effect.gen(function* () {
         }
         return true;
       });
+    // A tool call and its result are separate transcript lines, so a sync can
+    // land between them and import the command without its output. Re-emit
+    // those items (same item id and ordinal, revision event id) once the
+    // output shows up; the projector upserts them in place.
+    const importedItemsById = new Map(
+      projection.turnItems
+        .filter((item) => item.id.startsWith(`${SESSION_IMPORT_EVENT_PREFIX}:turn-item:`))
+        .map((item) => [item.id, item]),
+    );
+    const outputBackfills = source.entries
+      .map((entry, index) => ({ entry, index }))
+      .flatMap(({ entry, index }) => {
+        if (entry.kind !== "command" || entry.output === undefined) return [];
+        const itemId = `${SESSION_IMPORT_EVENT_PREFIX}:turn-item:${importedMessageId({
+          driver,
+          threadId,
+          index,
+          sourceId: entry.sourceId,
+        })}`;
+        const existing = importedItemsById.get(TurnItemId.make(itemId));
+        if (
+          existing === undefined ||
+          existing.type !== "command_execution" ||
+          (existing.output !== undefined && existing.output.length > 0)
+        ) {
+          return [];
+        }
+        return [{ entry, index, ordinal: existing.ordinal }];
+      });
+
     const now = yield* DateTime.now;
-    if (missing.length > 0) {
+    if (missing.length > 0 || outputBackfills.length > 0) {
       // New entries happened after everything the thread already shows, so
       // their positions go after the current maximum — including native run
       // bands — instead of into the import's original 0-band.
@@ -724,6 +756,19 @@ export const make = Effect.gen(function* () {
         fallbackAt: now,
         ordinalBase: maxOrdinalRows[0]?.max_ordinal ?? 0,
       });
+      const backfillBatch = buildImportedThreadEvents({
+        driver,
+        providerDriver: providerDriverKindOf(driver),
+        threadId,
+        entries: outputBackfills,
+        fallbackAt: now,
+      });
+      // Revision id: the output transition happens at most once per item, so
+      // one deterministic suffix keeps the re-emit idempotent.
+      const backfillEvents = backfillBatch.events.map((event) => ({
+        ...event,
+        id: EventId.make(`${event.id}:out`),
+      }));
       // The initial guard above is time-of-check/time-of-use: a run can be
       // dispatched between reading the projection and writing here. Re-check
       // inside the transaction so the write is atomic with the run-state
@@ -742,7 +787,10 @@ export const make = Effect.gen(function* () {
             return true;
           }
           yield* insertPositions(threadId, batch.positions);
-          yield* eventSink.write({ events: [...batch.events] });
+          const events = [...batch.events, ...backfillEvents];
+          if (events.length > 0) {
+            yield* eventSink.write({ events });
+          }
           return false;
         }),
       );
