@@ -660,7 +660,11 @@ export function PullRequestDetailPanel({
                   <MenuSeparator />
                   {detail.state === "open" ? (
                     <>
-                      {can(detail.isDraft ? "ready" : "draft") ? (
+                      {/* Only where the button row could not take it: "Ready for review" on a
+                          draft is the primary header button, so offering it here as well would
+                          show the same action twice. */}
+                      {can(detail.isDraft ? "ready" : "draft") &&
+                      !(detail.isDraft && primaryAction === "ready") ? (
                         <MenuItem
                           disabled={actionPending}
                           onClick={() => void perform(detail.isDraft ? "ready" : "draft")}
