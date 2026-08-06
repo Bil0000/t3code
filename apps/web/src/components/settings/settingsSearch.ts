@@ -142,6 +142,11 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/general",
   },
   {
+    id: "quit-confirmation",
+    title: "Quit confirmation",
+    to: "/settings/general",
+  },
+  {
     id: "text-generation-model",
     title: "Text generation model",
     to: "/settings/general",
