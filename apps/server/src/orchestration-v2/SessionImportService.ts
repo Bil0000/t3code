@@ -724,12 +724,31 @@ export const make = Effect.gen(function* () {
         fallbackAt: now,
         ordinalBase: maxOrdinalRows[0]?.max_ordinal ?? 0,
       });
-      yield* sql.withTransaction(
+      // The initial guard above is time-of-check/time-of-use: a run can be
+      // dispatched between reading the projection and writing here. Re-check
+      // inside the transaction so the write is atomic with the run-state
+      // check; an abort leaves the imports row untouched, so the next read
+      // retries the sync.
+      const aborted = yield* sql.withTransaction(
         Effect.gen(function* () {
+          const activeRuns = yield* sql<{ readonly run_id: string }>`
+            SELECT run_id
+            FROM orchestration_v2_projection_runs
+            WHERE thread_id = ${threadId}
+              AND status IN ('preparing', 'queued', 'starting', 'running', 'waiting')
+            LIMIT 1
+          `;
+          if (activeRuns[0] !== undefined) {
+            return true;
+          }
           yield* insertPositions(threadId, batch.positions);
           yield* eventSink.write({ events: [...batch.events] });
+          return false;
         }),
       );
+      if (aborted) {
+        return;
+      }
     }
     yield* sql`
       UPDATE orchestration_v2_session_imports
