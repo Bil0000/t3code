@@ -1,6 +1,6 @@
 /**
- * What sits under a line of the diff: a conversation already on the host, a comment queued for
- * the review being written, or the box that writes one.
+ * Pull-request-specific annotations: conversations already on the host and comments queued for
+ * the review being written. New comment composition uses the shared diff annotation.
  */
 import type { PullRequestReviewThread } from "@t3tools/contracts";
 import {
@@ -8,7 +8,6 @@ import {
   CircleIcon,
   HammerIcon,
   MessageSquareIcon,
-  SparklesIcon,
   Trash2Icon,
 } from "lucide-react";
 import { useState } from "react";
@@ -25,7 +24,7 @@ import type { PendingReviewComment } from "./pullRequestReviewStore";
 const CARD_CLASS =
   "mx-3 my-2 rounded-xl border border-border/70 bg-background p-3 text-sm shadow-sm";
 
-/** Sends on ⌘/Ctrl+Enter and abandons on Escape, which is what every other composer here does. */
+/** Sends a reply on ⌘/Ctrl+Enter and abandons it on Escape. */
 function submitKeys(input: {
   readonly value: string;
   readonly onSubmit: () => void;
@@ -41,69 +40,6 @@ function submitKeys(input: {
       input.onSubmit();
     }
   };
-}
-
-/** The box that writes a new line comment into the review being drafted. */
-export function ReviewCommentComposer({
-  lineLabel,
-  pending,
-  onAsk,
-  onCancel,
-  onSubmit,
-}: {
-  lineLabel: string;
-  pending: boolean;
-  /**
-   * Hands the whole selection to an agent instead of the host. Absent where there is nothing to
-   * hand it to, since a button that cannot do its one thing is worse than no button.
-   */
-  onAsk?: ((question: string) => void) | undefined;
-  onCancel: () => void;
-  onSubmit: (body: string) => void;
-}) {
-  const [body, setBody] = useState("");
-  const submit = () => {
-    const trimmed = body.trim();
-    if (trimmed.length > 0) onSubmit(trimmed);
-  };
-  return (
-    <div
-      className={cn(CARD_CLASS, "shadow-lg")}
-      contentEditable={false}
-      onPointerDown={(event) => event.stopPropagation()}
-    >
-      <div className="flex items-center gap-2 text-xs text-muted-foreground">
-        <MessageSquareIcon className="size-3.5" />
-        <span>Comment on {lineLabel}</span>
-      </div>
-      <Textarea
-        autoFocus
-        size="sm"
-        className="mt-2"
-        value={body}
-        placeholder="Leave a comment"
-        aria-label={`Comment on ${lineLabel}`}
-        onChange={(event) => setBody(event.target.value)}
-        onKeyDown={submitKeys({ value: body, onSubmit: submit, onCancel })}
-      />
-      <div className="mt-2 flex justify-end gap-2">
-        <Button size="xs" variant="ghost" onClick={onCancel}>
-          Cancel
-        </Button>
-        {/* Empty is allowed: handing the agent the lines and no question yet is a fair way to
-            start, and the words can follow in the composer the selection lands in. */}
-        {onAsk ? (
-          <Button size="xs" variant="outline" onClick={() => onAsk(body.trim())}>
-            <SparklesIcon className="size-3" />
-            Ask
-          </Button>
-        ) : null}
-        <Button size="xs" disabled={pending || body.trim().length === 0} onClick={submit}>
-          Add to review
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 /** A comment waiting to be sent with the rest of the review. */

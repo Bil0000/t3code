@@ -1,5 +1,5 @@
 import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs";
-import { CodeView, type CodeViewDiffItem } from "@pierre/diffs/react";
+import type { CodeViewDiffItem } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
   PullRequestDetail,
@@ -15,6 +15,7 @@ import {
   Columns2Icon,
   MessageSquareOffIcon,
   Rows3Icon,
+  SparklesIcon,
   TextWrapIcon,
   TriangleAlertIcon,
 } from "lucide-react";
@@ -36,12 +37,15 @@ import {
   type RenderablePatch,
 } from "~/lib/diffRendering";
 import { cn } from "~/lib/utils";
+import { createPullRequestDiffFileContentsLoader } from "~/lib/diffFileContents";
 import { buildDiffReviewComment, type ReviewCommentContext } from "~/reviewCommentContext";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
+import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
+import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
@@ -54,11 +58,7 @@ import { Skeleton } from "../ui/skeleton";
 import { toastManager } from "../ui/toast";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  PendingReviewCommentCard,
-  ReviewCommentComposer,
-  ReviewThreadCard,
-} from "./PullRequestReviewAnnotation";
+import { PendingReviewCommentCard, ReviewThreadCard } from "./PullRequestReviewAnnotation";
 import { PullRequestReviewBar } from "./PullRequestReviewBar";
 import {
   isFileDiffCollapsed,
@@ -287,6 +287,17 @@ export function PullRequestCodeTab({
   const setThreadResolution = useAtomCommand(pullRequestEnvironment.setThreadResolution, {
     reportFailure: false,
   });
+  const getDiffFileContents = useAtomCommand(pullRequestEnvironment.diffFileContents);
+  const loadDiffFiles = useMemo(
+    () =>
+      createPullRequestDiffFileContentsLoader(getDiffFileContents, {
+        environmentId,
+        reference,
+        commit,
+        cacheKey: `pull-request:${referenceKey}:${detail.updatedAt}:${commit ?? "all"}`,
+      }),
+    [commit, detail.updatedAt, environmentId, getDiffFileContents, reference, referenceKey],
+  );
 
   // What is offered is the intersection of two different questions: what this host can do at
   // all, and what this account may do on this repository. Either one saying no means a control
@@ -315,7 +326,9 @@ export function PullRequestCodeTab({
         const cacheKey = `pull-request:${scopeKey}:${resolvedTheme}:${slice.cursor ?? "first"}:${fnv1a32(slice.patch)}`;
         const cached = parseCache.current.get(cacheKey);
         if (cached) return cached;
-        const parsed = getRenderablePatch(slice.patch, cacheKey);
+        const parsed = getRenderablePatch(slice.patch, cacheKey, {
+          compactPartialHunkOffsets: true,
+        });
         if (parsed) parseCache.current.set(cacheKey, parsed);
         return parsed;
       }),
@@ -940,8 +953,8 @@ export function PullRequestCodeTab({
         {/* The viewer virtualizes against the element it is told is scrolling and places its
             rows absolutely, so it has to own that element — the thread diff panel hands it the
             same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
-        <CodeView<ReviewAnnotationGroup>
-          className="diff-render-surface min-h-0 flex-1 overflow-auto"
+        <StyledDiffCodeView<ReviewAnnotationGroup>
+          className="min-h-0 flex-1 overflow-auto"
           items={items}
           selectedLines={selectedLines}
           onSelectedLinesChange={setSelectedLines}
@@ -952,8 +965,7 @@ export function PullRequestCodeTab({
             theme: resolveDiffThemeName(resolvedTheme),
             themeType: resolvedTheme,
             stickyHeaders: true,
-            itemMetrics: { diffHeaderHeight: 33 },
-            layout: { paddingTop: 0, paddingBottom: 8, gap: 8 },
+            loadDiffFiles,
             enableGutterUtility: canCommentOnLines && draft === null,
             enableLineSelection: canCommentOnLines && draft === null,
             // Two gestures reach the same place: dragging the line numbers selects a range,
@@ -1024,17 +1036,26 @@ export function PullRequestCodeTab({
                 />
               ))}
               {annotation.metadata.draft && draft ? (
-                <ReviewCommentComposer
-                  lineLabel={`${draft.path}:${draft.line}`}
-                  pending={false}
+                <DiffCommentAnnotation
+                  kind="draft"
+                  rangeLabel={`${draft.path}:${draft.line}`}
+                  text=""
+                  submitLabel="Add to review"
                   {...(onAskAboutSelection
-                    ? { onAsk: (question: string) => askAboutSelection(draft, question) }
+                    ? {
+                        secondaryAction: {
+                          label: "Ask",
+                          icon: <SparklesIcon className="size-3" />,
+                          allowEmpty: true,
+                          onAction: (question: string) => askAboutSelection(draft, question),
+                        },
+                      }
                     : {})}
                   onCancel={() => {
                     setDraft(null);
                     setSelectedLines(null);
                   }}
-                  onSubmit={(body) => {
+                  onComment={(body) => {
                     addComment(reviewKey, {
                       id: nextPendingReviewCommentId(),
                       path: draft.path,

@@ -165,6 +165,8 @@ export type GitHubPullRequestCliError =
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
+/** Pierre expansion is for source files, not blobs large enough to stall a review surface. */
+const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 /** What the files API serves at most in one response, which is what one slice is made of. */
 const DIFF_FILES_PAGE_SIZE = 100;
@@ -286,6 +288,20 @@ export class GitHubPullRequestCli extends Context.Service<
       /** One commit's own changes, rather than everything the pull request carries. */
       readonly commit?: string | undefined;
     }) => Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestCliError>;
+
+    readonly getPullRequestDiffFileContents: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly commit?: string | undefined;
+      readonly changeType: "change" | "rename-pure" | "rename-changed" | "new" | "deleted";
+      readonly oldPath: string;
+      readonly newPath: string;
+    }) => Effect.Effect<
+      { readonly oldContents: string; readonly newContents: string },
+      GitHubPullRequestCliError
+    >;
 
     readonly listReviewThreadComments: (input: {
       readonly cwd: string;
@@ -708,6 +724,98 @@ export const make = Effect.gen(function* () {
       );
   };
 
+  const getPullRequestDiffFileContents: GitHubPullRequestCli["Service"]["getPullRequestDiffFileContents"] =
+    (input) =>
+      Effect.gen(function* () {
+        if (input.commit !== undefined && !isCommitSha(input.commit)) {
+          return yield* new GitHubDiffCommitError({ command: "gh", cwd: input.cwd });
+        }
+        const { owner, name } = parseRepositorySelector(input.repository);
+        const refsResult = yield* github.execute({
+          cwd: input.cwd,
+          args: [
+            "api",
+            "--hostname",
+            input.host,
+            input.commit === undefined
+              ? `repos/${owner}/${name}/pulls/${input.number}`
+              : `repos/${owner}/${name}/commits/${input.commit}`,
+            "--jq",
+            input.commit === undefined
+              ? "[.base.sha, .head.sha] | @tsv"
+              : "[.parents[0].sha, .sha] | @tsv",
+          ],
+          maxOutputBytes: 1024,
+          timeoutMs: DIFF_TIMEOUT_MS,
+        });
+        const [baseRef, headRef, ...extraRefs] = refsResult.stdout.trim().split("\t");
+        if (
+          refsResult.stdoutTruncated ||
+          !baseRef ||
+          !headRef ||
+          extraRefs.length > 0 ||
+          !isCommitSha(baseRef) ||
+          !isCommitSha(headRef)
+        ) {
+          return yield* new GitHubPullRequestReadError({
+            command: "gh",
+            cwd: input.cwd,
+            operation: "getPullRequestDiffFileContents",
+            cause: new Error("GitHub returned no usable base and head revisions."),
+          });
+        }
+
+        const readFile = (revision: string, filePath: string) =>
+          github
+            .execute({
+              cwd: input.cwd,
+              args: [
+                "api",
+                "--hostname",
+                input.host,
+                "--header",
+                "Accept: application/vnd.github.raw+json",
+                `repos/${owner}/${name}/contents/${filePath
+                  .split("/")
+                  .map(encodeURIComponent)
+                  .join("/")}?ref=${encodeURIComponent(revision)}`,
+              ],
+              maxOutputBytes: DIFF_FILE_MAX_OUTPUT_BYTES,
+              timeoutMs: DIFF_TIMEOUT_MS,
+            })
+            .pipe(
+              Effect.flatMap((result) =>
+                result.stdoutTruncated || result.stdout.includes("\0")
+                  ? Effect.fail(
+                      new GitHubPullRequestReadError({
+                        command: "gh",
+                        cwd: input.cwd,
+                        operation: "getPullRequestDiffFileContents",
+                        cause: new Error(
+                          result.stdoutTruncated
+                            ? `The diff file '${filePath}' exceeds the 1 MB expansion limit.`
+                            : `The diff file '${filePath}' is binary.`,
+                        ),
+                      }),
+                    )
+                  : Effect.succeed(result.stdout),
+              ),
+            );
+
+        const [oldContents, newContents] = yield* Effect.all(
+          [
+            input.changeType === "new"
+              ? Effect.succeed("")
+              : readFile(baseRef, input.oldPath),
+            input.changeType === "deleted"
+              ? Effect.succeed("")
+              : readFile(headRef, input.newPath),
+          ],
+          { concurrency: 2 },
+        );
+        return { oldContents, newContents };
+      });
+
   return GitHubPullRequestCli.of({
     getViewerLogin: (input) =>
       github.execute({ cwd: input.cwd, args: ["api", "user", "--jq", ".login"] }).pipe(
@@ -946,6 +1054,8 @@ export const make = Effect.gen(function* () {
           ),
         );
     },
+
+    getPullRequestDiffFileContents,
 
     listReviewThreadComments: (input) =>
       Effect.gen(function* () {

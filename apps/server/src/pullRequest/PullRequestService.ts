@@ -14,6 +14,8 @@ import {
   type PullRequestActionInput,
   type PullRequestCommentInput,
   type PullRequestDetail,
+  type PullRequestDiffFileContentsInput,
+  type PullRequestDiffFileContentsResult,
   type PullRequestDiffStat,
   type PullRequestDiffInput,
   type PullRequestDiffResult,
@@ -104,6 +106,9 @@ export class PullRequestService extends Context.Service<
     readonly diff: (
       input: PullRequestDiffInput,
     ) => Effect.Effect<PullRequestDiffResult, PullRequestError>;
+    readonly diffFileContents: (
+      input: PullRequestDiffFileContentsInput,
+    ) => Effect.Effect<PullRequestDiffFileContentsResult, PullRequestError>;
     readonly runAction: (input: PullRequestActionInput) => Effect.Effect<void, PullRequestError>;
     readonly comment: (input: PullRequestCommentInput) => Effect.Effect<void, PullRequestError>;
     readonly submitReview: (
@@ -895,6 +900,30 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const diffFileContents: PullRequestService["Service"]["diffFileContents"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project) => {
+        const read = project.api.getDiffFileContents;
+        return project.api.capabilities.diff && read
+          ? read({
+              cwd: project.project.workspaceRoot,
+              repository: project.repository,
+              host: project.host,
+              number: input.number,
+              ...(input.commit === undefined ? {} : { commit: input.commit }),
+              changeType: input.changeType,
+              oldPath: input.oldPath,
+              newPath: input.newPath,
+            }).pipe(Effect.mapError(toPullRequestError("diffFileContents")))
+          : Effect.fail(
+              new PullRequestOperationError({
+                operation: "diffFileContents",
+                detail: "This host cannot expand unchanged pull request lines.",
+              }),
+            );
+      }),
+    );
+
   const runAction: PullRequestService["Service"]["runAction"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
@@ -1453,6 +1482,7 @@ export const make = Effect.gen(function* () {
     listStats,
     detail,
     diff,
+    diffFileContents,
     runAction: invalidatedByMutation(runAction),
     comment: invalidatedByMutation(comment),
     submitReview: invalidatedByMutation(submitReview),

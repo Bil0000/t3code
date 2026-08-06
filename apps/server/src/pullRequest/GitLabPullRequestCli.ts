@@ -19,6 +19,7 @@ import type {
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import {
+  decodeCommitDiffRefsJson,
   decodeCommitsJson,
   decodeDiffRefsJson,
   decodeDiscussionsJson,
@@ -148,6 +149,7 @@ const COMMIT_PAGE_SIZE = 100;
 const CONVERSATION_PAGES = 10;
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
+const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
 
 export interface GitLabMergeRequestListBatch {
   readonly items: ReadonlyArray<GitLabMergeRequestListItem>;
@@ -212,6 +214,19 @@ export class GitLabPullRequestCli extends Context.Service<
       /** One commit's own changes, rather than everything the merge request carries. */
       readonly commit?: string | undefined;
     }) => Effect.Effect<GitLabMergeRequestDiffSlice, GitLabPullRequestCliError>;
+
+    readonly getMergeRequestDiffFileContents: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly commit?: string | undefined;
+      readonly changeType: "change" | "rename-pure" | "rename-changed" | "new" | "deleted";
+      readonly oldPath: string;
+      readonly newPath: string;
+    }) => Effect.Effect<
+      { readonly oldContents: string; readonly newContents: string },
+      GitLabPullRequestCliError
+    >;
 
     readonly getProjectMergeCapabilities: (input: {
       readonly cwd: string;
@@ -672,6 +687,40 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  const getCommitDiffRefs = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly commit: string;
+  }): Effect.Effect<GitLabDiffRefs, GitLabPullRequestCliError> =>
+    api({
+      cwd: input.cwd,
+      path: `projects/${projectPath(input.repository)}/repository/commits/${input.commit}`,
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeCommitDiffRefsJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            new GitLabMergeRequestReadError({
+              command: "glab",
+              cwd: input.cwd,
+              operation: "getMergeRequestDiffFileContents",
+              cause: decoded.failure,
+            }),
+          );
+        }
+        return decoded.success === null
+          ? Effect.fail(
+              new GitLabMergeRequestReadError({
+                command: "glab",
+                cwd: input.cwd,
+                operation: "getMergeRequestDiffFileContents",
+                cause: new Error("GitLab returned no usable parent for the commit."),
+              }),
+            )
+          : Effect.succeed(decoded.success);
+      }),
+    );
+
   /**
    * The merge request itself, which several calls need for different parts of it: the detail for
    * everything, and the reviewer paths for the ids GitLab writes a reviewer set with.
@@ -793,6 +842,62 @@ export const make = Effect.gen(function* () {
         ? Effect.fail(new GitLabDiffCursorError({ command: "glab", cwd: input.cwd }))
         : diffPage({ ...target, page });
     },
+
+    getMergeRequestDiffFileContents: (input) =>
+      Effect.gen(function* () {
+        if (input.commit !== undefined && !isCommitSha(input.commit)) {
+          return yield* Effect.fail(
+            new GitLabDiffCommitError({ command: "glab", cwd: input.cwd }),
+          );
+        }
+        const refs = yield* input.commit === undefined
+          ? getDiffRefs(input)
+          : getCommitDiffRefs({
+              cwd: input.cwd,
+              repository: input.repository,
+              commit: input.commit,
+            });
+
+        const readFile = (revision: string, filePath: string) =>
+          api({
+            cwd: input.cwd,
+            path: `projects/${projectPath(input.repository)}/repository/files/${encodeURIComponent(
+              filePath,
+            )}/raw?ref=${encodeURIComponent(revision)}`,
+            maxOutputBytes: DIFF_FILE_MAX_OUTPUT_BYTES,
+            timeoutMs: DIFF_TIMEOUT_MS,
+          }).pipe(
+            Effect.flatMap((result) =>
+              result.stdoutTruncated || result.stdout.includes("\0")
+                ? Effect.fail(
+                    new GitLabMergeRequestReadError({
+                      command: "glab",
+                      cwd: input.cwd,
+                      operation: "getMergeRequestDiffFileContents",
+                      cause: new Error(
+                        result.stdoutTruncated
+                          ? `The diff file '${filePath}' exceeds the 1 MB expansion limit.`
+                          : `The diff file '${filePath}' is binary.`,
+                      ),
+                    }),
+                  )
+                : Effect.succeed(result.stdout),
+            ),
+          );
+
+        const [oldContents, newContents] = yield* Effect.all(
+          [
+            input.changeType === "new"
+              ? Effect.succeed("")
+              : readFile(refs.baseSha, input.oldPath),
+            input.changeType === "deleted"
+              ? Effect.succeed("")
+              : readFile(refs.headSha, input.newPath),
+          ],
+          { concurrency: 2 },
+        );
+        return { oldContents, newContents };
+      }),
 
     getProjectMergeCapabilities: (input) =>
       api({
