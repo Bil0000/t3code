@@ -109,6 +109,13 @@ export const ContextHandoffId = makeEntityId("ContextHandoffId");
 export type ContextHandoffId = typeof ContextHandoffId.Type;
 export const ContextTransferId = makeEntityId("ContextTransferId");
 export type ContextTransferId = typeof ContextTransferId.Type;
+/**
+ * Identifies one hop of a thread handoff. Both environments involved in a hop
+ * store the same id, so it is the idempotency key for applying a bundle and
+ * the link between the two sides of the lineage.
+ */
+export const ThreadHandoffId = makeEntityId("ThreadHandoffId");
+export type ThreadHandoffId = typeof ThreadHandoffId.Type;
 export const RawEventId = makeEntityId("RawEventId");
 export type RawEventId = typeof RawEventId.Type;
 export const PlanId = makeEntityId("PlanId");

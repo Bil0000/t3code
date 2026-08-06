@@ -8,6 +8,7 @@ import {
   CommandId,
   ContextHandoffId,
   ContextTransferId,
+  EnvironmentId,
   EventId,
   IsoDateTime,
   MessageId,
@@ -23,11 +24,13 @@ import {
   RunAttemptId,
   RunId,
   RuntimeRequestId,
+  ThreadHandoffId,
   ThreadId,
   TrimmedNonEmptyString,
   TurnItemId,
 } from "./baseSchemas.ts";
 import { ChatAttachment } from "./chatAttachment.ts";
+import { RepositoryIdentity } from "./environment.ts";
 import {
   OrchestrationGetFullThreadDiffInput,
   OrchestrationGetFullThreadDiffResult,
@@ -2318,6 +2321,152 @@ export const OrchestrationV2ThreadLaunchResult = Schema.Struct({
   resumed: Schema.Boolean,
 });
 export type OrchestrationV2ThreadLaunchResult = typeof OrchestrationV2ThreadLaunchResult.Type;
+
+/**
+ * Thread handoff moves one thread from the environment that owns it to another
+ * connected environment: the conversation, the provider continuation, and the
+ * git working state the thread was left in.
+ *
+ * The bundle below is the wire contract between the two servers. It is a
+ * manifest plus content-addressed parts: everything small and structural is
+ * inline, everything large is a part fetched separately by digest. Keeping the
+ * bytes out of the manifest is what allows the transport to change later —
+ * today the client reads from one environment and writes to the other, because
+ * it is the only component authenticated to both — without the manifest or the
+ * ids changing with it.
+ */
+export const OrchestrationV2HandoffPartKind = Schema.Literals([
+  "git-bundle",
+  "tracked-patch",
+  "untracked-tar",
+  "attachments-tar",
+]);
+export type OrchestrationV2HandoffPartKind = typeof OrchestrationV2HandoffPartKind.Type;
+
+/** Lowercase hex SHA-256, the address of a part's bytes. */
+export const OrchestrationV2HandoffPartDigest = TrimmedNonEmptyString.check(
+  Schema.isPattern(/^[0-9a-f]{64}$/),
+);
+
+export const OrchestrationV2HandoffPart = Schema.Struct({
+  kind: OrchestrationV2HandoffPartKind,
+  digest: OrchestrationV2HandoffPartDigest,
+  byteLength: NonNegativeInt,
+});
+export type OrchestrationV2HandoffPart = typeof OrchestrationV2HandoffPart.Type;
+
+/**
+ * A terminal as it can be reconstructed elsewhere. The process itself cannot
+ * travel; the working directory, the shell, and the scrollback the user reads
+ * can. `cwd` is relative to the origin workspace root so the receiving
+ * environment can rebase it onto its own.
+ */
+export const OrchestrationV2HandoffTerminal = Schema.Struct({
+  terminalId: TrimmedNonEmptyString,
+  title: Schema.NullOr(TrimmedNonEmptyString),
+  relativeCwd: Schema.String,
+  shell: Schema.NullOr(TrimmedNonEmptyString),
+  history: Schema.String,
+});
+export type OrchestrationV2HandoffTerminal = typeof OrchestrationV2HandoffTerminal.Type;
+
+/**
+ * Where this hop sits in the chain. A round trip is not a special case: it is a
+ * hop whose destination is an environment already in the lineage, so laptop →
+ * server → phone → laptop is a walk rather than a pair of push/pull verbs.
+ */
+export const OrchestrationV2HandoffLineage = Schema.Struct({
+  previousHandoffId: Schema.NullOr(ThreadHandoffId),
+  hopCount: NonNegativeInt,
+});
+export type OrchestrationV2HandoffLineage = typeof OrchestrationV2HandoffLineage.Type;
+
+export const OrchestrationV2HandoffBundleV1 = Schema.Struct({
+  version: Schema.Literal(1),
+  handoffId: ThreadHandoffId,
+  origin: Schema.Struct({
+    environmentId: EnvironmentId,
+    threadId: ThreadId,
+    serverVersion: TrimmedNonEmptyString,
+  }),
+  repository: RepositoryIdentity,
+  workspace: Schema.Struct({
+    branch: Schema.NullOr(TrimmedNonEmptyString),
+    headSha: TrimmedNonEmptyString,
+    strategy: OrchestrationV2ThreadLaunchWorkspaceStrategy,
+  }),
+  conversation: Schema.Struct({
+    items: Schema.Array(OrchestrationV2TurnItem),
+    coveredRunOrdinals: Schema.Array(NonNegativeInt),
+  }),
+  provider: Schema.Struct({
+    driverKind: ProviderDriverKind,
+    modelSelection: ModelSelection,
+    runtimeMode: RuntimeMode,
+    interactionMode: ProviderInteractionMode,
+  }),
+  thread: Schema.Struct({
+    title: TrimmedNonEmptyString,
+  }),
+  terminals: Schema.Array(OrchestrationV2HandoffTerminal),
+  lineage: OrchestrationV2HandoffLineage,
+  parts: Schema.Array(OrchestrationV2HandoffPart),
+});
+export type OrchestrationV2HandoffBundleV1 = typeof OrchestrationV2HandoffBundleV1.Type;
+
+/**
+ * Lifecycle of one hop, recorded on both sides.
+ *
+ * The origin moves preparing → departed and stays there until it observes
+ * `arrived` or `aborted`; the destination moves applying → arrived. `applying`
+ * is the only state in which the receiving repository has been written to, so
+ * it is also the only state that needs recovery on startup.
+ */
+export const OrchestrationV2HandoffState = Schema.Literals([
+  "preparing",
+  "departed",
+  "applying",
+  "arrived",
+  "failed",
+  "aborted",
+]);
+export type OrchestrationV2HandoffState = typeof OrchestrationV2HandoffState.Type;
+
+export const OrchestrationV2HandoffErrorReason = Schema.Literals([
+  "environment_unsupported",
+  "thread_missing",
+  "thread_already_away",
+  "repository_mismatch",
+  "project_missing",
+  "workspace_diverged",
+  "payload_too_large",
+  "part_missing",
+  "part_digest_mismatch",
+  "apply_failed",
+  "store_failed",
+]);
+export type OrchestrationV2HandoffErrorReason = typeof OrchestrationV2HandoffErrorReason.Type;
+
+export class OrchestrationV2HandoffError extends Schema.TaggedErrorClass<OrchestrationV2HandoffError>()(
+  "OrchestrationV2HandoffError",
+  {
+    reason: OrchestrationV2HandoffErrorReason,
+    handoffId: Schema.optional(ThreadHandoffId),
+    message: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {}
+
+/**
+ * Payload ceilings, in bytes, applied to the sum of every part.
+ *
+ * A dirty tree that has swallowed a build directory is the common case these
+ * catch, and the difference between the two is whether the user is told before
+ * or instead of the transfer. Both are enforced while preparing, so a refusal
+ * costs nothing on either machine.
+ */
+export const ORCHESTRATION_V2_HANDOFF_PAYLOAD_WARN_BYTES = 200 * 1024 * 1024;
+export const ORCHESTRATION_V2_HANDOFF_PAYLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 
 export const OrchestrationV2DispatchCommandResult = Schema.Struct({
   sequence: NonNegativeInt,
