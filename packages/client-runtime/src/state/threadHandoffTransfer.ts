@@ -1,0 +1,206 @@
+import type {
+  EnvironmentId,
+  OrchestrationV2HandoffBundleV1,
+  OrchestrationV2HandoffPart,
+  ProjectId,
+  ThreadHandoffId,
+  ThreadId,
+} from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+
+import type { PreparedConnection } from "../connection/model.ts";
+import {
+  abortThreadHandoff,
+  completeThreadHandoff,
+  departThread,
+  prepareThreadHandoff,
+  receiveThreadHandoff,
+} from "../operations/threadHandoff.ts";
+import type { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
+import { readHandoffPartChunk, writeHandoffPartChunk } from "./handoffPartsHttp.ts";
+import { runInEnvironment } from "./runtime.ts";
+
+/**
+ * The steps of a hop, in the order they happen.
+ *
+ * The split matters for what a user is allowed to do: everything up to and
+ * including `upload` has changed nothing on either machine, so cancelling is
+ * free. From `apply` onward the receiving repository is being written to, and
+ * only the servers can put it back.
+ */
+export type ThreadHandoffPhase = "prepare" | "depart" | "upload" | "apply" | "settle";
+
+export interface ThreadHandoffProgress {
+  readonly phase: ThreadHandoffPhase;
+  readonly transferredBytes: number;
+  readonly totalBytes: number;
+}
+
+export interface ThreadHandoffTransferInput {
+  readonly threadId: ThreadId;
+  readonly originEnvironmentId: EnvironmentId;
+  readonly targetEnvironmentId: EnvironmentId;
+  readonly targetLabel: string | null;
+  readonly targetProjectId: ProjectId;
+  /** Set when the hop returns to a thread the target already owns. */
+  readonly returningThreadId: ThreadId | null;
+  /** The target's tip for this branch, so the bundle carries only what it lacks. */
+  readonly targetBranchTip: string | null;
+  readonly previousHandoffId: ThreadHandoffId | null;
+  readonly hopCount: number;
+  readonly originConnection: PreparedConnection;
+  readonly targetConnection: PreparedConnection;
+  readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
+  readonly onProgress?: (progress: ThreadHandoffProgress) => void;
+}
+
+export interface ThreadHandoffTransferResult {
+  readonly handoffId: ThreadHandoffId;
+  readonly targetThreadId: ThreadId;
+}
+
+/**
+ * Copies one part across, a chunk at a time.
+ *
+ * The receiving side rejects a chunk that does not continue exactly where the
+ * staged bytes end, so the offset the reader reports is the only thing that
+ * decides where a write lands — a retried or reordered chunk cannot punch a
+ * hole in the part.
+ */
+const copyPart = Effect.fn("clientRuntime.state.copyHandoffPart")(function* (input: {
+  readonly part: OrchestrationV2HandoffPart;
+  readonly handoffId: ThreadHandoffId;
+  readonly origin: ThreadHandoffTransferInput["originConnection"];
+  readonly target: ThreadHandoffTransferInput["targetConnection"];
+  readonly signer: ThreadHandoffTransferInput["signer"];
+  readonly onChunk: (bytes: number) => void;
+}) {
+  let offset = 0;
+  let complete = false;
+  while (!complete) {
+    const chunk = yield* readHandoffPartChunk({
+      prepared: input.origin,
+      signer: input.signer,
+      handoffId: input.handoffId,
+      kind: input.part.kind,
+      offset,
+    });
+    if (chunk.data.length > 0) {
+      yield* writeHandoffPartChunk({
+        prepared: input.target,
+        signer: input.signer,
+        handoffId: input.handoffId,
+        kind: input.part.kind,
+        offset: chunk.offset,
+        data: chunk.data,
+      });
+      input.onChunk(chunk.data.length);
+    }
+    offset = chunk.offset + chunk.data.length;
+    complete = chunk.complete;
+  }
+});
+
+/**
+ * Runs one hop end to end across two environments.
+ *
+ * The order is the safety model: stage, lock the giving side, move the bytes,
+ * apply, then record where the thread went. Locking before the bytes move is
+ * what guarantees the two sides can never both be live; anything that fails
+ * after the lock releases it, so a failed transfer leaves the thread usable
+ * where it started rather than stranded.
+ */
+export const runThreadHandoffTransfer = Effect.fn("clientRuntime.state.runThreadHandoffTransfer")(
+  function* (input: ThreadHandoffTransferInput) {
+    const report = (phase: ThreadHandoffPhase, transferredBytes: number, totalBytes: number) => {
+      input.onProgress?.({ phase, transferredBytes, totalBytes });
+    };
+
+    report("prepare", 0, 0);
+    const preparation = yield* runInEnvironment(
+      input.originEnvironmentId,
+      prepareThreadHandoff({
+        threadId: input.threadId,
+        peerEnvironmentId: input.targetEnvironmentId,
+        peerBranchTip: input.targetBranchTip,
+        previousHandoffId: input.previousHandoffId,
+        hopCount: input.hopCount,
+      }),
+    );
+    const bundle: OrchestrationV2HandoffBundleV1 = preparation.bundle;
+    const totalBytes = preparation.totalBytes;
+
+    report("depart", 0, totalBytes);
+    yield* runInEnvironment(
+      input.originEnvironmentId,
+      departThread({
+        threadId: input.threadId,
+        handoffId: bundle.handoffId,
+        peerEnvironmentId: input.targetEnvironmentId,
+        peerLabel: input.targetLabel,
+        previousHandoffId: input.previousHandoffId,
+        hopCount: input.hopCount,
+      }),
+    );
+
+    // From here on the thread is locked, so every failure has to release it
+    // before surfacing — otherwise a transient network error would leave a
+    // thread nobody can type in on either machine.
+    const release = (reason: string) =>
+      runInEnvironment(
+        input.originEnvironmentId,
+        abortThreadHandoff({
+          threadId: input.threadId,
+          handoffId: bundle.handoffId,
+          reason,
+        }),
+      ).pipe(Effect.ignore);
+
+    return yield* Effect.gen(function* () {
+      let transferred = 0;
+      report("upload", transferred, totalBytes);
+      for (const part of bundle.parts) {
+        yield* copyPart({
+          part,
+          handoffId: bundle.handoffId,
+          origin: input.originConnection,
+          target: input.targetConnection,
+          signer: input.signer,
+          onChunk: (bytes) => {
+            transferred += bytes;
+            report("upload", transferred, totalBytes);
+          },
+        });
+      }
+
+      report("apply", transferred, totalBytes);
+      const application = yield* runInEnvironment(
+        input.targetEnvironmentId,
+        receiveThreadHandoff({
+          bundle,
+          projectId: input.targetProjectId,
+          returningThreadId: input.returningThreadId,
+        }),
+      );
+
+      report("settle", transferred, totalBytes);
+      yield* runInEnvironment(
+        input.originEnvironmentId,
+        completeThreadHandoff({
+          threadId: input.threadId,
+          handoffId: bundle.handoffId,
+          peerThreadId: application.threadId,
+        }),
+      );
+
+      return {
+        handoffId: bundle.handoffId,
+        targetThreadId: application.threadId,
+      } satisfies ThreadHandoffTransferResult;
+    }).pipe(
+      Effect.tapCause((cause) => release(String(cause))),
+      Effect.onInterrupt(() => release("transfer cancelled")),
+    );
+  },
+);
