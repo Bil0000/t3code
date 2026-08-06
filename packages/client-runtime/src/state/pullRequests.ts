@@ -48,6 +48,25 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       tag: WS_METHODS.pullRequestsDiff,
       staleTimeMs: 60_000,
     }),
+    diffFileContents: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:diff-file-contents",
+      tag: WS_METHODS.pullRequestsDiffFileContents,
+      scheduler: commandScheduler,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) =>
+          JSON.stringify([
+            environmentId,
+            input.projectId,
+            input.repository,
+            input.number,
+            input.commit ?? null,
+            input.changeType,
+            input.oldPath,
+            input.newPath,
+          ]),
+      },
+    }),
     runAction: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:run-action",
       tag: WS_METHODS.pullRequestsRunAction,

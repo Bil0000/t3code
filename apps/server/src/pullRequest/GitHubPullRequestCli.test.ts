@@ -18,17 +18,22 @@ const layer = it.layer(
   ),
 );
 
-function output(stdout: string, stdoutTruncated = false) {
+function output(stdout: string, stdoutTruncated = false, stdoutInvalidUtf8 = false) {
   return {
     exitCode: ChildProcessSpawner.ExitCode(0),
     stdout,
     stderr: "",
     stdoutTruncated,
     stderrTruncated: false,
+    stdoutInvalidUtf8,
   };
 }
 
-function pullRequests(count: number, firstNumber: number): string {
+function pullRequests(
+  count: number,
+  firstNumber: number,
+  overrides: (number: number) => Readonly<Record<string, unknown>> = () => ({}),
+): string {
   return JSON.stringify(
     Array.from({ length: count }, (_, index) => ({
       number: firstNumber + index,
@@ -38,6 +43,7 @@ function pullRequests(count: number, firstNumber: number): string {
       baseRefName: "main",
       createdAt: "2026-07-01T00:00:00Z",
       updatedAt: "2026-07-02T00:00:00Z",
+      ...overrides(firstNumber + index),
     })),
   );
 }
@@ -665,7 +671,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
     Effect.gen(function* () {
       // GitHub answers for a repository outside its search index with no rows and no error.
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(3, 1))));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output(pullRequests(3, 1, () => ({ state: "CLOSED" })))),
+      );
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const batch = yield* cli.listPullRequests({
@@ -679,11 +687,113 @@ layer("GitHubPullRequestCli.layer", (it) => {
       });
 
       assert.strictEqual(batch.items.length, 3);
-      // Nothing of the search survives the fallback, not even the tab's own qualifier: this read
-      // happens precisely because search answered nothing here, and `is:unmerged` is a search
-      // too. Those rows arrive in gh's own order, so nothing can carry on from them.
+      // The fallback itself uses no search, then narrows the decoded rows locally. They still
+      // arrive in gh's own order, so nothing can carry on from them.
       expect(searchOfCall(1)).toBeUndefined();
       assert.isFalse(batch.continues);
+    }),
+  );
+
+  it.effect("keeps state and involvement filters on the search-free fallback", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            pullRequests(4, 1, (number) => ({
+              state: number === 4 ? "OPEN" : "CLOSED",
+              ...(number === 3 ? { mergedAt: "2026-07-03T00:00:00Z" } : {}),
+              reviewRequests:
+                number === 2 ? [{ slug: "platform", name: "Platform" }] : [{ login: "bilal" }],
+            })),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const batch = yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "closed",
+        involvement: "reviewing",
+        viewer: "bilal",
+        limit: 10,
+      });
+
+      // Individual requests for this viewer and team requests survive. The fallback cannot
+      // resolve team membership, so dropping team-routed reviews would hide legitimate work.
+      expect(batch.items.map((item) => item.number)).toEqual([1, 2]);
+      expect(searchOfCall(1)).toBeUndefined();
+      assert.isFalse(batch.continues);
+    }),
+  );
+
+  it.effect("grows the search-free fallback until it fills the filtered page", () =>
+    Effect.gen(function* () {
+      const unrelated = () => ({ reviewRequests: [{ login: "somebody-else" }] });
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(3, 1, unrelated))));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            pullRequests(4, 1, (number) =>
+              number === 4 ? { reviewRequests: [{ login: "bilal" }] } : unrelated(),
+            ),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const batch = yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "reviewing",
+        viewer: "bilal",
+        limit: 2,
+      });
+
+      expect(batch.items.map((item) => item.number)).toEqual([4]);
+      const firstFallbackArgs = callAt(1).args;
+      const secondFallbackArgs = callAt(2).args;
+      expect(firstFallbackArgs[firstFallbackArgs.indexOf("--limit") + 1]).toBe("3");
+      expect(secondFallbackArgs[secondFallbackArgs.indexOf("--limit") + 1]).toBe("6");
+      assert.isFalse(batch.truncated);
+    }),
+  );
+
+  it.effect("bounds a sparse search-free fallback and reports the unread tail", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((_input) => {
+        if (mockedExecute.mock.calls.length === 1) return Effect.succeed(output("[]"));
+        const args = callAt(mockedExecute.mock.calls.length - 1).args;
+        const limit = Number(args[args.indexOf("--limit") + 1]);
+        return Effect.succeed(
+          output(
+            pullRequests(limit, 1, () => ({
+              reviewRequests: [{ login: "somebody-else" }],
+            })),
+          ),
+        );
+      });
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const batch = yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "reviewing",
+        viewer: "bilal",
+        limit: 2,
+      });
+
+      const finalArgs = callAt(mockedExecute.mock.calls.length - 1).args;
+      expect(finalArgs[finalArgs.indexOf("--limit") + 1]).toBe("1000");
+      assert.strictEqual(batch.items.length, 0);
+      assert.isTrue(batch.truncated);
     }),
   );
 
@@ -1006,6 +1116,129 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       assert.strictEqual(error._tag, "GitHubDiffCommitError");
       assert.strictEqual(mockedExecute.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("expands a new file from a root commit without requiring a parent", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("\ta1b2c3d\n")));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("root contents\n")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const contents = yield* cli.getPullRequestDiffFileContents({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        commit: "a1b2c3d",
+        changeType: "new",
+        oldPath: "src/root.ts",
+        newPath: "src/root.ts",
+      });
+
+      expect(contents).toEqual({ oldContents: "", newContents: "root contents\n" });
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      expect(callAt(1).args.join(" ")).toContain("contents/src/root.ts?ref=a1b2c3d");
+    }),
+  );
+
+  it.effect("reports unusable diff revisions as a structured error", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("not-a-sha\tstill-not-a-sha\n")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getPullRequestDiffFileContents({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          commit: "a1b2c3d",
+          changeType: "change",
+          oldPath: "src/a.ts",
+          newPath: "src/a.ts",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitHubDiffRevisionsUnavailableError");
+      if (error._tag === "GitHubDiffRevisionsUnavailableError") {
+        assert.strictEqual(error.number, 7);
+        assert.strictEqual(error.commit, "a1b2c3d");
+      }
+    }),
+  );
+
+  it.effect("reports an oversized diff file with its path and reason", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("a1b2c3d\tb1c2d3e\n")));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("partial", true)));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getPullRequestDiffFileContents({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          changeType: "deleted",
+          oldPath: "src/large.ts",
+          newPath: "src/large.ts",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitHubDiffFileContentsUnavailableError");
+      if (error._tag === "GitHubDiffFileContentsUnavailableError") {
+        assert.strictEqual(error.path, "src/large.ts");
+        assert.strictEqual(error.reason, "oversized");
+      }
+    }),
+  );
+
+  it.effect("reports undecodable diff file contents as binary", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("a1b2c3d\tb1c2d3e\n")));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output("binary\uFFFDcontents", false, true)),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getPullRequestDiffFileContents({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          changeType: "deleted",
+          oldPath: "assets/logo.png",
+          newPath: "assets/logo.png",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitHubDiffFileContentsUnavailableError");
+      if (error._tag === "GitHubDiffFileContentsUnavailableError") {
+        assert.strictEqual(error.path, "assets/logo.png");
+        assert.strictEqual(error.reason, "binary");
+      }
+    }),
+  );
+
+  it.effect("returns valid text containing a literal replacement character", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("a1b2c3d\tb1c2d3e\n")));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("before\uFFFDafter")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const contents = yield* cli.getPullRequestDiffFileContents({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        changeType: "deleted",
+        oldPath: "docs/encoding.md",
+        newPath: "docs/encoding.md",
+      });
+
+      assert.strictEqual(contents.oldContents, "before\uFFFDafter");
     }),
   );
 

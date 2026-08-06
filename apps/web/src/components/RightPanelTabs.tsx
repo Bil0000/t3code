@@ -1,4 +1,4 @@
-import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
+import type { ContextMenuItem, PreviewSessionSnapshot, PullRequestState } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
   ClipboardList,
@@ -55,14 +55,25 @@ interface RightPanelTabsProps {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   browserAvailable: boolean;
+  terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
+  pullRequestStatuses?: Readonly<Record<string, PullRequestTabStatus>>;
   children: ReactNode;
+}
+
+export interface PullRequestTabStatus {
+  projectId: string;
+  repository: string;
+  number: number;
+  state: PullRequestState;
+  isDraft: boolean;
 }
 
 const SURFACE_DISABLED_REASONS = {
   browser: "Browser previews are only available in the T3 Code desktop app.",
+  terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
@@ -105,6 +116,7 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   browserAvailable: boolean;
+  terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
@@ -116,16 +128,16 @@ function RightPanelEmptyState(props: {
       icon: Globe2,
       available: props.browserAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.browser,
-      wide: false,
+      centered: false,
       onClick: props.onAddBrowser,
     },
     {
       label: "Terminal",
       description: "Start a shell in this workspace.",
       icon: TerminalSquare,
-      available: true,
-      disabledReason: null,
-      wide: false,
+      available: props.terminalAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.terminal,
+      centered: false,
       onClick: props.onAddTerminal,
     },
     {
@@ -134,7 +146,7 @@ function RightPanelEmptyState(props: {
       icon: Files,
       available: props.filesAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.files,
-      wide: false,
+      centered: false,
       onClick: props.onAddFiles,
     },
     {
@@ -143,7 +155,7 @@ function RightPanelEmptyState(props: {
       icon: FileDiff,
       available: props.diffAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.diff,
-      wide: false,
+      centered: false,
       onClick: props.onAddDiff,
     },
     {
@@ -152,9 +164,7 @@ function RightPanelEmptyState(props: {
       icon: GitPullRequest,
       available: props.pullRequestAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.pullRequest,
-      // Last and across both columns, because it is the one surface that is about the thread's
-      // work as a whole rather than a tool to look at it with.
-      wide: true,
+      centered: true,
       onClick: props.onAddPullRequest,
     },
   ] as const;
@@ -171,7 +181,9 @@ function RightPanelEmptyState(props: {
         <div className="grid grid-cols-2 gap-2">
           {actions.map((action) => {
             const Icon = action.icon;
-            const spanClass = action.wide ? "col-span-2" : undefined;
+            const placementClass = action.centered
+              ? "col-span-2 w-[calc(50%-0.25rem)] justify-self-center"
+              : undefined;
             const content = (
               <>
                 <Icon className="mb-3 size-5" />
@@ -189,7 +201,7 @@ function RightPanelEmptyState(props: {
                   onClick={action.onClick}
                   className={cn(
                     "flex min-h-28 w-full flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left transition hover:border-border hover:bg-accent/60 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5",
-                    spanClass,
+                    placementClass,
                   )}
                 >
                   {content}
@@ -201,7 +213,7 @@ function RightPanelEmptyState(props: {
                 type="button"
                 className={cn(
                   "flex min-h-28 w-full cursor-not-allowed flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left opacity-40 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5",
-                  spanClass,
+                  placementClass,
                 )}
                 aria-disabled="true"
               >
@@ -276,10 +288,12 @@ function SurfaceIcon({
   surface,
   sessions,
   theme,
+  pullRequestStatuses,
 }: {
   surface: RightPanelSurface;
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>;
   theme: "light" | "dark";
+  pullRequestStatuses: Readonly<Record<string, PullRequestTabStatus>> | undefined;
 }) {
   switch (surface.kind) {
     case "preview": {
@@ -304,8 +318,20 @@ function SurfaceIcon({
       return <TerminalSquare className="size-3 shrink-0" />;
     case "plan":
       return <ClipboardList className="size-3 shrink-0" />;
-    case "pull-request":
-      return <GitPullRequest className="size-3 shrink-0" />;
+    case "pull-request": {
+      const status = pullRequestStatuses?.[surface.id] ?? null;
+      const toneClassName =
+        status?.state === "merged"
+          ? "text-violet-600 dark:text-violet-300/90"
+          : status?.state === "closed"
+            ? "text-red-600 dark:text-red-300/90"
+            : status?.isDraft
+              ? "text-zinc-500 dark:text-zinc-400/80"
+              : status?.state === "open"
+                ? "text-emerald-600 dark:text-emerald-300/90"
+                : "text-muted-foreground";
+      return <GitPullRequest className={cn("size-3 shrink-0", toneClassName)} />;
+    }
   }
 }
 
@@ -399,7 +425,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
         className={cn(
           "workspace-topbar gap-1 pl-2",
           props.mode !== "inline" && "[--workspace-topbar-height:--spacing(11)]",
-          props.mode === "inline" ? "pr-28" : "pr-3",
+          props.mode === "inline" && !props.layoutControls ? "pr-28" : "pr-3",
           ownsDesktopTitleBar && "wco:pr-[calc(var(--workspace-native-controls-inset)+6rem)]",
           props.mode === "inline" && props.maximized && COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
         )}
@@ -442,6 +468,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                         surface={surface}
                         sessions={props.previewSessions}
                         theme={resolvedTheme}
+                        pullRequestStatuses={props.pullRequestStatuses}
                       />
                       {pending ? (
                         <span
@@ -486,7 +513,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <Globe2 />
                     Browser
                   </SurfaceMenuItem>
-                  <SurfaceMenuItem available onClick={props.onAddTerminal}>
+                  <SurfaceMenuItem
+                    available={props.terminalAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.terminal}
+                    onClick={props.onAddTerminal}
+                  >
                     <TerminalSquare />
                     Terminal
                   </SurfaceMenuItem>
@@ -530,6 +561,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             browserAvailable={props.browserAvailable}
+            terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}

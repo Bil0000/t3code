@@ -131,6 +131,48 @@ export class GitHubDiffCommitError extends Schema.TaggedErrorClass<GitHubDiffCom
   }
 }
 
+/** The revisions read successfully, but cannot name both sides this file needs. */
+export class GitHubDiffRevisionsUnavailableError extends Schema.TaggedErrorClass<GitHubDiffRevisionsUnavailableError>()(
+  "GitHubDiffRevisionsUnavailableError",
+  {
+    command: Schema.Literal("gh"),
+    cwd: Schema.String,
+    number: Schema.Int,
+    commit: Schema.optional(Schema.String),
+  },
+) {
+  get detail(): string {
+    return this.commit === undefined
+      ? `Pull request #${this.number} reported no usable base and head revisions.`
+      : `Commit ${this.commit} reported no usable revisions for this file.`;
+  }
+
+  override get message(): string {
+    return `GitHub CLI failed in getPullRequestDiffFileContents: ${this.detail}`;
+  }
+}
+
+/** A blob exists, but expanding it would be unsafe or would not produce text. */
+export class GitHubDiffFileContentsUnavailableError extends Schema.TaggedErrorClass<GitHubDiffFileContentsUnavailableError>()(
+  "GitHubDiffFileContentsUnavailableError",
+  {
+    command: Schema.Literal("gh"),
+    cwd: Schema.String,
+    path: Schema.String,
+    reason: Schema.Literals(["oversized", "binary"]),
+  },
+) {
+  get detail(): string {
+    return this.reason === "oversized"
+      ? `The diff file '${this.path}' exceeds the 1 MB expansion limit.`
+      : `The diff file '${this.path}' is binary.`;
+  }
+
+  override get message(): string {
+    return `GitHub CLI failed in getPullRequestDiffFileContents: ${this.detail}`;
+  }
+}
+
 /**
  * Not a decode failure: a repository was named that cannot go into a search or into a GraphQL
  * document as itself. Every qualifier and every alias below is composed from `owner/name`, so a
@@ -159,12 +201,19 @@ export type GitHubPullRequestCliError =
   | GitHubPullRequestReadError
   | GitHubDiffCursorError
   | GitHubDiffCommitError
+  | GitHubDiffRevisionsUnavailableError
+  | GitHubDiffFileContentsUnavailableError
   | GitHubRepositorySelectorError
   | GitHubViewerLoginUnavailableError;
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
 const DIFF_MAX_OUTPUT_BYTES = 8 * 1024 * 1024;
 const DIFF_TIMEOUT_MS = 60_000;
+/** Pierre expansion is for source files, not blobs large enough to stall a review surface. */
+const DIFF_FILE_MAX_OUTPUT_BYTES = 1024 * 1024;
+
+/** A search-free fallback may scan older rows for local filters, but never the whole repository. */
+const PULL_REQUEST_FALLBACK_MAX_ROWS = 1_000;
 
 /** What the files API serves at most in one response, which is what one slice is made of. */
 const DIFF_FILES_PAGE_SIZE = 100;
@@ -286,6 +335,20 @@ export class GitHubPullRequestCli extends Context.Service<
       /** One commit's own changes, rather than everything the pull request carries. */
       readonly commit?: string | undefined;
     }) => Effect.Effect<GitHubPullRequestDiffSlice, GitHubPullRequestCliError>;
+
+    readonly getPullRequestDiffFileContents: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly commit?: string | undefined;
+      readonly changeType: "change" | "rename-pure" | "rename-changed" | "new" | "deleted";
+      readonly oldPath: string;
+      readonly newPath: string;
+    }) => Effect.Effect<
+      { readonly oldContents: string; readonly newContents: string },
+      GitHubPullRequestCliError
+    >;
 
     readonly listReviewThreadComments: (input: {
       readonly cwd: string;
@@ -446,8 +509,8 @@ function involvementArgs(input: {
   // takes one `--search`, so the reader's text joins the qualifiers rather than replacing them.
   const query = input.query?.trim() ?? "";
   // The fallback read exists because this repository's search index answered nothing, so it goes
-  // nowhere near search: no order, no cursor, and no qualifiers either, since `review-requested:`
-  // and `is:unmerged` are searches too and would come back just as empty.
+  // nowhere near search: no order, cursor or qualifiers. Its decoded rows are narrowed by state
+  // and involvement below, since widening either would put unrelated pull requests on the page.
   const searchTerms = !input.sorted
     ? []
     : [
@@ -468,6 +531,26 @@ function involvementArgs(input: {
     ...(input.involvement === "authored" ? ["--author", input.viewer] : []),
     ...(searchTerms.length > 0 ? ["--search", searchTerms.join(" ")] : []),
   ];
+}
+
+/** The search-free fallback is wider than the request, so narrow its decoded rows locally. */
+function matchesUnsortedListing(
+  item: GitHubPullRequestListItem,
+  input: {
+    readonly state: PullRequestListState;
+    readonly involvement: PullRequestInvolvement;
+    readonly viewer: string;
+  },
+): boolean {
+  const matchesState = input.state === "all" || item.state === input.state;
+  const viewer = input.viewer.toLowerCase();
+  const matchesInvolvement =
+    input.involvement === "all" ||
+    (input.involvement === "authored"
+      ? item.author?.login.toLowerCase() === viewer
+      : item.hasTeamReviewRequest ||
+        item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer));
+  return matchesState && matchesInvolvement;
 }
 
 /** What a repository selector may hold before it goes into a search as itself. */
@@ -708,6 +791,96 @@ export const make = Effect.gen(function* () {
       );
   };
 
+  const getPullRequestDiffFileContents: GitHubPullRequestCli["Service"]["getPullRequestDiffFileContents"] =
+    (input) =>
+      Effect.gen(function* () {
+        if (input.commit !== undefined && !isCommitSha(input.commit)) {
+          return yield* new GitHubDiffCommitError({ command: "gh", cwd: input.cwd });
+        }
+        const { owner, name } = parseRepositorySelector(input.repository);
+        const refsResult = yield* github.execute({
+          cwd: input.cwd,
+          args: [
+            "api",
+            "--hostname",
+            input.host,
+            input.commit === undefined
+              ? `repos/${owner}/${name}/pulls/${input.number}`
+              : `repos/${owner}/${name}/commits/${input.commit}`,
+            "--jq",
+            input.commit === undefined
+              ? "[.base.sha, .head.sha] | @tsv"
+              : "[.parents[0].sha, .sha] | @tsv",
+          ],
+          maxOutputBytes: 1024,
+          timeoutMs: DIFF_TIMEOUT_MS,
+        });
+        // Keep a leading tab: a root commit has no parent, and jq represents that absent old
+        // revision as the empty field before the tab. Every file in it is new, so that is a
+        // usable answer whenever the caller does not need the old side.
+        const [baseRef, headRef, ...extraRefs] = refsResult.stdout.trimEnd().split("\t");
+        const rootCommitNewFile =
+          input.commit !== undefined && input.changeType === "new" && baseRef === "";
+        if (
+          refsResult.stdoutTruncated ||
+          !headRef ||
+          extraRefs.length > 0 ||
+          (!rootCommitNewFile && (baseRef === undefined || !isCommitSha(baseRef))) ||
+          !isCommitSha(headRef)
+        ) {
+          return yield* new GitHubDiffRevisionsUnavailableError({
+            command: "gh",
+            cwd: input.cwd,
+            number: input.number,
+            ...(input.commit === undefined ? {} : { commit: input.commit }),
+          });
+        }
+
+        const readFile = (revision: string, filePath: string) =>
+          github
+            .execute({
+              cwd: input.cwd,
+              args: [
+                "api",
+                "--hostname",
+                input.host,
+                "--header",
+                "Accept: application/vnd.github.raw+json",
+                `repos/${owner}/${name}/contents/${filePath
+                  .split("/")
+                  .map(encodeURIComponent)
+                  .join("/")}?ref=${encodeURIComponent(revision)}`,
+              ],
+              maxOutputBytes: DIFF_FILE_MAX_OUTPUT_BYTES,
+              timeoutMs: DIFF_TIMEOUT_MS,
+            })
+            .pipe(
+              Effect.flatMap((result) =>
+                result.stdoutTruncated ||
+                result.stdout.includes("\0") ||
+                result.stdoutInvalidUtf8 === true
+                  ? Effect.fail(
+                      new GitHubDiffFileContentsUnavailableError({
+                        command: "gh",
+                        cwd: input.cwd,
+                        path: filePath,
+                        reason: result.stdoutTruncated ? "oversized" : "binary",
+                      }),
+                    )
+                  : Effect.succeed(result.stdout),
+              ),
+            );
+
+        const [oldContents, newContents] = yield* Effect.all(
+          [
+            input.changeType === "new" ? Effect.succeed("") : readFile(baseRef, input.oldPath),
+            input.changeType === "deleted" ? Effect.succeed("") : readFile(headRef, input.newPath),
+          ],
+          { concurrency: 2 },
+        );
+        return { oldContents, newContents };
+      });
+
   return GitHubPullRequestCli.of({
     getViewerLogin: (input) =>
       github.execute({ cwd: input.cwd, args: ["api", "user", "--jq", ".login"] }).pipe(
@@ -720,8 +893,10 @@ export const make = Effect.gen(function* () {
       ),
 
     listPullRequests: (input) => {
+      const fallbackMaxRows = Math.max(input.limit + 1, PULL_REQUEST_FALLBACK_MAX_ROWS);
       const read = (
         continues: boolean,
+        requestedRows = input.limit + 1,
       ): Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestCliError> =>
         github
           .execute({
@@ -735,7 +910,7 @@ export const make = Effect.gen(function* () {
               input.state,
               "--limit",
               // One extra row reveals that the repository has more than the page shows.
-              String(input.limit + 1),
+              String(requestedRows),
               "--json",
               PULL_REQUEST_LIST_JSON_FIELDS,
             ],
@@ -747,22 +922,37 @@ export const make = Effect.gen(function* () {
                 return Effect.succeed({ items: [], truncated: false, continues });
               }
               const decoded = decodePullRequestListJson(raw);
-              return Result.isSuccess(decoded)
-                ? Effect.succeed({
-                    items: decoded.success.items.slice(0, input.limit),
-                    // One row over the page size is the probe for a next page, and it is
-                    // counted before decoding: a skipped malformed row must not end paging.
-                    truncated: decoded.success.rawCount > input.limit,
-                    continues,
-                  })
-                : Effect.fail(
-                    new GitHubPullRequestReadError({
-                      command: "gh",
-                      cwd: input.cwd,
-                      operation: "listPullRequests",
-                      cause: decoded.failure,
-                    }),
-                  );
+              if (Result.isSuccess(decoded)) {
+                const items = continues
+                  ? decoded.success.items
+                  : decoded.success.items.filter((item) => matchesUnsortedListing(item, input));
+                if (
+                  !continues &&
+                  items.length < input.limit &&
+                  decoded.success.rawCount >= requestedRows &&
+                  requestedRows < fallbackMaxRows
+                ) {
+                  const nextRows = Math.min(requestedRows * 2, fallbackMaxRows);
+                  if (nextRows > requestedRows) return read(false, nextRows);
+                }
+                return Effect.succeed({
+                  items: items.slice(0, input.limit),
+                  // One row over the page size is the probe for a next page, and it is
+                  // counted before decoding: a skipped malformed row must not end paging.
+                  truncated: continues
+                    ? decoded.success.rawCount > input.limit
+                    : items.length > input.limit || decoded.success.rawCount >= requestedRows,
+                  continues,
+                });
+              }
+              return Effect.fail(
+                new GitHubPullRequestReadError({
+                  command: "gh",
+                  cwd: input.cwd,
+                  operation: "listPullRequests",
+                  cause: decoded.failure,
+                }),
+              );
             }),
           );
       // GitHub does not index every repository for search, and one it will not search answers
@@ -947,6 +1137,8 @@ export const make = Effect.gen(function* () {
         );
     },
 
+    getPullRequestDiffFileContents,
+
     listReviewThreadComments: (input) =>
       Effect.gen(function* () {
         const { owner, name } = parseRepositorySelector(input.repository);
@@ -988,7 +1180,7 @@ export const make = Effect.gen(function* () {
         const entries: GitHubReviewThreadEntry[] = [];
         const avatarsByLogin = new Map<string, string>();
         let reviewers: ReadonlyArray<PullRequestActor> = [];
-        let viewer: GitHubReviewThreadPage["viewer"] = { canUpdate: true, didAuthor: true };
+        let viewer: GitHubReviewThreadPage["viewer"] = { canUpdate: true, didAuthor: false };
         let cursor: string | null = null;
         let page = 0;
         do {

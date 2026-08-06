@@ -214,7 +214,7 @@ export const make = Effect.gen(function* () {
               avatarsByLogin: new Map<string, string>(),
               // A read that never happened says nothing about the reader, and an unknown
               // permission is granted: the controls stay live and GitHub explains any refusal.
-              viewer: { canUpdate: true, didAuthor: true },
+              viewer: { canUpdate: true, didAuthor: false },
             })),
           ),
         ],
@@ -262,6 +262,9 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(fail("getViewerPermissions")), Effect.map(gitHubViewerPermissions)),
 
     getDiff: (input) => cli.getPullRequestDiff(input).pipe(Effect.mapError(fail("getDiff"))),
+
+    getDiffFileContents: (input) =>
+      cli.getPullRequestDiffFileContents(input).pipe(Effect.mapError(fail("getDiffFileContents"))),
 
     listReviewerCandidates: (input) =>
       cli.listReviewerCandidates(input).pipe(Effect.mapError(fail("listReviewerCandidates"))),

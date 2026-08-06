@@ -541,6 +541,23 @@ export const PullRequestDiffResult = Schema.Struct({
 });
 export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;
 
+/** The complete old and new files Pierre needs to open omitted context in a host-backed patch. */
+export const PullRequestDiffFileContentsInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  /** One commit's own comparison; absent means the whole change request. */
+  commit: Schema.optional(TrimmedNonEmptyString),
+  changeType: Schema.Literals(["change", "rename-pure", "rename-changed", "new", "deleted"]),
+  oldPath: TrimmedNonEmptyString,
+  newPath: TrimmedNonEmptyString,
+});
+export type PullRequestDiffFileContentsInput = typeof PullRequestDiffFileContentsInput.Type;
+
+export const PullRequestDiffFileContentsResult = Schema.Struct({
+  oldContents: Schema.String,
+  newContents: Schema.String,
+});
+export type PullRequestDiffFileContentsResult = typeof PullRequestDiffFileContentsResult.Type;
+
 export const PullRequestActionInput = Schema.Struct({
   ...PullRequestRef.fields,
   action: PullRequestAction,

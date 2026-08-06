@@ -5,11 +5,14 @@ import type {
   PullRequestAction,
   PullRequestMergeMethod,
   PullRequestRef,
+  PullRequestState,
 } from "@t3tools/contracts";
 import {
+  ArrowLeftIcon,
+  ArrowUpRightIcon,
   BookOpenIcon,
   ChevronDownIcon,
-  ExternalLinkIcon,
+  FilesIcon,
   FolderGit2Icon,
   GitBranchIcon,
   GitMergeIcon,
@@ -22,12 +25,13 @@ import {
   MoreHorizontalIcon,
   PanelRightIcon,
   RefreshCwIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
-import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
+import { useCopyToClipboard, writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
@@ -36,6 +40,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import {
   AlertDialog,
@@ -75,7 +80,12 @@ import {
   readableFailure,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
-import { PullRequestStateGlyph } from "./pullRequestPresentation";
+import {
+  PullRequestActorLabel,
+  PullRequestDiffStat,
+  PullRequestMetaLine,
+  resolvePullRequestState,
+} from "./pullRequestPresentation";
 
 type DetailTab = "summary" | "timeline" | "code";
 
@@ -137,6 +147,7 @@ export function PullRequestDetailPanel({
   refreshToken: forcedRefreshToken = 0,
   onActed,
   onClose,
+  onStateChange,
   context = "page",
 }: {
   environmentId: EnvironmentId;
@@ -152,8 +163,16 @@ export function PullRequestDetailPanel({
    * Told rather than assumed: only the page knows whether it is showing one.
    */
   onActed?: () => void;
-  /** Absent when something around the panel already owns closing it — a surface tab's own X. */
+  /** Page-owned detail columns use this to clear the selected pull request. */
   onClose?: () => void;
+  /** Keeps compact chrome, such as the right-panel tab, in step with refreshed host state. */
+  onStateChange?: (status: {
+    projectId: string;
+    repository: string;
+    number: number;
+    state: PullRequestState;
+    isDraft: boolean;
+  }) => void;
   /**
    * Beside a thread, the checkout affordance disappears: the panel is showing that thread's
    * own pull request, so the branch is already under the reader's feet — and checking it out
@@ -168,11 +187,25 @@ export function PullRequestDetailPanel({
   // Which handoff is preparing, keyed so a per-finding button can say "Preparing..." on itself
   // alone. One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
+  const { copyToClipboard: copyBranchToClipboard, isCopied: isBranchCopied } = useCopyToClipboard({
+    target: "branch name",
+    timeout: 1600,
+  });
 
   const detailQuery = useEnvironmentQuery(
     pullRequestEnvironment.detail({ environmentId, input: reference }),
   );
   const detail = detailQuery.data;
+  useEffect(() => {
+    if (!detail) return;
+    onStateChange?.({
+      projectId: detail.projectId,
+      repository: detail.repository,
+      number: detail.number,
+      state: detail.state,
+      isDraft: detail.isDraft,
+    });
+  }, [detail, onStateChange]);
   // A pull request changes while it is open in front of somebody — a push lands, a check
   // finishes, a review arrives — so the panel reads it again on the way back to the window and
   // while a reader sits on it. Keyed by the pull request rather than by the panel, because this
@@ -561,41 +594,37 @@ export function PullRequestDetailPanel({
             : allowedMergeMethods.length > 0
               ? "merge"
               : null;
+  // The pull request number carries this state in the overview and the right-panel tab mirrors
+  // it. Conflicts keep their own row below: an open pull request remains green there.
+  const statePresentation = detail
+    ? resolvePullRequestState({ state: detail.state, isDraft: detail.isDraft })
+    : null;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
-      <div className="surface-subheader gap-2 px-3" data-surface-subheader>
-        {detail ? (
-          <PullRequestStateGlyph
-            state={detail.state}
-            isDraft={detail.isDraft}
-            mergeability={detail.mergeability}
-            baseBranch={detail.baseBranch}
-          />
-        ) : null}
-        <nav className="flex min-w-0 items-center gap-0.5" aria-label="Pull request tabs">
-          {visibleTabs.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              aria-pressed={tab === item.value}
-              onClick={() => {
-                // Once opened, the diff viewer is kept alive for the rest of the panel's life.
-                if (item.value === "code") setCodeMounted(true);
-                setTab(item.value);
-              }}
-              className={cn(
-                "rounded-md px-2 py-1 text-xs transition-colors",
-                tab === item.value
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
-        <div className="ml-auto flex shrink-0 items-center gap-1">
+      <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 border-b border-border/60">
+        <div className="ml-2 flex min-h-6 min-w-0 items-center gap-1 text-sm text-muted-foreground sm:text-xs">
+          {detail && statePresentation ? (
+            <>
+              <span className="min-w-0 truncate" title={detail.repository}>
+                {detail.repository}
+              </span>
+              <button
+                type="button"
+                onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}
+                className={cn(
+                  "shrink-0 font-medium underline-offset-2 hover:underline",
+                  statePresentation.toneClassName,
+                )}
+                title={OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                aria-label={`Open pull request #${detail.number} on host`}
+              >
+                #{detail.number}
+              </button>
+            </>
+          ) : null}
+        </div>
+        <div className="mr-2 flex min-w-0 flex-wrap items-center justify-end gap-1">
           {detail ? (
             <>
               <Menu>
@@ -605,14 +634,28 @@ export function PullRequestDetailPanel({
                 >
                   <MoreHorizontalIcon className="size-4" />
                 </MenuTrigger>
-                <MenuPopup align="end" side="bottom" className="min-w-52">
+                <MenuPopup align="end" side="bottom" className="min-w-72">
                   <MenuItem disabled={detailQuery.isPending} onClick={() => void refreshFromHost()}>
                     <RefreshCwIcon className="size-3.5" />
                     Refresh
                   </MenuItem>
-                  <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}>
-                    <ExternalLinkIcon className="size-3.5" />
-                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  <MenuItem disabled={handoff !== null} onClick={askAboutPullRequest}>
+                    <MessageCircleQuestionIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>{handoff === "ask" ? "Opening..." : "Ask a question"}</span>
+                      <span className="text-xs text-muted-foreground">
+                        Opens a thread that knows which pull request you mean.
+                      </span>
+                    </span>
+                  </MenuItem>
+                  <MenuItem disabled={handoff !== null} onClick={explainPullRequest}>
+                    <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
+                    <span className="flex min-w-0 flex-col">
+                      <span>{handoff === "explain" ? "Opening..." : "Explain this PR"}</span>
+                      <span className="text-xs text-muted-foreground">
+                        A walk through the diff and what to read closely.
+                      </span>
+                    </span>
                   </MenuItem>
                   <MenuSeparator />
                   {detail.state === "open" ? (
@@ -701,6 +744,15 @@ export function PullRequestDetailPanel({
                   ) : null}
                 </MenuPopup>
               </Menu>
+              <Button
+                size="xs"
+                variant="ghost"
+                className="text-muted-foreground hover:text-foreground"
+                onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}
+              >
+                {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                <ArrowUpRightIcon className="size-3" />
+              </Button>
               {/* Checking a pull request out is the reason to open one here at all, so it is a
                   button of its own rather than a side effect of asking an agent for something.
                   It asks where, because the two answers are not interchangeable: one leaves your
@@ -746,56 +798,9 @@ export function PullRequestDetailPanel({
                   </MenuPopup>
                 </Menu>
               ) : null}
-              {/* Beside checking out, because they are the two things somebody opening a pull
-                  request wants: the code, or an answer about it. Asking takes no checkout — a
-                  question is not a reason to move the working tree or to make a worktree nobody
-                  asked for — which is what keeps it a separate press rather than a mode of the
-                  one next to it. */}
-              <Menu>
-                <MenuTrigger
-                  disabled={handoff !== null}
-                  render={
-                    <Button size="xs" variant="outline">
-                      {handoff === "ask" || handoff === "explain" ? (
-                        "Opening..."
-                      ) : (
-                        <>
-                          <MessageCircleQuestionIcon className="size-3" />
-                          Ask
-                          <ChevronDownIcon className="size-3 text-muted-foreground" />
-                        </>
-                      )}
-                    </Button>
-                  }
-                />
-                <MenuPopup align="end" side="bottom" className="min-w-72">
-                  <MenuItem onClick={askAboutPullRequest}>
-                    <MessageCircleQuestionIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>Ask a question</span>
-                      <span className="text-xs text-muted-foreground">
-                        Opens a thread that knows which pull request you mean.
-                      </span>
-                    </span>
-                  </MenuItem>
-                  <MenuItem onClick={explainPullRequest}>
-                    <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                    <span className="flex min-w-0 flex-col">
-                      <span>Explain this PR</span>
-                      <span className="text-xs text-muted-foreground">
-                        A walk through the diff: what it is for, and what to read closely.
-                      </span>
-                    </span>
-                  </MenuItem>
-                </MenuPopup>
-              </Menu>
               {primaryAction === "ready" ? (
                 <Button size="xs" disabled={actionPending} onClick={() => void perform("ready")}>
                   Ready for review
-                </Button>
-              ) : primaryAction === "resolve" ? (
-                <Button size="xs" disabled={handoff !== null} onClick={startResolveConflicts}>
-                  {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts"}
                 </Button>
               ) : primaryAction === "merge" ? (
                 <Button
@@ -809,8 +814,6 @@ export function PullRequestDetailPanel({
             </>
           ) : null}
           {onClose ? (
-            // Panel chrome rather than an action: the same collapse glyph the rest of the app
-            // uses for its right panel, ghosted so it does not compete with the buttons.
             <Button
               size="icon-xs"
               variant="ghost"
@@ -821,6 +824,109 @@ export function PullRequestDetailPanel({
             </Button>
           ) : null}
         </div>
+
+        {detail ? (
+          <div className="col-span-2 mt-3 min-w-0 px-2 pb-4">
+            <h1 className="text-base font-semibold leading-snug">{detail.title}</h1>
+            <PullRequestMetaLine className="mt-2 text-xs text-muted-foreground">
+              <PullRequestActorLabel actor={detail.author} className="font-medium" />
+              <span>updated {formatRelativeTimeLabel(detail.updatedAt)}</span>
+            </PullRequestMetaLine>
+
+            <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+              <code
+                className="max-w-48 truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground"
+                title={detail.baseBranch}
+              >
+                {detail.baseBranch}
+              </code>
+              <ArrowLeftIcon aria-label="receives changes from" className="size-4 shrink-0" />
+              <button
+                type="button"
+                className="grid max-w-64 min-w-0 cursor-pointer rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                aria-label={isBranchCopied ? "Branch name copied" : "Copy pull request branch"}
+                title={isBranchCopied ? "Copied" : "Copy pull request branch"}
+                onClick={() => copyBranchToClipboard(detail.headBranch)}
+              >
+                <code
+                  className={cn(
+                    "col-start-1 row-start-1 min-w-0 truncate transition-opacity duration-150 motion-reduce:transition-none",
+                    isBranchCopied ? "opacity-0" : "opacity-100",
+                  )}
+                  title={detail.headBranch}
+                >
+                  {detail.headBranch}
+                </code>
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "col-start-1 row-start-1 truncate text-center transition-opacity duration-150 motion-reduce:transition-none",
+                    isBranchCopied ? "opacity-100" : "opacity-0",
+                  )}
+                >
+                  Copied
+                </span>
+              </button>
+              <span className="ml-auto inline-flex shrink-0 items-center justify-end gap-2">
+                <span className="inline-flex items-center gap-1.5 tabular-nums">
+                  <FilesIcon className="size-3.5" />
+                  {detail.changedFiles.toLocaleString()}{" "}
+                  {detail.changedFiles === 1 ? "file" : "files"}
+                </span>
+                <PullRequestDiffStat
+                  additions={detail.additions}
+                  deletions={detail.deletions}
+                  className="shrink-0 font-mono text-xs"
+                />
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        {detail && conflicting ? (
+          <div className="col-span-2 flex min-h-12 items-center gap-2 border-t border-border/60 px-2 py-2.5">
+            <TriangleAlertIcon className="size-4 shrink-0 text-destructive" />
+            <span className="text-xs font-medium">Merge conflicts</span>
+            <span className="min-w-0 truncate text-xs text-muted-foreground">
+              with {detail.baseBranch}
+            </span>
+            <Button
+              size="xs"
+              variant="secondary"
+              className="ml-auto"
+              disabled={handoff !== null}
+              onClick={startResolveConflicts}
+            >
+              {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts"}
+            </Button>
+          </div>
+        ) : null}
+
+        <nav
+          className="col-span-2 flex min-w-0 items-center gap-1 border-t border-border/60 px-2 py-2"
+          aria-label="Pull request tabs"
+        >
+          {visibleTabs.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              aria-pressed={tab === item.value}
+              onClick={() => {
+                // Once opened, the diff viewer is kept alive for the rest of the panel's life.
+                if (item.value === "code") setCodeMounted(true);
+                setTab(item.value);
+              }}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors",
+                tab === item.value
+                  ? "bg-accent text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </nav>
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">

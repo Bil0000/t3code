@@ -54,6 +54,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.pullRequestsListStats]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsDetail]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsDiff]: AuthOrchestrationReadScope,
+  [WS_METHODS.pullRequestsDiffFileContents]: AuthOrchestrationReadScope,
   [WS_METHODS.pullRequestsRunAction]: AuthOrchestrationOperateScope,
   [WS_METHODS.pullRequestsComment]: AuthOrchestrationOperateScope,
   [WS_METHODS.pullRequestsSubmitReview]: AuthOrchestrationOperateScope,

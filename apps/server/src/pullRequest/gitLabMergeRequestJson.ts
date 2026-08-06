@@ -137,6 +137,7 @@ const RawCommitSchema = Schema.Struct({
   title: Schema.optional(Schema.NullOr(Schema.String)),
   committed_date: Schema.optional(Schema.NullOr(Schema.String)),
   created_at: Schema.optional(Schema.NullOr(Schema.String)),
+  parent_ids: Schema.optional(Schema.Array(Schema.String)),
 });
 
 const RawDiffSchema = Schema.Struct({
@@ -347,6 +348,7 @@ const decodeMergeRequest = decodeJsonResult(RawMergeRequestSchema);
 const decodeNoteEntry = Schema.decodeUnknownExit(RawNoteSchema);
 const decodeUserEntry = Schema.decodeUnknownExit(RawUserSchema);
 const decodeCommitEntry = Schema.decodeUnknownExit(RawCommitSchema);
+const decodeCommit = decodeJsonResult(RawCommitSchema);
 const decodeDiffEntry = Schema.decodeUnknownExit(RawDiffSchema);
 const decodeDiscussionEntry = Schema.decodeUnknownExit(RawDiscussionSchema);
 const decodeDiffRefs = decodeJsonResult(RawDiffRefsSchema);
@@ -363,6 +365,8 @@ export interface GitLabProjectUsers {
 
 export interface GitLabMergeRequestListBatch {
   readonly items: ReadonlyArray<GitLabMergeRequestListItem>;
+  /** Zero-based positions of the decoded items in GitLab's raw page. */
+  readonly rawIndexes: ReadonlyArray<number>;
   /** Rows GitLab returned, counted before decoding, so a skipped row cannot hide a next page. */
   readonly rawCount: number;
 }
@@ -377,13 +381,15 @@ export function decodeMergeRequestListJson(
     return Result.fail(decoded.failure);
   }
   const items: GitLabMergeRequestListItem[] = [];
-  for (const entry of decoded.success) {
+  const rawIndexes: number[] = [];
+  for (const [rawIndex, entry] of decoded.success.entries()) {
     const item = decodeMergeRequestEntry(entry);
     if (Exit.isSuccess(item)) {
       items.push(toListItem(item.value));
+      rawIndexes.push(rawIndex);
     }
   }
-  return Result.succeed({ items, rawCount: decoded.success.length });
+  return Result.succeed({ items, rawIndexes, rawCount: decoded.success.length });
 }
 
 export function decodeMergeRequestDetailJson(
@@ -592,6 +598,19 @@ export function decodeCommitsJson(
   }
   // GitLab lists a merge request's commits newest first; the timeline reads oldest first.
   return Result.succeed(commits.toReversed());
+}
+
+/** The exact comparison GitLab uses for a commit-scoped diff. */
+export function decodeCommitDiffRefsJson(
+  raw: string,
+): Result.Result<GitLabDiffRefs | null, DecodeFailure> {
+  const decoded = decodeCommit(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const baseSha = trimmed(decoded.success.parent_ids?.[0]);
+  const headSha = trimmed(decoded.success.id);
+  return Result.succeed(
+    baseSha === null || headSha === null ? null : { baseSha, headSha, startSha: baseSha },
+  );
 }
 
 function diffHeaderPaths(raw: Schema.Schema.Type<typeof RawDiffSchema>): {

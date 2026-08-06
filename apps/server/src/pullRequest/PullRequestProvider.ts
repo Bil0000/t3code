@@ -71,6 +71,11 @@ export interface ProviderChangeRequestPage {
   /** True when the host has more rows than the page size asked for. */
   readonly truncated: boolean;
   /**
+   * Optional count-based cursor advance. Most hosts advance by the rows delivered after local
+   * de-duplication; an offset-paged host may need to count malformed raw rows it consumed too.
+   */
+  readonly cursorAdvance?: number;
+  /**
    * This page can be carried on from, so the service may hand the caller a cursor for it. False
    * where the host answered in an order a cursor means nothing in, which leaves a larger `limit`
    * as the only way to the rest — what every listing did before there were cursors.
@@ -93,8 +98,9 @@ export interface ProviderListCursor {
    */
   readonly updatedBefore: string;
   /**
-   * How many rows this repository has handed over so far, for a host that carries on by counting
-   * rather than by date.
+   * How many provider rows this repository has consumed so far, for a host that carries on by
+   * counting rather than by date. Usually this is the number handed over; malformed raw rows may
+   * count too when the provider reports a `cursorAdvance`.
    */
   readonly delivered: number;
 }
@@ -155,6 +161,11 @@ export interface ProviderDiffSlice {
   /** Something in this slice could not be shown, as opposed to there being more slices. */
   readonly truncated: boolean;
   readonly nextCursor: string | null;
+}
+
+export interface ProviderDiffFileContents {
+  readonly oldContents: string;
+  readonly newContents: string;
 }
 
 export interface ProviderRepositoryRef {
@@ -275,6 +286,20 @@ export interface PullRequestProviderApi {
       readonly commit?: string | undefined;
     },
   ) => Effect.Effect<ProviderDiffSlice, PullRequestProviderError>;
+
+  /**
+   * Full files at the exact revisions the host used for its patch. Optional where the provider
+   * exposes no diff at all; the service refuses expansion there just as it refuses the patch.
+   */
+  readonly getDiffFileContents?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly commit?: string | undefined;
+      readonly changeType: "change" | "rename-pure" | "rename-changed" | "new" | "deleted";
+      readonly oldPath: string;
+      readonly newPath: string;
+    },
+  ) => Effect.Effect<ProviderDiffFileContents, PullRequestProviderError>;
 
   readonly runAction: (
     input: ProviderRepositoryRef & {

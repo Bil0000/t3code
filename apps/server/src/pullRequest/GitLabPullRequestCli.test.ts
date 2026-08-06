@@ -18,13 +18,14 @@ const layer = it.layer(
   ),
 );
 
-function output(stdout: string) {
+function output(stdout: string, stdoutTruncated = false, stdoutInvalidUtf8 = false) {
   return {
     exitCode: ChildProcessSpawner.ExitCode(0),
     stdout,
     stderr: "",
-    stdoutTruncated: false,
+    stdoutTruncated,
     stderrTruncated: false,
+    stdoutInvalidUtf8,
   };
 }
 
@@ -117,6 +118,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
 
       assert.strictEqual(batch.items.length, 3);
       assert.isFalse(batch.truncated);
+      assert.strictEqual(batch.cursorAdvance, 3);
       const path = argsOfCall(0)[1] ?? "";
       expect(path).toContain("projects/acme%2Fweb/merge_requests");
       expect(path).toContain("per_page=11");
@@ -170,7 +172,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("carries on from the instant the last slice ended on", () =>
+  it.effect("carries on from the number of rows already delivered", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(mergeRequests(3, 1))));
       const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
@@ -185,11 +187,65 @@ layer("GitLabPullRequestCli.layer", (it) => {
         cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 10 },
       });
 
-      // GitLab reads `updated_before` inclusively, so the rows already sent at that instant come
-      // back for the caller to drop rather than the ones beside them being skipped.
+      // GitLab's timestamp filter has no tie-breaker, so an offset is what advances through a
+      // boundary shared by more rows than one page can hold.
       const path = argsOfCall(0)[1] ?? "";
-      expect(path).toContain("updated_before=2026-07-02T00%3A00%3A00Z");
+      expect(path).not.toContain("updated_before=");
       expect(path).toContain("order_by=updated_at");
+      expect(path).toContain("per_page=11");
+      expect(path).toContain("page=1");
+    }),
+  );
+
+  it.effect("advances beyond several pages sharing the cursor timestamp", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(mergeRequests(11, 144))))
+        .mockReturnValueOnce(Effect.succeed(output(mergeRequests(11, 155))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const batch = yield* cli.listMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 150 },
+      });
+
+      expect(argsOfCall(0)[1]).toContain("per_page=11");
+      expect(argsOfCall(0)[1]).toContain("page=14");
+      expect(argsOfCall(1)[1]).toContain("page=15");
+      expect(batch.items.map((item) => item.number)).toEqual([
+        151, 152, 153, 154, 155, 156, 157, 158, 159, 160,
+      ]);
+      assert.isTrue(batch.truncated);
+    }),
+  );
+
+  it.effect("advances the cursor through malformed raw rows", () =>
+    Effect.gen(function* () {
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const rows = JSON.parse(mergeRequests(2, 1)) as ReadonlyArray<unknown>;
+      mockedExecute.mockReturnValueOnce(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        Effect.succeed(output(JSON.stringify([{ iid: "malformed" }, ...rows]))),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const batch = yield* cli.listMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 2,
+      });
+
+      expect(batch.items.map((item) => item.number)).toEqual([1, 2]);
+      assert.strictEqual(batch.cursorAdvance, 3);
+      assert.isTrue(batch.truncated);
     }),
   );
 
@@ -502,6 +558,167 @@ layer("GitLabPullRequestCli.layer", (it) => {
 
       assert.strictEqual(error._tag, "GitLabDiffCommitError");
       assert.strictEqual(mockedExecute.mock.calls.length, 0);
+    }),
+  );
+
+  it.effect("reports a commit with no parent as a structured error", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        Effect.succeed(output(JSON.stringify({ id: "a1b2c3d", parent_ids: [] }))),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getMergeRequestDiffFileContents({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          commit: "a1b2c3d",
+          changeType: "change",
+          oldPath: "src/a.ts",
+          newPath: "src/a.ts",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitLabDiffCommitParentUnavailableError");
+      if (error._tag === "GitLabDiffCommitParentUnavailableError") {
+        assert.strictEqual(error.commit, "a1b2c3d");
+      }
+    }),
+  );
+
+  it.effect("expands a new file from a root commit without requiring a parent", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        Effect.succeed(output(JSON.stringify({ id: "a1b2c3d", parent_ids: [] }))),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("first contents\n")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const contents = yield* cli.getMergeRequestDiffFileContents({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        commit: "a1b2c3d",
+        changeType: "new",
+        oldPath: "src/first.ts",
+        newPath: "src/first.ts",
+      });
+
+      expect(contents).toEqual({ oldContents: "", newContents: "first contents\n" });
+      expect(argsOfCall(1)[1]).toContain("raw?ref=a1b2c3d");
+    }),
+  );
+
+  it.effect("reports an oversized diff file with its path and reason", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              diff_refs: {
+                base_sha: "a1b2c3d",
+                head_sha: "b1c2d3e",
+                start_sha: "a1b2c3d",
+              },
+            }),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("partial", true)));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getMergeRequestDiffFileContents({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          changeType: "deleted",
+          oldPath: "src/large.ts",
+          newPath: "src/large.ts",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitLabDiffFileContentsUnavailableError");
+      if (error._tag === "GitLabDiffFileContentsUnavailableError") {
+        assert.strictEqual(error.path, "src/large.ts");
+        assert.strictEqual(error.reason, "oversized");
+      }
+    }),
+  );
+
+  it.effect("reports undecodable diff file contents as binary", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              diff_refs: {
+                base_sha: "a1b2c3d",
+                head_sha: "b1c2d3e",
+                start_sha: "a1b2c3d",
+              },
+            }),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output("binary\uFFFDcontents", false, true)),
+      );
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getMergeRequestDiffFileContents({
+          cwd: "/w",
+          repository: "acme/web",
+          number: 7,
+          changeType: "deleted",
+          oldPath: "assets/logo.png",
+          newPath: "assets/logo.png",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitLabDiffFileContentsUnavailableError");
+      if (error._tag === "GitLabDiffFileContentsUnavailableError") {
+        assert.strictEqual(error.path, "assets/logo.png");
+        assert.strictEqual(error.reason, "binary");
+      }
+    }),
+  );
+
+  it.effect("returns valid text containing a literal replacement character", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              diff_refs: {
+                base_sha: "a1b2c3d",
+                head_sha: "b1c2d3e",
+                start_sha: "a1b2c3d",
+              },
+            }),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("before\uFFFDafter")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      const contents = yield* cli.getMergeRequestDiffFileContents({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        changeType: "deleted",
+        oldPath: "docs/encoding.md",
+        newPath: "docs/encoding.md",
+      });
+
+      assert.strictEqual(contents.oldContents, "before\uFFFDafter");
     }),
   );
 

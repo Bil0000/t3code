@@ -1,4 +1,5 @@
-import { pullRequestHostOf } from "@t3tools/contracts";
+import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { pullRequestHostOf, ThreadId } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   ProjectId,
@@ -21,7 +22,15 @@ import {
   RefreshCwIcon,
   SearchIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState, type ElementType, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ElementType,
+  type ReactNode,
+} from "react";
 
 import {
   filterPullRequestsByInvolvement,
@@ -47,13 +56,21 @@ import {
 import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
-import { RightPanelResizeHandle } from "../components/preview/RightPanelResizeHandle";
+import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
+import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Skeleton } from "../components/ui/skeleton";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
-import { useResizableWidth } from "../hooks/useResizableWidth";
+import {
+  pullRequestSurfaceId,
+  selectActiveRightPanelSurface,
+  selectSelectedRightPanelSurface,
+  selectThreadRightPanelState,
+  useRightPanelStore,
+  type PullRequestSurface,
+} from "../rightPanelStore";
 import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
@@ -108,10 +125,11 @@ const PAGE_SIZE = 99;
 const MAX_PAGE_SIZE = 500;
 /** Stable empty map so the memos below do not see a new object on every render. */
 const EMPTY_VIEWERS: PullRequestListResult["viewers"] = {};
-const DETAIL_WIDTH_STORAGE_KEY = "t3code:pull-requests-detail-width";
-const DETAIL_MIN_WIDTH = 420;
-const DETAIL_DEFAULT_WIDTH = 640;
-const DETAIL_MAX_WIDTH = 1100;
+/** The list owns one environment-scoped right panel rather than borrowing a real thread's. */
+const PULL_REQUESTS_PANEL_ID = ThreadId.make("pull-requests-panel");
+const EMPTY_PREVIEW_SESSIONS = {};
+const EMPTY_TERMINAL_LABELS = new Map<string, string>();
+const EMPTY_PENDING_SURFACES = new Set<string>();
 
 export const Route = createFileRoute("/_chat/pull-requests")({
   validateSearch: (raw: Record<string, unknown>): PullRequestsSearch => ({
@@ -164,13 +182,30 @@ function PullRequestsRouteView() {
     () => resolveProjectScope(search.projectId, projects),
     [projects, search.projectId],
   );
-  const detailPanel = useResizableWidth({
-    storageKey: DETAIL_WIDTH_STORAGE_KEY,
-    defaultWidth: DETAIL_DEFAULT_WIDTH,
-    minWidth: DETAIL_MIN_WIDTH,
-    maxWidth: DETAIL_MAX_WIDTH,
-    edge: "left",
-  });
+  const rightPanelRef = useMemo(
+    () => (environmentId === null ? null : scopeThreadRef(environmentId, PULL_REQUESTS_PANEL_ID)),
+    [environmentId],
+  );
+  const rightPanelState = useRightPanelStore((state) =>
+    selectThreadRightPanelState(state.byThreadKey, rightPanelRef),
+  );
+  const selectedRightPanelSurface = useRightPanelStore((state) =>
+    selectSelectedRightPanelSurface(state.byThreadKey, rightPanelRef),
+  );
+  const selectedPullRequestSurface =
+    selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
+  const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
+  const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
+    Record<string, PullRequestTabStatus>
+  >({});
+  const handlePullRequestTabStatusChange = useCallback((status: PullRequestTabStatus) => {
+    const id = pullRequestSurfaceId(status);
+    setPullRequestTabStatuses((current) =>
+      current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
+        ? current
+        : { ...current, [id]: status },
+    );
+  }, []);
 
   const updateSearch = (patch: {
     [Key in keyof PullRequestsSearch]?: PullRequestsSearch[Key] | undefined;
@@ -200,6 +235,15 @@ function PullRequestsRouteView() {
     repository: undefined,
     number: undefined,
     selectedProjectId: undefined,
+  };
+  const updateListScope = (patch: {
+    [Key in keyof PullRequestsSearch]?: PullRequestsSearch[Key] | undefined;
+  }) => {
+    if (rightPanelRef !== null) {
+      // Hide the old selection while retaining peer PR tabs for parallel reviews.
+      useRightPanelStore.getState().close(rightPanelRef);
+    }
+    updateSearch({ ...patch, ...clearedSelection });
   };
 
   // Searching asks the hosts, which takes a round trip, so the text is held for a moment before
@@ -514,9 +558,6 @@ function PullRequestsRouteView() {
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-    // `loadMore` closes over the page state it advances, which the rest of the list already
-    // depends on.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     entries.length,
     filterKey,
@@ -597,10 +638,49 @@ function PullRequestsRouteView() {
     [projects, search.selectedProjectId],
   );
   const selectedProjectId = linkedProjectId ?? projectIdForRepository;
+  const linkedSelection = useMemo(
+    () =>
+      search.repository && search.number && selectedProjectId
+        ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
+        : null,
+    [search.number, search.repository, selectedProjectId],
+  );
+  useEffect(() => {
+    if (rightPanelRef === null || linkedSelection === null) return;
+    useRightPanelStore.getState().openPullRequest(rightPanelRef, linkedSelection);
+  }, [linkedSelection, rightPanelRef]);
+
   const selected =
-    search.repository && search.number && selectedProjectId
-      ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
+    rightPanelState.isOpen && activePullRequestSurface !== null
+      ? {
+          repository: activePullRequestSurface.repository,
+          number: activePullRequestSurface.number,
+          projectId: activePullRequestSurface.projectId as ProjectId,
+        }
       : null;
+
+  const selectSurfaceInUrl = (surface: PullRequestSurface | null) =>
+    updateSearch(
+      surface === null
+        ? clearedSelection
+        : {
+            repository: surface.repository,
+            number: surface.number,
+            selectedProjectId: surface.projectId as ProjectId,
+          },
+    );
+
+  const toggleRightPanel = () => {
+    if (rightPanelRef === null) return;
+    if (rightPanelState.isOpen) {
+      useRightPanelStore.getState().close(rightPanelRef);
+      updateSearch(clearedSelection);
+      return;
+    }
+    if (selectedPullRequestSurface === null) return;
+    useRightPanelStore.getState().show(rightPanelRef);
+    selectSurfaceInUrl(selectedPullRequestSurface);
+  };
 
   // The provider list is the workspace's hosts, not the filtered ones, so switching to a host
   // cannot make the switcher that got you there disappear.
@@ -636,19 +716,22 @@ function PullRequestsRouteView() {
     [listErrors],
   );
 
-  const selectEntry = (entry: PullRequestListEntry) =>
+  const selectEntry = (entry: PullRequestListEntry) => {
+    if (rightPanelRef === null) return;
+    useRightPanelStore.getState().openPullRequest(rightPanelRef, entry);
     updateSearch({
       repository: entry.repository,
       number: entry.number,
       selectedProjectId: entry.projectId,
     });
+  };
 
   const involvementPills = (
     <PullRequestFilterPills
       label="Filter by involvement"
       value={search.involvement}
       options={INVOLVEMENT_TABS}
-      onChange={(involvement) => updateSearch({ involvement, ...clearedSelection })}
+      onChange={(involvement) => updateListScope({ involvement })}
     />
   );
   const statePills = (
@@ -656,7 +739,7 @@ function PullRequestsRouteView() {
       label="Filter by state"
       value={search.state}
       options={STATE_TABS}
-      onChange={(state) => updateSearch({ state, ...clearedSelection })}
+      onChange={(state) => updateListScope({ state })}
     />
   );
   const providerFilter = (
@@ -664,7 +747,7 @@ function PullRequestsRouteView() {
       providers={hosts}
       value={search.host}
       expectedHosts={expectedHosts}
-      onChange={(host) => updateSearch({ host, ...clearedSelection })}
+      onChange={(host) => updateListScope({ host })}
     />
   );
   const searchInput = (
@@ -679,8 +762,26 @@ function PullRequestsRouteView() {
       projects={scopedProjects}
       value={scopedProjectId}
       unavailable={unavailableProjects}
-      onChange={(projectId) => updateSearch({ ...clearedSelection, projectId })}
+      onChange={(projectId) => updateListScope({ projectId })}
     />
+  );
+  const panelToggleControls = (
+    <PanelLayoutControls
+      showTerminalControl={false}
+      terminalAvailable={false}
+      terminalOpen={false}
+      terminalShortcutLabel={null}
+      rightPanelAvailable={rightPanelState.surfaces.length > 0}
+      rightPanelOpen={rightPanelState.isOpen}
+      rightPanelShortcutLabel={null}
+      onToggleTerminal={() => undefined}
+      onToggleRightPanel={toggleRightPanel}
+    />
+  );
+  const openPanelControls = (
+    <div className="workspace-titlebar-controls right-2 z-50 gap-1 [-webkit-app-region:no-drag] wco:right-[var(--workspace-controls-right)]">
+      {panelToggleControls}
+    </div>
   );
   // The rows carried over from the last filters can also narrow to nothing one step further on,
   // where involvement is applied against the viewers of the answer they came from. "Nothing under
@@ -806,33 +907,100 @@ function PullRequestsRouteView() {
     state: search.state,
     host: search.host,
     hostMenuOptions,
-    onInvolvement: (involvement: PullRequestInvolvement) =>
-      updateSearch({ involvement, ...clearedSelection }),
-    onState: (state: PullRequestListState) => updateSearch({ state, ...clearedSelection }),
-    onHost: (host: string | undefined) => updateSearch({ host, ...clearedSelection }),
+    onInvolvement: (involvement: PullRequestInvolvement) => updateListScope({ involvement }),
+    onState: (state: PullRequestListState) => updateListScope({ state }),
+    onHost: (host: string | undefined) => updateListScope({ host }),
     involvementPills,
     statePills,
     providerFilter,
     searchInput,
     projectFilter,
+    rightPanelControl: rightPanelState.isOpen ? null : panelToggleControls,
     listBody,
+  };
+
+  const activateSurface = (surface: PullRequestSurface) => {
+    if (rightPanelRef === null) return;
+    useRightPanelStore.getState().activateSurface(rightPanelRef, surface.id);
+    selectSurfaceInUrl(surface);
+  };
+  const closeSurface = (surface: PullRequestSurface) => {
+    if (rightPanelRef === null) return;
+    useRightPanelStore.getState().closeSurface(rightPanelRef, surface.id);
+    const next = selectActiveRightPanelSurface(
+      useRightPanelStore.getState().byThreadKey,
+      rightPanelRef,
+    );
+    selectSurfaceInUrl(next?.kind === "pull-request" ? next : null);
+  };
+  const closeOtherSurfaces = (surface: PullRequestSurface) => {
+    if (rightPanelRef === null) return;
+    useRightPanelStore.getState().closeOtherSurfaces(rightPanelRef, surface.id);
+    selectSurfaceInUrl(surface);
+  };
+  const closeSurfacesToRight = (surface: PullRequestSurface) => {
+    if (rightPanelRef === null) return;
+    useRightPanelStore.getState().closeSurfacesToRight(rightPanelRef, surface.id);
+    const next = selectActiveRightPanelSurface(
+      useRightPanelStore.getState().byThreadKey,
+      rightPanelRef,
+    );
+    selectSurfaceInUrl(next?.kind === "pull-request" ? next : null);
+  };
+  const closeAllSurfaces = () => {
+    if (rightPanelRef === null) return;
+    useRightPanelStore.getState().closeAllSurfaces(rightPanelRef);
+    selectSurfaceInUrl(null);
   };
 
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden bg-background text-foreground">
-      <div className="flex min-h-0 flex-1">
+      <div className="relative flex min-h-0 flex-1">
+        {rightPanelState.isOpen ? openPanelControls : null}
         <PullRequestsColumn {...columnProps} />
 
-        {selected && environmentId !== null ? (
-          <aside
-            className="relative flex shrink-0 border-l border-border"
-            style={{ width: `${detailPanel.width}px` }}
+        {rightPanelState.isOpen && activePullRequestSurface && environmentId !== null ? (
+          <RightPanelTabs
+            mode="inline"
+            surfaces={rightPanelState.surfaces}
+            activeSurfaceId={activePullRequestSurface.id}
+            pendingSurfaceIds={EMPTY_PENDING_SURFACES}
+            previewSessions={EMPTY_PREVIEW_SESSIONS}
+            terminalLabelsById={EMPTY_TERMINAL_LABELS}
+            onActivate={(surface) => {
+              if (surface.kind === "pull-request") activateSurface(surface);
+            }}
+            onCloseSurface={(surface) => {
+              if (surface.kind === "pull-request") closeSurface(surface);
+            }}
+            onCloseOtherSurfaces={(surface) => {
+              if (surface.kind === "pull-request") closeOtherSurfaces(surface);
+            }}
+            onCloseSurfacesToRight={(surface) => {
+              if (surface.kind === "pull-request") closeSurfacesToRight(surface);
+            }}
+            onCloseAllSurfaces={closeAllSurfaces}
+            onCopyFilePath={() => undefined}
+            onAddBrowser={() => undefined}
+            onAddTerminal={() => undefined}
+            onAddDiff={() => undefined}
+            onAddFiles={() => undefined}
+            onAddPullRequest={() => undefined}
+            browserAvailable={false}
+            terminalAvailable={false}
+            diffAvailable={false}
+            filesAvailable={false}
+            pullRequestAvailable={false}
+            pullRequestStatuses={pullRequestTabStatuses}
           >
-            <RightPanelResizeHandle handlers={detailPanel.handlers} />
             <PullRequestDetailPanel
-              key={`${selected.repository}#${selected.number}`}
+              key={activePullRequestSurface.id}
               environmentId={environmentId}
-              reference={selected}
+              reference={{
+                projectId: activePullRequestSurface.projectId as ProjectId,
+                repository: activePullRequestSurface.repository,
+                number: activePullRequestSurface.number,
+              }}
               refreshToken={detailRefreshToken}
               // Merging, closing or reopening changes the row this panel was opened from, so the
               // list behind it is out of date the moment the host takes the action.
@@ -840,9 +1008,9 @@ function PullRequestsRouteView() {
                 listQuery.refresh();
                 baselineQuery.refresh();
               }}
-              onClose={() => updateSearch(clearedSelection)}
+              onStateChange={handlePullRequestTabStatusChange}
             />
-          </aside>
+          </RightPanelTabs>
         ) : null}
       </div>
     </SidebarInset>
@@ -996,6 +1164,7 @@ function PullRequestsColumn({
   providerFilter,
   searchInput,
   projectFilter,
+  rightPanelControl,
   listBody,
 }: {
   refreshing: boolean;
@@ -1013,6 +1182,7 @@ function PullRequestsColumn({
   providerFilter: ReactNode;
   searchInput: ReactNode;
   projectFilter: ReactNode;
+  rightPanelControl: ReactNode;
   listBody: ReactNode;
 }) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -1129,6 +1299,7 @@ function PullRequestsColumn({
         >
           <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
         </Button>
+        {rightPanelControl}
       </header>
 
       <div
