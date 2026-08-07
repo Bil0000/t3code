@@ -343,11 +343,8 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
   interactionMode: ProviderInteractionMode;
   runtimeMode: RuntimeMode;
   showPlanToggle: boolean;
-  planSidebarLabel: string;
-  planSidebarOpen: boolean;
   onToggleInteractionMode: () => void;
   onRuntimeModeChange: (mode: RuntimeMode) => void;
-  onTogglePlanSidebar: () => void;
 }) {
   const runtimeModeOption = runtimeModeConfig[props.runtimeMode];
   const RuntimeModeIcon = runtimeModeOption.icon;
@@ -355,10 +352,6 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
     props.interactionMode === "plan"
       ? "Plan mode — click to return to normal build mode"
       : "Default mode — click to enter plan mode";
-  const planSidebarTooltip = props.planSidebarOpen
-    ? `Hide ${props.planSidebarLabel.toLowerCase()} sidebar`
-    : `Show ${props.planSidebarLabel.toLowerCase()} sidebar`;
-
   const interactionModeToggle = props.showInteractionModeToggle ? (
     <>
       <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
@@ -433,36 +426,6 @@ const ComposerFooterModeControls = memo(function ComposerFooterModeControls(prop
       </Tooltip>
 
       {interactionModeToggle}
-
-      {props.showPlanToggle ? (
-        <>
-          <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <ComposerControl
-                  className={cn(
-                    "shrink-0 whitespace-nowrap",
-                    props.planSidebarOpen
-                      ? "bg-blue-500/10 text-blue-400 hover:bg-blue-500/15 hover:text-blue-300"
-                      : "text-muted-foreground/70 hover:text-foreground/80",
-                  )}
-                  type="button"
-                  onClick={props.onTogglePlanSidebar}
-                  aria-label={planSidebarTooltip}
-                />
-              }
-            >
-              <ComposerControlIcon
-                icon={ListTodoIcon}
-                className={props.planSidebarOpen ? "text-current opacity-100" : undefined}
-              />
-              <span className="sr-only sm:not-sr-only">{props.planSidebarLabel}</span>
-            </TooltipTrigger>
-            <TooltipPopup side="top">{planSidebarTooltip}</TooltipPopup>
-          </Tooltip>
-        </>
-      ) : null}
     </>
   );
 });
@@ -630,8 +593,6 @@ export interface ChatComposerProps {
   activeProposedPlan: LatestProposedPlanState | null;
   activePlan: { runId?: RunId | null } | null;
   sidebarProposedPlan: { runId?: RunId | null } | null;
-  planSidebarLabel: string;
-  planSidebarOpen: boolean;
 
   // Mode
   runtimeMode: RuntimeMode;
@@ -690,7 +651,6 @@ export interface ChatComposerProps {
   toggleInteractionMode: () => void;
   handleRuntimeModeChange: (mode: RuntimeMode) => void;
   handleInteractionModeChange: (mode: ProviderInteractionMode) => void;
-  togglePlanSidebar: () => void;
 
   focusComposer: () => void;
   scheduleComposerFocus: () => void;
@@ -739,8 +699,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProposedPlan,
     activePlan,
     sidebarProposedPlan,
-    planSidebarLabel,
-    planSidebarOpen,
     runtimeMode,
     interactionMode,
     lockedProvider,
@@ -775,7 +733,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     toggleInteractionMode,
     handleRuntimeModeChange,
     handleInteractionModeChange,
-    togglePlanSidebar,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -1292,7 +1249,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isComposerCollapsedMobile && !isComposerApprovalState && pendingUserInputs.length === 0;
 
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
-  const showPlanSidebarToggle = Boolean(activePlan || sidebarProposedPlan || planSidebarOpen);
   const composerFooterActionLayoutKey = useMemo(() => {
     if (activePendingProgress) {
       return `pending:${activePendingProgress.questionIndex}:${activePendingProgress.isLastQuestion}:${activePendingIsResponding}`;
@@ -3620,15 +3576,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
 
                 {isComposerFooterCompact ? (
                   <CompactComposerControlsMenu
-                    activePlan={showPlanSidebarToggle}
                     interactionMode={interactionMode}
-                    planSidebarLabel={planSidebarLabel}
-                    planSidebarOpen={planSidebarOpen}
                     runtimeMode={runtimeMode}
                     showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                     traitsMenuContent={providerTraitsMenuContent}
                     onToggleInteractionMode={toggleInteractionMode}
-                    onTogglePlanSidebar={togglePlanSidebar}
                     onRuntimeModeChange={handleRuntimeModeChange}
                   />
                 ) : (
@@ -3643,12 +3595,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       showInteractionModeToggle={composerProviderControls.showInteractionModeToggle}
                       interactionMode={interactionMode}
                       runtimeMode={runtimeMode}
-                      showPlanToggle={showPlanSidebarToggle}
-                      planSidebarLabel={planSidebarLabel}
-                      planSidebarOpen={planSidebarOpen}
+                      showPlanToggle={false}
                       onToggleInteractionMode={toggleInteractionMode}
                       onRuntimeModeChange={handleRuntimeModeChange}
-                      onTogglePlanSidebar={togglePlanSidebar}
                     />
                   </>
                 )}
