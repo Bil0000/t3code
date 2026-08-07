@@ -1,4 +1,5 @@
 import {
+  CommandId,
   EventId,
   ORCHESTRATION_V2_HANDOFF_PAYLOAD_MAX_BYTES,
   ORCHESTRATION_V2_HANDOFF_PAYLOAD_WARN_BYTES,
@@ -129,6 +130,7 @@ export interface ThreadHandoffPreparation {
 
 export interface ThreadHandoffApplication {
   readonly threadId: ThreadId;
+  readonly projectId: ProjectId;
   readonly classification: HandoffTipClassification;
   readonly stashRef: string | null;
   readonly preTag: string | null;
@@ -145,6 +147,8 @@ export interface ThreadHandoffServiceShape {
     readonly peerEnvironmentId: EnvironmentId;
     /** The destination's current tip for this branch, so the bundle carries only what it lacks. */
     readonly peerBranchTip: string | null;
+    /** Bundle the whole history so the destination can clone with no remote. */
+    readonly fullHistory: boolean;
     readonly previousHandoffId: ThreadHandoffId | null;
     readonly hopCount: number;
   }) => Effect.Effect<ThreadHandoffPreparation, OrchestrationV2HandoffError>;
@@ -163,7 +167,9 @@ export interface ThreadHandoffServiceShape {
    */
   readonly receive: (input: {
     readonly bundle: OrchestrationV2HandoffBundleV1;
-    readonly projectId: ProjectId;
+    /** Null when the repository must first be cloned from the bundle. */
+    readonly projectId: ProjectId | null;
+    readonly cloneWorkspaceRoot: string | null;
     readonly returningThreadId: ThreadId | null;
   }) => Effect.Effect<ThreadHandoffApplication, OrchestrationV2HandoffError>;
   /**
@@ -449,7 +455,11 @@ export const make = Effect.gen(function* () {
               // remote-tracking refs: both sides clone the same remote, so
               // anything a remote already has is not worth shipping. Without
               // this a first hop bundles the repository's entire history.
-              excludeTips: input.peerBranchTip === null ? ["--remotes"] : [input.peerBranchTip],
+              excludeTips: input.fullHistory
+                ? []
+                : input.peerBranchTip === null
+                  ? ["--remotes"]
+                  : [input.peerBranchTip],
             }),
         });
         if (bundlePart !== null) parts.push(bundlePart);
@@ -720,11 +730,59 @@ export const make = Effect.gen(function* () {
           verifyStagedPart({ handoffId: bundle.handoffId, part }),
         );
 
-        const cwd = yield* workspaceRootFor(input.projectId);
         const branch = bundle.workspace.branch;
         const incomingTip = bundle.workspace.headSha;
-        const wantsWorktree = bundle.workspace.strategy.type !== "root";
         const bundlePart = bundle.parts.find((part) => part.kind === "git-bundle") ?? null;
+
+        // No project yet: the bundle carries the whole history, so clone from
+        // it, point origin at the real remote, and register the project — no
+        // network or credentials needed on this machine.
+        let projectId = input.projectId;
+        let cloned = false;
+        if (projectId === null) {
+          if (input.cloneWorkspaceRoot === null || bundlePart === null) {
+            return yield* handoffError({
+              reason: "project_missing",
+              message:
+                "This environment does not have the repository, and the transfer did not carry enough history to clone it.",
+              handoffId: bundle.handoffId,
+            });
+          }
+          yield* markHop({ handoffId: bundle.handoffId, state: "applying", lastError: null });
+          yield* git
+            .cloneFromBundle({
+              bundlePath: partPath({ handoffId: bundle.handoffId, kind: "git-bundle" }),
+              targetPath: input.cloneWorkspaceRoot,
+              branch,
+            })
+            .pipe(
+              asHandoffError("apply_failed", "Could not clone the repository from the bundle."),
+            );
+          yield* git
+            .setOriginRemote({
+              cwd: input.cloneWorkspaceRoot,
+              remoteUrl: bundle.repository.locator.remoteUrl,
+            })
+            .pipe(Effect.ignore);
+          projectId = ProjectId.make(`project:${NodeCrypto.randomUUID()}`);
+          yield* projects
+            .create({
+              commandId: CommandId.make(`handoff:${bundle.handoffId}:project`),
+              projectId,
+              title: bundle.repository.displayName ?? bundle.repository.name ?? "Imported project",
+              workspaceRoot: input.cloneWorkspaceRoot,
+            })
+            .pipe(asHandoffError("store_failed", "Could not register the cloned project."));
+          cloned = true;
+        }
+
+        const cwd =
+          cloned && input.cloneWorkspaceRoot !== null
+            ? input.cloneWorkspaceRoot
+            : yield* workspaceRootFor(projectId);
+        // A fresh clone already sits at the incoming tip; worktree handling is
+        // for repositories that existed here before the hop.
+        const wantsWorktree = !cloned && bundle.workspace.strategy.type !== "root";
 
         const existing =
           input.returningThreadId === null
@@ -741,7 +799,7 @@ export const make = Effect.gen(function* () {
         let preTag: string | null = null;
         let stashRef: string | null = null;
 
-        if (bundlePart !== null) {
+        if (bundlePart !== null && !cloned) {
           const bundlePath = partPath({ handoffId: bundle.handoffId, kind: "git-bundle" });
           yield* git
             .importBundle({ cwd, bundlePath })
@@ -971,7 +1029,7 @@ export const make = Effect.gen(function* () {
         yield* writeArrival({
           bundle,
           threadId,
-          projectId: input.projectId,
+          projectId,
           existing,
           worktreePath: wantsWorktree && applyCwd !== cwd ? applyCwd : null,
         });
@@ -994,7 +1052,13 @@ export const make = Effect.gen(function* () {
           preTag,
         });
 
-        return { threadId, classification, stashRef, preTag } satisfies ThreadHandoffApplication;
+        return {
+          threadId,
+          projectId,
+          classification,
+          stashRef,
+          preTag,
+        } satisfies ThreadHandoffApplication;
       }),
     );
 

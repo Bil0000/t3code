@@ -42,7 +42,10 @@ export interface ThreadHandoffTransferInput {
   readonly originEnvironmentId: EnvironmentId;
   readonly targetEnvironmentId: EnvironmentId;
   readonly targetLabel: string | null;
-  readonly targetProjectId: ProjectId;
+  /** Null when the destination lacks the repository and must clone it. */
+  readonly targetProjectId: ProjectId | null;
+  /** Where the destination should clone when it lacks the repository. */
+  readonly cloneWorkspaceRoot: string | null;
   /** Set when the hop returns to a thread the target already owns. */
   readonly returningThreadId: ThreadId | null;
   /** The target's tip for this branch, so the bundle carries only what it lacks. */
@@ -124,6 +127,9 @@ export const runThreadHandoffTransfer = Effect.fn("clientRuntime.state.runThread
         threadId: input.threadId,
         peerEnvironmentId: input.targetEnvironmentId,
         peerBranchTip: input.targetBranchTip,
+        // No project on the destination means it will clone from the bundle,
+        // which only works when the bundle carries the whole history.
+        fullHistory: input.targetProjectId === null,
         previousHandoffId: input.previousHandoffId,
         hopCount: input.hopCount,
       }),
@@ -180,6 +186,7 @@ export const runThreadHandoffTransfer = Effect.fn("clientRuntime.state.runThread
         receiveThreadHandoff({
           bundle,
           projectId: input.targetProjectId,
+          cloneWorkspaceRoot: input.cloneWorkspaceRoot,
           returningThreadId: input.returningThreadId,
         }),
       );

@@ -179,6 +179,11 @@ export interface ThreadHandoffGitShape {
     readonly cwd: string;
     readonly archivePath: string;
   }) => Effect.Effect<void, VcsError>;
+  /** Points `origin` at the repository's real remote after a clone from a bundle. */
+  readonly setOriginRemote: (input: {
+    readonly cwd: string;
+    readonly remoteUrl: string;
+  }) => Effect.Effect<void, VcsError>;
   /** Path of the worktree that has `branch` checked out, if any. */
   readonly findWorktreeForBranch: (input: {
     readonly cwd: string;
@@ -481,6 +486,26 @@ export const make = Effect.gen(function* () {
       timeoutMs: 600_000,
     }).pipe(Effect.asVoid);
 
+  const setOriginRemote: ThreadHandoffGitShape["setOriginRemote"] = (input) =>
+    git({
+      operation: "set-origin-remote",
+      // A clone from a bundle has the bundle file as its origin; replace it
+      // with the real remote so fetch and push work afterwards.
+      args: ["remote", "set-url", "origin", input.remoteUrl],
+      cwd: input.cwd,
+      allowNonZeroExit: true,
+    }).pipe(
+      Effect.flatMap((output) =>
+        output.exitCode === 0
+          ? Effect.void
+          : git({
+              operation: "add-origin-remote",
+              args: ["remote", "add", "origin", input.remoteUrl],
+              cwd: input.cwd,
+            }).pipe(Effect.asVoid),
+      ),
+    );
+
   const popStash: ThreadHandoffGitShape["popStash"] = (input) =>
     git({
       operation: "pop-stash",
@@ -512,6 +537,7 @@ export const make = Effect.gen(function* () {
     archivePaths,
     extractArchive,
     popStash,
+    setOriginRemote,
     findWorktreeForBranch,
     addWorktree,
     isBranchCheckedOut,

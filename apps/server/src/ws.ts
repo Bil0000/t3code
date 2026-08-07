@@ -1190,6 +1190,7 @@ const makeWsRpcLayer = (
                 threadId: input.threadId,
                 peerEnvironmentId: input.peerEnvironmentId,
                 peerBranchTip: input.peerBranchTip,
+                fullHistory: input.fullHistory ?? false,
                 previousHandoffId: input.previousHandoffId,
                 hopCount: input.hopCount,
               })
@@ -1218,11 +1219,13 @@ const makeWsRpcLayer = (
               .receive({
                 bundle: input.bundle,
                 projectId: input.projectId,
+                cloneWorkspaceRoot: input.cloneWorkspaceRoot,
                 returningThreadId: input.returningThreadId,
               })
               .pipe(
                 Effect.map((application) => ({
                   threadId: application.threadId,
+                  projectId: application.projectId,
                   // A diverged or unrelated hop fails rather than returning,
                   // so only the two outcomes that wrote anything get here.
                   classification:

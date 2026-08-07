@@ -27,6 +27,7 @@ export const prepareThreadHandoff = Effect.fn("EnvironmentCommands.prepareThread
     readonly threadId: ThreadId;
     readonly peerEnvironmentId: EnvironmentId;
     readonly peerBranchTip: string | null;
+    readonly fullHistory: boolean;
     readonly previousHandoffId: ThreadHandoffId | null;
     readonly hopCount: number;
   }) {
@@ -34,6 +35,7 @@ export const prepareThreadHandoff = Effect.fn("EnvironmentCommands.prepareThread
       threadId: input.threadId,
       peerEnvironmentId: input.peerEnvironmentId,
       peerBranchTip: input.peerBranchTip,
+      fullHistory: input.fullHistory,
       previousHandoffId: input.previousHandoffId,
       hopCount: input.hopCount,
     });
@@ -44,12 +46,14 @@ export const prepareThreadHandoff = Effect.fn("EnvironmentCommands.prepareThread
 export const receiveThreadHandoff = Effect.fn("EnvironmentCommands.receiveThreadHandoff")(
   function* (input: {
     readonly bundle: OrchestrationV2HandoffBundleV1;
-    readonly projectId: ProjectId;
+    readonly projectId: ProjectId | null;
+    readonly cloneWorkspaceRoot: string | null;
     readonly returningThreadId: ThreadId | null;
   }) {
     return yield* request(ORCHESTRATION_V2_WS_METHODS.receiveThreadHandoff, {
       bundle: input.bundle,
       projectId: input.projectId,
+      cloneWorkspaceRoot: input.cloneWorkspaceRoot,
       returningThreadId: input.returningThreadId,
     });
   },

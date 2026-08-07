@@ -2576,6 +2576,12 @@ export const OrchestrationV2PrepareHandoffInput = Schema.Struct({
   peerEnvironmentId: EnvironmentId,
   /** The destination's tip for this branch, so the bundle carries only what it lacks. */
   peerBranchTip: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * Bundle the repository's entire history. Set when the destination does not
+   * have the repository at all, so the bundle is enough to clone from with no
+   * remote, credentials, or network on the far side.
+   */
+  fullHistory: Schema.optionalKey(Schema.Boolean),
   previousHandoffId: Schema.NullOr(ThreadHandoffId),
   hopCount: NonNegativeInt,
 });
@@ -2593,7 +2599,10 @@ export type OrchestrationV2PrepareHandoffResult = typeof OrchestrationV2PrepareH
 
 export const OrchestrationV2ReceiveHandoffInput = Schema.Struct({
   bundle: OrchestrationV2HandoffBundleV1,
-  projectId: ProjectId,
+  /** Null when the repository must first be cloned from the bundle. */
+  projectId: Schema.NullOr(ProjectId),
+  /** Where to clone when `projectId` is null; the project is created there. */
+  cloneWorkspaceRoot: Schema.NullOr(TrimmedNonEmptyString),
   /** Set when the hop returns to a thread this environment already owns. */
   returningThreadId: Schema.NullOr(ThreadId),
 });
@@ -2601,6 +2610,7 @@ export type OrchestrationV2ReceiveHandoffInput = typeof OrchestrationV2ReceiveHa
 
 export const OrchestrationV2ReceiveHandoffResult = Schema.Struct({
   threadId: ThreadId,
+  projectId: ProjectId,
   classification: Schema.Literals(["advance", "absorb"]),
 });
 export type OrchestrationV2ReceiveHandoffResult = typeof OrchestrationV2ReceiveHandoffResult.Type;

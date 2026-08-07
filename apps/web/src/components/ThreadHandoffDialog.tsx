@@ -1,6 +1,6 @@
 import type { ThreadHandoffProgress } from "@t3tools/client-runtime/state/threadHandoffTransfer";
 import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { threadHandoff } from "../state/threads";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -25,6 +25,10 @@ export interface ThreadHandoffDialogProps {
   readonly targetLabel: string;
   readonly targetProjectId: ProjectId | null;
   readonly branch: string | null;
+  /** The thread has an active run; sending must interrupt it first. */
+  readonly isBusy: boolean;
+  /** Interrupts the thread's current turn; resolves when the request is accepted. */
+  readonly onInterrupt: () => Promise<void>;
   readonly onMoved?: (targetThreadId: ThreadId) => void;
 }
 
@@ -34,10 +38,11 @@ export interface ThreadHandoffDialogProps {
  * is not offered afterwards because only the servers can undo an apply.
  */
 const PHASE_LABELS: ReadonlyArray<{
-  readonly phase: ThreadHandoffProgress["phase"];
+  readonly phase: ThreadHandoffProgress["phase"] | "interrupt";
   readonly label: string;
   readonly safeToCancel: boolean;
 }> = [
+  { phase: "interrupt", label: "Finish the current turn", safeToCancel: true },
   { phase: "prepare", label: "Snapshot branch, changes and untracked files", safeToCancel: true },
   { phase: "depart", label: "Pause this thread here", safeToCancel: true },
   { phase: "upload", label: "Move the bundle across", safeToCancel: true },
@@ -45,7 +50,7 @@ const PHASE_LABELS: ReadonlyArray<{
   { phase: "settle", label: "Hand the thread over", safeToCancel: false },
 ];
 
-function phaseIndex(phase: ThreadHandoffProgress["phase"]): number {
+function phaseIndex(phase: ThreadHandoffProgress["phase"] | "interrupt"): number {
   return PHASE_LABELS.findIndex((entry) => entry.phase === phase);
 }
 
@@ -92,17 +97,27 @@ export function ThreadHandoffDialog({
   targetLabel,
   targetProjectId,
   branch,
+  isBusy,
+  onInterrupt,
   onMoved,
 }: ThreadHandoffDialogProps) {
   const move = useAtomCommand(threadHandoff.move, { reportFailure: false });
-  const [progress, setProgress] = useState<ThreadHandoffProgress | null>(null);
+  const [progress, setProgress] = useState<
+    ThreadHandoffProgress | { readonly phase: "interrupt" } | null
+  >(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isMoving = progress !== null && errorMessage === null;
+  // Send pressed while the agent was working: the turn was interrupted and
+  // the transfer starts the moment the thread goes idle.
+  const [sendQueued, setSendQueued] = useState(false);
+  // Where the destination should clone when it does not have the repository.
+  const [cloneWorkspaceRoot, setCloneWorkspaceRoot] = useState("");
 
-  const handleMove = useCallback(async () => {
-    if (targetProjectId === null) {
+  const startTransfer = useCallback(async () => {
+    if (targetProjectId === null && cloneWorkspaceRoot.trim().length === 0) {
+      setProgress(null);
       setErrorMessage(
-        `${targetLabel} does not have this repository as a project yet. Add it there first.`,
+        `${targetLabel} does not have this repository yet. Enter a folder to clone it into.`,
       );
       return;
     }
@@ -114,6 +129,7 @@ export function ThreadHandoffDialog({
       targetEnvironmentId,
       targetLabel,
       targetProjectId,
+      cloneWorkspaceRoot: targetProjectId === null ? cloneWorkspaceRoot.trim() : null,
       returningThreadId: null,
       targetBranchTip: null,
       previousHandoffId: null,
@@ -141,8 +157,29 @@ export function ThreadHandoffDialog({
     targetEnvironmentId,
     targetLabel,
     targetProjectId,
+    cloneWorkspaceRoot,
     threadId,
   ]);
+
+  const handleMove = useCallback(async () => {
+    if (isBusy) {
+      // Interrupt now, send when idle: the snapshot must never be cut while
+      // the agent is writing the worktree.
+      setErrorMessage(null);
+      setProgress({ phase: "interrupt" });
+      setSendQueued(true);
+      await onInterrupt();
+      return;
+    }
+    await startTransfer();
+  }, [isBusy, onInterrupt, startTransfer]);
+
+  useEffect(() => {
+    if (sendQueued && !isBusy) {
+      setSendQueued(false);
+      void startTransfer();
+    }
+  }, [sendQueued, isBusy, startTransfer]);
 
   const activeIndex = progress === null ? -1 : phaseIndex(progress.phase);
   const canCancel = progress === null || (PHASE_LABELS[activeIndex]?.safeToCancel ?? false);
@@ -175,6 +212,26 @@ export function ThreadHandoffDialog({
             </span>
           </div>
 
+          {targetProjectId === null ? (
+            <label className="grid gap-1.5">
+              <span className="text-xs font-medium">
+                {targetLabel} does not have this repository yet — clone it into
+              </span>
+              <input
+                type="text"
+                value={cloneWorkspaceRoot}
+                placeholder="/home/user/code/repo"
+                disabled={isMoving}
+                onChange={(event) => setCloneWorkspaceRoot(event.target.value)}
+                className="border-border bg-background rounded-md border px-2 py-1.5 text-xs"
+              />
+              <span className="text-muted-foreground text-xs">
+                The whole history travels in the bundle, so the other machine needs no git
+                credentials or network.
+              </span>
+            </label>
+          ) : null}
+
           {progress === null ? null : (
             <div className="grid gap-1.5">
               {PHASE_LABELS.map((entry, index) => (
@@ -192,7 +249,9 @@ export function ThreadHandoffDialog({
                   <span className={index <= activeIndex ? "" : "text-muted-foreground"}>
                     {entry.label}
                   </span>
-                  {entry.phase === "upload" && index === activeIndex ? (
+                  {entry.phase === "upload" &&
+                  index === activeIndex &&
+                  progress.phase !== "interrupt" ? (
                     <span className="text-muted-foreground ml-auto">
                       {formatBytes(progress.transferredBytes)}
                       {progress.totalBytes > 0 ? ` / ${formatBytes(progress.totalBytes)}` : ""}

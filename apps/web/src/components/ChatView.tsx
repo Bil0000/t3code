@@ -2098,6 +2098,7 @@ function ChatViewContent(props: ChatViewProps) {
                       targetEnvironmentId: serverThread.environmentId,
                       targetLabel: activeEnvironment?.label ?? null,
                       targetProjectId: serverThread.projectId,
+                      cloneWorkspaceRoot: null,
                       returningThreadId: serverThread.id,
                       targetBranchTip: null,
                       previousHandoffId: awayHandoff.handoffId,
@@ -6686,6 +6687,8 @@ function ChatViewContent(props: ChatViewProps) {
                 targetLabel={moveTargetEnvironment.label}
                 targetProjectId={moveTargetEnvironment.projectId}
                 branch={serverThread.branch}
+                isBusy={activeRuntime !== null}
+                onInterrupt={onInterrupt}
               />
             ) : null}
           </div>

@@ -19,7 +19,8 @@ export interface MoveThreadInput {
   readonly originEnvironmentId: EnvironmentId;
   readonly targetEnvironmentId: EnvironmentId;
   readonly targetLabel: string | null;
-  readonly targetProjectId: ProjectId;
+  readonly targetProjectId: ProjectId | null;
+  readonly cloneWorkspaceRoot: string | null;
   readonly returningThreadId: ThreadId | null;
   readonly targetBranchTip: string | null;
   readonly previousHandoffId: ThreadHandoffId | null;
@@ -87,6 +88,7 @@ export function createThreadHandoffAtoms<R, E>(
             targetEnvironmentId: input.targetEnvironmentId,
             targetLabel: input.targetLabel,
             targetProjectId: input.targetProjectId,
+            cloneWorkspaceRoot: input.cloneWorkspaceRoot,
             returningThreadId: input.returningThreadId,
             targetBranchTip: input.targetBranchTip,
             previousHandoffId: input.previousHandoffId,
