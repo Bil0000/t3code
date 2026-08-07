@@ -163,7 +163,11 @@ function PullRequestsRouteView() {
   const scopedProjects = useMemo(
     () =>
       projects
-        .map((project) => ({ id: project.id, title: project.title }))
+        .map((project) => ({
+          id: project.id,
+          title: project.title,
+          workspaceRoot: project.workspaceRoot,
+        }))
         .toSorted((left, right) => left.title.localeCompare(right.title)),
     [projects],
   );
@@ -888,6 +892,7 @@ function PullRequestsRouteView() {
       host={search.host}
       hostOptions={hostMenuOptions}
       onHost={(host) => updateListScope({ host })}
+      environmentId={environmentId}
       projects={scopedProjects}
       projectId={scopedProjectId}
       unavailable={unavailableProjects}

@@ -1,4 +1,5 @@
 import type {
+  EnvironmentId,
   ProjectId,
   PullRequestInvolvement,
   PullRequestListState,
@@ -9,6 +10,7 @@ import type { ElementType } from "react";
 
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
+import { ProjectFavicon } from "../ProjectFavicon";
 
 import {
   Menu,
@@ -148,6 +150,7 @@ export function PullRequestFiltersMenu({
   host,
   hostOptions,
   onHost,
+  environmentId,
   projects,
   projectId,
   unavailable,
@@ -166,7 +169,13 @@ export function PullRequestFiltersMenu({
    */
   hostOptions: ReadonlyArray<PullRequestFilterOption<string>>;
   onHost: (host: string | undefined) => void;
-  projects: ReadonlyArray<{ readonly id: ProjectId; readonly title: string }>;
+  /** Where the projects' own favicons are read from; null before the environment is known. */
+  environmentId: EnvironmentId | null;
+  projects: ReadonlyArray<{
+    readonly id: ProjectId;
+    readonly title: string;
+    readonly workspaceRoot: string;
+  }>;
   projectId: ProjectId | undefined;
   /**
    * Projects whose repository could not be read this time round. They are named here, where
@@ -252,7 +261,16 @@ export function PullRequestFiltersMenu({
                   title={reason}
                 >
                   <span className="flex min-w-0 flex-1 items-center gap-2">
-                    <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
+                    {environmentId === null ? (
+                      <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
+                    ) : (
+                      <ProjectFavicon
+                        environmentId={environmentId}
+                        cwd={project.workspaceRoot}
+                        fallbackIcon={FolderGit2Icon}
+                        className="size-3.5 shrink-0"
+                      />
+                    )}
                     <span className="min-w-0 flex-1 truncate">{project.title}</span>
                     {reason === undefined ? null : (
                       <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
