@@ -29,6 +29,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeCrypto from "node:crypto";
 
 import { toSafeThreadAttachmentSegment } from "../attachmentStore.ts";
+import { toSafeThreadId as terminalHistoryFilePrefix } from "../terminal/Manager.ts";
 import { ServerConfig } from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { ProjectService } from "../project/ProjectService.ts";
@@ -59,6 +60,8 @@ export function partFileName(kind: OrchestrationV2HandoffPartKind): string {
       return "untracked.tar.gz";
     case "attachments-tar":
       return "attachments.tar.gz";
+    case "terminals-tar":
+      return "terminals.tar.gz";
   }
 }
 
@@ -481,6 +484,34 @@ export const make = Effect.gen(function* () {
           if (attachmentsPart !== null) parts.push(attachmentsPart);
         }
 
+        // Terminal scrollback lives as flat history files named by a
+        // thread-derived prefix. The PTY itself cannot travel; the history the
+        // user reads can, and the manager restores a session from it on first
+        // open exactly as it does after a restart.
+        const terminalPrefix = terminalHistoryFilePrefix(thread.id);
+        const terminalFiles = yield* fs.readDirectory(config.terminalLogsDir).pipe(
+          Effect.map((entries) =>
+            entries.filter(
+              (entry) =>
+                entry === `${terminalPrefix}.log` || entry.startsWith(`${terminalPrefix}_`),
+            ),
+          ),
+          Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+        );
+        if (terminalFiles.length > 0) {
+          const terminalsPart = yield* stagePart({
+            handoffId,
+            kind: "terminals-tar",
+            write: (target) =>
+              git.archivePaths({
+                cwd: config.terminalLogsDir,
+                paths: terminalFiles,
+                outputPath: target,
+              }),
+          });
+          if (terminalsPart !== null) parts.push(terminalsPart);
+        }
+
         const totalBytes = parts.reduce((sum, part) => sum + part.byteLength, 0);
         const verdict = classifyPayloadSize(totalBytes);
         if (verdict === "refuse") {
@@ -886,6 +917,44 @@ export const make = Effect.gen(function* () {
 
         const threadId =
           input.returningThreadId ?? ThreadId.make(`thread:${NodeCrypto.randomUUID()}`);
+
+        if (bundle.parts.some((part) => part.kind === "terminals-tar")) {
+          yield* git
+            .extractArchive({
+              cwd: config.terminalLogsDir,
+              archivePath: partPath({ handoffId: bundle.handoffId, kind: "terminals-tar" }),
+            })
+            .pipe(asHandoffError("apply_failed", "Could not restore the thread's terminals."));
+          // History files are named by thread id, and the thread has a new id
+          // here; rename the extracted files so the manager finds them.
+          const originPrefix = terminalHistoryFilePrefix(bundle.origin.threadId);
+          const localPrefix = terminalHistoryFilePrefix(threadId);
+          if (originPrefix !== localPrefix) {
+            const extracted = yield* fs.readDirectory(config.terminalLogsDir).pipe(
+              Effect.map((entries) =>
+                entries.filter(
+                  (entry) =>
+                    entry === `${originPrefix}.log` || entry.startsWith(`${originPrefix}_`),
+                ),
+              ),
+              Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+            );
+            yield* Effect.forEach(
+              extracted,
+              (entry) =>
+                fs
+                  .rename(
+                    path.join(config.terminalLogsDir, entry),
+                    path.join(
+                      config.terminalLogsDir,
+                      `${localPrefix}${entry.slice(originPrefix.length)}`,
+                    ),
+                  )
+                  .pipe(Effect.ignore),
+              { discard: true },
+            );
+          }
+        }
         yield* writeArrival({
           bundle,
           threadId,

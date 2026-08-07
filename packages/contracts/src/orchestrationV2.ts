@@ -2435,6 +2435,7 @@ export const OrchestrationV2HandoffPartKind = Schema.Literals([
   "tracked-patch",
   "untracked-tar",
   "attachments-tar",
+  "terminals-tar",
 ]);
 export type OrchestrationV2HandoffPartKind = typeof OrchestrationV2HandoffPartKind.Type;
 
