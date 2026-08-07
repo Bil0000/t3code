@@ -2774,7 +2774,10 @@ function ChatViewContent(props: ChatViewProps) {
   );
   const activeHandoff = isServerThread ? (serverThread?.handoff ?? null) : null;
   const canMoveThread =
-    isServerThread && envLocked && activeHandoff === null && logicalProjectEnvironments.length > 1;
+    isServerThread &&
+    envLocked &&
+    activeHandoff?.presence !== "away" &&
+    logicalProjectEnvironments.length > 1;
   const onMoveThread = useCallback((nextEnvironmentId: EnvironmentId) => {
     setMoveTargetEnvironmentId(nextEnvironmentId);
   }, []);
@@ -6196,6 +6199,9 @@ function ChatViewContent(props: ChatViewProps) {
     availableEnvironments: logicalProjectEnvironments,
     onEnvironmentChange,
     ...(canMoveThread ? { onMoveThread } : {}),
+    ...(activeHandoff?.presence === "here"
+      ? { movedFromLabel: activeHandoff.peerLabel ?? activeHandoff.peerEnvironmentId }
+      : {}),
     onEnvModeChange,
     ...(canOverrideServerThreadEnvMode ? { effectiveEnvModeOverride: envMode } : {}),
     ...(canOverrideServerThreadEnvMode
@@ -6598,6 +6604,13 @@ function ChatViewContent(props: ChatViewProps) {
                                     : {})}
                                   {...(hasMultipleEnvironments ? { onEnvironmentChange } : {})}
                                   {...(canMoveThread ? { onMoveThread } : {})}
+                                  {...(activeHandoff?.presence === "here"
+                                    ? {
+                                        movedFromLabel:
+                                          activeHandoff.peerLabel ??
+                                          activeHandoff.peerEnvironmentId,
+                                      }
+                                    : {})}
                                   availableEnvironments={logicalProjectEnvironments}
                                 />
                               </div>
@@ -6687,6 +6700,17 @@ function ChatViewContent(props: ChatViewProps) {
                 targetLabel={moveTargetEnvironment.label}
                 targetProjectId={moveTargetEnvironment.projectId}
                 branch={serverThread.branch}
+                {...(activeHandoff?.presence === "here" &&
+                activeHandoff.peerEnvironmentId === moveTargetEnvironment.environmentId &&
+                activeHandoff.peerThreadId !== null
+                  ? {
+                      returnTo: {
+                        threadId: activeHandoff.peerThreadId,
+                        previousHandoffId: activeHandoff.handoffId,
+                        hopCount: activeHandoff.hopCount + 1,
+                      },
+                    }
+                  : {})}
                 isBusy={
                   // Must match the server's busy guard exactly: it refuses on
                   // an active RUN, and the runtime summary alone stays

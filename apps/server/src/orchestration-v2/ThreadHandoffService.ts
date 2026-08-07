@@ -423,7 +423,9 @@ export const make = Effect.gen(function* () {
           .getThreadProjection(input.threadId)
           .pipe(asHandoffError("thread_missing", `Thread ${input.threadId} could not be read.`));
         const thread = projection.thread;
-        if ((thread.handoff ?? null) !== null) {
+        // Only an away thread refuses: a thread that arrived here is live and
+        // free to move again — onward, or back where it came from.
+        if (thread.handoff?.presence === "away") {
           return yield* handoffError({
             reason: "thread_already_away",
             message: `Thread ${input.threadId} is already handed off.`,

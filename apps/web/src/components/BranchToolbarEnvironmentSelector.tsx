@@ -32,6 +32,8 @@ interface BranchToolbarEnvironmentSelectorProps {
    * meaning for the same rows.
    */
   onMoveThread?: (environmentId: EnvironmentId) => void;
+  /** Where this thread ran before it was moved here. */
+  movedFromLabel?: string;
   displayMode?: "toolbar" | "panel";
 }
 
@@ -43,6 +45,7 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
   availableEnvironments,
   onEnvironmentChange,
   onMoveThread,
+  movedFromLabel,
   displayMode = "toolbar",
 }: BranchToolbarEnvironmentSelectorProps) {
   const activeEnvironment = useMemo(() => {
@@ -128,7 +131,11 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
             : {})}
         >
           <SelectGroup>
-            <SelectGroupLabel>Running on</SelectGroupLabel>
+            <SelectGroupLabel>
+              {movedFromLabel === undefined
+                ? "Running on"
+                : `Running on · moved from ${movedFromLabel}`}
+            </SelectGroupLabel>
             <SelectItem value={environmentId}>
               <span className="inline-flex items-center gap-1.5">
                 {activeEnvironment?.isPrimary ? (

@@ -1439,11 +1439,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     // A thread can only leave once, and only the hop that locked it may report
     // its landing or release it. Without these the client could lock a thread
     // twice and lose track of which peer owns it.
-    if (command.type === "thread.handoff.depart" && (thread.handoff ?? null) !== null) {
+    if (command.type === "thread.handoff.depart" && thread.handoff?.presence === "away") {
       return yield* new OrchestratorDispatchError({
         commandId: command.commandId,
         commandType: command.type,
-        cause: `Thread ${command.threadId} is already handed off to ${thread.handoff?.peerEnvironmentId}.`,
+        cause: `Thread ${command.threadId} is already handed off to ${thread.handoff.peerEnvironmentId}.`,
       });
     }
     if (command.type === "thread.handoff.complete" || command.type === "thread.handoff.abort") {

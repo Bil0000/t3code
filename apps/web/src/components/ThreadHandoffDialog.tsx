@@ -1,5 +1,5 @@
 import type { ThreadHandoffProgress } from "@t3tools/client-runtime/state/threadHandoffTransfer";
-import type { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, ThreadHandoffId, ThreadId } from "@t3tools/contracts";
 import { useCallback, useEffect, useState } from "react";
 
 import { threadHandoff } from "../state/threads";
@@ -29,6 +29,12 @@ export interface ThreadHandoffDialogProps {
   readonly isBusy: boolean;
   /** Interrupts the thread's current turn; resolves when the request is accepted. */
   readonly onInterrupt: () => Promise<void>;
+  /** Set when this move returns the thread to the environment it came from. */
+  readonly returnTo?: {
+    readonly threadId: ThreadId;
+    readonly previousHandoffId: ThreadHandoffId;
+    readonly hopCount: number;
+  };
   readonly onMoved?: (targetThreadId: ThreadId) => void;
 }
 
@@ -99,6 +105,7 @@ export function ThreadHandoffDialog({
   branch,
   isBusy,
   onInterrupt,
+  returnTo,
   onMoved,
 }: ThreadHandoffDialogProps) {
   const move = useAtomCommand(threadHandoff.move, { reportFailure: false });
@@ -130,10 +137,10 @@ export function ThreadHandoffDialog({
       targetLabel,
       targetProjectId,
       cloneWorkspaceRoot: targetProjectId === null ? cloneWorkspaceRoot.trim() : null,
-      returningThreadId: null,
+      returningThreadId: returnTo?.threadId ?? null,
       targetBranchTip: null,
-      previousHandoffId: null,
-      hopCount: 0,
+      previousHandoffId: returnTo?.previousHandoffId ?? null,
+      hopCount: returnTo?.hopCount ?? 0,
       onProgress: setProgress,
     });
     if (result._tag === "Failure") {
@@ -158,6 +165,7 @@ export function ThreadHandoffDialog({
     targetLabel,
     targetProjectId,
     cloneWorkspaceRoot,
+    returnTo,
     threadId,
   ]);
 
@@ -212,7 +220,9 @@ export function ThreadHandoffDialog({
         <DialogHeader>
           <DialogTitle>Send thread to {targetLabel}</DialogTitle>
           <DialogDescription>
-            It keeps running there. {originLabel} keeps a read-only copy until you pull it back.
+            {returnTo === undefined
+              ? `It keeps running there. ${originLabel} keeps a read-only copy until you pull it back.`
+              : `This thread originally ran on ${targetLabel}. Sending it back continues the original thread there.`}
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-4">
