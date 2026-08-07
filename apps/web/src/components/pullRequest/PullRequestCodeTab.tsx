@@ -437,7 +437,14 @@ export function PullRequestCodeTab({
                     .join(",")}:${metadata.threads
                     .map(
                       (thread) =>
-                        `${thread.id}:${thread.isResolved ? "r" : ""}:${thread.comments.length}`,
+                        `${thread.id}:${thread.isResolved ? "r" : ""}:${
+                          thread.isOutdated ? "o" : ""
+                        }:${thread.comments
+                          .map(
+                            (comment) =>
+                              `${comment.id}:${comment.author?.login ?? ""}:${comment.createdAt}:${comment.body}`,
+                          )
+                          .join(";")}`,
                     )
                     .join(",")}`,
               )
