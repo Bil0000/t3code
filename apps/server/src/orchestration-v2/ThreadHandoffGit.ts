@@ -179,6 +179,22 @@ export interface ThreadHandoffGitShape {
     readonly cwd: string;
     readonly archivePath: string;
   }) => Effect.Effect<void, VcsError>;
+  /** Path of the worktree that has `branch` checked out, if any. */
+  readonly findWorktreeForBranch: (input: {
+    readonly cwd: string;
+    readonly branch: string;
+  }) => Effect.Effect<string | null, VcsError>;
+  /** Adds a detached worktree at `commit`; attaching a branch is a separate, fallible step. */
+  readonly addWorktree: (input: {
+    readonly cwd: string;
+    readonly path: string;
+    readonly commit: string;
+  }) => Effect.Effect<void, VcsError>;
+  /** True when `branch` is checked out by the repository or any worktree. */
+  readonly isBranchCheckedOut: (input: {
+    readonly cwd: string;
+    readonly branch: string;
+  }) => Effect.Effect<boolean, VcsError>;
   /** Restores a stash this hop created, used when an apply is rolled back. */
   readonly popStash: (input: {
     readonly cwd: string;
@@ -421,6 +437,50 @@ export const make = Effect.gen(function* () {
       })
       .pipe(Effect.asVoid);
 
+  const worktreeEntries = (input: { readonly cwd: string }) =>
+    git({
+      operation: "list-worktrees",
+      args: ["worktree", "list", "--porcelain"],
+      cwd: input.cwd,
+      maxOutputBytes: Number.MAX_SAFE_INTEGER,
+    }).pipe(
+      Effect.map((output) => {
+        const entries: Array<{ path: string; branch: string | null }> = [];
+        let current: { path: string; branch: string | null } | null = null;
+        for (const line of output.stdout.split("\n")) {
+          if (line.startsWith("worktree ")) {
+            if (current !== null) entries.push(current);
+            current = { path: line.slice("worktree ".length).trim(), branch: null };
+          } else if (line.startsWith("branch ") && current !== null) {
+            current.branch = line
+              .slice("branch ".length)
+              .trim()
+              .replace(/^refs\/heads\//, "");
+          }
+        }
+        if (current !== null) entries.push(current);
+        return entries;
+      }),
+    );
+
+  const findWorktreeForBranch: ThreadHandoffGitShape["findWorktreeForBranch"] = (input) =>
+    worktreeEntries(input).pipe(
+      Effect.map((entries) => entries.find((entry) => entry.branch === input.branch)?.path ?? null),
+    );
+
+  const isBranchCheckedOut: ThreadHandoffGitShape["isBranchCheckedOut"] = (input) =>
+    worktreeEntries(input).pipe(
+      Effect.map((entries) => entries.some((entry) => entry.branch === input.branch)),
+    );
+
+  const addWorktree: ThreadHandoffGitShape["addWorktree"] = (input) =>
+    git({
+      operation: "add-worktree",
+      args: ["worktree", "add", "--detach", input.path, input.commit],
+      cwd: input.cwd,
+      timeoutMs: 600_000,
+    }).pipe(Effect.asVoid);
+
   const popStash: ThreadHandoffGitShape["popStash"] = (input) =>
     git({
       operation: "pop-stash",
@@ -452,6 +512,9 @@ export const make = Effect.gen(function* () {
     archivePaths,
     extractArchive,
     popStash,
+    findWorktreeForBranch,
+    addWorktree,
+    isBranchCheckedOut,
   } satisfies ThreadHandoffGitShape;
 });
 

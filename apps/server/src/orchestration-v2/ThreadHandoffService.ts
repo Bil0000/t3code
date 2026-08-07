@@ -552,6 +552,7 @@ export const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly projectId: ProjectId;
     readonly existing: OrchestrationV2AppThread | null;
+    readonly worktreePath: string | null;
   }) =>
     Effect.gen(function* () {
       const now = yield* DateTime.now;
@@ -565,10 +566,7 @@ export const make = Effect.gen(function* () {
         runtimeMode: bundle.provider.runtimeMode,
         interactionMode: bundle.provider.interactionMode,
         branch: bundle.workspace.branch,
-        worktreePath:
-          bundle.workspace.strategy.type === "existing_worktree"
-            ? bundle.workspace.strategy.worktreePath
-            : null,
+        worktreePath: input.worktreePath,
         activeProviderThreadId: null,
         lineage: {
           parentThreadId: null,
@@ -653,6 +651,7 @@ export const make = Effect.gen(function* () {
         const cwd = yield* workspaceRootFor(input.projectId);
         const branch = bundle.workspace.branch;
         const incomingTip = bundle.workspace.headSha;
+        const wantsWorktree = bundle.workspace.strategy.type !== "root";
         const bundlePart = bundle.parts.find((part) => part.kind === "git-bundle") ?? null;
 
         const existing =
@@ -750,12 +749,63 @@ export const make = Effect.gen(function* () {
               .pipe(asHandoffError("apply_failed", "Could not set the local changes aside."));
           }
 
-          if (classification === "advance" && branch !== null) {
+          if (classification === "advance" && branch !== null && !wantsWorktree) {
             yield* git
               .checkoutBranchAt({ cwd, branch, commit: incomingTip })
               .pipe(
                 asHandoffError("apply_failed", "Could not move the branch to the incoming commit."),
               );
+          }
+        }
+
+        // A thread that lived in a worktree lands in one here too: reuse the
+        // worktree that already has the branch checked out, otherwise add a
+        // fresh one at the incoming commit. The branch attaches only when no
+        // other checkout holds it — git forbids two checkouts of one branch,
+        // and a detached worktree at the right commit still runs the thread.
+        let applyCwd = cwd;
+        if (wantsWorktree && branch !== null) {
+          const existingWorktree = yield* git
+            .findWorktreeForBranch({ cwd, branch })
+            .pipe(asHandoffError("apply_failed", "Could not inspect the repository's worktrees."));
+          if (existingWorktree !== null && existingWorktree !== cwd) {
+            applyCwd = existingWorktree;
+            stashRef =
+              stashRef ??
+              (yield* git
+                .stashWorktree({
+                  cwd: applyCwd,
+                  label: handoffStashLabel(bundle.handoffId, incomingTip),
+                })
+                .pipe(
+                  asHandoffError("apply_failed", "Could not set the worktree's changes aside."),
+                ));
+            if (classification === "advance") {
+              yield* git
+                .resetHardTo({ cwd: applyCwd, commit: incomingTip })
+                .pipe(asHandoffError("apply_failed", "Could not advance the worktree."));
+            }
+          } else if (existingWorktree === null) {
+            const worktreePath = path.join(
+              config.worktreesDir,
+              `handoff-${bundle.handoffId.slice(0, 8)}`,
+            );
+            yield* git
+              .addWorktree({ cwd, path: worktreePath, commit: incomingTip })
+              .pipe(asHandoffError("apply_failed", "Could not create a worktree for the thread."));
+            applyCwd = worktreePath;
+            const branchTaken = yield* git
+              .isBranchCheckedOut({ cwd, branch })
+              .pipe(
+                asHandoffError("apply_failed", "Could not inspect the repository's worktrees."),
+              );
+            if (!branchTaken) {
+              yield* git
+                .checkoutBranchAt({ cwd: applyCwd, branch, commit: incomingTip })
+                .pipe(
+                  asHandoffError("apply_failed", "Could not attach the branch to the worktree."),
+                );
+            }
           }
         }
 
@@ -767,10 +817,10 @@ export const make = Effect.gen(function* () {
           // Dry run first: a patch that will not apply must leave the working
           // tree exactly as it was, not half-written.
           const applies = yield* git
-            .applyPatch({ cwd, patch, check: true })
+            .applyPatch({ cwd: applyCwd, patch, check: true })
             .pipe(asHandoffError("apply_failed", "Could not test the incoming changes."));
           if (!applies) {
-            yield* rollback({ cwd, preTag, stashRef });
+            yield* rollback({ cwd: applyCwd, preTag, stashRef });
             yield* markHop({
               handoffId: bundle.handoffId,
               state: "failed",
@@ -784,14 +834,14 @@ export const make = Effect.gen(function* () {
             });
           }
           yield* git
-            .applyPatch({ cwd, patch, check: false })
+            .applyPatch({ cwd: applyCwd, patch, check: false })
             .pipe(asHandoffError("apply_failed", "Could not apply the incoming changes."));
         }
 
         if (bundle.parts.some((part) => part.kind === "untracked-tar")) {
           yield* git
             .extractArchive({
-              cwd,
+              cwd: applyCwd,
               archivePath: partPath({ handoffId: bundle.handoffId, kind: "untracked-tar" }),
             })
             .pipe(asHandoffError("apply_failed", "Could not restore the untracked files."));
@@ -804,6 +854,7 @@ export const make = Effect.gen(function* () {
           threadId,
           projectId: input.projectId,
           existing,
+          worktreePath: wantsWorktree && applyCwd !== cwd ? applyCwd : null,
         });
         yield* recordHop({
           handoffId: bundle.handoffId,

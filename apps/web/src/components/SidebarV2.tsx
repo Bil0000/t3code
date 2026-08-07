@@ -18,6 +18,7 @@ import type {
   TimestampFormat,
 } from "@t3tools/contracts";
 import {
+  CloudIcon,
   AlarmClockIcon,
   AlarmClockOffIcon,
   CheckIcon,
@@ -792,6 +793,26 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
         #{pr.number}
       </button>
     ) : null;
+  // A thread that is one side of a handoff carries where its work lives:
+  // `away` recedes (the work is elsewhere), `here` is quietly affirmative.
+  const handoffLink = thread.handoff ?? null;
+  const handoffBadge = handoffLink ? (
+    <span
+      role="img"
+      aria-label={
+        handoffLink.presence === "away"
+          ? `Running on ${handoffLink.peerLabel ?? "another device"}`
+          : "Moved to this device"
+      }
+      data-testid={`sidebar-v2-handoff-${handoffLink.presence}-${thread.id}`}
+      className={cn(
+        "inline-flex shrink-0 items-center justify-center",
+        handoffLink.presence === "away" ? "text-muted-foreground/60" : "text-primary/80",
+      )}
+    >
+      <CloudIcon className="size-3.5" />
+    </span>
+  ) : null;
   const terminalStatusIcon = terminalStatus ? (
     <span
       role="img"
@@ -843,6 +864,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
             </span>
             {title}
             {terminalStatusIcon}
+            {handoffBadge}
             {isRegeneratingTitle ? (
               <span role="status" className="sr-only">
                 Regenerating title
@@ -1059,6 +1081,7 @@ const SidebarV2Row = memo(function SidebarV2Row(props: {
                 <span className="flex-1" />
               )}
               {terminalStatusIcon}
+              {handoffBadge}
               {prBadge}
               {diff ? (
                 <span className="shrink-0 font-mono">
