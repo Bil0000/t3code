@@ -6687,7 +6687,16 @@ function ChatViewContent(props: ChatViewProps) {
                 targetLabel={moveTargetEnvironment.label}
                 targetProjectId={moveTargetEnvironment.projectId}
                 branch={serverThread.branch}
-                isBusy={activeRuntime !== null}
+                isBusy={
+                  // Must match the server's busy guard exactly: it refuses on
+                  // an active RUN, and the runtime summary alone stays
+                  // non-null on an idle thread — using it here made the
+                  // dialog wait forever for an interrupt of nothing.
+                  serverThread.latestRun !== null &&
+                  ["preparing", "queued", "starting", "running", "waiting"].includes(
+                    serverThread.latestRun.status,
+                  )
+                }
                 onInterrupt={onInterrupt}
               />
             ) : null}

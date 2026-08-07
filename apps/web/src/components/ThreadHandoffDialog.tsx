@@ -181,6 +181,21 @@ export function ThreadHandoffDialog({
     }
   }, [sendQueued, isBusy, startTransfer]);
 
+  // The interrupt wait must not hang forever: if the thread has not gone
+  // idle within a minute, surface it instead of showing Sending… until the
+  // heat death of the universe.
+  useEffect(() => {
+    if (!sendQueued) return;
+    const timer = setTimeout(() => {
+      setSendQueued(false);
+      setProgress(null);
+      setErrorMessage(
+        "The current turn did not finish within a minute. Stop it manually, then send again.",
+      );
+    }, 60_000);
+    return () => clearTimeout(timer);
+  }, [sendQueued]);
+
   const activeIndex = progress === null ? -1 : phaseIndex(progress.phase);
   const canCancel = progress === null || (PHASE_LABELS[activeIndex]?.safeToCancel ?? false);
 
