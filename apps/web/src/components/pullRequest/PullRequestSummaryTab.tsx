@@ -177,6 +177,15 @@ export function PullRequestSummaryTab({
   );
   const hiddenCommentCount = detail.comments.length - visibleComments.length;
 
+  // A comment that already lives on a review thread is that thread: the thread carries the line
+  // and side the bare comment has lost, and a resolved one is finished work nobody should be
+  // invited to fix again — the same call the whole-review hand-off makes.
+  const threadByCommentId = new Map(
+    detail.reviewThreads.flatMap((thread) =>
+      thread.comments.map((comment) => [comment.id, thread] as const),
+    ),
+  );
+
   const openCheck = (url: string) => {
     void readLocalApi()?.shell.openExternal(url);
   };
@@ -322,52 +331,64 @@ export function PullRequestSummaryTab({
                 {hiddenCommentCount === 1 ? "comment" : "comments"}
               </Button>
             ) : null}
-            {visibleComments.map((comment) => (
-              <article
-                key={comment.id}
-                // Offscreen comments skip style, layout and paint. Bot comments carry pages of
-                // highlighted code, and the conversation is below the description either way.
-                className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
-              >
-                <div className="flex items-start gap-2">
-                  <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
-                    <PullRequestActorLabel
-                      actor={comment.author}
-                      className="font-medium text-foreground"
-                    />
-                    <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
-                    {comment.reviewState ? <span>{comment.reviewState.toLowerCase()}</span> : null}
-                  </PullRequestMetaLine>
-                  {/* Review remarks only. A plain conversation comment is talk, not a finding,
+            {visibleComments.map((comment) => {
+              const thread = threadByCommentId.get(comment.id);
+              const finding: PullRequestFinding | null =
+                comment.kind !== "review" && comment.kind !== "review-comment"
+                  ? null
+                  : thread === undefined
+                    ? { kind: "comment", comment }
+                    : thread.isResolved
+                      ? null
+                      : { kind: "thread", thread };
+              return (
+                <article
+                  key={comment.id}
+                  // Offscreen comments skip style, layout and paint. Bot comments carry pages of
+                  // highlighted code, and the conversation is below the description either way.
+                  className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
+                >
+                  <div className="flex items-start gap-2">
+                    <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
+                      <PullRequestActorLabel
+                        actor={comment.author}
+                        className="font-medium text-foreground"
+                      />
+                      <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
+                      {comment.reviewState ? (
+                        <span>{comment.reviewState.toLowerCase()}</span>
+                      ) : null}
+                    </PullRequestMetaLine>
+                    {/* Review remarks only. A plain conversation comment is talk, not a finding,
                       and offering to fix one would promise more than it says. */}
-                  {onFixFinding &&
-                  (comment.kind === "review" || comment.kind === "review-comment") ? (
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      className="-mt-1 shrink-0"
-                      disabled={pendingFinding !== null && pendingFinding !== undefined}
-                      onClick={() => onFixFinding({ kind: "comment", comment })}
-                    >
-                      <HammerIcon className="size-3" />
-                      {pendingFinding === pullRequestFindingKey({ kind: "comment", comment })
-                        ? "Preparing..."
-                        : "Fix in a thread"}
-                    </Button>
+                    {onFixFinding && finding ? (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        className="-mt-1 shrink-0"
+                        disabled={pendingFinding !== null && pendingFinding !== undefined}
+                        onClick={() => onFixFinding(finding)}
+                      >
+                        <HammerIcon className="size-3" />
+                        {pendingFinding === pullRequestFindingKey(finding)
+                          ? "Preparing..."
+                          : "Fix in a thread"}
+                      </Button>
+                    ) : null}
+                  </div>
+                  {comment.path ? (
+                    <p className="mt-1 truncate text-xs text-muted-foreground" title={comment.path}>
+                      {comment.path}
+                    </p>
                   ) : null}
-                </div>
-                {comment.path ? (
-                  <p className="mt-1 truncate text-xs text-muted-foreground" title={comment.path}>
-                    {comment.path}
-                  </p>
-                ) : null}
-                <PullRequestMarkdown
-                  className="mt-2"
-                  text={comment.body}
-                  cwd={detail.workspaceRoot}
-                />
-              </article>
-            ))}
+                  <PullRequestMarkdown
+                    className="mt-2"
+                    text={comment.body}
+                    cwd={detail.workspaceRoot}
+                  />
+                </article>
+              );
+            })}
           </div>
         )}
         {/* A host that cannot post a comment gets no composer, rather than one that fails. */}
