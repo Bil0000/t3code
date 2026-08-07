@@ -68,7 +68,9 @@ function extractFailureMessage(cause: unknown, targetLabel: string): string {
     for (const key of ["cause", "error", "failure", "defect", "left", "value"]) {
       if (key in record) queue.push(record[key]);
     }
-    if (Array.isArray(record["failures"])) queue.push(...(record["failures"] as unknown[]));
+    for (const key of ["failures", "reasons", "errors"]) {
+      if (Array.isArray(record[key])) queue.push(...(record[key] as unknown[]));
+    }
   }
   return `Could not move this thread to ${targetLabel}. Check the console for details.`;
 }
