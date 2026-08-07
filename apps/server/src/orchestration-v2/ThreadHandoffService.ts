@@ -699,8 +699,8 @@ export const make = Effect.gen(function* () {
       const cameHome = input.existing?.handoff?.presence === "away";
       const thread: OrchestrationV2AppThread = {
         ...base,
-        // Arrival always revives: a copy archived by a completed departure
-        // returns to the sidebar the moment work lands in it again.
+        // Arrival revives: a copy the user archived (or one archived by an
+        // older build) returns to the sidebar the moment work lands in it.
         archivedAt: returning ? null : base.archivedAt,
         handoff: cameHome
           ? null

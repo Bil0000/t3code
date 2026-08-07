@@ -773,9 +773,10 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       });
       const completed = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(completed.thread.handoff?.peerThreadId, "thread-on-staging");
-      // A confirmed departure archives the residual copy so the sidebar
-      // shows one thread, not a pair.
-      assert.isNotNull(completed.thread.archivedAt);
+      // The residual copy stays unarchived: the sidebar's one-row rule hides
+      // it while the live peer is visible, and it must remain reachable as
+      // the return target and the offline-peer safety net.
+      assert.isNull(completed.thread.archivedAt);
 
       yield* threadManagement.dispatch({
         type: "thread.handoff.abort",

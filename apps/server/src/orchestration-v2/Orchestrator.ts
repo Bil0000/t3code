@@ -1687,10 +1687,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             },
             updatedAt: now,
           };
-        // Completion means the live copy is confirmed on the peer, which makes
-        // this departed copy pure residue: archive it so the sidebar shows one
-        // thread, not a pair. It stays reachable from the archive, keeps its
-        // banner, and a later return hop revives it in place.
         case "thread.handoff.complete":
           return {
             ...thread,
@@ -1703,7 +1699,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     updatedAt: now,
                   },
                 }),
-            archivedAt: thread.archivedAt ?? now,
             updatedAt: now,
           };
         // Releasing the link is what makes this side live again, so an aborted
