@@ -653,6 +653,30 @@ describe("a second ask into the same composer", () => {
     ).toBe("check the migration first\n\nExplain this pull request.");
   });
 
+  it("replaces only its own sentence under text the reader typed", () => {
+    expect(
+      handoffPrompt(
+        {
+          prompt: "check the migration first\n\nExplain this pull request.",
+          lastHandoffPrompt: "Explain this pull request.",
+        },
+        "Why the cache key?",
+      ),
+    ).toBe("check the migration first\n\nWhy the cache key?");
+  });
+
+  it("takes back only its own sentence when the next ask is empty", () => {
+    expect(
+      handoffPrompt(
+        {
+          prompt: "check the migration first\n\nExplain this pull request.",
+          lastHandoffPrompt: "Explain this pull request.",
+        },
+        "",
+      ),
+    ).toBe("check the migration first");
+  });
+
   it("keeps the lines the reader marked up in the thread themselves", () => {
     const own = chip("file-comment:3");
     const next = handoffReviewComments(

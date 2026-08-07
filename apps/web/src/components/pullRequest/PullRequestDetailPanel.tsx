@@ -304,7 +304,9 @@ export function PullRequestDetailPanel({
       },
       task.prompt,
     );
-    lastHandoffPromptByDraft.set(session.draftId, prompt);
+    // Remember the hand-off's own contribution, not the merged prompt: only that sentence is
+    // this session's to take back next time, and the reader's text around it is not.
+    lastHandoffPromptByDraft.set(session.draftId, task.prompt);
     store.setPrompt(session.draftId, prompt);
     store.setReviewComments(
       session.draftId,

@@ -201,14 +201,29 @@ const HANDOFF_COMMENT_ID_PREFIX = "pull-request-";
 export function handoffPrompt(
   existing: {
     readonly prompt: string;
-    /** What the last hand-off into this draft wrote, if this session put anything there. */
+    /**
+     * What the last hand-off into this draft wrote — its own contribution alone, never the
+     * merged prompt it landed in, or a draft that held the reader's text before the first
+     * hand-off would read as all hand-off and be replaced wholesale by the second.
+     */
     readonly lastHandoffPrompt: string | undefined;
   },
   incoming: string,
 ): string {
   if (existing.prompt.trim().length === 0) return incoming;
-  if (existing.prompt === existing.lastHandoffPrompt) return incoming;
-  return incoming.length === 0 ? existing.prompt : `${existing.prompt}\n\n${incoming}`;
+  const last = existing.lastHandoffPrompt ?? "";
+  // Only the sentence the last hand-off wrote is taken back: alone, or off the end of the
+  // reader's own text it was appended under.
+  const kept =
+    last.length === 0
+      ? existing.prompt
+      : existing.prompt === last
+        ? ""
+        : existing.prompt.endsWith(`\n\n${last}`)
+          ? existing.prompt.slice(0, -(last.length + 2))
+          : existing.prompt;
+  if (kept.trim().length === 0) return incoming;
+  return incoming.length === 0 ? kept : `${kept}\n\n${incoming}`;
 }
 
 /**
