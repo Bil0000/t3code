@@ -694,26 +694,25 @@ export const make = Effect.gen(function* () {
         deletedAt: null,
       };
       const returning = input.existing !== null;
-      // Coming home (this thread had departed) ends the visible lineage; a
-      // revived copy that was pushed here again is simply "here" once more.
-      const cameHome = input.existing?.handoff?.presence === "away";
       const thread: OrchestrationV2AppThread = {
         ...base,
         // Arrival revives: a copy the user archived (or one archived by an
         // older build) returns to the sidebar the moment work lands in it.
         archivedAt: returning ? null : base.archivedAt,
-        handoff: cameHome
-          ? null
-          : {
-              handoffId: bundle.handoffId,
-              presence: "here",
-              peerEnvironmentId: bundle.origin.environmentId,
-              peerThreadId: bundle.origin.threadId,
-              peerLabel: bundle.origin.label ?? null,
-              previousHandoffId: bundle.lineage.previousHandoffId,
-              hopCount: bundle.lineage.hopCount,
-              updatedAt: now,
-            },
+        // Every arrival keeps a "here" link — it is provenance, not a lock.
+        // Only "away" restricts anything, so keeping the link through round
+        // trips is what preserves "moved from X" and the pull-back verbs
+        // after any number of hops.
+        handoff: {
+          handoffId: bundle.handoffId,
+          presence: "here",
+          peerEnvironmentId: bundle.origin.environmentId,
+          peerThreadId: bundle.origin.threadId,
+          peerLabel: bundle.origin.label ?? null,
+          previousHandoffId: bundle.lineage.previousHandoffId,
+          hopCount: bundle.lineage.hopCount,
+          updatedAt: now,
+        },
         updatedAt: now,
       };
       // The carried conversation replays as this environment's own events —
