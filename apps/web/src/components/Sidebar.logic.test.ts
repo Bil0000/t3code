@@ -38,7 +38,14 @@ import {
   sortProjectsForSidebar,
   THREAD_JUMP_HINT_SHOW_DELAY_MS,
 } from "./Sidebar.logic";
-import { EnvironmentId, ProjectId, ProviderInstanceId, RunId, ThreadId } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderInstanceId,
+  RunId,
+  ThreadId,
+  ThreadHandoffId,
+} from "@t3tools/contracts";
 import {
   DEFAULT_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
@@ -293,16 +300,16 @@ describe("sidebar thread lineage helpers", () => {
   });
 
   it("shows one row per handed-off thread: the away copy hides while its live peer is visible", () => {
-    const environmentId = "environment-mac";
-    const peerEnvironmentId = "environment-staging";
+    const environmentId = EnvironmentId.make("environment-mac");
+    const peerEnvironmentId = EnvironmentId.make("environment-staging");
     const away = makeThreadFixture({
       id: ThreadId.make("thread-away"),
       environmentId,
       handoff: {
-        handoffId: "handoff-1",
+        handoffId: ThreadHandoffId.make("handoff-1"),
         presence: "away",
         peerEnvironmentId,
-        peerThreadId: "thread-here",
+        peerThreadId: ThreadId.make("thread-here"),
         peerLabel: "calendaty-staging",
         previousHandoffId: null,
         hopCount: 0,
@@ -313,10 +320,10 @@ describe("sidebar thread lineage helpers", () => {
       id: ThreadId.make("thread-here"),
       environmentId: peerEnvironmentId,
       handoff: {
-        handoffId: "handoff-1",
+        handoffId: ThreadHandoffId.make("handoff-1"),
         presence: "here",
         peerEnvironmentId: environmentId,
-        peerThreadId: "thread-away",
+        peerThreadId: ThreadId.make("thread-away"),
         peerLabel: null,
         previousHandoffId: null,
         hopCount: 0,
@@ -332,12 +339,12 @@ describe("sidebar thread lineage helpers", () => {
   it("keeps the away copy visible when the owning device is offline", () => {
     const away = makeThreadFixture({
       id: ThreadId.make("thread-away-alone"),
-      environmentId: "environment-mac",
+      environmentId: EnvironmentId.make("environment-mac"),
       handoff: {
-        handoffId: "handoff-1",
+        handoffId: ThreadHandoffId.make("handoff-1"),
         presence: "away",
-        peerEnvironmentId: "environment-staging",
-        peerThreadId: "thread-here",
+        peerEnvironmentId: EnvironmentId.make("environment-staging"),
+        peerThreadId: ThreadId.make("thread-here"),
         peerLabel: "calendaty-staging",
         previousHandoffId: null,
         hopCount: 0,
