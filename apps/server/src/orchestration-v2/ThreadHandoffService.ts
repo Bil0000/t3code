@@ -28,6 +28,7 @@ import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeCrypto from "node:crypto";
 
+import { toSafeThreadAttachmentSegment } from "../attachmentStore.ts";
 import { ServerConfig } from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { ProjectService } from "../project/ProjectService.ts";
@@ -453,6 +454,33 @@ export const make = Effect.gen(function* () {
           if (untrackedPart !== null) parts.push(untrackedPart);
         }
 
+        // Attachments are flat files named by a thread-derived prefix. They
+        // travel under their original names, which is what the carried turn
+        // items reference, so nothing has to be rewritten on arrival.
+        const threadSegment = toSafeThreadAttachmentSegment(thread.id);
+        const attachmentFiles =
+          threadSegment === null
+            ? []
+            : yield* fs.readDirectory(config.attachmentsDir).pipe(
+                Effect.map((entries) =>
+                  entries.filter((entry) => entry.startsWith(`${threadSegment}-`)),
+                ),
+                Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+              );
+        if (attachmentFiles.length > 0) {
+          const attachmentsPart = yield* stagePart({
+            handoffId,
+            kind: "attachments-tar",
+            write: (target) =>
+              git.archivePaths({
+                cwd: config.attachmentsDir,
+                paths: attachmentFiles,
+                outputPath: target,
+              }),
+          });
+          if (attachmentsPart !== null) parts.push(attachmentsPart);
+        }
+
         const totalBytes = parts.reduce((sum, part) => sum + part.byteLength, 0);
         const verdict = classifyPayloadSize(totalBytes);
         if (verdict === "refuse") {
@@ -845,6 +873,15 @@ export const make = Effect.gen(function* () {
               archivePath: partPath({ handoffId: bundle.handoffId, kind: "untracked-tar" }),
             })
             .pipe(asHandoffError("apply_failed", "Could not restore the untracked files."));
+        }
+
+        if (bundle.parts.some((part) => part.kind === "attachments-tar")) {
+          yield* git
+            .extractArchive({
+              cwd: config.attachmentsDir,
+              archivePath: partPath({ handoffId: bundle.handoffId, kind: "attachments-tar" }),
+            })
+            .pipe(asHandoffError("apply_failed", "Could not restore the thread's attachments."));
         }
 
         const threadId =
