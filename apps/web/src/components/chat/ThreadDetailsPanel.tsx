@@ -48,6 +48,8 @@ export interface ThreadDetailsPanelProps {
   envLocked: boolean;
   availableEnvironments: readonly EnvironmentOption[];
   onEnvironmentChange: (environmentId: EnvironmentId) => void;
+  /** Offered on a locked thread: moving it to another environment. */
+  onMoveThread?: (environmentId: EnvironmentId) => void;
   onEnvModeChange: (mode: EnvMode) => void;
   effectiveEnvModeOverride?: EnvMode;
   activeThreadBranchOverride?: string | null;
@@ -186,6 +188,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 environmentId={props.environmentId}
                 availableEnvironments={props.availableEnvironments}
                 onEnvironmentChange={props.onEnvironmentChange}
+                {...(props.onMoveThread ? { onMoveThread: props.onMoveThread } : {})}
               />
             ) : null}
 

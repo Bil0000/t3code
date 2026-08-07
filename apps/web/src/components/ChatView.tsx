@@ -6141,6 +6141,7 @@ function ChatViewContent(props: ChatViewProps) {
     envLocked,
     availableEnvironments: logicalProjectEnvironments,
     onEnvironmentChange,
+    ...(canMoveThread ? { onMoveThread } : {}),
     onEnvModeChange,
     ...(canOverrideServerThreadEnvMode ? { effectiveEnvModeOverride: envMode } : {}),
     ...(canOverrideServerThreadEnvMode
