@@ -1,10 +1,7 @@
 import type { FileDiffMetadata } from "@pierre/diffs";
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  isFileDiffCollapsed,
-  isLineInFileDiff,
-} from "./pullRequestDiff.logic";
+import { isFileDiffCollapsed, isLineInFileDiff } from "./pullRequestDiff.logic";
 
 /** Only the hunk ranges matter here; the viewer fills the rest in when it renders. */
 function fileWithHunks(
