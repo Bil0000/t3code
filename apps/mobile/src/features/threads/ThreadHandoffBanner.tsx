@@ -60,7 +60,7 @@ export function ThreadHandoffBanner(props: {
           Running on {handoff.peerLabel ?? "another device"}
         </Text>
         <Text className="text-xs text-foreground-tertiary">
-          This copy stays readable. Pull it back from that device to continue here.
+          The thread now lives there — keep working with it from any device.
         </Text>
       </View>
       <Pressable

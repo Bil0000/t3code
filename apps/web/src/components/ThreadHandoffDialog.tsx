@@ -20,7 +20,6 @@ export interface ThreadHandoffDialogProps {
   readonly threadId: ThreadId;
   readonly threadTitle: string;
   readonly originEnvironmentId: EnvironmentId;
-  readonly originLabel: string;
   readonly targetEnvironmentId: EnvironmentId;
   readonly targetLabel: string;
   readonly targetProjectId: ProjectId | null;
@@ -98,7 +97,6 @@ export function ThreadHandoffDialog({
   threadId,
   threadTitle,
   originEnvironmentId,
-  originLabel,
   targetEnvironmentId,
   targetLabel,
   targetProjectId,
@@ -225,7 +223,7 @@ export function ThreadHandoffDialog({
           </DialogTitle>
           <DialogDescription>
             {returnTo === undefined
-              ? `It keeps running there. ${originLabel} keeps a read-only copy until you pull it back.`
+              ? `The thread and its work move to ${targetLabel}. You can keep chatting with it from any of your devices.`
               : `This thread originally ran on ${targetLabel}. Sending it back continues the original thread there.`}
           </DialogDescription>
         </DialogHeader>
