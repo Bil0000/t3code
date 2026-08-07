@@ -699,6 +699,9 @@ export const make = Effect.gen(function* () {
         // A hop that returns to the thread's home ends the lineage's visible
         // state: the thread is simply live again. Only a first arrival keeps
         // the link, marking this side as the one that owns the work now.
+        // A returning thread was archived when its departure completed;
+        // coming home revives it in place.
+        archivedAt: returning ? null : base.archivedAt,
         handoff: returning
           ? null
           : {

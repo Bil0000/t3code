@@ -773,6 +773,9 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       });
       const completed = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(completed.thread.handoff?.peerThreadId, "thread-on-staging");
+      // A confirmed departure archives the residual copy so the sidebar
+      // shows one thread, not a pair.
+      assert.isNotNull(completed.thread.archivedAt);
 
       yield* threadManagement.dispatch({
         type: "thread.handoff.abort",
