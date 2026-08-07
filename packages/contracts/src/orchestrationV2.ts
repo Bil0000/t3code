@@ -2532,6 +2532,7 @@ export const OrchestrationV2HandoffErrorReason = Schema.Literals([
   "environment_unsupported",
   "thread_missing",
   "thread_already_away",
+  "thread_busy",
   "repository_mismatch",
   "project_missing",
   "workspace_diverged",

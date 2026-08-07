@@ -400,6 +400,19 @@ export const make = Effect.gen(function* () {
             message: `Thread ${input.threadId} is already handed off.`,
           });
         }
+        // A running agent is writing the worktree this hop is about to
+        // snapshot; a bundle cut mid-write would carry a half-finished state
+        // to the other machine. Refuse with the action the user can take.
+        const busy = projection.runs.some((run) =>
+          ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+        );
+        if (busy) {
+          return yield* handoffError({
+            reason: "thread_busy",
+            message:
+              "The agent is still working in this thread. Interrupt it or let it finish, then send.",
+          });
+        }
 
         const cwd = yield* threadCwd(thread);
         const handoffId = ThreadHandoffId.make(NodeCrypto.randomUUID());
