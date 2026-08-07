@@ -52,6 +52,7 @@ import { OrchestrationV2EventSinkLayerLive, OrchestrationV2LayerLive } from "./r
 import { shellStreamItemFromThreadShell } from "./ShellStream.ts";
 import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
 import { ThreadManagementService } from "./ThreadManagementService.ts";
+import { userFacingDispatchErrorMessage } from "./UserFacingErrors.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-orchestration-v2-runtime-layer-",
@@ -712,6 +713,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
   it.effect("departs, completes and releases a thread handoff", () =>
     Effect.gen(function* () {
       const orchestrator = yield* OrchestratorV2;
+      const threadManagement = yield* ThreadManagementService;
       const threadId = ThreadId.make("runtime-layer-handoff-thread");
       yield* orchestrator.dispatch({
         type: "thread.create",
@@ -728,7 +730,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         worktreePath: null,
       });
 
-      yield* orchestrator.dispatch({
+      yield* threadManagement.dispatch({
         type: "thread.handoff.depart",
         commandId: CommandId.make("runtime-layer-handoff-depart"),
         threadId,
@@ -743,7 +745,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(departed.thread.handoff?.peerLabel, "calendaty-staging");
 
       // A departed thread refuses a second departure.
-      const second = yield* orchestrator
+      const second = yield* threadManagement
         .dispatch({
           type: "thread.handoff.depart",
           commandId: CommandId.make("runtime-layer-handoff-depart-2"),
@@ -756,8 +758,13 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
         })
         .pipe(Effect.flip);
       assert.instanceOf(second, OrchestratorDispatchError);
+      // The refusal must carry a reason a user can act on, not the generic
+      // dispatch failure — the dialog shows exactly this string.
+      const detail = userFacingDispatchErrorMessage(second);
+      assert.isDefined(detail);
+      assert.include(detail ?? "", "already handed off");
 
-      yield* orchestrator.dispatch({
+      yield* threadManagement.dispatch({
         type: "thread.handoff.complete",
         commandId: CommandId.make("runtime-layer-handoff-complete"),
         threadId,
@@ -767,7 +774,7 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       const completed = yield* orchestrator.getThreadProjection(threadId);
       assert.equal(completed.thread.handoff?.peerThreadId, "thread-on-staging");
 
-      yield* orchestrator.dispatch({
+      yield* threadManagement.dispatch({
         type: "thread.handoff.abort",
         commandId: CommandId.make("runtime-layer-handoff-abort"),
         threadId,

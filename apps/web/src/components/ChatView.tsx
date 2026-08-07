@@ -1205,6 +1205,9 @@ function ChatViewContent(props: ChatViewProps) {
   const closeTerminalMutation = useAtomCommand(terminalEnvironment.close, "terminal close");
   const createThread = useAtomCommand(threadEnvironment.create, { reportFailure: false });
   const deleteThread = useAtomCommand(threadEnvironment.delete, { reportFailure: false });
+  const releaseThreadHandoff = useAtomCommand(threadEnvironment.releaseHandoff, {
+    reportFailure: false,
+  });
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
@@ -2078,6 +2081,25 @@ function ChatViewContent(props: ChatViewProps) {
         icon: <CloudIcon />,
         title: `Running on ${awayHandoff.peerLabel ?? awayHandoff.peerEnvironmentId}`,
         description: "This copy stays readable. Pull it back to continue here.",
+        // Escape hatch for a hop whose transfer never landed: releasing makes
+        // this side live again without waiting for the peer.
+        actions: (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              if (serverThread) {
+                void releaseThreadHandoff({
+                  environmentId: serverThread.environmentId,
+                  input: { threadId: serverThread.id, handoffId: awayHandoff.handoffId },
+                });
+              }
+            }}
+          >
+            Continue here
+          </Button>
+        ),
       });
     }
     const updateRunning = serverUpdateState.status === "running";
@@ -2219,6 +2241,7 @@ function ChatViewContent(props: ChatViewProps) {
     versionMismatchServerLabel,
     isServerThread,
     serverThread,
+    releaseThreadHandoff,
   ]);
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
   const unlockedSelectedProvider = resolveSelectableProvider(
