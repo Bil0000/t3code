@@ -657,6 +657,10 @@ export function PullRequestDetailPanel({
                       </span>
                     </span>
                   </MenuItem>
+                  <MenuItem disabled={handoff !== null} onClick={startFixFindings}>
+                    <HammerIcon className="size-3.5" />
+                    {handoff === "findings" ? "Preparing..." : "Fix findings in a thread"}
+                  </MenuItem>
                   <MenuSeparator />
                   {detail.state === "open" ? (
                     <>
@@ -717,10 +721,6 @@ export function PullRequestDetailPanel({
                   <MenuItem onClick={() => void writeTextToClipboard(detail.url)}>
                     <LinkIcon className="size-3.5" />
                     Copy link
-                  </MenuItem>
-                  <MenuItem disabled={handoff !== null} onClick={startFixFindings}>
-                    <HammerIcon className="size-3.5" />
-                    {handoff === "findings" ? "Preparing..." : "Fix findings in a thread"}
                   </MenuItem>
                   {/* Only where the button row could not take it, so it is never offered twice. */}
                   {conflicting && primaryAction !== "resolve" ? (
