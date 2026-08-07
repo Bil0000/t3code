@@ -328,7 +328,7 @@ function PullRequestsRouteView() {
     } finally {
       setInvalidating(false);
     }
-    listQuery.refresh();
+    refreshList();
     baselineQuery.refresh();
     statsQuery.refresh();
     setDetailRefreshToken((token) => token + 1);
@@ -456,6 +456,26 @@ function PullRequestsRouteView() {
     });
   };
 
+  // A refresh means the whole visible list again, and a cursored query cannot answer that: it
+  // re-reads only its own slice, so the rows loaded before it would never see a merge, a close,
+  // or a retitle. Going back to a single page long enough to cover everything on screen lets the
+  // merge above bring every row up to date in place.
+  const refreshList = () => {
+    if (sentCursors === null) {
+      listQuery.refresh();
+      return;
+    }
+    const loadedCount = ordered?.key === filterKey ? ordered.entries.length : pageSize;
+    setPage({
+      key: filterKey,
+      size: Math.min(
+        Math.max(pageSize, Math.ceil(loadedCount / PAGE_SIZE) * PAGE_SIZE),
+        MAX_PAGE_SIZE,
+      ),
+      cursors: null,
+    });
+  };
+
   // The list goes stale the same way the detail does: somebody opens a pull request, a check
   // finishes, a branch is merged. So it reads again on the way back to the window, and once a
   // minute while somebody is reading it. Those reads go through the server's cache and stop
@@ -463,7 +483,7 @@ function PullRequestsRouteView() {
   // host's rate limit.
   useLiveRefresh(
     () => {
-      listQuery.refresh();
+      refreshList();
       baselineQuery.refresh();
     },
     { enabled: environmentId !== null },
@@ -979,7 +999,7 @@ function PullRequestsRouteView() {
               // Merging, closing or reopening changes the row this panel was opened from, so the
               // list behind it is out of date the moment the host takes the action.
               onActed={() => {
-                listQuery.refresh();
+                refreshList();
                 baselineQuery.refresh();
               }}
               onStateChange={handlePullRequestTabStatusChange}
