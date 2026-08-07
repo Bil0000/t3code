@@ -696,6 +696,9 @@ export const make = Effect.gen(function* () {
       const returning = input.existing !== null;
       const thread: OrchestrationV2AppThread = {
         ...base,
+        // The carried title wins: a rename made on either side reaches the
+        // pair at the next hop instead of leaving a stale name behind.
+        title: bundle.thread.title,
         // Arrival revives: a copy the user archived (or one archived by an
         // older build) returns to the sidebar the moment work lands in it.
         archivedAt: returning ? null : base.archivedAt,

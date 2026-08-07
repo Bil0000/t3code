@@ -205,6 +205,24 @@ export function useThreadActions() {
     return resolveThreadRouteRef(currentRouteParams);
   }, [router]);
 
+  // A handed-off thread is one thread living as a pair of records, so an
+  // action taken on the visible half mirrors to the hidden peer — otherwise
+  // deleting (or archiving, settling…) the pair takes two attempts, because
+  // removing one half un-hides the other. Best effort: an unreachable peer
+  // keeps its state until that device is next seen.
+  const mirrorToHandoffPeer = useCallback(
+    async (
+      target: ScopedThreadRef,
+      act: (peer: ScopedThreadRef) => Promise<unknown>,
+    ): Promise<void> => {
+      const shell = readThreadShell(target);
+      const link = shell?.handoff ?? null;
+      if (link === null || link.peerThreadId === null) return;
+      await act(scopeThreadRef(link.peerEnvironmentId, link.peerThreadId)).catch(() => undefined);
+    },
+    [],
+  );
+
   const archiveThread = useCallback(
     async (target: ScopedThreadRef, opts: { onArchived?: () => void } = {}) => {
       const resolved = resolveThreadTarget(target);
@@ -232,6 +250,12 @@ export function useThreadActions() {
       if (archiveResult._tag === "Failure") {
         return archiveResult;
       }
+      await mirrorToHandoffPeer(threadRef, (peer) =>
+        archiveThreadMutation({
+          environmentId: peer.environmentId,
+          input: { threadId: peer.threadId },
+        }),
+      );
       const wokeAt = threadWokeAt(thread, { now: new Date().toISOString() });
       if (wokeAt !== null) {
         markThreadVisited(scopedThreadKey(threadRef), wokeAt);
@@ -251,11 +275,23 @@ export function useThreadActions() {
 
       return archiveResult;
     },
-    [archiveThreadMutation, getCurrentRouteThreadRef, markThreadVisited, resolveThreadTarget],
+    [
+      archiveThreadMutation,
+      getCurrentRouteThreadRef,
+      markThreadVisited,
+      mirrorToHandoffPeer,
+      resolveThreadTarget,
+    ],
   );
 
   const unarchiveThread = useCallback(
     async (target: ScopedThreadRef) => {
+      await mirrorToHandoffPeer(target, (peer) =>
+        unarchiveThreadMutation({
+          environmentId: peer.environmentId,
+          input: { threadId: peer.threadId },
+        }),
+      );
       const result = await unarchiveThreadMutation({
         environmentId: target.environmentId,
         input: { threadId: target.threadId },
@@ -265,11 +301,17 @@ export function useThreadActions() {
       }
       return result;
     },
-    [unarchiveThreadMutation],
+    [mirrorToHandoffPeer, unarchiveThreadMutation],
   );
 
   const deleteThread = useCallback(
     async (target: ScopedThreadRef, opts: { deletedThreadKeys?: ReadonlySet<string> } = {}) => {
+      await mirrorToHandoffPeer(target, (peer) =>
+        deleteThreadMutation({
+          environmentId: peer.environmentId,
+          input: { threadId: peer.threadId },
+        }),
+      );
       const resolved = resolveThreadTarget(target);
       if (!resolved) {
         // Thread not in main store (e.g. archived thread) — dispatch delete directly.
@@ -451,6 +493,7 @@ export function useThreadActions() {
       return deleteResult;
     },
     [
+      mirrorToHandoffPeer,
       clearComposerDraftForThread,
       clearProjectDraftThreadById,
       clearTerminalUiState,
