@@ -218,7 +218,11 @@ export function ThreadHandoffDialog({
     >
       <DialogPopup className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Send thread to {targetLabel}</DialogTitle>
+          <DialogTitle>
+            {returnTo === undefined
+              ? `Send thread to ${targetLabel}`
+              : `Pull thread back to ${targetLabel}`}
+          </DialogTitle>
           <DialogDescription>
             {returnTo === undefined
               ? `It keeps running there. ${originLabel} keeps a read-only copy until you pull it back.`
@@ -265,13 +269,21 @@ export function ThreadHandoffDialog({
                     aria-hidden
                     className={
                       index < activeIndex
-                        ? "bg-foreground size-2 shrink-0 rounded-full"
+                        ? "size-2 shrink-0 rounded-full bg-emerald-600 dark:bg-emerald-400"
                         : index === activeIndex
                           ? "bg-primary size-2 shrink-0 rounded-full"
                           : "bg-border size-2 shrink-0 rounded-full"
                     }
                   />
-                  <span className={index <= activeIndex ? "" : "text-muted-foreground"}>
+                  <span
+                    className={
+                      index < activeIndex
+                        ? "text-emerald-700 dark:text-emerald-300"
+                        : index === activeIndex
+                          ? ""
+                          : "text-muted-foreground"
+                    }
+                  >
                     {entry.label}
                   </span>
                   {entry.phase === "upload" &&
@@ -309,7 +321,13 @@ export function ThreadHandoffDialog({
             Cancel
           </Button>
           <Button type="button" size="sm" disabled={isMoving} onClick={() => void handleMove()}>
-            {isMoving ? "Sending…" : "Send thread"}
+            {isMoving
+              ? returnTo === undefined
+                ? "Sending…"
+                : "Pulling…"
+              : returnTo === undefined
+                ? "Send thread"
+                : "Pull back"}
           </Button>
         </div>
       </DialogPopup>

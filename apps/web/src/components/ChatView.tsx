@@ -2096,6 +2096,7 @@ function ChatViewContent(props: ChatViewProps) {
                 size="sm"
                 onClick={() => {
                   if (serverThread && awayHandoff.peerThreadId !== null) {
+                    const homeRef = scopeThreadRef(serverThread.environmentId, serverThread.id);
                     void moveThreadCommand({
                       threadId: awayHandoff.peerThreadId,
                       originEnvironmentId: awayHandoff.peerEnvironmentId,
@@ -2107,6 +2108,13 @@ function ChatViewContent(props: ChatViewProps) {
                       targetBranchTip: null,
                       previousHandoffId: awayHandoff.handoffId,
                       hopCount: awayHandoff.hopCount + 1,
+                    }).then((result) => {
+                      if (result._tag === "Success") {
+                        void navigate({
+                          to: "/$environmentId/$threadId",
+                          params: buildThreadRouteParams(homeRef),
+                        });
+                      }
                     });
                   }
                 }}
@@ -6723,6 +6731,16 @@ function ChatViewContent(props: ChatViewProps) {
                       },
                     }
                   : {})}
+                onMoved={(targetThreadId) => {
+                  // The live thread is now on the other device; follow it so
+                  // the user never lands on the archived residue.
+                  void navigate({
+                    to: "/$environmentId/$threadId",
+                    params: buildThreadRouteParams(
+                      scopeThreadRef(moveTargetEnvironment.environmentId, targetThreadId),
+                    ),
+                  });
+                }}
                 isBusy={
                   // Must match the server's busy guard exactly: it refuses on
                   // an active RUN, and the runtime summary alone stays
