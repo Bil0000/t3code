@@ -120,6 +120,29 @@ export function handoffChunkWindow(input: {
   return { offset, end, complete: end >= input.totalBytes };
 }
 
+/**
+ * Rewrites one carried turn item into this environment's history.
+ *
+ * The origin's run, node and provider references do not exist here, so they
+ * are dropped rather than left dangling; the item id and ordinal survive,
+ * which is what keeps the conversation ordered and makes a later return trip
+ * deduplicable instead of doubling every message.
+ */
+function localizeTurnItem(
+  item: OrchestrationV2TurnItem,
+  threadId: ThreadId,
+): OrchestrationV2TurnItem {
+  return {
+    ...item,
+    threadId,
+    runId: null,
+    nodeId: null,
+    providerThreadId: null,
+    providerTurnId: null,
+    nativeItemRef: null,
+  } as OrchestrationV2TurnItem;
+}
+
 export interface ThreadHandoffPreparation {
   readonly bundle: OrchestrationV2HandoffBundleV1;
   readonly totalBytes: number;
@@ -634,6 +657,7 @@ export const make = Effect.gen(function* () {
     readonly threadId: ThreadId;
     readonly projectId: ProjectId;
     readonly existing: OrchestrationV2AppThread | null;
+    readonly existingItems: ReadonlyArray<OrchestrationV2TurnItem>;
     readonly worktreePath: string | null;
   }) =>
     Effect.gen(function* () {
@@ -686,6 +710,51 @@ export const make = Effect.gen(function* () {
             },
         updatedAt: now,
       };
+      // The carried conversation replays as this environment's own events —
+      // the same message/turn-item pair the v1 importer writes. A returning
+      // hop skips every item this side already has, so a round trip adds only
+      // what happened away instead of doubling the history.
+      const existingItemIds = new Set(
+        input.existingItems.map((existingItem) => String(existingItem.id)),
+      );
+      const conversationEvents: Array<OrchestrationV2DomainEvent> = [];
+      for (const item of bundle.conversation.items) {
+        if (existingItemIds.has(String(item.id))) continue;
+        const localized = localizeTurnItem(item, thread.id);
+        if (
+          (localized.type === "user_message" || localized.type === "assistant_message") &&
+          localized.messageId !== null
+        ) {
+          conversationEvents.push({
+            id: EventId.make(`${HANDOFF_EVENT_PREFIX}:${bundle.handoffId}:message:${item.id}`),
+            type: "message.updated",
+            threadId: thread.id,
+            occurredAt: now,
+            payload: {
+              createdBy: localized.type === "user_message" ? "user" : "agent",
+              creationSource: "server",
+              id: localized.messageId,
+              threadId: thread.id,
+              runId: null,
+              nodeId: null,
+              role: localized.type === "user_message" ? "user" : "assistant",
+              text: localized.text ?? "",
+              attachments: localized.type === "user_message" ? localized.attachments : [],
+              streaming: false,
+              createdAt: localized.startedAt ?? now,
+              updatedAt: localized.updatedAt ?? now,
+            },
+          });
+        }
+        conversationEvents.push({
+          id: EventId.make(`${HANDOFF_EVENT_PREFIX}:${bundle.handoffId}:item:${item.id}`),
+          type: "turn-item.updated",
+          threadId: thread.id,
+          occurredAt: now,
+          payload: localized,
+        });
+      }
+
       const events: Array<OrchestrationV2DomainEvent> = [
         {
           id: EventId.make(`${HANDOFF_EVENT_PREFIX}:${bundle.handoffId}:thread`),
@@ -695,6 +764,7 @@ export const make = Effect.gen(function* () {
           occurredAt: now,
           payload: thread,
         },
+        ...conversationEvents,
         ...(returning
           ? []
           : [
@@ -711,8 +781,12 @@ export const make = Effect.gen(function* () {
       // Through the sink, not the raw event store: the sink applies the
       // projections and broadcasts the shell delta, which is what makes the
       // arrived thread appear on every connected client immediately instead
-      // of after the next projection rebuild.
-      yield* eventSink.write({ events });
+      // of after the next projection rebuild. Batched, because a long
+      // conversation is hundreds of events and one giant write would hold the
+      // sink's serial lane for the whole payload.
+      for (let index = 0; index < events.length; index += 100) {
+        yield* eventSink.write({ events: events.slice(index, index + 100) });
+      }
       return thread;
     }).pipe(
       asHandoffError(
@@ -784,16 +858,18 @@ export const make = Effect.gen(function* () {
         // for repositories that existed here before the hop.
         const wantsWorktree = !cloned && bundle.workspace.strategy.type !== "root";
 
-        const existing =
+        const existingProjection =
           input.returningThreadId === null
             ? null
-            : yield* projectionStore.getThreadProjection(input.returningThreadId).pipe(
-                Effect.map((projection) => projection.thread),
-                asHandoffError(
-                  "thread_missing",
-                  `Thread ${input.returningThreadId} could not be read.`,
-                ),
-              );
+            : yield* projectionStore
+                .getThreadProjection(input.returningThreadId)
+                .pipe(
+                  asHandoffError(
+                    "thread_missing",
+                    `Thread ${input.returningThreadId} could not be read.`,
+                  ),
+                );
+        const existing = existingProjection?.thread ?? null;
 
         let classification: HandoffTipClassification = "advance";
         let preTag: string | null = null;
@@ -1031,6 +1107,7 @@ export const make = Effect.gen(function* () {
           threadId,
           projectId,
           existing,
+          existingItems: existingProjection?.turnItems ?? [],
           worktreePath: wantsWorktree && applyCwd !== cwd ? applyCwd : null,
         });
         yield* recordHop({
