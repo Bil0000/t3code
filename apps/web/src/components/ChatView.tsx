@@ -232,6 +232,7 @@ import {
   useProjects,
   useThreadProjection,
   useThreadShell,
+  useThreadShells,
   useThreadRefs,
   useThreadVisibleTurnItems,
   waitForThreadShell,
@@ -2110,9 +2111,9 @@ function ChatViewContent(props: ChatViewProps) {
                       hopCount: awayHandoff.hopCount + 1,
                     }).then((result) => {
                       if (result._tag === "Success") {
-                        void navigate({
-                          to: "/$environmentId/$threadId",
-                          params: buildThreadRouteParams(homeRef),
+                        setPendingMoveNavigation({
+                          environmentId: homeRef.environmentId,
+                          threadId: homeRef.threadId,
                         });
                       }
                     });
@@ -2794,6 +2795,30 @@ function ChatViewContent(props: ChatViewProps) {
   const onMoveThread = useCallback((nextEnvironmentId: EnvironmentId) => {
     setMoveTargetEnvironmentId(nextEnvironmentId);
   }, []);
+  // Navigating the instant a transfer lands races the shell broadcast — the
+  // route would render before the client knows the thread and fall back to a
+  // fresh draft. Park the destination and follow it once the shell arrives.
+  const [pendingMoveNavigation, setPendingMoveNavigation] = useState<{
+    readonly environmentId: EnvironmentId;
+    readonly threadId: ThreadId;
+  } | null>(null);
+  const allThreadShells = useThreadShells();
+  useEffect(() => {
+    if (pendingMoveNavigation === null) return;
+    const arrived = allThreadShells.some(
+      (shell) =>
+        shell.environmentId === pendingMoveNavigation.environmentId &&
+        shell.id === pendingMoveNavigation.threadId,
+    );
+    if (!arrived) return;
+    setPendingMoveNavigation(null);
+    void navigate({
+      to: "/$environmentId/$threadId",
+      params: buildThreadRouteParams(
+        scopeThreadRef(pendingMoveNavigation.environmentId, pendingMoveNavigation.threadId),
+      ),
+    });
+  }, [pendingMoveNavigation, allThreadShells, navigate]);
   const moveTargetEnvironment =
     moveTargetEnvironmentId === null
       ? null
@@ -6732,13 +6757,11 @@ function ChatViewContent(props: ChatViewProps) {
                     }
                   : {})}
                 onMoved={(targetThreadId) => {
-                  // The live thread is now on the other device; follow it so
-                  // the user never lands on the archived residue.
-                  void navigate({
-                    to: "/$environmentId/$threadId",
-                    params: buildThreadRouteParams(
-                      scopeThreadRef(moveTargetEnvironment.environmentId, targetThreadId),
-                    ),
+                  // The live thread is now on the other device; follow it
+                  // once its shell lands so the user never sees a blank draft.
+                  setPendingMoveNavigation({
+                    environmentId: moveTargetEnvironment.environmentId,
+                    threadId: targetThreadId,
                   });
                 }}
                 isBusy={

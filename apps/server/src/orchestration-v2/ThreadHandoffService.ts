@@ -694,15 +694,15 @@ export const make = Effect.gen(function* () {
         deletedAt: null,
       };
       const returning = input.existing !== null;
+      // Coming home (this thread had departed) ends the visible lineage; a
+      // revived copy that was pushed here again is simply "here" once more.
+      const cameHome = input.existing?.handoff?.presence === "away";
       const thread: OrchestrationV2AppThread = {
         ...base,
-        // A hop that returns to the thread's home ends the lineage's visible
-        // state: the thread is simply live again. Only a first arrival keeps
-        // the link, marking this side as the one that owns the work now.
-        // A returning thread was archived when its departure completed;
-        // coming home revives it in place.
+        // Arrival always revives: a copy archived by a completed departure
+        // returns to the sidebar the moment work lands in it again.
         archivedAt: returning ? null : base.archivedAt,
-        handoff: returning
+        handoff: cameHome
           ? null
           : {
               handoffId: bundle.handoffId,
@@ -864,15 +864,41 @@ export const make = Effect.gen(function* () {
         // for repositories that existed here before the hop.
         const wantsWorktree = !cloned && bundle.workspace.strategy.type !== "root";
 
+        // A hop between the same two threads is a revival, not a new copy —
+        // even when the client no longer knows the pair. The lineage table
+        // remembers every hop this environment took part in, so an incoming
+        // origin thread that matches a prior peer lands back in that thread.
+        let returningThreadId = input.returningThreadId;
+        if (returningThreadId === null) {
+          const prior = yield* sql<{ readonly thread_id: string }>`
+            SELECT thread_id FROM orchestration_v2_thread_handoffs
+            WHERE peer_thread_id = ${bundle.origin.threadId}
+            ORDER BY updated_at DESC
+            LIMIT 1
+          `.pipe(Effect.orElseSucceed(() => []));
+          const priorThreadId = prior[0]?.thread_id;
+          if (priorThreadId !== undefined) {
+            const revivable = yield* projectionStore
+              .getThreadProjection(ThreadId.make(priorThreadId))
+              .pipe(
+                Effect.map((projection) => projection.thread.deletedAt === null),
+                Effect.orElseSucceed(() => false),
+              );
+            if (revivable) {
+              returningThreadId = ThreadId.make(priorThreadId);
+            }
+          }
+        }
+
         const existingProjection =
-          input.returningThreadId === null
+          returningThreadId === null
             ? null
             : yield* projectionStore
-                .getThreadProjection(input.returningThreadId)
+                .getThreadProjection(returningThreadId)
                 .pipe(
                   asHandoffError(
                     "thread_missing",
-                    `Thread ${input.returningThreadId} could not be read.`,
+                    `Thread ${returningThreadId} could not be read.`,
                   ),
                 );
         const existing = existingProjection?.thread ?? null;
@@ -1068,8 +1094,7 @@ export const make = Effect.gen(function* () {
             .pipe(asHandoffError("apply_failed", "Could not restore the thread's attachments."));
         }
 
-        const threadId =
-          input.returningThreadId ?? ThreadId.make(`thread:${NodeCrypto.randomUUID()}`);
+        const threadId = returningThreadId ?? ThreadId.make(`thread:${NodeCrypto.randomUUID()}`);
 
         if (bundle.parts.some((part) => part.kind === "terminals-tar")) {
           yield* git
