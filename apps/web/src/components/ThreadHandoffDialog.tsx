@@ -49,6 +49,30 @@ function phaseIndex(phase: ThreadHandoffProgress["phase"]): number {
   return PHASE_LABELS.findIndex((entry) => entry.phase === phase);
 }
 
+/**
+ * Digs the human-facing message out of a failure however it is wrapped —
+ * a tagged error, a Cause holding one, or a defect — because the generic
+ * fallback tells the user nothing they can act on.
+ */
+function extractFailureMessage(cause: unknown, targetLabel: string): string {
+  const seen = new Set<unknown>();
+  const queue: Array<unknown> = [cause];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === null || typeof current !== "object" || seen.has(current)) continue;
+    seen.add(current);
+    const record = current as Record<string, unknown>;
+    if (typeof record["message"] === "string" && record["message"].length > 0) {
+      return record["message"];
+    }
+    for (const key of ["cause", "error", "failure", "defect", "left", "value"]) {
+      if (key in record) queue.push(record[key]);
+    }
+    if (Array.isArray(record["failures"])) queue.push(...(record["failures"] as unknown[]));
+  }
+  return `Could not move this thread to ${targetLabel}. Check the console for details.`;
+}
+
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
@@ -96,14 +120,12 @@ export function ThreadHandoffDialog({
     });
     if (result._tag === "Failure") {
       setProgress(null);
-      setErrorMessage(
-        // The server's message is written for this exact situation — a
-        // divergence names the ref the commits were parked at, a payload
-        // refusal names the size — so it beats anything generic here.
-        "message" in result.cause && typeof result.cause.message === "string"
-          ? result.cause.message
-          : `Could not move this thread to ${targetLabel}.`,
-      );
+      // The server's message is written for this exact situation — a
+      // divergence names the ref the commits were parked at, a payload
+      // refusal names the size — so dig it out of however the failure is
+      // wrapped before falling back to something generic.
+      console.error("thread handoff failed", result.cause);
+      setErrorMessage(extractFailureMessage(result.cause, targetLabel));
       return;
     }
     onOpenChange(false);

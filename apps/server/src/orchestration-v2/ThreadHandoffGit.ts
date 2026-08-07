@@ -66,6 +66,7 @@ interface GitInput {
   readonly stdin?: string;
   readonly allowNonZeroExit?: boolean;
   readonly maxOutputBytes?: number;
+  readonly timeoutMs?: number;
 }
 
 const runGit = (process: VcsProcess["Service"], input: GitInput) =>
@@ -77,6 +78,7 @@ const runGit = (process: VcsProcess["Service"], input: GitInput) =>
     ...(input.stdin === undefined ? {} : { stdin: input.stdin }),
     ...(input.allowNonZeroExit === undefined ? {} : { allowNonZeroExit: input.allowNonZeroExit }),
     ...(input.maxOutputBytes === undefined ? {} : { maxOutputBytes: input.maxOutputBytes }),
+    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
   });
 
 export interface ThreadHandoffGitShape {
@@ -136,7 +138,7 @@ export interface ThreadHandoffGitShape {
     readonly outputPath: string;
     readonly refs: ReadonlyArray<string>;
     readonly excludeTips: ReadonlyArray<string>;
-  }) => Effect.Effect<void, VcsError>;
+  }) => Effect.Effect<boolean, VcsError>;
   /** Imports a bundle's objects and parks its refs under `refs/handoff-incoming/`. */
   readonly importBundle: (input: {
     readonly cwd: string;
@@ -306,17 +308,32 @@ export const make = Effect.gen(function* () {
     }).pipe(Effect.asVoid);
 
   const createBundle: ThreadHandoffGitShape["createBundle"] = (input) =>
-    git({
-      operation: "create-bundle",
-      args: [
-        "bundle",
-        "create",
-        input.outputPath,
+    Effect.gen(function* () {
+      const revListArgs = [
         ...input.refs,
         ...(input.excludeTips.length === 0 ? [] : ["--not", ...input.excludeTips]),
-      ],
-      cwd: input.cwd,
-    }).pipe(Effect.asVoid);
+      ];
+      // A branch whose every commit is already on the excluded tips — fully
+      // pushed, the common case — would make `git bundle` refuse with "empty
+      // bundle". That is a normal state, not a failure, so it is detected
+      // first and reported as "nothing to bundle".
+      const count = yield* git({
+        operation: "count-bundle-commits",
+        args: ["rev-list", "--count", ...revListArgs],
+        cwd: input.cwd,
+        timeoutMs: 600_000,
+      });
+      if (count.stdout.trim() === "0") return false;
+      yield* git({
+        operation: "create-bundle",
+        args: ["bundle", "create", input.outputPath, ...revListArgs],
+        cwd: input.cwd,
+        // Bundling can walk a lot of history; the default probe timeout is
+        // far too short for a real repository.
+        timeoutMs: 600_000,
+      });
+      return true;
+    });
 
   const importBundle: ThreadHandoffGitShape["importBundle"] = (input) =>
     git({

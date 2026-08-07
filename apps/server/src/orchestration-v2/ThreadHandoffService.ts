@@ -428,7 +428,11 @@ export const make = Effect.gen(function* () {
               cwd,
               outputPath: target,
               refs: [...(branch === null ? ["HEAD"] : [`refs/heads/${branch}`]), ...checkpointRefs],
-              excludeTips: input.peerBranchTip === null ? [] : [input.peerBranchTip],
+              // With no known peer tip, cut against this repository's
+              // remote-tracking refs: both sides clone the same remote, so
+              // anything a remote already has is not worth shipping. Without
+              // this a first hop bundles the repository's entire history.
+              excludeTips: input.peerBranchTip === null ? ["--remotes"] : [input.peerBranchTip],
             }),
         });
         if (bundlePart !== null) parts.push(bundlePart);
@@ -662,7 +666,24 @@ export const make = Effect.gen(function* () {
           yield* git
             .importBundle({ cwd, bundlePath })
             .pipe(asHandoffError("apply_failed", "Could not import the incoming git objects."));
-
+        }
+        const incomingCommitKnown = yield* git
+          .hasCommit({ cwd, commit: incomingTip })
+          .pipe(asHandoffError("apply_failed", "Could not inspect the incoming commit."));
+        if (!incomingCommitKnown) {
+          yield* markHop({
+            handoffId: bundle.handoffId,
+            state: "failed",
+            lastError: "incoming commit missing after import",
+          });
+          return yield* handoffError({
+            reason: "apply_failed",
+            message:
+              "The incoming commit is not available here even after importing the bundle. Fetch the repository on this machine and try again.",
+            handoffId: bundle.handoffId,
+          });
+        }
+        {
           const localTip =
             branch === null
               ? null
@@ -727,8 +748,6 @@ export const make = Effect.gen(function* () {
                 asHandoffError("apply_failed", "Could not move the branch to the incoming commit."),
               );
           }
-        } else {
-          yield* markHop({ handoffId: bundle.handoffId, state: "applying", lastError: null });
         }
 
         const patchPart = bundle.parts.find((part) => part.kind === "tracked-patch") ?? null;
