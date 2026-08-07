@@ -6786,6 +6786,9 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.interaction-mode.set":
       case "thread.model-selection.set":
       case "provider.switch":
+      case "thread.handoff.depart":
+      case "thread.handoff.complete":
+      case "thread.handoff.abort":
         yield* dispatchThreadMutation(command, events, effects);
         break;
       case "provider-session.detach":
