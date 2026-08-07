@@ -72,14 +72,11 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   const pointerFocusProps = preserveComposerFocusOnPointerDown
     ? { onPointerDown: preventPointerFocus }
     : undefined;
-<<<<<<< HEAD
   const isSendDisabled = sendDisabledReason !== null;
-=======
   const environmentIdentificationMode = useEnvironmentIdentificationMode();
   const stageBackdropVariant = useSidebarStageBackdropVariant(
     environmentIdentificationMode === "artwork",
   );
->>>>>>> 0c15987295 (fix: reconcile rebase with latest main)
 
   if (pendingAction) {
     return (
