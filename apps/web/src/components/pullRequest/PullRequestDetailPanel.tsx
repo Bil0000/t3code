@@ -710,6 +710,10 @@ export function PullRequestDetailPanel({
                       <MenuSeparator />
                     </>
                   ) : null}
+                  <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}>
+                    <ArrowUpRightIcon className="size-3.5" />
+                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  </MenuItem>
                   <MenuItem onClick={() => void writeTextToClipboard(detail.url)}>
                     <LinkIcon className="size-3.5" />
                     Copy link
@@ -748,15 +752,6 @@ export function PullRequestDetailPanel({
                   ) : null}
                 </MenuPopup>
               </Menu>
-              <Button
-                size="xs"
-                variant="ghost"
-                className="text-muted-foreground hover:text-foreground"
-                onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}
-              >
-                {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                <ArrowUpRightIcon className="size-3" />
-              </Button>
               {/* Checking a pull request out is the reason to open one here at all, so it is a
                   button of its own rather than a side effect of asking an agent for something.
                   It asks where, because the two answers are not interchangeable: one leaves your
