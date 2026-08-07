@@ -173,8 +173,8 @@ function PullRequestsRouteView() {
   );
   // The scope the URL asks for, once the environment has had its say about whether it exists.
   const scopedProjectId = useMemo(
-    () => resolveProjectScope(search.projectId, projects),
-    [projects, search.projectId],
+    () => resolveProjectScope(search.projectId, projects, projectsKnown),
+    [projects, projectsKnown, search.projectId],
   );
   const rightPanelRef = useMemo(
     () => (environmentId === null ? null : scopeThreadRef(environmentId, PULL_REQUESTS_PANEL_ID)),
@@ -651,8 +651,8 @@ function PullRequestsRouteView() {
   // The selection is resolved the same way the scope is: an id from another environment can
   // never be read here, and one that arrived before the projects did is not yet wrong.
   const linkedProjectId = useMemo(
-    () => resolveProjectScope(search.selectedProjectId, projects),
-    [projects, search.selectedProjectId],
+    () => resolveProjectScope(search.selectedProjectId, projects, projectsKnown),
+    [projects, projectsKnown, search.selectedProjectId],
   );
   const selectedProjectId = linkedProjectId ?? projectIdForRepository;
   const linkedSelection = useMemo(

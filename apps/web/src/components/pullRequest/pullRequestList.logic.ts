@@ -131,15 +131,16 @@ export function pullRequestEntryKey(entry: PullRequestListEntry): string {
  * visible filter explaining it, since the switcher has no such project to show as selected. So
  * an id the environment does not have is dropped.
  *
- * Until the projects are known, the id is kept rather than dropped: an environment that has not
+ * Until `projectsKnown`, the id is kept rather than dropped: an environment that has not
  * reported yet is not the same as one without the project, and dropping first would show every
  * project's pull requests for a moment before narrowing back down.
  */
 export function resolveProjectScope<Id extends string>(
   projectId: Id | undefined,
   projects: ReadonlyArray<{ readonly id: string }>,
+  projectsKnown: boolean,
 ): Id | undefined {
-  if (projectId === undefined || projects.length === 0) return projectId;
+  if (projectId === undefined || !projectsKnown) return projectId;
   return projects.some((project) => project.id === projectId) ? projectId : undefined;
 }
 

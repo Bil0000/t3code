@@ -208,16 +208,21 @@ describe("resolveProjectScope", () => {
   const projects = [{ id: "p1" }, { id: "p2" }];
 
   it("keeps an id the environment has", () => {
-    expect(resolveProjectScope("p2", projects)).toBe("p2");
+    expect(resolveProjectScope("p2", projects, true)).toBe("p2");
   });
 
   it("drops an id from another environment", () => {
-    expect(resolveProjectScope("p9", projects)).toBeUndefined();
+    expect(resolveProjectScope("p9", projects, false)).toBe("p9");
+    expect(resolveProjectScope("p9", projects, true)).toBeUndefined();
+  });
+
+  it("drops an id once the environment is known to have no projects", () => {
+    expect(resolveProjectScope("p9", [], true)).toBeUndefined();
   });
 
   it("keeps an id while the projects are still unknown", () => {
     // Dropping here would list every project for a moment before narrowing back down.
-    expect(resolveProjectScope("p9", [])).toBe("p9");
+    expect(resolveProjectScope("p9", [], false)).toBe("p9");
   });
 });
 
