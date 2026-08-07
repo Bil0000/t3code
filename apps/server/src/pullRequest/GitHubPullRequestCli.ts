@@ -1131,9 +1131,10 @@ export const make = Effect.gen(function* () {
           // fallback that fails too reports the original refusal, which is the one that explains
           // the page. Narrowed to a command that ran and was refused: a missing `gh` or a
           // signed-out one fails the same way for every request.
-          Effect.catchTag("GitHubCliCommandError", (error) =>
-            filesPage(1).pipe(Effect.catch(() => Effect.fail(error))),
-          ),
+          Effect.catchTags({
+            GitHubCliCommandError: (error) =>
+              filesPage(1).pipe(Effect.catch(() => Effect.fail(error))),
+          }),
         );
     },
 
