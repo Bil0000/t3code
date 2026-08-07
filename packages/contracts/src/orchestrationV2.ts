@@ -2484,6 +2484,9 @@ export const OrchestrationV2HandoffBundleV1 = Schema.Struct({
     environmentId: EnvironmentId,
     threadId: ThreadId,
     serverVersion: TrimmedNonEmptyString,
+    /** The origin's human label, so the far side can say where the thread came
+        from without resolving an environment id it may not know. */
+    label: Schema.optionalKey(TrimmedNonEmptyString),
   }),
   repository: RepositoryIdentity,
   workspace: Schema.Struct({

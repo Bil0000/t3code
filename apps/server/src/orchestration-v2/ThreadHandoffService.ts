@@ -584,6 +584,7 @@ export const make = Effect.gen(function* () {
             environmentId,
             threadId: thread.id,
             serverVersion: descriptor.serverVersion,
+            label: descriptor.label,
           },
           repository: yield* repositoryIdentityFor(cwd),
           workspace: {
@@ -705,7 +706,7 @@ export const make = Effect.gen(function* () {
               presence: "here",
               peerEnvironmentId: bundle.origin.environmentId,
               peerThreadId: bundle.origin.threadId,
-              peerLabel: null,
+              peerLabel: bundle.origin.label ?? null,
               previousHandoffId: bundle.lineage.previousHandoffId,
               hopCount: bundle.lineage.hopCount,
               updatedAt: now,

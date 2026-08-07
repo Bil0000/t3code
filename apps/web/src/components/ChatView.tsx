@@ -2080,7 +2080,11 @@ function ChatViewContent(props: ChatViewProps) {
         id: `thread-handoff-away:${awayHandoff.handoffId}`,
         variant: "info",
         icon: <CloudIcon />,
-        title: `Running on ${awayHandoff.peerLabel ?? awayHandoff.peerEnvironmentId}`,
+        title: `Running on ${
+          awayHandoff.peerLabel ??
+          environmentById.get(awayHandoff.peerEnvironmentId)?.label ??
+          "another device"
+        }`,
         description: "This copy stays readable. Pull it back to continue here.",
         actions: (
           <>
@@ -2273,6 +2277,7 @@ function ChatViewContent(props: ChatViewProps) {
     releaseThreadHandoff,
     moveThreadCommand,
     activeEnvironment,
+    environmentById,
   ]);
   const providerStatuses = serverConfig?.providers ?? EMPTY_PROVIDERS;
   const unlockedSelectedProvider = resolveSelectableProvider(
@@ -6200,7 +6205,12 @@ function ChatViewContent(props: ChatViewProps) {
     onEnvironmentChange,
     ...(canMoveThread ? { onMoveThread } : {}),
     ...(activeHandoff?.presence === "here"
-      ? { movedFromLabel: activeHandoff.peerLabel ?? activeHandoff.peerEnvironmentId }
+      ? {
+          movedFromLabel:
+            activeHandoff.peerLabel ??
+            environmentById.get(activeHandoff.peerEnvironmentId)?.label ??
+            "another device",
+        }
       : {}),
     onEnvModeChange,
     ...(canOverrideServerThreadEnvMode ? { effectiveEnvModeOverride: envMode } : {}),
@@ -6608,7 +6618,9 @@ function ChatViewContent(props: ChatViewProps) {
                                     ? {
                                         movedFromLabel:
                                           activeHandoff.peerLabel ??
-                                          activeHandoff.peerEnvironmentId,
+                                          environmentById.get(activeHandoff.peerEnvironmentId)
+                                            ?.label ??
+                                          "another device",
                                       }
                                     : {})}
                                   availableEnvironments={logicalProjectEnvironments}
