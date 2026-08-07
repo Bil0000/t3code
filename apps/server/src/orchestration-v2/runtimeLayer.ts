@@ -262,6 +262,7 @@ const threadHandoffProvided = threadHandoffServiceLayer.pipe(
     Layer.mergeAll(
       storesLayer,
       projectionStoreLayer,
+      eventSinkProvided,
       ProjectServiceLayerLive,
       providerAdapterRegistryProvided,
       repositoryIdentityResolverLayer,

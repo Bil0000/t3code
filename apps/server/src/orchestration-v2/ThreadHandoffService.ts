@@ -32,7 +32,7 @@ import { ServerConfig } from "../config.ts";
 import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
 import { ProjectService } from "../project/ProjectService.ts";
 import { RepositoryIdentityResolver } from "../project/RepositoryIdentityResolver.ts";
-import { EventStoreV2 } from "./EventStore.ts";
+import { EventSinkV2 } from "./EventSink.ts";
 import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
@@ -206,7 +206,7 @@ export const make = Effect.gen(function* () {
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const config = yield* ServerConfig;
-  const eventStore = yield* EventStoreV2;
+  const eventSink = yield* EventSinkV2;
   const projectionStore = yield* ProjectionStoreV2;
   const git = yield* ThreadHandoffGit;
   const projects = yield* ProjectService;
@@ -586,21 +586,26 @@ export const make = Effect.gen(function* () {
         lastVisitedAt: null,
         deletedAt: null,
       };
+      const returning = input.existing !== null;
       const thread: OrchestrationV2AppThread = {
         ...base,
-        handoff: {
-          handoffId: bundle.handoffId,
-          presence: "here",
-          peerEnvironmentId: bundle.origin.environmentId,
-          peerThreadId: bundle.origin.threadId,
-          peerLabel: null,
-          previousHandoffId: bundle.lineage.previousHandoffId,
-          hopCount: bundle.lineage.hopCount,
-          updatedAt: now,
-        },
+        // A hop that returns to the thread's home ends the lineage's visible
+        // state: the thread is simply live again. Only a first arrival keeps
+        // the link, marking this side as the one that owns the work now.
+        handoff: returning
+          ? null
+          : {
+              handoffId: bundle.handoffId,
+              presence: "here",
+              peerEnvironmentId: bundle.origin.environmentId,
+              peerThreadId: bundle.origin.threadId,
+              peerLabel: null,
+              previousHandoffId: bundle.lineage.previousHandoffId,
+              hopCount: bundle.lineage.hopCount,
+              updatedAt: now,
+            },
         updatedAt: now,
       };
-      const returning = input.existing !== null;
       const events: Array<OrchestrationV2DomainEvent> = [
         {
           id: EventId.make(`${HANDOFF_EVENT_PREFIX}:${bundle.handoffId}:thread`),
@@ -623,7 +628,11 @@ export const make = Effect.gen(function* () {
               },
             ]),
       ];
-      yield* eventStore.append({ events });
+      // Through the sink, not the raw event store: the sink applies the
+      // projections and broadcasts the shell delta, which is what makes the
+      // arrived thread appear on every connected client immediately instead
+      // of after the next projection rebuild.
+      yield* eventSink.write({ events });
       return thread;
     }).pipe(
       asHandoffError(
@@ -853,7 +862,7 @@ export const layer: Layer.Layer<
   | FileSystem.FileSystem
   | Path.Path
   | ServerConfig
-  | EventStoreV2
+  | EventSinkV2
   | ProjectionStoreV2
   | ThreadHandoffGit
   | ProjectService
