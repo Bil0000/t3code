@@ -4,6 +4,7 @@ import {
   type ApplicationStoredEvent,
   CommandId,
   ContextTransferId,
+  EnvironmentId,
   EventId,
   MessageId,
   type ModelSelection,
@@ -12,6 +13,7 @@ import {
   ProviderInstanceId,
   ProviderThreadId,
   RunId,
+  ThreadHandoffId,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -704,6 +706,76 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       assert.equal(projection.thread.modelSelection.model, "gpt-5.5");
       assert.isNotNull(projection.thread.archivedAt);
       assert.isNotNull(projection.thread.deletedAt);
+    }),
+  );
+
+  it.effect("departs, completes and releases a thread handoff", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* OrchestratorV2;
+      const threadId = ThreadId.make("runtime-layer-handoff-thread");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("runtime-layer-handoff-create"),
+        threadId,
+        projectId: ProjectId.make("runtime-layer-handoff-project"),
+        title: "Handoff thread",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: "feat/handoff",
+        worktreePath: null,
+      });
+
+      yield* orchestrator.dispatch({
+        type: "thread.handoff.depart",
+        commandId: CommandId.make("runtime-layer-handoff-depart"),
+        threadId,
+        handoffId: ThreadHandoffId.make("handoff-runtime-1"),
+        peerEnvironmentId: EnvironmentId.make("environment-staging"),
+        peerLabel: "calendaty-staging",
+        previousHandoffId: null,
+        hopCount: 0,
+      });
+      const departed = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(departed.thread.handoff?.presence, "away");
+      assert.equal(departed.thread.handoff?.peerLabel, "calendaty-staging");
+
+      // A departed thread refuses a second departure.
+      const second = yield* orchestrator
+        .dispatch({
+          type: "thread.handoff.depart",
+          commandId: CommandId.make("runtime-layer-handoff-depart-2"),
+          threadId,
+          handoffId: ThreadHandoffId.make("handoff-runtime-2"),
+          peerEnvironmentId: EnvironmentId.make("environment-other"),
+          peerLabel: null,
+          previousHandoffId: null,
+          hopCount: 0,
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(second, OrchestratorDispatchError);
+
+      yield* orchestrator.dispatch({
+        type: "thread.handoff.complete",
+        commandId: CommandId.make("runtime-layer-handoff-complete"),
+        threadId,
+        handoffId: ThreadHandoffId.make("handoff-runtime-1"),
+        peerThreadId: ThreadId.make("thread-on-staging"),
+      });
+      const completed = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(completed.thread.handoff?.peerThreadId, "thread-on-staging");
+
+      yield* orchestrator.dispatch({
+        type: "thread.handoff.abort",
+        commandId: CommandId.make("runtime-layer-handoff-abort"),
+        threadId,
+        handoffId: ThreadHandoffId.make("handoff-runtime-1"),
+        reason: "test release",
+      });
+      const released = yield* orchestrator.getThreadProjection(threadId);
+      assert.isNull(released.thread.handoff ?? null);
     }),
   );
 
