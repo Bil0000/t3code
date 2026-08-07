@@ -2,7 +2,6 @@ import type { ContextMenuItem, PreviewSessionSnapshot, PullRequestState } from "
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
   Bot,
-  ClipboardList,
   FileDiff,
   Files,
   GitPullRequest,
@@ -266,8 +265,6 @@ function surfaceTitle(
         terminalLabelsById.get(surface.activeTerminalId) ??
         getTerminalLabel(surface.activeTerminalId)
       );
-    case "plan":
-      return "Plan";
     case "pull-request":
       return `#${surface.number}`;
     case "agents":
@@ -333,8 +330,6 @@ function SurfaceIcon({
       );
     case "terminal":
       return <TerminalSquare className="size-3 shrink-0" />;
-    case "plan":
-      return <ClipboardList className="size-3 shrink-0" />;
     case "pull-request": {
       const status = pullRequestStatuses?.[surface.id] ?? null;
       const toneClassName =
