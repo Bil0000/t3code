@@ -1,6 +1,7 @@
 import type { ContextMenuItem, PreviewSessionSnapshot, PullRequestState } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
+  Bot,
   ClipboardList,
   FileDiff,
   Files,
@@ -54,11 +55,13 @@ interface RightPanelTabsProps {
   onAddDiff: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
+  onAddAgents: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
+  agentsAvailable: boolean;
   pullRequestStatuses?: Readonly<Record<string, PullRequestTabStatus>>;
   children: ReactNode;
 }
@@ -77,6 +80,7 @@ const SURFACE_DISABLED_REASONS = {
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
+  agents: "Agents are only available from a thread.",
 } as const;
 
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
@@ -115,11 +119,13 @@ function RightPanelEmptyState(props: {
   onAddDiff: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
+  onAddAgents: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
+  agentsAvailable: boolean;
 }) {
   const actions = [
     {
@@ -166,6 +172,15 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_DISABLED_REASONS.pullRequest,
       centered: true,
       onClick: props.onAddPullRequest,
+    },
+    {
+      label: "Agents",
+      description: "Watch subagents and workflows run.",
+      icon: Bot,
+      available: props.agentsAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.agents,
+      centered: false,
+      onClick: props.onAddAgents,
     },
   ] as const;
 
@@ -255,6 +270,8 @@ function surfaceTitle(
       return "Plan";
     case "pull-request":
       return `#${surface.number}`;
+    case "agents":
+      return "Agents";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -332,6 +349,8 @@ function SurfaceIcon({
                 : "text-muted-foreground";
       return <GitPullRequest className={cn("size-3 shrink-0", toneClassName)} />;
     }
+    case "agents":
+      return <Bot className="size-3 shrink-0" />;
   }
 }
 
@@ -545,6 +564,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <GitPullRequest />
                     Pull request
                   </SurfaceMenuItem>
+                  <SurfaceMenuItem
+                    available={props.agentsAvailable}
+                    disabledReason={SURFACE_DISABLED_REASONS.agents}
+                    onClick={props.onAddAgents}
+                  >
+                    <Bot />
+                    Agents
+                  </SurfaceMenuItem>
                 </MenuPopup>
               </Menu>
             ) : null}
@@ -560,11 +587,13 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
+            onAddAgents={props.onAddAgents}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
+            agentsAvailable={props.agentsAvailable}
           />
         ) : (
           props.children
