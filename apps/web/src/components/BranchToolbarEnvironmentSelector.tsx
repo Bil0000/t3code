@@ -117,7 +117,12 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
           )}
           <span
             data-composer-label
-            className="min-w-0 max-w-[240px] truncate transition-[max-width,opacity] duration-300 ease-out group-data-[compact]/composer-context:max-w-0 group-data-[compact]/composer-context:opacity-0"
+            className={cn(
+              "min-w-0 max-w-[240px] truncate transition-[max-width,opacity] duration-300 ease-out group-data-[compact]/composer-context:max-w-0 group-data-[compact]/composer-context:opacity-0",
+              // Panel rows push their chevron and divider to the right edge,
+              // like every other panel row; the label absorbs the slack.
+              displayMode === "panel" && "flex-1 text-left",
+            )}
           >
             <SelectValue />
           </span>
@@ -234,7 +239,12 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
         )}
         <span
           data-composer-label
-          className="min-w-0 max-w-[240px] truncate transition-[max-width,opacity] duration-300 ease-out group-data-[compact]/composer-context:max-w-0 group-data-[compact]/composer-context:opacity-0"
+          className={cn(
+            "min-w-0 max-w-[240px] truncate transition-[max-width,opacity] duration-300 ease-out group-data-[compact]/composer-context:max-w-0 group-data-[compact]/composer-context:opacity-0",
+            // Panel rows push their chevron and divider to the right edge,
+            // like every other panel row; the label absorbs the slack.
+            displayMode === "panel" && "flex-1 text-left",
+          )}
         >
           <SelectValue />
         </span>
