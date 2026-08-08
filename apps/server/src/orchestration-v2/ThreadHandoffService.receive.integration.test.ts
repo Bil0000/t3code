@@ -11,7 +11,8 @@ import {
   ThreadId,
   type ModelSelection,
   type OrchestrationV2AppThread,
-  type OrchestrationV2HandoffBundleV1,
+  OrchestrationV2HandoffBundleV1,
+  type OrchestrationV2HandoffBundleV1 as OrchestrationV2HandoffBundleV1Type,
   type OrchestrationV2HandoffPart,
   type OrchestrationV2HandoffPartKind,
 } from "@t3tools/contracts";
@@ -20,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 
 import { ServerConfig } from "../config.ts";
@@ -204,7 +206,7 @@ const bundleFor = (input: {
   readonly headSha: string;
   readonly parts: ReadonlyArray<OrchestrationV2HandoffPart>;
   readonly worktree: boolean;
-}): OrchestrationV2HandoffBundleV1 => ({
+}): OrchestrationV2HandoffBundleV1Type => ({
   version: 1,
   handoffId: input.handoffId,
   origin: {
@@ -636,7 +638,17 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
 
         const handoffId = ThreadHandoffId.make("handoff-created-worktree");
         const now = DateTime.formatIso(yield* DateTime.now);
-        const manifest = JSON.stringify({ workspace: { branch: "feat/incoming" } });
+        const manifest = yield* Schema.encodeEffect(
+          Schema.fromJsonString(OrchestrationV2HandoffBundleV1),
+        )(
+          bundleFor({
+            handoffId,
+            branch: "feat/incoming",
+            headSha: movedTip,
+            parts: [],
+            worktree: true,
+          }),
+        );
         yield* sql`
           INSERT INTO orchestration_v2_thread_handoffs (
             handoff_id, thread_id, peer_environment_id, peer_thread_id,

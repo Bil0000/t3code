@@ -233,6 +233,7 @@ export const make = Effect.gen(function* () {
   const environment = yield* ServerEnvironment.ServerEnvironment;
   const providerAdapters = yield* ProviderAdapterRegistryV2;
   const encodeManifest = Schema.encodeEffect(Schema.fromJsonString(OrchestrationV2HandoffBundleV1));
+  const decodeManifest = Schema.decodeEffect(Schema.fromJsonString(OrchestrationV2HandoffBundleV1));
 
   // One hop at a time per thread: prepare reads a working tree a receive may be
   // rewriting, and two concurrent hops would each believe they own the thread.
@@ -1611,13 +1612,10 @@ export const make = Effect.gen(function* () {
                     // would otherwise find it occupied forever. The branch it
                     // held is put back at its old tip when one is recorded.
                     yield* git.removeWorktree({ cwd: rootCwd, path: applyCwd }).pipe(Effect.ignore);
-                    const branch = Effect.try(() => {
-                      const manifest = JSON.parse(row.manifest_json) as {
-                        readonly workspace?: { readonly branch?: string | null };
-                      };
-                      return manifest.workspace?.branch ?? null;
-                    }).pipe(Effect.orElseSucceed(() => null));
-                    const branchName = yield* branch;
+                    const branchName = yield* decodeManifest(row.manifest_json).pipe(
+                      Effect.map((manifest) => manifest.workspace.branch),
+                      Effect.orElseSucceed(() => null),
+                    );
                     if (branchName !== null && row.pre_tag !== null) {
                       yield* git
                         .writeRef({
