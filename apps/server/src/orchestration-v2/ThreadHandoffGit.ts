@@ -1,4 +1,4 @@
-import type { VcsError } from "@t3tools/contracts";
+import { VcsProcessExitError, type VcsError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -236,8 +236,6 @@ interface Shape {
 export class ThreadHandoffGit extends Context.Service<ThreadHandoffGit, Shape>()(
   "t3/orchestration-v2/ThreadHandoffGit",
 ) {}
-
-export type ThreadHandoffGitShape = ThreadHandoffGit["Service"];
 
 export const make = Effect.gen(function* () {
   const process = yield* VcsProcess.VcsProcess;
@@ -495,14 +493,47 @@ export const make = Effect.gen(function* () {
       .pipe(Effect.asVoid);
 
   const extractArchive: ThreadHandoffGit["Service"]["extractArchive"] = (input) =>
-    process
-      .run({
+    Effect.gen(function* () {
+      // A file untracked at the sender's tip can be tracked at the receiver's
+      // descendant commit. Extracting over it would silently replace committed
+      // content with the sender's stale untracked copy, so collisions with
+      // tracked files refuse the hop the same way a patch conflict does.
+      const listed = yield* process.run({
+        operation: "thread-handoff.list-archive",
+        command: "tar",
+        args: ["-tzf", input.archivePath],
+        cwd: input.cwd,
+      });
+      const entries = listed.stdout
+        .split("\n")
+        .map((entry) => entry.replace(/^\.\//, ""))
+        .filter((entry) => entry.length > 0 && !entry.endsWith("/"));
+      const tracked = yield* git({
+        operation: "list-tracked",
+        args: ["ls-files", "-z"],
+        cwd: input.cwd,
+      }).pipe(
+        Effect.map((output) => new Set(output.stdout.split("\0").filter((p) => p.length > 0))),
+      );
+      const collisions = entries.filter((entry) => tracked.has(entry));
+      if (collisions.length > 0) {
+        return yield* new VcsProcessExitError({
+          operation: "thread-handoff.extract-archive",
+          command: "tar",
+          cwd: input.cwd,
+          exitCode: 1,
+          detail: `Untracked files from the sender collide with tracked files here: ${collisions
+            .slice(0, 5)
+            .join(", ")}${collisions.length > 5 ? ", …" : ""}.`,
+        });
+      }
+      yield* process.run({
         operation: "thread-handoff.extract-archive",
         command: "tar",
         args: ["-xzf", input.archivePath],
         cwd: input.cwd,
-      })
-      .pipe(Effect.asVoid);
+      });
+    });
 
   const worktreeEntries = (input: { readonly cwd: string }) =>
     git({

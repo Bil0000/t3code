@@ -117,7 +117,14 @@ const copyPart = Effect.fn("clientRuntime.state.copyHandoffPart")(function* (inp
 export const runThreadHandoffTransfer = Effect.fn("clientRuntime.state.runThreadHandoffTransfer")(
   function* (input: ThreadHandoffTransferInput) {
     const report = (phase: ThreadHandoffPhase, transferredBytes: number, totalBytes: number) => {
-      input.onProgress?.({ phase, transferredBytes, totalBytes });
+      // A throwing progress callback must never look like a transfer failure:
+      // past the receive step that would release the origin lock while the
+      // target is already live.
+      try {
+        input.onProgress?.({ phase, transferredBytes, totalBytes });
+      } catch {
+        // Progress is cosmetic; the transfer's own state is authoritative.
+      }
     };
 
     report("prepare", 0, 0);
