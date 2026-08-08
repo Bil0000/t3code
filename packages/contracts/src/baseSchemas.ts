@@ -114,7 +114,12 @@ export type ContextTransferId = typeof ContextTransferId.Type;
  * store the same id, so it is the idempotency key for applying a bundle and
  * the link between the two sides of the lineage.
  */
-export const ThreadHandoffId = makeEntityId("ThreadHandoffId");
+export const ThreadHandoffId = TrimmedNonEmptyString.check(
+  // Handoff ids travel inside URL paths and git ref names on both servers, so
+  // the alphabet is locked down: no separators, no dots, nothing a path or
+  // ref parser could reinterpret. Generated ids are uuids and always fit.
+  Schema.isPattern(/^[A-Za-z0-9_-]{1,64}$/),
+).pipe(Schema.brand("ThreadHandoffId"));
 export type ThreadHandoffId = typeof ThreadHandoffId.Type;
 export const RawEventId = makeEntityId("RawEventId");
 export type RawEventId = typeof RawEventId.Type;

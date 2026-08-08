@@ -4,6 +4,7 @@ import { memo, useMemo } from "react";
 
 import type { EnvironmentOption } from "./BranchToolbar.logic";
 import { cn } from "../lib/utils";
+import { useEnvironments } from "../state/environments";
 import {
   THREAD_DETAILS_PANEL_ICON_CLASS,
   THREAD_DETAILS_PANEL_LOCKED_ROW_CLASS,
@@ -52,9 +53,23 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
     return availableEnvironments.find((env) => env.environmentId === environmentId) ?? null;
   }, [availableEnvironments, environmentId]);
 
+  // A move only works against a device that is reachable right now and speaks
+  // the handoff protocol, so offering the others would only produce a dialog
+  // that fails at the first step.
+  const { environments } = useEnvironments();
   const moveTargets = useMemo(
-    () => availableEnvironments.filter((env) => env.environmentId !== environmentId),
-    [availableEnvironments, environmentId],
+    () =>
+      availableEnvironments.filter((env) => {
+        if (env.environmentId === environmentId) return false;
+        const presentation = environments.find(
+          (candidate) => candidate.environmentId === env.environmentId,
+        );
+        return (
+          presentation?.connection.phase === "connected" &&
+          presentation.serverConfig?.environment.capabilities.threadHandoff === true
+        );
+      }),
+    [availableEnvironments, environmentId, environments],
   );
 
   const environmentItems = useMemo(
@@ -75,8 +90,14 @@ export const BranchToolbarEnvironmentSelector = memo(function BranchToolbarEnvir
 
   const handleValueChange = (value: EnvironmentId | null) => {
     if (value === null) return;
-    if (value.startsWith(MOVE_VALUE_PREFIX)) {
-      onMoveThread?.(value.slice(MOVE_VALUE_PREFIX.length) as EnvironmentId);
+    // An environment id could itself start with the prefix, so a value only
+    // means "move" when it names one of the offered targets.
+    const moved = value.slice(MOVE_VALUE_PREFIX.length) as EnvironmentId;
+    if (
+      value.startsWith(MOVE_VALUE_PREFIX) &&
+      moveTargets.some((env) => env.environmentId === moved)
+    ) {
+      onMoveThread?.(moved);
       return;
     }
     onEnvironmentChange?.(value);

@@ -120,9 +120,18 @@ export function filterSidebarV2VisibleThreads<
   // one row: the live copy. The away copy hides only while its live
   // counterpart is actually in the list — if the owning device is offline,
   // the away row stays visible so the thread never disappears entirely.
+  const isVisibleOnItsOwn = (thread: T): boolean =>
+    thread.archivedAt === null &&
+    !isSidebarSubagentThread(thread) &&
+    (scopedProjectKeys === null ||
+      scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`));
+  // Only a row the sidebar would actually show can stand in for its peer —
+  // hiding an away copy behind an archived live one loses the thread entirely.
   const present = new Set(
     threads.flatMap((thread) =>
-      thread.id === undefined ? [] : [`${thread.environmentId}:${thread.id}`],
+      thread.id === undefined || !isVisibleOnItsOwn(thread)
+        ? []
+        : [`${thread.environmentId}:${thread.id}`],
     ),
   );
   const awayWithVisiblePeer = (thread: T): boolean => {
@@ -134,14 +143,7 @@ export function filterSidebarV2VisibleThreads<
       present.has(`${handoff.peerEnvironmentId}:${handoff.peerThreadId}`)
     );
   };
-  return threads.filter(
-    (thread) =>
-      thread.archivedAt === null &&
-      !isSidebarSubagentThread(thread) &&
-      !awayWithVisiblePeer(thread) &&
-      (scopedProjectKeys === null ||
-        scopedProjectKeys.has(`${thread.environmentId}:${thread.projectId}`)),
-  );
+  return threads.filter((thread) => isVisibleOnItsOwn(thread) && !awayWithVisiblePeer(thread));
 }
 
 export function getSidebarForkParentThreadId(

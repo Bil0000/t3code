@@ -63,6 +63,8 @@ export const EnvironmentRequestInvalidReason = Schema.Literals([
   "invalid_command",
   /** A handoff part chunk that does not continue the bytes already staged. */
   "handoff_part_offset_mismatch",
+  /** A handoff part write that would grow the staged file past the payload ceiling. */
+  "handoff_part_exceeds_max_bytes",
 ]);
 export type EnvironmentRequestInvalidReason = typeof EnvironmentRequestInvalidReason.Type;
 

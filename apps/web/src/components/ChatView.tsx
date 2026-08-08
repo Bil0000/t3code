@@ -232,7 +232,6 @@ import {
   useProjects,
   useThreadProjection,
   useThreadShell,
-  useThreadShells,
   useThreadRefs,
   useThreadVisibleTurnItems,
   waitForThreadShell,
@@ -2126,22 +2125,26 @@ function ChatViewContent(props: ChatViewProps) {
               </Button>
             ) : null}
             {/* Escape hatch for a hop whose transfer never landed: releasing
-                makes this side live again without waiting for the peer. */}
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() => {
-                if (serverThread) {
-                  void releaseThreadHandoff({
-                    environmentId: serverThread.environmentId,
-                    input: { threadId: serverThread.id, handoffId: awayHandoff.handoffId },
-                  });
-                }
-              }}
-            >
-              Continue here
-            </Button>
+                makes this side live again without waiting for the peer. Once
+                the peer thread exists the transfer did land, and releasing
+                would fork the thread — pull it back instead. */}
+            {awayHandoff.peerThreadId !== null ? null : (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  if (serverThread) {
+                    void releaseThreadHandoff({
+                      environmentId: serverThread.environmentId,
+                      input: { threadId: serverThread.id, handoffId: awayHandoff.handoffId },
+                    });
+                  }
+                }}
+              >
+                Continue here
+              </Button>
+            )}
           </>
         ),
       });
@@ -2788,6 +2791,11 @@ function ChatViewContent(props: ChatViewProps) {
   const [moveTargetEnvironmentId, setMoveTargetEnvironmentId] = useState<EnvironmentId | null>(
     null,
   );
+  // A pending move belongs to the thread it was picked on; switching threads
+  // must not open its dialog against the new one.
+  useEffect(() => {
+    setMoveTargetEnvironmentId(null);
+  }, [activeThread?.id]);
   const activeHandoff = isServerThread ? (serverThread?.handoff ?? null) : null;
   const canMoveThread =
     isServerThread &&

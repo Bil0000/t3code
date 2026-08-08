@@ -37,22 +37,17 @@ export interface ThreadHandoffDialogProps {
   readonly onMoved?: (targetThreadId: ThreadId) => void;
 }
 
-/**
- * The steps, in the order they run. Split by whether the receiving repository
- * has been written to: cancelling is free up to and including the upload, and
- * is not offered afterwards because only the servers can undo an apply.
- */
+/** The steps, in the order they run. */
 const PHASE_LABELS: ReadonlyArray<{
   readonly phase: ThreadHandoffProgress["phase"] | "interrupt";
   readonly label: string;
-  readonly safeToCancel: boolean;
 }> = [
-  { phase: "interrupt", label: "Finish the current turn", safeToCancel: true },
-  { phase: "prepare", label: "Snapshot branch, changes and untracked files", safeToCancel: true },
-  { phase: "depart", label: "Pause this thread here", safeToCancel: true },
-  { phase: "upload", label: "Move the bundle across", safeToCancel: true },
-  { phase: "apply", label: "Apply on the other machine", safeToCancel: false },
-  { phase: "settle", label: "Hand the thread over", safeToCancel: false },
+  { phase: "interrupt", label: "Finish the current turn" },
+  { phase: "prepare", label: "Snapshot branch, changes and untracked files" },
+  { phase: "depart", label: "Pause this thread here" },
+  { phase: "upload", label: "Move the bundle across" },
+  { phase: "apply", label: "Apply on the other machine" },
+  { phase: "settle", label: "Hand the thread over" },
 ];
 
 function phaseIndex(phase: ThreadHandoffProgress["phase"] | "interrupt"): number {
@@ -203,13 +198,17 @@ export function ThreadHandoffDialog({
   }, [sendQueued]);
 
   const activeIndex = progress === null ? -1 : phaseIndex(progress.phase);
-  const canCancel = progress === null || (PHASE_LABELS[activeIndex]?.safeToCancel ?? false);
 
+  // Closing the dialog cannot stop a transfer that is already running: the
+  // command layer offers no interruption, and a half-cancelled hop is worse
+  // than one that finishes. The transfer's own failure path releases the
+  // thread, so the honest UI is to lock the dialog until it settles rather
+  // than offer a Cancel that does not cancel.
   return (
     <Dialog
       open={open}
       onOpenChange={(nextOpen) => {
-        if (!isMoving || canCancel) {
+        if (!isMoving) {
           onOpenChange(nextOpen);
         }
       }}
@@ -294,11 +293,11 @@ export function ThreadHandoffDialog({
                   ) : null}
                 </div>
               ))}
-              {canCancel ? null : (
+              {isMoving ? (
                 <span className="text-muted-foreground text-xs">
-                  The other machine is being written to; this can no longer be cancelled here.
+                  The move is underway; it cannot be cancelled from here.
                 </span>
-              )}
+              ) : null}
             </div>
           )}
 
@@ -313,10 +312,10 @@ export function ThreadHandoffDialog({
             type="button"
             variant="outline"
             size="sm"
-            disabled={isMoving && !canCancel}
+            disabled={isMoving}
             onClick={() => onOpenChange(false)}
           >
-            Cancel
+            {progress === null ? "Cancel" : "Close"}
           </Button>
           <Button type="button" size="sm" disabled={isMoving} onClick={() => void handleMove()}>
             {isMoving

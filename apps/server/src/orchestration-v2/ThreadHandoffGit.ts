@@ -3,7 +3,7 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { VcsProcess } from "../vcs/VcsProcess.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 
 /**
  * How an incoming branch tip relates to the one the receiving repository is
@@ -45,19 +45,45 @@ export function classifyIncomingTip(input: ClassifyIncomingTipInput): HandoffTip
  * side writes them under its own namespace before deciding, so a refusal still
  * leaves the user holding both histories and able to join them by hand.
  */
-export function handoffRefName(environmentId: string, branch: string): string {
-  return `refs/handoff/${environmentId}/${branch}`;
+export function handoffRefName(
+  environmentId: string,
+  branch: string,
+  // Call sites should pass the handoff id: without it two refused handoffs on
+  // the same environment/branch write the same ref, and the first parked
+  // commit loses its only reference.
+  handoffId?: string,
+): string {
+  const scope = handoffId === undefined ? "" : `${refSafe(handoffId)}/`;
+  return `refs/handoff/${refSafe(environmentId)}/${scope}${refSafe(branch)}`;
 }
 
 /** Tag written over the old tip before any pointer moves. */
 export function handoffPreTagName(handoffId: string): string {
-  return `handoff-pre-${handoffId}`;
+  return `handoff-pre-${refSafe(handoffId)}`;
 }
 
 /** Stash label for a dirty receiving worktree; the base sha makes a later pop legible. */
 export function handoffStashLabel(handoffId: string, baseSha: string): string {
-  return `handoff-overwritten-${handoffId}-base-${baseSha}`;
+  return `handoff-overwritten-${refSafe(handoffId)}-base-${refSafe(baseSha)}`;
 }
+
+/**
+ * Ids and branch names are only branded non-empty strings, but they end up
+ * inside git ref names, where a space, `~`, `:` or `..` makes git reject the
+ * whole operation. Everything outside git's safe alphabet becomes `-`.
+ */
+function refSafe(value: string): string {
+  return value
+    .replaceAll(/[^A-Za-z0-9._/-]/g, "-")
+    .replaceAll("..", "-")
+    .replace(/^\.+/, "")
+    .replace(/\.+$/, "");
+}
+
+/** Big enough for any diff the payload ceiling would accept, small enough to fail fast. */
+const PATCH_MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
+/** File lists are far smaller than diffs. */
+const LIST_MAX_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 interface GitInput {
   readonly operation: string;
@@ -69,7 +95,7 @@ interface GitInput {
   readonly timeoutMs?: number;
 }
 
-const runGit = (process: VcsProcess["Service"], input: GitInput) =>
+const runGit = (process: VcsProcess.VcsProcess["Service"], input: GitInput) =>
   process.run({
     operation: `thread-handoff.${input.operation}`,
     command: "git",
@@ -81,7 +107,7 @@ const runGit = (process: VcsProcess["Service"], input: GitInput) =>
     ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
   });
 
-export interface ThreadHandoffGitShape {
+interface Shape {
   /** Current tip of `branch`, or null when the branch does not exist. */
   readonly resolveTip: (input: {
     readonly cwd: string;
@@ -207,33 +233,45 @@ export interface ThreadHandoffGitShape {
   }) => Effect.Effect<void, VcsError>;
 }
 
-export class ThreadHandoffGit extends Context.Service<ThreadHandoffGit, ThreadHandoffGitShape>()(
+export class ThreadHandoffGit extends Context.Service<ThreadHandoffGit, Shape>()(
   "t3/orchestration-v2/ThreadHandoffGit",
 ) {}
 
+export type ThreadHandoffGitShape = ThreadHandoffGit["Service"];
+
 export const make = Effect.gen(function* () {
-  const process = yield* VcsProcess;
+  const process = yield* VcsProcess.VcsProcess;
   const git = (input: GitInput) => runGit(process, input);
 
-  const resolveTip: ThreadHandoffGitShape["resolveTip"] = (input) =>
+  const resolveTip: ThreadHandoffGit["Service"]["resolveTip"] = (input) =>
     git({
       operation: "resolve-tip",
       args: ["rev-parse", "--verify", "--quiet", `refs/heads/${input.branch}`],
       cwd: input.cwd,
       allowNonZeroExit: true,
     }).pipe(
-      Effect.map((output) => {
+      Effect.flatMap((output) => {
         const tip = output.stdout.trim();
-        return output.exitCode === 0 && tip.length > 0 ? tip : null;
+        if (output.exitCode === 0) return Effect.succeed(tip.length > 0 ? tip : null);
+        // `rev-parse --verify --quiet` exits 1 with no diagnostics when the ref
+        // simply does not exist. Anything that had something to say about
+        // itself is a real failure and must not be read as "no branch": the
+        // caller would classify the hop as `advance` and overwrite the branch.
+        if (output.stderr.trim().length === 0) return Effect.succeed(null);
+        return git({
+          operation: "resolve-tip",
+          args: ["rev-parse", "--verify", "--quiet", `refs/heads/${input.branch}`],
+          cwd: input.cwd,
+        }).pipe(Effect.as(null));
       }),
     );
 
-  const resolveHead: ThreadHandoffGitShape["resolveHead"] = (input) =>
+  const resolveHead: ThreadHandoffGit["Service"]["resolveHead"] = (input) =>
     git({ operation: "resolve-head", args: ["rev-parse", "HEAD"], cwd: input.cwd }).pipe(
       Effect.map((output) => output.stdout.trim()),
     );
 
-  const isAncestor: ThreadHandoffGitShape["isAncestor"] = (input) =>
+  const isAncestor: ThreadHandoffGit["Service"]["isAncestor"] = (input) =>
     git({
       operation: "is-ancestor",
       args: ["merge-base", "--is-ancestor", input.ancestor, input.descendant],
@@ -241,7 +279,7 @@ export const make = Effect.gen(function* () {
       allowNonZeroExit: true,
     }).pipe(Effect.map((output) => output.exitCode === 0));
 
-  const hasCommonAncestor: ThreadHandoffGitShape["hasCommonAncestor"] = (input) =>
+  const hasCommonAncestor: ThreadHandoffGit["Service"]["hasCommonAncestor"] = (input) =>
     git({
       operation: "has-common-ancestor",
       args: ["merge-base", input.left, input.right],
@@ -249,7 +287,7 @@ export const make = Effect.gen(function* () {
       allowNonZeroExit: true,
     }).pipe(Effect.map((output) => output.exitCode === 0 && output.stdout.trim().length > 0));
 
-  const hasCommit: ThreadHandoffGitShape["hasCommit"] = (input) =>
+  const hasCommit: ThreadHandoffGit["Service"]["hasCommit"] = (input) =>
     git({
       operation: "has-commit",
       args: ["cat-file", "-e", `${input.commit}^{commit}`],
@@ -257,37 +295,39 @@ export const make = Effect.gen(function* () {
       allowNonZeroExit: true,
     }).pipe(Effect.map((output) => output.exitCode === 0));
 
-  const trackedPatch: ThreadHandoffGitShape["trackedPatch"] = (input) =>
+  const trackedPatch: ThreadHandoffGit["Service"]["trackedPatch"] = (input) =>
     git({
       operation: "tracked-patch",
       // --binary keeps images and other non-text changes intact; without it a
       // dirty png silently arrives as "Binary files differ" and never applies.
       args: ["diff", "--binary", "--no-color", "HEAD"],
       cwd: input.cwd,
-      maxOutputBytes: Number.MAX_SAFE_INTEGER,
+      // The payload ceiling would refuse anything near this anyway; the cap is
+      // here so an enormous binary diff fails before it is fully buffered.
+      maxOutputBytes: PATCH_MAX_OUTPUT_BYTES,
     }).pipe(Effect.map((output) => output.stdout));
 
-  const untrackedPaths: ThreadHandoffGitShape["untrackedPaths"] = (input) =>
+  const untrackedPaths: ThreadHandoffGit["Service"]["untrackedPaths"] = (input) =>
     git({
       operation: "untracked-paths",
       args: ["ls-files", "--others", "--exclude-standard", "-z"],
       cwd: input.cwd,
-      maxOutputBytes: Number.MAX_SAFE_INTEGER,
+      maxOutputBytes: LIST_MAX_OUTPUT_BYTES,
     }).pipe(Effect.map((output) => output.stdout.split("\0").filter((path) => path.length > 0)));
 
-  const dirtyFileCount: ThreadHandoffGitShape["dirtyFileCount"] = (input) =>
+  const dirtyFileCount: ThreadHandoffGit["Service"]["dirtyFileCount"] = (input) =>
     git({
       operation: "dirty-file-count",
       args: ["status", "--porcelain", "-z"],
       cwd: input.cwd,
-      maxOutputBytes: Number.MAX_SAFE_INTEGER,
+      maxOutputBytes: LIST_MAX_OUTPUT_BYTES,
     }).pipe(
       Effect.map(
         (output) => output.stdout.split("\0").filter((entry) => entry.trim().length > 0).length,
       ),
     );
 
-  const isPublished: ThreadHandoffGitShape["isPublished"] = (input) =>
+  const isPublished: ThreadHandoffGit["Service"]["isPublished"] = (input) =>
     git({
       operation: "is-published",
       args: ["branch", "--remotes", "--contains", input.commit],
@@ -295,44 +335,63 @@ export const make = Effect.gen(function* () {
       allowNonZeroExit: true,
     }).pipe(Effect.map((output) => output.exitCode === 0 && output.stdout.trim().length > 0));
 
-  const tagCommit: ThreadHandoffGitShape["tagCommit"] = (input) =>
+  const tagCommit: ThreadHandoffGit["Service"]["tagCommit"] = (input) =>
     git({
       operation: "tag-commit",
       args: ["tag", "--force", input.tag, input.commit],
       cwd: input.cwd,
     }).pipe(Effect.asVoid);
 
-  const stashWorktree: ThreadHandoffGitShape["stashWorktree"] = (input) =>
+  const stashWorktree: ThreadHandoffGit["Service"]["stashWorktree"] = (input) =>
     Effect.gen(function* () {
       const dirty = yield* dirtyFileCount({ cwd: input.cwd });
       if (dirty === 0) return null;
+      const stashRef = () =>
+        git({
+          operation: "stash-ref",
+          args: ["rev-parse", "--verify", "--quiet", "refs/stash"],
+          cwd: input.cwd,
+          allowNonZeroExit: true,
+        }).pipe(Effect.map((output) => output.stdout.trim()));
+      // `git status` calls a repository with only submodule edits dirty, but
+      // `stash push` does not stash them. Without comparing refs/stash before
+      // and after, an older unrelated stash would be reported as this hop's.
+      const before = yield* stashRef();
       yield* git({
         operation: "stash-worktree",
         args: ["stash", "push", "--include-untracked", "--message", input.label],
         cwd: input.cwd,
       });
-      const stash = yield* git({
-        operation: "stash-ref",
-        args: ["rev-parse", "--verify", "--quiet", "refs/stash"],
-        cwd: input.cwd,
-        allowNonZeroExit: true,
-      });
-      const ref = stash.stdout.trim();
-      return ref.length > 0 ? ref : null;
+      const after = yield* stashRef();
+      return after.length > 0 && after !== before ? after : null;
     });
 
-  const writeRef: ThreadHandoffGitShape["writeRef"] = (input) =>
+  const writeRef: ThreadHandoffGit["Service"]["writeRef"] = (input) =>
     git({
       operation: "write-ref",
       args: ["update-ref", input.ref, input.commit],
       cwd: input.cwd,
     }).pipe(Effect.asVoid);
 
-  const createBundle: ThreadHandoffGitShape["createBundle"] = (input) =>
+  const createBundle: ThreadHandoffGit["Service"]["createBundle"] = (input) =>
     Effect.gen(function* () {
+      // A destination tip the sender has never seen (the ordinary diverged or
+      // unrelated case) is not a resolvable revision here, and `--not <it>`
+      // would fail the whole bundle. Dropping it only makes the bundle carry
+      // more than strictly necessary.
+      const resolvableTips = yield* Effect.filter(input.excludeTips, (tip) =>
+        tip.startsWith("--")
+          ? Effect.succeed(true)
+          : git({
+              operation: "check-exclude-tip",
+              args: ["rev-parse", "--verify", "--quiet", `${tip}^{commit}`],
+              cwd: input.cwd,
+              allowNonZeroExit: true,
+            }).pipe(Effect.map((output) => output.exitCode === 0)),
+      );
       const revListArgs = [
         ...input.refs,
-        ...(input.excludeTips.length === 0 ? [] : ["--not", ...input.excludeTips]),
+        ...(resolvableTips.length === 0 ? [] : ["--not", ...resolvableTips]),
       ];
       // A branch whose every commit is already on the excluded tips — fully
       // pushed, the common case — would make `git bundle` refuse with "empty
@@ -356,7 +415,7 @@ export const make = Effect.gen(function* () {
       return true;
     });
 
-  const importBundle: ThreadHandoffGitShape["importBundle"] = (input) =>
+  const importBundle: ThreadHandoffGit["Service"]["importBundle"] = (input) =>
     git({
       operation: "import-bundle",
       // Fetching from the bundle imports objects and names its refs without
@@ -366,7 +425,7 @@ export const make = Effect.gen(function* () {
       cwd: input.cwd,
     }).pipe(Effect.asVoid);
 
-  const cloneFromBundle: ThreadHandoffGitShape["cloneFromBundle"] = (input) =>
+  const cloneFromBundle: ThreadHandoffGit["Service"]["cloneFromBundle"] = (input) =>
     git({
       operation: "clone-from-bundle",
       args: [
@@ -378,36 +437,39 @@ export const make = Effect.gen(function* () {
       cwd: ".",
     }).pipe(Effect.asVoid);
 
-  const applyPatch: ThreadHandoffGitShape["applyPatch"] = (input) =>
+  const applyPatch: ThreadHandoffGit["Service"]["applyPatch"] = (input) =>
     git({
       operation: input.check ? "apply-patch-check" : "apply-patch",
+      // `--3way` implies `--index`, so everything arrives staged. The sender's
+      // patch is a single `git diff HEAD` anyway: the staged/unstaged split
+      // does not travel, and flattening it here is intentional.
       args: ["apply", "--3way", "--binary", ...(input.check ? ["--check"] : []), "-"],
       cwd: input.cwd,
       stdin: input.patch,
       allowNonZeroExit: true,
     }).pipe(Effect.map((output) => output.exitCode === 0));
 
-  const checkoutBranchAt: ThreadHandoffGitShape["checkoutBranchAt"] = (input) =>
+  const checkoutBranchAt: ThreadHandoffGit["Service"]["checkoutBranchAt"] = (input) =>
     git({
       operation: "checkout-branch-at",
       args: ["checkout", "-B", input.branch, input.commit],
       cwd: input.cwd,
     }).pipe(Effect.asVoid);
 
-  const resetHardTo: ThreadHandoffGitShape["resetHardTo"] = (input) =>
+  const resetHardTo: ThreadHandoffGit["Service"]["resetHardTo"] = (input) =>
     git({
       operation: "reset-hard-to",
       args: ["reset", "--hard", input.commit],
       cwd: input.cwd,
     }).pipe(Effect.asVoid);
 
-  const listCheckpointRefs: ThreadHandoffGitShape["listCheckpointRefs"] = (input) =>
+  const listCheckpointRefs: ThreadHandoffGit["Service"]["listCheckpointRefs"] = (input) =>
     git({
       operation: "list-checkpoint-refs",
       args: ["for-each-ref", "--format=%(refname)", "refs/t3code"],
       cwd: input.cwd,
       allowNonZeroExit: true,
-      maxOutputBytes: Number.MAX_SAFE_INTEGER,
+      maxOutputBytes: LIST_MAX_OUTPUT_BYTES,
     }).pipe(
       Effect.map((output) =>
         output.exitCode === 0
@@ -419,7 +481,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const archivePaths: ThreadHandoffGitShape["archivePaths"] = (input) =>
+  const archivePaths: ThreadHandoffGit["Service"]["archivePaths"] = (input) =>
     // A null-delimited file list keeps paths containing spaces or newlines
     // intact, which is the form `git ls-files -z` already produces.
     process
@@ -432,7 +494,7 @@ export const make = Effect.gen(function* () {
       })
       .pipe(Effect.asVoid);
 
-  const extractArchive: ThreadHandoffGitShape["extractArchive"] = (input) =>
+  const extractArchive: ThreadHandoffGit["Service"]["extractArchive"] = (input) =>
     process
       .run({
         operation: "thread-handoff.extract-archive",
@@ -445,14 +507,17 @@ export const make = Effect.gen(function* () {
   const worktreeEntries = (input: { readonly cwd: string }) =>
     git({
       operation: "list-worktrees",
-      args: ["worktree", "list", "--porcelain"],
+      args: ["worktree", "list", "--porcelain", "-z"],
       cwd: input.cwd,
-      maxOutputBytes: Number.MAX_SAFE_INTEGER,
+      maxOutputBytes: LIST_MAX_OUTPUT_BYTES,
     }).pipe(
       Effect.map((output) => {
         const entries: Array<{ path: string; branch: string | null }> = [];
         let current: { path: string; branch: string | null } | null = null;
-        for (const line of output.stdout.split("\n")) {
+        // `--porcelain -z` terminates every attribute with a NUL and separates
+        // records with a second one, so splitting on NUL yields the attributes
+        // plus empty strings between records.
+        for (const line of output.stdout.split("\0")) {
           if (line.startsWith("worktree ")) {
             if (current !== null) entries.push(current);
             current = { path: line.slice("worktree ".length).trim(), branch: null };
@@ -468,17 +533,17 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const findWorktreeForBranch: ThreadHandoffGitShape["findWorktreeForBranch"] = (input) =>
+  const findWorktreeForBranch: ThreadHandoffGit["Service"]["findWorktreeForBranch"] = (input) =>
     worktreeEntries(input).pipe(
       Effect.map((entries) => entries.find((entry) => entry.branch === input.branch)?.path ?? null),
     );
 
-  const isBranchCheckedOut: ThreadHandoffGitShape["isBranchCheckedOut"] = (input) =>
+  const isBranchCheckedOut: ThreadHandoffGit["Service"]["isBranchCheckedOut"] = (input) =>
     worktreeEntries(input).pipe(
       Effect.map((entries) => entries.some((entry) => entry.branch === input.branch)),
     );
 
-  const addWorktree: ThreadHandoffGitShape["addWorktree"] = (input) =>
+  const addWorktree: ThreadHandoffGit["Service"]["addWorktree"] = (input) =>
     git({
       operation: "add-worktree",
       args: ["worktree", "add", "--detach", input.path, input.commit],
@@ -486,7 +551,7 @@ export const make = Effect.gen(function* () {
       timeoutMs: 600_000,
     }).pipe(Effect.asVoid);
 
-  const setOriginRemote: ThreadHandoffGitShape["setOriginRemote"] = (input) =>
+  const setOriginRemote: ThreadHandoffGit["Service"]["setOriginRemote"] = (input) =>
     git({
       operation: "set-origin-remote",
       // A clone from a bundle has the bundle file as its origin; replace it
@@ -506,12 +571,11 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const popStash: ThreadHandoffGitShape["popStash"] = (input) =>
+  const popStash: ThreadHandoffGit["Service"]["popStash"] = (input) =>
     git({
       operation: "pop-stash",
       args: ["stash", "pop", input.stashRef],
       cwd: input.cwd,
-      allowNonZeroExit: true,
     }).pipe(Effect.asVoid);
 
   return {
@@ -541,10 +605,10 @@ export const make = Effect.gen(function* () {
     findWorktreeForBranch,
     addWorktree,
     isBranchCheckedOut,
-  } satisfies ThreadHandoffGitShape;
+  } satisfies ThreadHandoffGit["Service"];
 });
 
-export const layer: Layer.Layer<ThreadHandoffGit, never, VcsProcess> = Layer.effect(
+export const layer: Layer.Layer<ThreadHandoffGit, never, VcsProcess.VcsProcess> = Layer.effect(
   ThreadHandoffGit,
   make,
 );

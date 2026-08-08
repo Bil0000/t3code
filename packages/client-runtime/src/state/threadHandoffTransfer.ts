@@ -137,7 +137,29 @@ export const runThreadHandoffTransfer = Effect.fn("clientRuntime.state.runThread
     const bundle: OrchestrationV2HandoffBundleV1 = preparation.bundle;
     const totalBytes = preparation.totalBytes;
 
+    // From here on the thread is locked, so every failure has to release it
+    // before surfacing — otherwise a transient network error would leave a
+    // thread nobody can type in on either machine.
+    const release = (reason: "transfer failed" | "transfer cancelled") =>
+      runInEnvironment(
+        input.originEnvironmentId,
+        abortThreadHandoff({
+          threadId: input.threadId,
+          handoffId: bundle.handoffId,
+          reason,
+        }),
+      ).pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning(
+            `thread handoff abort failed handoffId=${bundle.handoffId} environmentId=${input.originEnvironmentId}`,
+            cause,
+          ),
+        ),
+      );
+
     report("depart", 0, totalBytes);
+    // The lock can be taken server-side and the response still be lost, so a
+    // failed depart also tries to release before surfacing.
     yield* runInEnvironment(
       input.originEnvironmentId,
       departThread({
@@ -148,20 +170,12 @@ export const runThreadHandoffTransfer = Effect.fn("clientRuntime.state.runThread
         previousHandoffId: input.previousHandoffId,
         hopCount: input.hopCount,
       }),
-    );
+    ).pipe(Effect.tapCause(() => release("transfer failed")));
 
-    // From here on the thread is locked, so every failure has to release it
-    // before surfacing — otherwise a transient network error would leave a
-    // thread nobody can type in on either machine.
-    const release = (reason: string) =>
-      runInEnvironment(
-        input.originEnvironmentId,
-        abortThreadHandoff({
-          threadId: input.threadId,
-          handoffId: bundle.handoffId,
-          reason,
-        }),
-      ).pipe(Effect.ignore);
+    // Once the destination has applied the bundle, releasing here would make
+    // both sides live. Past that point failures surface with the depart lock
+    // still held, which "Continue here" or the next pull can recover.
+    let received = false;
 
     return yield* Effect.gen(function* () {
       let transferred = 0;
@@ -190,8 +204,8 @@ export const runThreadHandoffTransfer = Effect.fn("clientRuntime.state.runThread
           returningThreadId: input.returningThreadId,
         }),
       );
+      received = true;
 
-      report("settle", transferred, totalBytes);
       yield* runInEnvironment(
         input.originEnvironmentId,
         completeThreadHandoff({
@@ -199,15 +213,16 @@ export const runThreadHandoffTransfer = Effect.fn("clientRuntime.state.runThread
           handoffId: bundle.handoffId,
           peerThreadId: application.threadId,
         }),
-      );
+      ).pipe(Effect.retry({ times: 1 }));
+      report("settle", transferred, totalBytes);
 
       return {
         handoffId: bundle.handoffId,
         targetThreadId: application.threadId,
       } satisfies ThreadHandoffTransferResult;
     }).pipe(
-      Effect.tapCause((cause) => release(String(cause))),
-      Effect.onInterrupt(() => release("transfer cancelled")),
+      Effect.tapCause(() => (received ? Effect.void : release("transfer failed"))),
+      Effect.onInterrupt(() => (received ? Effect.void : release("transfer cancelled"))),
     );
   },
 );

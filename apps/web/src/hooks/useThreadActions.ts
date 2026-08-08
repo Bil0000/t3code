@@ -306,12 +306,17 @@ export function useThreadActions() {
 
   const deleteThread = useCallback(
     async (target: ScopedThreadRef, opts: { deletedThreadKeys?: ReadonlySet<string> } = {}) => {
-      await mirrorToHandoffPeer(target, (peer) =>
-        deleteThreadMutation({
-          environmentId: peer.environmentId,
-          input: { threadId: peer.threadId },
-        }),
-      );
+      // The link has to be read before the local delete removes the shell, but
+      // the peer is only deleted once the local delete actually happened —
+      // a cancelled or failed delete must not take the other half with it.
+      const peerLink = readThreadShell(target)?.handoff ?? null;
+      const deletePeer = async () => {
+        if (peerLink === null || peerLink.peerThreadId === null) return;
+        await deleteThreadMutation({
+          environmentId: peerLink.peerEnvironmentId,
+          input: { threadId: peerLink.peerThreadId },
+        }).catch(() => undefined);
+      };
       const resolved = resolveThreadTarget(target);
       if (!resolved) {
         // Thread not in main store (e.g. archived thread) — dispatch delete directly.
@@ -320,6 +325,7 @@ export function useThreadActions() {
           input: { threadId: target.threadId },
         });
         if (result._tag === "Success") {
+          await deletePeer();
           refreshArchivedThreadsForEnvironment(target.environmentId);
         }
         return result;
@@ -403,6 +409,7 @@ export function useThreadActions() {
       if (deleteResult._tag === "Failure") {
         return deleteResult;
       }
+      await deletePeer();
       refreshArchivedThreadsForEnvironment(threadRef.environmentId);
       clearComposerDraftForThread(threadRef);
       clearProjectDraftThreadById(
@@ -493,7 +500,6 @@ export function useThreadActions() {
       return deleteResult;
     },
     [
-      mirrorToHandoffPeer,
       clearComposerDraftForThread,
       clearProjectDraftThreadById,
       clearTerminalUiState,

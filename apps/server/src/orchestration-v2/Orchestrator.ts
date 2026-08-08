@@ -1335,6 +1335,19 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
     });
   });
 
+  // Mutations a departed (away) thread still accepts: the handoff verbs that
+  // end the trip, plus the lifecycle and read-state mirrors that describe the
+  // local copy rather than the conversation.
+  const AWAY_ALLOWED_MUTATIONS = new Set<string>([
+    "thread.handoff.complete",
+    "thread.handoff.abort",
+    "thread.delete",
+    "thread.archive",
+    "thread.unarchive",
+    "thread.visit",
+    "thread.mark-unread",
+  ]);
+
   const dispatchThreadMutation = Effect.fn("orchestrationV2.dispatch.threadMutation")(function* (
     command: Extract<
       OrchestrationV2Command,
@@ -1444,6 +1457,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandId: command.commandId,
         commandType: command.type,
         cause: `Thread ${command.threadId} is already handed off to ${thread.handoff.peerEnvironmentId}.`,
+      });
+    }
+    // The preflight ran before this command took the thread lock, so a
+    // message could have started a run in between. Depart transfers a
+    // snapshot and locks the source; a live run here would keep mutating it
+    // after the other side goes live.
+    if (
+      command.type === "thread.handoff.depart" &&
+      projection.runs.some((run) =>
+        ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
+      )
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} has an agent still working and cannot be handed off.`,
+      });
+    }
+    // An away thread is read-only here: the peer owns the conversation. Read
+    // state and lifecycle mirrors still apply so the local copy can be
+    // archived, deleted or marked read while the work lives elsewhere.
+    if (
+      thread.handoff?.presence === "away" &&
+      !AWAY_ALLOWED_MUTATIONS.has(command.type) &&
+      command.type !== "thread.handoff.depart"
+    ) {
+      return yield* new OrchestratorDispatchError({
+        commandId: command.commandId,
+        commandType: command.type,
+        cause: `Thread ${command.threadId} is running on ${
+          thread.handoff.peerLabel ?? thread.handoff.peerEnvironmentId
+        }.`,
       });
     }
     if (command.type === "thread.handoff.complete" || command.type === "thread.handoff.abort") {

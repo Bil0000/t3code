@@ -69,6 +69,17 @@ describe("handoff ref names", () => {
     );
   });
 
+  it("keeps each refused handoff's parked commit under its own ref", () => {
+    assert.strictEqual(
+      handoffRefName("environment-mac", "feat/thread-handoff", "handoff-1"),
+      "refs/handoff/environment-mac/handoff-1/feat/thread-handoff",
+    );
+  });
+
+  it("rewrites characters git refuses inside a ref name", () => {
+    assert.strictEqual(handoffRefName("env one", "feat/a..b~c"), "refs/handoff/env-one/feat/a-b-c");
+  });
+
   it("names the pre-move tag after the hop that moved the pointer", () => {
     assert.strictEqual(handoffPreTagName("handoff-1"), "handoff-pre-handoff-1");
   });

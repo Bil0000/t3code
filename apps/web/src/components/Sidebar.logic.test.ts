@@ -336,6 +336,44 @@ describe("sidebar thread lineage helpers", () => {
     ]);
   });
 
+  it("keeps the away copy visible when its live peer is archived", () => {
+    const environmentId = EnvironmentId.make("environment-mac");
+    const peerEnvironmentId = EnvironmentId.make("environment-staging");
+    const away = makeThreadFixture({
+      id: ThreadId.make("thread-away"),
+      environmentId,
+      handoff: {
+        handoffId: ThreadHandoffId.make("handoff-1"),
+        presence: "away",
+        peerEnvironmentId,
+        peerThreadId: ThreadId.make("thread-here"),
+        peerLabel: "calendaty-staging",
+        previousHandoffId: null,
+        hopCount: 0,
+        updatedAt: DateTime.makeUnsafe("2026-08-06T00:00:00.000Z"),
+      },
+    });
+    const here = makeThreadFixture({
+      id: ThreadId.make("thread-here"),
+      environmentId: peerEnvironmentId,
+      archivedAt: "2026-08-06T00:00:00.000Z",
+      handoff: {
+        handoffId: ThreadHandoffId.make("handoff-1"),
+        presence: "here",
+        peerEnvironmentId: environmentId,
+        peerThreadId: ThreadId.make("thread-away"),
+        peerLabel: null,
+        previousHandoffId: null,
+        hopCount: 0,
+        updatedAt: DateTime.makeUnsafe("2026-08-06T00:00:00.000Z"),
+      },
+    });
+
+    expect(filterSidebarV2VisibleThreads([away, here], null).map((thread) => thread.id)).toEqual([
+      away.id,
+    ]);
+  });
+
   it("keeps the away copy visible when the owning device is offline", () => {
     const away = makeThreadFixture({
       id: ThreadId.make("thread-away-alone"),

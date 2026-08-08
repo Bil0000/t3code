@@ -43,10 +43,10 @@ import { layerWithLegacyImporter as threadManagementServiceLayer } from "./Threa
 import { layer as threadLaunchServiceLayer } from "./ThreadLaunchService.ts";
 import { layer as threadLifecycleServiceLayer } from "./ThreadLifecycleService.ts";
 import { layer as threadForkServiceLayer } from "./ThreadForkService.ts";
-import { layer as repositoryIdentityResolverLayer } from "../project/RepositoryIdentityResolver.ts";
-import { layer as vcsProcessLayer } from "../vcs/VcsProcess.ts";
-import { layer as threadHandoffGitLayer } from "./ThreadHandoffGit.ts";
-import { layer as threadHandoffServiceLayer } from "./ThreadHandoffService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as ThreadHandoffGit from "./ThreadHandoffGit.ts";
+import * as ThreadHandoffService from "./ThreadHandoffService.ts";
 import { layer as turnItemPositionStoreLayer } from "./TurnItemPositionStore.ts";
 import { layer as scheduledTaskServiceLayer } from "../scheduledTasks/ScheduledTaskService.ts";
 
@@ -257,7 +257,7 @@ export const OrchestrationV2LayerLive = Layer.mergeAll(
   legacyV1ThreadImporterProvided,
 );
 
-const threadHandoffProvided = threadHandoffServiceLayer.pipe(
+const threadHandoffProvided = ThreadHandoffService.layer.pipe(
   Layer.provide(
     Layer.mergeAll(
       storesLayer,
@@ -265,8 +265,8 @@ const threadHandoffProvided = threadHandoffServiceLayer.pipe(
       eventSinkProvided,
       ProjectServiceLayerLive,
       providerAdapterRegistryProvided,
-      repositoryIdentityResolverLayer,
-      threadHandoffGitLayer.pipe(Layer.provide(vcsProcessLayer)),
+      RepositoryIdentityResolver.layer,
+      ThreadHandoffGit.layer.pipe(Layer.provide(VcsProcess.layer)),
     ),
   ),
 );

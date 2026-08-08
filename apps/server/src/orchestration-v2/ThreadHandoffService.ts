@@ -26,15 +26,16 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
+import * as Stream from "effect/Stream";
 import * as SqlClient from "effect/unstable/sql/SqlClient";
 import * as NodeCrypto from "node:crypto";
 
 import { toSafeThreadAttachmentSegment } from "../attachmentStore.ts";
 import { toSafeThreadId as terminalHistoryFilePrefix } from "../terminal/Manager.ts";
 import { ServerConfig } from "../config.ts";
-import { ServerEnvironment } from "../environment/ServerEnvironment.ts";
-import { ProjectService } from "../project/ProjectService.ts";
-import { RepositoryIdentityResolver } from "../project/RepositoryIdentityResolver.ts";
+import * as ServerEnvironment from "../environment/ServerEnvironment.ts";
+import * as ProjectService from "../project/ProjectService.ts";
+import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { makeKeyedSerialExecutor } from "./KeyedSerialExecutor.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
@@ -159,54 +160,54 @@ export interface ThreadHandoffApplication {
   readonly preTag: string | null;
 }
 
-export interface ThreadHandoffServiceShape {
-  /**
-   * Reads the thread and its worktree and stages the parts. Writes nothing the
-   * user can see and does not lock the thread, so the preflight a user
-   * approves comes from the same code path the transfer itself uses.
-   */
-  readonly prepare: (input: {
-    readonly threadId: ThreadId;
-    readonly peerEnvironmentId: EnvironmentId;
-    /** The destination's current tip for this branch, so the bundle carries only what it lacks. */
-    readonly peerBranchTip: string | null;
-    /** Bundle the whole history so the destination can clone with no remote. */
-    readonly fullHistory: boolean;
-    readonly previousHandoffId: ThreadHandoffId | null;
-    readonly hopCount: number;
-  }) => Effect.Effect<ThreadHandoffPreparation, OrchestrationV2HandoffError>;
-  /** Absolute path a part is staged at, for the transport to read from or write to. */
-  readonly partPath: (input: {
-    readonly handoffId: ThreadHandoffId;
-    readonly kind: OrchestrationV2HandoffPartKind;
-  }) => string;
-  readonly verifyStagedPart: (input: {
-    readonly handoffId: ThreadHandoffId;
-    readonly part: OrchestrationV2HandoffPart;
-  }) => Effect.Effect<void, OrchestrationV2HandoffError>;
-  /**
-   * Applies a staged bundle, creating the thread or — when the hop returns to
-   * a thread this environment already owns — continuing it.
-   */
-  readonly receive: (input: {
-    readonly bundle: OrchestrationV2HandoffBundleV1;
-    /** Null when the repository must first be cloned from the bundle. */
-    readonly projectId: ProjectId | null;
-    readonly cloneWorkspaceRoot: string | null;
-    readonly returningThreadId: ThreadId | null;
-  }) => Effect.Effect<ThreadHandoffApplication, OrchestrationV2HandoffError>;
-  /**
-   * Fails hops that were still applying when the server stopped. That is the
-   * only state in which a repository can have been written to, so it is the
-   * only state that needs recovering.
-   */
-  readonly recoverInterrupted: () => Effect.Effect<number>;
-}
-
 export class ThreadHandoffService extends Context.Service<
   ThreadHandoffService,
-  ThreadHandoffServiceShape
+  {
+    /**
+     * Reads the thread and its worktree and stages the parts. Writes nothing the
+     * user can see and does not lock the thread, so the preflight a user
+     * approves comes from the same code path the transfer itself uses.
+     */
+    readonly prepare: (input: {
+      readonly threadId: ThreadId;
+      readonly peerEnvironmentId: EnvironmentId;
+      /** The destination's current tip for this branch, so the bundle carries only what it lacks. */
+      readonly peerBranchTip: string | null;
+      /** Bundle the whole history so the destination can clone with no remote. */
+      readonly fullHistory: boolean;
+      readonly previousHandoffId: ThreadHandoffId | null;
+      readonly hopCount: number;
+    }) => Effect.Effect<ThreadHandoffPreparation, OrchestrationV2HandoffError>;
+    /** Absolute path a part is staged at, for the transport to read from or write to. */
+    readonly partPath: (input: {
+      readonly handoffId: ThreadHandoffId;
+      readonly kind: OrchestrationV2HandoffPartKind;
+    }) => string;
+    readonly verifyStagedPart: (input: {
+      readonly handoffId: ThreadHandoffId;
+      readonly part: OrchestrationV2HandoffPart;
+    }) => Effect.Effect<void, OrchestrationV2HandoffError>;
+    /**
+     * Applies a staged bundle, creating the thread or — when the hop returns to
+     * a thread this environment already owns — continuing it.
+     */
+    readonly receive: (input: {
+      readonly bundle: OrchestrationV2HandoffBundleV1;
+      /** Null when the repository must first be cloned from the bundle. */
+      readonly projectId: ProjectId | null;
+      readonly cloneWorkspaceRoot: string | null;
+      readonly returningThreadId: ThreadId | null;
+    }) => Effect.Effect<ThreadHandoffApplication, OrchestrationV2HandoffError>;
+    /**
+     * Fails hops that were still applying when the server stopped. That is the
+     * only state in which a repository can have been written to, so it is the
+     * only state that needs recovering.
+     */
+    readonly recoverInterrupted: () => Effect.Effect<number>;
+  }
 >()("t3/orchestration-v2/ThreadHandoffService") {}
+
+export type ThreadHandoffServiceShape = ThreadHandoffService["Service"];
 
 const handoffError = (input: {
   readonly reason: OrchestrationV2HandoffError["reason"];
@@ -242,9 +243,9 @@ export const make = Effect.gen(function* () {
   const eventSink = yield* EventSinkV2;
   const projectionStore = yield* ProjectionStoreV2;
   const git = yield* ThreadHandoffGit;
-  const projects = yield* ProjectService;
-  const repositoryIdentity = yield* RepositoryIdentityResolver;
-  const environment = yield* ServerEnvironment;
+  const projects = yield* ProjectService.ProjectService;
+  const repositoryIdentity = yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
+  const environment = yield* ServerEnvironment.ServerEnvironment;
   const providerAdapters = yield* ProviderAdapterRegistryV2;
   const encodeManifest = Schema.encodeEffect(Schema.fromJsonString(OrchestrationV2HandoffBundleV1));
 
@@ -257,6 +258,22 @@ export const make = Effect.gen(function* () {
   const partPath: ThreadHandoffServiceShape["partPath"] = (input) =>
     path.join(handoffDir(input.handoffId), partFileName(input.kind));
 
+  // Digest and size read in chunks: a part can be close to the gigabyte
+  // ceiling, and reading one whole into a buffer to hash it is how the
+  // process runs out of heap before the ceiling is ever checked.
+  const measurePart = (target: string) =>
+    Effect.gen(function* () {
+      const hash = NodeCrypto.createHash("sha256");
+      let byteLength = 0;
+      yield* Stream.runForEach(fs.stream(target), (chunk: Uint8Array) =>
+        Effect.sync(() => {
+          hash.update(chunk);
+          byteLength += chunk.length;
+        }),
+      );
+      return { digest: hash.digest("hex"), byteLength };
+    });
+
   const stagePart = (input: {
     readonly handoffId: ThreadHandoffId;
     readonly kind: OrchestrationV2HandoffPartKind;
@@ -268,17 +285,17 @@ export const make = Effect.gen(function* () {
       yield* input.write(target);
       const exists = yield* fs.exists(target);
       if (!exists) return null;
-      const contents = yield* fs.readFile(target);
+      const measured = yield* measurePart(target);
       // An empty part is the absence of a payload, not a payload of zero bytes:
       // dropping it keeps the manifest an accurate list of what has to move.
-      if (contents.length === 0) {
+      if (measured.byteLength === 0) {
         yield* fs.remove(target).pipe(Effect.ignore);
         return null;
       }
       return {
         kind: input.kind,
-        digest: sha256(contents),
-        byteLength: contents.length,
+        digest: measured.digest,
+        byteLength: measured.byteLength,
       } satisfies OrchestrationV2HandoffPart;
     }).pipe(asHandoffError("store_failed", `Could not stage the ${input.kind} part.`));
 
@@ -295,10 +312,19 @@ export const make = Effect.gen(function* () {
           handoffId: input.handoffId,
         });
       }
-      const contents = yield* fs
-        .readFile(target)
-        .pipe(asHandoffError("store_failed", "Could not read a staged handoff part."));
-      if (sha256(contents) !== input.part.digest) {
+      const measured = yield* measurePart(target).pipe(
+        asHandoffError("store_failed", "Could not read a staged handoff part."),
+      );
+      // The declared length is what size accounting downstream trusts, so a
+      // manifest that understates it is rejected the same way a wrong digest is.
+      if (measured.byteLength !== input.part.byteLength) {
+        return yield* handoffError({
+          reason: "part_digest_mismatch",
+          message: `Handoff part ${input.part.kind} is ${measured.byteLength} bytes, not the ${input.part.byteLength} bytes the manifest declares.`,
+          handoffId: input.handoffId,
+        });
+      }
+      if (measured.digest !== input.part.digest) {
         return yield* handoffError({
           reason: "part_digest_mismatch",
           message: `Handoff part ${input.part.kind} does not match the digest in the manifest.`,
@@ -696,6 +722,9 @@ export const make = Effect.gen(function* () {
       const returning = input.existing !== null;
       const thread: OrchestrationV2AppThread = {
         ...base,
+        // A provisioned worktree wins even for a returning thread: the
+        // incoming changes were applied there, so that is where work resumes.
+        worktreePath: input.worktreePath ?? base.worktreePath,
         // The carried title wins: a rename made on either side reaches the
         // pair at the next hop instead of leaving a stale name behind.
         title: bundle.thread.title,
@@ -804,17 +833,126 @@ export const make = Effect.gen(function* () {
     );
 
   const receive: ThreadHandoffServiceShape["receive"] = (input) =>
+    // Locked on the origin thread id — the one key both ends of a hop agree
+    // on, and the one that identifies the logical thread pair. `prepare`
+    // locks the local thread id for the same reason: two hops for one thread
+    // must never rewrite the same worktree at once.
     serialize.withLock(
-      input.bundle.handoffId,
+      input.bundle.origin.threadId,
       Effect.gen(function* () {
         const { bundle } = input;
         yield* Effect.forEach(bundle.parts, (part) =>
           verifyStagedPart({ handoffId: bundle.handoffId, part }),
         );
 
+        // A retried transfer must not import, patch and mint a second thread.
+        // A hop that already landed reports where it landed and stops.
+        const arrivedRows = yield* sql<{ readonly thread_id: string }>`
+          SELECT thread_id FROM orchestration_v2_thread_handoffs
+          WHERE handoff_id = ${bundle.handoffId} AND state = 'arrived'
+          LIMIT 1
+        `.pipe(Effect.orElseSucceed(() => []));
+        const arrivedThreadId = arrivedRows[0]?.thread_id;
+        if (arrivedThreadId !== undefined) {
+          const landedProjectId = yield* projectionStore
+            .getThreadProjection(ThreadId.make(arrivedThreadId))
+            .pipe(
+              Effect.map((projection): ProjectId | null => projection.thread.projectId),
+              Effect.orElseSucceed(() => null),
+            );
+          if (landedProjectId !== null) {
+            return {
+              threadId: ThreadId.make(arrivedThreadId),
+              projectId: landedProjectId,
+              classification: "absorb",
+              stashRef: null,
+              preTag: null,
+            } satisfies ThreadHandoffApplication;
+          }
+        }
+
         const branch = bundle.workspace.branch;
         const incomingTip = bundle.workspace.headSha;
         const bundlePart = bundle.parts.find((part) => part.kind === "git-bundle") ?? null;
+
+        // A hop between the same two threads is a revival, not a new copy —
+        // even when the client no longer knows the pair. The lineage table
+        // remembers every hop this environment took part in, so an incoming
+        // origin thread that matches a prior peer lands back in that thread.
+        let returningThreadId = input.returningThreadId;
+        if (returningThreadId === null) {
+          const prior = yield* sql<{ readonly thread_id: string }>`
+            SELECT thread_id FROM orchestration_v2_thread_handoffs
+            WHERE peer_thread_id = ${bundle.origin.threadId}
+            ORDER BY updated_at DESC
+            LIMIT 1
+          `.pipe(Effect.orElseSucceed(() => []));
+          const priorThreadId = prior[0]?.thread_id;
+          if (priorThreadId !== undefined) {
+            const revivable = yield* projectionStore
+              .getThreadProjection(ThreadId.make(priorThreadId))
+              .pipe(
+                Effect.map((projection) => projection.thread.deletedAt === null),
+                Effect.orElseSucceed(() => false),
+              );
+            if (revivable) {
+              returningThreadId = ThreadId.make(priorThreadId);
+            }
+          }
+        }
+
+        const existingProjection =
+          returningThreadId === null
+            ? null
+            : yield* projectionStore
+                .getThreadProjection(returningThreadId)
+                .pipe(
+                  asHandoffError(
+                    "thread_missing",
+                    `Thread ${returningThreadId} could not be read.`,
+                  ),
+                );
+        const existing = existingProjection?.thread ?? null;
+
+        // A caller-named return target has to belong to this hop's lineage:
+        // either it is the copy that departed to the origin thread, or a
+        // previous hop of this pair recorded it. Otherwise a bundle could
+        // overwrite an unrelated thread's worktree and history.
+        if (input.returningThreadId !== null && existing !== null) {
+          const linkedByPresence =
+            existing.handoff?.presence === "away" &&
+            existing.handoff.peerThreadId === bundle.origin.threadId;
+          const linkedByLineage =
+            linkedByPresence ||
+            (yield* sql<{ readonly thread_id: string }>`
+              SELECT thread_id FROM orchestration_v2_thread_handoffs
+              WHERE thread_id = ${input.returningThreadId}
+                AND peer_thread_id = ${bundle.origin.threadId}
+              LIMIT 1
+            `.pipe(Effect.orElseSucceed(() => []))).length > 0;
+          if (!linkedByLineage) {
+            return yield* handoffError({
+              reason: "thread_missing",
+              message: `Thread ${input.returningThreadId} is not the return target of this handoff's lineage.`,
+              handoffId: bundle.handoffId,
+            });
+          }
+        }
+
+        const threadId = returningThreadId ?? ThreadId.make(`thread:${NodeCrypto.randomUUID()}`);
+        // The row exists before anything is written to a repository: `markHop`
+        // only updates, so without this a first arrival that dies mid-apply
+        // leaves no `applying` row for recovery to roll back.
+        yield* recordHop({
+          handoffId: bundle.handoffId,
+          threadId,
+          peerEnvironmentId: bundle.origin.environmentId,
+          peerThreadId: bundle.origin.threadId,
+          previousHandoffId: bundle.lineage.previousHandoffId,
+          hopCount: bundle.lineage.hopCount,
+          state: "receiving",
+          bundle,
+        });
 
         // No project yet: the bundle carries the whole history, so clone from
         // it, point origin at the real remote, and register the project — no
@@ -866,48 +1004,24 @@ export const make = Effect.gen(function* () {
         // for repositories that existed here before the hop.
         const wantsWorktree = !cloned && bundle.workspace.strategy.type !== "root";
 
-        // A hop between the same two threads is a revival, not a new copy —
-        // even when the client no longer knows the pair. The lineage table
-        // remembers every hop this environment took part in, so an incoming
-        // origin thread that matches a prior peer lands back in that thread.
-        let returningThreadId = input.returningThreadId;
-        if (returningThreadId === null) {
-          const prior = yield* sql<{ readonly thread_id: string }>`
-            SELECT thread_id FROM orchestration_v2_thread_handoffs
-            WHERE peer_thread_id = ${bundle.origin.threadId}
-            ORDER BY updated_at DESC
-            LIMIT 1
-          `.pipe(Effect.orElseSucceed(() => []));
-          const priorThreadId = prior[0]?.thread_id;
-          if (priorThreadId !== undefined) {
-            const revivable = yield* projectionStore
-              .getThreadProjection(ThreadId.make(priorThreadId))
-              .pipe(
-                Effect.map((projection) => projection.thread.deletedAt === null),
-                Effect.orElseSucceed(() => false),
-              );
-            if (revivable) {
-              returningThreadId = ThreadId.make(priorThreadId);
-            }
-          }
-        }
-
-        const existingProjection =
-          returningThreadId === null
-            ? null
-            : yield* projectionStore
-                .getThreadProjection(returningThreadId)
-                .pipe(
-                  asHandoffError(
-                    "thread_missing",
-                    `Thread ${returningThreadId} could not be read.`,
-                  ),
-                );
-        const existing = existingProjection?.thread ?? null;
-
         let classification: HandoffTipClassification = "advance";
         let preTag: string | null = null;
-        let stashRef: string | null = null;
+        // Two checkouts can be stashed in one hop — the repository root and
+        // the worktree the thread lands in. One nullable ref for both would
+        // make the second stash look already taken and hard-reset over it.
+        let rootStashRef: string | null = null;
+        let worktreeStashRef: string | null = null;
+        let applyCwd = cwd;
+
+        // Puts both checkouts back the way they were found. Best effort: it
+        // runs on a path that is already failing.
+        const undo = () =>
+          Effect.gen(function* () {
+            if (applyCwd !== cwd) {
+              yield* rollback({ cwd: applyCwd, preTag, stashRef: worktreeStashRef });
+            }
+            yield* rollback({ cwd, preTag, stashRef: rootStashRef });
+          });
 
         if (bundlePart !== null && !cloned) {
           const bundlePath = partPath({ handoffId: bundle.handoffId, kind: "git-bundle" });
@@ -984,7 +1098,7 @@ export const make = Effect.gen(function* () {
             yield* git
               .tagCommit({ cwd, tag: preTag, commit: localTip })
               .pipe(asHandoffError("apply_failed", "Could not tag the current tip."));
-            stashRef = yield* git
+            rootStashRef = yield* git
               .stashWorktree({ cwd, label: handoffStashLabel(bundle.handoffId, localTip) })
               .pipe(asHandoffError("apply_failed", "Could not set the local changes aside."));
           }
@@ -996,6 +1110,32 @@ export const make = Effect.gen(function* () {
                 asHandoffError("apply_failed", "Could not move the branch to the incoming commit."),
               );
           }
+
+          // A detached-HEAD thread has no branch to move, so the working tree
+          // is put on the incoming commit directly. Without this the patch
+          // lands on whatever commit this side happened to be sitting on.
+          if (classification === "advance" && branch === null && bundlePart !== null) {
+            const head = yield* git
+              .resolveHead({ cwd })
+              .pipe(asHandoffError("apply_failed", "Could not read the local HEAD."));
+            if (head !== incomingTip) {
+              preTag = handoffPreTagName(bundle.handoffId);
+              yield* git
+                .tagCommit({ cwd, tag: preTag, commit: head })
+                .pipe(asHandoffError("apply_failed", "Could not tag the current tip."));
+              rootStashRef = yield* git
+                .stashWorktree({ cwd, label: handoffStashLabel(bundle.handoffId, head) })
+                .pipe(asHandoffError("apply_failed", "Could not set the local changes aside."));
+              yield* git
+                .resetHardTo({ cwd, commit: incomingTip })
+                .pipe(
+                  asHandoffError(
+                    "apply_failed",
+                    "Could not move the working tree to the incoming commit.",
+                  ),
+                );
+            }
+          }
         }
 
         // A thread that lived in a worktree lands in one here too: reuse the
@@ -1003,23 +1143,20 @@ export const make = Effect.gen(function* () {
         // fresh one at the incoming commit. The branch attaches only when no
         // other checkout holds it — git forbids two checkouts of one branch,
         // and a detached worktree at the right commit still runs the thread.
-        let applyCwd = cwd;
         if (wantsWorktree && branch !== null) {
           const existingWorktree = yield* git
             .findWorktreeForBranch({ cwd, branch })
             .pipe(asHandoffError("apply_failed", "Could not inspect the repository's worktrees."));
           if (existingWorktree !== null && existingWorktree !== cwd) {
             applyCwd = existingWorktree;
-            stashRef =
-              stashRef ??
-              (yield* git
-                .stashWorktree({
-                  cwd: applyCwd,
-                  label: handoffStashLabel(bundle.handoffId, incomingTip),
-                })
-                .pipe(
-                  asHandoffError("apply_failed", "Could not set the worktree's changes aside."),
-                ));
+            // Its own stash, taken before its own reset: the root's stash says
+            // nothing about what this worktree is holding.
+            worktreeStashRef = yield* git
+              .stashWorktree({
+                cwd: applyCwd,
+                label: handoffStashLabel(bundle.handoffId, incomingTip),
+              })
+              .pipe(asHandoffError("apply_failed", "Could not set the worktree's changes aside."));
             if (classification === "advance") {
               yield* git
                 .resetHardTo({ cwd: applyCwd, commit: incomingTip })
@@ -1050,17 +1187,20 @@ export const make = Effect.gen(function* () {
         }
 
         const patchPart = bundle.parts.find((part) => part.kind === "tracked-patch") ?? null;
-        if (patchPart !== null) {
-          const patch = yield* fs
-            .readFileString(partPath({ handoffId: bundle.handoffId, kind: "tracked-patch" }))
-            .pipe(asHandoffError("store_failed", "Could not read the staged patch."));
+        const patch =
+          patchPart === null
+            ? null
+            : yield* fs
+                .readFileString(partPath({ handoffId: bundle.handoffId, kind: "tracked-patch" }))
+                .pipe(asHandoffError("store_failed", "Could not read the staged patch."));
+        if (patch !== null) {
           // Dry run first: a patch that will not apply must leave the working
           // tree exactly as it was, not half-written.
           const applies = yield* git
             .applyPatch({ cwd: applyCwd, patch, check: true })
             .pipe(asHandoffError("apply_failed", "Could not test the incoming changes."));
           if (!applies) {
-            yield* rollback({ cwd: applyCwd, preTag, stashRef });
+            yield* undo();
             yield* markHop({
               handoffId: bundle.handoffId,
               state: "failed",
@@ -1073,55 +1213,61 @@ export const make = Effect.gen(function* () {
               handoffId: bundle.handoffId,
             });
           }
-          yield* git
-            .applyPatch({ cwd: applyCwd, patch, check: false })
-            .pipe(asHandoffError("apply_failed", "Could not apply the incoming changes."));
         }
 
-        if (bundle.parts.some((part) => part.kind === "untracked-tar")) {
-          yield* git
-            .extractArchive({
-              cwd: applyCwd,
-              archivePath: partPath({ handoffId: bundle.handoffId, kind: "untracked-tar" }),
-            })
-            .pipe(asHandoffError("apply_failed", "Could not restore the untracked files."));
-        }
+        // Past the dry run the tree is really being written. Any failure from
+        // here on must put both checkouts back and mark the hop failed, or the
+        // repository is left half-applied with the user's changes stashed away.
+        const applyRest = Effect.gen(function* () {
+          if (patch !== null) {
+            yield* git
+              .applyPatch({ cwd: applyCwd, patch, check: false })
+              .pipe(asHandoffError("apply_failed", "Could not apply the incoming changes."));
+          }
 
-        if (bundle.parts.some((part) => part.kind === "attachments-tar")) {
-          yield* git
-            .extractArchive({
-              cwd: config.attachmentsDir,
-              archivePath: partPath({ handoffId: bundle.handoffId, kind: "attachments-tar" }),
-            })
-            .pipe(asHandoffError("apply_failed", "Could not restore the thread's attachments."));
-        }
+          if (bundle.parts.some((part) => part.kind === "untracked-tar")) {
+            yield* git
+              .extractArchive({
+                cwd: applyCwd,
+                archivePath: partPath({ handoffId: bundle.handoffId, kind: "untracked-tar" }),
+              })
+              .pipe(asHandoffError("apply_failed", "Could not restore the untracked files."));
+          }
 
-        const threadId = returningThreadId ?? ThreadId.make(`thread:${NodeCrypto.randomUUID()}`);
+          if (bundle.parts.some((part) => part.kind === "attachments-tar")) {
+            yield* git
+              .extractArchive({
+                cwd: config.attachmentsDir,
+                archivePath: partPath({ handoffId: bundle.handoffId, kind: "attachments-tar" }),
+              })
+              .pipe(asHandoffError("apply_failed", "Could not restore the thread's attachments."));
+          }
 
-        if (bundle.parts.some((part) => part.kind === "terminals-tar")) {
-          yield* git
-            .extractArchive({
-              cwd: config.terminalLogsDir,
-              archivePath: partPath({ handoffId: bundle.handoffId, kind: "terminals-tar" }),
-            })
-            .pipe(asHandoffError("apply_failed", "Could not restore the thread's terminals."));
-          // History files are named by thread id, and the thread has a new id
-          // here; rename the extracted files so the manager finds them.
-          const originPrefix = terminalHistoryFilePrefix(bundle.origin.threadId);
-          const localPrefix = terminalHistoryFilePrefix(threadId);
-          if (originPrefix !== localPrefix) {
-            const extracted = yield* fs.readDirectory(config.terminalLogsDir).pipe(
-              Effect.map((entries) =>
-                entries.filter(
-                  (entry) =>
-                    entry === `${originPrefix}.log` || entry.startsWith(`${originPrefix}_`),
+          if (bundle.parts.some((part) => part.kind === "terminals-tar")) {
+            yield* git
+              .extractArchive({
+                cwd: config.terminalLogsDir,
+                archivePath: partPath({ handoffId: bundle.handoffId, kind: "terminals-tar" }),
+              })
+              .pipe(asHandoffError("apply_failed", "Could not restore the thread's terminals."));
+            // History files are named by thread id, and the thread has a new id
+            // here; rename the extracted files so the manager finds them.
+            const originPrefix = terminalHistoryFilePrefix(bundle.origin.threadId);
+            const localPrefix = terminalHistoryFilePrefix(threadId);
+            if (originPrefix !== localPrefix) {
+              const extracted = yield* fs.readDirectory(config.terminalLogsDir).pipe(
+                Effect.map((entries) =>
+                  entries.filter(
+                    (entry) =>
+                      entry === `${originPrefix}.log` || entry.startsWith(`${originPrefix}_`),
+                  ),
                 ),
-              ),
-              Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
-            );
-            yield* Effect.forEach(
-              extracted,
-              (entry) =>
+                Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+              );
+              // A rename that fails leaves scrollback under the origin prefix
+              // where the terminal manager will never look. It is not worth
+              // failing the hop over, but it is worth saying out loud.
+              const unrenamed = yield* Effect.forEach(extracted, (entry) =>
                 fs
                   .rename(
                     path.join(config.terminalLogsDir, entry),
@@ -1130,43 +1276,68 @@ export const make = Effect.gen(function* () {
                       `${localPrefix}${entry.slice(originPrefix.length)}`,
                     ),
                   )
-                  .pipe(Effect.ignore),
-              { discard: true },
-            );
+                  .pipe(
+                    Effect.as<ReadonlyArray<string>>([]),
+                    Effect.orElseSucceed((): ReadonlyArray<string> => [entry]),
+                  ),
+              );
+              const failedRenames = unrenamed.flat();
+              if (failedRenames.length > 0) {
+                yield* Effect.logWarning("orchestrationV2.handoff.terminalHistoryRenameFailed", {
+                  handoffId: bundle.handoffId,
+                  threadId,
+                  entries: failedRenames,
+                });
+              }
+            }
           }
-        }
-        yield* writeArrival({
-          bundle,
-          threadId,
-          projectId,
-          existing,
-          existingItems: existingProjection?.turnItems ?? [],
-          worktreePath: wantsWorktree && applyCwd !== cwd ? applyCwd : null,
+          yield* writeArrival({
+            bundle,
+            threadId,
+            projectId,
+            existing,
+            existingItems: existingProjection?.turnItems ?? [],
+            worktreePath: wantsWorktree && applyCwd !== cwd ? applyCwd : null,
+          });
+          yield* recordHop({
+            handoffId: bundle.handoffId,
+            threadId,
+            peerEnvironmentId: bundle.origin.environmentId,
+            peerThreadId: bundle.origin.threadId,
+            previousHandoffId: bundle.lineage.previousHandoffId,
+            hopCount: bundle.lineage.hopCount,
+            state: "arrived",
+            bundle,
+          });
+          yield* markHop({
+            handoffId: bundle.handoffId,
+            state: "arrived",
+            lastError: null,
+            appliedHeadSha: incomingTip,
+            stashRef: worktreeStashRef ?? rootStashRef,
+            preTag,
+          });
         });
-        yield* recordHop({
-          handoffId: bundle.handoffId,
-          threadId,
-          peerEnvironmentId: bundle.origin.environmentId,
-          peerThreadId: bundle.origin.threadId,
-          previousHandoffId: bundle.lineage.previousHandoffId,
-          hopCount: bundle.lineage.hopCount,
-          state: "arrived",
-          bundle,
-        });
-        yield* markHop({
-          handoffId: bundle.handoffId,
-          state: "arrived",
-          lastError: null,
-          appliedHeadSha: incomingTip,
-          stashRef,
-          preTag,
-        });
+        yield* applyRest.pipe(
+          Effect.onError(() =>
+            undo().pipe(
+              Effect.andThen(
+                markHop({
+                  handoffId: bundle.handoffId,
+                  state: "failed",
+                  lastError: "apply failed after the patch check",
+                }),
+              ),
+              Effect.ignore,
+            ),
+          ),
+        );
 
         return {
           threadId,
           projectId,
           classification,
-          stashRef,
+          stashRef: worktreeStashRef ?? rootStashRef,
           preTag,
         } satisfies ThreadHandoffApplication;
       }),
@@ -1174,16 +1345,36 @@ export const make = Effect.gen(function* () {
 
   const recoverInterrupted: ThreadHandoffServiceShape["recoverInterrupted"] = () =>
     Effect.gen(function* () {
-      const rows = yield* sql<{ readonly handoff_id: string }>`
-        SELECT handoff_id FROM orchestration_v2_thread_handoffs WHERE state = 'applying'
+      const rows = yield* sql<{
+        readonly handoff_id: string;
+        readonly thread_id: string;
+        readonly stash_ref: string | null;
+        readonly pre_tag: string | null;
+      }>`
+        SELECT handoff_id, thread_id, stash_ref, pre_tag
+        FROM orchestration_v2_thread_handoffs WHERE state = 'applying'
       `;
       yield* Effect.forEach(
         rows,
         (row) =>
-          markHop({
-            handoffId: ThreadHandoffId.make(row.handoff_id),
-            state: "failed",
-            lastError: "server stopped while applying",
+          Effect.gen(function* () {
+            // A hop that died mid-apply left a written tree behind. Put it
+            // back where the tag and stash say it was before marking the hop
+            // failed — best effort, since the worktree may itself be gone.
+            if (row.pre_tag !== null || row.stash_ref !== null) {
+              yield* Effect.gen(function* () {
+                const projection = yield* projectionStore.getThreadProjection(
+                  ThreadId.make(row.thread_id),
+                );
+                const cwd = yield* threadCwd(projection.thread);
+                yield* rollback({ cwd, preTag: row.pre_tag, stashRef: row.stash_ref });
+              }).pipe(Effect.ignore);
+            }
+            yield* markHop({
+              handoffId: ThreadHandoffId.make(row.handoff_id),
+              state: "failed",
+              lastError: "server stopped while applying",
+            });
           }).pipe(Effect.ignore),
         { discard: true },
       );
@@ -1209,8 +1400,8 @@ export const layer: Layer.Layer<
   | EventSinkV2
   | ProjectionStoreV2
   | ThreadHandoffGit
-  | ProjectService
-  | RepositoryIdentityResolver
-  | ServerEnvironment
+  | ProjectService.ProjectService
+  | RepositoryIdentityResolver.RepositoryIdentityResolver
+  | ServerEnvironment.ServerEnvironment
   | ProviderAdapterRegistryV2
 > = Layer.effect(ThreadHandoffService, make);
