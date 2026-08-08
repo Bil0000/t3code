@@ -372,6 +372,15 @@ export const make = Effect.gen(function* () {
           state = excluded.state,
           peer_thread_id = excluded.peer_thread_id,
           manifest_json = excluded.manifest_json,
+          -- A retry reuses the row, and the previous attempt's rollback
+          -- metadata describes a checkout this attempt has not touched:
+          -- inheriting it would have recovery reset or pop the wrong tree.
+          applied_head_sha = NULL,
+          stash_ref = NULL,
+          root_stash_ref = NULL,
+          pre_tag = NULL,
+          apply_cwd = NULL,
+          root_cwd = NULL,
           updated_at = excluded.updated_at
       `;
     }).pipe(asHandoffError("store_failed", "Could not record the handoff."));
@@ -382,8 +391,10 @@ export const make = Effect.gen(function* () {
     readonly lastError: string | null;
     readonly appliedHeadSha?: string | null;
     readonly stashRef?: string | null;
+    readonly rootStashRef?: string | null;
     readonly preTag?: string | null;
     readonly applyCwd?: string | null;
+    readonly rootCwd?: string | null;
   }) =>
     Effect.gen(function* () {
       const now = DateTime.formatIso(yield* DateTime.now);
@@ -394,8 +405,10 @@ export const make = Effect.gen(function* () {
           last_error = ${input.lastError},
           applied_head_sha = COALESCE(${input.appliedHeadSha ?? null}, applied_head_sha),
           stash_ref = COALESCE(${input.stashRef ?? null}, stash_ref),
+          root_stash_ref = COALESCE(${input.rootStashRef ?? null}, root_stash_ref),
           pre_tag = COALESCE(${input.preTag ?? null}, pre_tag),
           apply_cwd = COALESCE(${input.applyCwd ?? null}, apply_cwd),
+          root_cwd = COALESCE(${input.rootCwd ?? null}, root_cwd),
           updated_at = ${now}
         WHERE handoff_id = ${input.handoffId}
       `;
@@ -441,8 +454,13 @@ export const make = Effect.gen(function* () {
       ? workspaceRootFor(thread.projectId)
       : Effect.succeed(thread.worktreePath);
 
-  const prepare: ThreadHandoffService["Service"]["prepare"] = (input) =>
-    serialize.withLock(
+  const prepare: ThreadHandoffService["Service"]["prepare"] = (input) => {
+    // Staging writes parts to disk before the manifest exists. A failure
+    // anywhere after the first part — oversized payload, a git error, the
+    // hop row not recording — would otherwise leave them there with nothing
+    // left that knows their id.
+    let stagedHandoffId: ThreadHandoffId | null = null;
+    return serialize.withLock(
       input.threadId,
       Effect.gen(function* () {
         const projection = yield* projectionStore
@@ -473,6 +491,7 @@ export const make = Effect.gen(function* () {
 
         const cwd = yield* threadCwd(thread);
         const handoffId = ThreadHandoffId.make(NodeCrypto.randomUUID());
+        stagedHandoffId = handoffId;
         const branch = thread.branch;
         const headSha = yield* git
           .resolveHead({ cwd })
@@ -589,7 +608,6 @@ export const make = Effect.gen(function* () {
         const totalBytes = parts.reduce((sum, part) => sum + part.byteLength, 0);
         const verdict = classifyPayloadSize(totalBytes);
         if (verdict === "refuse") {
-          yield* fs.remove(handoffDir(handoffId), { recursive: true }).pipe(Effect.ignore);
           return yield* handoffError({
             reason: "payload_too_large",
             message: `This thread's working state is ${Math.round(
@@ -659,8 +677,15 @@ export const make = Effect.gen(function* () {
           dirtyFileCount,
           untrackedFileCount: untracked.length,
         } satisfies ThreadHandoffPreparation;
-      }),
+      }).pipe(
+        Effect.onError(() =>
+          stagedHandoffId === null
+            ? Effect.void
+            : fs.remove(handoffDir(stagedHandoffId), { recursive: true }).pipe(Effect.ignore),
+        ),
+      ),
     );
+  };
 
   const rollback = (input: {
     readonly cwd: string;
@@ -1135,9 +1160,10 @@ export const make = Effect.gen(function* () {
             state: "applying",
             lastError: null,
             appliedHeadSha: incomingTip,
-            stashRef: rootStashRef,
+            rootStashRef,
             preTag,
             applyCwd: cwd,
+            rootCwd: cwd,
           });
 
           if (classification === "advance" && branch !== null && !wantsWorktree) {
@@ -1167,9 +1193,10 @@ export const make = Effect.gen(function* () {
                 handoffId: bundle.handoffId,
                 state: "applying",
                 lastError: null,
-                stashRef: rootStashRef,
+                rootStashRef,
                 preTag,
                 applyCwd: cwd,
+                rootCwd: cwd,
               });
               yield* git
                 .resetHardTo({ cwd, commit: incomingTip })
@@ -1395,9 +1422,11 @@ export const make = Effect.gen(function* () {
             state: "arrived",
             lastError: null,
             appliedHeadSha: incomingTip,
-            stashRef: worktreeStashRef ?? rootStashRef,
+            stashRef: worktreeStashRef,
+            rootStashRef,
             preTag,
             applyCwd,
+            rootCwd: cwd,
           });
         });
         yield* apply.pipe(
@@ -1431,10 +1460,12 @@ export const make = Effect.gen(function* () {
         readonly handoff_id: string;
         readonly thread_id: string;
         readonly stash_ref: string | null;
+        readonly root_stash_ref: string | null;
         readonly pre_tag: string | null;
         readonly apply_cwd: string | null;
+        readonly root_cwd: string | null;
       }>`
-        SELECT handoff_id, thread_id, stash_ref, pre_tag, apply_cwd
+        SELECT handoff_id, thread_id, stash_ref, root_stash_ref, pre_tag, apply_cwd, root_cwd
         FROM orchestration_v2_thread_handoffs WHERE state = 'applying'
       `;
       yield* Effect.forEach(
@@ -1444,17 +1475,32 @@ export const make = Effect.gen(function* () {
             // A hop that died mid-apply left a written tree behind. Put it
             // back where the tag and stash say it was before marking the hop
             // failed — best effort, since the worktree may itself be gone.
-            if (row.pre_tag !== null || row.stash_ref !== null) {
+            if (row.pre_tag !== null || row.stash_ref !== null || row.root_stash_ref !== null) {
               yield* Effect.gen(function* () {
-                // The row's own directory first: a first arrival that died
+                // The row's own directories first: a first arrival that died
                 // before its history was written has no projection to read a
                 // working directory from.
-                const cwd =
-                  row.apply_cwd ??
-                  (yield* projectionStore
+                const fallback = () =>
+                  projectionStore
                     .getThreadProjection(ThreadId.make(row.thread_id))
-                    .pipe(Effect.flatMap((projection) => threadCwd(projection.thread))));
-                yield* rollback({ cwd, preTag: row.pre_tag, stashRef: row.stash_ref });
+                    .pipe(Effect.flatMap((projection) => threadCwd(projection.thread)));
+                const rootCwd = row.root_cwd ?? row.apply_cwd ?? (yield* fallback());
+                const applyCwd = row.apply_cwd ?? rootCwd;
+                // Each stash belongs to the checkout it was taken in; popping
+                // the worktree's against the root, or the other way round,
+                // drops the changes into the wrong tree.
+                if (applyCwd !== rootCwd) {
+                  yield* rollback({
+                    cwd: applyCwd,
+                    preTag: row.pre_tag,
+                    stashRef: row.stash_ref,
+                  });
+                }
+                yield* rollback({
+                  cwd: rootCwd,
+                  preTag: row.pre_tag,
+                  stashRef: row.root_stash_ref ?? (applyCwd === rootCwd ? row.stash_ref : null),
+                });
               }).pipe(Effect.ignore);
             }
             yield* markHop({

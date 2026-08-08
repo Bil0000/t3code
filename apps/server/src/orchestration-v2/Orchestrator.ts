@@ -1518,6 +1518,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Handoff ${command.handoffId} already completed to ${link.peerThreadId} and can no longer be aborted.`,
         });
       }
+      // A completion is idempotent for the peer it already recorded, but a
+      // different peer under the same handoff id is a stale or forged
+      // duplicate — accepting it would repoint the return-target link.
+      if (
+        command.type === "thread.handoff.complete" &&
+        link.peerThreadId !== null &&
+        link.peerThreadId !== command.peerThreadId
+      ) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Handoff ${command.handoffId} already completed to ${link.peerThreadId}; refusing to repoint it to ${command.peerThreadId}.`,
+        });
+      }
     }
 
     const providerSwitchPlan =

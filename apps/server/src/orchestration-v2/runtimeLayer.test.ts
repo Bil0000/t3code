@@ -778,15 +778,20 @@ it.layer(TestLayer)("OrchestrationV2LayerLive lifecycle", (it) => {
       // the return target and the offline-peer safety net.
       assert.isNull(completed.thread.archivedAt);
 
-      yield* threadManagement.dispatch({
-        type: "thread.handoff.abort",
-        commandId: CommandId.make("runtime-layer-handoff-abort"),
-        threadId,
-        handoffId: ThreadHandoffId.make("handoff-runtime-1"),
-        reason: "test release",
-      });
-      const released = yield* orchestrator.getThreadProjection(threadId);
-      assert.isNull(released.thread.handoff ?? null);
+      // A completed handoff can no longer be aborted: releasing here would
+      // make this side live again while the peer thread is running.
+      const lateAbort = yield* threadManagement
+        .dispatch({
+          type: "thread.handoff.abort",
+          commandId: CommandId.make("runtime-layer-handoff-abort"),
+          threadId,
+          handoffId: ThreadHandoffId.make("handoff-runtime-1"),
+          reason: "test release",
+        })
+        .pipe(Effect.flip);
+      assert.instanceOf(lateAbort, OrchestratorDispatchError);
+      const stillAway = yield* orchestrator.getThreadProjection(threadId);
+      assert.equal(stillAway.thread.handoff?.peerThreadId, "thread-on-staging");
     }),
   );
 
