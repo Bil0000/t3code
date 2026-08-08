@@ -611,6 +611,58 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
         assert.strictEqual((yield* hopState(handoffId))?.state, "failed");
       }),
     );
+
+    it.effect("removes a worktree the interrupted hop created and restores its branch", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const sql = yield* SqlClient.SqlClient;
+        const handoffGit = yield* ThreadHandoffGit;
+        const service = yield* ThreadHandoffService;
+        const rootCwd = yield* makeReceiverRepo;
+        const oldTip = yield* handoffGit.resolveHead({ cwd: rootCwd });
+        // The hop moved feat/incoming forward and attached it in a worktree
+        // it created, then the server died before the arrival was recorded.
+        yield* git(["branch", "feat/incoming", oldTip], rootCwd);
+        yield* git(["tag", "handoff-pre-created", oldTip], rootCwd);
+        yield* write(rootCwd, "b.txt", "moved\n");
+        yield* git(["add", "b.txt"], rootCwd);
+        yield* git(["commit", "-m", "moved"], rootCwd);
+        const movedTip = yield* handoffGit.resolveHead({ cwd: rootCwd });
+        yield* git(["reset", "--hard", oldTip], rootCwd);
+        yield* git(["branch", "-f", "feat/incoming", movedTip], rootCwd);
+        const applyCwd = path.join(yield* tempDir("t3-handoff-created-"), "worktree");
+        yield* handoffGit.addWorktree({ cwd: rootCwd, path: applyCwd, commit: movedTip });
+
+        const handoffId = ThreadHandoffId.make("handoff-created-worktree");
+        const now = DateTime.formatIso(yield* DateTime.now);
+        const manifest = JSON.stringify({ workspace: { branch: "feat/incoming" } });
+        yield* sql`
+          INSERT INTO orchestration_v2_thread_handoffs (
+            handoff_id, thread_id, peer_environment_id, peer_thread_id,
+            previous_handoff_id, hop_count, state, manifest_json,
+            stash_ref, root_stash_ref, pre_tag, apply_cwd, root_cwd,
+            created_worktree, created_at, updated_at
+          ) VALUES (
+            ${handoffId}, ${"thread:created-worktree"}, ${"environment-sender"}, ${null},
+            ${null}, ${1}, ${"applying"}, ${manifest},
+            ${null}, ${null}, ${"handoff-pre-created"}, ${applyCwd}, ${rootCwd},
+            ${1}, ${now}, ${now}
+          )
+        `;
+
+        assert.strictEqual(yield* service.recoverInterrupted(), 1);
+
+        // The worktree is gone, so a retry can provision the same path again,
+        // and the branch is back at the tip it had before the hop.
+        assert.isFalse(yield* fs.exists(applyCwd));
+        assert.strictEqual(
+          yield* handoffGit.resolveTip({ cwd: rootCwd, branch: "feat/incoming" }),
+          oldTip,
+        );
+        assert.strictEqual((yield* hopState(handoffId))?.state, "failed");
+      }),
+    );
   });
 
   describe("prepare", () => {

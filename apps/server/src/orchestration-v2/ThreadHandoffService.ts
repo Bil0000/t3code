@@ -366,6 +366,7 @@ export const make = Effect.gen(function* () {
           stash_ref = NULL,
           root_stash_ref = NULL,
           pre_tag = NULL,
+          created_worktree = 0,
           apply_cwd = NULL,
           root_cwd = NULL,
           updated_at = excluded.updated_at
@@ -382,6 +383,7 @@ export const make = Effect.gen(function* () {
     readonly preTag?: string | null;
     readonly applyCwd?: string | null;
     readonly rootCwd?: string | null;
+    readonly createdWorktree?: boolean;
   }) =>
     Effect.gen(function* () {
       const now = DateTime.formatIso(yield* DateTime.now);
@@ -396,6 +398,7 @@ export const make = Effect.gen(function* () {
           pre_tag = COALESCE(${input.preTag ?? null}, pre_tag),
           apply_cwd = COALESCE(${input.applyCwd ?? null}, apply_cwd),
           root_cwd = COALESCE(${input.rootCwd ?? null}, root_cwd),
+          created_worktree = COALESCE(${input.createdWorktree === undefined ? null : input.createdWorktree ? 1 : 0}, created_worktree),
           updated_at = ${now}
         WHERE handoff_id = ${input.handoffId}
       `;
@@ -1328,6 +1331,7 @@ export const make = Effect.gen(function* () {
                 state: "applying",
                 lastError: null,
                 applyCwd,
+                createdWorktree: true,
               });
               const branchTaken = yield* git
                 .isBranchCheckedOut({ cwd, branch })
@@ -1572,8 +1576,11 @@ export const make = Effect.gen(function* () {
         readonly pre_tag: string | null;
         readonly apply_cwd: string | null;
         readonly root_cwd: string | null;
+        readonly created_worktree: number;
+        readonly manifest_json: string;
       }>`
-        SELECT handoff_id, thread_id, stash_ref, root_stash_ref, pre_tag, apply_cwd, root_cwd
+        SELECT handoff_id, thread_id, stash_ref, root_stash_ref, pre_tag, apply_cwd, root_cwd,
+               created_worktree, manifest_json
         FROM orchestration_v2_thread_handoffs WHERE state = 'applying'
       `;
       yield* Effect.forEach(
@@ -1598,14 +1605,38 @@ export const make = Effect.gen(function* () {
                 // the worktree's against the root, or the other way round,
                 // drops the changes into the wrong tree.
                 if (applyCwd !== rootCwd) {
-                  // The tag names the thread branch's old tip, which only the
-                  // checkout the hop moved may be reset to. The root sits on
-                  // its own branch and just wants its changes back.
-                  yield* rollback({
-                    cwd: applyCwd,
-                    preTag: row.pre_tag,
-                    stashRef: row.stash_ref,
-                  });
+                  if (row.created_worktree !== 0) {
+                    // The worktree was this hop's to make, so it is this
+                    // hop's to remove — a retry derives the same path and
+                    // would otherwise find it occupied forever. The branch it
+                    // held is put back at its old tip when one is recorded.
+                    yield* git.removeWorktree({ cwd: rootCwd, path: applyCwd }).pipe(Effect.ignore);
+                    const branch = Effect.try(() => {
+                      const manifest = JSON.parse(row.manifest_json) as {
+                        readonly workspace?: { readonly branch?: string | null };
+                      };
+                      return manifest.workspace?.branch ?? null;
+                    }).pipe(Effect.orElseSucceed(() => null));
+                    const branchName = yield* branch;
+                    if (branchName !== null && row.pre_tag !== null) {
+                      yield* git
+                        .writeRef({
+                          cwd: rootCwd,
+                          ref: `refs/heads/${branchName}`,
+                          commit: row.pre_tag,
+                        })
+                        .pipe(Effect.ignore);
+                    }
+                  } else {
+                    // The tag names the thread branch's old tip, which only
+                    // the checkout the hop moved may be reset to. The root
+                    // sits on its own branch and just wants its changes back.
+                    yield* rollback({
+                      cwd: applyCwd,
+                      preTag: row.pre_tag,
+                      stashRef: row.stash_ref,
+                    });
+                  }
                   if (row.root_stash_ref !== null) {
                     yield* git
                       .popStash({ cwd: rootCwd, stashRef: row.root_stash_ref })
