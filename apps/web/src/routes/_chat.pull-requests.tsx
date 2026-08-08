@@ -29,11 +29,16 @@ import {
   groupPullRequestsByInvolvement,
   matchesPullRequestQuery,
   narrowPullRequestsToFilters,
+  mergePullRequestDiffStats,
+  partitionPullRequestsWithPriority,
   pullRequestEntryKey,
   rankPullRequestMatches,
+  readPullRequestListSnapshot,
   resolveProjectScope,
   withDiffStat,
+  writePullRequestListSnapshot,
   scorePullRequestMatch,
+  type PullRequestDiffStats,
 } from "../components/pullRequest/pullRequestList.logic";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
@@ -315,6 +320,41 @@ function PullRequestsRouteView() {
           },
         }),
   );
+  // The priority groups' own reads. The feed below is paginated by recency, so an older authored
+  // or review-requested row can be missing from its first page; partitioned from these
+  // server-filtered reads instead, the priority view is complete up front and a continuation can
+  // only ever append below what is already on screen. A search re-ranks the whole list by match,
+  // so no partitions are read for one. These are the same atoms the Authored and Reviewing tabs
+  // ask for, so switching to either is answered from cache.
+  const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;
+  const authoredQuery = useEnvironmentQuery(
+    environmentId === null || !partitionsWanted
+      ? null
+      : pullRequestEnvironment.list({
+          environmentId,
+          input: {
+            state: search.state,
+            involvement: "authored",
+            limit: PAGE_SIZE,
+            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+            ...(search.host ? { host: search.host } : {}),
+          },
+        }),
+  );
+  const reviewingQuery = useEnvironmentQuery(
+    environmentId === null || !partitionsWanted
+      ? null
+      : pullRequestEnvironment.list({
+          environmentId,
+          input: {
+            state: search.state,
+            involvement: "reviewing",
+            limit: PAGE_SIZE,
+            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+            ...(search.host ? { host: search.host } : {}),
+          },
+        }),
+  );
   // The header's refresh punches through the server's cache before re-reading; the error and
   // empty states retry plainly, because a failure is never cached.
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
@@ -337,6 +377,8 @@ function PullRequestsRouteView() {
     }
     refreshList();
     baselineQuery.refresh();
+    authoredQuery.refresh();
+    reviewingQuery.refresh();
     statsQuery.refresh();
     setDetailRefreshToken((token) => token + 1);
   };
@@ -352,6 +394,25 @@ function PullRequestsRouteView() {
     query: string;
     data: PullRequestListResult;
   } | null>(null);
+  // A reload recreates the registry the queries live in, so with nothing held the page would
+  // cold-start into skeletons even though almost every row is unchanged. The last answer for
+  // this environment is kept across reloads and hydrated here as the carried rows: they render
+  // at once — narrowed to the current filters like any carried answer — and the live read
+  // reconciles them in place by key rather than replacing them with ghosts.
+  useEffect(() => {
+    if (environmentId === null) return;
+    setLoaded((current) => {
+      // Another environment's rows could not even be narrowed — nothing on a row says which
+      // environment read it — so its snapshot beats holding them.
+      if (current !== null && current.environmentId === environmentId) return current;
+      const snapshot = readPullRequestListSnapshot(
+        typeof window === "undefined" ? undefined : window.localStorage,
+        environmentId,
+      );
+      if (snapshot === null) return null;
+      return { environmentId, scope: snapshot.scope, query: "", data: snapshot.data };
+    });
+  }, [environmentId]);
   useEffect(() => {
     // Only once this query has settled. While a search is being swapped in or out the text has
     // already changed and the data has not, so recording them together would file the previous
@@ -359,6 +420,14 @@ function PullRequestsRouteView() {
     // workspace after the search was cleared.
     if (!listQuery.data || listQuery.isPending) return;
     setLoaded({ environmentId, scope: scopeKey, query: sentQuery, data: listQuery.data });
+    // A search's answer is the search's, not the workspace's, so only unsearched lists persist.
+    if (environmentId !== null && sentQuery.length === 0) {
+      writePullRequestListSnapshot(
+        typeof window === "undefined" ? undefined : window.localStorage,
+        environmentId,
+        { scope: scopeKey, data: listQuery.data },
+      );
+    }
   }, [environmentId, scopeKey, sentQuery, listQuery.data, listQuery.isPending]);
   // Changing a filter asks a question nothing has answered yet, and the page is already holding
   // perfectly good rows for the last one. Rather than blank out for the round trip, those rows
@@ -492,6 +561,8 @@ function PullRequestsRouteView() {
     () => {
       refreshList();
       baselineQuery.refresh();
+      authoredQuery.refresh();
+      reviewingQuery.refresh();
     },
     { enabled: environmentId !== null },
   );
@@ -592,39 +663,53 @@ function PullRequestsRouteView() {
    * listing leaves them out and they arrive a moment later, into rows that already draw without
    * them. Keyed by the rows being shown, so scrolling further asks only about what is new.
    */
+  const groups = useMemo(() => {
+    if (search.involvement !== "all") return [{ key: "others" as const, label: "", entries }];
+    // Until both partitions have answered, the loaded rows are grouped locally as before; once
+    // they have, the groups are the hosts' own partitions and the feed only fills "Others".
+    const authored = partitionsWanted ? authoredQuery.data?.entries : undefined;
+    const reviewing = partitionsWanted ? reviewingQuery.data?.entries : undefined;
+    if (authored === undefined || reviewing === undefined) {
+      return groupPullRequestsByInvolvement(entries, viewers);
+    }
+    return partitionPullRequestsWithPriority(entries, authored, reviewing);
+  }, [
+    authoredQuery.data?.entries,
+    entries,
+    partitionsWanted,
+    reviewingQuery.data?.entries,
+    search.involvement,
+    viewers,
+  ]);
+
+  // Keyed by every row being shown — the partitions can hold rows the feed has not paged to —
+  // so scrolling further asks only about what is new.
   const statsInput = useMemo(
     () => ({
-      refs: entries.map((entry) => ({
-        projectId: entry.projectId,
-        repository: entry.repository,
-        number: entry.number,
-      })),
+      refs: groups
+        .flatMap((group) => group.entries)
+        .map((entry) => ({
+          projectId: entry.projectId,
+          repository: entry.repository,
+          number: entry.number,
+        })),
     }),
-    [entries],
+    [groups],
   );
   const statsQuery = useEnvironmentQuery(
     environmentId === null || statsInput.refs.length === 0
       ? null
       : pullRequestEnvironment.listStats({ environmentId, input: statsInput }),
   );
-  const statsByRow = useMemo(() => {
-    const found = new Map<string, { additions: number; deletions: number }>();
-    for (const stat of statsQuery.data?.stats ?? []) {
-      found.set(`${stat.projectId} ${stat.number}`, {
-        additions: stat.additions,
-        deletions: stat.deletions,
-      });
-    }
-    return found;
+  // Adding or removing one row keys a fresh stats query with nothing in it yet, so the counts
+  // are merged into what is already held rather than rebuilt: every count on screen stays until
+  // its replacement arrives.
+  const [statsByRow, setStatsByRow] = useState<PullRequestDiffStats>(() => new Map());
+  useEffect(() => {
+    const stats = statsQuery.data?.stats;
+    if (stats === undefined) return;
+    setStatsByRow((previous) => mergePullRequestDiffStats(previous, stats));
   }, [statsQuery.data]);
-
-  const groups = useMemo(
-    () =>
-      search.involvement === "all"
-        ? groupPullRequestsByInvolvement(entries, viewers)
-        : [{ key: "others" as const, label: "", entries }],
-    [entries, search.involvement, viewers],
-  );
 
   // A link from a thread or the sidebar only knows the repository, so the owning project is
   // resolved here; an explicit `projectId` in the URL still wins.
@@ -1005,6 +1090,8 @@ function PullRequestsRouteView() {
               onActed={() => {
                 refreshList();
                 baselineQuery.refresh();
+                authoredQuery.refresh();
+                reviewingQuery.refresh();
               }}
               onStateChange={handlePullRequestTabStatusChange}
             />

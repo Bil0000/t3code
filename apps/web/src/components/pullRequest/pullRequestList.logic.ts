@@ -126,6 +126,144 @@ export function pullRequestEntryKey(entry: PullRequestListEntry): string {
 }
 
 /**
+ * The priority groups built from the hosts' own answers rather than re-partitioned from the
+ * paginated feed. The feed is sliced by recency, so an older authored or review-requested row
+ * can be missing from its first page and arrive with a later one; grouping the loaded pages
+ * would then move it above rows already read. Here the partitions come whole from their own
+ * server-filtered reads, the feed fills "Others" in its own order, and a continuation can only
+ * append — a row it carries that a partition already holds is dropped rather than moved.
+ */
+export function partitionPullRequestsWithPriority(
+  entries: ReadonlyArray<PullRequestListEntry>,
+  authored: ReadonlyArray<PullRequestListEntry>,
+  reviewRequested: ReadonlyArray<PullRequestListEntry>,
+): ReadonlyArray<PullRequestGroup> {
+  const authoredByKey = new Map(authored.map((entry) => [pullRequestEntryKey(entry), entry]));
+  // A row can be both authored and review-requested; authored wins, as the local grouping has it.
+  const reviewByKey = new Map(
+    reviewRequested.flatMap((entry) => {
+      const key = pullRequestEntryKey(entry);
+      return authoredByKey.has(key) ? [] : [[key, entry] as const];
+    }),
+  );
+  const others: PullRequestListEntry[] = [];
+  for (const entry of entries) {
+    const key = pullRequestEntryKey(entry);
+    // The feed's copy of a partitioned row is at least as fresh — it replaces in place.
+    if (authoredByKey.has(key)) {
+      authoredByKey.set(key, entry);
+    } else if (reviewByKey.has(key)) {
+      reviewByKey.set(key, entry);
+    } else {
+      others.push(entry);
+    }
+  }
+  const byRecency = (left: PullRequestListEntry, right: PullRequestListEntry) =>
+    right.updatedAt.localeCompare(left.updatedAt);
+  return (
+    [
+      { key: "reviewRequested", entries: [...reviewByKey.values()].toSorted(byRecency) },
+      { key: "authored", entries: [...authoredByKey.values()].toSorted(byRecency) },
+      { key: "others", entries: others },
+    ] as const
+  )
+    .filter((group) => group.entries.length > 0)
+    .map((group) => ({ ...group, label: GROUP_LABELS[group.key] }));
+}
+
+export type PullRequestDiffStats = ReadonlyMap<
+  string,
+  { readonly additions: number; readonly deletions: number }
+>;
+
+/**
+ * The line counts held so far, with a new batch merged on. The stats read is keyed by the rows
+ * on screen, so adding or removing one row is a fresh query with nothing in it yet; replacing
+ * the map would blank every count already showing for the round trip. Merging by row identity
+ * keeps them until their replacements arrive.
+ */
+export function mergePullRequestDiffStats(
+  previous: PullRequestDiffStats,
+  stats: ReadonlyArray<{
+    readonly projectId: string;
+    readonly number: number;
+    readonly additions: number;
+    readonly deletions: number;
+  }>,
+): PullRequestDiffStats {
+  if (stats.length === 0) return previous;
+  const next = new Map(previous);
+  for (const stat of stats) {
+    next.set(`${stat.projectId} ${stat.number}`, {
+      additions: stat.additions,
+      deletions: stat.deletions,
+    });
+  }
+  return next;
+}
+
+/** One page is what the list itself starts with, and all a cold start needs to look warm. */
+const SNAPSHOT_MAX_ENTRIES = 99;
+
+type SnapshotStorage = Pick<Storage, "getItem" | "setItem">;
+
+const snapshotStorageKey = (environmentId: string) => `t3.pullRequests.list:${environmentId}`;
+
+export interface PullRequestListSnapshot {
+  readonly scope: string;
+  readonly data: PullRequestListResult;
+}
+
+/**
+ * The last list answered for this environment, brought back across a reload. The registry the
+ * queries live in is recreated with the renderer, so without this a revisit cold-starts into
+ * skeletons even though almost every row is unchanged; hydrated, the stale rows render at once
+ * and the live read reconciles them in place by key. Errors are not carried — a failure is
+ * never cached, and yesterday's is not this morning's.
+ */
+export function readPullRequestListSnapshot(
+  storage: SnapshotStorage | undefined,
+  environmentId: string,
+): PullRequestListSnapshot | null {
+  try {
+    const raw = storage?.getItem(snapshotStorageKey(environmentId));
+    if (!raw) return null;
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) return null;
+    const snapshot = parsed as { scope?: unknown; data?: { entries?: unknown } };
+    if (typeof snapshot.scope !== "string" || !Array.isArray(snapshot.data?.entries)) return null;
+    return snapshot as PullRequestListSnapshot;
+  } catch {
+    return null;
+  }
+}
+
+export function writePullRequestListSnapshot(
+  storage: SnapshotStorage | undefined,
+  environmentId: string,
+  snapshot: PullRequestListSnapshot,
+): void {
+  try {
+    storage?.setItem(
+      snapshotStorageKey(environmentId),
+      JSON.stringify({
+        scope: snapshot.scope,
+        data: {
+          ...snapshot.data,
+          entries: snapshot.data.entries.slice(0, SNAPSHOT_MAX_ENTRIES),
+          // A failure is never cached and yesterday's is not this morning's; a cursor names a
+          // position in a listing the host has long since forgotten.
+          errors: [],
+          nextCursors: {},
+        },
+      }),
+    );
+  } catch {
+    // Storage can be full or denied; the snapshot is a convenience, not a record.
+  }
+}
+
+/**
  * The project scope to actually ask for. A `projectId` in the URL outlives the environment it
  * came from, and one from elsewhere narrows the listing to nothing — an empty page with no
  * visible filter explaining it, since the switcher has no such project to show as selected. So

@@ -5,7 +5,11 @@ import {
   filterPullRequestsByInvolvement,
   groupPullRequestsByInvolvement,
   matchesPullRequestQuery,
+  mergePullRequestDiffStats,
   narrowPullRequestsToFilters,
+  partitionPullRequestsWithPriority,
+  readPullRequestListSnapshot,
+  writePullRequestListSnapshot,
   rankPullRequestMatches,
   scorePullRequestMatch,
   withDiffStat,
@@ -294,5 +298,134 @@ describe("line counts that arrive after the rows", () => {
   it("leaves a row whose counts have not arrived as it is", () => {
     const row = entry({ number: 9, additions: 0, deletions: 0 });
     expect(withDiffStat(row, stats)).toBe(row);
+  });
+});
+
+describe("merging line counts across keyed stats queries", () => {
+  it("keeps counts already held while a fresh batch says nothing about them", () => {
+    const held = mergePullRequestDiffStats(new Map(), [
+      { projectId: "project-1", number: 1, additions: 10, deletions: 2 },
+      { projectId: "project-1", number: 2, additions: 5, deletions: 1 },
+    ]);
+    // A third row appeared; its batch is still pending and contributes nothing yet.
+    const merged = mergePullRequestDiffStats(held, []);
+    expect(merged.get("project-1 1")).toEqual({ additions: 10, deletions: 2 });
+    expect(merged.get("project-1 2")).toEqual({ additions: 5, deletions: 1 });
+  });
+
+  it("replaces a count once its replacement arrives, keeping its neighbours", () => {
+    const held = mergePullRequestDiffStats(new Map(), [
+      { projectId: "project-1", number: 1, additions: 10, deletions: 2 },
+    ]);
+    const merged = mergePullRequestDiffStats(held, [
+      { projectId: "project-1", number: 1, additions: 11, deletions: 2 },
+      { projectId: "project-1", number: 3, additions: 7, deletions: 0 },
+    ]);
+    expect(merged.get("project-1 1")).toEqual({ additions: 11, deletions: 2 });
+    expect(merged.get("project-1 3")).toEqual({ additions: 7, deletions: 0 });
+  });
+
+  it("does not mutate the map it was handed", () => {
+    const held = new Map([["project-1 1", { additions: 1, deletions: 1 }]]);
+    mergePullRequestDiffStats(held, [
+      { projectId: "project-1", number: 1, additions: 2, deletions: 2 },
+    ]);
+    expect(held.get("project-1 1")).toEqual({ additions: 1, deletions: 1 });
+  });
+});
+
+describe("partitioning with the hosts' own priority reads", () => {
+  const authoredRow = (number: number, updatedAt: string) =>
+    entry({ number, updatedAt, author: { login: "Bilal", name: null, avatarUrl: null } });
+
+  it("keeps Others in feed order when a continuation lands an authored row already partitioned", () => {
+    const older = entry({ number: 1, updatedAt: "2026-07-05T00:00:00Z" });
+    const newer = entry({ number: 2, updatedAt: "2026-07-06T00:00:00Z" });
+    const mine = authoredRow(3, "2026-07-04T00:00:00Z");
+    // The authored partition already holds the row the continuation carries.
+    const groups = partitionPullRequestsWithPriority([newer, older, mine], [mine], []);
+    expect(groups.map((group) => group.key)).toEqual(["authored", "others"]);
+    expect(groups[1]!.entries.map((item) => item.number)).toEqual([2, 1]);
+    expect(groups[0]!.entries.map((item) => item.number)).toEqual([3]);
+  });
+
+  it("appends an authored row the partition page missed to Others rather than moving it up", () => {
+    const shown = entry({ number: 1, updatedAt: "2026-07-06T00:00:00Z" });
+    const olderMine = authoredRow(9, "2026-01-01T00:00:00Z");
+    const groups = partitionPullRequestsWithPriority([shown, olderMine], [], []);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.entries.map((item) => item.number)).toEqual([1, 9]);
+  });
+
+  it("gives authored precedence over review-requested and orders partitions by recency", () => {
+    const both = authoredRow(1, "2026-07-01T00:00:00Z");
+    const requested = entry({
+      number: 2,
+      viewerReviewRequested: true,
+      updatedAt: "2026-07-02T00:00:00Z",
+    });
+    const requestedOlder = entry({
+      number: 3,
+      viewerReviewRequested: true,
+      updatedAt: "2026-06-02T00:00:00Z",
+    });
+    const groups = partitionPullRequestsWithPriority([], [both], [both, requestedOlder, requested]);
+    expect(groups.map((group) => group.key)).toEqual(["reviewRequested", "authored"]);
+    expect(groups[0]!.entries.map((item) => item.number)).toEqual([2, 3]);
+    expect(groups[1]!.entries.map((item) => item.number)).toEqual([1]);
+  });
+
+  it("lets the feed's copy of a partitioned row replace the partition's", () => {
+    const stale = authoredRow(1, "2026-07-01T00:00:00Z");
+    const fresh = { ...stale, title: "Retitled" };
+    const groups = partitionPullRequestsWithPriority([fresh], [stale], []);
+    expect(groups[0]!.entries[0]!.title).toBe("Retitled");
+  });
+});
+
+describe("the list snapshot across a reload", () => {
+  const makeStorage = () => {
+    const held = new Map<string, string>();
+    return {
+      getItem: (key: string) => held.get(key) ?? null,
+      setItem: (key: string, value: string) => void held.set(key, value),
+    };
+  };
+  const data = {
+    entries: [entry({ number: 1 })],
+    viewers: { "github.com": "Bilal" },
+    providers: [],
+    errors: [{ projectId: "project-1", message: "boom" }],
+    truncated: true,
+    nextCursors: { "pingdotgg/t3code": "cursor-1" },
+  } as never;
+
+  it("hydrates the retained rows so ghosts never replace them", () => {
+    const storage = makeStorage();
+    writePullRequestListSnapshot(storage, "env-1", { scope: "env-1:open:all::", data });
+    const snapshot = readPullRequestListSnapshot(storage, "env-1");
+    expect(snapshot?.scope).toBe("env-1:open:all::");
+    expect(snapshot?.data.entries.map((item) => item.number)).toEqual([1]);
+  });
+
+  it("carries neither stale failures nor stale cursors", () => {
+    const storage = makeStorage();
+    writePullRequestListSnapshot(storage, "env-1", { scope: "s", data });
+    const snapshot = readPullRequestListSnapshot(storage, "env-1");
+    expect(snapshot?.data.errors).toEqual([]);
+    expect(snapshot?.data.nextCursors).toEqual({});
+  });
+
+  it("answers nothing for another environment", () => {
+    const storage = makeStorage();
+    writePullRequestListSnapshot(storage, "env-1", { scope: "s", data });
+    expect(readPullRequestListSnapshot(storage, "env-2")).toBeNull();
+  });
+
+  it("shrugs off corrupt storage and no storage at all", () => {
+    const storage = makeStorage();
+    storage.setItem("t3.pullRequests.list:env-1", "{not json");
+    expect(readPullRequestListSnapshot(storage, "env-1")).toBeNull();
+    expect(readPullRequestListSnapshot(undefined, "env-1")).toBeNull();
   });
 });
