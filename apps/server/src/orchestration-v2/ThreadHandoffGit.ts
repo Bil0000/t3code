@@ -674,11 +674,34 @@ export const make = Effect.gen(function* () {
     );
 
   const popStash: ThreadHandoffGit["Service"]["popStash"] = (input) =>
-    git({
-      operation: "pop-stash",
-      args: ["stash", "pop", input.stashRef],
-      cwd: input.cwd,
-    }).pipe(Effect.asVoid);
+    Effect.gen(function* () {
+      // `stash pop` only takes a `stash@{n}` reflog entry, but what this hop
+      // persisted is the stash commit's sha — the reflog index would go stale
+      // the moment another stash lands. `stash apply` accepts the sha; the
+      // drop then targets whichever reflog slot currently holds it.
+      yield* git({
+        operation: "apply-stash",
+        args: ["stash", "apply", input.stashRef],
+        cwd: input.cwd,
+      });
+      const reflog = yield* git({
+        operation: "list-stashes",
+        args: ["reflog", "stash", "--format=%H"],
+        cwd: input.cwd,
+        allowNonZeroExit: true,
+      }).pipe(Effect.map((output) => output.stdout.split("\n").filter((sha) => sha.length > 0)));
+      const index = reflog.indexOf(input.stashRef);
+      if (index >= 0) {
+        // The restore already happened; a failed drop only leaves a spare
+        // stash entry behind, which is not worth failing the caller over.
+        yield* git({
+          operation: "drop-stash",
+          args: ["stash", "drop", `stash@{${index}}`],
+          cwd: input.cwd,
+          allowNonZeroExit: true,
+        });
+      }
+    });
 
   return {
     resolveTip,
