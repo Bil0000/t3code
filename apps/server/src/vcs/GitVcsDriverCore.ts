@@ -2867,9 +2867,13 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       yield* executeGit(
         "GitVcsDriver.refreshCheckedOutBranch.move",
         input.cwd,
+        // `--merge` rather than `--hard`: the cleanliness check above is a snapshot, and another
+        // thread may edit a tracked file between it and this move. Git itself refuses a `--merge`
+        // reset that would overwrite such an edit — the same guarantee `--ff-only` gives the
+        // other branch — so a race loses nothing; the refresh fails and is reported instead.
         isAncestor
           ? ["merge", "--ff-only", input.targetCommit]
-          : ["reset", "--hard", input.targetCommit],
+          : ["reset", "--merge", input.targetCommit],
         {
           timeoutMs: 30_000,
           fallbackErrorDetail: "git failed to move the checkout onto the pull request head",
