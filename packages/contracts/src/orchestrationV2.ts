@@ -2552,10 +2552,19 @@ export class OrchestrationV2HandoffError extends Schema.TaggedErrorClass<Orchest
   {
     reason: OrchestrationV2HandoffErrorReason,
     handoffId: Schema.optional(ThreadHandoffId),
-    message: TrimmedNonEmptyString,
+    /**
+     * The situation-specific facts a user can act on: the ref the commits
+     * were parked at, the size that blew the ceiling. Written where the
+     * failure happens, because only that site knows them.
+     */
+    detail: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
-) {}
+) {
+  override get message(): string {
+    return this.detail;
+  }
+}
 
 /**
  * Payload ceilings, in bytes, applied to the sum of every part.

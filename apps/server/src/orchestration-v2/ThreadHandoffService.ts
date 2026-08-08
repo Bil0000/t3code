@@ -207,19 +207,6 @@ export class ThreadHandoffService extends Context.Service<
   }
 >()("t3/orchestration-v2/ThreadHandoffService") {}
 
-const handoffError = (input: {
-  readonly reason: OrchestrationV2HandoffError["reason"];
-  readonly message: string;
-  readonly handoffId?: ThreadHandoffId;
-  readonly cause?: unknown;
-}) =>
-  new OrchestrationV2HandoffError({
-    reason: input.reason,
-    message: input.message,
-    ...(input.handoffId === undefined ? {} : { handoffId: input.handoffId }),
-    ...(input.cause === undefined ? {} : { cause: input.cause }),
-  });
-
 const isHandoffError = Schema.is(OrchestrationV2HandoffError);
 
 /**
@@ -227,10 +214,10 @@ const isHandoffError = Schema.is(OrchestrationV2HandoffError);
  * already a handoff failure alone so the specific reason a step chose is not
  * flattened into the generic one of its caller.
  */
-const asHandoffError = (reason: OrchestrationV2HandoffError["reason"], message: string) =>
+const asHandoffError = (reason: OrchestrationV2HandoffError["reason"], detail: string) =>
   Effect.mapError(
     (cause: unknown): OrchestrationV2HandoffError =>
-      isHandoffError(cause) ? cause : handoffError({ reason, message, cause }),
+      isHandoffError(cause) ? cause : new OrchestrationV2HandoffError({ reason, detail, cause }),
   );
 
 export const make = Effect.gen(function* () {
@@ -304,9 +291,9 @@ export const make = Effect.gen(function* () {
         .exists(target)
         .pipe(asHandoffError("store_failed", "Could not read a staged handoff part."));
       if (!exists) {
-        return yield* handoffError({
+        return yield* new OrchestrationV2HandoffError({
           reason: "part_missing",
-          message: `Handoff part ${input.part.kind} was never uploaded.`,
+          detail: `Handoff part ${input.part.kind} was never uploaded.`,
           handoffId: input.handoffId,
         });
       }
@@ -316,16 +303,16 @@ export const make = Effect.gen(function* () {
       // The declared length is what size accounting downstream trusts, so a
       // manifest that understates it is rejected the same way a wrong digest is.
       if (measured.byteLength !== input.part.byteLength) {
-        return yield* handoffError({
+        return yield* new OrchestrationV2HandoffError({
           reason: "part_digest_mismatch",
-          message: `Handoff part ${input.part.kind} is ${measured.byteLength} bytes, not the ${input.part.byteLength} bytes the manifest declares.`,
+          detail: `Handoff part ${input.part.kind} is ${measured.byteLength} bytes, not the ${input.part.byteLength} bytes the manifest declares.`,
           handoffId: input.handoffId,
         });
       }
       if (measured.digest !== input.part.digest) {
-        return yield* handoffError({
+        return yield* new OrchestrationV2HandoffError({
           reason: "part_digest_mismatch",
-          message: `Handoff part ${input.part.kind} does not match the digest in the manifest.`,
+          detail: `Handoff part ${input.part.kind} does not match the digest in the manifest.`,
           handoffId: input.handoffId,
         });
       }
@@ -419,9 +406,9 @@ export const make = Effect.gen(function* () {
       asHandoffError("project_missing", `Project ${projectId} could not be read.`),
       Effect.flatMap((project) =>
         Option.isNone(project)
-          ? handoffError({
+          ? new OrchestrationV2HandoffError({
               reason: "project_missing",
-              message: `Project ${projectId} is not on this environment.`,
+              detail: `Project ${projectId} is not on this environment.`,
             })
           : Effect.succeed(project.value.workspaceRoot),
       ),
@@ -431,9 +418,9 @@ export const make = Effect.gen(function* () {
     repositoryIdentity.resolve(cwd).pipe(
       Effect.flatMap((identity) =>
         identity === null
-          ? handoffError({
+          ? new OrchestrationV2HandoffError({
               reason: "repository_mismatch",
-              message:
+              detail:
                 "This thread's workspace has no git remote, so the other machine cannot recognise the repository.",
             })
           : Effect.succeed(identity),
@@ -470,9 +457,9 @@ export const make = Effect.gen(function* () {
         // Only an away thread refuses: a thread that arrived here is live and
         // free to move again — onward, or back where it came from.
         if (thread.handoff?.presence === "away") {
-          return yield* handoffError({
+          return yield* new OrchestrationV2HandoffError({
             reason: "thread_already_away",
-            message: `Thread ${input.threadId} is already handed off.`,
+            detail: `Thread ${input.threadId} is already handed off.`,
           });
         }
         // A running agent is writing the worktree this hop is about to
@@ -482,9 +469,9 @@ export const make = Effect.gen(function* () {
           ["preparing", "queued", "starting", "running", "waiting"].includes(run.status),
         );
         if (busy) {
-          return yield* handoffError({
+          return yield* new OrchestrationV2HandoffError({
             reason: "thread_busy",
-            message:
+            detail:
               "The agent is still working in this thread. Interrupt it or let it finish, then send.",
           });
         }
@@ -608,9 +595,9 @@ export const make = Effect.gen(function* () {
         const totalBytes = parts.reduce((sum, part) => sum + part.byteLength, 0);
         const verdict = classifyPayloadSize(totalBytes);
         if (verdict === "refuse") {
-          return yield* handoffError({
+          return yield* new OrchestrationV2HandoffError({
             reason: "payload_too_large",
-            message: `This thread's working state is ${Math.round(
+            detail: `This thread's working state is ${Math.round(
               totalBytes / (1024 * 1024),
             )} MB, over the ${Math.round(
               ORCHESTRATION_V2_HANDOFF_PAYLOAD_MAX_BYTES / (1024 * 1024),
@@ -956,9 +943,9 @@ export const make = Effect.gen(function* () {
               LIMIT 1
             `.pipe(Effect.orElseSucceed(() => []))).length > 0;
           if (!linkedByLineage) {
-            return yield* handoffError({
+            return yield* new OrchestrationV2HandoffError({
               reason: "thread_missing",
-              message: `Thread ${input.returningThreadId} is not the return target of this handoff's lineage.`,
+              detail: `Thread ${input.returningThreadId} is not the return target of this handoff's lineage.`,
               handoffId: bundle.handoffId,
             });
           }
@@ -1005,9 +992,9 @@ export const make = Effect.gen(function* () {
         let cloned = false;
         if (projectId === null) {
           if (input.cloneWorkspaceRoot === null || bundlePart === null) {
-            return yield* handoffError({
+            return yield* new OrchestrationV2HandoffError({
               reason: "project_missing",
-              message:
+              detail:
                 "This environment does not have the repository, and the transfer did not carry enough history to clone it.",
               handoffId: bundle.handoffId,
             });
@@ -1166,9 +1153,9 @@ export const make = Effect.gen(function* () {
             state: "failed",
             lastError: "incoming commit missing after import",
           });
-          return yield* handoffError({
+          return yield* new OrchestrationV2HandoffError({
             reason: "apply_failed",
-            message:
+            detail:
               "The incoming commit is not available here even after importing the bundle. Fetch the repository on this machine and try again.",
             handoffId: bundle.handoffId,
           });
@@ -1211,9 +1198,9 @@ export const make = Effect.gen(function* () {
             state: "failed",
             lastError: `branch ${classification}`,
           });
-          return yield* handoffError({
+          return yield* new OrchestrationV2HandoffError({
             reason: "workspace_diverged",
-            message: `The branch moved on both machines, so nothing here was changed. The incoming commits are at ${parkedRef}.`,
+            detail: `The branch moved on both machines, so nothing here was changed. The incoming commits are at ${parkedRef}.`,
             handoffId: bundle.handoffId,
           });
         }
@@ -1373,9 +1360,9 @@ export const make = Effect.gen(function* () {
               .pipe(asHandoffError("apply_failed", "Could not test the incoming changes."));
             if (!applies) {
               failureNote = "patch did not apply";
-              return yield* handoffError({
+              return yield* new OrchestrationV2HandoffError({
                 reason: "apply_failed",
-                message:
+                detail:
                   "The incoming changes could not be applied here, so this repository was put back exactly as it was.",
                 handoffId: bundle.handoffId,
               });
