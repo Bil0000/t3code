@@ -348,6 +348,117 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
         assert.strictEqual((yield* hopState(handoffId))?.state, "failed");
       }),
     );
+
+    it.effect("leaves the repository root alone when the thread lives in a worktree", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const handoffGit = yield* ThreadHandoffGit;
+        const service = yield* ThreadHandoffService;
+        const receiverRepo = yield* makeReceiverRepo;
+        // The thread's branch exists but nothing has it checked out; the root
+        // is on an unrelated branch with its own committed and uncommitted work.
+        yield* git(["branch", "feat/incoming"], receiverRepo);
+        const branchTipBefore = yield* handoffGit.resolveTip({
+          cwd: receiverRepo,
+          branch: "feat/incoming",
+        });
+        yield* git(["checkout", "-b", "other"], receiverRepo);
+        yield* write(receiverRepo, "a.txt", "other work\n");
+        yield* git(["commit", "-am", "other work"], receiverRepo);
+        const otherTip = yield* handoffGit.resolveTip({ cwd: receiverRepo, branch: "other" });
+        yield* write(receiverRepo, "a.txt", "other work, mid-edit\n");
+
+        const projectId = yield* registerProject(receiverRepo);
+        const handoffId = ThreadHandoffId.make("handoff-worktree-root-untouched");
+        const staged = yield* stageIncoming({
+          receiverRepo,
+          handoffId,
+          branch: "feat/incoming",
+          patch: unappliablePatch,
+        });
+
+        const error = yield* Effect.flip(
+          service.receive({
+            bundle: bundleFor({ ...staged, handoffId, branch: "feat/incoming", worktree: true }),
+            projectId,
+            cloneWorkspaceRoot: null,
+            returningThreadId: null,
+          }),
+        );
+
+        assert.strictEqual(error.reason, "apply_failed");
+        // The root never moved: same branch, same commit, same mid-edit.
+        assert.strictEqual(
+          (yield* git(["rev-parse", "--abbrev-ref", "HEAD"], receiverRepo)).stdout.trim(),
+          "other",
+        );
+        assert.strictEqual(
+          yield* handoffGit.resolveTip({ cwd: receiverRepo, branch: "other" }),
+          otherTip,
+        );
+        assert.strictEqual(
+          yield* fs.readFileString(path.join(receiverRepo, "a.txt")),
+          "other work, mid-edit\n",
+        );
+        // The thread's branch — the one the hop did move — is back where it was.
+        assert.strictEqual(
+          yield* handoffGit.resolveTip({ cwd: receiverRepo, branch: "feat/incoming" }),
+          branchTipBefore,
+        );
+        assert.strictEqual((yield* hopState(handoffId))?.state, "failed");
+      }),
+    );
+  });
+
+  describe("a clone from the bundle that fails", () => {
+    it.effect("removes the partial clone so a retry can succeed", () =>
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const projects = yield* ProjectService.ProjectService;
+        const service = yield* ThreadHandoffService;
+        const receiverRepo = yield* makeReceiverRepo;
+        const handoffId = ThreadHandoffId.make("handoff-clone-cleanup");
+        const staged = yield* stageIncoming({
+          receiverRepo,
+          handoffId,
+          branch: "main",
+          patch: null,
+        });
+
+        // Another project already claims the clone target, so registering the
+        // cloned project fails — after the clone directory has been written.
+        const cloneRoot = path.join(yield* tempDir("t3-handoff-clone-"), "clone");
+        yield* fs.makeDirectory(cloneRoot, { recursive: true });
+        const squatter = yield* registerProject(cloneRoot);
+        yield* fs.remove(cloneRoot, { recursive: true });
+
+        const receiveInput = {
+          bundle: bundleFor({ ...staged, handoffId, branch: "main", worktree: false }),
+          projectId: null,
+          cloneWorkspaceRoot: cloneRoot,
+          returningThreadId: null,
+        };
+        const error = yield* Effect.flip(service.receive(receiveInput));
+
+        assert.strictEqual(error.reason, "store_failed");
+        assert.isFalse(yield* fs.exists(cloneRoot));
+        assert.strictEqual((yield* hopState(handoffId))?.state, "failed");
+
+        // With the conflict gone the same transfer lands, because nothing is
+        // occupying the clone target any more.
+        yield* projects.delete({
+          commandId: CommandId.make("handoff-test:clone-cleanup:delete"),
+          projectId: squatter,
+        });
+        const applied = yield* service.receive(receiveInput);
+
+        assert.isTrue(yield* fs.exists(path.join(cloneRoot, ".git")));
+        assert.strictEqual((yield* hopState(handoffId))?.state, "arrived");
+        assert.strictEqual(applied.projectId.startsWith("project:"), true);
+      }),
+    );
   });
 
   describe("a successful advance into a dirty checkout", () => {

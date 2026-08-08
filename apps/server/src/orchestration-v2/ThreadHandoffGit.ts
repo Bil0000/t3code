@@ -528,6 +528,14 @@ export const make = Effect.gen(function* () {
       // listing is newline-delimited, so a path embedding a newline would slip
       // past a listing-based check and overwrite exactly what it protects.
       const staging = `${input.archivePath}.staging`;
+      // A retry reuses the archive path; leftovers from a previous failed
+      // attempt would be swept into the worktree as if the archive held them.
+      yield* process.run({
+        operation: "thread-handoff.clear-staging",
+        command: "rm",
+        args: ["-rf", staging],
+        cwd: input.cwd,
+      });
       yield* process.run({
         operation: "thread-handoff.make-staging",
         command: "mkdir",

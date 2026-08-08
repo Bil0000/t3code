@@ -1013,30 +1013,59 @@ export const make = Effect.gen(function* () {
             });
           }
           yield* markHop({ handoffId: bundle.handoffId, state: "applying", lastError: null });
-          yield* git
-            .cloneFromBundle({
-              bundlePath: partPath({ handoffId: bundle.handoffId, kind: "git-bundle" }),
-              targetPath: input.cloneWorkspaceRoot,
-              branch,
-            })
-            .pipe(
-              asHandoffError("apply_failed", "Could not clone the repository from the bundle."),
-            );
-          yield* git
-            .setOriginRemote({
-              cwd: input.cloneWorkspaceRoot,
-              remoteUrl: bundle.repository.locator.remoteUrl,
-            })
-            .pipe(Effect.ignore);
-          projectId = ProjectId.make(`project:${NodeCrypto.randomUUID()}`);
-          yield* projects
-            .create({
-              commandId: CommandId.make(`handoff:${bundle.handoffId}:project`),
-              projectId,
-              title: bundle.repository.displayName ?? bundle.repository.name ?? "Imported project",
-              workspaceRoot: input.cloneWorkspaceRoot,
-            })
-            .pipe(asHandoffError("store_failed", "Could not register the cloned project."));
+          const cloneRoot = input.cloneWorkspaceRoot;
+          // Only a directory this hop brought into existence may be deleted on
+          // failure; one that was already here belongs to someone else.
+          const cloneRootExisted = yield* fs
+            .exists(cloneRoot)
+            .pipe(Effect.orElseSucceed(() => false));
+          const clonedProjectId = ProjectId.make(`project:${NodeCrypto.randomUUID()}`);
+          // Every step here runs before the `apply` guard below exists, so it
+          // carries its own: a half-written clone directory left behind makes
+          // every retry fail on an occupied target forever.
+          yield* Effect.gen(function* () {
+            yield* git
+              .cloneFromBundle({
+                bundlePath: partPath({ handoffId: bundle.handoffId, kind: "git-bundle" }),
+                targetPath: cloneRoot,
+                branch,
+              })
+              .pipe(
+                asHandoffError("apply_failed", "Could not clone the repository from the bundle."),
+              );
+            yield* git
+              .setOriginRemote({
+                cwd: cloneRoot,
+                remoteUrl: bundle.repository.locator.remoteUrl,
+              })
+              .pipe(Effect.ignore);
+            yield* projects
+              .create({
+                commandId: CommandId.make(`handoff:${bundle.handoffId}:project`),
+                projectId: clonedProjectId,
+                title:
+                  bundle.repository.displayName ?? bundle.repository.name ?? "Imported project",
+                workspaceRoot: cloneRoot,
+              })
+              .pipe(asHandoffError("store_failed", "Could not register the cloned project."));
+          }).pipe(
+            Effect.onError(() =>
+              (cloneRootExisted
+                ? Effect.void
+                : fs.remove(cloneRoot, { recursive: true }).pipe(Effect.ignore)
+              ).pipe(
+                Effect.andThen(
+                  markHop({
+                    handoffId: bundle.handoffId,
+                    state: "failed",
+                    lastError: "clone from bundle failed",
+                  }),
+                ),
+                Effect.ignore,
+              ),
+            ),
+          );
+          projectId = clonedProjectId;
           cloned = true;
         }
 
@@ -1059,6 +1088,9 @@ export const make = Effect.gen(function* () {
         // Set only when this hop added the worktree, so undo removes exactly
         // the ones it created and never a worktree that was already here.
         let createdWorktreePath: string | null = null;
+        // True once the branch was attached to that new worktree, i.e. once
+        // this hop moved the branch pointer somewhere undo has to put back.
+        let movedBranchInCreatedWorktree = false;
 
         // Everything an apply creates that git will not take back: `reset
         // --hard` leaves new untracked files behind, and the attachment and
@@ -1082,12 +1114,25 @@ export const make = Effect.gen(function* () {
         // be partly built — the tag and stashes may not exist yet.
         const undo = () =>
           Effect.gen(function* () {
+            // `preTag` names the thread branch's old tip, which is only where
+            // the checkout this hop moved belongs. When that checkout is not
+            // the root, resetting the root to it would throw away whatever
+            // unrelated branch the root is sitting on.
+            const applyWasRoot = applyCwd === cwd;
             // A worktree this hop added holds the branch. Hard-resetting it is
             // not enough: left registered, it blocks a retry from checking the
             // branch out again. Removed first, so the paths it contains are
             // already gone by the time the loop below runs.
             if (createdWorktreePath !== null) {
               yield* git.removeWorktree({ cwd, path: createdWorktreePath }).pipe(Effect.ignore);
+              // Removing the worktree leaves the branch pointer wherever this
+              // hop moved it; the reset that would have put it back went with
+              // the checkout, so the ref is restored directly.
+              if (movedBranchInCreatedWorktree && branch !== null && preTag !== null) {
+                yield* git
+                  .writeRef({ cwd, ref: `refs/heads/${branch}`, commit: preTag })
+                  .pipe(Effect.ignore);
+              }
               applyCwd = cwd;
             }
             yield* Effect.forEach(
@@ -1095,10 +1140,15 @@ export const make = Effect.gen(function* () {
               (target) => fs.remove(target, { recursive: true }).pipe(Effect.ignore),
               { discard: true },
             );
-            if (applyCwd !== cwd) {
+            if (!applyWasRoot && createdWorktreePath === null) {
               yield* rollback({ cwd: applyCwd, preTag, stashRef: worktreeStashRef });
             }
-            yield* rollback({ cwd, preTag, stashRef: rootStashRef });
+            if (applyWasRoot) {
+              yield* rollback({ cwd, preTag, stashRef: rootStashRef });
+            } else if (rootStashRef !== null) {
+              // The root was never moved, so it only wants its own changes back.
+              yield* git.popStash({ cwd, stashRef: rootStashRef }).pipe(Effect.ignore);
+            }
           });
 
         if (bundlePart !== null && !cloned) {
@@ -1303,6 +1353,7 @@ export const make = Effect.gen(function* () {
                   .pipe(
                     asHandoffError("apply_failed", "Could not attach the branch to the worktree."),
                   );
+                movedBranchInCreatedWorktree = true;
               }
             }
           }
@@ -1560,17 +1611,26 @@ export const make = Effect.gen(function* () {
                 // the worktree's against the root, or the other way round,
                 // drops the changes into the wrong tree.
                 if (applyCwd !== rootCwd) {
+                  // The tag names the thread branch's old tip, which only the
+                  // checkout the hop moved may be reset to. The root sits on
+                  // its own branch and just wants its changes back.
                   yield* rollback({
                     cwd: applyCwd,
                     preTag: row.pre_tag,
                     stashRef: row.stash_ref,
                   });
+                  if (row.root_stash_ref !== null) {
+                    yield* git
+                      .popStash({ cwd: rootCwd, stashRef: row.root_stash_ref })
+                      .pipe(Effect.ignore);
+                  }
+                } else {
+                  yield* rollback({
+                    cwd: rootCwd,
+                    preTag: row.pre_tag,
+                    stashRef: row.root_stash_ref ?? row.stash_ref,
+                  });
                 }
-                yield* rollback({
-                  cwd: rootCwd,
-                  preTag: row.pre_tag,
-                  stashRef: row.root_stash_ref ?? (applyCwd === rootCwd ? row.stash_ref : null),
-                });
               }).pipe(Effect.ignore);
             }
             yield* markHop({
