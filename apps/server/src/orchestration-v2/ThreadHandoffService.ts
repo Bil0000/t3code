@@ -207,8 +207,6 @@ export class ThreadHandoffService extends Context.Service<
   }
 >()("t3/orchestration-v2/ThreadHandoffService") {}
 
-export type ThreadHandoffServiceShape = ThreadHandoffService["Service"];
-
 const handoffError = (input: {
   readonly reason: OrchestrationV2HandoffError["reason"];
   readonly message: string;
@@ -255,7 +253,7 @@ export const make = Effect.gen(function* () {
 
   const handoffDir = (handoffId: ThreadHandoffId) => path.join(config.handoffsDir, handoffId);
 
-  const partPath: ThreadHandoffServiceShape["partPath"] = (input) =>
+  const partPath: ThreadHandoffService["Service"]["partPath"] = (input) =>
     path.join(handoffDir(input.handoffId), partFileName(input.kind));
 
   // Digest and size read in chunks: a part can be close to the gigabyte
@@ -299,7 +297,7 @@ export const make = Effect.gen(function* () {
       } satisfies OrchestrationV2HandoffPart;
     }).pipe(asHandoffError("store_failed", `Could not stage the ${input.kind} part.`));
 
-  const verifyStagedPart: ThreadHandoffServiceShape["verifyStagedPart"] = (input) =>
+  const verifyStagedPart: ThreadHandoffService["Service"]["verifyStagedPart"] = (input) =>
     Effect.gen(function* () {
       const target = partPath({ handoffId: input.handoffId, kind: input.part.kind });
       const exists = yield* fs
@@ -385,6 +383,7 @@ export const make = Effect.gen(function* () {
     readonly appliedHeadSha?: string | null;
     readonly stashRef?: string | null;
     readonly preTag?: string | null;
+    readonly applyCwd?: string | null;
   }) =>
     Effect.gen(function* () {
       const now = DateTime.formatIso(yield* DateTime.now);
@@ -396,6 +395,7 @@ export const make = Effect.gen(function* () {
           applied_head_sha = COALESCE(${input.appliedHeadSha ?? null}, applied_head_sha),
           stash_ref = COALESCE(${input.stashRef ?? null}, stash_ref),
           pre_tag = COALESCE(${input.preTag ?? null}, pre_tag),
+          apply_cwd = COALESCE(${input.applyCwd ?? null}, apply_cwd),
           updated_at = ${now}
         WHERE handoff_id = ${input.handoffId}
       `;
@@ -441,7 +441,7 @@ export const make = Effect.gen(function* () {
       ? workspaceRootFor(thread.projectId)
       : Effect.succeed(thread.worktreePath);
 
-  const prepare: ThreadHandoffServiceShape["prepare"] = (input) =>
+  const prepare: ThreadHandoffService["Service"]["prepare"] = (input) =>
     serialize.withLock(
       input.threadId,
       Effect.gen(function* () {
@@ -832,7 +832,7 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const receive: ThreadHandoffServiceShape["receive"] = (input) =>
+  const receive: ThreadHandoffService["Service"]["receive"] = (input) =>
     // Locked on the origin thread id — the one key both ends of a hop agree
     // on, and the one that identifies the logical thread pair. `prepare`
     // locks the local thread id for the same reason: two hops for one thread
@@ -1013,10 +1013,33 @@ export const make = Effect.gen(function* () {
         let worktreeStashRef: string | null = null;
         let applyCwd = cwd;
 
+        // Everything an apply creates that git will not take back: `reset
+        // --hard` leaves new untracked files behind, and the attachment and
+        // terminal directories are not in a repository at all.
+        const createdPaths: Array<string> = [];
+        const listDirectory = (dir: string) =>
+          fs.readDirectory(dir).pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
+        const noteNewEntries = (
+          dir: string,
+          before: ReadonlyArray<string>,
+          after: ReadonlyArray<string>,
+        ) => {
+          const known = new Set(before);
+          for (const entry of after) {
+            if (!known.has(entry)) createdPaths.push(path.join(dir, entry));
+          }
+        };
+
         // Puts both checkouts back the way they were found. Best effort: it
-        // runs on a path that is already failing.
+        // runs on a path that is already failing, and on a state that may only
+        // be partly built — the tag and stashes may not exist yet.
         const undo = () =>
           Effect.gen(function* () {
+            yield* Effect.forEach(
+              createdPaths,
+              (target) => fs.remove(target, { recursive: true }).pipe(Effect.ignore),
+              { discard: true },
+            );
             if (applyCwd !== cwd) {
               yield* rollback({ cwd: applyCwd, preTag, stashRef: worktreeStashRef });
             }
@@ -1045,54 +1068,57 @@ export const make = Effect.gen(function* () {
             handoffId: bundle.handoffId,
           });
         }
-        {
-          const localTip =
-            branch === null
-              ? null
-              : yield* git
-                  .resolveTip({ cwd, branch })
-                  .pipe(asHandoffError("apply_failed", "Could not read the local branch tip."));
-          classification = classifyIncomingTip({
-            localTip,
-            incomingTip,
-            incomingContainsLocal:
-              localTip !== null &&
-              (yield* git
-                .isAncestor({ cwd, ancestor: localTip, descendant: incomingTip })
-                .pipe(asHandoffError("apply_failed", "Could not compare the branch tips."))),
-            localContainsIncoming:
-              localTip !== null &&
-              (yield* git
-                .isAncestor({ cwd, ancestor: incomingTip, descendant: localTip })
-                .pipe(asHandoffError("apply_failed", "Could not compare the branch tips."))),
-            hasCommonAncestor:
-              localTip !== null &&
-              (yield* git
-                .hasCommonAncestor({ cwd, left: localTip, right: incomingTip })
-                .pipe(asHandoffError("apply_failed", "Could not compare the branch tips."))),
+        const localTip =
+          branch === null
+            ? null
+            : yield* git
+                .resolveTip({ cwd, branch })
+                .pipe(asHandoffError("apply_failed", "Could not read the local branch tip."));
+        classification = classifyIncomingTip({
+          localTip,
+          incomingTip,
+          incomingContainsLocal:
+            localTip !== null &&
+            (yield* git
+              .isAncestor({ cwd, ancestor: localTip, descendant: incomingTip })
+              .pipe(asHandoffError("apply_failed", "Could not compare the branch tips."))),
+          localContainsIncoming:
+            localTip !== null &&
+            (yield* git
+              .isAncestor({ cwd, ancestor: incomingTip, descendant: localTip })
+              .pipe(asHandoffError("apply_failed", "Could not compare the branch tips."))),
+          hasCommonAncestor:
+            localTip !== null &&
+            (yield* git
+              .hasCommonAncestor({ cwd, left: localTip, right: incomingTip })
+              .pipe(asHandoffError("apply_failed", "Could not compare the branch tips."))),
+        });
+
+        if (classification === "diverged" || classification === "unrelated") {
+          // Park the sender's commits and stop. Nothing on either machine has
+          // moved, and the user is left holding both histories.
+          const parkedRef = handoffRefName(bundle.origin.environmentId, branch ?? "HEAD");
+          yield* git
+            .writeRef({ cwd, ref: parkedRef, commit: incomingTip })
+            .pipe(asHandoffError("apply_failed", "Could not park the incoming commits."));
+          yield* markHop({
+            handoffId: bundle.handoffId,
+            state: "failed",
+            lastError: `branch ${classification}`,
           });
+          return yield* handoffError({
+            reason: "workspace_diverged",
+            message: `The branch moved on both machines, so nothing here was changed. The incoming commits are at ${parkedRef}.`,
+            handoffId: bundle.handoffId,
+          });
+        }
 
-          if (classification === "diverged" || classification === "unrelated") {
-            // Park the sender's commits and stop. Nothing on either machine has
-            // moved, and the user is left holding both histories.
-            const parkedRef = handoffRefName(bundle.origin.environmentId, branch ?? "HEAD");
-            yield* git
-              .writeRef({ cwd, ref: parkedRef, commit: incomingTip })
-              .pipe(asHandoffError("apply_failed", "Could not park the incoming commits."));
-            yield* markHop({
-              handoffId: bundle.handoffId,
-              state: "failed",
-              lastError: `branch ${classification}`,
-            });
-            return yield* handoffError({
-              reason: "workspace_diverged",
-              message: `The branch moved on both machines, so nothing here was changed. The incoming commits are at ${parkedRef}.`,
-              handoffId: bundle.handoffId,
-            });
-          }
-
-          yield* markHop({ handoffId: bundle.handoffId, state: "applying", lastError: null });
-
+        // From here on the checkouts are really being written — the tag, the
+        // stashes, the worktree and the patch alike. Every one of those steps
+        // has to put both checkouts back and mark the hop failed, or the
+        // repository is left half-applied with the user's changes stashed away.
+        let failureNote = "apply failed";
+        const apply = Effect.gen(function* () {
           if (localTip !== null) {
             preTag = handoffPreTagName(bundle.handoffId);
             yield* git
@@ -1102,6 +1128,17 @@ export const make = Effect.gen(function* () {
               .stashWorktree({ cwd, label: handoffStashLabel(bundle.handoffId, localTip) })
               .pipe(asHandoffError("apply_failed", "Could not set the local changes aside."));
           }
+          // The row names what a crash has to be rolled back from, so it is
+          // written before the tree moves rather than after the hop lands.
+          yield* markHop({
+            handoffId: bundle.handoffId,
+            state: "applying",
+            lastError: null,
+            appliedHeadSha: incomingTip,
+            stashRef: rootStashRef,
+            preTag,
+            applyCwd: cwd,
+          });
 
           if (classification === "advance" && branch !== null && !wantsWorktree) {
             yield* git
@@ -1126,6 +1163,14 @@ export const make = Effect.gen(function* () {
               rootStashRef = yield* git
                 .stashWorktree({ cwd, label: handoffStashLabel(bundle.handoffId, head) })
                 .pipe(asHandoffError("apply_failed", "Could not set the local changes aside."));
+              yield* markHop({
+                handoffId: bundle.handoffId,
+                state: "applying",
+                lastError: null,
+                stashRef: rootStashRef,
+                preTag,
+                applyCwd: cwd,
+              });
               yield* git
                 .resetHardTo({ cwd, commit: incomingTip })
                 .pipe(
@@ -1136,89 +1181,104 @@ export const make = Effect.gen(function* () {
                 );
             }
           }
-        }
 
-        // A thread that lived in a worktree lands in one here too: reuse the
-        // worktree that already has the branch checked out, otherwise add a
-        // fresh one at the incoming commit. The branch attaches only when no
-        // other checkout holds it — git forbids two checkouts of one branch,
-        // and a detached worktree at the right commit still runs the thread.
-        if (wantsWorktree && branch !== null) {
-          const existingWorktree = yield* git
-            .findWorktreeForBranch({ cwd, branch })
-            .pipe(asHandoffError("apply_failed", "Could not inspect the repository's worktrees."));
-          if (existingWorktree !== null && existingWorktree !== cwd) {
-            applyCwd = existingWorktree;
-            // Its own stash, taken before its own reset: the root's stash says
-            // nothing about what this worktree is holding.
-            worktreeStashRef = yield* git
-              .stashWorktree({
-                cwd: applyCwd,
-                label: handoffStashLabel(bundle.handoffId, incomingTip),
-              })
-              .pipe(asHandoffError("apply_failed", "Could not set the worktree's changes aside."));
-            if (classification === "advance") {
-              yield* git
-                .resetHardTo({ cwd: applyCwd, commit: incomingTip })
-                .pipe(asHandoffError("apply_failed", "Could not advance the worktree."));
-            }
-          } else if (existingWorktree === null) {
-            const worktreePath = path.join(
-              config.worktreesDir,
-              `handoff-${bundle.handoffId.slice(0, 8)}`,
-            );
-            yield* git
-              .addWorktree({ cwd, path: worktreePath, commit: incomingTip })
-              .pipe(asHandoffError("apply_failed", "Could not create a worktree for the thread."));
-            applyCwd = worktreePath;
-            const branchTaken = yield* git
-              .isBranchCheckedOut({ cwd, branch })
+          // A thread that lived in a worktree lands in one here too: reuse the
+          // worktree that already has the branch checked out, otherwise add a
+          // fresh one at the incoming commit. The branch attaches only when no
+          // other checkout holds it — git forbids two checkouts of one branch,
+          // and a detached worktree at the right commit still runs the thread.
+          if (wantsWorktree && branch !== null) {
+            const existingWorktree = yield* git
+              .findWorktreeForBranch({ cwd, branch })
               .pipe(
                 asHandoffError("apply_failed", "Could not inspect the repository's worktrees."),
               );
-            if (!branchTaken) {
-              yield* git
-                .checkoutBranchAt({ cwd: applyCwd, branch, commit: incomingTip })
+            if (existingWorktree !== null && existingWorktree !== cwd) {
+              applyCwd = existingWorktree;
+              // Its own stash, taken before its own reset: the root's stash says
+              // nothing about what this worktree is holding.
+              worktreeStashRef = yield* git
+                .stashWorktree({
+                  cwd: applyCwd,
+                  label: handoffStashLabel(bundle.handoffId, incomingTip),
+                })
                 .pipe(
-                  asHandoffError("apply_failed", "Could not attach the branch to the worktree."),
+                  asHandoffError("apply_failed", "Could not set the worktree's changes aside."),
                 );
+              yield* markHop({
+                handoffId: bundle.handoffId,
+                state: "applying",
+                lastError: null,
+                stashRef: worktreeStashRef,
+                applyCwd,
+              });
+              if (classification === "advance") {
+                yield* git
+                  .resetHardTo({ cwd: applyCwd, commit: incomingTip })
+                  .pipe(asHandoffError("apply_failed", "Could not advance the worktree."));
+              }
+            } else if (existingWorktree === null) {
+              const worktreePath = path.join(
+                config.worktreesDir,
+                `handoff-${bundle.handoffId.slice(0, 8)}`,
+              );
+              yield* git
+                .addWorktree({ cwd, path: worktreePath, commit: incomingTip })
+                .pipe(
+                  asHandoffError("apply_failed", "Could not create a worktree for the thread."),
+                );
+              applyCwd = worktreePath;
+              yield* markHop({
+                handoffId: bundle.handoffId,
+                state: "applying",
+                lastError: null,
+                applyCwd,
+              });
+              const branchTaken = yield* git
+                .isBranchCheckedOut({ cwd, branch })
+                .pipe(
+                  asHandoffError("apply_failed", "Could not inspect the repository's worktrees."),
+                );
+              if (!branchTaken) {
+                yield* git
+                  .checkoutBranchAt({ cwd: applyCwd, branch, commit: incomingTip })
+                  .pipe(
+                    asHandoffError("apply_failed", "Could not attach the branch to the worktree."),
+                  );
+              }
             }
           }
-        }
 
-        const patchPart = bundle.parts.find((part) => part.kind === "tracked-patch") ?? null;
-        const patch =
-          patchPart === null
-            ? null
-            : yield* fs
-                .readFileString(partPath({ handoffId: bundle.handoffId, kind: "tracked-patch" }))
-                .pipe(asHandoffError("store_failed", "Could not read the staged patch."));
-        if (patch !== null) {
-          // Dry run first: a patch that will not apply must leave the working
-          // tree exactly as it was, not half-written.
-          const applies = yield* git
-            .applyPatch({ cwd: applyCwd, patch, check: true })
-            .pipe(asHandoffError("apply_failed", "Could not test the incoming changes."));
-          if (!applies) {
-            yield* undo();
-            yield* markHop({
-              handoffId: bundle.handoffId,
-              state: "failed",
-              lastError: "patch did not apply",
-            });
-            return yield* handoffError({
-              reason: "apply_failed",
-              message:
-                "The incoming changes could not be applied here, so this repository was put back exactly as it was.",
-              handoffId: bundle.handoffId,
-            });
+          const patchPart = bundle.parts.find((part) => part.kind === "tracked-patch") ?? null;
+          const patch =
+            patchPart === null
+              ? null
+              : yield* fs
+                  .readFileString(partPath({ handoffId: bundle.handoffId, kind: "tracked-patch" }))
+                  .pipe(asHandoffError("store_failed", "Could not read the staged patch."));
+          if (patch !== null) {
+            // Dry run first: a patch that will not apply must leave the working
+            // tree exactly as it was, not half-written.
+            const applies = yield* git
+              .applyPatch({ cwd: applyCwd, patch, check: true })
+              .pipe(asHandoffError("apply_failed", "Could not test the incoming changes."));
+            if (!applies) {
+              failureNote = "patch did not apply";
+              return yield* handoffError({
+                reason: "apply_failed",
+                message:
+                  "The incoming changes could not be applied here, so this repository was put back exactly as it was.",
+                handoffId: bundle.handoffId,
+              });
+            }
           }
-        }
 
-        // Past the dry run the tree is really being written. Any failure from
-        // here on must put both checkouts back and mark the hop failed, or the
-        // repository is left half-applied with the user's changes stashed away.
-        const applyRest = Effect.gen(function* () {
+          failureNote = "apply failed after the patch check";
+          // Snapshotted before anything is written so undo knows exactly which
+          // files this hop brought into existence.
+          const untrackedBefore = yield* git
+            .untrackedPaths({ cwd: applyCwd })
+            .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>));
           if (patch !== null) {
             yield* git
               .applyPatch({ cwd: applyCwd, patch, check: false })
@@ -1233,17 +1293,31 @@ export const make = Effect.gen(function* () {
               })
               .pipe(asHandoffError("apply_failed", "Could not restore the untracked files."));
           }
+          noteNewEntries(
+            applyCwd,
+            untrackedBefore,
+            yield* git
+              .untrackedPaths({ cwd: applyCwd })
+              .pipe(Effect.orElseSucceed(() => [] as ReadonlyArray<string>)),
+          );
 
           if (bundle.parts.some((part) => part.kind === "attachments-tar")) {
+            const attachmentsBefore = yield* listDirectory(config.attachmentsDir);
             yield* git
               .extractArchive({
                 cwd: config.attachmentsDir,
                 archivePath: partPath({ handoffId: bundle.handoffId, kind: "attachments-tar" }),
               })
               .pipe(asHandoffError("apply_failed", "Could not restore the thread's attachments."));
+            noteNewEntries(
+              config.attachmentsDir,
+              attachmentsBefore,
+              yield* listDirectory(config.attachmentsDir),
+            );
           }
 
           if (bundle.parts.some((part) => part.kind === "terminals-tar")) {
+            const terminalsBefore = yield* listDirectory(config.terminalLogsDir);
             yield* git
               .extractArchive({
                 cwd: config.terminalLogsDir,
@@ -1290,6 +1364,13 @@ export const make = Effect.gen(function* () {
                 });
               }
             }
+            // After the renames, so the names undo deletes are the ones that
+            // are actually on disk.
+            noteNewEntries(
+              config.terminalLogsDir,
+              terminalsBefore,
+              yield* listDirectory(config.terminalLogsDir),
+            );
           }
           yield* writeArrival({
             bundle,
@@ -1316,16 +1397,17 @@ export const make = Effect.gen(function* () {
             appliedHeadSha: incomingTip,
             stashRef: worktreeStashRef ?? rootStashRef,
             preTag,
+            applyCwd,
           });
         });
-        yield* applyRest.pipe(
+        yield* apply.pipe(
           Effect.onError(() =>
             undo().pipe(
               Effect.andThen(
                 markHop({
                   handoffId: bundle.handoffId,
                   state: "failed",
-                  lastError: "apply failed after the patch check",
+                  lastError: failureNote,
                 }),
               ),
               Effect.ignore,
@@ -1343,15 +1425,16 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  const recoverInterrupted: ThreadHandoffServiceShape["recoverInterrupted"] = () =>
+  const recoverInterrupted: ThreadHandoffService["Service"]["recoverInterrupted"] = () =>
     Effect.gen(function* () {
       const rows = yield* sql<{
         readonly handoff_id: string;
         readonly thread_id: string;
         readonly stash_ref: string | null;
         readonly pre_tag: string | null;
+        readonly apply_cwd: string | null;
       }>`
-        SELECT handoff_id, thread_id, stash_ref, pre_tag
+        SELECT handoff_id, thread_id, stash_ref, pre_tag, apply_cwd
         FROM orchestration_v2_thread_handoffs WHERE state = 'applying'
       `;
       yield* Effect.forEach(
@@ -1363,10 +1446,14 @@ export const make = Effect.gen(function* () {
             // failed — best effort, since the worktree may itself be gone.
             if (row.pre_tag !== null || row.stash_ref !== null) {
               yield* Effect.gen(function* () {
-                const projection = yield* projectionStore.getThreadProjection(
-                  ThreadId.make(row.thread_id),
-                );
-                const cwd = yield* threadCwd(projection.thread);
+                // The row's own directory first: a first arrival that died
+                // before its history was written has no projection to read a
+                // working directory from.
+                const cwd =
+                  row.apply_cwd ??
+                  (yield* projectionStore
+                    .getThreadProjection(ThreadId.make(row.thread_id))
+                    .pipe(Effect.flatMap((projection) => threadCwd(projection.thread))));
                 yield* rollback({ cwd, preTag: row.pre_tag, stashRef: row.stash_ref });
               }).pipe(Effect.ignore);
             }
@@ -1387,7 +1474,7 @@ export const make = Effect.gen(function* () {
     verifyStagedPart,
     receive,
     recoverInterrupted,
-  } satisfies ThreadHandoffServiceShape;
+  } satisfies ThreadHandoffService["Service"];
 });
 
 export const layer: Layer.Layer<

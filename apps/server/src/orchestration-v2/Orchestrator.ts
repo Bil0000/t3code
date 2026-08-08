@@ -1507,6 +1507,17 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           cause: `Thread ${command.threadId} owns handoff ${command.handoffId} and cannot report on it.`,
         });
       }
+      // A peer thread on the link means complete already finalized this hop.
+      // A late abort clearing the link would make this side live again while
+      // the peer is running — the one state the whole protocol exists to
+      // prevent.
+      if (command.type === "thread.handoff.abort" && link.peerThreadId !== null) {
+        return yield* new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause: `Handoff ${command.handoffId} already completed to ${link.peerThreadId} and can no longer be aborted.`,
+        });
+      }
     }
 
     const providerSwitchPlan =

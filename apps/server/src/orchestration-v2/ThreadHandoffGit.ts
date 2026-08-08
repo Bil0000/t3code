@@ -1,7 +1,8 @@
-import { VcsProcessExitError, type VcsError } from "@t3tools/contracts";
+import type { VcsError } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 
@@ -80,6 +81,26 @@ function refSafe(value: string): string {
     .replace(/\.+$/, "");
 }
 
+/**
+ * A sender's untracked file would overwrite a file the receiving worktree
+ * tracks. Raised before anything is extracted, so refusing loses nothing.
+ */
+export class HandoffUntrackedCollisionError extends Schema.TaggedErrorClass<HandoffUntrackedCollisionError>()(
+  "HandoffUntrackedCollisionError",
+  {
+    cwd: Schema.String,
+    /** A bounded sample of the colliding paths. */
+    collisions: Schema.Array(Schema.String),
+    collisionCount: Schema.Number,
+  },
+) {
+  override get message(): string {
+    const sample = this.collisions.join(", ");
+    const suffix = this.collisionCount > this.collisions.length ? ", …" : "";
+    return `Untracked files from the sender collide with tracked files here: ${sample}${suffix}.`;
+  }
+}
+
 /** Big enough for any diff the payload ceiling would accept, small enough to fail fast. */
 const PATCH_MAX_OUTPUT_BYTES = 256 * 1024 * 1024;
 /** File lists are far smaller than diffs. */
@@ -107,135 +128,134 @@ const runGit = (process: VcsProcess.VcsProcess["Service"], input: GitInput) =>
     ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
   });
 
-interface Shape {
-  /** Current tip of `branch`, or null when the branch does not exist. */
-  readonly resolveTip: (input: {
-    readonly cwd: string;
-    readonly branch: string;
-  }) => Effect.Effect<string | null, VcsError>;
-  readonly resolveHead: (input: { readonly cwd: string }) => Effect.Effect<string, VcsError>;
-  readonly isAncestor: (input: {
-    readonly cwd: string;
-    readonly ancestor: string;
-    readonly descendant: string;
-  }) => Effect.Effect<boolean, VcsError>;
-  readonly hasCommonAncestor: (input: {
-    readonly cwd: string;
-    readonly left: string;
-    readonly right: string;
-  }) => Effect.Effect<boolean, VcsError>;
-  readonly hasCommit: (input: {
-    readonly cwd: string;
-    readonly commit: string;
-  }) => Effect.Effect<boolean, VcsError>;
-  /** Tracked changes against HEAD, binary-safe so images and lockfiles survive. */
-  readonly trackedPatch: (input: { readonly cwd: string }) => Effect.Effect<string, VcsError>;
-  readonly untrackedPaths: (input: {
-    readonly cwd: string;
-  }) => Effect.Effect<ReadonlyArray<string>, VcsError>;
-  readonly dirtyFileCount: (input: { readonly cwd: string }) => Effect.Effect<number, VcsError>;
-  /** True when `commit` is reachable from any remote-tracking ref, so rewriting it is off the table. */
-  readonly isPublished: (input: {
-    readonly cwd: string;
-    readonly commit: string;
-  }) => Effect.Effect<boolean, VcsError>;
-  readonly tagCommit: (input: {
-    readonly cwd: string;
-    readonly tag: string;
-    readonly commit: string;
-  }) => Effect.Effect<void, VcsError>;
-  readonly stashWorktree: (input: {
-    readonly cwd: string;
-    readonly label: string;
-  }) => Effect.Effect<string | null, VcsError>;
-  readonly writeRef: (input: {
-    readonly cwd: string;
-    readonly ref: string;
-    readonly commit: string;
-  }) => Effect.Effect<void, VcsError>;
-  /**
-   * Writes a bundle carrying `refs`, excluding anything the receiver already
-   * has. With no exclusions this is full history, which is what lets a
-   * repository the target has never seen arrive without a remote, credentials,
-   * or network.
-   */
-  readonly createBundle: (input: {
-    readonly cwd: string;
-    readonly outputPath: string;
-    readonly refs: ReadonlyArray<string>;
-    readonly excludeTips: ReadonlyArray<string>;
-  }) => Effect.Effect<boolean, VcsError>;
-  /** Imports a bundle's objects and parks its refs under `refs/handoff-incoming/`. */
-  readonly importBundle: (input: {
-    readonly cwd: string;
-    readonly bundlePath: string;
-  }) => Effect.Effect<void, VcsError>;
-  readonly cloneFromBundle: (input: {
-    readonly bundlePath: string;
-    readonly targetPath: string;
-    readonly branch: string | null;
-  }) => Effect.Effect<void, VcsError>;
-  /**
-   * Applies a tracked-changes patch. `check` runs the same apply as a dry run,
-   * which is what lets a hop refuse before touching the working tree.
-   */
-  readonly applyPatch: (input: {
-    readonly cwd: string;
-    readonly patch: string;
-    readonly check: boolean;
-  }) => Effect.Effect<boolean, VcsError>;
-  readonly checkoutBranchAt: (input: {
-    readonly cwd: string;
-    readonly branch: string;
-    readonly commit: string;
-  }) => Effect.Effect<void, VcsError>;
-  readonly resetHardTo: (input: {
-    readonly cwd: string;
-    readonly commit: string;
-  }) => Effect.Effect<void, VcsError>;
-  readonly listCheckpointRefs: (input: {
-    readonly cwd: string;
-  }) => Effect.Effect<ReadonlyArray<string>, VcsError>;
-  readonly archivePaths: (input: {
-    readonly cwd: string;
-    readonly paths: ReadonlyArray<string>;
-    readonly outputPath: string;
-  }) => Effect.Effect<void, VcsError>;
-  readonly extractArchive: (input: {
-    readonly cwd: string;
-    readonly archivePath: string;
-  }) => Effect.Effect<void, VcsError>;
-  /** Points `origin` at the repository's real remote after a clone from a bundle. */
-  readonly setOriginRemote: (input: {
-    readonly cwd: string;
-    readonly remoteUrl: string;
-  }) => Effect.Effect<void, VcsError>;
-  /** Path of the worktree that has `branch` checked out, if any. */
-  readonly findWorktreeForBranch: (input: {
-    readonly cwd: string;
-    readonly branch: string;
-  }) => Effect.Effect<string | null, VcsError>;
-  /** Adds a detached worktree at `commit`; attaching a branch is a separate, fallible step. */
-  readonly addWorktree: (input: {
-    readonly cwd: string;
-    readonly path: string;
-    readonly commit: string;
-  }) => Effect.Effect<void, VcsError>;
-  /** True when `branch` is checked out by the repository or any worktree. */
-  readonly isBranchCheckedOut: (input: {
-    readonly cwd: string;
-    readonly branch: string;
-  }) => Effect.Effect<boolean, VcsError>;
-  /** Restores a stash this hop created, used when an apply is rolled back. */
-  readonly popStash: (input: {
-    readonly cwd: string;
-    readonly stashRef: string;
-  }) => Effect.Effect<void, VcsError>;
-}
-
-export class ThreadHandoffGit extends Context.Service<ThreadHandoffGit, Shape>()(
-  "t3/orchestration-v2/ThreadHandoffGit",
-) {}
+export class ThreadHandoffGit extends Context.Service<
+  ThreadHandoffGit,
+  {
+    /** Current tip of `branch`, or null when the branch does not exist. */
+    readonly resolveTip: (input: {
+      readonly cwd: string;
+      readonly branch: string;
+    }) => Effect.Effect<string | null, VcsError>;
+    readonly resolveHead: (input: { readonly cwd: string }) => Effect.Effect<string, VcsError>;
+    readonly isAncestor: (input: {
+      readonly cwd: string;
+      readonly ancestor: string;
+      readonly descendant: string;
+    }) => Effect.Effect<boolean, VcsError>;
+    readonly hasCommonAncestor: (input: {
+      readonly cwd: string;
+      readonly left: string;
+      readonly right: string;
+    }) => Effect.Effect<boolean, VcsError>;
+    readonly hasCommit: (input: {
+      readonly cwd: string;
+      readonly commit: string;
+    }) => Effect.Effect<boolean, VcsError>;
+    /** Tracked changes against HEAD, binary-safe so images and lockfiles survive. */
+    readonly trackedPatch: (input: { readonly cwd: string }) => Effect.Effect<string, VcsError>;
+    readonly untrackedPaths: (input: {
+      readonly cwd: string;
+    }) => Effect.Effect<ReadonlyArray<string>, VcsError>;
+    readonly dirtyFileCount: (input: { readonly cwd: string }) => Effect.Effect<number, VcsError>;
+    /** True when `commit` is reachable from any remote-tracking ref, so rewriting it is off the table. */
+    readonly isPublished: (input: {
+      readonly cwd: string;
+      readonly commit: string;
+    }) => Effect.Effect<boolean, VcsError>;
+    readonly tagCommit: (input: {
+      readonly cwd: string;
+      readonly tag: string;
+      readonly commit: string;
+    }) => Effect.Effect<void, VcsError>;
+    readonly stashWorktree: (input: {
+      readonly cwd: string;
+      readonly label: string;
+    }) => Effect.Effect<string | null, VcsError>;
+    readonly writeRef: (input: {
+      readonly cwd: string;
+      readonly ref: string;
+      readonly commit: string;
+    }) => Effect.Effect<void, VcsError>;
+    /**
+     * Writes a bundle carrying `refs`, excluding anything the receiver already
+     * has. With no exclusions this is full history, which is what lets a
+     * repository the target has never seen arrive without a remote, credentials,
+     * or network.
+     */
+    readonly createBundle: (input: {
+      readonly cwd: string;
+      readonly outputPath: string;
+      readonly refs: ReadonlyArray<string>;
+      readonly excludeTips: ReadonlyArray<string>;
+    }) => Effect.Effect<boolean, VcsError>;
+    /** Imports a bundle's objects and parks its refs under `refs/handoff-incoming/`. */
+    readonly importBundle: (input: {
+      readonly cwd: string;
+      readonly bundlePath: string;
+    }) => Effect.Effect<void, VcsError>;
+    readonly cloneFromBundle: (input: {
+      readonly bundlePath: string;
+      readonly targetPath: string;
+      readonly branch: string | null;
+    }) => Effect.Effect<void, VcsError>;
+    /**
+     * Applies a tracked-changes patch. `check` runs the same apply as a dry run,
+     * which is what lets a hop refuse before touching the working tree.
+     */
+    readonly applyPatch: (input: {
+      readonly cwd: string;
+      readonly patch: string;
+      readonly check: boolean;
+    }) => Effect.Effect<boolean, VcsError>;
+    readonly checkoutBranchAt: (input: {
+      readonly cwd: string;
+      readonly branch: string;
+      readonly commit: string;
+    }) => Effect.Effect<void, VcsError>;
+    readonly resetHardTo: (input: {
+      readonly cwd: string;
+      readonly commit: string;
+    }) => Effect.Effect<void, VcsError>;
+    readonly listCheckpointRefs: (input: {
+      readonly cwd: string;
+    }) => Effect.Effect<ReadonlyArray<string>, VcsError>;
+    readonly archivePaths: (input: {
+      readonly cwd: string;
+      readonly paths: ReadonlyArray<string>;
+      readonly outputPath: string;
+    }) => Effect.Effect<void, VcsError>;
+    readonly extractArchive: (input: {
+      readonly cwd: string;
+      readonly archivePath: string;
+    }) => Effect.Effect<void, VcsError | HandoffUntrackedCollisionError>;
+    /** Points `origin` at the repository's real remote after a clone from a bundle. */
+    readonly setOriginRemote: (input: {
+      readonly cwd: string;
+      readonly remoteUrl: string;
+    }) => Effect.Effect<void, VcsError>;
+    /** Path of the worktree that has `branch` checked out, if any. */
+    readonly findWorktreeForBranch: (input: {
+      readonly cwd: string;
+      readonly branch: string;
+    }) => Effect.Effect<string | null, VcsError>;
+    /** Adds a detached worktree at `commit`; attaching a branch is a separate, fallible step. */
+    readonly addWorktree: (input: {
+      readonly cwd: string;
+      readonly path: string;
+      readonly commit: string;
+    }) => Effect.Effect<void, VcsError>;
+    /** True when `branch` is checked out by the repository or any worktree. */
+    readonly isBranchCheckedOut: (input: {
+      readonly cwd: string;
+      readonly branch: string;
+    }) => Effect.Effect<boolean, VcsError>;
+    /** Restores a stash this hop created, used when an apply is rolled back. */
+    readonly popStash: (input: {
+      readonly cwd: string;
+      readonly stashRef: string;
+    }) => Effect.Effect<void, VcsError>;
+  }
+>()("t3/orchestration-v2/ThreadHandoffGit") {}
 
 export const make = Effect.gen(function* () {
   const process = yield* VcsProcess.VcsProcess;
@@ -517,14 +537,10 @@ export const make = Effect.gen(function* () {
       );
       const collisions = entries.filter((entry) => tracked.has(entry));
       if (collisions.length > 0) {
-        return yield* new VcsProcessExitError({
-          operation: "thread-handoff.extract-archive",
-          command: "tar",
+        return yield* new HandoffUntrackedCollisionError({
           cwd: input.cwd,
-          exitCode: 1,
-          detail: `Untracked files from the sender collide with tracked files here: ${collisions
-            .slice(0, 5)
-            .join(", ")}${collisions.length > 5 ? ", …" : ""}.`,
+          collisions: collisions.slice(0, 5),
+          collisionCount: collisions.length,
         });
       }
       yield* process.run({
