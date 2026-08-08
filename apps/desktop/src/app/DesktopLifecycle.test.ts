@@ -105,6 +105,7 @@ function makeLayer(input: {
     ElectronDialog.ElectronDialog,
     ElectronDialog.ElectronDialog.of({
       pickFolder: () => Effect.succeed(Option.none()),
+      pickFiles: () => Effect.succeed([]),
       confirm: () => Effect.succeed(false),
       showMessageBox: (options, owner = Option.none()) =>
         Effect.sync(() => {
@@ -137,6 +138,7 @@ function makeLayer(input: {
     handleBackendNotReady: Effect.void,
     flushMainWindowBounds: Effect.void,
     dispatchMenuAction: () => Effect.void,
+    zoomMain: () => Effect.void,
     syncAppearance: Effect.void,
   });
 
