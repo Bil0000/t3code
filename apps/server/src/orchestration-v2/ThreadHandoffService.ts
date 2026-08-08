@@ -964,7 +964,26 @@ export const make = Effect.gen(function* () {
           }
         }
 
-        const threadId = returningThreadId ?? ThreadId.make(`thread:${NodeCrypto.randomUUID()}`);
+        // A retried first arrival has to land on the thread the previous
+        // attempt already recorded. The arrival events are keyed by handoff
+        // id, so minting a fresh thread id would have projection dedup drop
+        // every event an earlier batch already wrote and leave a half-empty
+        // conversation on the new thread. `recordHop` below writes the row
+        // before anything is applied, so the row is the record of that choice.
+        const priorRows =
+          returningThreadId === null
+            ? yield* sql<{ readonly thread_id: string }>`
+                SELECT thread_id FROM orchestration_v2_thread_handoffs
+                WHERE handoff_id = ${bundle.handoffId}
+                LIMIT 1
+              `.pipe(Effect.orElseSucceed(() => []))
+            : [];
+        const priorThreadIdForHandoff = priorRows[0]?.thread_id;
+        const threadId =
+          returningThreadId ??
+          (priorThreadIdForHandoff !== undefined
+            ? ThreadId.make(priorThreadIdForHandoff)
+            : ThreadId.make(`thread:${NodeCrypto.randomUUID()}`));
         // The row exists before anything is written to a repository: `markHop`
         // only updates, so without this a first arrival that dies mid-apply
         // leaves no `applying` row for recovery to roll back.
@@ -1037,6 +1056,9 @@ export const make = Effect.gen(function* () {
         let rootStashRef: string | null = null;
         let worktreeStashRef: string | null = null;
         let applyCwd = cwd;
+        // Set only when this hop added the worktree, so undo removes exactly
+        // the ones it created and never a worktree that was already here.
+        let createdWorktreePath: string | null = null;
 
         // Everything an apply creates that git will not take back: `reset
         // --hard` leaves new untracked files behind, and the attachment and
@@ -1060,6 +1082,14 @@ export const make = Effect.gen(function* () {
         // be partly built — the tag and stashes may not exist yet.
         const undo = () =>
           Effect.gen(function* () {
+            // A worktree this hop added holds the branch. Hard-resetting it is
+            // not enough: left registered, it blocks a retry from checking the
+            // branch out again. Removed first, so the paths it contains are
+            // already gone by the time the loop below runs.
+            if (createdWorktreePath !== null) {
+              yield* git.removeWorktree({ cwd, path: createdWorktreePath }).pipe(Effect.ignore);
+              applyCwd = cwd;
+            }
             yield* Effect.forEach(
               createdPaths,
               (target) => fs.remove(target, { recursive: true }).pipe(Effect.ignore),
@@ -1255,6 +1285,7 @@ export const make = Effect.gen(function* () {
                   asHandoffError("apply_failed", "Could not create a worktree for the thread."),
                 );
               applyCwd = worktreePath;
+              createdWorktreePath = worktreePath;
               yield* markHop({
                 handoffId: bundle.handoffId,
                 state: "applying",
@@ -1428,6 +1459,45 @@ export const make = Effect.gen(function* () {
             applyCwd,
             rootCwd: cwd,
           });
+
+          // The receiver's own dirty changes were only set aside for the
+          // duration of the apply; a landed hop hands them back. Each stash
+          // pops against the checkout it was taken in. A pop that conflicts
+          // must not fail a hop that already succeeded: the stash stays, its
+          // ref stays on the row, and the warning names it so the user can pop
+          // it by hand. Only cleanly popped refs are cleared.
+          for (const stash of [
+            { ref: worktreeStashRef, stashCwd: applyCwd, root: false },
+            { ref: rootStashRef, stashCwd: cwd, root: true },
+          ]) {
+            if (stash.ref === null) continue;
+            const popped = yield* git.popStash({ cwd: stash.stashCwd, stashRef: stash.ref }).pipe(
+              Effect.as(true),
+              Effect.orElseSucceed(() => false),
+            );
+            if (!popped) {
+              yield* Effect.logWarning("orchestrationV2.handoff.stashPopFailed", {
+                handoffId: bundle.handoffId,
+                threadId,
+                cwd: stash.stashCwd,
+                stashRef: stash.ref,
+              });
+              continue;
+            }
+            if (stash.root) {
+              rootStashRef = null;
+              yield* sql`
+                UPDATE orchestration_v2_thread_handoffs
+                SET root_stash_ref = NULL WHERE handoff_id = ${bundle.handoffId}
+              `.pipe(Effect.ignore);
+            } else {
+              worktreeStashRef = null;
+              yield* sql`
+                UPDATE orchestration_v2_thread_handoffs
+                SET stash_ref = NULL WHERE handoff_id = ${bundle.handoffId}
+              `.pipe(Effect.ignore);
+            }
+          }
         });
         yield* apply.pipe(
           Effect.onError(() =>

@@ -244,6 +244,11 @@ export class ThreadHandoffGit extends Context.Service<
       readonly path: string;
       readonly commit: string;
     }) => Effect.Effect<void, VcsError>;
+    /** Removes a worktree this hop created, so a failed apply leaves no stale checkout. */
+    readonly removeWorktree: (input: {
+      readonly cwd: string;
+      readonly path: string;
+    }) => Effect.Effect<void, VcsError>;
     /** True when `branch` is checked out by the repository or any worktree. */
     readonly isBranchCheckedOut: (input: {
       readonly cwd: string;
@@ -539,7 +544,9 @@ export const make = Effect.gen(function* () {
         .run({
           operation: "thread-handoff.list-extracted",
           command: "find",
-          args: [".", "-type", "f", "-print0"],
+          // Symlinks count: a sender symlink landing on a tracked regular
+          // file would overwrite it just as thoroughly as a file would.
+          args: [".", "(", "-type", "f", "-o", "-type", "l", ")", "-print0"],
           cwd: staging,
         })
         .pipe(
@@ -638,6 +645,14 @@ export const make = Effect.gen(function* () {
       timeoutMs: 600_000,
     }).pipe(Effect.asVoid);
 
+  const removeWorktree: ThreadHandoffGit["Service"]["removeWorktree"] = (input) =>
+    git({
+      operation: "remove-worktree",
+      args: ["worktree", "remove", "--force", input.path],
+      cwd: input.cwd,
+      timeoutMs: 600_000,
+    }).pipe(Effect.asVoid);
+
   const setOriginRemote: ThreadHandoffGit["Service"]["setOriginRemote"] = (input) =>
     git({
       operation: "set-origin-remote",
@@ -691,6 +706,7 @@ export const make = Effect.gen(function* () {
     setOriginRemote,
     findWorktreeForBranch,
     addWorktree,
+    removeWorktree,
     isBranchCheckedOut,
   } satisfies ThreadHandoffGit["Service"];
 });
