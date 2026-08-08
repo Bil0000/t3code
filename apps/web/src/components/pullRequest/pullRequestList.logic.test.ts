@@ -422,6 +422,20 @@ describe("the list snapshot across a reload", () => {
     expect(readPullRequestListSnapshot(storage, "env-2")).toBeNull();
   });
 
+  it("rejects a snapshot whose rows do not decode as entries", () => {
+    const storage = makeStorage();
+    storage.setItem(
+      "t3.pullRequests.list:env-1",
+      JSON.stringify({ scope: "s", data: { entries: [null] } }),
+    );
+    expect(readPullRequestListSnapshot(storage, "env-1")).toBeNull();
+    storage.setItem(
+      "t3.pullRequests.list:env-1",
+      JSON.stringify({ scope: "s", data: { entries: [{ host: "github.com" }] } }),
+    );
+    expect(readPullRequestListSnapshot(storage, "env-1")).toBeNull();
+  });
+
   it("shrugs off corrupt storage and no storage at all", () => {
     const storage = makeStorage();
     storage.setItem("t3.pullRequests.list:env-1", "{not json");

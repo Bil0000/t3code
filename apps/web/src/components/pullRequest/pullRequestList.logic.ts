@@ -1,7 +1,9 @@
+import * as Schema from "effect/Schema";
+
+import { PullRequestListResult } from "@t3tools/contracts";
 import type {
   PullRequestInvolvement,
   PullRequestListEntry,
-  PullRequestListResult,
   PullRequestListState,
 } from "@t3tools/contracts";
 
@@ -215,6 +217,16 @@ export interface PullRequestListSnapshot {
 }
 
 /**
+ * Decoded with the contract's own schema rather than trusted from a cast: storage is writable
+ * by anything in the origin and by any past version of this app, and one malformed row would
+ * otherwise crash the list on every reload until the key is cleared. A snapshot from before a
+ * schema change is rejected the same way, which is exactly the cold start it would have broken.
+ */
+const decodeSnapshot = Schema.decodeUnknownOption(
+  Schema.Struct({ scope: Schema.String, data: PullRequestListResult }),
+);
+
+/**
  * The last list answered for this environment, brought back across a reload. The registry the
  * queries live in is recreated with the renderer, so without this a revisit cold-starts into
  * skeletons even though almost every row is unchanged; hydrated, the stale rows render at once
@@ -228,11 +240,8 @@ export function readPullRequestListSnapshot(
   try {
     const raw = storage?.getItem(snapshotStorageKey(environmentId));
     if (!raw) return null;
-    const parsed: unknown = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return null;
-    const snapshot = parsed as { scope?: unknown; data?: { entries?: unknown } };
-    if (typeof snapshot.scope !== "string" || !Array.isArray(snapshot.data?.entries)) return null;
-    return snapshot as PullRequestListSnapshot;
+    const decoded = decodeSnapshot(JSON.parse(raw));
+    return decoded._tag === "Some" ? decoded.value : null;
   } catch {
     return null;
   }
