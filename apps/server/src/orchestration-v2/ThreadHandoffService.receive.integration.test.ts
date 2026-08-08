@@ -31,20 +31,15 @@ import { ProjectEnrichmentService } from "../project/ProjectEnrichmentService.ts
 import * as ProjectService from "../project/ProjectService.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
-import { layer as workspacePathsLayer } from "../workspace/WorkspacePaths.ts";
+import * as WorkspacePaths from "../workspace/WorkspacePaths.ts";
 import { EventSinkV2 } from "./EventSink.ts";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
 import { ProviderAdapterRegistryV2 } from "./ProviderAdapterRegistry.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import { layer as projectionStoreLayer } from "./ProjectionStore.ts";
 import { OrchestrationV2EventSinkLayerLive, ProjectServiceLayerLive } from "./runtimeLayer.ts";
-import { layer as threadHandoffGitLayer, ThreadHandoffGit } from "./ThreadHandoffGit.ts";
-import {
-  partFileName,
-  sha256,
-  layer as threadHandoffServiceLayer,
-  ThreadHandoffService,
-} from "./ThreadHandoffService.ts";
+import * as ThreadHandoffGit from "./ThreadHandoffGit.ts";
+import * as ThreadHandoffService from "./ThreadHandoffService.ts";
 
 const ServerConfigLayer = ServerConfig.layerTest(process.cwd(), {
   prefix: "t3-handoff-receive-",
@@ -82,7 +77,7 @@ const ProjectEnrichmentTestLayer = Layer.succeed(ProjectEnrichmentService, {
   subscribeChanges: Effect.never,
 });
 
-const HandoffLayer = threadHandoffServiceLayer.pipe(
+const HandoffLayer = ThreadHandoffService.layer.pipe(
   Layer.provideMerge(
     Layer.mergeAll(
       projectionStoreLayer,
@@ -91,11 +86,11 @@ const HandoffLayer = threadHandoffServiceLayer.pipe(
       ProviderAdapterRegistryTestLayer,
       RepositoryIdentityResolver.layer,
       ServerEnvironment.layer,
-      threadHandoffGitLayer,
+      ThreadHandoffGit.layer,
     ),
   ),
   Layer.provideMerge(VcsProcess.layer),
-  Layer.provide(Layer.merge(ProjectEnrichmentTestLayer, workspacePathsLayer)),
+  Layer.provide(Layer.merge(ProjectEnrichmentTestLayer, WorkspacePaths.layer)),
   Layer.provideMerge(SqlitePersistenceMemory),
   Layer.provideMerge(ServerConfigLayer),
   Layer.provideMerge(NodeServices.layer),
@@ -154,7 +149,7 @@ const stageIncoming = (input: {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const config = yield* ServerConfig;
-    const handoffGit = yield* ThreadHandoffGit;
+    const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
 
     const sender = path.join(yield* tempDir("t3-handoff-sender-"), "clone");
     yield* git(["clone", input.receiverRepo, sender], ".");
@@ -170,20 +165,23 @@ const stageIncoming = (input: {
     const parts: Array<OrchestrationV2HandoffPart> = [];
     const declare = (kind: OrchestrationV2HandoffPartKind) =>
       Effect.gen(function* () {
-        const bytes = yield* fs.readFile(path.join(dir, partFileName(kind)));
-        parts.push({ kind, digest: sha256(bytes), byteLength: bytes.length });
+        const bytes = yield* fs.readFile(path.join(dir, ThreadHandoffService.partFileName(kind)));
+        parts.push({ kind, digest: ThreadHandoffService.sha256(bytes), byteLength: bytes.length });
       });
 
     yield* handoffGit.createBundle({
       cwd: sender,
-      outputPath: path.join(dir, partFileName("git-bundle")),
+      outputPath: path.join(dir, ThreadHandoffService.partFileName("git-bundle")),
       refs: [`refs/heads/${input.branch}`],
       excludeTips: [],
     });
     yield* declare("git-bundle");
 
     if (input.patch !== null) {
-      yield* fs.writeFileString(path.join(dir, partFileName("tracked-patch")), input.patch);
+      yield* fs.writeFileString(
+        path.join(dir, ThreadHandoffService.partFileName("tracked-patch")),
+        input.patch,
+      );
       yield* declare("tracked-patch");
     }
 
@@ -275,8 +273,8 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
   describe("a failed apply", () => {
     it.effect("puts the branch back on its pre-hop tip and fails the hop", () =>
       Effect.gen(function* () {
-        const handoffGit = yield* ThreadHandoffGit;
-        const service = yield* ThreadHandoffService;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
+        const service = yield* ThreadHandoffService.ThreadHandoffService;
         const receiverRepo = yield* makeReceiverRepo;
         const projectId = yield* registerProject(receiverRepo);
         const beforeTip = yield* handoffGit.resolveTip({ cwd: receiverRepo, branch: "main" });
@@ -310,8 +308,8 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
     it.effect("removes the worktree it created and everything it extracted", () =>
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
-        const handoffGit = yield* ThreadHandoffGit;
-        const service = yield* ThreadHandoffService;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
+        const service = yield* ThreadHandoffService.ThreadHandoffService;
         const receiverRepo = yield* makeReceiverRepo;
         const projectId = yield* registerProject(receiverRepo);
         const handoffId = ThreadHandoffId.make("handoff-worktree-rollback");
@@ -355,8 +353,8 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const handoffGit = yield* ThreadHandoffGit;
-        const service = yield* ThreadHandoffService;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
+        const service = yield* ThreadHandoffService.ThreadHandoffService;
         const receiverRepo = yield* makeReceiverRepo;
         // The thread's branch exists but nothing has it checked out; the root
         // is on an unrelated branch with its own committed and uncommitted work.
@@ -419,7 +417,7 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const projects = yield* ProjectService.ProjectService;
-        const service = yield* ThreadHandoffService;
+        const service = yield* ThreadHandoffService.ThreadHandoffService;
         const receiverRepo = yield* makeReceiverRepo;
         const handoffId = ThreadHandoffId.make("handoff-clone-cleanup");
         const staged = yield* stageIncoming({
@@ -468,8 +466,8 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const handoffGit = yield* ThreadHandoffGit;
-        const service = yield* ThreadHandoffService;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
+        const service = yield* ThreadHandoffService.ThreadHandoffService;
         const receiverRepo = yield* makeReceiverRepo;
         const projectId = yield* registerProject(receiverRepo);
         const handoffId = ThreadHandoffId.make("handoff-dirty-advance");
@@ -514,7 +512,7 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const service = yield* ThreadHandoffService;
+        const service = yield* ThreadHandoffService.ThreadHandoffService;
         const receiverRepo = yield* makeReceiverRepo;
         const projectId = yield* registerProject(receiverRepo);
         const handoffId = ThreadHandoffId.make("handoff-retried");
@@ -537,7 +535,7 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
         assert.strictEqual(failedRow?.state, "failed");
 
         // The retry carries the same handoff id with a payload that applies.
-        yield* fs.remove(path.join(staged.dir, partFileName("tracked-patch")));
+        yield* fs.remove(path.join(staged.dir, ThreadHandoffService.partFileName("tracked-patch")));
         const retried = yield* service.receive({
           bundle: bundleFor({
             handoffId,
@@ -567,8 +565,8 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const sql = yield* SqlClient.SqlClient;
-        const handoffGit = yield* ThreadHandoffGit;
-        const service = yield* ThreadHandoffService;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
+        const service = yield* ThreadHandoffService.ThreadHandoffService;
         const rootCwd = yield* makeReceiverRepo;
         const applyCwd = path.join(yield* tempDir("t3-handoff-interrupted-"), "checkout");
         const head = yield* handoffGit.resolveHead({ cwd: rootCwd });
@@ -619,8 +617,8 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const sql = yield* SqlClient.SqlClient;
-        const handoffGit = yield* ThreadHandoffGit;
-        const service = yield* ThreadHandoffService;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
+        const service = yield* ThreadHandoffService.ThreadHandoffService;
         const rootCwd = yield* makeReceiverRepo;
         const oldTip = yield* handoffGit.resolveHead({ cwd: rootCwd });
         // The hop moved feat/incoming forward and attached it in a worktree
@@ -683,7 +681,7 @@ it.layer(HandoffLayer)("ThreadHandoffService receive against real repositories",
         const fs = yield* FileSystem.FileSystem;
         const config = yield* ServerConfig;
         const eventSink = yield* EventSinkV2;
-        const service = yield* ThreadHandoffService;
+        const service = yield* ThreadHandoffService.ThreadHandoffService;
         // No remote, so preparing fails at the repository-identity step — after
         // the parts have already been staged.
         const receiverRepo = yield* makeReceiverRepo;

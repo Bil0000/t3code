@@ -363,11 +363,13 @@ export const make = Effect.gen(function* () {
           -- A retry reuses the row, and the previous attempt's rollback
           -- metadata describes a checkout this attempt has not touched:
           -- inheriting it would have recovery reset or pop the wrong tree.
-          applied_head_sha = NULL,
-          stash_ref = NULL,
-          root_stash_ref = NULL,
-          pre_tag = NULL,
-          created_worktree = 0,
+          -- The arrival of the same attempt keeps them: the stash refs must
+          -- survive until the post-arrival pops have actually run.
+          applied_head_sha = CASE WHEN excluded.state = 'arrived' THEN applied_head_sha ELSE NULL END,
+          stash_ref = CASE WHEN excluded.state = 'arrived' THEN stash_ref ELSE NULL END,
+          root_stash_ref = CASE WHEN excluded.state = 'arrived' THEN root_stash_ref ELSE NULL END,
+          pre_tag = CASE WHEN excluded.state = 'arrived' THEN pre_tag ELSE NULL END,
+          created_worktree = CASE WHEN excluded.state = 'arrived' THEN created_worktree ELSE 0 END,
           apply_cwd = NULL,
           root_cwd = NULL,
           updated_at = excluded.updated_at
@@ -545,14 +547,18 @@ export const make = Effect.gen(function* () {
         // travel under their original names, which is what the carried turn
         // items reference, so nothing has to be rewritten on arrival.
         const threadSegment = toSafeThreadAttachmentSegment(thread.id);
+        // A missing directory means no thread ever attached anything; an
+        // unreadable one must stop the hop, or the carried turn items would
+        // reference attachments that silently never travelled.
         const attachmentFiles =
-          threadSegment === null
+          threadSegment === null ||
+          !(yield* fs.exists(config.attachmentsDir).pipe(Effect.orElseSucceed(() => false)))
             ? []
             : yield* fs.readDirectory(config.attachmentsDir).pipe(
                 Effect.map((entries) =>
                   entries.filter((entry) => entry.startsWith(`${threadSegment}-`)),
                 ),
-                Effect.orElseSucceed(() => [] as ReadonlyArray<string>),
+                asHandoffError("store_failed", "Could not read the attachments directory."),
               );
         if (attachmentFiles.length > 0) {
           const attachmentsPart = yield* stagePart({
@@ -1572,6 +1578,7 @@ export const make = Effect.gen(function* () {
       const rows = yield* sql<{
         readonly handoff_id: string;
         readonly thread_id: string;
+        readonly state: string;
         readonly stash_ref: string | null;
         readonly root_stash_ref: string | null;
         readonly pre_tag: string | null;
@@ -1580,14 +1587,48 @@ export const make = Effect.gen(function* () {
         readonly created_worktree: number;
         readonly manifest_json: string;
       }>`
-        SELECT handoff_id, thread_id, stash_ref, root_stash_ref, pre_tag, apply_cwd, root_cwd,
-               created_worktree, manifest_json
-        FROM orchestration_v2_thread_handoffs WHERE state = 'applying'
+        SELECT handoff_id, thread_id, state, stash_ref, root_stash_ref, pre_tag, apply_cwd,
+               root_cwd, created_worktree, manifest_json
+        FROM orchestration_v2_thread_handoffs
+        WHERE state = 'applying'
+           OR (state = 'arrived' AND (stash_ref IS NOT NULL OR root_stash_ref IS NOT NULL))
       `;
       yield* Effect.forEach(
         rows,
         (row) =>
           Effect.gen(function* () {
+            // A hop that arrived but stopped before handing the stashes back
+            // only owes those pops: the arrival itself is done and stays.
+            if (row.state === "arrived") {
+              yield* Effect.gen(function* () {
+                const rootCwd = row.root_cwd ?? row.apply_cwd;
+                if (rootCwd === null) return;
+                const applyCwd = row.apply_cwd ?? rootCwd;
+                for (const stash of [
+                  { ref: row.stash_ref, cwd: applyCwd, column: "stash_ref" as const },
+                  { ref: row.root_stash_ref, cwd: rootCwd, column: "root_stash_ref" as const },
+                ]) {
+                  if (stash.ref === null) continue;
+                  const popped = yield* git.popStash({ cwd: stash.cwd, stashRef: stash.ref }).pipe(
+                    Effect.as(true),
+                    Effect.orElseSucceed(() => false),
+                  );
+                  if (!popped) continue;
+                  yield* (
+                    stash.column === "stash_ref"
+                      ? sql`
+                        UPDATE orchestration_v2_thread_handoffs
+                        SET stash_ref = NULL WHERE handoff_id = ${row.handoff_id}
+                      `
+                      : sql`
+                        UPDATE orchestration_v2_thread_handoffs
+                        SET root_stash_ref = NULL WHERE handoff_id = ${row.handoff_id}
+                      `
+                  ).pipe(Effect.ignore);
+                }
+              }).pipe(Effect.ignore);
+              return;
+            }
             // A hop that died mid-apply left a written tree behind. Put it
             // back where the tag and stash say it was before marking the hop
             // failed — best effort, since the worktree may itself be gone.

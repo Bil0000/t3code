@@ -6,18 +6,11 @@ import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 
 import * as VcsProcess from "../vcs/VcsProcess.ts";
-import {
-  classifyIncomingTip,
-  handoffPreTagName,
-  handoffRefName,
-  handoffStashLabel,
-  HandoffUntrackedCollisionError,
-  layer as threadHandoffGitLayer,
-  ThreadHandoffGit,
-  type ClassifyIncomingTipInput,
-} from "./ThreadHandoffGit.ts";
+import * as ThreadHandoffGit from "./ThreadHandoffGit.ts";
 
-const input = (overrides: Partial<ClassifyIncomingTipInput>): ClassifyIncomingTipInput => ({
+const input = (
+  overrides: Partial<ThreadHandoffGit.ClassifyIncomingTipInput>,
+): ThreadHandoffGit.ClassifyIncomingTipInput => ({
   localTip: "local",
   incomingTip: "incoming",
   incomingContainsLocal: false,
@@ -28,41 +21,52 @@ const input = (overrides: Partial<ClassifyIncomingTipInput>): ClassifyIncomingTi
 
 describe("classifyIncomingTip", () => {
   it("advances a branch the receiving repository does not have yet", () => {
-    assert.strictEqual(classifyIncomingTip(input({ localTip: null })), "advance");
+    assert.strictEqual(ThreadHandoffGit.classifyIncomingTip(input({ localTip: null })), "advance");
   });
 
   it("absorbs an identical tip instead of moving anything", () => {
     assert.strictEqual(
-      classifyIncomingTip(input({ localTip: "same", incomingTip: "same" })),
+      ThreadHandoffGit.classifyIncomingTip(input({ localTip: "same", incomingTip: "same" })),
       "absorb",
     );
   });
 
   it("advances when the incoming commit descends from the local tip", () => {
-    assert.strictEqual(classifyIncomingTip(input({ incomingContainsLocal: true })), "advance");
+    assert.strictEqual(
+      ThreadHandoffGit.classifyIncomingTip(input({ incomingContainsLocal: true })),
+      "advance",
+    );
   });
 
   it("absorbs when the receiving side is already ahead", () => {
-    assert.strictEqual(classifyIncomingTip(input({ localContainsIncoming: true })), "absorb");
+    assert.strictEqual(
+      ThreadHandoffGit.classifyIncomingTip(input({ localContainsIncoming: true })),
+      "absorb",
+    );
   });
 
   it("refuses when both sides moved, so neither tip is a descendant of the other", () => {
-    assert.strictEqual(classifyIncomingTip(input({})), "diverged");
+    assert.strictEqual(ThreadHandoffGit.classifyIncomingTip(input({})), "diverged");
   });
 
   it("refuses unrelated histories rather than treating them as a divergence to rebase", () => {
-    assert.strictEqual(classifyIncomingTip(input({ hasCommonAncestor: false })), "unrelated");
+    assert.strictEqual(
+      ThreadHandoffGit.classifyIncomingTip(input({ hasCommonAncestor: false })),
+      "unrelated",
+    );
   });
 
   it("treats a fast-forward as advance even when common ancestry was not computed", () => {
     assert.strictEqual(
-      classifyIncomingTip(input({ incomingContainsLocal: true, hasCommonAncestor: false })),
+      ThreadHandoffGit.classifyIncomingTip(
+        input({ incomingContainsLocal: true, hasCommonAncestor: false }),
+      ),
       "advance",
     );
   });
 
   it("never advances on a tip that only the local side contains", () => {
-    const classification = classifyIncomingTip(
+    const classification = ThreadHandoffGit.classifyIncomingTip(
       input({ localContainsIncoming: true, hasCommonAncestor: true }),
     );
 
@@ -73,35 +77,38 @@ describe("classifyIncomingTip", () => {
 describe("handoff ref names", () => {
   it("parks refused commits under an environment-scoped namespace", () => {
     assert.strictEqual(
-      handoffRefName("environment-mac", "feat/thread-handoff"),
+      ThreadHandoffGit.handoffRefName("environment-mac", "feat/thread-handoff"),
       "refs/handoff/environment-mac/feat/thread-handoff",
     );
   });
 
   it("keeps each refused handoff's parked commit under its own ref", () => {
     assert.strictEqual(
-      handoffRefName("environment-mac", "feat/thread-handoff", "handoff-1"),
+      ThreadHandoffGit.handoffRefName("environment-mac", "feat/thread-handoff", "handoff-1"),
       "refs/handoff/environment-mac/handoff-1/feat/thread-handoff",
     );
   });
 
   it("rewrites characters git refuses inside a ref name", () => {
-    assert.strictEqual(handoffRefName("env one", "feat/a..b~c"), "refs/handoff/env-one/feat/a-b-c");
+    assert.strictEqual(
+      ThreadHandoffGit.handoffRefName("env one", "feat/a..b~c"),
+      "refs/handoff/env-one/feat/a-b-c",
+    );
   });
 
   it("names the pre-move tag after the hop that moved the pointer", () => {
-    assert.strictEqual(handoffPreTagName("handoff-1"), "handoff-pre-handoff-1");
+    assert.strictEqual(ThreadHandoffGit.handoffPreTagName("handoff-1"), "handoff-pre-handoff-1");
   });
 
   it("puts the base sha in the stash label so a later pop is legible", () => {
     assert.strictEqual(
-      handoffStashLabel("handoff-1", "a91f2c4"),
+      ThreadHandoffGit.handoffStashLabel("handoff-1", "a91f2c4"),
       "handoff-overwritten-handoff-1-base-a91f2c4",
     );
   });
 });
 
-const GitLayer = threadHandoffGitLayer.pipe(
+const GitLayer = ThreadHandoffGit.layer.pipe(
   Layer.provideMerge(VcsProcess.layer),
   Layer.provideMerge(NodeServices.layer),
 );
@@ -156,7 +163,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const handoffGit = yield* ThreadHandoffGit;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
         const cwd = yield* makeRepo;
         const sender = yield* tempDir("t3-handoff-git-sender-");
         yield* write(sender, "tracked.txt", "from the sender\n");
@@ -164,7 +171,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
 
         const error = yield* Effect.flip(handoffGit.extractArchive({ cwd, archivePath }));
 
-        assert.instanceOf(error, HandoffUntrackedCollisionError);
+        assert.instanceOf(error, ThreadHandoffGit.HandoffUntrackedCollisionError);
         assert.deepStrictEqual([...error.collisions], ["tracked.txt"]);
         // The worktree is untouched and the staging directory is cleaned up.
         assert.strictEqual(yield* fs.readFileString(path.join(cwd, "tracked.txt")), "committed\n");
@@ -176,7 +183,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const handoffGit = yield* ThreadHandoffGit;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
         const cwd = yield* makeRepo;
         const sender = yield* tempDir("t3-handoff-git-sender-");
         yield* write(sender, "elsewhere.txt", "link target\n");
@@ -185,7 +192,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
 
         const error = yield* Effect.flip(handoffGit.extractArchive({ cwd, archivePath }));
 
-        assert.instanceOf(error, HandoffUntrackedCollisionError);
+        assert.instanceOf(error, ThreadHandoffGit.HandoffUntrackedCollisionError);
         assert.deepStrictEqual([...error.collisions], ["tracked.txt"]);
         assert.strictEqual(yield* fs.readFileString(path.join(cwd, "tracked.txt")), "committed\n");
       }),
@@ -195,7 +202,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const handoffGit = yield* ThreadHandoffGit;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
         const cwd = yield* makeRepo;
         const sender = yield* tempDir("t3-handoff-git-sender-");
         yield* write(sender, ".env", "SECRET=1\n");
@@ -218,7 +225,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
   describe("stashWorktree", () => {
     it.effect("returns null when there is nothing to stash", () =>
       Effect.gen(function* () {
-        const handoffGit = yield* ThreadHandoffGit;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
         const cwd = yield* makeRepo;
 
         assert.strictEqual(yield* handoffGit.stashWorktree({ cwd, label: "clean" }), null);
@@ -229,7 +236,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const handoffGit = yield* ThreadHandoffGit;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
         const cwd = yield* makeRepo;
         yield* write(cwd, "tracked.txt", "dirty\n");
 
@@ -246,7 +253,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const handoffGit = yield* ThreadHandoffGit;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
         const cwd = yield* makeRepo;
         yield* write(cwd, "tracked.txt", "dirty\n");
         yield* handoffGit.stashWorktree({ cwd, label: "dirty" });
@@ -264,7 +271,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const handoffGit = yield* ThreadHandoffGit;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
         const cwd = yield* makeRepo;
         yield* write(cwd, "tracked.txt", "dirty\n");
         const stashRef = yield* handoffGit.stashWorktree({ cwd, label: "dirty" });
@@ -282,7 +289,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const handoffGit = yield* ThreadHandoffGit;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
         const cwd = yield* makeRepo;
         const outputPath = path.join(yield* tempDir("t3-handoff-git-bundle-"), "objects.bundle");
 
@@ -304,7 +311,7 @@ it.layer(GitLayer)("ThreadHandoffGit against a real repository", (it) => {
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
-        const handoffGit = yield* ThreadHandoffGit;
+        const handoffGit = yield* ThreadHandoffGit.ThreadHandoffGit;
         const cwd = yield* makeRepo;
         const head = yield* handoffGit.resolveHead({ cwd });
         const worktreePath = path.join(yield* tempDir("t3-handoff-git-wt-"), "checkout");
