@@ -133,7 +133,6 @@ function RightPanelEmptyState(props: {
       icon: Globe2,
       available: props.browserAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.browser,
-      centered: false,
       onClick: props.onAddBrowser,
     },
     {
@@ -142,7 +141,6 @@ function RightPanelEmptyState(props: {
       icon: TerminalSquare,
       available: props.terminalAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.terminal,
-      centered: false,
       onClick: props.onAddTerminal,
     },
     {
@@ -151,7 +149,6 @@ function RightPanelEmptyState(props: {
       icon: Files,
       available: props.filesAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.files,
-      centered: false,
       onClick: props.onAddFiles,
     },
     {
@@ -160,7 +157,6 @@ function RightPanelEmptyState(props: {
       icon: FileDiff,
       available: props.diffAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.diff,
-      centered: false,
       onClick: props.onAddDiff,
     },
     {
@@ -169,7 +165,6 @@ function RightPanelEmptyState(props: {
       icon: GitPullRequest,
       available: props.pullRequestAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.pullRequest,
-      centered: true,
       onClick: props.onAddPullRequest,
     },
     {
@@ -178,7 +173,6 @@ function RightPanelEmptyState(props: {
       icon: Bot,
       available: props.agentsAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.agents,
-      centered: false,
       onClick: props.onAddAgents,
     },
   ] as const;
@@ -195,9 +189,6 @@ function RightPanelEmptyState(props: {
         <div className="grid grid-cols-2 gap-2">
           {actions.map((action) => {
             const Icon = action.icon;
-            const placementClass = action.centered
-              ? "col-span-2 w-[calc(50%-0.25rem)] justify-self-center"
-              : undefined;
             const content = (
               <>
                 <Icon className="mb-3 size-5" />
@@ -213,10 +204,7 @@ function RightPanelEmptyState(props: {
                   key={action.label}
                   type="button"
                   onClick={action.onClick}
-                  className={cn(
-                    "flex min-h-28 w-full flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left transition hover:border-border hover:bg-accent/60 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5",
-                    placementClass,
-                  )}
+                  className="flex min-h-28 w-full flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left transition hover:border-border hover:bg-accent/60 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5"
                 >
                   {content}
                 </button>
@@ -225,10 +213,7 @@ function RightPanelEmptyState(props: {
             const disabledCard = (
               <button
                 type="button"
-                className={cn(
-                  "flex min-h-28 w-full cursor-not-allowed flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left opacity-40 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5",
-                  placementClass,
-                )}
+                className="flex min-h-28 w-full cursor-not-allowed flex-col items-start rounded-lg border border-border/80 bg-card p-4 text-left opacity-40 dark:border-transparent dark:shadow-none dark:inset-ring-1 dark:inset-ring-white/5"
                 aria-disabled="true"
               >
                 {content}

@@ -281,10 +281,39 @@ describe("decodeCommitsJson", () => {
 
   it("falls back to the creation timestamp when there is no commit date", () => {
     const commits = expectSuccess(
-      decodeCommitsJson(JSON.stringify([{ id: "aaa", created_at: "2026-07-01T00:00:00+08:00" }])),
+      decodeCommitsJson(
+        JSON.stringify([
+          {
+            id: "aaa",
+            created_at: "2026-07-01T00:00:00+08:00",
+            author_name: "Ada Lovelace",
+            author_email: "ada@example.com",
+          },
+        ]),
+      ),
     );
 
-    expect(commits[0]).toMatchObject({ oid: "aaa", committedDate: "2026-07-01T00:00:00+08:00" });
+    expect(commits[0]).toMatchObject({
+      oid: "aaa",
+      committedDate: "2026-07-01T00:00:00+08:00",
+      authors: [{ login: "Ada Lovelace", name: "Ada Lovelace", avatarUrl: null }],
+    });
+  });
+
+  it("carries commit additions and deletions when GitLab returns stats", () => {
+    const commits = expectSuccess(
+      decodeCommitsJson(
+        JSON.stringify([
+          {
+            id: "aaa",
+            committed_date: "2026-07-01T00:00:00Z",
+            stats: { additions: 21, deletions: 8, total: 29 },
+          },
+        ]),
+      ),
+    );
+
+    expect(commits[0]).toMatchObject({ additions: 21, deletions: 8 });
   });
 });
 

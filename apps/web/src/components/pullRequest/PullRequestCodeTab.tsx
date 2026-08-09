@@ -43,7 +43,7 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
-import { PullRequestDiffGhost } from "./PullRequestGhosts";
+import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
@@ -150,6 +150,8 @@ export function PullRequestCodeTab({
   environmentId,
   reference,
   detail,
+  selectedCommitOid,
+  onSelectedCommitChange,
   pendingFinding,
   onFixFinding,
   onAskAboutSelection,
@@ -159,6 +161,9 @@ export function PullRequestCodeTab({
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   detail: PullRequestDetail;
+  /** Commit whose diff is open. Null keeps the whole pull-request diff selected. */
+  selectedCommitOid: string | null;
+  onSelectedCommitChange: (oid: string | null) => void;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
   onFixFinding?: (finding: PullRequestFinding) => void;
@@ -192,17 +197,10 @@ export function PullRequestCodeTab({
     readonly cursor: string | null;
     readonly slices: ReadonlyArray<DiffSlice>;
   }>({ key: "", cursor: null, slices: NO_SLICES });
-  // The chosen commit carries its pull request the same way, so switching pull request drops
-  // back to the whole change in the same render rather than asking the new host for a commit
-  // that belongs to the old one.
-  const [commitScope, setCommitScope] = useState<{ key: string; oid: string | null }>({
-    key: "",
-    oid: null,
-  });
   const parseCache = useRef(new Map<string, RenderablePatch>());
 
   const referenceKey = pullRequestReviewKey(reference);
-  const commit = commitScope.key === referenceKey ? commitScope.oid : null;
+  const commit = selectedCommitOid;
   // One commit's own changes and the whole change are two different diffs, paged separately, so
   // everything below is keyed by both.
   const scopeKey = commit === null ? referenceKey : `${referenceKey}@${commit}`;
@@ -643,9 +641,9 @@ export function PullRequestCodeTab({
   const selectedCommit = orderedCommits.find((entry) => entry.oid === commit);
   useEffect(() => {
     if (commit !== null && selectedCommit === undefined) {
-      setCommitScope({ key: referenceKey, oid: null });
+      onSelectedCommitChange(null);
     }
-  }, [commit, referenceKey, selectedCommit]);
+  }, [commit, onSelectedCommitChange, selectedCommit]);
   const scopeLabel = selectedCommit ? selectedCommit.messageHeadline : "All commits";
   /**
    * The same controls the thread diff panel carries, in the same order, minus the
@@ -653,23 +651,23 @@ export function PullRequestCodeTab({
    * diff API offers it.
    */
   const toolbar = (
-    <div className="flex shrink-0 items-center gap-3 border-b border-border/60 px-5 py-2 text-xs text-muted-foreground">
+    <div className="surface-subheader justify-between gap-2 px-4 text-xs text-muted-foreground">
       <div className="flex min-w-0 flex-1 items-center gap-3">
         {/* A host that reports no commits has nothing to scope by, and a dropdown whose only
             entry is the scope already showing is a control that does nothing. */}
         {orderedCommits.length > 0 ? (
           <DropdownMenu>
             <DropdownMenuTrigger
-              className="inline-flex h-6 max-w-64 items-center gap-1 rounded-md bg-muted/70 px-2 text-xs font-medium text-foreground outline-none transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+              className="inline-flex h-6 max-w-64 items-center gap-1 rounded-md bg-accent px-2 text-xs font-medium text-accent-foreground outline-none transition-colors hover:bg-accent/80 focus-visible:ring-2 focus-visible:ring-ring"
               aria-label={`Diff scope: ${scopeLabel}`}
             >
               <span className="truncate">{scopeLabel}</span>
-              <ChevronDownIcon className="size-3.5 shrink-0 text-muted-foreground" />
+              <ChevronDownIcon className="size-3.5 shrink-0 opacity-70" />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-80">
               <DropdownMenuItem
                 className={commit === null ? "bg-foreground/[0.08]" : undefined}
-                onClick={() => setCommitScope({ key: referenceKey, oid: null })}
+                onClick={() => onSelectedCommitChange(null)}
               >
                 <span>All commits</span>
               </DropdownMenuItem>
@@ -677,7 +675,7 @@ export function PullRequestCodeTab({
                 <DropdownMenuItem
                   key={entry.oid}
                   className={entry.oid === commit ? "bg-foreground/[0.08]" : undefined}
-                  onClick={() => setCommitScope({ key: referenceKey, oid: entry.oid })}
+                  onClick={() => onSelectedCommitChange(entry.oid)}
                 >
                   {/* Headlines run long, and the abbreviated oid after one is what a reader
                       matches against the commit list on the host. */}
@@ -752,17 +750,17 @@ export function PullRequestCodeTab({
               render={
                 <Button
                   type="button"
-                  size="icon-xs"
-                  variant="outline"
+                  size="icon-sm"
+                  variant="ghost"
                   aria-label={allFilesCollapsed ? "Expand all files" : "Collapse all files"}
                   onClick={toggleAllFiles}
                 />
               }
             >
               {allFilesCollapsed ? (
-                <ChevronsUpDownIcon className="size-3" />
+                <ChevronsUpDownIcon className="size-3.5" />
               ) : (
-                <ChevronsDownUpIcon className="size-3" />
+                <ChevronsDownUpIcon className="size-3.5" />
               )}
             </TooltipTrigger>
             <TooltipPopup side="top">
@@ -771,9 +769,8 @@ export function PullRequestCodeTab({
           </Tooltip>
         ) : null}
         <ToggleGroup
-          className="shrink-0"
-          variant="outline"
-          size="xs"
+          className="shrink-0 gap-1"
+          size="sm"
           value={[diffRenderMode]}
           onValueChange={(value) => {
             const next = value[0];
@@ -782,11 +779,11 @@ export function PullRequestCodeTab({
             }
           }}
         >
-          <Toggle aria-label="Stacked diff view" value="stacked">
-            <Rows3Icon className="size-3" />
+          <Toggle aria-label="Stacked diff view" value="stacked" variant="ghost">
+            <Rows3Icon className="size-3.5" />
           </Toggle>
-          <Toggle aria-label="Split diff view" value="split">
-            <Columns2Icon className="size-3" />
+          <Toggle aria-label="Split diff view" value="split" variant="ghost">
+            <Columns2Icon className="size-3.5" />
           </Toggle>
         </ToggleGroup>
         <Tooltip>
@@ -794,8 +791,8 @@ export function PullRequestCodeTab({
             render={
               <Toggle
                 aria-label={wordWrap ? "Disable diff line wrapping" : "Enable diff line wrapping"}
-                variant="outline"
-                size="xs"
+                variant="ghost"
+                size="sm"
                 pressed={wordWrap}
                 onPressedChange={(pressed) => {
                   setWordWrap(Boolean(pressed));
@@ -803,7 +800,7 @@ export function PullRequestCodeTab({
               />
             }
           >
-            <TextWrapIcon className="size-3" />
+            <TextWrapIcon className="size-3.5" />
           </TooltipTrigger>
           <TooltipPopup side="top">
             {wordWrap ? "Disable line wrapping" : "Enable line wrapping"}
@@ -825,13 +822,15 @@ export function PullRequestCodeTab({
   // Under the toolbar rather than in place of it, so choosing a commit does not take the
   // dropdown that was just used off the screen while its diff loads.
   if (diffQuery.isPending && loadedSlices.length === 0) {
-    return withReviewBar(<PullRequestDiffGhost className="p-5" />);
+    return withReviewBar(<DiffPanelLoadingState label="Loading pull request diff..." />);
   }
 
   // A slice that fails once there are files on screen is reported at the end of them instead:
   // the diff already read is worth more than the error that stopped it growing.
   if (diffQuery.error && loadedSlices.length === 0) {
-    return withReviewBar(<p className="p-5 text-sm text-muted-foreground">{diffQuery.error}</p>);
+    return withReviewBar(
+      <p className="px-4 py-5 text-sm text-muted-foreground">{diffQuery.error}</p>,
+    );
   }
 
   // A patch the viewer cannot structure (binary, or a format it does not parse) still has to
@@ -844,7 +843,7 @@ export function PullRequestCodeTab({
       : [];
   if (files.length === 0 && rawSlices.length > 0) {
     return withReviewBar(
-      <div className="space-y-4 p-5">
+      <div className="space-y-4 px-4 py-5">
         {rawSlices.map((slice) => (
           <div key={`${slice.reason}:${slice.text.slice(0, 64)}`} className="space-y-2">
             <p className="text-xs text-muted-foreground">{slice.reason}</p>
@@ -857,7 +856,7 @@ export function PullRequestCodeTab({
 
   if (items.length === 0 && nextCursor === null) {
     return withReviewBar(
-      <p className="p-5 text-sm text-muted-foreground">
+      <p className="px-4 py-5 text-sm text-muted-foreground">
         {commit === null
           ? "This pull request has no file changes."
           : "This commit has no file changes."}
@@ -880,7 +879,7 @@ export function PullRequestCodeTab({
       // A slice the viewer cannot structure is still part of the change. Shown under the files
       // that did parse rather than dropped, because the alternative is a diff that silently
       // omits whatever the viewer could not read.
-      <div className="space-y-4 border-t border-border/60 p-5">
+      <div className="space-y-4 border-t border-border/60 px-4 py-5">
         {rawSlices.map((slice) => (
           <div key={`${slice.reason}:${slice.text.slice(0, 64)}`} className="space-y-2">
             <p className="text-xs text-muted-foreground">{slice.reason}</p>
@@ -905,7 +904,7 @@ export function PullRequestCodeTab({
             {/* Still a heading, so the section keeps its place in a screen reader's outline;
                 the count is spelled out there rather than left as a bare number. */}
             <h2>
-              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-5 py-2 text-left text-xs text-muted-foreground">
+              <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-4 py-2 text-left text-xs text-muted-foreground">
                 {/* While slices are still arriving a conversation may simply belong to a file
                     that has not landed yet, which is not the same as being off the diff. */}
                 <span>
@@ -930,7 +929,7 @@ export function PullRequestCodeTab({
             <CollapsiblePanel>
               {/* Capped: opened on a change with dozens of them, this would otherwise leave no
                   room for the diff it sits above. */}
-              <div className="max-h-64 space-y-3 overflow-auto px-5 pb-3">
+              <div className="max-h-64 space-y-3 overflow-auto px-4 pb-3">
                 {[...orphanFiles].map(([path, threads]) => (
                   <div key={path}>
                     <p className="truncate px-3 text-xs text-muted-foreground" title={path}>

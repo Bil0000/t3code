@@ -144,6 +144,37 @@ export function PullRequestCheckStatusIcon({ status }: { status: PullRequestChec
   );
 }
 
+export function PullRequestActorAvatar({
+  actor,
+  className,
+}: {
+  actor: PullRequestActor | null;
+  className?: string;
+}) {
+  const login = actor?.login ?? "ghost";
+  const avatarUrl = actor?.avatarUrl ?? null;
+  return avatarUrl === null ? (
+    // Not every host reports an avatar, so the initial stands in where none arrives.
+    <span
+      aria-hidden
+      className={cn(
+        "flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-medium text-muted-foreground",
+        className,
+      )}
+    >
+      {login.slice(0, 1).toUpperCase()}
+    </span>
+  ) : (
+    <img
+      aria-hidden
+      alt=""
+      src={avatarUrl}
+      loading="lazy"
+      className={cn("size-4 shrink-0 rounded-full bg-muted object-cover", className)}
+    />
+  );
+}
+
 /** GitHub attributes work from a deleted account to "ghost"; say the same word everywhere. */
 export function PullRequestActorLabel({
   actor,
@@ -153,26 +184,9 @@ export function PullRequestActorLabel({
   className?: string;
 }) {
   const login = actor?.login ?? "ghost";
-  const avatarUrl = actor?.avatarUrl ?? null;
   return (
     <span className={cn("flex min-w-0 items-center gap-1.5", className)} title={login}>
-      {avatarUrl === null ? (
-        // Not every host reports an avatar, so the initial stands in where none arrives.
-        <span
-          aria-hidden
-          className="flex size-4 shrink-0 items-center justify-center rounded-full bg-muted text-[8px] font-medium text-muted-foreground"
-        >
-          {login.slice(0, 1).toUpperCase()}
-        </span>
-      ) : (
-        <img
-          aria-hidden
-          alt=""
-          src={avatarUrl}
-          loading="lazy"
-          className="size-4 shrink-0 rounded-full bg-muted object-cover"
-        />
-      )}
+      <PullRequestActorAvatar actor={actor} />
       <span className="truncate">{login}</span>
     </span>
   );

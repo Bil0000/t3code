@@ -1180,6 +1180,10 @@ export const make = Effect.gen(function* () {
 
         const entries: GitHubReviewThreadEntry[] = [];
         const avatarsByLogin = new Map<string, string>();
+        const commitStats = new Map<
+          string,
+          { readonly additions: number; readonly deletions: number }
+        >();
         let reviewers: ReadonlyArray<PullRequestActor> = [];
         let viewer: GitHubReviewThreadPage["viewer"] = { canUpdate: true, didAuthor: false };
         let cursor: string | null = null;
@@ -1194,6 +1198,7 @@ export const make = Effect.gen(function* () {
           if (page === 0) {
             reviewers = read.reviewers;
             viewer = read.viewer;
+            for (const [oid, stat] of read.commitStats) commitStats.set(oid, stat);
           }
           cursor = read.nextCursor;
           page += 1;
@@ -1233,6 +1238,7 @@ export const make = Effect.gen(function* () {
           truncated: cursor !== null || finished.some((entry) => entry.truncated),
           reviewers,
           avatarsByLogin,
+          commitStats,
           viewer,
         };
       }),

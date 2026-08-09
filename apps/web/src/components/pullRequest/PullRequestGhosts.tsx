@@ -1,7 +1,7 @@
 /**
- * The one loading language of the pull request surface. Every pending state — the first list,
- * a search under way, a detail panel opening, a diff on its way — wears the same ghost: bars
- * in the geometry of the content they stand for, pulsing on one composited layer.
+ * Loading states specific to the pull request surface — the first list, a search under way,
+ * and a detail panel opening — use bars in the geometry of the content they stand for, pulsing
+ * on one composited layer. Diff loading uses the shared diff-panel skeleton instead.
  *
  * Deliberately not the app's shimmer skeleton. The sweep is a `transform` animation per bar —
  * compositor-safe, but a layer for every bar on screen — and its white highlight over the
@@ -65,7 +65,7 @@ export function PullRequestDetailGhost() {
     <div
       role="status"
       aria-label="Loading pull request"
-      className="animate-ghost-pulse space-y-6 p-5"
+      className="animate-ghost-pulse space-y-6 px-4 py-5"
     >
       <div className="space-y-2">
         <GhostBar className="h-5 w-4/5" />
@@ -90,35 +90,6 @@ export function PullRequestDetailGhost() {
   );
 }
 
-/** Code-shaped: short lines stepping through indentation, the way a hunk reads. */
-const DIFF_LINES = [
-  "ml-0 w-2/5",
-  "ml-5 w-3/5",
-  "ml-10 w-1/2",
-  "ml-10 w-2/5",
-  "ml-5 w-1/3",
-  "ml-0 w-1/4",
-  "ml-5 w-1/2",
-  "ml-10 w-1/3",
-];
-
-export function PullRequestDiffGhost({ className }: { className?: string }) {
-  return (
-    <div
-      role="status"
-      aria-label="Loading diff"
-      className={cn("animate-ghost-pulse space-y-2.5", className)}
-    >
-      <GhostBar className="h-3.5 w-40" />
-      <div className="space-y-2 pt-1">
-        {DIFF_LINES.map((line) => (
-          <GhostBar key={line} className={cn("bg-muted-foreground/10", line)} />
-        ))}
-      </div>
-    </div>
-  );
-}
-
 /** People-shaped: an avatar and a name, in the reviewer picker's own row height. */
 export function PullRequestPeopleGhost({ rows = 4 }: { rows?: number }) {
   return (
@@ -136,7 +107,7 @@ export function PullRequestPeopleGhost({ rows = 4 }: { rows?: number }) {
 /** The timeline's own shape: dots on the rail, a line and a date to each. */
 export function PullRequestTimelineGhost({ rows = 6 }: { rows?: number }) {
   return (
-    <div role="status" aria-label="Loading timeline" className="animate-ghost-pulse px-5 py-5">
+    <div role="status" aria-label="Loading timeline" className="animate-ghost-pulse px-4 py-5">
       <div className="relative ml-2 border-l border-border/70 pl-5">
         {Array.from({ length: rows }, (_, index) => (
           <div key={index} className="relative pb-5">

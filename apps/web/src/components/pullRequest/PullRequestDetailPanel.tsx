@@ -8,19 +8,23 @@ import type {
   PullRequestState,
 } from "@t3tools/contracts";
 import {
+  ArrowDownUpIcon,
   ArrowLeftIcon,
   ArrowUpRightIcon,
   BookOpenIcon,
+  CircleDotIcon,
   ChevronDownIcon,
   FilesIcon,
   FolderGit2Icon,
   GitBranchIcon,
+  GitCommitHorizontalIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
   GitPullRequestDraftIcon,
   GitPullRequestIcon,
   HammerIcon,
   MessageCircleQuestionIcon,
+  MessageSquareIcon,
   LinkIcon,
   MoreHorizontalIcon,
   PanelRightIcon,
@@ -51,6 +55,7 @@ import {
   AlertDialogPopup,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -62,11 +67,8 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { toastManager } from "../ui/toast";
-import {
-  PullRequestDetailGhost,
-  PullRequestDiffGhost,
-  PullRequestTimelineGhost,
-} from "./PullRequestGhosts";
+import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
+import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAskSelectionInput } from "./PullRequestCodeTab";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
@@ -89,6 +91,7 @@ import {
   PullRequestDiffStat,
   PullRequestMetaLine,
   resolvePullRequestState,
+  summarizePullRequestChecks,
 } from "./pullRequestPresentation";
 
 type DetailTab = "summary" | "timeline" | "code";
@@ -184,7 +187,22 @@ export function PullRequestDetailPanel({
    */
   context?: "page" | "thread";
 }) {
+  const pullRequestKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
   const [tab, setTab] = useState<DetailTab>("summary");
+  const [timelineOrder, setTimelineOrder] = useState<"newest" | "oldest">("newest");
+  const [codeCommitScope, setCodeCommitScope] = useState<{
+    readonly pullRequestKey: string;
+    readonly oid: string | null;
+  }>(() => ({ pullRequestKey, oid: null }));
+  const selectedCodeCommitOid =
+    codeCommitScope.pullRequestKey === pullRequestKey ? codeCommitScope.oid : null;
+  const selectCodeCommit = (oid: string | null) => {
+    setCodeCommitScope({ pullRequestKey, oid });
+  };
+  const openCommit = (oid: string) => {
+    selectCodeCommit(oid);
+    setTab("code");
+  };
   // Every tab the reader has opened stays mounted behind the active one. The diff viewer
   // always needed this (it virtualizes against its own scroll position); the trace showed the
   // summary needs it too — a large description re-parses its whole markdown on every return
@@ -581,8 +599,8 @@ export function PullRequestDetailPanel({
     ? mergeMethod
     : (allowedMergeMethods[0] ?? "merge");
   const conflicting = detail?.state === "open" && detail.mergeability === "conflicting";
-  // A host that cannot produce a patch has no Code tab to open. Until the detail arrives the
-  // full set is shown, so the row does not shift once it does.
+  // A host that cannot produce a patch has no Code tab to open. The tabs themselves stay hidden
+  // until the detail arrives, so the loading ghost is the panel's only unfinished UI.
   const visibleTabs = TABS.filter(
     (item) => item.value !== "code" || detail === null || detail.capabilities.diff,
   );
@@ -617,11 +635,12 @@ export function PullRequestDetailPanel({
   const statePresentation = detail
     ? resolvePullRequestState({ state: detail.state, isDraft: detail.isDraft })
     : null;
+  const checksSummary = detail ? summarizePullRequestChecks(detail.checks) : null;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
       <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 border-b border-border/60">
-        <div className="ml-2 flex min-h-6 min-w-0 items-center gap-1 text-sm text-muted-foreground sm:text-xs">
+        <div className="ml-4 flex min-h-6 min-w-0 items-center gap-1 text-sm text-muted-foreground sm:text-xs">
           {detail && statePresentation ? (
             <>
               <span className="min-w-0 truncate" title={detail.repository}>
@@ -642,7 +661,7 @@ export function PullRequestDetailPanel({
             </>
           ) : null}
         </div>
-        <div className="mr-2 flex min-w-0 flex-wrap items-center justify-end gap-1">
+        <div className="mr-4 flex min-w-0 flex-wrap items-center justify-end gap-1">
           {detail ? (
             <>
               <Menu>
@@ -843,16 +862,16 @@ export function PullRequestDetailPanel({
         </div>
 
         {detail ? (
-          <div className="col-span-2 mt-3 min-w-0 px-2 pb-4">
+          <div className="col-span-2 mt-3 min-w-0 px-4 pb-4">
             <h1 className="text-base font-semibold leading-snug">{detail.title}</h1>
             <PullRequestMetaLine className="mt-2 text-xs text-muted-foreground">
               <PullRequestActorLabel actor={detail.author} className="font-medium" />
               <span>updated {formatRelativeTimeLabel(detail.updatedAt)}</span>
             </PullRequestMetaLine>
 
-            <div className="mt-4 flex min-w-0 flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <div className="mt-4 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
               <code
-                className="max-w-48 truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground"
+                className="min-w-0 max-w-48 shrink truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground"
                 title={detail.baseBranch}
               >
                 {detail.baseBranch}
@@ -860,7 +879,7 @@ export function PullRequestDetailPanel({
               <ArrowLeftIcon aria-label="receives changes from" className="size-4 shrink-0" />
               <button
                 type="button"
-                className="grid max-w-64 min-w-0 cursor-pointer rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                className="grid min-w-0 max-w-64 shrink cursor-pointer rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
                 aria-label={isBranchCopied ? "Branch name copied" : "Copy pull request branch"}
                 title={isBranchCopied ? "Copied" : "Copy pull request branch"}
                 onClick={() => copyBranchToClipboard(detail.headBranch)}
@@ -901,45 +920,98 @@ export function PullRequestDetailPanel({
         ) : null}
 
         {detail && conflicting ? (
-          <div className="col-span-2 flex min-h-12 items-center gap-2 border-t border-border/60 px-2 py-2.5">
-            <TriangleAlertIcon className="size-4 shrink-0 text-destructive" />
-            <span className="text-xs font-medium">Merge conflicts</span>
-            <span className="min-w-0 truncate text-xs text-muted-foreground">
-              with {detail.baseBranch}
-            </span>
+          <div className="col-span-2 flex items-center gap-1 px-4 pb-3">
+            <Badge
+              variant="error"
+              className="h-auto gap-1.5 rounded-md px-3 py-1.5 text-xs text-destructive"
+            >
+              <TriangleAlertIcon className="size-3.5" />
+              Merge conflicts
+            </Badge>
             <Button
               size="xs"
-              variant="secondary"
-              className="ml-auto"
+              variant="ghost"
+              className="ml-auto text-destructive hover:bg-destructive/8 hover:text-destructive"
               disabled={handoff !== null}
               onClick={startResolveConflicts}
             >
-              {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts"}
+              {handoff === "conflicts" ? "Preparing..." : "Resolve in a new thread"}
+              <ArrowUpRightIcon className="size-3.5 text-destructive" />
             </Button>
           </div>
         ) : null}
 
-        <nav
-          className="col-span-2 flex min-w-0 items-center gap-1 border-t border-border/60 px-2 py-2"
-          aria-label="Pull request tabs"
-        >
-          {visibleTabs.map((item) => (
-            <button
-              key={item.value}
-              type="button"
-              aria-pressed={tab === item.value}
-              onClick={() => setTab(item.value)}
-              className={cn(
-                "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors",
-                tab === item.value
-                  ? "bg-accent text-foreground"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {item.label}
-            </button>
-          ))}
-        </nav>
+        {detail ? (
+          <nav
+            className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-border/60 px-4 py-2"
+            aria-label="Pull request tabs"
+          >
+            {visibleTabs.map((item) => (
+              <button
+                key={item.value}
+                type="button"
+                aria-pressed={tab === item.value}
+                onClick={() => setTab(item.value)}
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors",
+                  tab === item.value
+                    ? "bg-accent text-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {item.label}
+              </button>
+            ))}
+            {tab === "summary" ? (
+              <span
+                className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                aria-label={checksSummary ? `Checks: ${checksSummary}` : "Checks"}
+              >
+                <CircleDotIcon aria-hidden className="size-3.5" />
+                {checksSummary}
+              </span>
+            ) : tab === "timeline" ? (
+              <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                <PullRequestMetaLine className="whitespace-nowrap text-[11px]">
+                  <span
+                    className="inline-flex items-center gap-1"
+                    aria-label={`${detail.commentCount.toLocaleString()} ${
+                      detail.commentCount === 1 ? "comment" : "comments"
+                    }`}
+                  >
+                    <MessageSquareIcon aria-hidden className="size-3" />
+                    {detail.commentCount.toLocaleString()}
+                  </span>
+                  <span
+                    className="inline-flex items-center gap-1"
+                    aria-label={`${detail.commits.length.toLocaleString()} ${
+                      detail.commits.length === 1 ? "commit" : "commits"
+                    }`}
+                  >
+                    <GitCommitHorizontalIcon aria-hidden className="size-3" />
+                    {detail.commits.length.toLocaleString()}
+                  </span>
+                </PullRequestMetaLine>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  className="h-7 px-2 text-[10px] text-muted-foreground"
+                  aria-label={
+                    timelineOrder === "newest"
+                      ? "Show oldest activity first"
+                      : "Show newest activity first"
+                  }
+                  onClick={() =>
+                    setTimelineOrder((value) => (value === "newest" ? "oldest" : "newest"))
+                  }
+                >
+                  <ArrowDownUpIcon aria-hidden className="size-3" />
+                  {timelineOrder === "newest" ? "Newest first" : "Oldest first"}
+                </Button>
+              </div>
+            ) : null}
+          </nav>
+        ) : null}
       </div>
 
       <div className="relative min-h-0 flex-1 overflow-hidden">
@@ -949,7 +1021,7 @@ export function PullRequestDetailPanel({
           tab === "timeline" ? (
             <PullRequestTimelineGhost />
           ) : tab === "code" ? (
-            <PullRequestDiffGhost className="p-5" />
+            <DiffPanelLoadingState label="Loading pull request diff..." />
           ) : (
             <PullRequestDetailGhost />
           )
@@ -974,17 +1046,23 @@ export function PullRequestDetailPanel({
             ) : null}
             {mountedTabs.has("timeline") ? (
               <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
-                <PullRequestTimelineTab detail={detail} />
+                <PullRequestTimelineTab
+                  detail={detail}
+                  order={timelineOrder}
+                  onOpenCommit={openCommit}
+                />
               </div>
             ) : null}
             {mountedTabs.has("code") ? (
               <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
-                <Suspense fallback={<PullRequestDiffGhost className="p-5" />}>
+                <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
                   <PullRequestCodeTab
                     onAskAboutSelection={askAboutSelection}
                     environmentId={environmentId}
                     reference={reference}
                     detail={detail}
+                    selectedCommitOid={selectedCodeCommitOid}
+                    onSelectedCommitChange={selectCodeCommit}
                     pendingFinding={handoff}
                     onFixFinding={startFixFinding}
                     onRefresh={() => detailQuery.refresh()}

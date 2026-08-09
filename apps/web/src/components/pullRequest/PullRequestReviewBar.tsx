@@ -109,7 +109,7 @@ export function PullRequestReviewBar({
     verdict === "approve" || body.trim().length > 0 || comments.length > 0;
 
   return (
-    <div className="shrink-0 border-t border-border/60 bg-background px-5 py-3">
+    <div className="shrink-0 border-t border-border/60 bg-background px-4 py-3">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>
           {comments.length === 0

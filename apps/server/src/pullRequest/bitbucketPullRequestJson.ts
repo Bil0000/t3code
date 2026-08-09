@@ -123,6 +123,14 @@ const RawCommitSchema = Schema.Struct({
   hash: Schema.String,
   message: Schema.optional(Schema.NullOr(Schema.String)),
   date: Schema.optional(Schema.NullOr(Schema.String)),
+  author: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        raw: Schema.optional(Schema.NullOr(Schema.String)),
+        user: Schema.optional(Schema.NullOr(RawUserSchema)),
+      }),
+    ),
+  ),
 });
 
 const RawStatusSchema = Schema.Struct({
@@ -514,10 +522,18 @@ export function decodeCommitsJson(
     const commit = decodedCommit.value;
     const committedDate = trimmed(commit.date);
     if (committedDate === null) continue;
+    const linkedAuthor = toActor(commit.author?.user);
+    const rawAuthor = trimmed(commit.author?.raw);
     commits.push({
       oid: commit.hash,
       messageHeadline: (commit.message ?? "").split("\n")[0] ?? "",
       committedDate: toIsoUtc(committedDate),
+      authors:
+        linkedAuthor !== null
+          ? [linkedAuthor]
+          : rawAuthor === null
+            ? []
+            : [{ login: rawAuthor, name: rawAuthor, avatarUrl: null }],
     });
   }
   // Bitbucket lists a pull request's commits newest first; the timeline reads oldest first.

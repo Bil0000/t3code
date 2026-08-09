@@ -212,6 +212,10 @@ export const make = Effect.gen(function* () {
               truncated: true,
               reviewers: [],
               avatarsByLogin: new Map<string, string>(),
+              commitStats: new Map<
+                string,
+                { readonly additions: number; readonly deletions: number }
+              >(),
               // A read that never happened says nothing about the reader, and an unknown
               // permission is granted: the controls stay live and GitHub explains any refusal.
               viewer: { canUpdate: true, didAuthor: false },
@@ -225,6 +229,13 @@ export const make = Effect.gen(function* () {
           ([pullRequest, repository, reviewThreads]): ProviderChangeRequestDetail => ({
             ...pullRequest,
             author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin, input.host),
+            commits: pullRequest.commits.map((commit) => ({
+              ...commit,
+              ...reviewThreads.commitStats.get(commit.oid),
+              authors: commit.authors?.map(
+                (author) => withAvatar(author, reviewThreads.avatarsByLogin, input.host) ?? author,
+              ),
+            })),
             // From the review itself rather than from the listing's outstanding requests, which
             // hold no avatar and drop anyone who has already reviewed.
             reviewers: reviewThreads.reviewers,

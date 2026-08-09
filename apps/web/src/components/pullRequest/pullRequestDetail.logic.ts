@@ -1,4 +1,5 @@
 import type {
+  PullRequestActor,
   PullRequestCheck,
   PullRequestComment,
   PullRequestDetail,
@@ -18,12 +19,48 @@ export function describePullRequestState(state: PullRequestState, isDraft: boole
 export interface PullRequestTimelineEvent {
   readonly id: string;
   readonly at: string;
+  readonly kind: "opened" | "commit" | "comment" | "review" | "merged" | "closed";
   readonly title: string;
   readonly body: string | null;
   /** Whether `body` is markdown. A commit headline is plain text and must not be parsed as one. */
   readonly markdown: boolean;
   /** Where the entry can be read on the host. Null for events the host gives no page of its own. */
   readonly url: string | null;
+  readonly actor: PullRequestActor | null;
+  /** Every author attributed by the host, with the first used for the timeline marker. */
+  readonly commitAuthors: ReadonlyArray<PullRequestActor>;
+  readonly additions: number | null;
+  readonly deletions: number | null;
+  readonly path: string | null;
+  readonly reviewState: string | null;
+}
+
+export type PullRequestTimelineRow =
+  | { readonly kind: "event"; readonly event: PullRequestTimelineEvent }
+  | { readonly kind: "comments"; readonly events: ReadonlyArray<PullRequestTimelineEvent> };
+
+/**
+ * Consecutive comments are one conversation section. Commits and pull-request lifecycle updates
+ * stay first-class rows and split those sections, so expanding a conversation never hides the
+ * work that happened between two review rounds.
+ */
+export function groupPullRequestTimelineConversations(
+  events: ReadonlyArray<PullRequestTimelineEvent>,
+): ReadonlyArray<PullRequestTimelineRow> {
+  const rows: PullRequestTimelineRow[] = [];
+  for (const event of events) {
+    if (event.kind === "comment" || event.kind === "review") {
+      const last = rows.at(-1);
+      if (last?.kind === "comments") {
+        rows[rows.length - 1] = { kind: "comments", events: [...last.events, event] };
+      } else {
+        rows.push({ kind: "comments", events: [event] });
+      }
+    } else {
+      rows.push({ kind: "event", event });
+    }
+  }
+  return rows;
 }
 
 /**
@@ -55,38 +92,64 @@ export function buildPullRequestTimeline(
     {
       id: "created",
       at: detail.createdAt,
-      title: `${detail.author?.login ?? "Someone"} opened this pull request`,
+      kind: "opened" as const,
+      title: "opened this pull request",
       body: null,
       markdown: false,
       url: null,
+      actor: detail.author,
+      commitAuthors: [],
+      additions: null,
+      deletions: null,
+      path: null,
+      reviewState: null,
     },
     ...detail.commits.map((commit) => ({
       id: commit.oid,
       at: commit.committedDate,
+      kind: "commit" as const,
       title: `Commit ${commit.oid.slice(0, 7)}`,
       body: commit.messageHeadline || null,
       markdown: false,
       url: null,
+      actor: commit.authors?.[0] ?? null,
+      commitAuthors: commit.authors ?? [],
+      additions: commit.additions ?? null,
+      deletions: commit.deletions ?? null,
+      path: null,
+      reviewState: null,
     })),
     ...detail.comments.map((comment) => ({
       id: comment.id,
       at: comment.createdAt,
-      title: `${comment.author?.login ?? "Someone"} ${
-        comment.kind === "review" ? "reviewed" : "commented"
-      }`,
+      kind: comment.kind === "review" ? ("review" as const) : ("comment" as const),
+      title: comment.kind === "review" ? "reviewed" : "commented",
       body: visibleBody(comment.body),
       markdown: true,
       url: comment.url,
+      actor: comment.author,
+      commitAuthors: [],
+      additions: null,
+      deletions: null,
+      path: comment.path,
+      reviewState: comment.reviewState,
     })),
     ...(detail.mergedAt
       ? [
           {
             id: "merged",
             at: detail.mergedAt,
+            kind: "merged" as const,
             title: "Pull request merged",
             body: null,
             markdown: false,
             url: null,
+            actor: null,
+            commitAuthors: [],
+            additions: null,
+            deletions: null,
+            path: null,
+            reviewState: null,
           },
         ]
       : []),
@@ -95,10 +158,17 @@ export function buildPullRequestTimeline(
           {
             id: "closed",
             at: detail.closedAt,
+            kind: "closed" as const,
             title: "Pull request closed",
             body: null,
             markdown: false,
             url: null,
+            actor: null,
+            commitAuthors: [],
+            additions: null,
+            deletions: null,
+            path: null,
+            reviewState: null,
           },
         ]
       : []),

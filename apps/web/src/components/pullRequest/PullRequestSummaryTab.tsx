@@ -1,12 +1,5 @@
 import type { EnvironmentId, PullRequestDetail, PullRequestRef } from "@t3tools/contracts";
-import {
-  ChevronRightIcon,
-  CircleDotIcon,
-  HammerIcon,
-  MessageSquareIcon,
-  SendIcon,
-  UsersIcon,
-} from "lucide-react";
+import { ChevronRightIcon, HammerIcon, MessageSquareIcon, SendIcon, UsersIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -25,7 +18,6 @@ import {
   PullRequestCheckStatusIcon,
   PullRequestMetaLine,
   pullRequestCheckStatusLabel,
-  summarizePullRequestChecks,
 } from "./pullRequestPresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
@@ -67,7 +59,7 @@ function Section({
     <Collapsible open={open} onOpenChange={setOpen}>
       {/* Title first, chevron riding to its right, count last: the row reads as a heading
           with an affordance rather than a tree node. */}
-      <CollapsibleTrigger className="flex w-full items-center gap-1.5 border-t border-border/60 px-5 py-3 text-left text-sm font-medium">
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 border-t border-border/60 px-4 py-3 text-left text-sm font-medium">
         <span>{title}</span>
         <ChevronRightIcon
           aria-hidden
@@ -78,7 +70,7 @@ function Section({
         )}
       </CollapsibleTrigger>
       <CollapsiblePanel>
-        <div className="px-5 pb-4">{children}</div>
+        <div className="px-4 pb-4">{children}</div>
       </CollapsiblePanel>
     </Collapsible>
   );
@@ -192,7 +184,7 @@ export function PullRequestSummaryTab({
 
   return (
     <div className="h-full overflow-y-auto">
-      <section className="px-5 py-3">
+      <section className="px-4 py-3">
         <div>
           <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -243,9 +235,6 @@ export function PullRequestSummaryTab({
           <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
             {/* The host's own count, so this reads the same here as it does there. */}
             {detail.commentCount === 1 ? "1 comment" : `${detail.commentCount} comments`}
-          </MetaRow>
-          <MetaRow icon={<CircleDotIcon className="size-3.5" />} label="Checks">
-            {summarizePullRequestChecks(detail.checks)}
           </MetaRow>
         </div>
       </section>
