@@ -14,7 +14,7 @@ import {
   BookOpenIcon,
   CircleDotIcon,
   ChevronDownIcon,
-  FilesIcon,
+  FileDiffIcon,
   FolderGit2Icon,
   GitBranchIcon,
   GitCommitHorizontalIcon,
@@ -1021,7 +1021,7 @@ export function PullRequestDetailPanel({
                 </span>
                 <span className="ml-2 inline-flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
                   <span className="inline-flex items-center gap-1 tabular-nums">
-                    <FilesIcon className="size-3" />
+                    <FileDiffIcon className="size-3" />
                     {detail.changedFiles.toLocaleString()}
                   </span>
                   <PullRequestDiffStat
@@ -1104,7 +1104,7 @@ export function PullRequestDetailPanel({
                   </button>
                   <span className="ml-auto inline-flex shrink-0 items-center justify-end gap-2">
                     <span className="inline-flex items-center gap-1.5 tabular-nums">
-                      <FilesIcon className="size-3.5" />
+                      <FileDiffIcon className="size-3.5" />
                       {detail.changedFiles.toLocaleString()}{" "}
                       {detail.changedFiles === 1 ? "file" : "files"}
                     </span>
