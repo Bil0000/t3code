@@ -13,11 +13,13 @@ import {
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
   Columns2Icon,
+  MessageSquareIcon,
   MessageSquareOffIcon,
   Rows3Icon,
   SparklesIcon,
   TextWrapIcon,
   TriangleAlertIcon,
+  XIcon,
 } from "lucide-react";
 import { useAtomRefresh } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -190,6 +192,9 @@ export function PullRequestCodeTab({
   const [draft, setDraft] = useState<DraftAnchor | null>(null);
   const [threadPending, setThreadPending] = useState(false);
   const [orphansOpen, setOrphansOpen] = useState(false);
+  // Closed by default so the review form does not permanently eat vertical space below the
+  // diff; opened on demand as a floating overlay instead.
+  const [reviewOpen, setReviewOpen] = useState(false);
   // Which pull request the slices belong to travels with them, so a render taken before the
   // reset below cannot read the previous one's slices — or send its cursor to the host.
   const [sliceState, setSliceState] = useState<{
@@ -619,18 +624,57 @@ export function PullRequestCodeTab({
   );
 
   /**
-   * The review bar belongs to the pull request, not to the patch: a change whose diff cannot
-   * be structured — or read at all — is still one a reviewer can approve or reject, so it
-   * survives every branch below.
+   * The review overlay belongs to the pull request, not to the patch: a change whose diff
+   * cannot be structured — or read at all — is still one a reviewer can approve or reject, so
+   * it survives every branch below. It floats over the scroll area rather than sitting in the
+   * layout flow, so the diff keeps the full height instead of permanently losing a strip to a
+   * footer most reviews never touch. Hidden entirely where the host offers no verdicts, same as
+   * the bar it wraps did.
    */
-  const reviewBar = (
-    <PullRequestReviewBar
-      environmentId={environmentId}
-      reference={reference}
-      verdicts={review.verdicts}
-      onSubmitted={onRefresh}
-    />
-  );
+  const reviewOverlay =
+    review.verdicts.length === 0 ? null : (
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10">
+        {reviewOpen ? (
+          <div className="chat-composer-glass pointer-events-auto absolute inset-x-3 bottom-3 rounded-xl border border-border/60 shadow-lg">
+            <Button
+              type="button"
+              size="icon-sm"
+              variant="ghost"
+              aria-label="Close review"
+              className="absolute right-2 top-2"
+              onClick={() => setReviewOpen(false)}
+            >
+              <XIcon className="size-3.5" />
+            </Button>
+            <PullRequestReviewBar
+              environmentId={environmentId}
+              reference={reference}
+              verdicts={review.verdicts}
+              onSubmitted={() => {
+                onRefresh();
+                setReviewOpen(false);
+              }}
+            />
+          </div>
+        ) : (
+          // Bottom-right, clear of the vertical scrollbar the diff view keeps to its own right
+          // edge.
+          <button
+            type="button"
+            className="chat-composer-glass pointer-events-auto absolute bottom-3 right-4 flex items-center gap-1.5 rounded-full border border-border/60 px-3 py-1.5 text-xs font-medium shadow-lg"
+            onClick={() => setReviewOpen(true)}
+          >
+            <MessageSquareIcon className="size-3.5" />
+            Review
+            {pendingComments.length > 0 ? (
+              <span className="flex size-4 items-center justify-center rounded-full bg-accent text-[10px] tabular-nums text-accent-foreground">
+                {pendingComments.length}
+              </span>
+            ) : null}
+          </button>
+        )}
+      </div>
+    );
   // A rebase or a force-push can take the scoped commit out of the change. Its diff may still
   // be reachable on the host, but it is no longer part of what is being reviewed, so the scope
   // goes back to the whole change rather than sitting under a name nothing matches.
@@ -814,8 +858,13 @@ export function PullRequestCodeTab({
   const withReviewBar = (body: ReactNode) => (
     <div className="flex h-full min-h-0 flex-col">
       {toolbar}
-      <div className="min-h-0 flex-1 overflow-auto">{body}</div>
-      {reviewBar}
+      {/* The overlay is anchored to this wrapper, not the scroller: absolute positioning
+          inside an overflowing element tracks the content's bottom edge, which would carry
+          the trigger away with the first scroll. */}
+      <div className="relative min-h-0 flex-1">
+        <div className="h-full overflow-auto">{body}</div>
+        {reviewOverlay}
+      </div>
     </div>
   );
 
@@ -951,130 +1000,134 @@ export function PullRequestCodeTab({
             </CollapsiblePanel>
           </Collapsible>
         ) : null}
-        {/* The viewer virtualizes against the element it is told is scrolling and places its
-            rows absolutely, so it has to own that element — the thread diff panel hands it the
-            same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
-        <StyledDiffCodeView<ReviewAnnotationGroup>
-          className="min-h-0 flex-1 overflow-auto"
-          items={items}
-          selectedLines={selectedLines}
-          onSelectedLinesChange={setSelectedLines}
-          options={{
-            diffStyle: diffRenderMode === "split" ? "split" : "unified",
-            lineDiffType: "none",
-            overflow: wordWrap ? "wrap" : "scroll",
-            theme: resolveDiffThemeName(resolvedTheme),
-            themeType: resolvedTheme,
-            stickyHeaders: true,
-            loadDiffFiles,
-            enableGutterUtility: canCommentOnLines && draft === null,
-            enableLineSelection: canCommentOnLines && draft === null,
-            // Two gestures reach the same place: dragging the line numbers selects a range,
-            // and the gutter's own button comments on the one line it sits on. They are
-            // separate callbacks in the viewer, so a reader who only ever presses the button
-            // gets nothing unless both are wired.
-            onGutterUtilityClick: beginComment,
-            onLineSelectionEnd: beginComment,
-          }}
-          // The viewer owns the scroll container, so the sentinel that asks for the next slice
-          // has to live inside it — at the end of the files, where reaching it means the reader
-          // is running out of diff.
-          renderCodeViewFooter={() =>
-            // Only while something is still owed. A finished diff whose query fails on a later
-            // refresh — a reconnect re-runs every one of them — is whole on screen already, and
-            // saying otherwise sends the reader looking for files that are all there.
-            nextCursor === null ? null : (
-              <div
-                ref={setSentinel}
-                className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground"
-              >
-                {diffQuery.error !== null ? (
-                  <>
-                    <span>The rest of this diff could not be loaded.</span>
-                    <Button size="xs" variant="outline" onClick={() => diffQuery.refresh()}>
-                      Retry
-                    </Button>
-                  </>
-                ) : diffQuery.isPending ? (
-                  "Loading more files..."
+        {/* Relative wrapper so the review overlay floats over the diff rather than pushing it
+            up; the viewer inside still owns its own scrolling. */}
+        <div className="relative min-h-0 flex-1">
+          {/* The viewer virtualizes against the element it is told is scrolling and places its
+              rows absolutely, so it has to own that element — the thread diff panel hands it the
+              same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
+          <StyledDiffCodeView<ReviewAnnotationGroup>
+            className="h-full overflow-auto"
+            items={items}
+            selectedLines={selectedLines}
+            onSelectedLinesChange={setSelectedLines}
+            options={{
+              diffStyle: diffRenderMode === "split" ? "split" : "unified",
+              lineDiffType: "none",
+              overflow: wordWrap ? "wrap" : "scroll",
+              theme: resolveDiffThemeName(resolvedTheme),
+              themeType: resolvedTheme,
+              stickyHeaders: true,
+              loadDiffFiles,
+              enableGutterUtility: canCommentOnLines && draft === null,
+              enableLineSelection: canCommentOnLines && draft === null,
+              // Two gestures reach the same place: dragging the line numbers selects a range,
+              // and the gutter's own button comments on the one line it sits on. They are
+              // separate callbacks in the viewer, so a reader who only ever presses the button
+              // gets nothing unless both are wired.
+              onGutterUtilityClick: beginComment,
+              onLineSelectionEnd: beginComment,
+            }}
+            // The viewer owns the scroll container, so the sentinel that asks for the next slice
+            // has to live inside it — at the end of the files, where reaching it means the reader
+            // is running out of diff.
+            renderCodeViewFooter={() =>
+              // Only while something is still owed. A finished diff whose query fails on a later
+              // refresh — a reconnect re-runs every one of them — is whole on screen already, and
+              // saying otherwise sends the reader looking for files that are all there.
+              nextCursor === null ? null : (
+                <div
+                  ref={setSentinel}
+                  className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground"
+                >
+                  {diffQuery.error !== null ? (
+                    <>
+                      <span>The rest of this diff could not be loaded.</span>
+                      <Button size="xs" variant="outline" onClick={() => diffQuery.refresh()}>
+                        Retry
+                      </Button>
+                    </>
+                  ) : diffQuery.isPending ? (
+                    "Loading more files..."
+                  ) : null}
+                </div>
+              )
+            }
+            renderHeaderPrefix={(item) => {
+              // The item the viewer is drawing already carries the state the memo settled on,
+              // so the chevron follows it rather than recomputing the default here.
+              const collapsed = item.collapsed === true;
+              return (
+                <button
+                  type="button"
+                  aria-expanded={!collapsed}
+                  aria-label={collapsed ? "Expand diff" : "Collapse diff"}
+                  className={cn(
+                    "mr-1 inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground",
+                  )}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    toggleFile(item.id);
+                  }}
+                >
+                  {collapsed ? (
+                    <ChevronRightIcon className="size-4" />
+                  ) : (
+                    <ChevronDownIcon className="size-4" />
+                  )}
+                </button>
+              );
+            }}
+            renderAnnotation={(annotation) => (
+              <div className="py-1">
+                {annotation.metadata.threads.map(renderThreadCard)}
+                {annotation.metadata.pending.map((comment) => (
+                  <PendingReviewCommentCard
+                    key={comment.id}
+                    comment={comment}
+                    onRemove={() => removeComment(reviewKey, comment.id)}
+                  />
+                ))}
+                {annotation.metadata.draft && draft ? (
+                  <DiffCommentAnnotation
+                    kind="draft"
+                    rangeLabel={`${draft.path}:${draft.line}`}
+                    text=""
+                    submitLabel="Add to review"
+                    {...(onAskAboutSelection
+                      ? {
+                          secondaryAction: {
+                            label: "Ask",
+                            icon: <SparklesIcon className="size-3" />,
+                            allowEmpty: true,
+                            onAction: (question: string) => askAboutSelection(draft, question),
+                          },
+                        }
+                      : {})}
+                    onCancel={() => {
+                      setDraft(null);
+                      setSelectedLines(null);
+                    }}
+                    onComment={(body) => {
+                      addComment(reviewKey, {
+                        id: nextPendingReviewCommentId(),
+                        path: draft.path,
+                        ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
+                        line: draft.line,
+                        side: draft.side,
+                        body,
+                      });
+                      setDraft(null);
+                      setSelectedLines(null);
+                    }}
+                  />
                 ) : null}
               </div>
-            )
-          }
-          renderHeaderPrefix={(item) => {
-            // The item the viewer is drawing already carries the state the memo settled on,
-            // so the chevron follows it rather than recomputing the default here.
-            const collapsed = item.collapsed === true;
-            return (
-              <button
-                type="button"
-                aria-expanded={!collapsed}
-                aria-label={collapsed ? "Expand diff" : "Collapse diff"}
-                className={cn(
-                  "mr-1 inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground",
-                )}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  toggleFile(item.id);
-                }}
-              >
-                {collapsed ? (
-                  <ChevronRightIcon className="size-4" />
-                ) : (
-                  <ChevronDownIcon className="size-4" />
-                )}
-              </button>
-            );
-          }}
-          renderAnnotation={(annotation) => (
-            <div className="py-1">
-              {annotation.metadata.threads.map(renderThreadCard)}
-              {annotation.metadata.pending.map((comment) => (
-                <PendingReviewCommentCard
-                  key={comment.id}
-                  comment={comment}
-                  onRemove={() => removeComment(reviewKey, comment.id)}
-                />
-              ))}
-              {annotation.metadata.draft && draft ? (
-                <DiffCommentAnnotation
-                  kind="draft"
-                  rangeLabel={`${draft.path}:${draft.line}`}
-                  text=""
-                  submitLabel="Add to review"
-                  {...(onAskAboutSelection
-                    ? {
-                        secondaryAction: {
-                          label: "Ask",
-                          icon: <SparklesIcon className="size-3" />,
-                          allowEmpty: true,
-                          onAction: (question: string) => askAboutSelection(draft, question),
-                        },
-                      }
-                    : {})}
-                  onCancel={() => {
-                    setDraft(null);
-                    setSelectedLines(null);
-                  }}
-                  onComment={(body) => {
-                    addComment(reviewKey, {
-                      id: nextPendingReviewCommentId(),
-                      path: draft.path,
-                      ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
-                      line: draft.line,
-                      side: draft.side,
-                      body,
-                    });
-                    setDraft(null);
-                    setSelectedLines(null);
-                  }}
-                />
-              ) : null}
-            </div>
-          )}
-        />
+            )}
+          />
+          {reviewOverlay}
+        </div>
         {unstructured}
-        {reviewBar}
       </div>
     </DiffWorkerPoolProvider>
   );

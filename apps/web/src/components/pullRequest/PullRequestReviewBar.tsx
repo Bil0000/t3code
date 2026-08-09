@@ -1,6 +1,8 @@
 /**
- * The foot of the Code tab: how many comments the review is holding, its summary, and the
- * verdict that sends the lot. Hidden entirely on a host that cannot take a review.
+ * The review form floated over the Code tab: how many comments the review is holding, its
+ * summary, and the verdict that sends the lot. Hidden entirely on a host that cannot take a
+ * review. The glass card frame belongs to the caller (PullRequestCodeTab), which is why this
+ * only contributes its own padding.
  */
 import type { EnvironmentId, PullRequestRef, PullRequestReviewVerdict } from "@t3tools/contracts";
 import { CheckIcon, MessageSquareIcon, XCircleIcon } from "lucide-react";
@@ -109,7 +111,7 @@ export function PullRequestReviewBar({
     verdict === "approve" || body.trim().length > 0 || comments.length > 0;
 
   return (
-    <div className="shrink-0 border-t border-border/60 bg-background px-4 py-3">
+    <div className="px-4 py-3">
       <div className="flex items-center gap-2 text-xs text-muted-foreground">
         <span>
           {comments.length === 0
