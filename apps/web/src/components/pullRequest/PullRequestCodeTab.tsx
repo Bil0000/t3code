@@ -501,15 +501,21 @@ export function PullRequestCodeTab({
     return () => observer.disconnect();
   }, [cursor, diffQuery.error, diffQuery.isPending, nextCursor, sentinel]);
 
-  const toggleFile = (fileKey: string) =>
-    setToggledFiles((current) => {
-      // The override becomes this file's new default the moment it is folded into the set below,
-      // so nothing has to be re-derived when the reader goes back to choosing one at a time.
-      const next = new Set(current);
-      if (next.has(fileKey)) next.delete(fileKey);
-      else next.add(fileKey);
-      return next;
-    });
+  // A stable identity: the viewer's SlotPortals memoizes each file's header/annotation portal on
+  // these render props, so a fresh function here would recreate every visible file's portal on
+  // every tab re-render (a line-selection drag, a keystroke in the draft, a review-store update).
+  const toggleFile = useCallback(
+    (fileKey: string) =>
+      setToggledFiles((current) => {
+        // The override becomes this file's new default the moment it is folded into the set below,
+        // so nothing has to be re-derived when the reader goes back to choosing one at a time.
+        const next = new Set(current);
+        if (next.has(fileKey)) next.delete(fileKey);
+        else next.add(fileKey);
+        return next;
+      }),
+    [],
+  );
 
   const toggleAllFiles = () => {
     // Held as an override of the default rather than as the file keys on screen: a diff that is
@@ -556,25 +562,166 @@ export function PullRequestCodeTab({
   // Built here because the parsed diff only lives here, and built by the same function the
   // thread panel's own line selection uses — the gesture is the same one, so a second reading of
   // the hunks would only be a second place for it to drift.
-  const askAboutSelection = (anchor: DraftAnchor, question: string) => {
-    const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === anchor.fileKey);
-    const comment =
-      file === undefined
-        ? null
-        : buildDiffReviewComment({
-            id: `pull-request-selection:${anchor.fileKey}:${anchor.range.start}:${anchor.range.end}`,
-            sectionId: `pull-request:${detail.number}`,
-            sectionTitle: `PR #${detail.number} review`,
-            filePath: anchor.path,
-            fileDiff: file,
-            range: anchor.range,
-            text: question,
-          });
-    setDraft(null);
-    setSelectedLines(null);
-    if (comment === null || !onAskAboutSelection) return;
-    onAskAboutSelection({ comment, question });
-  };
+  const askAboutSelection = useCallback(
+    (anchor: DraftAnchor, question: string) => {
+      const file = files.find((candidate) => buildFileDiffRenderKey(candidate) === anchor.fileKey);
+      const comment =
+        file === undefined
+          ? null
+          : buildDiffReviewComment({
+              id: `pull-request-selection:${anchor.fileKey}:${anchor.range.start}:${anchor.range.end}`,
+              sectionId: `pull-request:${detail.number}`,
+              sectionTitle: `PR #${detail.number} review`,
+              filePath: anchor.path,
+              fileDiff: file,
+              range: anchor.range,
+              text: question,
+            });
+      setDraft(null);
+      setSelectedLines(null);
+      if (comment === null || !onAskAboutSelection) return;
+      onAskAboutSelection({ comment, question });
+    },
+    [detail.number, files, onAskAboutSelection],
+  );
+
+  // The viewer's SlotPortals memoizes each visible file's header/annotation portal on these
+  // render props and on `options` below; a fresh identity on any of them — as a plain inline
+  // function or object literal would be — invalidates that memo and recreates every portal on
+  // screen on any tab re-render (a drag-selection, a keystroke in the draft, a review-store
+  // update), which is the jank this file is otherwise clean of.
+  const renderCodeViewFooter = useCallback(
+    () =>
+      // Only while something is still owed. A finished diff whose query fails on a later
+      // refresh — a reconnect re-runs every one of them — is whole on screen already, and
+      // saying otherwise sends the reader looking for files that are all there.
+      nextCursor === null ? null : (
+        <div
+          ref={setSentinel}
+          className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground"
+        >
+          {diffQuery.error !== null ? (
+            <>
+              <span>The rest of this diff could not be loaded.</span>
+              <Button size="xs" variant="outline" onClick={() => diffQuery.refresh()}>
+                Retry
+              </Button>
+            </>
+          ) : diffQuery.isPending ? (
+            "Loading more files..."
+          ) : null}
+        </div>
+      ),
+    [nextCursor, diffQuery.error, diffQuery.isPending, diffQuery.refresh],
+  );
+
+  const renderHeaderPrefix = useCallback(
+    (item: CodeViewItem<ReviewAnnotationGroup>) => {
+      // The item the viewer is drawing already carries the state the memo settled on, so the
+      // chevron follows it rather than recomputing the default here.
+      const collapsed = item.collapsed === true;
+      return (
+        <button
+          type="button"
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "Expand diff" : "Collapse diff"}
+          className={cn(
+            "mr-1 inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground",
+          )}
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleFile(item.id);
+          }}
+        >
+          {collapsed ? (
+            <ChevronRightIcon className="size-4" />
+          ) : (
+            <ChevronDownIcon className="size-4" />
+          )}
+        </button>
+      );
+    },
+    [toggleFile],
+  );
+
+  const renderAnnotation = useCallback(
+    (annotation: ReviewAnnotation) => (
+      <div className="py-1">
+        {annotation.metadata.threads.map(renderThreadCard)}
+        {annotation.metadata.pending.map((comment) => (
+          <PendingReviewCommentCard
+            key={comment.id}
+            comment={comment}
+            onRemove={() => removeComment(reviewKey, comment.id)}
+          />
+        ))}
+        {annotation.metadata.draft && draft ? (
+          <DiffCommentAnnotation
+            kind="draft"
+            rangeLabel={`${draft.path}:${draft.line}`}
+            text=""
+            submitLabel="Add to review"
+            {...(onAskAboutSelection
+              ? {
+                  secondaryAction: {
+                    label: "Ask",
+                    icon: <SparklesIcon className="size-3" />,
+                    allowEmpty: true,
+                    onAction: (question: string) => askAboutSelection(draft, question),
+                  },
+                }
+              : {})}
+            onCancel={() => {
+              setDraft(null);
+              setSelectedLines(null);
+            }}
+            onComment={(body) => {
+              addComment(reviewKey, {
+                id: nextPendingReviewCommentId(),
+                path: draft.path,
+                ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
+                line: draft.line,
+                side: draft.side,
+                body,
+              });
+              setDraft(null);
+              setSelectedLines(null);
+            }}
+          />
+        ) : null}
+      </div>
+    ),
+    [draft, reviewKey, removeComment, addComment, onAskAboutSelection, askAboutSelection],
+  );
+
+  const diffViewOptions = useMemo(
+    () => ({
+      diffStyle: diffRenderMode === "split" ? ("split" as const) : ("unified" as const),
+      lineDiffType: "none" as const,
+      overflow: wordWrap ? ("wrap" as const) : ("scroll" as const),
+      theme: resolveDiffThemeName(resolvedTheme),
+      themeType: resolvedTheme,
+      stickyHeaders: true,
+      loadDiffFiles,
+      enableGutterUtility: canCommentOnLines && draft === null,
+      enableLineSelection: canCommentOnLines && draft === null,
+      // Two gestures reach the same place: dragging the line numbers selects a range, and the
+      // gutter's own button comments on the one line it sits on. They are separate callbacks in
+      // the viewer, so a reader who only ever presses the button gets nothing unless both are
+      // wired.
+      onGutterUtilityClick: beginComment,
+      onLineSelectionEnd: beginComment,
+    }),
+    [
+      diffRenderMode,
+      wordWrap,
+      resolvedTheme,
+      loadDiffFiles,
+      canCommentOnLines,
+      draft,
+      beginComment,
+    ],
+  );
 
   const runThreadCommand = async (
     label: string,
@@ -1011,119 +1158,13 @@ export function PullRequestCodeTab({
             items={items}
             selectedLines={selectedLines}
             onSelectedLinesChange={setSelectedLines}
-            options={{
-              diffStyle: diffRenderMode === "split" ? "split" : "unified",
-              lineDiffType: "none",
-              overflow: wordWrap ? "wrap" : "scroll",
-              theme: resolveDiffThemeName(resolvedTheme),
-              themeType: resolvedTheme,
-              stickyHeaders: true,
-              loadDiffFiles,
-              enableGutterUtility: canCommentOnLines && draft === null,
-              enableLineSelection: canCommentOnLines && draft === null,
-              // Two gestures reach the same place: dragging the line numbers selects a range,
-              // and the gutter's own button comments on the one line it sits on. They are
-              // separate callbacks in the viewer, so a reader who only ever presses the button
-              // gets nothing unless both are wired.
-              onGutterUtilityClick: beginComment,
-              onLineSelectionEnd: beginComment,
-            }}
+            options={diffViewOptions}
             // The viewer owns the scroll container, so the sentinel that asks for the next slice
             // has to live inside it — at the end of the files, where reaching it means the reader
             // is running out of diff.
-            renderCodeViewFooter={() =>
-              // Only while something is still owed. A finished diff whose query fails on a later
-              // refresh — a reconnect re-runs every one of them — is whole on screen already, and
-              // saying otherwise sends the reader looking for files that are all there.
-              nextCursor === null ? null : (
-                <div
-                  ref={setSentinel}
-                  className="flex items-center justify-center gap-2 py-2 text-xs text-muted-foreground"
-                >
-                  {diffQuery.error !== null ? (
-                    <>
-                      <span>The rest of this diff could not be loaded.</span>
-                      <Button size="xs" variant="outline" onClick={() => diffQuery.refresh()}>
-                        Retry
-                      </Button>
-                    </>
-                  ) : diffQuery.isPending ? (
-                    "Loading more files..."
-                  ) : null}
-                </div>
-              )
-            }
-            renderHeaderPrefix={(item) => {
-              // The item the viewer is drawing already carries the state the memo settled on,
-              // so the chevron follows it rather than recomputing the default here.
-              const collapsed = item.collapsed === true;
-              return (
-                <button
-                  type="button"
-                  aria-expanded={!collapsed}
-                  aria-label={collapsed ? "Expand diff" : "Collapse diff"}
-                  className={cn(
-                    "mr-1 inline-flex size-5 items-center justify-center rounded text-muted-foreground transition-colors hover:text-foreground",
-                  )}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    toggleFile(item.id);
-                  }}
-                >
-                  {collapsed ? (
-                    <ChevronRightIcon className="size-4" />
-                  ) : (
-                    <ChevronDownIcon className="size-4" />
-                  )}
-                </button>
-              );
-            }}
-            renderAnnotation={(annotation) => (
-              <div className="py-1">
-                {annotation.metadata.threads.map(renderThreadCard)}
-                {annotation.metadata.pending.map((comment) => (
-                  <PendingReviewCommentCard
-                    key={comment.id}
-                    comment={comment}
-                    onRemove={() => removeComment(reviewKey, comment.id)}
-                  />
-                ))}
-                {annotation.metadata.draft && draft ? (
-                  <DiffCommentAnnotation
-                    kind="draft"
-                    rangeLabel={`${draft.path}:${draft.line}`}
-                    text=""
-                    submitLabel="Add to review"
-                    {...(onAskAboutSelection
-                      ? {
-                          secondaryAction: {
-                            label: "Ask",
-                            icon: <SparklesIcon className="size-3" />,
-                            allowEmpty: true,
-                            onAction: (question: string) => askAboutSelection(draft, question),
-                          },
-                        }
-                      : {})}
-                    onCancel={() => {
-                      setDraft(null);
-                      setSelectedLines(null);
-                    }}
-                    onComment={(body) => {
-                      addComment(reviewKey, {
-                        id: nextPendingReviewCommentId(),
-                        path: draft.path,
-                        ...(draft.oldPath === null ? {} : { oldPath: draft.oldPath }),
-                        line: draft.line,
-                        side: draft.side,
-                        body,
-                      });
-                      setDraft(null);
-                      setSelectedLines(null);
-                    }}
-                  />
-                ) : null}
-              </div>
-            )}
+            renderCodeViewFooter={renderCodeViewFooter}
+            renderHeaderPrefix={renderHeaderPrefix}
+            renderAnnotation={renderAnnotation}
           />
           {reviewOverlay}
         </div>
