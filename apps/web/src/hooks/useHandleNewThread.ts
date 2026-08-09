@@ -78,7 +78,7 @@ export function useNewThreadHandler() {
       // Which draft the thread ended up in, so a caller that has something to put in it — a
       // prepared checkout, a task to write — addresses that one rather than looking the project
       // up again and finding whichever draft it happens to hold.
-    ): Promise<{ draftId: DraftId; threadId: ThreadId }> => {
+    ): Promise<{ draftId: DraftId; threadId: ThreadId } | null> => {
       const {
         getComposerDraft,
         getDraftSessionByLogicalProjectKey,
@@ -225,10 +225,7 @@ export function useNewThreadHandler() {
               getComposerDraft(emptyStoredDraftThread.draftId),
             );
             if (openedMeanwhile || promotedMeanwhile || remappedMeanwhile || investedMeanwhile) {
-              return {
-                draftId: emptyStoredDraftThread.draftId,
-                threadId: emptyStoredDraftThread.threadId,
-              };
+              return null;
             }
             workspaceContext = {
               branch: null,

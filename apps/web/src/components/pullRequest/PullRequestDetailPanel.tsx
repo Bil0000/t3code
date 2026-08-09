@@ -441,7 +441,7 @@ export function PullRequestDetailPanel({
       worktreePath: prepared.value.worktreePath,
       envMode: prepared.value.worktreePath === null ? "local" : "worktree",
     }).then(
-      () => true,
+      (session) => session !== null,
       () => false,
     );
     if (!pointed) {
