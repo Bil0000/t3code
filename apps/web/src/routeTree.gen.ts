@@ -137,8 +137,8 @@ export interface FileRoutesByFullPath {
   '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
-  '/pull-requests': typeof ChatPullRequestsRoute
   '/usage': typeof UsageRoute
+  '/pull-requests': typeof ChatPullRequestsRoute
   '/connect/callback': typeof ConnectCallbackRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -157,8 +157,8 @@ export interface FileRoutesByTo {
   '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
-  '/pull-requests': typeof ChatPullRequestsRoute
   '/usage': typeof UsageRoute
+  '/pull-requests': typeof ChatPullRequestsRoute
   '/connect/callback': typeof ConnectCallbackRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -180,8 +180,8 @@ export interface FileRoutesById {
   '/connect': typeof ConnectRoute
   '/pair': typeof PairRoute
   '/settings': typeof SettingsRouteWithChildren
-  '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/usage': typeof UsageRoute
+  '/_chat/pull-requests': typeof ChatPullRequestsRoute
   '/connect_/callback': typeof ConnectCallbackRoute
   '/settings/appearance': typeof SettingsAppearanceRoute
   '/settings/archived': typeof SettingsArchivedRoute
@@ -204,8 +204,8 @@ export interface FileRouteTypes {
     | '/connect'
     | '/pair'
     | '/settings'
-    | '/pull-requests'
     | '/usage'
+    | '/pull-requests'
     | '/connect/callback'
     | '/settings/appearance'
     | '/settings/archived'
@@ -224,8 +224,8 @@ export interface FileRouteTypes {
     | '/connect'
     | '/pair'
     | '/settings'
-    | '/pull-requests'
     | '/usage'
+    | '/pull-requests'
     | '/connect/callback'
     | '/settings/appearance'
     | '/settings/archived'
@@ -246,8 +246,8 @@ export interface FileRouteTypes {
     | '/connect'
     | '/pair'
     | '/settings'
-    | '/_chat/pull-requests'
     | '/usage'
+    | '/_chat/pull-requests'
     | '/connect_/callback'
     | '/settings/appearance'
     | '/settings/archived'

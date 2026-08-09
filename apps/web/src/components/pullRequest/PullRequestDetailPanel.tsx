@@ -31,7 +31,7 @@ import {
   RefreshCwIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -159,6 +159,7 @@ export function PullRequestDetailPanel({
   onClose,
   onStateChange,
   context = "page",
+  chromeVariant = "full",
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
@@ -189,6 +190,12 @@ export function PullRequestDetailPanel({
    * again is at best a no-op and at worst git refusing a branch two checkouts.
    */
   context?: "page" | "thread";
+  /**
+   * How the metadata above the content behaves: `full` keeps every row pinned; `collapse`
+   * folds the whole of it into the top row once the active tab scrolls, and unfolds at the
+   * top — the chrome spends its height on what is being read.
+   */
+  chromeVariant?: "full" | "collapse";
 }) {
   const pullRequestKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
   const [tab, setTab] = useState<DetailTab>("summary");
@@ -219,6 +226,32 @@ export function PullRequestDetailPanel({
       previous.has(tab) ? previous : new Set<DetailTab>(previous).add(tab),
     );
   }, [tab]);
+  const [chromeCondensed, setChromeCondensed] = useState(false);
+  // Each tab remembers whether its chrome was condensed. Only the active tab can emit scroll
+  // events, so the capture handler always writes the active tab's entry — and a tab switch
+  // reads the destination's memory instead of inheriting the tab being left. A tab too short
+  // to scroll remembers "expanded", which is what keeps it from being stranded under a chrome
+  // it has no scrollbar to reopen.
+  const chromeStateByTab = useRef<Partial<Record<DetailTab, boolean>>>({});
+  useEffect(() => {
+    setChromeCondensed(chromeStateByTab.current[tab] ?? false);
+  }, [tab]);
+  const condensed = chromeVariant === "collapse" && chromeCondensed;
+  // Collapsing removes the fold's height from the chrome, which would otherwise hand that
+  // height to the scrollport and leap the content up by it mid-scroll. The cure is exact
+  // compensation: collapse only once the reader has scrolled at least the fold's height,
+  // then give that height back to `scrollTop` before the next paint — the content under
+  // their eyes does not move, and the collapse itself is the only thing that changes.
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  const foldRef = useRef<HTMLDivElement | null>(null);
+  const compensationRef = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (compensationRef.current === null) return;
+    const scroller = scrollerRef.current;
+    const delta = compensationRef.current;
+    compensationRef.current = null;
+    if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
+  }, [condensed]);
   const [mergeMethod, setMergeMethod] = useState<PullRequestMergeMethod>("merge");
   const [confirmAction, setConfirmAction] = useState<"merge" | "close" | null>(null);
   // Which handoff is preparing, keyed so a per-finding button can say "Preparing..." on itself
@@ -655,36 +688,112 @@ export function PullRequestDetailPanel({
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
+      {/* The top row's geometry never changes: both of its states occupy the same stacked
+          cell and crossfade, so the actions on the right have one home whatever the chrome
+          is doing below. The fold and this fade share one 200ms clock. */}
       <div className="grid shrink-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-2 border-b border-border/60">
-        <div className="ml-4 flex min-h-6 min-w-0 items-center gap-1 text-sm text-muted-foreground sm:text-xs">
-          {detail && statePresentation ? (
-            <>
-              <span className="min-w-0 truncate" title={detail.repository}>
-                {detail.repository}
-              </span>
-              <button
-                type="button"
-                onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}
-                className={cn(
-                  "shrink-0 font-medium underline-offset-2 hover:underline",
-                  statePresentation.toneClassName,
-                )}
-                title={OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                aria-label={`Open pull request #${detail.number} on host`}
-              >
-                #{detail.number}
-              </button>
-              {/* On the Code tab the tall title/meta block below is hidden so the diff gets the
-                  vertical space; the title rides along in the compact row instead. */}
-              {tab === "code" ? (
-                <span className="min-w-0 truncate text-foreground font-medium" title={detail.title}>
+        {/* The fixed height lives on the two top-row cells — not the grid, whose later rows
+            are the fold — so the actions have one immovable home in both states. */}
+        <div className="ml-4 grid h-11 min-w-0 items-center">
+          <div
+            aria-hidden={condensed}
+            inert={condensed}
+            className={cn(
+              "col-start-1 row-start-1 flex min-w-0 items-center gap-1 text-sm text-muted-foreground transition-opacity sm:text-xs motion-reduce:transition-none",
+              // Sequenced, not simultaneous: the leaving layer clears quickly before the
+              // arriving one lands, so no frame shows both texts superimposed at half opacity.
+              condensed
+                ? "pointer-events-none opacity-0 duration-100"
+                : "opacity-100 delay-75 duration-150",
+            )}
+          >
+            {detail && statePresentation ? (
+              <>
+                <span className="min-w-0 truncate" title={detail.repository}>
+                  {detail.repository}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}
+                  className={cn(
+                    "shrink-0 font-medium underline-offset-2 hover:underline",
+                    statePresentation.toneClassName,
+                  )}
+                  title={OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  aria-label={`Open pull request #${detail.number} on host`}
+                >
+                  #{detail.number}
+                </button>
+              </>
+            ) : null}
+          </div>
+          <div
+            aria-hidden={!condensed}
+            inert={!condensed}
+            className={cn(
+              "col-start-1 row-start-1 flex min-w-0 items-center gap-1.5 text-sm transition-opacity sm:text-xs motion-reduce:transition-none",
+              condensed
+                ? "opacity-100 delay-75 duration-150"
+                : "pointer-events-none opacity-0 duration-100",
+            )}
+          >
+            {detail && statePresentation ? (
+              <>
+                <button
+                  type="button"
+                  tabIndex={condensed ? 0 : -1}
+                  onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}
+                  className={cn(
+                    "shrink-0 font-medium underline-offset-2 hover:underline",
+                    statePresentation.toneClassName,
+                  )}
+                  title={OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  aria-label={`Open pull request #${detail.number} on host`}
+                >
+                  #{detail.number}
+                </button>
+                <span className="min-w-0 truncate font-medium text-foreground" title={detail.title}>
                   {detail.title}
                 </span>
-              ) : null}
-            </>
-          ) : null}
+                {conflicting ? (
+                  <Badge
+                    variant="error"
+                    className="h-5 shrink-0 gap-1 rounded px-1.5 text-[10px] text-destructive"
+                  >
+                    <TriangleAlertIcon className="size-3" />
+                    Conflicts
+                  </Badge>
+                ) : checksSummary ? (
+                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                    {checksSummary}
+                  </span>
+                ) : null}
+                <nav
+                  aria-label="Pull request tabs"
+                  className="ml-1 flex shrink-0 items-center gap-0.5"
+                >
+                  {visibleTabs.map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      aria-pressed={tab === item.value}
+                      onClick={() => setTab(item.value)}
+                      className={cn(
+                        "rounded px-1.5 py-0.5 text-[11px] transition-colors",
+                        tab === item.value
+                          ? "bg-accent text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </nav>
+              </>
+            ) : null}
+          </div>
         </div>
-        <div className="mr-4 flex min-w-0 flex-wrap items-center justify-end gap-1">
+        <div className="mr-4 flex h-11 min-w-0 flex-nowrap items-center justify-end gap-1">
           {detail ? (
             <>
               <Menu>
@@ -884,175 +993,217 @@ export function PullRequestDetailPanel({
           ) : null}
         </div>
 
-        {detail && tab !== "code" ? (
-          <div className="col-span-2 mt-3 min-w-0 px-4 pb-4">
-            <h1 className="text-base font-semibold leading-snug">{detail.title}</h1>
-            <PullRequestMetaLine className="mt-2 text-xs text-muted-foreground">
-              <PullRequestActorLabel actor={detail.author} className="font-medium" />
-              <span>updated {formatRelativeTimeLabel(detail.updatedAt)}</span>
-            </PullRequestMetaLine>
-
-            <div className="mt-4 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-              <code
-                className="min-w-0 max-w-48 shrink truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground"
-                title={detail.baseBranch}
-              >
-                {detail.baseBranch}
-              </code>
-              <ArrowLeftIcon aria-label="receives changes from" className="size-4 shrink-0" />
-              <button
-                type="button"
-                className="grid min-w-0 max-w-64 shrink cursor-pointer rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
-                aria-label={isBranchCopied ? "Branch name copied" : "Copy pull request branch"}
-                title={isBranchCopied ? "Copied" : "Copy pull request branch"}
-                onClick={() => copyBranchToClipboard(detail.headBranch)}
-              >
-                <code
-                  className={cn(
-                    "col-start-1 row-start-1 min-w-0 truncate transition-opacity duration-150 motion-reduce:transition-none",
-                    isBranchCopied ? "opacity-0" : "opacity-100",
-                  )}
-                  title={detail.headBranch}
-                >
-                  {detail.headBranch}
-                </code>
-                <span
-                  aria-hidden="true"
-                  className={cn(
-                    "col-start-1 row-start-1 truncate text-center transition-opacity duration-150 motion-reduce:transition-none",
-                    isBranchCopied ? "opacity-100" : "opacity-0",
-                  )}
-                >
-                  Copied
-                </span>
-              </button>
-              <span className="ml-auto inline-flex shrink-0 items-center justify-end gap-2">
-                <span className="inline-flex items-center gap-1.5 tabular-nums">
-                  <FilesIcon className="size-3.5" />
-                  {detail.changedFiles.toLocaleString()}{" "}
-                  {detail.changedFiles === 1 ? "file" : "files"}
-                </span>
-                <PullRequestDiffStat
-                  additions={detail.additions}
-                  deletions={detail.deletions}
-                  className="shrink-0 font-mono text-xs"
-                />
-              </span>
-            </div>
-          </div>
-        ) : null}
-
-        {detail && conflicting ? (
-          <div className="col-span-2 flex items-center gap-1 px-4 pb-3">
-            <Badge
-              variant="error"
-              className="h-auto gap-1.5 rounded-md px-3 py-1.5 text-xs text-destructive"
-            >
-              <TriangleAlertIcon className="size-3.5" />
-              Merge conflicts
-            </Badge>
-            <Button
-              size="xs"
-              variant="ghost"
-              className="ml-auto text-destructive hover:bg-destructive/8 hover:text-destructive"
-              disabled={handoff !== null}
-              onClick={startResolveConflicts}
-            >
-              {handoff === "conflicts" ? "Preparing..." : "Resolve in a new thread"}
-              <ArrowUpRightIcon className="size-3.5 text-destructive" />
-            </Button>
-          </div>
-        ) : null}
-
-        {detail ? (
-          <nav
-            className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-border/60 px-4 py-2"
-            aria-label="Pull request tabs"
+        {/* Folding is a grid track going to zero: the rows below stay mounted, the track
+            animates closed over them, and `inert` takes the hidden controls out of the tab
+            order for as long as the chrome is condensed. */}
+        <div
+          className={cn(
+            "col-span-2 grid",
+            // Instant in both directions: the scroll compensation keeps the content pinned
+            // through either flip, and an animated track would fight it frame by frame. The
+            // top row's crossfade is the transition.
+            condensed ? "grid-rows-[0fr]" : "grid-rows-[1fr]",
+          )}
+        >
+          <div
+            ref={foldRef}
+            // One-way on purpose: appearing content eases in over ground the instant track
+            // already reserved; departing content cuts, because its ground is gone in the
+            // same frame and the scroll compensation reads it as scrolled past.
+            className={cn(
+              "min-h-0 overflow-hidden",
+              condensed
+                ? "opacity-0"
+                : "opacity-100 transition-opacity duration-200 ease-out motion-reduce:transition-none",
+            )}
+            inert={condensed}
           >
-            {visibleTabs.map((item) => (
-              <button
-                key={item.value}
-                type="button"
-                aria-pressed={tab === item.value}
-                onClick={() => setTab(item.value)}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors",
-                  tab === item.value
-                    ? "bg-accent text-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
-              >
-                {item.label}
-              </button>
-            ))}
-            {tab === "summary" ? (
-              <span
-                className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
-                aria-label={checksSummary ? `Checks: ${checksSummary}` : "Checks"}
-              >
-                <CircleDotIcon aria-hidden className="size-3.5" />
-                {checksSummary}
-              </span>
-            ) : tab === "timeline" ? (
-              <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                <PullRequestMetaLine className="whitespace-nowrap text-[11px]">
-                  <span
-                    className="inline-flex items-center gap-1"
-                    aria-label={`${detail.commentCount.toLocaleString()} ${
-                      detail.commentCount === 1 ? "comment" : "comments"
-                    }`}
-                  >
-                    <MessageSquareIcon aria-hidden className="size-3" />
-                    {detail.commentCount.toLocaleString()}
-                  </span>
-                  <span
-                    className="inline-flex items-center gap-1"
-                    aria-label={`${detail.commits.length.toLocaleString()} ${
-                      detail.commits.length === 1 ? "commit" : "commits"
-                    }`}
-                  >
-                    <GitCommitHorizontalIcon aria-hidden className="size-3" />
-                    {detail.commits.length.toLocaleString()}
-                  </span>
+            {detail ? (
+              <div className="col-span-2 mt-3 min-w-0 px-4 pb-4">
+                <h1 className="text-base font-semibold leading-snug">{detail.title}</h1>
+                <PullRequestMetaLine className="mt-2 text-xs text-muted-foreground">
+                  <PullRequestActorLabel actor={detail.author} className="font-medium" />
+                  <span>updated {formatRelativeTimeLabel(detail.updatedAt)}</span>
                 </PullRequestMetaLine>
+
+                <div className="mt-4 flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                  <code
+                    className="min-w-0 max-w-48 shrink truncate rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground"
+                    title={detail.baseBranch}
+                  >
+                    {detail.baseBranch}
+                  </code>
+                  <ArrowLeftIcon aria-label="receives changes from" className="size-4 shrink-0" />
+                  <button
+                    type="button"
+                    className="grid min-w-0 max-w-64 shrink cursor-pointer rounded-md bg-muted px-2 py-1 font-mono text-xs text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1 focus-visible:ring-offset-background"
+                    aria-label={isBranchCopied ? "Branch name copied" : "Copy pull request branch"}
+                    title={isBranchCopied ? "Copied" : "Copy pull request branch"}
+                    onClick={() => copyBranchToClipboard(detail.headBranch)}
+                  >
+                    <code
+                      className={cn(
+                        "col-start-1 row-start-1 min-w-0 truncate transition-opacity duration-150 motion-reduce:transition-none",
+                        isBranchCopied ? "opacity-0" : "opacity-100",
+                      )}
+                      title={detail.headBranch}
+                    >
+                      {detail.headBranch}
+                    </code>
+                    <span
+                      aria-hidden="true"
+                      className={cn(
+                        "col-start-1 row-start-1 truncate text-center transition-opacity duration-150 motion-reduce:transition-none",
+                        isBranchCopied ? "opacity-100" : "opacity-0",
+                      )}
+                    >
+                      Copied
+                    </span>
+                  </button>
+                  <span className="ml-auto inline-flex shrink-0 items-center justify-end gap-2">
+                    <span className="inline-flex items-center gap-1.5 tabular-nums">
+                      <FilesIcon className="size-3.5" />
+                      {detail.changedFiles.toLocaleString()}{" "}
+                      {detail.changedFiles === 1 ? "file" : "files"}
+                    </span>
+                    <PullRequestDiffStat
+                      additions={detail.additions}
+                      deletions={detail.deletions}
+                      className="shrink-0 font-mono text-xs"
+                    />
+                  </span>
+                </div>
+              </div>
+            ) : null}
+
+            {detail && conflicting ? (
+              <div className="col-span-2 flex items-center gap-1 px-4 pb-3">
+                <Badge
+                  variant="error"
+                  className="h-auto gap-1.5 rounded-md px-3 py-1.5 text-xs text-destructive"
+                >
+                  <TriangleAlertIcon className="size-3.5" />
+                  Merge conflicts
+                </Badge>
                 <Button
                   size="xs"
                   variant="ghost"
-                  className="h-7 px-2 text-[10px] text-muted-foreground"
-                  aria-label={
-                    timelineOrder === "newest"
-                      ? "Show oldest activity first"
-                      : "Show newest activity first"
-                  }
-                  onClick={() =>
-                    setTimelineOrder((value) => (value === "newest" ? "oldest" : "newest"))
-                  }
+                  className="ml-auto text-destructive hover:bg-destructive/8 hover:text-destructive"
+                  disabled={handoff !== null}
+                  onClick={startResolveConflicts}
                 >
-                  <ArrowDownUpIcon aria-hidden className="size-3" />
-                  {timelineOrder === "newest" ? "Newest first" : "Oldest first"}
+                  {handoff === "conflicts" ? "Preparing..." : "Resolve in a new thread"}
+                  <ArrowUpRightIcon className="size-3.5 text-destructive" />
                 </Button>
               </div>
-            ) : tab === "code" ? (
-              // The diffstat normally lives in the branch row, which is hidden on this tab, so
-              // it moves up into the tabs row alongside the changed-files count.
-              <span className="ml-auto inline-flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                <span className="inline-flex items-center gap-1.5 tabular-nums">
-                  <FilesIcon className="size-3.5" />
-                  {detail.changedFiles.toLocaleString()}{" "}
-                  {detail.changedFiles === 1 ? "file" : "files"}
-                </span>
-                <PullRequestDiffStat
-                  additions={detail.additions}
-                  deletions={detail.deletions}
-                  className="shrink-0 font-mono text-xs"
-                />
-              </span>
             ) : null}
-          </nav>
-        ) : null}
+
+            {detail ? (
+              <nav
+                className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-border/60 px-4 py-2"
+                aria-label="Pull request tabs"
+              >
+                {visibleTabs.map((item) => (
+                  <button
+                    key={item.value}
+                    type="button"
+                    aria-pressed={tab === item.value}
+                    onClick={() => setTab(item.value)}
+                    className={cn(
+                      "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors",
+                      tab === item.value
+                        ? "bg-accent text-foreground"
+                        : "text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+                {tab === "summary" ? (
+                  <span
+                    className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
+                    aria-label={checksSummary ? `Checks: ${checksSummary}` : "Checks"}
+                  >
+                    <CircleDotIcon aria-hidden className="size-3.5" />
+                    {checksSummary}
+                  </span>
+                ) : tab === "timeline" ? (
+                  <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                    <PullRequestMetaLine className="whitespace-nowrap text-[11px]">
+                      <span
+                        className="inline-flex items-center gap-1"
+                        aria-label={`${detail.commentCount.toLocaleString()} ${
+                          detail.commentCount === 1 ? "comment" : "comments"
+                        }`}
+                      >
+                        <MessageSquareIcon aria-hidden className="size-3" />
+                        {detail.commentCount.toLocaleString()}
+                      </span>
+                      <span
+                        className="inline-flex items-center gap-1"
+                        aria-label={`${detail.commits.length.toLocaleString()} ${
+                          detail.commits.length === 1 ? "commit" : "commits"
+                        }`}
+                      >
+                        <GitCommitHorizontalIcon aria-hidden className="size-3" />
+                        {detail.commits.length.toLocaleString()}
+                      </span>
+                    </PullRequestMetaLine>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="h-7 px-2 text-[10px] text-muted-foreground"
+                      aria-label={
+                        timelineOrder === "newest"
+                          ? "Show oldest activity first"
+                          : "Show newest activity first"
+                      }
+                      onClick={() =>
+                        setTimelineOrder((value) => (value === "newest" ? "oldest" : "newest"))
+                      }
+                    >
+                      <ArrowDownUpIcon aria-hidden className="size-3" />
+                      {timelineOrder === "newest" ? "Newest first" : "Oldest first"}
+                    </Button>
+                  </div>
+                ) : null}
+              </nav>
+            ) : null}
+          </div>
+        </div>
       </div>
 
-      <div className="relative min-h-0 flex-1 overflow-hidden">
+      <div
+        className="relative min-h-0 flex-1 overflow-hidden"
+        // Scroll does not bubble, but it captures: one listener hears every tab's own scroll
+        // container. Collapse past two line-heights, expand only back at the very top, so the
+        // boundary row cannot flap the chrome open and shut.
+        onScrollCapture={(event) => {
+          if (chromeVariant !== "collapse") return;
+          const scroller = event.target as HTMLElement;
+          scrollerRef.current = scroller;
+          const top = scroller.scrollTop;
+          setChromeCondensed((previous) => {
+            let next = previous;
+            // `scrollHeight` reads the fold's natural height whichever state the track is in.
+            const foldHeight = foldRef.current?.scrollHeight ?? 0;
+            if (previous) {
+              // The hard top reopens the chrome. The refund puts the reader a fold's height
+              // from the top, pinned to the same pixels — the metadata is scrolled up to,
+              // not thrown at them.
+              if (top < 4 && foldHeight > 0) {
+                compensationRef.current = foldHeight;
+                next = false;
+              }
+            } else if (foldHeight > 0 && top > foldHeight + 32) {
+              compensationRef.current = -foldHeight;
+              next = true;
+            }
+            chromeStateByTab.current[tab] = next;
+            return next;
+          });
+        }}
+      >
         {detailQuery.isPending && !detail ? (
           // The ghost wears the shape of the tab being waited on, so switching tabs mid-load
           // does not flash a summary outline under a timeline heading.

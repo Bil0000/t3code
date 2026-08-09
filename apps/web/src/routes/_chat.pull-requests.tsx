@@ -1144,8 +1144,8 @@ function PullRequestsRouteView() {
                 number: activePullRequestSurface.number,
               }}
               refreshToken={detailRefreshToken}
-              // Merging, closing or reopening changes the row this panel was opened from, so the
-              // list behind it is out of date the moment the host takes the action.
+              // Merging, closing or reopening changes the row this panel was opened from, so
+              // the list behind it is out of date the moment the host takes the action.
               onActed={() => {
                 refreshList();
                 baselineQuery.refresh();
@@ -1153,6 +1153,7 @@ function PullRequestsRouteView() {
                 reviewingQuery.refresh();
               }}
               onStateChange={handlePullRequestTabStatusChange}
+              chromeVariant="collapse"
             />
           </RightPanelTabs>
         ) : null}
