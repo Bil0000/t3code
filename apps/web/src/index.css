@@ -55,7 +55,9 @@ html[data-mobile-composer-route-transition="true"]::view-transition-new(t3-mobil
   }
 }
 
-html[data-mobile-composer-route-transition="true"]::view-transition-group(t3-mobile-draft-headline) {
+html[data-mobile-composer-route-transition="true"]::view-transition-group(
+    t3-mobile-draft-headline
+  ) {
   animation-duration: 130ms;
 }
 
@@ -397,6 +399,13 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
       100% var(--topbar-scroll-fade-height),
       100% calc(100% - var(--topbar-scroll-fade-height)),
       var(--app-scrollbar-width) 100%;
+  }
+
+  /* The pull request list sits directly under its topbar, so the tall band the chat and
+     settings pages fade under would read as empty padding here. A shorter band keeps the
+     fade while letting the controls start near the chrome. */
+  .pull-requests-scroll-fade {
+    --topbar-scroll-fade-height: 1.5rem;
   }
 
   @keyframes settings-search-target-pulse {
@@ -825,8 +834,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
 
   @media (min-width: 40rem) {
     .chat-timeline-scroll-fade,
-    .settings-page-scroll-fade,
-    .pull-requests-scroll-fade {
+    .settings-page-scroll-fade {
       --topbar-scroll-fade-height: 3rem;
     }
 

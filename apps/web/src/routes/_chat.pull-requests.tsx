@@ -1381,10 +1381,10 @@ function PullRequestsColumn({
         ref={scrollRef}
         className="pull-requests-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto"
       >
-        {/* The top padding is the fade band's own height (2.5rem, 3rem from `sm:`), the same
-            pairing the settings page makes: at rest the controls sit fully below the mask, and
-            only content actually passing under the chrome fades. */}
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pt-10 pb-12 sm:pt-12">
+        {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
+            settings page makes: at rest the controls sit fully below the mask, and only
+            content actually passing under the chrome fades. */}
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pt-6 pb-12">
           <div className="flex flex-col gap-3">
             <div ref={inFlowSearchRef} className="flex items-center gap-2">
               {searchInput}
