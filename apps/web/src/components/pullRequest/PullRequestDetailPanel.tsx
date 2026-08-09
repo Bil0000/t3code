@@ -658,6 +658,13 @@ export function PullRequestDetailPanel({
               >
                 #{detail.number}
               </button>
+              {/* On the Code tab the tall title/meta block below is hidden so the diff gets the
+                  vertical space; the title rides along in the compact row instead. */}
+              {tab === "code" ? (
+                <span className="min-w-0 truncate text-foreground font-medium" title={detail.title}>
+                  {detail.title}
+                </span>
+              ) : null}
             </>
           ) : null}
         </div>
@@ -861,7 +868,7 @@ export function PullRequestDetailPanel({
           ) : null}
         </div>
 
-        {detail ? (
+        {detail && tab !== "code" ? (
           <div className="col-span-2 mt-3 min-w-0 px-4 pb-4">
             <h1 className="text-base font-semibold leading-snug">{detail.title}</h1>
             <PullRequestMetaLine className="mt-2 text-xs text-muted-foreground">
@@ -1009,6 +1016,21 @@ export function PullRequestDetailPanel({
                   {timelineOrder === "newest" ? "Newest first" : "Oldest first"}
                 </Button>
               </div>
+            ) : tab === "code" ? (
+              // The diffstat normally lives in the branch row, which is hidden on this tab, so
+              // it moves up into the tabs row alongside the changed-files count.
+              <span className="ml-auto inline-flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+                <span className="inline-flex items-center gap-1.5 tabular-nums">
+                  <FilesIcon className="size-3.5" />
+                  {detail.changedFiles.toLocaleString()}{" "}
+                  {detail.changedFiles === 1 ? "file" : "files"}
+                </span>
+                <PullRequestDiffStat
+                  additions={detail.additions}
+                  deletions={detail.deletions}
+                  className="shrink-0 font-mono text-xs"
+                />
+              </span>
             ) : null}
           </nav>
         ) : null}
