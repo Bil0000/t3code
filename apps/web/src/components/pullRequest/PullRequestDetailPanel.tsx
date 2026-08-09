@@ -244,6 +244,10 @@ export function PullRequestDetailPanel({
   // their eyes does not move, and the collapse itself is the only thing that changes.
   const scrollerRef = useRef<HTMLElement | null>(null);
   const foldRef = useRef<HTMLDivElement | null>(null);
+  // The condensed chrome's second row opens as the fold closes, so the height the scrollport
+  // gains is the fold's minus this row's. Measured the same way the fold is: `scrollHeight`
+  // through a zero track reads its natural height in either state.
+  const condensedRowRef = useRef<HTMLDivElement | null>(null);
   const compensationRef = useRef<number | null>(null);
   useLayoutEffect(() => {
     if (compensationRef.current === null) return;
@@ -768,27 +772,6 @@ export function PullRequestDetailPanel({
                     {checksSummary}
                   </span>
                 ) : null}
-                <nav
-                  aria-label="Pull request tabs"
-                  className="ml-1 flex shrink-0 items-center gap-0.5"
-                >
-                  {visibleTabs.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      aria-pressed={tab === item.value}
-                      onClick={() => setTab(item.value)}
-                      className={cn(
-                        "rounded px-1.5 py-0.5 text-[11px] transition-colors",
-                        tab === item.value
-                          ? "bg-accent text-foreground"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </nav>
               </>
             ) : null}
           </div>
@@ -993,6 +976,65 @@ export function PullRequestDetailPanel({
           ) : null}
         </div>
 
+        {/* The condensed chrome's second row: the tabs that the closing fold takes with it,
+            and compact copies of the branch pair and diff stat so they stay in sight while
+            the full rows are folded away. Same zero-track mechanism as the fold, inverted. */}
+        <div className={cn("col-span-2 grid", condensed ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+          <div
+            ref={condensedRowRef}
+            className={cn(
+              "min-h-0 overflow-hidden",
+              condensed
+                ? "opacity-100 transition-opacity duration-200 ease-out motion-reduce:transition-none"
+                : "opacity-0",
+            )}
+            inert={!condensed}
+          >
+            {detail ? (
+              <div className="flex min-w-0 items-center gap-1 px-4 pb-2">
+                <nav aria-label="Pull request tabs" className="flex shrink-0 items-center gap-0.5">
+                  {visibleTabs.map((item) => (
+                    <button
+                      key={item.value}
+                      type="button"
+                      tabIndex={condensed ? 0 : -1}
+                      aria-pressed={tab === item.value}
+                      onClick={() => setTab(item.value)}
+                      className={cn(
+                        "rounded-md px-2 py-1 text-[11px] transition-colors",
+                        tab === item.value
+                          ? "bg-accent text-foreground"
+                          : "text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                </nav>
+                <span
+                  className="ml-auto inline-flex min-w-0 shrink items-center gap-1 font-mono text-[11px] text-muted-foreground"
+                  title={`${detail.baseBranch} ← ${detail.headBranch}`}
+                >
+                  <span className="truncate">{detail.baseBranch}</span>
+                  <ArrowLeftIcon aria-label="receives changes from" className="size-3 shrink-0" />
+                  <span className="truncate">{detail.headBranch}</span>
+                </span>
+                <span className="ml-2 inline-flex shrink-0 items-center gap-2 text-[11px] text-muted-foreground">
+                  <span className="inline-flex items-center gap-1 tabular-nums">
+                    <FilesIcon className="size-3" />
+                    {detail.changedFiles.toLocaleString()}
+                  </span>
+                  <PullRequestDiffStat
+                    additions={detail.additions}
+                    deletions={detail.deletions}
+                    className="shrink-0 font-mono text-[11px]"
+                  />
+                </span>
+              </div>
+            ) : null}
+          </div>
+        </div>
+
         {/* Folding is a grid track going to zero: the rows below stay mounted, the track
             animates closed over them, and `inert` takes the hidden controls out of the tab
             order for as long as the chrome is condensed. */}
@@ -1187,16 +1229,19 @@ export function PullRequestDetailPanel({
             let next = previous;
             // `scrollHeight` reads the fold's natural height whichever state the track is in.
             const foldHeight = foldRef.current?.scrollHeight ?? 0;
+            // The chrome trades the fold for the condensed second row, so the height the
+            // scrollport actually gains is the difference between the two.
+            const chromeDelta = foldHeight - (condensedRowRef.current?.scrollHeight ?? 0);
             if (previous) {
               // The hard top reopens the chrome. The refund puts the reader a fold's height
               // from the top, pinned to the same pixels — the metadata is scrolled up to,
               // not thrown at them.
               if (top < 4 && foldHeight > 0) {
-                compensationRef.current = foldHeight;
+                compensationRef.current = chromeDelta;
                 next = false;
               }
             } else if (foldHeight > 0 && top > foldHeight + 32) {
-              compensationRef.current = -foldHeight;
+              compensationRef.current = -chromeDelta;
               next = true;
             }
             chromeStateByTab.current[tab] = next;
