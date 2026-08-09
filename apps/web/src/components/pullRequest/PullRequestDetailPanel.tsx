@@ -139,7 +139,10 @@ const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
 ];
 
 // The diff viewer pulls in its worker pool, so it stays out of the bundle until Code is opened.
-const PullRequestCodeTab = lazy(() => import("./PullRequestCodeTab"));
+// Named rather than inlined so the panel can also call it itself, to start the download before
+// anyone has clicked the tab.
+const loadCodeTab = () => import("./PullRequestCodeTab");
+const PullRequestCodeTab = lazy(loadCodeTab);
 
 /**
  * What the last hand-off wrote into each draft, kept outside React because the panel that wrote it
@@ -226,8 +229,21 @@ export function PullRequestDetailPanel({
     timeout: 1600,
   });
 
+  // The chunk is fetched as soon as the panel exists rather than waiting for the Code tab to be
+  // clicked, so a reader who does click it lands on a chunk already in the module cache.
+  useEffect(() => {
+    void loadCodeTab();
+  }, []);
+
   const detailQuery = useEnvironmentQuery(
     pullRequestEnvironment.detail({ environmentId, input: reference }),
+  );
+  // Detail and diff are independent server reads, so the diff for the default view (no commit,
+  // no cursor) is started here too rather than waiting for the Code tab to mount. This is one
+  // extra cached read per opened pull request even for readers who never open the tab, but it
+  // turns the tab's first paint from a cold request into a cache hit.
+  const _diffWarmUpQuery = useEnvironmentQuery(
+    pullRequestEnvironment.diff({ environmentId, input: { ...reference } }),
   );
   const detail = detailQuery.data;
   useEffect(() => {
