@@ -279,6 +279,19 @@ describe("decodeCommitsJson", () => {
     expect(commits.map((commit) => commit.oid)).toEqual(["aaa", "bbb"]);
   });
 
+  it("skips commits whose id is empty", () => {
+    const commits = expectSuccess(
+      decodeCommitsJson(
+        JSON.stringify([
+          { id: "   ", title: "invalid", committed_date: "2026-07-02T00:00:00Z" },
+          { id: "aaa", committed_date: "2026-07-01T00:00:00Z" },
+        ]),
+      ),
+    );
+
+    expect(commits.map((commit) => commit.oid)).toEqual(["aaa"]);
+  });
+
   it("falls back to the creation timestamp when there is no commit date", () => {
     const commits = expectSuccess(
       decodeCommitsJson(

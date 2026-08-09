@@ -848,6 +848,7 @@ function PullRequestsRouteView() {
       rightPanelAvailable={rightPanelState.surfaces.length > 0}
       rightPanelOpen={rightPanelState.isOpen}
       rightPanelShortcutLabel={null}
+      liveAgentCount={0}
       onToggleTerminal={() => undefined}
       onToggleRightPanel={toggleRightPanel}
     />
@@ -1074,6 +1075,7 @@ function PullRequestsRouteView() {
             filesAvailable={false}
             pullRequestAvailable={false}
             agentsAvailable={false}
+            liveAgentCount={0}
             pullRequestStatuses={pullRequestTabStatuses}
           >
             <PullRequestDetailPanel

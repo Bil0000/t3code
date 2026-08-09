@@ -120,7 +120,7 @@ const RawCommentSchema = Schema.Struct({
 });
 
 const RawCommitSchema = Schema.Struct({
-  hash: Schema.String,
+  hash: TrimmedNonEmptyString,
   message: Schema.optional(Schema.NullOr(Schema.String)),
   date: Schema.optional(Schema.NullOr(Schema.String)),
   author: Schema.optional(

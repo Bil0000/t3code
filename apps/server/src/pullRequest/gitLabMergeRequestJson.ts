@@ -15,6 +15,7 @@ import type {
   PullRequestReviewerCandidate,
   PullRequestState,
 } from "@t3tools/contracts";
+import { TrimmedNonEmptyString } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 /**
@@ -133,7 +134,7 @@ const RawDiffRefsSchema = Schema.Struct({
 });
 
 const RawCommitSchema = Schema.Struct({
-  id: Schema.String,
+  id: TrimmedNonEmptyString,
   title: Schema.optional(Schema.NullOr(Schema.String)),
   committed_date: Schema.optional(Schema.NullOr(Schema.String)),
   created_at: Schema.optional(Schema.NullOr(Schema.String)),

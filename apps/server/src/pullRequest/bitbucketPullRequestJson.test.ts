@@ -260,6 +260,19 @@ describe("decodeCommitsJson", () => {
     expect(decoded.items[1]?.messageHeadline).toBe("second");
     expect(decoded.next).toBeNull();
   });
+
+  it("skips commits whose hash is empty", () => {
+    const decoded = expectSuccess(
+      decodeCommitsJson(
+        page([
+          { hash: "   ", message: "invalid", date: "2026-06-16T04:51:00+00:00" },
+          { hash: "aaa", date: "2026-06-16T04:50:49+00:00" },
+        ]),
+      ),
+    );
+
+    expect(decoded.items.map((commit) => commit.oid)).toEqual(["aaa"]);
+  });
 });
 
 describe("decodeStatusesJson", () => {
