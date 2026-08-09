@@ -58,28 +58,38 @@ function Section({
   title,
   count,
   defaultOpen = true,
+  actions,
   children,
 }: {
   title: string;
   count?: number;
   defaultOpen?: boolean;
+  /** Controls riding on the heading row itself. A sibling of the trigger, not a child of it —
+      a button cannot hold a button — and only while open, since they act on what is shown. */
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      {/* Title first, chevron riding to its right, count last: the row reads as a heading
-          with an affordance rather than a tree node. */}
-      <CollapsibleTrigger className="flex w-full items-center gap-1.5 border-t border-border/60 px-4 py-3 text-left text-sm font-medium">
-        <span>{title}</span>
-        <ChevronRightIcon
-          aria-hidden
-          className={cn("size-3.5 text-muted-foreground transition-transform", open && "rotate-90")}
-        />
-        {count === undefined ? null : (
-          <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
-        )}
-      </CollapsibleTrigger>
+      <div className="flex w-full items-center border-t border-border/60 pr-4">
+        {/* Title first, chevron riding to its right, count last: the row reads as a heading
+            with an affordance rather than a tree node. */}
+        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
+          <span>{title}</span>
+          <ChevronRightIcon
+            aria-hidden
+            className={cn(
+              "size-3.5 text-muted-foreground transition-transform",
+              open && "rotate-90",
+            )}
+          />
+          {count === undefined ? null : (
+            <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
+          )}
+        </CollapsibleTrigger>
+        {open ? actions : null}
+      </div>
       <CollapsiblePanel>
         <div className="px-4 pb-4">{children}</div>
       </CollapsiblePanel>
@@ -308,13 +318,15 @@ export function PullRequestSummaryTab({
         )}
       </Section>
 
-      <Section title="Comments" count={detail.commentCount}>
-        {detail.comments.length > 0 ? (
-          <div className="mb-2 flex justify-end">
+      <Section
+        title="Comments"
+        count={detail.commentCount}
+        actions={
+          detail.comments.length > 0 ? (
             <Button
               size="xs"
               variant="ghost"
-              className="h-7 px-2 text-[10px] text-muted-foreground"
+              className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
               aria-label={
                 commentOrder === "newest"
                   ? "Show oldest comments first"
@@ -325,8 +337,9 @@ export function PullRequestSummaryTab({
               <ArrowDownUpIcon aria-hidden className="size-3" />
               {commentOrder === "newest" ? "Newest first" : "Oldest first"}
             </Button>
-          </div>
-        ) : null}
+          ) : null
+        }
+      >
         {detail.commentsTruncated ? (
           <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
             This conversation is longer than this page reads in one go. The most recent{" "}
