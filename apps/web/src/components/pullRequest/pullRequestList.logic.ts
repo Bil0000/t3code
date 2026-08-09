@@ -1,11 +1,7 @@
 import * as Schema from "effect/Schema";
 
-import { PullRequestListResult } from "@t3tools/contracts";
-import type {
-  PullRequestInvolvement,
-  PullRequestListEntry,
-  PullRequestListState,
-} from "@t3tools/contracts";
+import { PullRequestListEntry, PullRequestListResult } from "@t3tools/contracts";
+import type { PullRequestInvolvement, PullRequestListState } from "@t3tools/contracts";
 
 export type PullRequestGroupKey = "reviewRequested" | "authored" | "others";
 
@@ -211,9 +207,20 @@ type SnapshotStorage = Pick<Storage, "getItem" | "setItem">;
 
 const snapshotStorageKey = (environmentId: string) => `t3.pullRequests.list:${environmentId}`;
 
+/**
+ * The priority groups' own server-filtered answers, carried with the feed. An authored pull
+ * request older than the feed's first page lives only in these, so a snapshot without them
+ * cold-starts into an Authored group missing exactly the rows that made it worth having.
+ */
+export interface PullRequestPartitionsSnapshot {
+  readonly authored: ReadonlyArray<PullRequestListEntry>;
+  readonly reviewing: ReadonlyArray<PullRequestListEntry>;
+}
+
 export interface PullRequestListSnapshot {
   readonly scope: string;
   readonly data: PullRequestListResult;
+  readonly partitions?: PullRequestPartitionsSnapshot | undefined;
 }
 
 /**
@@ -223,7 +230,17 @@ export interface PullRequestListSnapshot {
  * schema change is rejected the same way, which is exactly the cold start it would have broken.
  */
 const decodeSnapshot = Schema.decodeUnknownOption(
-  Schema.Struct({ scope: Schema.String, data: PullRequestListResult }),
+  Schema.Struct({
+    scope: Schema.String,
+    data: PullRequestListResult,
+    // Optional so a snapshot written before the partitions existed still hydrates the feed.
+    partitions: Schema.optional(
+      Schema.Struct({
+        authored: Schema.Array(PullRequestListEntry),
+        reviewing: Schema.Array(PullRequestListEntry),
+      }),
+    ),
+  }),
 );
 
 /**
@@ -265,6 +282,14 @@ export function writePullRequestListSnapshot(
           errors: [],
           nextCursors: {},
         },
+        ...(snapshot.partitions === undefined
+          ? {}
+          : {
+              partitions: {
+                authored: snapshot.partitions.authored.slice(0, SNAPSHOT_MAX_ENTRIES),
+                reviewing: snapshot.partitions.reviewing.slice(0, SNAPSHOT_MAX_ENTRIES),
+              },
+            }),
       }),
     );
   } catch {

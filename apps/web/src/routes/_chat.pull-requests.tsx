@@ -39,6 +39,7 @@ import {
   writePullRequestListSnapshot,
   scorePullRequestMatch,
   type PullRequestDiffStats,
+  type PullRequestPartitionsSnapshot,
 } from "../components/pullRequest/pullRequestList.logic";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
@@ -393,6 +394,8 @@ function PullRequestsRouteView() {
     scope: string;
     query: string;
     data: PullRequestListResult;
+    /** The priority groups' own answers, carried so a cold start has whole groups too. */
+    partitions?: PullRequestPartitionsSnapshot;
   } | null>(null);
   // A reload recreates the registry the queries live in, so with nothing held the page would
   // cold-start into skeletons even though almost every row is unchanged. The last answer for
@@ -410,7 +413,13 @@ function PullRequestsRouteView() {
         environmentId,
       );
       if (snapshot === null) return null;
-      return { environmentId, scope: snapshot.scope, query: "", data: snapshot.data };
+      return {
+        environmentId,
+        scope: snapshot.scope,
+        query: "",
+        data: snapshot.data,
+        ...(snapshot.partitions === undefined ? {} : { partitions: snapshot.partitions }),
+      };
     });
   }, [environmentId]);
   useEffect(() => {
@@ -419,16 +428,48 @@ function PullRequestsRouteView() {
     // answer under the new question — which is how a search's answer came to speak for the
     // workspace after the search was cleared.
     if (!listQuery.data || listQuery.isPending) return;
-    setLoaded({ environmentId, scope: scopeKey, query: sentQuery, data: listQuery.data });
-    // A search's answer is the search's, not the workspace's, so only unsearched lists persist.
-    if (environmentId !== null && sentQuery.length === 0) {
-      writePullRequestListSnapshot(
-        typeof window === "undefined" ? undefined : window.localStorage,
+    const data = listQuery.data;
+    setLoaded((current) => {
+      // The partitions arrive on their own clock, so this records whichever have landed by
+      // now and runs again when the rest do. Until then the ones already held for this scope
+      // stay — hydrated or previously answered — rather than being dropped for a feed that
+      // merely settled first.
+      const partitions =
+        partitionsWanted && authoredQuery.data !== null && reviewingQuery.data !== null
+          ? { authored: authoredQuery.data.entries, reviewing: reviewingQuery.data.entries }
+          : current !== null &&
+              current.environmentId === environmentId &&
+              current.scope === scopeKey
+            ? current.partitions
+            : undefined;
+      // A search's answer is the search's, not the workspace's, so only unsearched lists
+      // persist. Written here where the held partitions are in reach, so a feed settling
+      // ahead of them cannot overwrite a stored snapshot that already had both groups.
+      if (environmentId !== null && sentQuery.length === 0) {
+        writePullRequestListSnapshot(
+          typeof window === "undefined" ? undefined : window.localStorage,
+          environmentId,
+          { scope: scopeKey, data, ...(partitions === undefined ? {} : { partitions }) },
+        );
+      }
+      return {
         environmentId,
-        { scope: scopeKey, data: listQuery.data },
-      );
-    }
-  }, [environmentId, scopeKey, sentQuery, listQuery.data, listQuery.isPending]);
+        scope: scopeKey,
+        query: sentQuery,
+        data,
+        ...(partitions === undefined ? {} : { partitions }),
+      };
+    });
+  }, [
+    environmentId,
+    scopeKey,
+    sentQuery,
+    listQuery.data,
+    listQuery.isPending,
+    partitionsWanted,
+    authoredQuery.data,
+    reviewingQuery.data,
+  ]);
   // Changing a filter asks a question nothing has answered yet, and the page is already holding
   // perfectly good rows for the last one. Rather than blank out for the round trip, those rows
   // are narrowed to the new filters and stay until the answer lands — a subset of it, never a
@@ -501,15 +542,12 @@ function PullRequestsRouteView() {
         );
         return { key: filterKey, entries: [...previous.entries, ...appended] };
       }
-      const kept = previous.entries.flatMap((entry) => {
-        const key = pullRequestEntryKey(entry);
-        const fresh = arriving.get(key);
-        if (fresh === undefined) return [];
-        arriving.delete(key);
-        // The row's own contents are the newest ones; only its place is inherited.
-        return [fresh];
-      });
-      return { key: filterKey, entries: [...kept, ...arriving.values()] };
+      // A whole-page answer replaces the order outright. Positions used to be inherited so the
+      // list would not shift under a reader, but inheriting them filed a pull request opened
+      // since the last read at the bottom of the page — below rows a week older — where "the
+      // latest" is exactly what a refresh was for. The host answers in the order the page
+      // reads, so its order stands; a row that moved was updated, and moving is the news.
+      return { key: filterKey, entries: rankPullRequestMatches(answered.entries, sentQuery) };
     });
   }, [answered, filterKey, sentCursors, sentQuery]);
 
@@ -665,10 +703,18 @@ function PullRequestsRouteView() {
    */
   const groups = useMemo(() => {
     if (search.involvement !== "all") return [{ key: "others" as const, label: "", entries }];
-    // Until both partitions have answered, the loaded rows are grouped locally as before; once
-    // they have, the groups are the hosts' own partitions and the feed only fills "Others".
-    const authored = partitionsWanted ? authoredQuery.data?.entries : undefined;
-    const reviewing = partitionsWanted ? reviewingQuery.data?.entries : undefined;
+    // Until both partitions have answered, the snapshot's stand in — they are yesterday's
+    // groups, but whole ones, where grouping the feed's first page locally loses every
+    // authored row older than it. Once the live reads land they take over; with neither,
+    // the local grouping is still better than nothing.
+    const held =
+      loaded !== null && loaded.environmentId === environmentId && loaded.scope === scopeKey
+        ? loaded.partitions
+        : undefined;
+    const authored = partitionsWanted ? (authoredQuery.data?.entries ?? held?.authored) : undefined;
+    const reviewing = partitionsWanted
+      ? (reviewingQuery.data?.entries ?? held?.reviewing)
+      : undefined;
     if (authored === undefined || reviewing === undefined) {
       return groupPullRequestsByInvolvement(entries, viewers);
     }
@@ -676,8 +722,11 @@ function PullRequestsRouteView() {
   }, [
     authoredQuery.data?.entries,
     entries,
+    environmentId,
+    loaded,
     partitionsWanted,
     reviewingQuery.data?.entries,
+    scopeKey,
     search.involvement,
     viewers,
   ]);
@@ -739,7 +788,10 @@ function PullRequestsRouteView() {
     () => resolveProjectScope(search.selectedProjectId, projects, projectsKnown),
     [projects, projectsKnown, search.selectedProjectId],
   );
-  const selectedProjectId = linkedProjectId ?? projectIdForRepository;
+  // The scope filter stands in as a last resort: a link can carry `projectId` with a repository
+  // whose identity the inference above cannot match, and refusing to open it because of the
+  // weaker signal would ignore the stronger one the URL spelled out.
+  const selectedProjectId = linkedProjectId ?? projectIdForRepository ?? scopedProjectId;
   const linkedSelection = useMemo(
     () =>
       search.repository && search.number && selectedProjectId
