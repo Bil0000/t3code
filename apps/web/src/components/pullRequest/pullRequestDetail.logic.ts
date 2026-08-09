@@ -16,6 +16,14 @@ export function describePullRequestState(state: PullRequestState, isDraft: boole
   return isDraft ? "Draft" : "Ready for review";
 }
 
+/** Chronological ascending, oldest to newest — reversed for the "newest" reading order. */
+export function orderPullRequestComments<T extends { readonly createdAt: string }>(
+  comments: ReadonlyArray<T>,
+  order: "newest" | "oldest",
+): ReadonlyArray<T> {
+  return order === "newest" ? comments.toReversed() : comments;
+}
+
 export interface PullRequestTimelineEvent {
   readonly id: string;
   readonly at: string;

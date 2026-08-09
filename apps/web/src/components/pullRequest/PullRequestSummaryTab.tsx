@@ -1,5 +1,12 @@
 import type { EnvironmentId, PullRequestDetail, PullRequestRef } from "@t3tools/contracts";
-import { ChevronRightIcon, HammerIcon, MessageSquareIcon, SendIcon, UsersIcon } from "lucide-react";
+import {
+  ArrowDownUpIcon,
+  ChevronRightIcon,
+  HammerIcon,
+  MessageSquareIcon,
+  SendIcon,
+  UsersIcon,
+} from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -20,7 +27,11 @@ import {
   pullRequestCheckStatusLabel,
 } from "./pullRequestPresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
-import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
+import {
+  orderPullRequestComments,
+  pullRequestFindingKey,
+  type PullRequestFinding,
+} from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 
 function MetaRow({
@@ -164,10 +175,12 @@ export function PullRequestSummaryTab({
   // rather than wherever the last one had been read back to.
   const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
   const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;
-  const visibleComments = detail.comments.slice(
-    Math.max(0, detail.comments.length - shownComments),
-  );
-  const hiddenCommentCount = detail.comments.length - visibleComments.length;
+  // Windowed by recency regardless of display order: expanding always reaches further back in
+  // time, whether the newest comment currently reads first or last.
+  const recentComments = detail.comments.slice(Math.max(0, detail.comments.length - shownComments));
+  const hiddenCommentCount = detail.comments.length - recentComments.length;
+  const [commentOrder, setCommentOrder] = useState<"newest" | "oldest">("newest");
+  const visibleComments = orderPullRequestComments(recentComments, commentOrder);
 
   // A comment that already lives on a review thread is that thread: the thread carries the line
   // and side the bare comment has lost, and a resolved one is finished work nobody should be
@@ -296,6 +309,24 @@ export function PullRequestSummaryTab({
       </Section>
 
       <Section title="Comments" count={detail.commentCount}>
+        {detail.comments.length > 0 ? (
+          <div className="mb-2 flex justify-end">
+            <Button
+              size="xs"
+              variant="ghost"
+              className="h-7 px-2 text-[10px] text-muted-foreground"
+              aria-label={
+                commentOrder === "newest"
+                  ? "Show oldest comments first"
+                  : "Show newest comments first"
+              }
+              onClick={() => setCommentOrder((value) => (value === "newest" ? "oldest" : "newest"))}
+            >
+              <ArrowDownUpIcon aria-hidden className="size-3" />
+              {commentOrder === "newest" ? "Newest first" : "Oldest first"}
+            </Button>
+          </div>
+        ) : null}
         {detail.commentsTruncated ? (
           <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
             This conversation is longer than this page reads in one go. The most recent{" "}

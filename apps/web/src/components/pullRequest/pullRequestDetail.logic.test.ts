@@ -15,6 +15,7 @@ import {
   groupPullRequestTimelineConversations,
   handoffPrompt,
   handoffReviewComments,
+  orderPullRequestComments,
   pullRequestFindingKey,
   readableFailure,
   buildPullRequestTimeline,
@@ -53,6 +54,20 @@ describe("pull request state description", () => {
     expect(describePullRequestState("open", false)).toBe("Ready for review");
     expect(describePullRequestState("merged", true)).toBe("Merged");
     expect(describePullRequestState("closed", false)).toBe("Closed");
+  });
+});
+
+describe("ordering comments", () => {
+  it("reverses the chronological list for newest first, and leaves oldest first alone", () => {
+    const comments = [{ createdAt: "a" }, { createdAt: "b" }, { createdAt: "c" }];
+    expect(orderPullRequestComments(comments, "newest")).toEqual([
+      { createdAt: "c" },
+      { createdAt: "b" },
+      { createdAt: "a" },
+    ]);
+    expect(orderPullRequestComments(comments, "oldest")).toEqual(comments);
+    // The source array is chronological input, not a mutation target.
+    expect(comments).toEqual([{ createdAt: "a" }, { createdAt: "b" }, { createdAt: "c" }]);
   });
 });
 
