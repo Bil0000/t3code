@@ -1185,6 +1185,7 @@ export const make = Effect.gen(function* () {
           { readonly additions: number; readonly deletions: number }
         >();
         let reviewers: ReadonlyArray<PullRequestActor> = [];
+        let commits: GitHubReviewThreadPage["commits"] = [];
         let viewer: GitHubReviewThreadPage["viewer"] = { canUpdate: true, didAuthor: false };
         let cursor: string | null = null;
         let page = 0;
@@ -1193,10 +1194,11 @@ export const make = Effect.gen(function* () {
           entries.push(...read.threads);
           for (const [login, avatarUrl] of read.avatarsByLogin)
             avatarsByLogin.set(login, avatarUrl);
-          // The roster and the viewer's standing travel with every page, and the first one
-          // already carries all of both.
+          // The roster, the commits and the viewer's standing travel with every page, and the
+          // first one already carries all of them.
           if (page === 0) {
             reviewers = read.reviewers;
+            commits = read.commits;
             viewer = read.viewer;
             for (const [oid, stat] of read.commitStats) commitStats.set(oid, stat);
           }
@@ -1239,6 +1241,7 @@ export const make = Effect.gen(function* () {
           reviewers,
           avatarsByLogin,
           commitStats,
+          commits,
           viewer,
         };
       }),

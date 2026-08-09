@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullRequestProvider.ts";
+import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
 
 describe("gitHubViewerPermissions", () => {
   it("offers everything to a viewer who can write to the repository", () => {
@@ -107,6 +108,106 @@ describe("gitHubViewerPermissions", () => {
         }),
       ),
     ),
+  );
+});
+
+describe("getChangeRequest commits", () => {
+  const baseDetail = {
+    authorId: null,
+    number: 7,
+    title: "Pull request 7",
+    url: "https://github.com/acme/web/pull/7",
+    author: null,
+    headBranch: "feat/page",
+    baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
+    mergeability: "mergeable" as const,
+    additions: 1,
+    deletions: 1,
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
+    reviewRequestLogins: [],
+    hasTeamReviewRequest: false,
+    labels: [],
+    body: "",
+    changedFiles: 1,
+    mergedAt: null,
+    closedAt: null,
+    checks: [],
+    comments: [],
+  };
+
+  const baseThreadComments = {
+    comments: [],
+    reviewThreads: [],
+    commentCount: 0,
+    truncated: false,
+    reviewers: [],
+    avatarsByLogin: new Map<string, string>(),
+    commitStats: new Map<string, { readonly additions: number; readonly deletions: number }>(),
+    viewer: { canUpdate: true, didAuthor: false },
+  };
+
+  const layerWith = (commits: GitHubReviewThreadComments["commits"]) =>
+    Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+      getPullRequestDetail: () =>
+        Effect.succeed({
+          ...baseDetail,
+          commits: [
+            {
+              oid: "view-oldest",
+              messageHeadline: "gh pr view's oldest commit",
+              committedDate: "2026-01-01T00:00:00Z",
+              authors: [],
+            },
+          ],
+        }),
+      getRepositoryAccess: () =>
+        Effect.succeed({
+          canWrite: false,
+          mergeCapabilities: { merge: true, squash: true, rebase: true },
+        }),
+      listReviewThreadComments: () => Effect.succeed({ ...baseThreadComments, commits }),
+    });
+
+  it.effect("prefers the GraphQL commits, which are the newest, over the gh view list", () =>
+    Effect.gen(function* () {
+      const provider = yield* make;
+      const detail = yield* provider.getChangeRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      expect(detail.commits.map((commit) => commit.oid)).toEqual(["graphql-newest"]);
+    }).pipe(
+      Effect.provide(
+        layerWith([
+          {
+            oid: "graphql-newest",
+            messageHeadline: "the newest commit gh pr view drops",
+            committedDate: "2026-07-06T00:00:00Z",
+            authors: [],
+          },
+        ]),
+      ),
+    ),
+  );
+
+  it.effect("falls back to the gh view list when the GraphQL read has no commits", () =>
+    Effect.gen(function* () {
+      const provider = yield* make;
+      const detail = yield* provider.getChangeRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      expect(detail.commits.map((commit) => commit.oid)).toEqual(["view-oldest"]);
+    }).pipe(Effect.provide(layerWith([]))),
   );
 });
 

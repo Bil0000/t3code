@@ -260,6 +260,58 @@ describe("review thread decoding", () => {
     ]);
   });
 
+  it("decodes the newest commits off the same connection, oldest to newest", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: { totalCount: 0, nodes: [] },
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        oid: "abc123",
+                        messageHeadline: "Ship the timeline",
+                        committedDate: "2026-07-05T00:00:00Z",
+                        additions: 18,
+                        deletions: 7,
+                        authors: { nodes: [{ name: "Julius", user: { login: "julius" } }] },
+                      },
+                    },
+                    {
+                      commit: {
+                        oid: "def456",
+                        messageHeadline: "Fix the flaky test",
+                        committedDate: "2026-07-06T00:00:00Z",
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(result.commits).toEqual([
+      {
+        oid: "abc123",
+        messageHeadline: "Ship the timeline",
+        committedDate: "2026-07-05T00:00:00Z",
+        authors: [{ login: "julius", name: "Julius", avatarUrl: null }],
+      },
+      {
+        oid: "def456",
+        messageHeadline: "Fix the flaky test",
+        committedDate: "2026-07-06T00:00:00Z",
+        authors: [],
+      },
+    ]);
+  });
+
   it("lists someone who was asked and then answered only once", () => {
     const result = expectSuccess(
       decodeReviewThreadsJson(
