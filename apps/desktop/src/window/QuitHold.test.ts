@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { makeQuitHoldHandler, QUIT_HOLD_DURATION_MS } from "./QuitHold.ts";
 import type { QuitHoldKeyInput, QuitHoldState } from "./QuitHold.ts";
