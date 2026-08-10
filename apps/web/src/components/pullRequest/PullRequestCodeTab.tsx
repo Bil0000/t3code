@@ -742,7 +742,7 @@ export function PullRequestCodeTab({
 
   const renderAnnotation = useCallback(
     (annotation: ReviewAnnotation) => (
-      <div className="py-1">
+      <div className="py-1 font-sans text-foreground">
         {annotation.metadata.threads.map(renderThreadCard)}
         {annotation.metadata.pending.map((comment) => (
           <PendingReviewCommentCard
