@@ -270,7 +270,17 @@ export function PullRequestCodeTab({
         existing !== undefined &&
         existing.patch === next.patch &&
         existing.truncated === next.truncated &&
-        existing.nextCursor === next.nextCursor
+        existing.nextCursor === next.nextCursor &&
+        existing.omittedFileStats.length === next.omittedFileStats.length &&
+        existing.omittedFileStats.every((file, index) => {
+          const refreshed = next.omittedFileStats[index];
+          return (
+            refreshed !== undefined &&
+            refreshed.path === file.path &&
+            refreshed.additions === file.additions &&
+            refreshed.deletions === file.deletions
+          );
+        })
       ) {
         return previous;
       }
