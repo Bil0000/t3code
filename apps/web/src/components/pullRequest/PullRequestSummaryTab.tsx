@@ -1,10 +1,12 @@
 import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
+  CheckCircle2Icon,
   ChevronRightIcon,
   HammerIcon,
   MessageSquareIcon,
   SendIcon,
+  TagIcon,
   UsersIcon,
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
@@ -35,6 +37,12 @@ import {
 } from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
+
+/** A host colour only when it is one, so a malformed value falls back to the neutral dot. */
+function labelDotColor(color: string | null): string | null {
+  const hex = color?.trim().replace(/^#/, "") ?? "";
+  return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
+}
 
 function MetaRow({
   icon,
@@ -261,6 +269,28 @@ export function PullRequestSummaryTab({
               ) : null}
             </span>
           </MetaRow>
+          {detail.labels.length > 0 ? (
+            <MetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
+              <span className="flex min-w-0 flex-wrap items-center gap-1">
+                {detail.labels.map((label) => {
+                  const dot = labelDotColor(label.color);
+                  return (
+                    <span
+                      key={label.name}
+                      className="inline-flex max-w-48 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 py-0.5 pl-1.5 pr-2 text-xs"
+                    >
+                      <span
+                        aria-hidden
+                        className="size-2 shrink-0 rounded-full bg-muted-foreground"
+                        {...(dot ? { style: { backgroundColor: dot } } : {})}
+                      />
+                      <span className="truncate">{label.name}</span>
+                    </span>
+                  );
+                })}
+              </span>
+            </MetaRow>
+          ) : null}
           <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
             {activityPending
               ? "Loading conversation…"
@@ -385,8 +415,10 @@ export function PullRequestSummaryTab({
                 ) : null}
                 {visibleComments.map((comment) => {
                   const thread = threadByCommentId.get(comment.id);
+                  // An approval is a verdict, not a finding: there is nothing in it to fix.
                   const finding: PullRequestFinding | null =
-                    comment.kind !== "review" && comment.kind !== "review-comment"
+                    (comment.kind !== "review" && comment.kind !== "review-comment") ||
+                    comment.reviewState?.toLowerCase() === "approved"
                       ? null
                       : thread === undefined
                         ? { kind: "comment", comment }
@@ -409,6 +441,12 @@ export function PullRequestSummaryTab({
                           <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
                           {comment.reviewState ? (
                             <span>{comment.reviewState.toLowerCase()}</span>
+                          ) : null}
+                          {thread?.isResolved ? (
+                            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-500">
+                              <CheckCircle2Icon className="size-3" />
+                              Resolved
+                            </span>
                           ) : null}
                         </PullRequestMetaLine>
                         {/* Review remarks only. A plain conversation comment is talk, not a finding,
