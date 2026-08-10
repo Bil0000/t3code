@@ -6,7 +6,6 @@ import type {
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
-  CheckCircle2Icon,
   ChevronDownIcon,
   ChevronRightIcon,
   HammerIcon,
@@ -65,10 +64,7 @@ function ResolvedComment({ comment, cwd }: { comment: PullRequestComment; cwd: s
           <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
             <PullRequestActorLabel actor={comment.author} className="font-medium text-foreground" />
             <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
-            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-500">
-              <CheckCircle2Icon className="size-3" />
-              Resolved
-            </span>
+            <span>resolved</span>
           </PullRequestMetaLine>
           <ChevronDownIcon
             aria-hidden
