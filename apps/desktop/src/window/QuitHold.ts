@@ -1,3 +1,5 @@
+// @effect-diagnostics globalDate:off globalTimers:off -- Synchronous before-input-event handler; key events must be timed and the watchdog scheduled outside any Effect runtime.
+
 // Chrome-style hold-to-quit. The quit accelerator is intercepted in
 // before-input-event (which runs before the native menu accelerator), and the
 // app only quits once the shortcut has been held for QUIT_HOLD_DURATION_MS.
