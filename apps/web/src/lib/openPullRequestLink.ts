@@ -11,7 +11,6 @@ import { useRightPanelStore } from "../rightPanelStore";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
 import { useProjects, useServerConfigs } from "../state/entities";
-import { serverSupportsPullRequests } from "../state/environmentCapabilities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 
 export class PullRequestLinkOpenError extends Schema.TaggedErrorClass<PullRequestLinkOpenError>()(
@@ -189,7 +188,10 @@ export function useOpenChangeRequestLink(
     (event, targetUrl, targetThreadRef) => {
       const resolvedThreadRef = targetThreadRef ?? threadRef;
       const environmentId = resolvedThreadRef?.environmentId ?? primaryEnvironmentId;
-      if (environmentId === null || !serverSupportsPullRequests(serverConfigs.get(environmentId))) {
+      if (
+        environmentId === null ||
+        serverConfigs.get(environmentId)?.environment.capabilities.pullRequests !== true
+      ) {
         return false;
       }
       // Beside a thread the panel reads on that thread's environment, so a project from another

@@ -4,7 +4,6 @@ import { Link, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { serverSupportsPullRequests } from "../../state/environmentCapabilities";
 import { usePrimaryEnvironment } from "../../state/environments";
 import {
   resolveEnvironmentIdentificationPillLabel,
@@ -114,7 +113,8 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
   const primaryEnvironment = usePrimaryEnvironment();
-  const pullRequestsSupported = serverSupportsPullRequests(primaryEnvironment?.serverConfig);
+  const pullRequestsSupported =
+    primaryEnvironment?.serverConfig?.environment.capabilities.pullRequests === true;
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);

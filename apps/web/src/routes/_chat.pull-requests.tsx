@@ -74,7 +74,6 @@ import {
 } from "../rightPanelStore";
 import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
-import { serverSupportsPullRequests } from "../state/environmentCapabilities";
 import { usePrimaryEnvironment } from "../state/environments";
 import { pullRequestEnvironment } from "../state/pullRequests";
 import { useEnvironmentQuery } from "../state/query";
@@ -163,7 +162,8 @@ function PullRequestsRouteView() {
   const primaryEnvironment = usePrimaryEnvironment();
   const environmentId = primaryEnvironment?.environmentId ?? null;
   const capabilityKnown = primaryEnvironment !== null && primaryEnvironment.serverConfig !== null;
-  const pullRequestsSupported = serverSupportsPullRequests(primaryEnvironment?.serverConfig);
+  const pullRequestsSupported =
+    primaryEnvironment?.serverConfig?.environment.capabilities.pullRequests === true;
   // The primary environment may still be connecting, or may predate this feature. In either
   // case every query remains idle until the server has explicitly advertised these APIs.
   const pullRequestEnvironmentId = pullRequestsSupported ? environmentId : null;
