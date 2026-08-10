@@ -6055,6 +6055,7 @@ function ChatViewContent(props: ChatViewProps) {
             ? "thread"
             : "page"
         }
+        chromeVariant="collapse"
         onStateChange={handlePullRequestTabStatusChange}
       />
     ) : activeRightPanelSurface?.kind === "agents" ? (
