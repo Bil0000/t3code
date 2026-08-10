@@ -1149,7 +1149,33 @@ export function PullRequestCodeTab({
         ) : null}
         {/* Relative wrapper so the review overlay floats over the diff rather than pushing it
             up; the viewer inside still owns its own scrolling. */}
-        <div className="relative min-h-0 flex-1">
+        <div
+          className="relative min-h-0 flex-1"
+          // The chevron answers this too, but the whole header row is the target a reader
+          // actually aims for. The header lives in the viewer's shadow tree, so the capture
+          // listener walks `composedPath` — the only way to see through the shadow boundary.
+          onClickCapture={(event) => {
+            const composedPath = event.nativeEvent.composedPath?.() ?? [];
+            for (const node of composedPath) {
+              if (!(node instanceof HTMLElement)) continue;
+              // A control inside the header — the collapse chevron — handles itself, and
+              // this capture listener fires before its own click does. Leave it alone or
+              // the two toggles cancel out.
+              if (node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement) {
+                return;
+              }
+              if (node.hasAttribute("data-diffs-header")) {
+                const filePath = node.querySelector("[data-title]")?.textContent?.trim();
+                if (filePath === undefined || filePath === "") return;
+                const item = items.find(
+                  (candidate) => resolveFileDiffPath(candidate.fileDiff) === filePath,
+                );
+                if (item !== undefined) toggleFile(item.id);
+                return;
+              }
+            }
+          }}
+        >
           {/* The viewer virtualizes against the element it is told is scrolling and places its
               rows absolutely, so it has to own that element — the thread diff panel hands it the
               same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
