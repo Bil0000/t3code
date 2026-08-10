@@ -1,5 +1,6 @@
 import type {
   EnvironmentId,
+  PullRequestActor,
   PullRequestComment,
   PullRequestDetailView,
   PullRequestRef,
@@ -28,9 +29,9 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
+  PullRequestActorAvatar,
   PullRequestActorLabel,
   PullRequestCheckStatusIcon,
-  PullRequestMetaLine,
   pullRequestCheckStatusLabel,
 } from "./pullRequestPresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
@@ -49,6 +50,27 @@ function labelDotColor(color: string | null): string | null {
   return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
 }
 
+/** The avatar carries the attribution alone; who it is arrives on hover, like the reviewer row. */
+function CommentAuthor({ actor }: { actor: PullRequestActor | null }) {
+  const login = actor?.login ?? "ghost";
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="shrink-0 rounded-full" aria-label={login} />}>
+        <PullRequestActorAvatar actor={actor} />
+      </TooltipTrigger>
+      <TooltipPopup side="bottom">
+        {actor?.name && actor.name !== login ? `${actor.name} (@${login})` : login}
+      </TooltipPopup>
+    </Tooltip>
+  );
+}
+
+/** "CHANGES_REQUESTED" reads as "Changes requested": one capital, the host's underscores gone. */
+function reviewStateLabel(state: string): string {
+  const words = state.toLowerCase().replace(/_/g, " ");
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
+
 /** A resolved conversation is finished work, so it opens collapsed the way the timeline folds. */
 function ResolvedComment({ comment, cwd }: { comment: PullRequestComment; cwd: string }) {
   const [open, setOpen] = useState(false);
@@ -61,11 +83,11 @@ function ResolvedComment({ comment, cwd }: { comment: PullRequestComment; cwd: s
             open ? "opacity-100" : "opacity-65",
           )}
         >
-          <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
-            <PullRequestActorLabel actor={comment.author} className="font-medium text-foreground" />
+          <span className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
+            <CommentAuthor actor={comment.author} />
             <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
-            <span>resolved</span>
-          </PullRequestMetaLine>
+            <span>Resolved</span>
+          </span>
           <ChevronDownIcon
             aria-hidden
             className={cn(
@@ -471,10 +493,13 @@ export function PullRequestSummaryTab({
                       />
                     );
                   }
-                  // An approval is a verdict, not a finding: there is nothing in it to fix.
+                  // An approval or a dismissed review is a verdict, not a finding: there is
+                  // nothing in it to fix.
+                  const reviewState = comment.reviewState?.toLowerCase();
                   const finding: PullRequestFinding | null =
                     (comment.kind !== "review" && comment.kind !== "review-comment") ||
-                    comment.reviewState?.toLowerCase() === "approved"
+                    reviewState === "approved" ||
+                    reviewState === "dismissed"
                       ? null
                       : thread === undefined
                         ? { kind: "comment", comment }
@@ -487,16 +512,13 @@ export function PullRequestSummaryTab({
                       className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
                     >
                       <div className="flex items-start gap-2">
-                        <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
-                          <PullRequestActorLabel
-                            actor={comment.author}
-                            className="font-medium text-foreground"
-                          />
+                        <span className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
+                          <CommentAuthor actor={comment.author} />
                           <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
                           {comment.reviewState ? (
-                            <span>{comment.reviewState.toLowerCase()}</span>
+                            <span>{reviewStateLabel(comment.reviewState)}</span>
                           ) : null}
-                        </PullRequestMetaLine>
+                        </span>
                         {/* Review remarks only. A plain conversation comment is talk, not a finding,
                       and offering to fix one would promise more than it says. */}
                         {onFixFinding && finding ? (
