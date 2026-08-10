@@ -1,7 +1,7 @@
 import type {
   PullRequestCheck,
   PullRequestComment,
-  PullRequestDetail,
+  PullRequestDetailView,
   PullRequestReviewThread,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
@@ -24,7 +24,7 @@ import {
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
 const TIMELINE_SOURCE: Pick<
-  PullRequestDetail,
+  PullRequestDetailView,
   "createdAt" | "author" | "commits" | "comments" | "mergedAt" | "closedAt"
 > = {
   createdAt: "2026-07-01T00:00:00Z",

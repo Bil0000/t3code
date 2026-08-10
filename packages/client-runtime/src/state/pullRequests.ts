@@ -1,12 +1,25 @@
-import { WS_METHODS } from "@t3tools/contracts";
+import { WS_METHODS, type PullRequestDiffInput } from "@t3tools/contracts";
+import * as Data from "effect/Data";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom } from "effect/unstable/reactivity";
 
 import {
   createAtomCommandScheduler,
   createEnvironmentRpcCommand,
   createEnvironmentRpcQueryAtomFamily,
+  createEnvironmentQueryAtomFamily,
 } from "./runtime.ts";
+import { PullRequestDiffLoader } from "./pullRequestDiffHttp.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+import { EnvironmentSupervisor } from "../connection/supervisor.ts";
+
+export { PullRequestDiffLoader, pullRequestDiffLoaderLayer } from "./pullRequestDiffHttp.ts";
+
+export class EnvironmentHttpConnectionNotReadyError extends Data.TaggedError(
+  "EnvironmentHttpConnectionNotReadyError",
+)<{ readonly message: string }> {}
 
 /**
  * Every read shells out to the GitHub CLI, so results are reused for a short while and
@@ -14,7 +27,7 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
  * pull request are order-sensitive, and the detail view refetches after each one.
  */
 export function createPullRequestEnvironmentAtoms<R, E>(
-  runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
+  runtime: Atom.AtomRuntime<EnvironmentRegistry | PullRequestDiffLoader | R, E>,
 ) {
   const commandScheduler = createAtomCommandScheduler();
   const serialPerEnvironment = {
@@ -43,10 +56,26 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       tag: WS_METHODS.pullRequestsDetail,
       staleTimeMs: 15_000,
     }),
-    diff: createEnvironmentRpcQueryAtomFamily(runtime, {
+    activity: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-requests:activity",
+      tag: WS_METHODS.pullRequestsActivity,
+      staleTimeMs: 15_000,
+    }),
+    diff: createEnvironmentQueryAtomFamily(runtime, {
       label: "environment-data:pull-requests:diff",
-      tag: WS_METHODS.pullRequestsDiff,
       staleTimeMs: 60_000,
+      execute: (input: PullRequestDiffInput) =>
+        Effect.gen(function* () {
+          const supervisor = yield* EnvironmentSupervisor;
+          const loader = yield* PullRequestDiffLoader;
+          const prepared = yield* SubscriptionRef.get(supervisor.prepared);
+          if (Option.isNone(prepared)) {
+            return yield* new EnvironmentHttpConnectionNotReadyError({
+              message: "The environment HTTP connection is not ready.",
+            });
+          }
+          return yield* loader.load(prepared.value, input);
+        }),
     }),
     diffFileContents: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:diff-file-contents",

@@ -5,6 +5,7 @@ import * as AzureDevOpsPullRequestCli from "./AzureDevOpsPullRequestCli.ts";
 import {
   PullRequestProviderError,
   type ProviderChangeRequest,
+  type ProviderChangeRequestActivity,
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
@@ -141,9 +142,24 @@ export const make = Effect.gen(function* () {
     getChangeRequest: (input) =>
       cli.getPullRequest({ cwd: input.cwd, number: input.number }).pipe(
         Effect.mapError(fail("getChangeRequest")),
-        // The conversation hangs off a url the pull request itself reports, so it is read after
-        // rather than alongside. A thread read that fails degrades to none, marked truncated so
-        // it does not present as a pull request nobody has commented on.
+        Effect.map(
+          (pullRequest): ProviderChangeRequestDetail => ({
+            ...toChangeRequest(pullRequest),
+            body: pullRequest.body,
+            changedFiles: 0,
+            mergedAt: pullRequest.state === "merged" ? pullRequest.closedAt : null,
+            closedAt: pullRequest.state === "closed" ? pullRequest.closedAt : null,
+            reviewers: pullRequest.reviewers,
+            checks: [],
+            mergeCapabilities: { merge: true, squash: true, rebase: false },
+            viewerPermissions: AZURE_DEVOPS_VIEWER_PERMISSIONS,
+          }),
+        ),
+      ),
+
+    getChangeRequestActivity: (input) =>
+      cli.getPullRequest({ cwd: input.cwd, number: input.number }).pipe(
+        Effect.mapError(fail("getChangeRequestActivity")),
         Effect.flatMap((pullRequest) =>
           (pullRequest.threadsUrl === null
             ? Effect.succeed({ comments: [], truncated: true })
@@ -153,34 +169,12 @@ export const make = Effect.gen(function* () {
               )
           ).pipe(
             Effect.map(
-              (conversation): ProviderChangeRequestDetail => ({
-                ...toChangeRequest(pullRequest),
-                body: pullRequest.body,
-                changedFiles: 0,
-                mergedAt: pullRequest.state === "merged" ? pullRequest.closedAt : null,
-                closedAt: pullRequest.state === "closed" ? pullRequest.closedAt : null,
-                reviewers: pullRequest.reviewers,
-                // Azure reports its gates as branch policy evaluations, which are a separate
-                // read this does not make yet.
-                checks: [],
+              (conversation): ProviderChangeRequestActivity => ({
                 comments: conversation.comments,
-                // Azure hands its whole thread collection over in one response, so a read that
-                // succeeded holds all of it and the count is exact.
                 commentCount: conversation.comments.length,
                 commentsTruncated: conversation.truncated,
-                // No patch to pin a conversation to, so nothing here is anchored to a line.
                 reviewThreads: [],
-                // `az repos pr show` carries no commit list.
                 commits: [],
-                // Azure publishes no per-strategy availability on the pull request: which
-                // strategies a repository allows lives in its branch policies, which `az repos
-                // pr show` does not read. So both strategies Azure has are offered, and one a
-                // policy forbids is refused at completion — with the host's own sentence, which
-                // is the only place that reason exists. Reading `az repos policy list` per
-                // repository would let the control be hidden instead; that is a second call per
-                // pull request for a case the completion error already names.
-                mergeCapabilities: { merge: true, squash: true, rebase: false },
-                viewerPermissions: AZURE_DEVOPS_VIEWER_PERMISSIONS,
               }),
             ),
           ),

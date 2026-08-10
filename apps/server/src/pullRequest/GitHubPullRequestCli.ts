@@ -22,6 +22,7 @@ import {
   buildReviewSubmissionJson,
   buildReviewerRequestJson,
   decodeActorAvatarsJson,
+  decodePullRequestActivityJson,
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
   decodePullRequestListJson,
@@ -35,6 +36,7 @@ import {
   encodeGraphQlRequestJson,
   pullRequestSearchGraphQlQuery,
   PULL_REQUEST_SEARCH_MAX_ROWS,
+  PULL_REQUEST_ACTIVITY_JSON_FIELDS,
   PULL_REQUEST_DETAIL_JSON_FIELDS,
   PULL_REQUEST_LIST_JSON_FIELDS,
   REPOSITORY_ACCESS_JSON_FIELDS,
@@ -48,6 +50,7 @@ import {
   VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   decodeViewerPermissionsJson,
   type GitHubPullRequestDetail,
+  type GitHubPullRequestActivity,
   type GitHubPullRequestListItem,
   type GitHubPullRequestSearchItem,
   type GitHubReviewThreadComments,
@@ -324,6 +327,13 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly host: string;
       readonly number: number;
     }) => Effect.Effect<GitHubPullRequestDetail, GitHubPullRequestCliError>;
+
+    readonly getPullRequestActivity: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+    }) => Effect.Effect<GitHubPullRequestActivity, GitHubPullRequestCliError>;
 
     readonly getPullRequestDiff: (input: {
       readonly cwd: string;
@@ -1069,6 +1079,35 @@ export const make = Effect.gen(function* () {
                     command: "gh",
                     cwd: input.cwd,
                     operation: "getPullRequestDetail",
+                    cause: decoded.failure,
+                  }),
+                );
+          }),
+        ),
+
+    getPullRequestActivity: (input) =>
+      github
+        .execute({
+          cwd: input.cwd,
+          args: [
+            "pr",
+            "view",
+            String(input.number),
+            ...repositoryArgs(input),
+            "--json",
+            PULL_REQUEST_ACTIVITY_JSON_FIELDS,
+          ],
+        })
+        .pipe(
+          Effect.flatMap((result) => {
+            const decoded = decodePullRequestActivityJson(result.stdout.trim());
+            return Result.isSuccess(decoded)
+              ? Effect.succeed(decoded.success)
+              : Effect.fail(
+                  new GitHubPullRequestReadError({
+                    command: "gh",
+                    cwd: input.cwd,
+                    operation: "getPullRequestActivity",
                     cause: decoded.failure,
                   }),
                 );

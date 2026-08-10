@@ -1,4 +1,6 @@
 import * as Schema from "effect/Schema";
+import * as HttpServerRespondable from "effect/unstable/http/HttpServerRespondable";
+import * as HttpServerResponse from "effect/unstable/http/HttpServerResponse";
 
 import {
   IsoDateTime,
@@ -496,6 +498,19 @@ export const PullRequestDetail = Schema.Struct({
   reviewers: Schema.Array(PullRequestActor),
   labels: Schema.Array(PullRequestLabel),
   checks: Schema.Array(PullRequestCheck),
+  mergeCapabilities: PullRequestMergeCapabilities,
+});
+export type PullRequestDetail = typeof PullRequestDetail.Type;
+
+/**
+ * The slower, conversation-shaped half of a change request. It is read independently from the
+ * core detail so a host with a deeply paginated review history cannot hold the title, body,
+ * checks, and actions off screen. `author` and `reviewers` are optional enrichments: GitHub's
+ * conversation query carries avatars and completed reviewers that its basic detail does not.
+ */
+export const PullRequestActivity = Schema.Struct({
+  author: Schema.optional(Schema.NullOr(PullRequestActor)),
+  reviewers: Schema.optional(Schema.Array(PullRequestActor)),
   comments: Schema.Array(PullRequestComment),
   /**
    * How many remarks the host itself counts in the conversation, which is the number a surface
@@ -512,9 +527,19 @@ export const PullRequestDetail = Schema.Struct({
   commentsTruncated: Schema.Boolean,
   reviewThreads: Schema.Array(PullRequestReviewThread),
   commits: Schema.Array(PullRequestCommit),
-  mergeCapabilities: PullRequestMergeCapabilities,
 });
-export type PullRequestDetail = typeof PullRequestDetail.Type;
+export type PullRequestActivity = typeof PullRequestActivity.Type;
+
+/** The complete detail shape after the independently loaded activity has been applied. */
+export const PullRequestDetailView = Schema.Struct({
+  ...PullRequestDetail.fields,
+  ...PullRequestActivity.fields,
+  // A composed view always has the core identity fields, even when the activity did not enrich
+  // them. Re-declare them as required after the activity's optional overrides.
+  author: Schema.NullOr(PullRequestActor),
+  reviewers: Schema.Array(PullRequestActor),
+});
+export type PullRequestDetailView = typeof PullRequestDetailView.Type;
 
 /**
  * A diff arrives a slice at a time, because a large change is more than any host will hand over
@@ -734,7 +759,12 @@ export class PullRequestUnavailableError extends Schema.TaggedErrorClass<PullReq
     provider: Schema.optional(SourceControlProviderKind),
     cause: Schema.optional(Schema.Defect()),
   },
+  { httpApiStatus: 503 },
 ) {
+  [HttpServerRespondable.symbol]() {
+    return HttpServerResponse.schemaJson(PullRequestUnavailableError)(this, { status: 503 });
+  }
+
   override get message(): string {
     const requirement =
       this.provider === undefined ? undefined : PROVIDER_REQUIREMENT[this.provider];
@@ -758,7 +788,12 @@ export class PullRequestOperationError extends Schema.TaggedErrorClass<PullReque
     detail: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
+  { httpApiStatus: 502 },
 ) {
+  [HttpServerRespondable.symbol]() {
+    return HttpServerResponse.schemaJson(PullRequestOperationError)(this, { status: 502 });
+  }
+
   override get message(): string {
     return `Pull request operation ${this.operation} failed: ${this.detail}`;
   }

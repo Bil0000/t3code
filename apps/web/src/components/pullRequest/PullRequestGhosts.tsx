@@ -120,3 +120,25 @@ export function PullRequestTimelineGhost({ rows = 6 }: { rows?: number }) {
     </div>
   );
 }
+
+/** A compact placeholder for the conversation while the core detail is already readable. */
+export function PullRequestConversationGhost({ rows = 3 }: { rows?: number }) {
+  return (
+    <div
+      role="status"
+      aria-label="Loading pull request conversation"
+      className="animate-ghost-pulse space-y-4 py-2"
+    >
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="flex items-start gap-2">
+          <GhostBar className="size-5 shrink-0 rounded-full" />
+          <div className="flex-1 space-y-1.5">
+            <GhostBar className={META_WIDTHS[index % META_WIDTHS.length]} />
+            <GhostBar className="w-full bg-muted-foreground/10" />
+            <GhostBar className="w-3/4 bg-muted-foreground/10" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}

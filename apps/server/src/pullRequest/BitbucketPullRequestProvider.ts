@@ -5,6 +5,7 @@ import * as BitbucketPullRequestApi from "./BitbucketPullRequestApi.ts";
 import {
   PullRequestProviderError,
   type ProviderChangeRequest,
+  type ProviderChangeRequestActivity,
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
@@ -132,26 +133,18 @@ export const make = Effect.gen(function* () {
 
     getChangeRequest: (input) => {
       const target = { repository: input.repository, number: input.number };
-      // Bitbucket spreads a pull request over seven endpoints, so they are read together.
       return Effect.all(
         [
           api.getPullRequest(target),
           api.getDiffStat(target),
-          // Each of these is worth degrading for: none is a reason to blank a pull request that
-          // was read successfully. An unread conversation counts as truncated so it does not
-          // present as one with no comments.
           api.getMergeability(target).pipe(Effect.orElseSucceed(() => "unknown" as const)),
-          api
-            .listComments(target)
-            .pipe(Effect.orElseSucceed(() => ({ comments: [], threads: [], truncated: true }))),
-          api.listCommits(target).pipe(Effect.orElseSucceed(() => [])),
           api.listChecks(target).pipe(Effect.orElseSucceed(() => [])),
           // A permission that could not be read is an unknown one, which is granted: a hidden
           // Merge leaves someone entitled to it with no way through, and one Bitbucket refuses
           // at least says why.
           api.getRepositoryPermission(target).pipe(Effect.orElseSucceed(() => true)),
         ],
-        { concurrency: 7 },
+        { concurrency: 5 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
         Effect.map(
@@ -159,8 +152,6 @@ export const make = Effect.gen(function* () {
             pullRequest,
             diffStat,
             mergeability,
-            comments,
-            commits,
             checks,
             canWrite,
           ]): ProviderChangeRequestDetail => ({
@@ -174,19 +165,39 @@ export const make = Effect.gen(function* () {
             closedAt: pullRequest.state === "closed" ? pullRequest.updatedAt : null,
             reviewers: pullRequest.reviewers,
             checks,
-            comments: [...comments.comments, ...pullRequest.reviews].toSorted((left, right) =>
-              left.createdAt.localeCompare(right.createdAt),
-            ),
-            // Bitbucket's page carries a `size`, but it counts the deleted and unposted comments
-            // this drops, so the walk's own total is the truer count of what was said.
-            commentCount: comments.comments.length + pullRequest.reviews.length,
-            commentsTruncated: comments.truncated,
-            reviewThreads: comments.threads,
-            commits,
             // Bitbucket publishes no per-repository list of allowed strategies, so the ones it
             // supports are all offered and a strategy the repository forbids fails on merge.
             mergeCapabilities: { merge: true, squash: true, rebase: true },
             viewerPermissions: bitbucketViewerPermissions({ canWrite }),
+          }),
+        ),
+      );
+    },
+
+    getChangeRequestActivity: (input) => {
+      const target = { repository: input.repository, number: input.number };
+      return Effect.all(
+        [
+          // Reviews ride on the pull request itself, so this inexpensive core read is repeated
+          // here rather than making the core response wait for the conversation endpoints.
+          api.getPullRequest(target),
+          api
+            .listComments(target)
+            .pipe(Effect.orElseSucceed(() => ({ comments: [], threads: [], truncated: true }))),
+          api.listCommits(target).pipe(Effect.orElseSucceed(() => [])),
+        ],
+        { concurrency: 3 },
+      ).pipe(
+        Effect.mapError(fail("getChangeRequestActivity")),
+        Effect.map(
+          ([pullRequest, comments, commits]): ProviderChangeRequestActivity => ({
+            comments: [...comments.comments, ...pullRequest.reviews].toSorted((left, right) =>
+              left.createdAt.localeCompare(right.createdAt),
+            ),
+            commentCount: comments.comments.length + pullRequest.reviews.length,
+            commentsTruncated: comments.truncated,
+            reviewThreads: comments.threads,
+            commits,
           }),
         ),
       );

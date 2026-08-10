@@ -2,7 +2,7 @@ import type {
   PullRequestActor,
   PullRequestCheck,
   PullRequestComment,
-  PullRequestDetail,
+  PullRequestDetailView,
   PullRequestReviewThread,
   PullRequestState,
 } from "@t3tools/contracts";
@@ -92,7 +92,7 @@ function visibleBody(body: string): string | null {
  */
 export function buildPullRequestTimeline(
   detail: Pick<
-    PullRequestDetail,
+    PullRequestDetailView,
     "createdAt" | "author" | "commits" | "comments" | "mergedAt" | "closedAt"
   >,
 ): ReadonlyArray<PullRequestTimelineEvent> {

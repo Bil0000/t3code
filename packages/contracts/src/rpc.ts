@@ -69,13 +69,12 @@ import {
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
+  PullRequestActivity,
   PullRequestCommentInput,
   PullRequestDetail,
   PullRequestDiffFileContentsInput,
   PullRequestDiffFileContentsResult,
-  PullRequestDiffInput,
   PullRequestInvalidateInput,
-  PullRequestDiffResult,
   PullRequestListInput,
   PullRequestListResult,
   PullRequestListStatsInput,
@@ -277,7 +276,7 @@ export const WS_METHODS = {
   pullRequestsList: "pullRequests.list",
   pullRequestsListStats: "pullRequests.listStats",
   pullRequestsDetail: "pullRequests.detail",
-  pullRequestsDiff: "pullRequests.diff",
+  pullRequestsActivity: "pullRequests.activity",
   pullRequestsDiffFileContents: "pullRequests.diffFileContents",
   pullRequestsRunAction: "pullRequests.runAction",
   pullRequestsComment: "pullRequests.comment",
@@ -490,9 +489,9 @@ export const WsPullRequestsDetailRpc = Rpc.make(WS_METHODS.pullRequestsDetail, {
   error: PullRequestRpcError,
 });
 
-export const WsPullRequestsDiffRpc = Rpc.make(WS_METHODS.pullRequestsDiff, {
-  payload: PullRequestDiffInput,
-  success: PullRequestDiffResult,
+export const WsPullRequestsActivityRpc = Rpc.make(WS_METHODS.pullRequestsActivity, {
+  payload: PullRequestRef,
+  success: PullRequestActivity,
   error: PullRequestRpcError,
 });
 
@@ -974,7 +973,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsListRpc,
   WsPullRequestsListStatsRpc,
   WsPullRequestsDetailRpc,
-  WsPullRequestsDiffRpc,
+  WsPullRequestsActivityRpc,
   WsPullRequestsDiffFileContentsRpc,
   WsPullRequestsRunActionRpc,
   WsPullRequestsCommentRpc,

@@ -200,6 +200,10 @@ const RawDetailSchema = Schema.Struct({
   changedFiles: Schema.optional(Schema.Int),
   closedAt: Schema.optional(Schema.NullOr(Schema.String)),
   statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawCheckSchema))),
+});
+
+const RawActivitySchema = Schema.Struct({
+  author: Schema.optional(Schema.NullOr(RawActorSchema)),
   comments: Schema.optional(Schema.Array(RawCommentSchema)),
   reviews: Schema.optional(Schema.Array(RawReviewSchema)),
   commits: Schema.optional(Schema.Array(RawCommitSchema)),
@@ -382,7 +386,8 @@ export function decodeActorAvatarsJson(
 export const PULL_REQUEST_LIST_JSON_FIELDS =
   "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels";
 
-export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,statusCheckRollup,comments,reviews,commits`;
+export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,statusCheckRollup`;
+export const PULL_REQUEST_ACTIVITY_JSON_FIELDS = "author,comments,reviews,commits";
 
 /** GitHub's own ceiling on a connection page, which is what both thread reads ask for. */
 const GRAPHQL_PAGE_SIZE = 100;
@@ -637,6 +642,10 @@ export interface GitHubPullRequestDetail extends GitHubPullRequestListItem {
   readonly mergedAt: string | null;
   readonly closedAt: string | null;
   readonly checks: ReadonlyArray<PullRequestCheck>;
+}
+
+export interface GitHubPullRequestActivity {
+  readonly author: PullRequestActor | null;
   readonly comments: ReadonlyArray<PullRequestComment>;
   readonly commits: ReadonlyArray<PullRequestCommit>;
 }
@@ -812,9 +821,10 @@ function isReviewVerdict(reviewState: string | null): boolean {
   }
 }
 
-function toComments(
-  raw: Schema.Schema.Type<typeof RawDetailSchema>,
-): ReadonlyArray<PullRequestComment> {
+function toComments(raw: {
+  readonly comments?: ReadonlyArray<Schema.Schema.Type<typeof RawCommentSchema>> | undefined;
+  readonly reviews?: ReadonlyArray<Schema.Schema.Type<typeof RawReviewSchema>> | undefined;
+}): ReadonlyArray<PullRequestComment> {
   const issueComments = (raw.comments ?? []).map(
     (comment): PullRequestComment => ({
       id: comment.id,
@@ -858,6 +868,20 @@ function toComments(
   );
 }
 
+function toCommits(
+  commits: ReadonlyArray<Schema.Schema.Type<typeof RawCommitSchema>> | undefined,
+): ReadonlyArray<PullRequestCommit> {
+  return (commits ?? []).map((commit) => ({
+    oid: commit.oid,
+    messageHeadline: commit.messageHeadline ?? "",
+    committedDate: commit.committedDate,
+    authors: (commit.authors ?? []).flatMap((author) => {
+      const actor = toCommitActor(author);
+      return actor === null ? [] : [actor];
+    }),
+  }));
+}
+
 function toListItem(raw: Schema.Schema.Type<typeof RawListItemSchema>): GitHubPullRequestListItem {
   return {
     authorId: trimmed(raw.author?.id),
@@ -888,16 +912,14 @@ function toDetail(raw: Schema.Schema.Type<typeof RawDetailSchema>): GitHubPullRe
     mergedAt: trimmed(raw.mergedAt),
     closedAt: trimmed(raw.closedAt),
     checks: toChecks(raw.statusCheckRollup),
+  };
+}
+
+function toActivity(raw: Schema.Schema.Type<typeof RawActivitySchema>): GitHubPullRequestActivity {
+  return {
+    author: toActor(raw.author),
     comments: toComments(raw),
-    commits: (raw.commits ?? []).map((commit) => ({
-      oid: commit.oid,
-      messageHeadline: commit.messageHeadline ?? "",
-      committedDate: commit.committedDate,
-      authors: (commit.authors ?? []).flatMap((author) => {
-        const actor = toCommitActor(author);
-        return actor === null ? [] : [actor];
-      }),
-    })),
+    commits: toCommits(raw.commits),
   };
 }
 
@@ -907,6 +929,7 @@ const decodeSearch = decodeJsonResult(RawSearchSchema);
 const decodeSearchItem = Schema.decodeUnknownExit(RawSearchItemSchema);
 const decodeStats = decodeJsonResult(RawStatsSchema);
 const decodeDetail = decodeJsonResult(RawDetailSchema);
+const decodeActivity = decodeJsonResult(RawActivitySchema);
 const decodeFileEntry = Schema.decodeUnknownExit(RawPullRequestFileSchema);
 const decodeRepositoryAccess = decodeJsonResult(RawRepositoryAccessSchema);
 const decodeReviewThreads = decodeJsonResult(RawReviewThreadsSchema);
@@ -1057,6 +1080,15 @@ export function decodePullRequestDetailJson(
   const decoded = decodeDetail(raw);
   return Result.isSuccess(decoded)
     ? Result.succeed(toDetail(decoded.success))
+    : Result.fail(decoded.failure);
+}
+
+export function decodePullRequestActivityJson(
+  raw: string,
+): Result.Result<GitHubPullRequestActivity, DecodeFailure> {
+  const decoded = decodeActivity(raw);
+  return Result.isSuccess(decoded)
+    ? Result.succeed(toActivity(decoded.success))
     : Result.fail(decoded.failure);
 }
 

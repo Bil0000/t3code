@@ -138,6 +138,16 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
   readonly closedAt: string | null;
   readonly reviewers: ReadonlyArray<PullRequestActor>;
   readonly checks: ReadonlyArray<PullRequestCheck>;
+  readonly mergeCapabilities: PullRequestMergeCapabilities;
+  readonly viewerPermissions: PullRequestViewerPermissions;
+}
+
+/** The conversation-shaped half of a detail, loaded after the core can already render. */
+export interface ProviderChangeRequestActivity {
+  /** An optional richer actor, e.g. after GitHub's GraphQL read supplies an avatar. */
+  readonly author?: PullRequestActor | null;
+  /** Optional because most hosts already report their reviewer list in the core detail. */
+  readonly reviewers?: ReadonlyArray<PullRequestActor>;
   readonly comments: ReadonlyArray<PullRequestComment>;
   /**
    * The host's own count of the conversation, which a bounded read can fall short of. A host
@@ -148,12 +158,6 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
   readonly commentsTruncated: boolean;
   readonly reviewThreads: ReadonlyArray<PullRequestReviewThread>;
   readonly commits: ReadonlyArray<PullRequestCommit>;
-  readonly mergeCapabilities: PullRequestMergeCapabilities;
-  /**
-   * What the signed-in account may do with this change request. Read from calls this detail
-   * already makes, so knowing it costs nothing extra.
-   */
-  readonly viewerPermissions: PullRequestViewerPermissions;
 }
 
 export interface ProviderDiffSlice {
@@ -259,6 +263,11 @@ export interface PullRequestProviderApi {
   readonly getChangeRequest: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderChangeRequestDetail, PullRequestProviderError>;
+
+  /** Comments, line threads, and commits, kept off the critical path for the core detail. */
+  readonly getChangeRequestActivity: (
+    input: ProviderRepositoryRef & { readonly number: number },
+  ) => Effect.Effect<ProviderChangeRequestActivity, PullRequestProviderError>;
 
   /**
    * The same answer `getChangeRequest` carries, on its own. Asked before anything is written, so

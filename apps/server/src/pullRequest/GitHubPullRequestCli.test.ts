@@ -1421,6 +1421,60 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("keeps the core detail read separate from conversation activity", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              number: 7,
+              title: "Progressive detail",
+              url: "https://github.com/acme/web/pull/7",
+              author: { login: "octocat" },
+              headRefName: "feature",
+              baseRefName: "main",
+              createdAt: "2026-07-01T00:00:00Z",
+              updatedAt: "2026-07-02T00:00:00Z",
+              body: "Core body",
+              changedFiles: 2,
+            }),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              author: { login: "octocat" },
+              comments: [],
+              reviews: [],
+              commits: [],
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const input = {
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      } as const;
+
+      const detail = yield* cli.getPullRequestDetail(input);
+      const activity = yield* cli.getPullRequestActivity(input);
+
+      expect(detail.body).toBe("Core body");
+      expect(activity.author?.login).toBe("octocat");
+      expect(callAt(0).args.at(-1)).toBe(
+        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,body,changedFiles,closedAt,statusCheckRollup",
+      );
+      expect(callAt(1).args.at(-1)).toBe("author,comments,reviews,commits");
+    }),
+  );
+
   it.effect("fails a files page too large to read rather than calling the diff whole", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.fail(diffRefused));

@@ -13,6 +13,7 @@ import {
   type OrchestrationProjectShell,
   type PullRequestAction,
   type PullRequestActionInput,
+  type PullRequestActivity,
   type PullRequestCommentInput,
   type PullRequestDetail,
   type PullRequestDiffFileContentsInput,
@@ -120,6 +121,9 @@ export class PullRequestService extends Context.Service<
       input: PullRequestListStatsInput,
     ) => Effect.Effect<PullRequestListStatsResult, PullRequestError>;
     readonly detail: (input: PullRequestRef) => Effect.Effect<PullRequestDetail, PullRequestError>;
+    readonly activity: (
+      input: PullRequestRef,
+    ) => Effect.Effect<PullRequestActivity, PullRequestError>;
     readonly diff: (
       input: PullRequestDiffInput,
     ) => Effect.Effect<PullRequestDiffResult, PullRequestError>;
@@ -905,13 +909,35 @@ export const make = Effect.gen(function* () {
                 reviewers: changeRequest.reviewers,
                 labels: changeRequest.labels,
                 checks: changeRequest.checks,
-                comments: changeRequest.comments,
-                commentCount: changeRequest.commentCount,
-                commentsTruncated: changeRequest.commentsTruncated,
-                reviewThreads: changeRequest.reviewThreads,
-                commits: changeRequest.commits,
                 mergeCapabilities: changeRequest.mergeCapabilities,
                 viewerPermissions: changeRequest.viewerPermissions,
+              }),
+            ),
+          ),
+      ),
+    );
+
+  const activityUncached: PullRequestService["Service"]["activity"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project) =>
+        project.api
+          .getChangeRequestActivity({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            host: project.host,
+            number: input.number,
+          })
+          .pipe(
+            Effect.mapError(toPullRequestError("activity")),
+            Effect.map(
+              (activity): PullRequestActivity => ({
+                ...(activity.author === undefined ? {} : { author: activity.author }),
+                ...(activity.reviewers === undefined ? {} : { reviewers: activity.reviewers }),
+                comments: activity.comments,
+                commentCount: activity.commentCount,
+                commentsTruncated: activity.commentsTruncated,
+                reviewThreads: activity.reviewThreads,
+                commits: activity.commits,
               }),
             ),
           ),
@@ -1498,6 +1524,25 @@ export const make = Effect.gen(function* () {
     return staleDetail(key, Cache.get(detailCache, key));
   };
 
+  const activityCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [, projectId, repository, number] = JSON.parse(key) as [number, string, string, number];
+      return activityUncached({ projectId, repository, number } as PullRequestRef);
+    },
+    {
+      capacity: DETAIL_CACHE_CAPACITY,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? DETAIL_CACHE_TTL : Duration.zero),
+    },
+  );
+  const staleActivity = staleWhileRevalidate<PullRequestActivity>(
+    DETAIL_STALE_WINDOW,
+    DETAIL_CACHE_CAPACITY,
+  );
+  const activity: PullRequestService["Service"]["activity"] = (input) => {
+    const key = JSON.stringify([refEpoch(input), input.projectId, input.repository, input.number]);
+    return staleActivity(key, Cache.get(activityCache, key));
+  };
+
   const diffCache = yield* Cache.makeWith(
     (key: string) => {
       const [, projectId, repository, number, cursor, commit] = JSON.parse(key) as [
@@ -1607,6 +1652,7 @@ export const make = Effect.gen(function* () {
     list,
     listStats,
     detail,
+    activity,
     diff,
     diffFileContents,
     runAction: invalidatedByMutation(runAction),

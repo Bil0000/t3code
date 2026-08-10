@@ -4,6 +4,7 @@ import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3t
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import {
   PullRequestProviderError,
+  type ProviderChangeRequestActivity,
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
@@ -100,14 +101,26 @@ export const make = Effect.gen(function* () {
         ),
 
     getChangeRequest: (input) =>
-      // GitLab splits a merge request across four endpoints, so they are read together.
       Effect.all(
         [
           cli.getMergeRequestDetail(input),
           cli.getProjectMergeCapabilities({ cwd: input.cwd, repository: input.repository }),
-          // The conversation and the commit list are worth degrading for: neither is reason
-          // to blank a merge request that was read successfully. An unread conversation counts
-          // as truncated, so it does not present as one with no comments.
+        ],
+        { concurrency: 2 },
+      ).pipe(
+        Effect.mapError(fail("getChangeRequest")),
+        Effect.map(
+          ([mergeRequest, mergeCapabilities]): ProviderChangeRequestDetail => ({
+            ...mergeRequest,
+            mergeCapabilities,
+            viewerPermissions: gitLabViewerPermissions(mergeRequest),
+          }),
+        ),
+      ),
+
+    getChangeRequestActivity: (input) =>
+      Effect.all(
+        [
           cli
             .listNotes(input)
             .pipe(Effect.orElseSucceed(() => ({ comments: [], truncated: true }))),
@@ -116,18 +129,11 @@ export const make = Effect.gen(function* () {
             .listDiscussions(input)
             .pipe(Effect.orElseSucceed(() => ({ threads: [], truncated: true }))),
         ],
-        { concurrency: 5 },
+        { concurrency: 3 },
       ).pipe(
-        Effect.mapError(fail("getChangeRequest")),
+        Effect.mapError(fail("getChangeRequestActivity")),
         Effect.map(
-          ([
-            mergeRequest,
-            mergeCapabilities,
-            notes,
-            commits,
-            discussions,
-          ]): ProviderChangeRequestDetail => ({
-            ...mergeRequest,
+          ([notes, commits, discussions]): ProviderChangeRequestActivity => ({
             comments: notes.comments,
             // GitLab reports no count of its own, so the walk's own total is the host's: the
             // notes endpoint carries every comment on the merge request, including the ones
@@ -136,9 +142,6 @@ export const make = Effect.gen(function* () {
             commentsTruncated: notes.truncated || discussions.truncated,
             reviewThreads: discussions.threads,
             commits,
-            mergeCapabilities,
-            // Off the merge request read above, which was being made anyway.
-            viewerPermissions: gitLabViewerPermissions(mergeRequest),
           }),
         ),
       ),

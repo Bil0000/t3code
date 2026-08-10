@@ -2,7 +2,7 @@ import type { CodeViewItem, DiffLineAnnotation, SelectedLineRange } from "@pierr
 import type { CodeViewDiffItem } from "@pierre/diffs/react";
 import type {
   EnvironmentId,
-  PullRequestDetail,
+  PullRequestDetailView,
   PullRequestDiffSide,
   PullRequestRef,
   PullRequestReviewThread,
@@ -162,7 +162,7 @@ export function PullRequestCodeTab({
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
-  detail: PullRequestDetail;
+  detail: PullRequestDetailView;
   /** Commit whose diff is open. Null keeps the whole pull-request diff selected. */
   selectedCommitOid: string | null;
   onSelectedCommitChange: (oid: string | null) => void;

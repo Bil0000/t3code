@@ -44,7 +44,7 @@ describe("gitHubViewerPermissions", () => {
     });
   });
 
-  it.effect("does not assume authorship when the review-thread read fails", () =>
+  it.effect("uses the small viewer-access read for core permissions", () =>
     Effect.gen(function* () {
       const provider = yield* make;
       const detail = yield* provider.getChangeRequest({
@@ -96,15 +96,8 @@ describe("gitHubViewerPermissions", () => {
               canWrite: false,
               mergeCapabilities: { merge: true, squash: true, rebase: true },
             }),
-          listReviewThreadComments: () =>
-            Effect.fail(
-              new GitHubPullRequestCli.GitHubPullRequestReadError({
-                command: "gh",
-                cwd: "/w",
-                operation: "listReviewThreadComments",
-                cause: new Error("transient GraphQL failure"),
-              }),
-            ),
+          getViewerAccess: () =>
+            Effect.succeed({ canWrite: false, canUpdate: true, didAuthor: false }),
         }),
       ),
     ),
@@ -151,9 +144,10 @@ describe("getChangeRequest commits", () => {
 
   const layerWith = (commits: GitHubReviewThreadComments["commits"]) =>
     Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
-      getPullRequestDetail: () =>
+      getPullRequestActivity: () =>
         Effect.succeed({
-          ...baseDetail,
+          author: baseDetail.author,
+          comments: baseDetail.comments,
           commits: [
             {
               oid: "view-oldest",
@@ -163,18 +157,13 @@ describe("getChangeRequest commits", () => {
             },
           ],
         }),
-      getRepositoryAccess: () =>
-        Effect.succeed({
-          canWrite: false,
-          mergeCapabilities: { merge: true, squash: true, rebase: true },
-        }),
       listReviewThreadComments: () => Effect.succeed({ ...baseThreadComments, commits }),
     });
 
   it.effect("prefers the GraphQL commits, which are the newest, over the gh view list", () =>
     Effect.gen(function* () {
       const provider = yield* make;
-      const detail = yield* provider.getChangeRequest({
+      const detail = yield* provider.getChangeRequestActivity({
         cwd: "/w",
         repository: "acme/web",
         host: "github.com",
@@ -199,7 +188,7 @@ describe("getChangeRequest commits", () => {
   it.effect("falls back to the gh view list when the GraphQL read has no commits", () =>
     Effect.gen(function* () {
       const provider = yield* make;
-      const detail = yield* provider.getChangeRequest({
+      const detail = yield* provider.getChangeRequestActivity({
         cwd: "/w",
         repository: "acme/web",
         host: "github.com",

@@ -128,6 +128,7 @@ function fakeProvider(
       }),
     listChangeRequests: () => Effect.succeed({ items: [], truncated: false, continues: true }),
     getChangeRequest: () => Effect.die("unused"),
+    getChangeRequestActivity: () => Effect.die("unused"),
     getDiff: () => Effect.die("unused"),
     runAction: () => Effect.void,
     comment: () => Effect.void,
@@ -2195,4 +2196,67 @@ it.effect("keeps the rows when the line counts cannot be read", () =>
 
     assert.deepStrictEqual(result.stats, []);
   }),
+);
+
+it.effect(
+  "serves core detail without waiting for activity, and shares activity between clients",
+  () =>
+    Effect.gen(function* () {
+      let coreCalls = 0;
+      let activityCalls = 0;
+      const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+      const service = yield* makeService({
+        projects: [
+          project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        ],
+        providers: [
+          fakeProvider("github", {
+            getChangeRequest: () => {
+              coreCalls += 1;
+              return Effect.succeed({
+                ...changeRequest(1, "2026-07-02T00:00:00Z"),
+                body: "Ready before the conversation",
+                changedFiles: 2,
+                mergedAt: null,
+                closedAt: null,
+                reviewers: [],
+                checks: [],
+                mergeCapabilities: { merge: true, squash: true, rebase: true },
+                viewerPermissions: {
+                  actions: ["merge"],
+                  comment: true,
+                  resolve: true,
+                  verdicts: ["comment", "approve", "request-changes"],
+                  requestReviewers: true,
+                },
+              });
+            },
+            getChangeRequestActivity: () => {
+              activityCalls += 1;
+              return Effect.succeed({
+                comments: [],
+                commentCount: 0,
+                commentsTruncated: false,
+                reviewThreads: [],
+                commits: [],
+              });
+            },
+          }),
+        ],
+      });
+
+      const core = yield* service.detail(reference);
+      assert.strictEqual(core.body, "Ready before the conversation");
+      assert.strictEqual(coreCalls, 1);
+      assert.strictEqual(activityCalls, 0);
+
+      yield* Effect.all([service.activity(reference), service.activity(reference)], {
+        concurrency: 2,
+      });
+      assert.strictEqual(activityCalls, 1);
+
+      yield* service.invalidate({ reference });
+      yield* service.activity(reference);
+      assert.strictEqual(activityCalls, 2);
+    }),
 );

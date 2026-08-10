@@ -1,4 +1,4 @@
-import type { PullRequestActor, PullRequestDetail } from "@t3tools/contracts";
+import type { PullRequestActor, PullRequestDetailView } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   ExternalLinkIcon,
@@ -318,7 +318,7 @@ export function PullRequestTimelineTab({
   order,
   onOpenCommit,
 }: {
-  detail: PullRequestDetail;
+  detail: PullRequestDetailView;
   order: "newest" | "oldest";
   onOpenCommit: (oid: string) => void;
 }) {

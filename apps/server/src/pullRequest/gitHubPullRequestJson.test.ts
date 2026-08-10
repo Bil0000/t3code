@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   buildReviewSubmissionJson,
   buildReviewerRequestJson,
+  decodePullRequestActivityJson,
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
   decodePullRequestListJson,
@@ -117,14 +118,14 @@ describe("pull request detail decoding", () => {
   });
 
   it("merges reviews with comments in time order and keeps a bodyless approval", () => {
-    const detail = expectSuccess(decodePullRequestDetailJson(detailJson));
+    const detail = expectSuccess(decodePullRequestActivityJson(detailJson));
     // r2 approved without writing anything, which is still the event worth seeing.
     expect(detail.comments.map((comment) => comment.id)).toEqual(["r1", "c1", "r2"]);
     expect(detail.comments.at(-1)?.reviewState).toBe("APPROVED");
   });
 
   it("keeps every attributed commit author, including an unlinked signature", () => {
-    const detail = expectSuccess(decodePullRequestDetailJson(detailJson));
+    const detail = expectSuccess(decodePullRequestActivityJson(detailJson));
     expect(detail.commits[0]?.authors).toEqual([
       { login: "octocat", name: "Octo Cat", avatarUrl: null },
       { login: "Pair Author", name: "Pair Author", avatarUrl: null },
@@ -134,7 +135,7 @@ describe("pull request detail decoding", () => {
   it("drops the bodyless review GitHub opens to hold line comments", () => {
     const raw = JSON.parse(detailJson) as Record<string, unknown>;
     const detail = expectSuccess(
-      decodePullRequestDetailJson(
+      decodePullRequestActivityJson(
         JSON.stringify({
           ...raw,
           reviews: [
@@ -160,7 +161,7 @@ describe("pull request detail decoding", () => {
     (state) => {
       const raw = JSON.parse(detailJson) as Record<string, unknown>;
       const detail = expectSuccess(
-        decodePullRequestDetailJson(
+        decodePullRequestActivityJson(
           JSON.stringify({
             ...raw,
             reviews: [{ id: "r6", body: "", state, submittedAt: "2026-07-07T00:00:00Z" }],
@@ -175,7 +176,7 @@ describe("pull request detail decoding", () => {
   it("drops a review that carries neither a body nor a state", () => {
     const raw = JSON.parse(detailJson) as Record<string, unknown>;
     const detail = expectSuccess(
-      decodePullRequestDetailJson(
+      decodePullRequestActivityJson(
         JSON.stringify({
           ...raw,
           reviews: [{ id: "r3", body: "  ", submittedAt: "2026-07-07T00:00:00Z" }],

@@ -31,7 +31,16 @@ import {
   RefreshCwIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { lazy, Suspense, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -68,6 +77,7 @@ import {
 } from "../ui/menu";
 import { toastManager } from "../ui/toast";
 import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
+import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAskSelectionInput } from "./PullRequestCodeTab";
@@ -275,6 +285,9 @@ export function PullRequestDetailPanel({
   const detailQuery = useEnvironmentQuery(
     pullRequestEnvironment.detail({ environmentId, input: reference }),
   );
+  const activityQuery = useEnvironmentQuery(
+    pullRequestEnvironment.activity({ environmentId, input: reference }),
+  );
   // Detail and diff are independent server reads, so the diff for the default view (no commit,
   // no cursor) is started here too rather than waiting for the Code tab to mount. This is one
   // extra cached read per opened pull request even for readers who never open the tab, but it
@@ -282,7 +295,30 @@ export function PullRequestDetailPanel({
   const _diffWarmUpQuery = useEnvironmentQuery(
     pullRequestEnvironment.diff({ environmentId, input: { ...reference } }),
   );
-  const detail = detailQuery.data;
+  const coreDetail = detailQuery.data;
+  const activity = activityQuery.data;
+  const detail = useMemo(
+    () =>
+      coreDetail === null
+        ? null
+        : {
+            ...coreDetail,
+            author: activity?.author ?? coreDetail.author,
+            reviewers: activity?.reviewers ?? coreDetail.reviewers,
+            comments: activity?.comments ?? [],
+            commentCount: activity?.commentCount ?? 0,
+            commentsTruncated: activity?.commentsTruncated ?? false,
+            reviewThreads: activity?.reviewThreads ?? [],
+            commits: activity?.commits ?? [],
+          },
+    [activity, coreDetail],
+  );
+  const activityPending = activityQuery.isPending && activity === null;
+  const activityError = activity === null ? activityQuery.error : null;
+  const refreshDetail = useCallback(() => {
+    detailQuery.refresh();
+    activityQuery.refresh();
+  }, [activityQuery.refresh, detailQuery.refresh]);
   useEffect(() => {
     if (!detail) return;
     onStateChange?.({
@@ -297,7 +333,7 @@ export function PullRequestDetailPanel({
   // finishes, a review arrives — so the panel reads it again on the way back to the window and
   // while a reader sits on it. Keyed by the pull request rather than by the panel, because this
   // one panel shows a different pull request every time it is opened.
-  useLiveRefresh(() => detailQuery.refresh(), {
+  useLiveRefresh(refreshDetail, {
     key: `pull-request:${reference.projectId}:${reference.repository}#${reference.number}`,
   });
   // The button, on the other hand, goes around the server's cache rather than through it: it is
@@ -306,18 +342,18 @@ export function PullRequestDetailPanel({
   // and at worst answer from it.
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
   const [refreshToken, setRefreshToken] = useState(0);
-  const refreshFromHost = async () => {
+  const refreshFromHost = useCallback(async () => {
     await invalidate({ environmentId, input: { reference } });
-    detailQuery.refresh();
+    refreshDetail();
     setRefreshToken((token) => token + 1);
-  };
+  }, [environmentId, invalidate, reference, refreshDetail]);
   // A refresh asked for by the page: the detail, and through the token below, the diff with it.
   const appliedForcedToken = useRef(forcedRefreshToken);
   useEffect(() => {
     if (appliedForcedToken.current === forcedRefreshToken) return;
     appliedForcedToken.current = forcedRefreshToken;
     void refreshFromHost();
-  }, [forcedRefreshToken]);
+  }, [forcedRefreshToken, refreshFromHost]);
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
   const [actionPending, setActionPending] = useState(false);
   const newThread = useNewThreadHandler();
@@ -348,7 +384,7 @@ export function PullRequestDetailPanel({
       return;
     }
     toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
-    detailQuery.refresh();
+    refreshDetail();
     onActed?.();
   };
 
@@ -1171,24 +1207,45 @@ export function PullRequestDetailPanel({
                   </span>
                 ) : tab === "timeline" ? (
                   <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                    <PullRequestMetaLine className="whitespace-nowrap text-[11px]">
+                    <PullRequestMetaLine
+                      className={cn(
+                        "whitespace-nowrap text-[11px] transition-opacity",
+                        (activityPending || activityError) && "opacity-35",
+                      )}
+                    >
                       <span
                         className="inline-flex items-center gap-1"
-                        aria-label={`${detail.commentCount.toLocaleString()} ${
-                          detail.commentCount === 1 ? "comment" : "comments"
-                        }`}
+                        aria-label={
+                          activityError
+                            ? "Comments unavailable"
+                            : `${detail.commentCount.toLocaleString()} ${
+                                detail.commentCount === 1 ? "comment" : "comments"
+                              }`
+                        }
                       >
                         <MessageSquareIcon aria-hidden className="size-3" />
-                        {detail.commentCount.toLocaleString()}
+                        {activityError
+                          ? "—"
+                          : activityPending
+                            ? "…"
+                            : detail.commentCount.toLocaleString()}
                       </span>
                       <span
                         className="inline-flex items-center gap-1"
-                        aria-label={`${detail.commits.length.toLocaleString()} ${
-                          detail.commits.length === 1 ? "commit" : "commits"
-                        }`}
+                        aria-label={
+                          activityError
+                            ? "Commits unavailable"
+                            : `${detail.commits.length.toLocaleString()} ${
+                                detail.commits.length === 1 ? "commit" : "commits"
+                              }`
+                        }
                       >
                         <GitCommitHorizontalIcon aria-hidden className="size-3" />
-                        {detail.commits.length.toLocaleString()}
+                        {activityError
+                          ? "—"
+                          : activityPending
+                            ? "…"
+                            : detail.commits.length.toLocaleString()}
                       </span>
                     </PullRequestMetaLine>
                     <Button
@@ -1260,10 +1317,7 @@ export function PullRequestDetailPanel({
             <PullRequestDetailGhost />
           )
         ) : detailQuery.error && !detail ? (
-          <PullRequestsUnavailableState
-            error={detailQuery.error}
-            onRetry={() => detailQuery.refresh()}
-          />
+          <PullRequestsUnavailableState error={detailQuery.error} onRetry={refreshDetail} />
         ) : detail ? (
           <>
             {mountedTabs.has("summary") ? (
@@ -1272,19 +1326,30 @@ export function PullRequestDetailPanel({
                   environmentId={environmentId}
                   reference={reference}
                   detail={detail}
+                  activityPending={activityPending}
+                  activityError={activityError}
                   pendingFinding={handoff}
                   onFixFinding={startFixFinding}
-                  onRefresh={() => detailQuery.refresh()}
+                  onRefresh={refreshDetail}
                 />
               </div>
             ) : null}
             {mountedTabs.has("timeline") ? (
               <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
-                <PullRequestTimelineTab
-                  detail={detail}
-                  order={timelineOrder}
-                  onOpenCommit={openCommit}
-                />
+                {activityPending ? (
+                  <PullRequestTimelineGhost />
+                ) : activityError ? (
+                  <PullRequestActivityUnavailableState
+                    error={activityError}
+                    onRetry={activityQuery.refresh}
+                  />
+                ) : (
+                  <PullRequestTimelineTab
+                    detail={detail}
+                    order={timelineOrder}
+                    onOpenCommit={openCommit}
+                  />
+                )}
               </div>
             ) : null}
             {mountedTabs.has("code") ? (
@@ -1299,7 +1364,7 @@ export function PullRequestDetailPanel({
                     onSelectedCommitChange={selectCodeCommit}
                     pendingFinding={handoff}
                     onFixFinding={startFixFinding}
-                    onRefresh={() => detailQuery.refresh()}
+                    onRefresh={refreshDetail}
                     refreshToken={refreshToken}
                   />
                 </Suspense>

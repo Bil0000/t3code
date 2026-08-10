@@ -8,6 +8,7 @@ import type {
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import {
   PullRequestProviderError,
+  type ProviderChangeRequestActivity,
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
@@ -201,9 +202,33 @@ export const make = Effect.gen(function* () {
             repository: input.repository,
             host: input.host,
           }),
+          // A small permissions query replaces the deeply paginated review-thread walk on the
+          // core path. Writes ask again immediately before mutating, so this is presentation.
+          cli.getViewerAccess(input),
+        ],
+        { concurrency: 3 },
+      ).pipe(
+        Effect.mapError(fail("getChangeRequest")),
+        Effect.map(
+          ([pullRequest, repository, viewerAccess]): ProviderChangeRequestDetail => ({
+            ...pullRequest,
+            reviewers: pullRequest.reviewRequestLogins.map((login) => ({
+              login,
+              name: null,
+              avatarUrl: null,
+            })),
+            mergeCapabilities: repository.mergeCapabilities,
+            viewerPermissions: gitHubViewerPermissions(viewerAccess),
+          }),
+        ),
+      ),
+
+    getChangeRequestActivity: (input) =>
+      Effect.all(
+        [
+          cli.getPullRequestActivity(input),
           // Line comments live on review threads, which `gh pr view --json` cannot reach. A
-          // GraphQL hiccup must not blank the whole detail, so it degrades to "none" — marked
-          // truncated, because an unread thread is a missing comment, not an absent one.
+          // GraphQL hiccup degrades to a truncated conversation rather than blanking activity.
           cli.listReviewThreadComments(input).pipe(
             Effect.orElseSucceed(() => ({
               comments: [],
@@ -217,22 +242,17 @@ export const make = Effect.gen(function* () {
                 { readonly additions: number; readonly deletions: number }
               >(),
               commits: [],
-              // A read that never happened says nothing about the reader, and an unknown
-              // permission is granted: the controls stay live and GitHub explains any refusal.
               viewer: { canUpdate: true, didAuthor: false },
             })),
           ),
         ],
-        { concurrency: 3 },
+        { concurrency: 2 },
       ).pipe(
-        Effect.mapError(fail("getChangeRequest")),
+        Effect.mapError(fail("getChangeRequestActivity")),
         Effect.map(
-          ([pullRequest, repository, reviewThreads]): ProviderChangeRequestDetail => ({
-            ...pullRequest,
+          ([pullRequest, reviewThreads]): ProviderChangeRequestActivity => ({
             author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin, input.host),
-            // `gh pr view --json commits` pages from the start, so a pull request with more than a
-            // hundred commits never shows its newest ones. The GraphQL read asks with `last`
-            // instead, so its list replaces the `gh` one wherever it came back non-empty.
+            reviewers: reviewThreads.reviewers,
             commits: (reviewThreads.commits.length > 0
               ? reviewThreads.commits
               : pullRequest.commits
@@ -243,9 +263,6 @@ export const make = Effect.gen(function* () {
                 (author) => withAvatar(author, reviewThreads.avatarsByLogin, input.host) ?? author,
               ),
             })),
-            // From the review itself rather than from the listing's outstanding requests, which
-            // hold no avatar and drop anyone who has already reviewed.
-            reviewers: reviewThreads.reviewers,
             comments: [...pullRequest.comments, ...reviewThreads.comments]
               .map((comment) => ({
                 ...comment,
@@ -263,13 +280,6 @@ export const make = Effect.gen(function* () {
                 author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
               })),
             })),
-            mergeCapabilities: repository.mergeCapabilities,
-            // Both reads were being made anyway: `gh repo view` for the merge settings, and the
-            // GraphQL conversation read for the pull request's own viewer fields.
-            viewerPermissions: gitHubViewerPermissions({
-              canWrite: repository.canWrite,
-              ...reviewThreads.viewer,
-            }),
           }),
         ),
       ),

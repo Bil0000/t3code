@@ -1,4 +1,4 @@
-import type { EnvironmentId, PullRequestDetail, PullRequestRef } from "@t3tools/contracts";
+import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
   ChevronRightIcon,
@@ -27,12 +27,14 @@ import {
   pullRequestCheckStatusLabel,
 } from "./pullRequestPresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
+import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import {
   orderPullRequestComments,
   pullRequestFindingKey,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { PullRequestConversationGhost } from "./PullRequestGhosts";
 
 function MetaRow({
   icon,
@@ -103,7 +105,7 @@ function CommentComposer({
   onCommented,
 }: {
   environmentId: EnvironmentId;
-  detail: PullRequestDetail;
+  detail: PullRequestDetailView;
   onCommented: () => void;
 }) {
   const [body, setBody] = useState("");
@@ -169,13 +171,17 @@ export function PullRequestSummaryTab({
   environmentId,
   reference,
   detail,
+  activityPending,
+  activityError,
   pendingFinding,
   onFixFinding,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
-  detail: PullRequestDetail;
+  detail: PullRequestDetailView;
+  activityPending: boolean;
+  activityError: string | null;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
   onFixFinding?: (finding: PullRequestFinding) => void;
@@ -256,8 +262,13 @@ export function PullRequestSummaryTab({
             </span>
           </MetaRow>
           <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
-            {/* The host's own count, so this reads the same here as it does there. */}
-            {detail.commentCount === 1 ? "1 comment" : `${detail.commentCount} comments`}
+            {activityPending
+              ? "Loading conversation…"
+              : activityError
+                ? "Conversation unavailable"
+                : detail.commentCount === 1
+                  ? "1 comment"
+                  : `${detail.commentCount} comments`}
           </MetaRow>
         </div>
       </section>
@@ -320,9 +331,9 @@ export function PullRequestSummaryTab({
 
       <Section
         title="Comments"
-        count={detail.commentCount}
+        {...(activityPending || activityError ? {} : { count: detail.commentCount })}
         actions={
-          detail.comments.length > 0 ? (
+          !activityPending && !activityError && detail.comments.length > 0 ? (
             <Button
               size="xs"
               variant="ghost"
@@ -340,91 +351,104 @@ export function PullRequestSummaryTab({
           ) : null
         }
       >
-        {detail.commentsTruncated ? (
-          <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
-            This conversation is longer than this page reads in one go. The most recent{" "}
-            {detail.comments.length} are here; open it on the host to read the rest.
-          </p>
-        ) : null}
-        {detail.comments.length === 0 ? (
-          <p className="py-2 text-xs text-muted-foreground">No comments yet.</p>
+        {activityPending ? (
+          <PullRequestConversationGhost />
+        ) : activityError ? (
+          <PullRequestActivityUnavailableState compact error={activityError} onRetry={onRefresh} />
         ) : (
-          <div className="space-y-3">
-            {hiddenCommentCount > 0 ? (
-              // Hundreds of comments are hundreds of markdown renders, and the ones worth
-              // opening a pull request for are the recent ones. The rest are one press away and
-              // stay rendered once asked for.
-              <Button
-                size="sm"
-                variant="outline"
-                className="w-full"
-                onClick={() => setShown({ url: detail.url, count: shownComments + COMMENT_PAGE })}
-              >
-                Show {Math.min(hiddenCommentCount, COMMENT_PAGE)} earlier{" "}
-                {hiddenCommentCount === 1 ? "comment" : "comments"}
-              </Button>
+          <>
+            {detail.commentsTruncated ? (
+              <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
+                This conversation is longer than this page reads in one go. The most recent{" "}
+                {detail.comments.length} are here; open it on the host to read the rest.
+              </p>
             ) : null}
-            {visibleComments.map((comment) => {
-              const thread = threadByCommentId.get(comment.id);
-              const finding: PullRequestFinding | null =
-                comment.kind !== "review" && comment.kind !== "review-comment"
-                  ? null
-                  : thread === undefined
-                    ? { kind: "comment", comment }
-                    : thread.isResolved
+            {detail.comments.length === 0 ? (
+              <p className="py-2 text-xs text-muted-foreground">No comments yet.</p>
+            ) : (
+              <div className="space-y-3">
+                {hiddenCommentCount > 0 ? (
+                  // Hundreds of comments are hundreds of markdown renders, and the ones worth
+                  // opening a pull request for are the recent ones. The rest are one press away and
+                  // stay rendered once asked for.
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() =>
+                      setShown({ url: detail.url, count: shownComments + COMMENT_PAGE })
+                    }
+                  >
+                    Show {Math.min(hiddenCommentCount, COMMENT_PAGE)} earlier{" "}
+                    {hiddenCommentCount === 1 ? "comment" : "comments"}
+                  </Button>
+                ) : null}
+                {visibleComments.map((comment) => {
+                  const thread = threadByCommentId.get(comment.id);
+                  const finding: PullRequestFinding | null =
+                    comment.kind !== "review" && comment.kind !== "review-comment"
                       ? null
-                      : { kind: "thread", thread };
-              return (
-                <article
-                  key={comment.id}
-                  // Offscreen comments skip style, layout and paint. Bot comments carry pages of
-                  // highlighted code, and the conversation is below the description either way.
-                  className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
-                >
-                  <div className="flex items-start gap-2">
-                    <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
-                      <PullRequestActorLabel
-                        actor={comment.author}
-                        className="font-medium text-foreground"
-                      />
-                      <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
-                      {comment.reviewState ? (
-                        <span>{comment.reviewState.toLowerCase()}</span>
-                      ) : null}
-                    </PullRequestMetaLine>
-                    {/* Review remarks only. A plain conversation comment is talk, not a finding,
+                      : thread === undefined
+                        ? { kind: "comment", comment }
+                        : thread.isResolved
+                          ? null
+                          : { kind: "thread", thread };
+                  return (
+                    <article
+                      key={comment.id}
+                      // Offscreen comments skip style, layout and paint. Bot comments carry pages of
+                      // highlighted code, and the conversation is below the description either way.
+                      className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
+                    >
+                      <div className="flex items-start gap-2">
+                        <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
+                          <PullRequestActorLabel
+                            actor={comment.author}
+                            className="font-medium text-foreground"
+                          />
+                          <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
+                          {comment.reviewState ? (
+                            <span>{comment.reviewState.toLowerCase()}</span>
+                          ) : null}
+                        </PullRequestMetaLine>
+                        {/* Review remarks only. A plain conversation comment is talk, not a finding,
                       and offering to fix one would promise more than it says. */}
-                    {onFixFinding && finding ? (
-                      <Button
-                        size="xs"
-                        variant="ghost"
-                        className="-mt-1 shrink-0"
-                        disabled={pendingFinding !== null && pendingFinding !== undefined}
-                        onClick={() => onFixFinding(finding)}
-                      >
-                        <HammerIcon className="size-3" />
-                        {pendingFinding === pullRequestFindingKey(finding)
-                          ? "Preparing..."
-                          : "Fix in a thread"}
-                      </Button>
-                    ) : null}
-                  </div>
-                  {comment.path ? (
-                    <p className="mt-1 truncate text-xs text-muted-foreground" title={comment.path}>
-                      {comment.path}
-                    </p>
-                  ) : null}
-                  <PullRequestMarkdown
-                    className="mt-2"
-                    text={comment.body}
-                    cwd={detail.workspaceRoot}
-                  />
-                </article>
-              );
-            })}
-          </div>
+                        {onFixFinding && finding ? (
+                          <Button
+                            size="xs"
+                            variant="ghost"
+                            className="-mt-1 shrink-0"
+                            disabled={pendingFinding !== null && pendingFinding !== undefined}
+                            onClick={() => onFixFinding(finding)}
+                          >
+                            <HammerIcon className="size-3" />
+                            {pendingFinding === pullRequestFindingKey(finding)
+                              ? "Preparing..."
+                              : "Fix in a thread"}
+                          </Button>
+                        ) : null}
+                      </div>
+                      {comment.path ? (
+                        <p
+                          className="mt-1 truncate text-xs text-muted-foreground"
+                          title={comment.path}
+                        >
+                          {comment.path}
+                        </p>
+                      ) : null}
+                      <PullRequestMarkdown
+                        className="mt-2"
+                        text={comment.body}
+                        cwd={detail.workspaceRoot}
+                      />
+                    </article>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
-        {/* A host that cannot post a comment gets no composer, rather than one that fails. */}
+        {/* Posting is a core capability and remains usable even if the activity read failed. */}
         {detail.capabilities.comment && detail.viewerPermissions.comment ? (
           <CommentComposer
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
