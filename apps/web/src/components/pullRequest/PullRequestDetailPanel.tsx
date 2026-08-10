@@ -1325,11 +1325,10 @@ export function PullRequestDetailPanel({
             // scrollport actually gains is the difference between the two.
             const chromeDelta = foldHeight - (condensedRowRef.current?.scrollHeight ?? 0);
             if (previous) {
-              // The hard top reopens the chrome. The refund puts the reader a fold's height
-              // from the top, pinned to the same pixels — the metadata is scrolled up to,
-              // not thrown at them.
+              // The hard top reopens the chrome with no refund: the reader asked for the top,
+              // and moving them a fold's height back down would snatch it away — the fold
+              // slides in above while the content stays where they left it.
               if (top < 4 && foldHeight > 0) {
-                compensationRef.current = chromeDelta;
                 next = false;
               }
             } else if (foldHeight > 0 && top > foldHeight + 32) {
