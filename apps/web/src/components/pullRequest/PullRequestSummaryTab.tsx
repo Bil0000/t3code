@@ -1,7 +1,13 @@
-import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  PullRequestComment,
+  PullRequestDetailView,
+  PullRequestRef,
+} from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
   CheckCircle2Icon,
+  ChevronDownIcon,
   ChevronRightIcon,
   HammerIcon,
   MessageSquareIcon,
@@ -42,6 +48,51 @@ import { PullRequestConversationGhost } from "./PullRequestGhosts";
 function labelDotColor(color: string | null): string | null {
   const hex = color?.trim().replace(/^#/, "") ?? "";
   return /^[0-9a-fA-F]{6}$/.test(hex) ? `#${hex}` : null;
+}
+
+/** A resolved conversation is finished work, so it opens collapsed the way the timeline folds. */
+function ResolvedComment({ comment, cwd }: { comment: PullRequestComment; cwd: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Collapsible open={open} onOpenChange={setOpen}>
+      <article className="rounded-lg border border-border/60 [contain-intrinsic-block-size:44px] [content-visibility:auto]">
+        <CollapsibleTrigger
+          className={cn(
+            "flex w-full items-center gap-2 p-3 text-left transition-opacity hover:opacity-100",
+            open ? "opacity-100" : "opacity-65",
+          )}
+        >
+          <PullRequestMetaLine className="min-w-0 flex-1 text-xs text-muted-foreground">
+            <PullRequestActorLabel actor={comment.author} className="font-medium text-foreground" />
+            <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
+            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-500">
+              <CheckCircle2Icon className="size-3" />
+              Resolved
+            </span>
+          </PullRequestMetaLine>
+          <ChevronDownIcon
+            aria-hidden
+            className={cn(
+              "size-3.5 shrink-0 text-muted-foreground transition-transform",
+              open && "rotate-180",
+            )}
+          />
+        </CollapsibleTrigger>
+        <CollapsiblePanel>
+          {open ? (
+            <div className="px-3 pb-3">
+              {comment.path ? (
+                <p className="truncate text-xs text-muted-foreground" title={comment.path}>
+                  {comment.path}
+                </p>
+              ) : null}
+              <PullRequestMarkdown className="mt-2" text={comment.body} cwd={cwd} />
+            </div>
+          ) : null}
+        </CollapsiblePanel>
+      </article>
+    </Collapsible>
+  );
 }
 
 function MetaRow({
@@ -415,6 +466,15 @@ export function PullRequestSummaryTab({
                 ) : null}
                 {visibleComments.map((comment) => {
                   const thread = threadByCommentId.get(comment.id);
+                  if (thread?.isResolved) {
+                    return (
+                      <ResolvedComment
+                        key={comment.id}
+                        comment={comment}
+                        cwd={detail.workspaceRoot}
+                      />
+                    );
+                  }
                   // An approval is a verdict, not a finding: there is nothing in it to fix.
                   const finding: PullRequestFinding | null =
                     (comment.kind !== "review" && comment.kind !== "review-comment") ||
@@ -422,9 +482,7 @@ export function PullRequestSummaryTab({
                       ? null
                       : thread === undefined
                         ? { kind: "comment", comment }
-                        : thread.isResolved
-                          ? null
-                          : { kind: "thread", thread };
+                        : { kind: "thread", thread };
                   return (
                     <article
                       key={comment.id}
@@ -441,12 +499,6 @@ export function PullRequestSummaryTab({
                           <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
                           {comment.reviewState ? (
                             <span>{comment.reviewState.toLowerCase()}</span>
-                          ) : null}
-                          {thread?.isResolved ? (
-                            <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-500">
-                              <CheckCircle2Icon className="size-3" />
-                              Resolved
-                            </span>
                           ) : null}
                         </PullRequestMetaLine>
                         {/* Review remarks only. A plain conversation comment is talk, not a finding,
