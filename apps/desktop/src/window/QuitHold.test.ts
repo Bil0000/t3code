@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   makeQuitHoldHandler,
+  QUIT_DOUBLE_TAP_MS,
   QUIT_HOLD_DURATION_MS,
   QUIT_HOLD_RELEASE_GRACE_MS,
 } from "./QuitHold.ts";
@@ -123,6 +124,8 @@ describe("makeQuitHoldHandler", () => {
     });
     await harness.send(makeInput({}));
     await harness.send(makeInput({ type: "keyUp" }));
+    // Outside the double-tap window, so the second press starts a new hold.
+    vi.advanceTimersByTime(QUIT_DOUBLE_TAP_MS + 100);
     await harness.send(makeInput({}));
     expect(resolvers).toHaveLength(2);
 
@@ -136,6 +139,36 @@ describe("makeQuitHoldHandler", () => {
     resolvers[1]?.(true);
     await harness.holdFor(QUIT_HOLD_DURATION_MS + 200);
     expect(harness.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("quits on a quick double tap, even when the first release was never seen", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    vi.advanceTimersByTime(QUIT_DOUBLE_TAP_MS - 100);
+    await harness.send(makeInput({}));
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats two slow taps as separate presses", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.send(makeInput({ type: "keyUp" }));
+    vi.advanceTimersByTime(QUIT_DOUBLE_TAP_MS + 100);
+    await harness.send(makeInput({}));
+    expect(harness.quit).not.toHaveBeenCalled();
+    expect(harness.notifications).toEqual(["down", "up", "down"]);
+  });
+
+  it("cancels the hold when another key interrupts it", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.holdFor(500);
+    // Shift pressed mid-hold breaks the gesture...
+    await harness.send(makeInput({ shift: true }));
+    expect(harness.notifications).toEqual(["down", "up"]);
+    // ...so later repeats past the threshold must not quit.
+    await harness.holdFor(QUIT_HOLD_DURATION_MS);
+    expect(harness.quit).not.toHaveBeenCalled();
   });
 
   it("ignores other shortcuts", async () => {

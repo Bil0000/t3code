@@ -4,7 +4,7 @@ import { isMacPlatform } from "../lib/utils";
 
 // Matches the hold duration in apps/desktop/src/window/QuitHold.ts: the hint
 // from a quick tap lingers for as long as a full hold would have taken.
-const HIDE_AFTER_RELEASE_MS = 1500;
+const HIDE_AFTER_RELEASE_MS = 1200;
 
 /**
  * Chrome-style "Hold ⌘Q to Quit" hint. The desktop main process intercepts
