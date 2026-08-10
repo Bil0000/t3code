@@ -91,7 +91,10 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 }
 
 [data-diffs-header]:hover {
-  background-color: color-mix(in srgb, var(--code-background) 97%, var(--code-foreground)) !important;
+  /* A native scrollbar gutter cannot be painted by descendants. Use an inset edge cue instead
+     of a full-width band that would look accidentally clipped at the gutter. */
+  background-color: var(--code-background) !important;
+  box-shadow: inset 3px 0 color-mix(in srgb, var(--code-foreground) 24%, transparent);
 }
 
 :is([data-separator="line-info"], [data-separator="line-info-basic"]) {
@@ -270,13 +273,23 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
     <CodeView<LAnnotation>
       {...props}
       {...(viewerRef ? { ref: viewerRef } : {})}
-      className={className ? `diff-render-surface ${className}` : "diff-render-surface"}
+      // The custom element itself is focusable for keyboard scrolling. Its native outline sits
+      // outside the panel clipping boundary; actual controls inside retain their own indicators.
+      className={
+        className
+          ? `diff-render-surface outline-none ${className}`
+          : "diff-render-surface outline-none"
+      }
       options={{
         ...options,
         unsafeCSS: DIFF_VIEW_UNSAFE_CSS,
         itemMetrics: {
           diffHeaderHeight: 32,
           hunkSeparatorHeight: 24,
+          // Pierre uses its general file spacing as a fallback in expanded-file layout paths.
+          // Keep it zero alongside the explicit paddings or expanding the first file can
+          // reintroduce the library's default 8px gap above its header.
+          spacing: 0,
           paddingTop: 0,
           paddingBottom: 0,
         },

@@ -862,12 +862,34 @@ export default function DiffPanel({
                 className="min-h-0 flex-1"
                 onClickCapture={(event) => {
                   const composedPath = event.nativeEvent.composedPath?.() ?? [];
+                  for (const node of composedPath) {
+                    if (!(node instanceof HTMLElement)) continue;
+                    // Header controls keep their own actions. In particular, the chevron must
+                    // not also trigger the row handler or the two toggles cancel each other.
+                    if (node instanceof HTMLButtonElement || node instanceof HTMLAnchorElement) {
+                      return;
+                    }
+                  }
                   const title = composedPath.find(
                     (node): node is HTMLElement =>
                       node instanceof HTMLElement && node.hasAttribute("data-title"),
                   );
                   const filePath = title?.textContent?.trim();
-                  if (filePath) openDiffFile(filePath);
+                  // The filename remains the explicit "open in editor" affordance.
+                  if (filePath) {
+                    openDiffFile(filePath);
+                    return;
+                  }
+                  const header = composedPath.find(
+                    (node): node is HTMLElement =>
+                      node instanceof HTMLElement && node.hasAttribute("data-diffs-header"),
+                  );
+                  const headerFilePath = header?.querySelector("[data-title]")?.textContent?.trim();
+                  if (!headerFilePath) return;
+                  const file = codeViewFiles.find(
+                    (candidate) => candidate.filePath === headerFilePath,
+                  );
+                  if (file) toggleDiffFileCollapsed(file.fileKey);
                 }}
               >
                 <AnnotatableCodeView

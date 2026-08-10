@@ -644,6 +644,97 @@ export function PullRequestCodeTab({
     [toggleFile],
   );
 
+  const diffViewOptions = useMemo(
+    () => ({
+      diffStyle: diffRenderMode === "split" ? ("split" as const) : ("unified" as const),
+      lineDiffType: "none" as const,
+      overflow: wordWrap ? ("wrap" as const) : ("scroll" as const),
+      theme: resolveDiffThemeName(resolvedTheme),
+      themeType: resolvedTheme,
+      stickyHeaders: true,
+      loadDiffFiles,
+      enableGutterUtility: canCommentOnLines && draft === null,
+      enableLineSelection: canCommentOnLines && draft === null,
+      // Two gestures reach the same place: dragging the line numbers selects a range, and the
+      // gutter's own button comments on the one line it sits on. They are separate callbacks in
+      // the viewer, so a reader who only ever presses the button gets nothing unless both are
+      // wired.
+      onGutterUtilityClick: beginComment,
+      onLineSelectionEnd: beginComment,
+    }),
+    [
+      diffRenderMode,
+      wordWrap,
+      resolvedTheme,
+      loadDiffFiles,
+      canCommentOnLines,
+      draft,
+      beginComment,
+    ],
+  );
+
+  const runThreadCommand = useCallback(
+    async (label: string, run: () => Promise<{ readonly _tag: string }>): Promise<boolean> => {
+      if (threadPending) return false;
+      setThreadPending(true);
+      const result = await run();
+      setThreadPending(false);
+      if (result._tag === "Failure") {
+        toastManager.add({ type: "error", title: label });
+        return false;
+      }
+      onRefresh();
+      return true;
+    },
+    [onRefresh, threadPending],
+  );
+
+  // A conversation is the same card wired to the same commands whether it sits on its line or
+  // was stranded off the diff; only where it is drawn differs.
+  const renderThreadCard = useCallback(
+    (thread: PullRequestReviewThread) => (
+      <ReviewThreadCard
+        key={thread.id}
+        thread={thread}
+        workspaceRoot={detail.workspaceRoot}
+        canReply={review.reply}
+        canResolve={review.resolve}
+        pending={threadPending}
+        fixPending={pendingFinding === pullRequestFindingKey({ kind: "thread", thread })}
+        {...(onFixFinding ? { onFix: () => onFixFinding({ kind: "thread", thread }) } : {})}
+        onReply={(body) =>
+          runThreadCommand("Reply could not be posted", () =>
+            replyToThread({
+              environmentId,
+              input: { ...reference, threadId: thread.id, body },
+            }),
+          )
+        }
+        onToggleResolved={() =>
+          void runThreadCommand("The conversation could not be updated", () =>
+            setThreadResolution({
+              environmentId,
+              input: { ...reference, threadId: thread.id, resolved: !thread.isResolved },
+            }),
+          )
+        }
+      />
+    ),
+    [
+      detail.workspaceRoot,
+      environmentId,
+      onFixFinding,
+      pendingFinding,
+      reference,
+      replyToThread,
+      review.reply,
+      review.resolve,
+      runThreadCommand,
+      setThreadResolution,
+      threadPending,
+    ],
+  );
+
   const renderAnnotation = useCallback(
     (annotation: ReviewAnnotation) => (
       <div className="py-1">
@@ -691,83 +782,15 @@ export function PullRequestCodeTab({
         ) : null}
       </div>
     ),
-    [draft, reviewKey, removeComment, addComment, onAskAboutSelection, askAboutSelection],
-  );
-
-  const diffViewOptions = useMemo(
-    () => ({
-      diffStyle: diffRenderMode === "split" ? ("split" as const) : ("unified" as const),
-      lineDiffType: "none" as const,
-      overflow: wordWrap ? ("wrap" as const) : ("scroll" as const),
-      theme: resolveDiffThemeName(resolvedTheme),
-      themeType: resolvedTheme,
-      stickyHeaders: true,
-      loadDiffFiles,
-      enableGutterUtility: canCommentOnLines && draft === null,
-      enableLineSelection: canCommentOnLines && draft === null,
-      // Two gestures reach the same place: dragging the line numbers selects a range, and the
-      // gutter's own button comments on the one line it sits on. They are separate callbacks in
-      // the viewer, so a reader who only ever presses the button gets nothing unless both are
-      // wired.
-      onGutterUtilityClick: beginComment,
-      onLineSelectionEnd: beginComment,
-    }),
     [
-      diffRenderMode,
-      wordWrap,
-      resolvedTheme,
-      loadDiffFiles,
-      canCommentOnLines,
+      addComment,
+      askAboutSelection,
       draft,
-      beginComment,
+      onAskAboutSelection,
+      removeComment,
+      renderThreadCard,
+      reviewKey,
     ],
-  );
-
-  const runThreadCommand = async (
-    label: string,
-    run: () => Promise<{ readonly _tag: string }>,
-  ): Promise<boolean> => {
-    if (threadPending) return false;
-    setThreadPending(true);
-    const result = await run();
-    setThreadPending(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: label });
-      return false;
-    }
-    onRefresh();
-    return true;
-  };
-
-  // A conversation is the same card wired to the same commands whether it sits on its line or
-  // was stranded off the diff; only where it is drawn differs.
-  const renderThreadCard = (thread: PullRequestReviewThread) => (
-    <ReviewThreadCard
-      key={thread.id}
-      thread={thread}
-      workspaceRoot={detail.workspaceRoot}
-      canReply={review.reply}
-      canResolve={review.resolve}
-      pending={threadPending}
-      fixPending={pendingFinding === pullRequestFindingKey({ kind: "thread", thread })}
-      {...(onFixFinding ? { onFix: () => onFixFinding({ kind: "thread", thread }) } : {})}
-      onReply={(body) =>
-        runThreadCommand("Reply could not be posted", () =>
-          replyToThread({
-            environmentId,
-            input: { ...reference, threadId: thread.id, body },
-          }),
-        )
-      }
-      onToggleResolved={() =>
-        void runThreadCommand("The conversation could not be updated", () =>
-          setThreadResolution({
-            environmentId,
-            input: { ...reference, threadId: thread.id, resolved: !thread.isResolved },
-          }),
-        )
-      }
-    />
   );
 
   /**
@@ -1180,6 +1203,10 @@ export function PullRequestCodeTab({
               rows absolutely, so it has to own that element — the thread diff panel hands it the
               same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
           <StyledDiffCodeView<ReviewAnnotationGroup>
+            // Keep scrollbar space stable so file metadata and line numbers do not shift as a
+            // diff crosses the overflow boundary. The viewer is itself focusable for keyboard
+            // interaction, but its native host outline clips and competes with the focus
+            // indicators on its actual controls.
             className="h-full overflow-auto [scrollbar-gutter:stable]"
             items={items}
             selectedLines={selectedLines}
