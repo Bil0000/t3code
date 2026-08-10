@@ -1,4 +1,5 @@
 import * as Cache from "effect/Cache";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
@@ -89,6 +90,19 @@ const DIFF_CACHE_TTL = Duration.seconds(60);
 const COMMIT_DIFF_CACHE_TTL = Duration.minutes(10);
 /** Sized like the client's own stale time; a row's counts move only when somebody pushes. */
 const LIST_STATS_CACHE_TTL = Duration.seconds(60);
+/**
+ * How long a cache's last success may still be served while a fresh read runs behind it.
+ * Bounded by how the page actually revalidates: clients re-read on mount and once a minute
+ * while open, and every one of those reads repopulates the cache in the background — so in
+ * steady use a "stale" answer is at most a refresh cycle old, and the window only stretches
+ * that far when nobody has looked at the page for minutes. An explicit refresh or a mutation
+ * bumps the epochs and skips held answers entirely.
+ */
+const LIST_STALE_WINDOW = Duration.minutes(10);
+const DETAIL_STALE_WINDOW = Duration.minutes(5);
+const DIFF_STALE_WINDOW = Duration.minutes(10);
+/** How long one host's signed-in login is believed without asking its CLI again. */
+const VIEWER_CACHE_TTL = Duration.minutes(10);
 const LIST_CACHE_CAPACITY = 64;
 const LIST_STATS_CACHE_CAPACITY = 32;
 const DETAIL_CACHE_CAPACITY = 128;
@@ -468,28 +482,50 @@ export const make = Effect.gen(function* () {
    * Its failure doubles as the answer to "is this host set up", which is what the provider
    * switcher shows.
    */
+  type ResolvedViewer = {
+    readonly host: string;
+    readonly kind: SourceControlProviderKind;
+    readonly viewer: string | null;
+    readonly error: PullRequestProviderError | null;
+  };
+  // Who is signed in moves on the timescale of `gh auth login`, not of a page visit, yet every
+  // list read was asking each host's CLI again — a subprocess and a network round trip per host
+  // per read, three reads per page. Only a success is believed for a while: a failure is the
+  // "is this host set up" answer the provider switcher shows, and holding it would keep saying
+  // signed-out after the reader has signed in.
+  const viewersByHost = new Map<string, { readonly at: number; readonly result: ResolvedViewer }>();
+
   const resolveViewers = (
     projects: ReadonlyArray<SupportedProject>,
     viewerRoots: WorkspaceProjects["viewerRoots"],
   ) =>
     Effect.forEach(
       [...new Set(projects.map(({ host }) => host))],
-      (host) => {
-        const forHost = projects.filter((project) => project.host === host);
-        const api = forHost[0]!.api;
-        // Every checkout on the host, not just the ones that survived de-duplication: one
-        // unreadable worktree would otherwise report the whole host as signed out.
-        const roots = viewerRoots.get(host) ?? forHost.map(({ project }) => project.workspaceRoot);
-        return Effect.firstSuccessOf(roots.map((cwd) => api.getViewer({ cwd }))).pipe(
-          Effect.map((viewer) => ({
-            host,
-            kind: api.kind,
-            viewer: viewer as string | null,
-            error: null as PullRequestProviderError | null,
-          })),
-          Effect.catch((error) => Effect.succeed({ host, kind: api.kind, viewer: null, error })),
-        );
-      },
+      (host) =>
+        Effect.flatMap(Clock.currentTimeMillis, (now): Effect.Effect<ResolvedViewer> => {
+          const held = viewersByHost.get(host);
+          if (held !== undefined && now - held.at <= Duration.toMillis(VIEWER_CACHE_TTL)) {
+            return Effect.succeed(held.result);
+          }
+          const forHost = projects.filter((project) => project.host === host);
+          const api = forHost[0]!.api;
+          // Every checkout on the host, not just the ones that survived de-duplication: one
+          // unreadable worktree would otherwise report the whole host as signed out.
+          const roots =
+            viewerRoots.get(host) ?? forHost.map(({ project }) => project.workspaceRoot);
+          return Effect.firstSuccessOf(roots.map((cwd) => api.getViewer({ cwd }))).pipe(
+            Effect.map((viewer) => ({
+              host,
+              kind: api.kind,
+              viewer: viewer as string | null,
+              error: null as PullRequestProviderError | null,
+            })),
+            Effect.tap((result) =>
+              Effect.map(Clock.currentTimeMillis, (at) => viewersByHost.set(host, { at, result })),
+            ),
+            Effect.catch((error) => Effect.succeed({ host, kind: api.kind, viewer: null, error })),
+          );
+        }),
       { concurrency: REPOSITORY_CONCURRENCY },
     );
 
@@ -1329,6 +1365,46 @@ export const make = Effect.gen(function* () {
       return { stats: stats.flat() };
     });
 
+  const context = yield* Effect.context<never>();
+  const runFork = Effect.runForkWith(context);
+
+  /**
+   * Stale answers served while a fresh one is fetched behind them. Every read here leaves the
+   * process for a CLI whose wall clock is the host's — seconds on a good day, tens of them on a
+   * slow network — and the short cache windows below mean almost every page visit pays that
+   * clock again. The last success per key is therefore held a while longer: a read inside the
+   * window answers with it at once and refreshes the cache in the background, so the next read
+   * is fresh without anyone having waited on it.
+   *
+   * Correctness leans on the epochs: an explicit refresh or a mutation bumps them, the epoch is
+   * part of every key, and a held answer under the old key is simply never asked for again — so
+   * "give me truly fresh" still means exactly that.
+   */
+  const staleWhileRevalidate = <A>(staleFor: Duration.Duration, capacity: number) => {
+    const staleMs = Duration.toMillis(staleFor);
+    const held = new Map<string, { readonly at: number; readonly value: A }>();
+    const record = (key: string, value: A) =>
+      Effect.map(Clock.currentTimeMillis, (at) => {
+        held.delete(key);
+        if (held.size >= capacity) {
+          const oldest = held.keys().next().value;
+          if (oldest !== undefined) held.delete(oldest);
+        }
+        held.set(key, { at, value });
+      });
+    return <E>(key: string, read: Effect.Effect<A, E>): Effect.Effect<A, E> => {
+      const recorded = read.pipe(Effect.tap((value) => record(key, value)));
+      return Effect.flatMap(Clock.currentTimeMillis, (now) => {
+        const snapshot = held.get(key);
+        if (snapshot === undefined || now - snapshot.at > staleMs) return recorded;
+        // Run as its own fiber rather than a child: the caller is answered and gone before the
+        // refresh lands. The read still coalesces on the cache key, so ten stale reads in one
+        // window cost one host request — and a failed refresh costs nothing but the retry.
+        return Effect.sync(() => runFork(Effect.ignore(recorded))).pipe(Effect.as(snapshot.value));
+      });
+    };
+  };
+
   // Epochs are the invalidation mechanism: a key carries its scope's epoch, so bumping the
   // epoch strands every entry made under the old one — no enumerating a cache whose keys
   // (cursors, commits) nothing holds a list of. The counter is shared and monotonic so a
@@ -1383,22 +1459,25 @@ export const make = Effect.gen(function* () {
       timeToLive: (exit) => (Exit.isSuccess(exit) ? LIST_CACHE_TTL : Duration.zero),
     },
   );
-  const list: PullRequestService["Service"]["list"] = (input) =>
-    Cache.get(
-      listCache,
-      JSON.stringify([
-        listingsEpoch,
-        input.state,
-        input.involvement ?? null,
-        input.projectId ?? null,
-        input.host ?? null,
-        input.limit ?? null,
-        input.query ?? null,
-        input.cursors === undefined
-          ? null
-          : Object.entries(input.cursors).toSorted(([left], [right]) => left.localeCompare(right)),
-      ]),
-    );
+  const staleList = staleWhileRevalidate<PullRequestListResult>(
+    LIST_STALE_WINDOW,
+    LIST_CACHE_CAPACITY,
+  );
+  const list: PullRequestService["Service"]["list"] = (input) => {
+    const key = JSON.stringify([
+      listingsEpoch,
+      input.state,
+      input.involvement ?? null,
+      input.projectId ?? null,
+      input.host ?? null,
+      input.limit ?? null,
+      input.query ?? null,
+      input.cursors === undefined
+        ? null
+        : Object.entries(input.cursors).toSorted(([left], [right]) => left.localeCompare(right)),
+    ]);
+    return staleList(key, Cache.get(listCache, key));
+  };
 
   const detailCache = yield* Cache.makeWith(
     (key: string) => {
@@ -1410,11 +1489,14 @@ export const make = Effect.gen(function* () {
       timeToLive: (exit) => (Exit.isSuccess(exit) ? DETAIL_CACHE_TTL : Duration.zero),
     },
   );
-  const detail: PullRequestService["Service"]["detail"] = (input) =>
-    Cache.get(
-      detailCache,
-      JSON.stringify([refEpoch(input), input.projectId, input.repository, input.number]),
-    );
+  const staleDetail = staleWhileRevalidate<PullRequestDetail>(
+    DETAIL_STALE_WINDOW,
+    DETAIL_CACHE_CAPACITY,
+  );
+  const detail: PullRequestService["Service"]["detail"] = (input) => {
+    const key = JSON.stringify([refEpoch(input), input.projectId, input.repository, input.number]);
+    return staleDetail(key, Cache.get(detailCache, key));
+  };
 
   const diffCache = yield* Cache.makeWith(
     (key: string) => {
@@ -1443,18 +1525,21 @@ export const make = Effect.gen(function* () {
       },
     },
   );
-  const diff: PullRequestService["Service"]["diff"] = (input) =>
-    Cache.get(
-      diffCache,
-      JSON.stringify([
-        refEpoch(input),
-        input.projectId,
-        input.repository,
-        input.number,
-        input.cursor ?? null,
-        input.commit ?? null,
-      ]),
-    );
+  const staleDiff = staleWhileRevalidate<PullRequestDiffResult>(
+    DIFF_STALE_WINDOW,
+    DIFF_CACHE_CAPACITY,
+  );
+  const diff: PullRequestService["Service"]["diff"] = (input) => {
+    const key = JSON.stringify([
+      refEpoch(input),
+      input.projectId,
+      input.repository,
+      input.number,
+      input.cursor ?? null,
+      input.commit ?? null,
+    ]);
+    return staleDiff(key, Cache.get(diffCache, key));
+  };
 
   const listStatsCache = yield* Cache.makeWith(
     (key: string) => {
@@ -1472,27 +1557,30 @@ export const make = Effect.gen(function* () {
   // shares between clients like every other read. Refs are sorted so one page's worth of rows
   // is one key however the client assembled them, and the listings epoch rides along so the
   // refresh that forgets the listing forgets its decorations with it.
-  const listStats: PullRequestService["Service"]["listStats"] = (input) =>
-    input.refs.length === 0
-      ? Effect.succeed({ stats: [] })
-      : Cache.get(
-          listStatsCache,
-          JSON.stringify([
-            listingsEpoch,
-            input.refs
-              .map((ref) => [ref.projectId, ref.repository, ref.number] as const)
-              .toSorted((left, right) =>
-                `${left[0]} ${left[1]} ${left[2]}`.localeCompare(
-                  `${right[0]} ${right[1]} ${right[2]}`,
-                ),
-              ),
-          ]),
-        );
+  const staleListStats = staleWhileRevalidate<PullRequestListStatsResult>(
+    LIST_STALE_WINDOW,
+    LIST_STATS_CACHE_CAPACITY,
+  );
+  const listStats: PullRequestService["Service"]["listStats"] = (input) => {
+    if (input.refs.length === 0) return Effect.succeed({ stats: [] });
+    const key = JSON.stringify([
+      listingsEpoch,
+      input.refs
+        .map((ref) => [ref.projectId, ref.repository, ref.number] as const)
+        .toSorted((left, right) =>
+          `${left[0]} ${left[1]} ${left[2]}`.localeCompare(`${right[0]} ${right[1]} ${right[2]}`),
+        ),
+    ]);
+    return staleListStats(key, Cache.get(listStatsCache, key));
+  };
 
   const invalidate: PullRequestService["Service"]["invalidate"] = (input) =>
     Effect.sync(() => {
       if (input.reference === undefined) {
         listingsEpoch = ++epochCounter;
+        // A whole-workspace refresh is the reader asking to be re-answered from the hosts,
+        // and that includes who the hosts say they are.
+        viewersByHost.clear();
         return;
       }
       bumpRefEpoch(input.reference);

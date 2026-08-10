@@ -29,11 +29,17 @@ import {
   groupPullRequestsByInvolvement,
   matchesPullRequestQuery,
   narrowPullRequestsToFilters,
+  mergePullRequestDiffStats,
+  partitionPullRequestsWithPriority,
   pullRequestEntryKey,
   rankPullRequestMatches,
+  readPullRequestListSnapshot,
   resolveProjectScope,
   withDiffStat,
+  writePullRequestListSnapshot,
   scorePullRequestMatch,
+  type PullRequestDiffStats,
+  type PullRequestPartitionsSnapshot,
 } from "../components/pullRequest/pullRequestList.logic";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
@@ -48,6 +54,11 @@ import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhost
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
+import {
+  WorkspaceBreadcrumb,
+  WorkspaceBreadcrumbItem,
+  WorkspaceBreadcrumbSeparator,
+} from "../components/WorkspaceBreadcrumb";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
@@ -315,6 +326,41 @@ function PullRequestsRouteView() {
           },
         }),
   );
+  // The priority groups' own reads. The feed below is paginated by recency, so an older authored
+  // or review-requested row can be missing from its first page; partitioned from these
+  // server-filtered reads instead, the priority view is complete up front and a continuation can
+  // only ever append below what is already on screen. A search re-ranks the whole list by match,
+  // so no partitions are read for one. These are the same atoms the Authored and Reviewing tabs
+  // ask for, so switching to either is answered from cache.
+  const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;
+  const authoredQuery = useEnvironmentQuery(
+    environmentId === null || !partitionsWanted
+      ? null
+      : pullRequestEnvironment.list({
+          environmentId,
+          input: {
+            state: search.state,
+            involvement: "authored",
+            limit: PAGE_SIZE,
+            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+            ...(search.host ? { host: search.host } : {}),
+          },
+        }),
+  );
+  const reviewingQuery = useEnvironmentQuery(
+    environmentId === null || !partitionsWanted
+      ? null
+      : pullRequestEnvironment.list({
+          environmentId,
+          input: {
+            state: search.state,
+            involvement: "reviewing",
+            limit: PAGE_SIZE,
+            ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+            ...(search.host ? { host: search.host } : {}),
+          },
+        }),
+  );
   // The header's refresh punches through the server's cache before re-reading; the error and
   // empty states retry plainly, because a failure is never cached.
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
@@ -337,6 +383,8 @@ function PullRequestsRouteView() {
     }
     refreshList();
     baselineQuery.refresh();
+    authoredQuery.refresh();
+    reviewingQuery.refresh();
     statsQuery.refresh();
     setDetailRefreshToken((token) => token + 1);
   };
@@ -351,15 +399,82 @@ function PullRequestsRouteView() {
     scope: string;
     query: string;
     data: PullRequestListResult;
+    /** The priority groups' own answers, carried so a cold start has whole groups too. */
+    partitions?: PullRequestPartitionsSnapshot;
   } | null>(null);
+  // A reload recreates the registry the queries live in, so with nothing held the page would
+  // cold-start into skeletons even though almost every row is unchanged. The last answer for
+  // this environment is kept across reloads and hydrated here as the carried rows: they render
+  // at once — narrowed to the current filters like any carried answer — and the live read
+  // reconciles them in place by key rather than replacing them with ghosts.
+  useEffect(() => {
+    if (environmentId === null) return;
+    setLoaded((current) => {
+      // Another environment's rows could not even be narrowed — nothing on a row says which
+      // environment read it — so its snapshot beats holding them.
+      if (current !== null && current.environmentId === environmentId) return current;
+      const snapshot = readPullRequestListSnapshot(
+        typeof window === "undefined" ? undefined : window.localStorage,
+        environmentId,
+      );
+      if (snapshot === null) return null;
+      return {
+        environmentId,
+        scope: snapshot.scope,
+        query: "",
+        data: snapshot.data,
+        ...(snapshot.partitions === undefined ? {} : { partitions: snapshot.partitions }),
+      };
+    });
+  }, [environmentId]);
   useEffect(() => {
     // Only once this query has settled. While a search is being swapped in or out the text has
     // already changed and the data has not, so recording them together would file the previous
     // answer under the new question — which is how a search's answer came to speak for the
     // workspace after the search was cleared.
     if (!listQuery.data || listQuery.isPending) return;
-    setLoaded({ environmentId, scope: scopeKey, query: sentQuery, data: listQuery.data });
-  }, [environmentId, scopeKey, sentQuery, listQuery.data, listQuery.isPending]);
+    const data = listQuery.data;
+    setLoaded((current) => {
+      // The partitions arrive on their own clock, so this records whichever have landed by
+      // now and runs again when the rest do. Until then the ones already held for this scope
+      // stay — hydrated or previously answered — rather than being dropped for a feed that
+      // merely settled first.
+      const partitions =
+        partitionsWanted && authoredQuery.data !== null && reviewingQuery.data !== null
+          ? { authored: authoredQuery.data.entries, reviewing: reviewingQuery.data.entries }
+          : current !== null &&
+              current.environmentId === environmentId &&
+              current.scope === scopeKey
+            ? current.partitions
+            : undefined;
+      // A search's answer is the search's, not the workspace's, so only unsearched lists
+      // persist. Written here where the held partitions are in reach, so a feed settling
+      // ahead of them cannot overwrite a stored snapshot that already had both groups.
+      if (environmentId !== null && sentQuery.length === 0) {
+        writePullRequestListSnapshot(
+          typeof window === "undefined" ? undefined : window.localStorage,
+          environmentId,
+          { scope: scopeKey, data, ...(partitions === undefined ? {} : { partitions }) },
+        );
+      }
+      return {
+        environmentId,
+        scope: scopeKey,
+        query: sentQuery,
+        data,
+        ...(partitions === undefined ? {} : { partitions }),
+      };
+    });
+  }, [
+    environmentId,
+    scopeKey,
+    sentQuery,
+    listQuery.data,
+    listQuery.isPending,
+    partitionsWanted,
+    authoredQuery.data,
+    reviewingQuery.data,
+  ]);
   // Changing a filter asks a question nothing has answered yet, and the page is already holding
   // perfectly good rows for the last one. Rather than blank out for the round trip, those rows
   // are narrowed to the new filters and stay until the answer lands — a subset of it, never a
@@ -416,9 +531,6 @@ function PullRequestsRouteView() {
       if (previous === null || previous.key !== filterKey) {
         return { key: filterKey, entries: rankPullRequestMatches(answered.entries, sentQuery) };
       }
-      const arriving = new Map(
-        answered.entries.map((entry) => [pullRequestEntryKey(entry), entry] as const),
-      );
       if (sentCursors !== null) {
         // A continuation is a slice, not the list: it carries only what comes after the rows
         // already held, and says nothing about a repository that has run out. Everything on
@@ -432,15 +544,12 @@ function PullRequestsRouteView() {
         );
         return { key: filterKey, entries: [...previous.entries, ...appended] };
       }
-      const kept = previous.entries.flatMap((entry) => {
-        const key = pullRequestEntryKey(entry);
-        const fresh = arriving.get(key);
-        if (fresh === undefined) return [];
-        arriving.delete(key);
-        // The row's own contents are the newest ones; only its place is inherited.
-        return [fresh];
-      });
-      return { key: filterKey, entries: [...kept, ...arriving.values()] };
+      // A whole-page answer replaces the order outright. Positions used to be inherited so the
+      // list would not shift under a reader, but inheriting them filed a pull request opened
+      // since the last read at the bottom of the page — below rows a week older — where "the
+      // latest" is exactly what a refresh was for. The host answers in the order the page
+      // reads, so its order stands; a row that moved was updated, and moving is the news.
+      return { key: filterKey, entries: rankPullRequestMatches(answered.entries, sentQuery) };
     });
   }, [answered, filterKey, sentCursors, sentQuery]);
 
@@ -492,6 +601,8 @@ function PullRequestsRouteView() {
     () => {
       refreshList();
       baselineQuery.refresh();
+      authoredQuery.refresh();
+      reviewingQuery.refresh();
     },
     { enabled: environmentId !== null },
   );
@@ -592,39 +703,64 @@ function PullRequestsRouteView() {
    * listing leaves them out and they arrive a moment later, into rows that already draw without
    * them. Keyed by the rows being shown, so scrolling further asks only about what is new.
    */
+  const groups = useMemo(() => {
+    if (search.involvement !== "all") return [{ key: "others" as const, label: "", entries }];
+    // Until both partitions have answered, the snapshot's stand in — they are yesterday's
+    // groups, but whole ones, where grouping the feed's first page locally loses every
+    // authored row older than it. Once the live reads land they take over; with neither,
+    // the local grouping is still better than nothing.
+    const held =
+      loaded !== null && loaded.environmentId === environmentId && loaded.scope === scopeKey
+        ? loaded.partitions
+        : undefined;
+    const authored = partitionsWanted ? (authoredQuery.data?.entries ?? held?.authored) : undefined;
+    const reviewing = partitionsWanted
+      ? (reviewingQuery.data?.entries ?? held?.reviewing)
+      : undefined;
+    if (authored === undefined || reviewing === undefined) {
+      return groupPullRequestsByInvolvement(entries, viewers);
+    }
+    return partitionPullRequestsWithPriority(entries, authored, reviewing);
+  }, [
+    authoredQuery.data?.entries,
+    entries,
+    environmentId,
+    loaded,
+    partitionsWanted,
+    reviewingQuery.data?.entries,
+    scopeKey,
+    search.involvement,
+    viewers,
+  ]);
+
+  // Keyed by every row being shown — the partitions can hold rows the feed has not paged to —
+  // so scrolling further asks only about what is new.
   const statsInput = useMemo(
     () => ({
-      refs: entries.map((entry) => ({
-        projectId: entry.projectId,
-        repository: entry.repository,
-        number: entry.number,
-      })),
+      refs: groups
+        .flatMap((group) => group.entries)
+        .map((entry) => ({
+          projectId: entry.projectId,
+          repository: entry.repository,
+          number: entry.number,
+        })),
     }),
-    [entries],
+    [groups],
   );
   const statsQuery = useEnvironmentQuery(
     environmentId === null || statsInput.refs.length === 0
       ? null
       : pullRequestEnvironment.listStats({ environmentId, input: statsInput }),
   );
-  const statsByRow = useMemo(() => {
-    const found = new Map<string, { additions: number; deletions: number }>();
-    for (const stat of statsQuery.data?.stats ?? []) {
-      found.set(`${stat.projectId} ${stat.number}`, {
-        additions: stat.additions,
-        deletions: stat.deletions,
-      });
-    }
-    return found;
+  // Adding or removing one row keys a fresh stats query with nothing in it yet, so the counts
+  // are merged into what is already held rather than rebuilt: every count on screen stays until
+  // its replacement arrives.
+  const [statsByRow, setStatsByRow] = useState<PullRequestDiffStats>(() => new Map());
+  useEffect(() => {
+    const stats = statsQuery.data?.stats;
+    if (stats === undefined) return;
+    setStatsByRow((previous) => mergePullRequestDiffStats(previous, stats));
   }, [statsQuery.data]);
-
-  const groups = useMemo(
-    () =>
-      search.involvement === "all"
-        ? groupPullRequestsByInvolvement(entries, viewers)
-        : [{ key: "others" as const, label: "", entries }],
-    [entries, search.involvement, viewers],
-  );
 
   // A link from a thread or the sidebar only knows the repository, so the owning project is
   // resolved here; an explicit `projectId` in the URL still wins.
@@ -654,7 +790,10 @@ function PullRequestsRouteView() {
     () => resolveProjectScope(search.selectedProjectId, projects, projectsKnown),
     [projects, projectsKnown, search.selectedProjectId],
   );
-  const selectedProjectId = linkedProjectId ?? projectIdForRepository;
+  // The scope filter stands in as a last resort: a link can carry `projectId` with a repository
+  // whose identity the inference above cannot match, and refusing to open it because of the
+  // weaker signal would ignore the stronger one the URL spelled out.
+  const selectedProjectId = linkedProjectId ?? projectIdForRepository ?? scopedProjectId;
   const linkedSelection = useMemo(
     () =>
       search.repository && search.number && selectedProjectId
@@ -763,6 +902,7 @@ function PullRequestsRouteView() {
       rightPanelAvailable={rightPanelState.surfaces.length > 0}
       rightPanelOpen={rightPanelState.isOpen}
       rightPanelShortcutLabel={null}
+      liveAgentCount={0}
       onToggleTerminal={() => undefined}
       onToggleRightPanel={toggleRightPanel}
     />
@@ -958,6 +1098,11 @@ function PullRequestsRouteView() {
         {rightPanelState.isOpen && activePullRequestSurface && environmentId !== null ? (
           <RightPanelTabs
             mode="inline"
+            widthStorageKey="t3code:pull-request-panel-width"
+            // Default to roughly half the viewport: the PR list needs more
+            // room than a chat, so the 540px chat-preview default squashes
+            // it. SSR has no window, so fall back to a reasonable width.
+            defaultWidth={typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2)}
             surfaces={rightPanelState.surfaces}
             activeSurfaceId={activePullRequestSurface.id}
             pendingSurfaceIds={EMPTY_PENDING_SURFACES}
@@ -989,6 +1134,7 @@ function PullRequestsRouteView() {
             filesAvailable={false}
             pullRequestAvailable={false}
             agentsAvailable={false}
+            liveAgentCount={0}
             pullRequestStatuses={pullRequestTabStatuses}
           >
             <PullRequestDetailPanel
@@ -1000,13 +1146,16 @@ function PullRequestsRouteView() {
                 number: activePullRequestSurface.number,
               }}
               refreshToken={detailRefreshToken}
-              // Merging, closing or reopening changes the row this panel was opened from, so the
-              // list behind it is out of date the moment the host takes the action.
+              // Merging, closing or reopening changes the row this panel was opened from, so
+              // the list behind it is out of date the moment the host takes the action.
               onActed={() => {
                 refreshList();
                 baselineQuery.refresh();
+                authoredQuery.refresh();
+                reviewingQuery.refresh();
               }}
               onStateChange={handlePullRequestTabStatusChange}
+              chromeVariant="collapse"
             />
           </RightPanelTabs>
         ) : null}
@@ -1235,34 +1384,43 @@ function PullRequestsColumn({
         )}
       >
         {condensed ? (
-          <div className="flex min-w-0 items-center gap-1.5">
-            <h1 className="shrink-0 truncate text-sm font-medium">Pull Requests</h1>
-            <span aria-hidden className="text-muted-foreground/50">
-              /
-            </span>
-            <CompactFilterMenu
-              label="Filter by state"
-              value={state}
-              options={STATE_TABS}
-              onChange={onState}
-            />
-            <CompactFilterMenu
-              label="Filter by involvement"
-              value={involvement}
-              options={INVOLVEMENT_TABS}
-              onChange={onInvolvement}
-            />
-            {hostMenuOptions.length > 2 ? (
+          <WorkspaceBreadcrumb ariaLabel="Pull request scope">
+            {/* The page name remains the foreground anchor in both states; the live filters are
+                its compact scope, grouped as the second crumb rather than pretending each menu
+                is a separate page in the hierarchy. */}
+            <WorkspaceBreadcrumbItem current>
+              <h1 className="truncate">Pull Requests</h1>
+            </WorkspaceBreadcrumbItem>
+            <WorkspaceBreadcrumbSeparator />
+            <WorkspaceBreadcrumbItem className="gap-1.5 overflow-hidden">
               <CompactFilterMenu
-                label="Filter by host"
-                value={host ?? ""}
-                options={hostMenuOptions}
-                onChange={(next) => onHost(next === "" ? undefined : next)}
+                label="Filter by state"
+                value={state}
+                options={STATE_TABS}
+                onChange={onState}
               />
-            ) : null}
-          </div>
+              <CompactFilterMenu
+                label="Filter by involvement"
+                value={involvement}
+                options={INVOLVEMENT_TABS}
+                onChange={onInvolvement}
+              />
+              {hostMenuOptions.length > 2 ? (
+                <CompactFilterMenu
+                  label="Filter by host"
+                  value={host ?? ""}
+                  options={hostMenuOptions}
+                  onChange={(next) => onHost(next === "" ? undefined : next)}
+                />
+              ) : null}
+            </WorkspaceBreadcrumbItem>
+          </WorkspaceBreadcrumb>
         ) : (
-          <h1 className="min-w-0 shrink truncate text-sm font-medium">Pull Requests</h1>
+          <WorkspaceBreadcrumb ariaLabel="Pull requests breadcrumb">
+            <WorkspaceBreadcrumbItem current>
+              <h1 className="truncate">Pull Requests</h1>
+            </WorkspaceBreadcrumbItem>
+          </WorkspaceBreadcrumb>
         )}
         <div className="min-w-0 flex-1" />
         {condensed ? (
@@ -1292,10 +1450,10 @@ function PullRequestsColumn({
         ref={scrollRef}
         className="pull-requests-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto"
       >
-        {/* The top padding is the fade band's own height (2.5rem, 3rem from `sm:`), the same
-            pairing the settings page makes: at rest the controls sit fully below the mask, and
-            only content actually passing under the chrome fades. */}
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pt-10 pb-12 sm:pt-12">
+        {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
+            settings page makes: at rest the controls sit fully below the mask, and only
+            content actually passing under the chrome fades. */}
+        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pt-6 pb-12">
           <div className="flex flex-col gap-3">
             <div ref={inFlowSearchRef} className="flex items-center gap-2">
               {searchInput}

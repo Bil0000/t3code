@@ -167,6 +167,14 @@ export const PullRequestCommit = Schema.Struct({
   oid: TrimmedNonEmptyString,
   messageHeadline: Schema.String,
   committedDate: IsoDateTime,
+  /** Per-commit line counts where the host can return them without a request per commit. */
+  additions: Schema.optional(NonNegativeInt),
+  deletions: Schema.optional(NonNegativeInt),
+  /**
+   * Everyone the host attributes the commit to. Optional because older servers and hosts that
+   * do not expose commit authors still produce a useful timeline entry.
+   */
+  authors: Schema.optional(Schema.Array(PullRequestActor)),
 });
 export type PullRequestCommit = typeof PullRequestCommit.Type;
 

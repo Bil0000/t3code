@@ -897,7 +897,10 @@ export const make = Effect.gen(function* () {
       api({
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/commits?${query(
-          [["per_page", String(COMMIT_PAGE_SIZE)]],
+          [
+            ["per_page", String(COMMIT_PAGE_SIZE)],
+            ["with_stats", "true"],
+          ],
         )}`,
       }).pipe(
         Effect.flatMap((result) => {

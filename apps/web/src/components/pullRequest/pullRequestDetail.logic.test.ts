@@ -12,8 +12,10 @@ import {
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
+  groupPullRequestTimelineConversations,
   handoffPrompt,
   handoffReviewComments,
+  orderPullRequestComments,
   pullRequestFindingKey,
   readableFailure,
   buildPullRequestTimeline,
@@ -55,6 +57,20 @@ describe("pull request state description", () => {
   });
 });
 
+describe("ordering comments", () => {
+  it("reverses the chronological list for newest first, and leaves oldest first alone", () => {
+    const comments = [{ createdAt: "a" }, { createdAt: "b" }, { createdAt: "c" }];
+    expect(orderPullRequestComments(comments, "newest")).toEqual([
+      { createdAt: "c" },
+      { createdAt: "b" },
+      { createdAt: "a" },
+    ]);
+    expect(orderPullRequestComments(comments, "oldest")).toEqual(comments);
+    // The source array is chronological input, not a mutation target.
+    expect(comments).toEqual([{ createdAt: "a" }, { createdAt: "b" }, { createdAt: "c" }]);
+  });
+});
+
 describe("pull request timeline", () => {
   it("orders creation, commits and comments newest first", () => {
     // What happened last is what the reader opening the tab is asking about.
@@ -75,6 +91,44 @@ describe("pull request timeline", () => {
       null,
       null,
     ]);
+  });
+
+  it("carries actors and review context into the presentation model", () => {
+    const commitAuthors = [
+      { login: "octocat", name: null, avatarUrl: "https://example.test/octocat.png" },
+      { login: "pair", name: "Pair Author", avatarUrl: null },
+    ];
+    const events = buildPullRequestTimeline({
+      ...TIMELINE_SOURCE,
+      commits: [{ ...TIMELINE_SOURCE.commits[0]!, authors: commitAuthors }],
+      comments: [
+        {
+          ...TIMELINE_SOURCE.comments[0]!,
+          kind: "review",
+          path: "src/app.ts",
+          reviewState: "APPROVED",
+        },
+      ],
+    });
+
+    expect(events.find((event) => event.kind === "commit")?.commitAuthors).toEqual(commitAuthors);
+    expect(events.find((event) => event.kind === "review")).toMatchObject({
+      actor: TIMELINE_SOURCE.comments[0]?.author,
+      path: "src/app.ts",
+      reviewState: "APPROVED",
+    });
+  });
+
+  it("carries each commit's line counts into its timeline event", () => {
+    const events = buildPullRequestTimeline({
+      ...TIMELINE_SOURCE,
+      commits: [{ ...TIMELINE_SOURCE.commits[0]!, additions: 12, deletions: 4 }],
+    });
+
+    expect(events.find((event) => event.kind === "commit")).toMatchObject({
+      additions: 12,
+      deletions: 4,
+    });
   });
 
   it("drops a body that is nothing but a bot's HTML comment, and keeps one that says more", () => {
@@ -116,6 +170,50 @@ describe("pull request timeline", () => {
     // Newest first, so the terminal event opens the list rather than ending it.
     expect(events[0]?.id).toBe("merged");
     expect(events.some((event) => event.id === "closed")).toBe(false);
+  });
+
+  it("groups conversation sections without crossing commits or PR updates", () => {
+    const events = buildPullRequestTimeline({
+      ...TIMELINE_SOURCE,
+      comments: [
+        {
+          ...TIMELINE_SOURCE.comments[0]!,
+          id: "new-comment-1",
+          createdAt: "2026-07-04T00:00:00Z",
+        },
+        {
+          ...TIMELINE_SOURCE.comments[0]!,
+          id: "new-comment-2",
+          createdAt: "2026-07-03T00:00:00Z",
+        },
+        {
+          ...TIMELINE_SOURCE.comments[0]!,
+          id: "old-comment-1",
+          createdAt: "2026-07-01T12:00:00Z",
+        },
+        {
+          ...TIMELINE_SOURCE.comments[0]!,
+          id: "old-comment-2",
+          createdAt: "2026-07-01T06:00:00Z",
+        },
+      ],
+      mergedAt: "2026-07-05T00:00:00Z",
+    });
+
+    const rows = groupPullRequestTimelineConversations(events);
+    expect(
+      rows.map((row) =>
+        row.kind === "comments"
+          ? [row.kind, ...row.events.map((event) => event.id)]
+          : [row.kind, row.event.id],
+      ),
+    ).toEqual([
+      ["event", "merged"],
+      ["comments", "new-comment-1", "new-comment-2"],
+      ["event", "1baf7bdcafe"],
+      ["comments", "old-comment-1", "old-comment-2"],
+      ["event", "created"],
+    ]);
   });
 });
 

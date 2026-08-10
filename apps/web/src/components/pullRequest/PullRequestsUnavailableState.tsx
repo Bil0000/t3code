@@ -18,7 +18,7 @@ export function PullRequestsUnavailableState({
   onRetry: () => void;
 }) {
   return (
-    <Empty className="py-16">
+    <Empty className="px-4 py-16 md:px-4">
       <EmptyMedia variant="icon">
         <GitPullRequestIcon />
       </EmptyMedia>

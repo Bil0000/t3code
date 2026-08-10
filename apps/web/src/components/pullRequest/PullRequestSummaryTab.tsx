@@ -1,7 +1,7 @@
 import type { EnvironmentId, PullRequestDetail, PullRequestRef } from "@t3tools/contracts";
 import {
+  ArrowDownUpIcon,
   ChevronRightIcon,
-  CircleDotIcon,
   HammerIcon,
   MessageSquareIcon,
   SendIcon,
@@ -25,10 +25,13 @@ import {
   PullRequestCheckStatusIcon,
   PullRequestMetaLine,
   pullRequestCheckStatusLabel,
-  summarizePullRequestChecks,
 } from "./pullRequestPresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
-import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
+import {
+  orderPullRequestComments,
+  pullRequestFindingKey,
+  type PullRequestFinding,
+} from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 
 function MetaRow({
@@ -55,30 +58,40 @@ function Section({
   title,
   count,
   defaultOpen = true,
+  actions,
   children,
 }: {
   title: string;
   count?: number;
   defaultOpen?: boolean;
+  /** Controls riding on the heading row itself. A sibling of the trigger, not a child of it —
+      a button cannot hold a button — and only while open, since they act on what is shown. */
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      {/* Title first, chevron riding to its right, count last: the row reads as a heading
-          with an affordance rather than a tree node. */}
-      <CollapsibleTrigger className="flex w-full items-center gap-1.5 border-t border-border/60 px-5 py-3 text-left text-sm font-medium">
-        <span>{title}</span>
-        <ChevronRightIcon
-          aria-hidden
-          className={cn("size-3.5 text-muted-foreground transition-transform", open && "rotate-90")}
-        />
-        {count === undefined ? null : (
-          <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
-        )}
-      </CollapsibleTrigger>
+      <div className="flex w-full items-center border-t border-border/60 pr-4">
+        {/* Title first, chevron riding to its right, count last: the row reads as a heading
+            with an affordance rather than a tree node. */}
+        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
+          <span>{title}</span>
+          <ChevronRightIcon
+            aria-hidden
+            className={cn(
+              "size-3.5 text-muted-foreground transition-transform",
+              open && "rotate-90",
+            )}
+          />
+          {count === undefined ? null : (
+            <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
+          )}
+        </CollapsibleTrigger>
+        {open ? actions : null}
+      </div>
       <CollapsiblePanel>
-        <div className="px-5 pb-4">{children}</div>
+        <div className="px-4 pb-4">{children}</div>
       </CollapsiblePanel>
     </Collapsible>
   );
@@ -172,10 +185,12 @@ export function PullRequestSummaryTab({
   // rather than wherever the last one had been read back to.
   const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
   const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;
-  const visibleComments = detail.comments.slice(
-    Math.max(0, detail.comments.length - shownComments),
-  );
-  const hiddenCommentCount = detail.comments.length - visibleComments.length;
+  // Windowed by recency regardless of display order: expanding always reaches further back in
+  // time, whether the newest comment currently reads first or last.
+  const recentComments = detail.comments.slice(Math.max(0, detail.comments.length - shownComments));
+  const hiddenCommentCount = detail.comments.length - recentComments.length;
+  const [commentOrder, setCommentOrder] = useState<"newest" | "oldest">("newest");
+  const visibleComments = orderPullRequestComments(recentComments, commentOrder);
 
   // A comment that already lives on a review thread is that thread: the thread carries the line
   // and side the bare comment has lost, and a resolved one is finished work nobody should be
@@ -192,7 +207,7 @@ export function PullRequestSummaryTab({
 
   return (
     <div className="h-full overflow-y-auto">
-      <section className="px-5 py-3">
+      <section className="px-4 py-3">
         <div>
           <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -243,9 +258,6 @@ export function PullRequestSummaryTab({
           <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
             {/* The host's own count, so this reads the same here as it does there. */}
             {detail.commentCount === 1 ? "1 comment" : `${detail.commentCount} comments`}
-          </MetaRow>
-          <MetaRow icon={<CircleDotIcon className="size-3.5" />} label="Checks">
-            {summarizePullRequestChecks(detail.checks)}
           </MetaRow>
         </div>
       </section>
@@ -306,7 +318,28 @@ export function PullRequestSummaryTab({
         )}
       </Section>
 
-      <Section title="Comments" count={detail.commentCount}>
+      <Section
+        title="Comments"
+        count={detail.commentCount}
+        actions={
+          detail.comments.length > 0 ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
+              aria-label={
+                commentOrder === "newest"
+                  ? "Show oldest comments first"
+                  : "Show newest comments first"
+              }
+              onClick={() => setCommentOrder((value) => (value === "newest" ? "oldest" : "newest"))}
+            >
+              <ArrowDownUpIcon aria-hidden className="size-3" />
+              {commentOrder === "newest" ? "Newest first" : "Oldest first"}
+            </Button>
+          ) : null
+        }
+      >
         {detail.commentsTruncated ? (
           <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
             This conversation is longer than this page reads in one go. The most recent{" "}

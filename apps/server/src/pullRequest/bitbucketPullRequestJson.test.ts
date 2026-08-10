@@ -240,14 +240,38 @@ describe("decodeCommitsJson", () => {
       decodeCommitsJson(
         page([
           { hash: "bbb", message: "second\n\nbody text\n", date: "2026-06-16T04:51:00+00:00" },
-          { hash: "aaa", message: "first\n", date: "2026-06-16T04:50:49+00:00" },
+          {
+            hash: "aaa",
+            message: "first\n",
+            date: "2026-06-16T04:50:49+00:00",
+            author: {
+              raw: "Ada Lovelace <ada@example.com>",
+              user: { nickname: "ada", display_name: "Ada Lovelace" },
+            },
+          },
         ]),
       ),
     );
 
     expect(decoded.items.map((commit) => commit.oid)).toEqual(["aaa", "bbb"]);
+    expect(decoded.items[0]?.authors).toEqual([
+      { login: "ada", name: "Ada Lovelace", avatarUrl: null },
+    ]);
     expect(decoded.items[1]?.messageHeadline).toBe("second");
     expect(decoded.next).toBeNull();
+  });
+
+  it("skips commits whose hash is empty", () => {
+    const decoded = expectSuccess(
+      decodeCommitsJson(
+        page([
+          { hash: "   ", message: "invalid", date: "2026-06-16T04:51:00+00:00" },
+          { hash: "aaa", date: "2026-06-16T04:50:49+00:00" },
+        ]),
+      ),
+    );
+
+    expect(decoded.items.map((commit) => commit.oid)).toEqual(["aaa"]);
   });
 });
 

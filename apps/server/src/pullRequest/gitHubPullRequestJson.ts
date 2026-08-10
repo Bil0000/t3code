@@ -182,6 +182,16 @@ const RawCommitSchema = Schema.Struct({
   oid: Schema.String,
   messageHeadline: Schema.optional(Schema.String),
   committedDate: Schema.String,
+  authors: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        email: Schema.optional(Schema.NullOr(Schema.String)),
+        id: Schema.optional(Schema.NullOr(Schema.String)),
+        login: Schema.optional(Schema.NullOr(Schema.String)),
+        name: Schema.optional(Schema.NullOr(Schema.String)),
+      }),
+    ),
+  ),
 });
 
 const RawDetailSchema = Schema.Struct({
@@ -266,6 +276,42 @@ const RawReviewThreadsSchema = Schema.Struct({
             Schema.Struct({
               nodes: Schema.Array(
                 Schema.Struct({ author: Schema.optional(Schema.NullOr(RawActorSchema)) }),
+              ),
+            }),
+          ),
+        ),
+        commits: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              nodes: Schema.Array(
+                Schema.Struct({
+                  commit: Schema.Struct({
+                    oid: Schema.String,
+                    messageHeadline: Schema.optional(Schema.NullOr(Schema.String)),
+                    committedDate: Schema.optional(Schema.NullOr(Schema.String)),
+                    additions: Schema.optional(Schema.Int),
+                    deletions: Schema.optional(Schema.Int),
+                    authors: Schema.optional(
+                      Schema.NullOr(
+                        Schema.Struct({
+                          nodes: Schema.Array(
+                            Schema.Struct({
+                              name: Schema.optional(Schema.NullOr(Schema.String)),
+                              avatarUrl: Schema.optional(Schema.NullOr(Schema.String)),
+                              user: Schema.optional(
+                                Schema.NullOr(
+                                  Schema.Struct({
+                                    login: Schema.optional(Schema.NullOr(Schema.String)),
+                                  }),
+                                ),
+                              ),
+                            }),
+                          ),
+                        }),
+                      ),
+                    ),
+                  }),
+                }),
               ),
             }),
           ),
@@ -403,6 +449,11 @@ export function pullRequestSearchGraphQlQuery(rows: number): string {
  * `viewerCanUpdate` and `viewerDidAuthor` ride along here for the same reason: they belong to the
  * pull request this query is already standing on, so what the reader may do with it arrives with
  * the conversation rather than costing a request of its own.
+ *
+ * Commits are asked for with `last` rather than `first`: `gh pr view --json commits` pages from
+ * the start, so a pull request with more than a hundred commits loses the newest ones from its
+ * view entirely. This query gives back the newest hundred, which is what a reader scoping a diff
+ * wants, and stands in for the `gh` list wherever it came back non-empty.
  */
 export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   repository(owner: $owner, name: $name) {
@@ -438,6 +489,18 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
       }
       latestReviews(first: 50) {
         nodes { author { login avatarUrl } }
+      }
+      commits(last: ${GRAPHQL_PAGE_SIZE}) {
+        nodes {
+          commit {
+            oid
+            messageHeadline
+            committedDate
+            additions
+            deletions
+            authors(first: 3) { nodes { name avatarUrl user { login } } }
+          }
+        }
       }
     }
   }
@@ -613,6 +676,28 @@ function toActor(raw: Schema.Schema.Type<typeof RawActorSchema> | null | undefin
   return login === null
     ? null
     : { login, name: trimmed(raw?.name), avatarUrl: trimmed(raw?.avatarUrl) };
+}
+
+function toCommitActor(
+  raw: NonNullable<Schema.Schema.Type<typeof RawCommitSchema>["authors"]>[number],
+): PullRequestActor | null {
+  // An email-linked GitHub account has a login; an unlinked signature only has a name or email.
+  // Keep that signature visible instead of silently turning a co-authored commit into one author.
+  const login = trimmed(raw.login) ?? trimmed(raw.name) ?? trimmed(raw.email);
+  return login === null ? null : { login, name: trimmed(raw.name), avatarUrl: null };
+}
+
+/** An author off the GraphQL commits connection, which names an account by `user.login` where
+ *  `gh pr view --json commits` names it by a flat `login` copied off the signature. */
+function toGraphqlCommitActor(raw: {
+  readonly name?: string | null | undefined;
+  readonly avatarUrl?: string | null | undefined;
+  readonly user?: { readonly login?: string | null | undefined } | null | undefined;
+}): PullRequestActor | null {
+  const login = trimmed(raw.user?.login) ?? trimmed(raw.name);
+  return login === null
+    ? null
+    : { login, name: trimmed(raw.name), avatarUrl: trimmed(raw.avatarUrl) };
 }
 
 function toState(raw: {
@@ -808,6 +893,10 @@ function toDetail(raw: Schema.Schema.Type<typeof RawDetailSchema>): GitHubPullRe
       oid: commit.oid,
       messageHeadline: commit.messageHeadline ?? "",
       committedDate: commit.committedDate,
+      authors: (commit.authors ?? []).flatMap((author) => {
+        const actor = toCommitActor(author);
+        return actor === null ? [] : [actor];
+      }),
     })),
   };
 }
@@ -990,6 +1079,18 @@ export interface GitHubReviewThreadComments {
    * so an app's avatar arrives the same way a person's does.
    */
   readonly avatarsByLogin: ReadonlyMap<string, string>;
+  /** Per-commit line counts carried by the same bounded pull-request query. */
+  readonly commitStats: ReadonlyMap<
+    string,
+    { readonly additions: number; readonly deletions: number }
+  >;
+  /**
+   * The newest hundred commits, oldest to newest, off the same query's `commits(last: ...)`.
+   * Empty wherever the read never happened (an install too old for the field, a degraded page),
+   * which the caller reads as "keep the `gh pr view` list" rather than as "this pull request has
+   * no commits".
+   */
+  readonly commits: ReadonlyArray<PullRequestCommit>;
   /** What GitHub says the reader may do with this pull request, read off the same response. */
   readonly viewer: { readonly canUpdate: boolean; readonly didAuthor: boolean };
 }
@@ -1009,6 +1110,11 @@ export interface GitHubReviewThreadPage {
   readonly nextCursor: string | null;
   readonly reviewers: ReadonlyArray<PullRequestActor>;
   readonly avatarsByLogin: ReadonlyMap<string, string>;
+  readonly commitStats: ReadonlyMap<
+    string,
+    { readonly additions: number; readonly deletions: number }
+  >;
+  readonly commits: ReadonlyArray<PullRequestCommit>;
   readonly viewer: { readonly canUpdate: boolean; readonly didAuthor: boolean };
 }
 
@@ -1098,11 +1204,37 @@ export function decodeReviewThreadsJson(
     // Keyed by login, so someone who was asked and then answered appears once.
     if (actor !== null && !reviewers.has(actor.login)) reviewers.set(actor.login, actor);
   }
+  const commitStats = new Map<string, { readonly additions: number; readonly deletions: number }>();
+  const commits: PullRequestCommit[] = [];
+  for (const node of pullRequest.commits?.nodes ?? []) {
+    const commit = node.commit;
+    const oid = trimmed(commit.oid);
+    if (oid === null) continue;
+    if (commit.additions !== undefined && commit.deletions !== undefined) {
+      commitStats.set(oid, {
+        additions: Math.max(0, commit.additions),
+        deletions: Math.max(0, commit.deletions),
+      });
+    }
+    const committedDate = trimmed(commit.committedDate);
+    if (committedDate === null) continue;
+    commits.push({
+      oid,
+      messageHeadline: commit.messageHeadline ?? "",
+      committedDate,
+      authors: (commit.authors?.nodes ?? []).flatMap((author) => {
+        const actor = toGraphqlCommitActor(author);
+        return actor === null ? [] : [actor];
+      }),
+    });
+  }
   return Result.succeed({
     threads: entries,
     nextCursor: nextCursorOf(threads.pageInfo),
     reviewers: [...reviewers.values()],
     avatarsByLogin,
+    commitStats,
+    commits,
     viewer: toPullRequestViewerFields(pullRequest),
   });
 }

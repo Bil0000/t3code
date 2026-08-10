@@ -1,7 +1,7 @@
 import type { LocalApi, ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import * as Schema from "effect/Schema";
-import { type MouseEvent, useCallback, useMemo } from "react";
+import { type MouseEvent, useCallback } from "react";
 
 import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
 
@@ -177,28 +177,29 @@ export function useOpenChangeRequestLink(
 ): (
   event: Pick<MouseEvent<HTMLElement>, "preventDefault" | "stopPropagation">,
   targetUrl: string,
+  targetThreadRef?: ScopedThreadRef,
 ) => boolean {
   const navigate = useNavigate();
   const allProjects = useProjects();
-  // Beside a thread the panel reads on that thread's environment, so a project from another one
-  // could not be read there whatever its remote says: two environments can hold the same
-  // repository, and handing the panel the wrong one's id opens a surface that never loads.
-  const projects = useMemo(
-    () =>
-      threadRef === undefined
-        ? allProjects
-        : allProjects.filter((project) => project.environmentId === threadRef.environmentId),
-    [allProjects, threadRef],
-  );
   return useCallback(
-    (event, targetUrl) => {
+    (event, targetUrl, targetThreadRef) => {
+      const resolvedThreadRef = targetThreadRef ?? threadRef;
+      // Beside a thread the panel reads on that thread's environment, so a project from another
+      // one could not be read there whatever its remote says: two environments can hold the same
+      // repository, and handing the panel the wrong one's id opens a surface that never loads.
+      const projects =
+        resolvedThreadRef === undefined
+          ? allProjects
+          : allProjects.filter(
+              (project) => project.environmentId === resolvedThreadRef.environmentId,
+            );
       const parsed = parseChangeRequestUrl(targetUrl);
       const project = parsed === null ? undefined : findProjectForChangeRequest(projects, parsed);
       if (parsed === null || project === undefined) return false;
       event.preventDefault();
       event.stopPropagation();
-      if (threadRef) {
-        useRightPanelStore.getState().openPullRequest(threadRef, {
+      if (resolvedThreadRef) {
+        useRightPanelStore.getState().openPullRequest(resolvedThreadRef, {
           projectId: project.id,
           // The identity's own spelling, not the one read out of the URL: the panel asks the
           // provider for this repository, while matching a link only ever compares lower case.
@@ -221,17 +222,17 @@ export function useOpenChangeRequestLink(
       });
       return true;
     },
-    [navigate, projects, threadRef],
+    [allProjects, navigate, threadRef],
   );
 }
 
-export function useOpenPrLink() {
-  const openChangeRequest = useOpenChangeRequestLink();
+export function useOpenPrLink(threadRef?: ScopedThreadRef) {
+  const openChangeRequest = useOpenChangeRequestLink(threadRef);
   return useCallback(
-    (event: MouseEvent<HTMLElement>, prUrl: string) => {
+    (event: MouseEvent<HTMLElement>, prUrl: string, targetThreadRef?: ScopedThreadRef) => {
       event.preventDefault();
       event.stopPropagation();
-      if (openChangeRequest(event, prUrl)) return;
+      if (openChangeRequest(event, prUrl, targetThreadRef)) return true;
 
       const api = readLocalApi();
       if (!api) {
@@ -239,7 +240,7 @@ export function useOpenPrLink() {
           type: "error",
           title: "Link opening is unavailable.",
         });
-        return;
+        return false;
       }
 
       void openPullRequestLink(api.shell, prUrl).catch((error) => {
@@ -252,6 +253,7 @@ export function useOpenPrLink() {
           }),
         );
       });
+      return false;
     },
     [openChangeRequest],
   );

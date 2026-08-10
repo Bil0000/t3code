@@ -94,6 +94,17 @@ describe("pull request detail decoding", () => {
       { id: "r1", body: "first", state: "CHANGES_REQUESTED", submittedAt: "2026-07-03T00:00:00Z" },
       { id: "r2", body: "   ", state: "APPROVED", submittedAt: "2026-07-06T00:00:00Z" },
     ],
+    commits: [
+      {
+        oid: "abc1234",
+        messageHeadline: "Ship the timeline",
+        committedDate: "2026-07-05T00:00:00Z",
+        authors: [
+          { login: "octocat", name: "Octo Cat", email: "octo@example.com" },
+          { name: "Pair Author", email: "pair@example.com" },
+        ],
+      },
+    ],
   });
 
   it("maps check-run status and commit-status state onto one vocabulary", () => {
@@ -110,6 +121,14 @@ describe("pull request detail decoding", () => {
     // r2 approved without writing anything, which is still the event worth seeing.
     expect(detail.comments.map((comment) => comment.id)).toEqual(["r1", "c1", "r2"]);
     expect(detail.comments.at(-1)?.reviewState).toBe("APPROVED");
+  });
+
+  it("keeps every attributed commit author, including an unlinked signature", () => {
+    const detail = expectSuccess(decodePullRequestDetailJson(detailJson));
+    expect(detail.commits[0]?.authors).toEqual([
+      { login: "octocat", name: "Octo Cat", avatarUrl: null },
+      { login: "Pair Author", name: "Pair Author", avatarUrl: null },
+    ]);
   });
 
   it("drops the bodyless review GitHub opens to hold line comments", () => {
@@ -211,6 +230,85 @@ describe("review thread decoding", () => {
     expect(result.reviewers).toEqual([
       { login: "julius", name: "Julius", avatarUrl: "https://avatars/j.png" },
       { login: "macroscopeapp", name: null, avatarUrl: "https://avatars/in/900172.png" },
+    ]);
+  });
+
+  it("carries per-commit line counts from the pull-request connection", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: { totalCount: 0, nodes: [] },
+                commits: {
+                  nodes: [
+                    { commit: { oid: "abc123", additions: 18, deletions: 7 } },
+                    { commit: { oid: "def456", additions: 3, deletions: 0 } },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect([...result.commitStats]).toEqual([
+      ["abc123", { additions: 18, deletions: 7 }],
+      ["def456", { additions: 3, deletions: 0 }],
+    ]);
+  });
+
+  it("decodes the newest commits off the same connection, oldest to newest", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                reviewThreads: { totalCount: 0, nodes: [] },
+                commits: {
+                  nodes: [
+                    {
+                      commit: {
+                        oid: "abc123",
+                        messageHeadline: "Ship the timeline",
+                        committedDate: "2026-07-05T00:00:00Z",
+                        additions: 18,
+                        deletions: 7,
+                        authors: { nodes: [{ name: "Julius", user: { login: "julius" } }] },
+                      },
+                    },
+                    {
+                      commit: {
+                        oid: "def456",
+                        messageHeadline: "Fix the flaky test",
+                        committedDate: "2026-07-06T00:00:00Z",
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(result.commits).toEqual([
+      {
+        oid: "abc123",
+        messageHeadline: "Ship the timeline",
+        committedDate: "2026-07-05T00:00:00Z",
+        authors: [{ login: "julius", name: "Julius", avatarUrl: null }],
+      },
+      {
+        oid: "def456",
+        messageHeadline: "Fix the flaky test",
+        committedDate: "2026-07-06T00:00:00Z",
+        authors: [],
+      },
     ]);
   });
 

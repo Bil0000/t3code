@@ -15,6 +15,7 @@ import type {
   PullRequestReviewerCandidate,
   PullRequestState,
 } from "@t3tools/contracts";
+import { TrimmedNonEmptyString } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 /**
@@ -133,11 +134,21 @@ const RawDiffRefsSchema = Schema.Struct({
 });
 
 const RawCommitSchema = Schema.Struct({
-  id: Schema.String,
+  id: TrimmedNonEmptyString,
   title: Schema.optional(Schema.NullOr(Schema.String)),
   committed_date: Schema.optional(Schema.NullOr(Schema.String)),
   created_at: Schema.optional(Schema.NullOr(Schema.String)),
   parent_ids: Schema.optional(Schema.Array(Schema.String)),
+  author_name: Schema.optional(Schema.NullOr(Schema.String)),
+  author_email: Schema.optional(Schema.NullOr(Schema.String)),
+  stats: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        additions: Schema.optional(Schema.Int),
+        deletions: Schema.optional(Schema.Int),
+      }),
+    ),
+  ),
 });
 
 const RawDiffSchema = Schema.Struct({
@@ -594,6 +605,18 @@ export function decodeCommitsJson(
       oid: commit.value.id,
       messageHeadline: commit.value.title ?? "",
       committedDate,
+      ...(commit.value.stats === null || commit.value.stats === undefined
+        ? {}
+        : {
+            additions: Math.max(0, commit.value.stats.additions ?? 0),
+            deletions: Math.max(0, commit.value.stats.deletions ?? 0),
+          }),
+      authors: (() => {
+        const login = trimmed(commit.value.author_name) ?? trimmed(commit.value.author_email);
+        return login === null
+          ? []
+          : [{ login, name: trimmed(commit.value.author_name), avatarUrl: null }];
+      })(),
     });
   }
   // GitLab lists a merge request's commits newest first; the timeline reads oldest first.

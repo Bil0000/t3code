@@ -1,4 +1,4 @@
-import { GitPullRequestIcon, SettingsIcon } from "lucide-react";
+import { ChartNoAxesColumnIcon, GitPullRequestIcon, SettingsIcon } from "lucide-react";
 import { memo, useCallback } from "react";
 import { Link, useNavigate } from "@tanstack/react-router";
 
@@ -125,6 +125,13 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
     void navigate({ to: "/settings" });
   }, [closeMobileSidebar, navigate]);
 
+  const handleUsageClick = useCallback(() => {
+    if (isMobile) {
+      setOpenMobile(false);
+    }
+    void navigate({ to: "/usage" });
+  }, [isMobile, navigate, setOpenMobile]);
+
   return (
     <SidebarFooter className="p-[var(--sidebar-content-inset)]">
       <SidebarProviderUpdatePill />
@@ -134,6 +141,12 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
           <SidebarMenuButton onClick={handlePullRequestsClick}>
             <GitPullRequestIcon />
             <span>Pull Requests</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        <SidebarMenuItem>
+          <SidebarMenuButton onClick={handleUsageClick}>
+            <ChartNoAxesColumnIcon />
+            <span>Usage</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
         <SidebarMenuItem>
