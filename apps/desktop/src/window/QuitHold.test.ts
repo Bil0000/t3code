@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { makeQuitHoldHandler, QUIT_HOLD_DURATION_MS } from "./QuitHold.ts";
+import {
+  makeQuitHoldHandler,
+  QUIT_HOLD_DURATION_MS,
+  QUIT_HOLD_RELEASE_GRACE_MS,
+} from "./QuitHold.ts";
 import type { QuitHoldKeyInput, QuitHoldState } from "./QuitHold.ts";
 
 function makeInput(overrides: Partial<QuitHoldKeyInput>): QuitHoldKeyInput {
@@ -16,12 +20,16 @@ function makeInput(overrides: Partial<QuitHoldKeyInput>): QuitHoldKeyInput {
   };
 }
 
-function makeHarness(options?: { enabled?: boolean; platform?: NodeJS.Platform }) {
+function makeHarness(options?: {
+  enabled?: boolean;
+  platform?: NodeJS.Platform;
+  isEnabled?: () => Promise<boolean>;
+}) {
   const notifications: Array<QuitHoldState> = [];
   const quit = vi.fn();
   const handler = makeQuitHoldHandler({
     platform: options?.platform ?? "darwin",
-    isEnabled: () => Promise.resolve(options?.enabled ?? true),
+    isEnabled: options?.isEnabled ?? (() => Promise.resolve(options?.enabled ?? true)),
     notify: (state) => notifications.push(state),
     quit,
   });
@@ -32,7 +40,18 @@ function makeHarness(options?: { enabled?: boolean; platform?: NodeJS.Platform }
     await Promise.resolve();
     await Promise.resolve();
   };
-  return { notifications, quit, preventDefault, send };
+  // Simulates the OS auto-repeating the held shortcut every `intervalMs`.
+  const holdFor = async (
+    durationMs: number,
+    repeatOverrides: Partial<QuitHoldKeyInput> = {},
+    intervalMs = 100,
+  ) => {
+    for (let elapsed = 0; elapsed < durationMs; elapsed += intervalMs) {
+      vi.advanceTimersByTime(intervalMs);
+      await send(makeInput({ isAutoRepeat: true, ...repeatOverrides }));
+    }
+  };
+  return { notifications, quit, preventDefault, send, holdFor };
 }
 
 describe("makeQuitHoldHandler", () => {
@@ -43,28 +62,39 @@ describe("makeQuitHoldHandler", () => {
     vi.useRealTimers();
   });
 
-  it("shows the hint on a tap without quitting", async () => {
+  it("shows the hint on a tap without quitting, even when the release is never seen", async () => {
+    // macOS suppresses the letter's keyUp while Cmd is held, so a tap may
+    // produce no keyUp at all. Quit must still not fire.
     const harness = makeHarness();
     await harness.send(makeInput({}));
     expect(harness.preventDefault).toHaveBeenCalledTimes(1);
     expect(harness.notifications).toEqual(["down"]);
 
-    await harness.send(makeInput({ type: "keyUp" }));
-    expect(harness.notifications).toEqual(["down", "up"]);
-    vi.advanceTimersByTime(QUIT_HOLD_DURATION_MS * 2);
+    vi.advanceTimersByTime(QUIT_HOLD_DURATION_MS + QUIT_HOLD_RELEASE_GRACE_MS);
     expect(harness.quit).not.toHaveBeenCalled();
+    // The watchdog dismisses the hint once the press is clearly over.
+    expect(harness.notifications).toEqual(["down", "up"]);
   });
 
-  it("quits after the shortcut is held for the full duration", async () => {
+  it("quits once the shortcut auto-repeats past the hold duration", async () => {
     const harness = makeHarness();
     await harness.send(makeInput({}));
-    await harness.send(makeInput({ isAutoRepeat: true }));
-    vi.advanceTimersByTime(QUIT_HOLD_DURATION_MS - 1);
+    await harness.holdFor(QUIT_HOLD_DURATION_MS - 200);
     expect(harness.quit).not.toHaveBeenCalled();
-    vi.advanceTimersByTime(1);
+    await harness.holdFor(400);
     expect(harness.quit).toHaveBeenCalledTimes(1);
-    // Only one hint for the whole hold, despite auto-repeats.
-    expect(harness.notifications).toEqual(["down"]);
+    // Exactly one hint cycle for the whole hold.
+    expect(harness.notifications).toEqual(["down", "up"]);
+  });
+
+  it("does not quit when the hold stops before the duration", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.holdFor(500);
+    await harness.send(makeInput({ type: "keyUp" }));
+    expect(harness.notifications).toEqual(["down", "up"]);
+    vi.advanceTimersByTime((QUIT_HOLD_DURATION_MS + QUIT_HOLD_RELEASE_GRACE_MS) * 2);
+    expect(harness.quit).not.toHaveBeenCalled();
   });
 
   it("cancels the hold when the modifier is released first", async () => {
@@ -72,13 +102,39 @@ describe("makeQuitHoldHandler", () => {
     await harness.send(makeInput({}));
     await harness.send(makeInput({ type: "keyUp", key: "Meta", meta: false }));
     expect(harness.notifications).toEqual(["down", "up"]);
-    vi.advanceTimersByTime(QUIT_HOLD_DURATION_MS * 2);
+    vi.advanceTimersByTime((QUIT_HOLD_DURATION_MS + QUIT_HOLD_RELEASE_GRACE_MS) * 2);
     expect(harness.quit).not.toHaveBeenCalled();
   });
 
   it("quits immediately on a single press when disabled", async () => {
     const harness = makeHarness({ enabled: false });
     await harness.send(makeInput({}));
+    expect(harness.quit).toHaveBeenCalledTimes(1);
+    // The hint is dismissed in case the quit gets cancelled downstream.
+    expect(harness.notifications).toEqual(["down", "up"]);
+  });
+
+  it("discards a stale isEnabled resolution from a superseded press", async () => {
+    // Press #1's isEnabled is still pending when the user releases and
+    // presses again; its late resolution must not act for press #2.
+    const resolvers: Array<(enabled: boolean) => void> = [];
+    const harness = makeHarness({
+      isEnabled: () => new Promise((resolve) => resolvers.push(resolve)),
+    });
+    await harness.send(makeInput({}));
+    await harness.send(makeInput({ type: "keyUp" }));
+    await harness.send(makeInput({}));
+    expect(resolvers).toHaveLength(2);
+
+    // Press #1 resolves late with "disabled" — it must not quit press #2.
+    resolvers[0]?.(false);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(harness.quit).not.toHaveBeenCalled();
+
+    // Press #2 resolves enabled and completes a full hold.
+    resolvers[1]?.(true);
+    await harness.holdFor(QUIT_HOLD_DURATION_MS + 200);
     expect(harness.quit).toHaveBeenCalledTimes(1);
   });
 
@@ -95,7 +151,7 @@ describe("makeQuitHoldHandler", () => {
     const harness = makeHarness({ platform: "linux" });
     await harness.send(makeInput({ meta: false, control: true }));
     expect(harness.preventDefault).toHaveBeenCalledTimes(1);
-    vi.advanceTimersByTime(QUIT_HOLD_DURATION_MS);
+    await harness.holdFor(QUIT_HOLD_DURATION_MS + 200, { meta: false, control: true });
     expect(harness.quit).toHaveBeenCalledTimes(1);
   });
 });
