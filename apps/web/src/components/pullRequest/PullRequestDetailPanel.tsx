@@ -1050,7 +1050,16 @@ export function PullRequestDetailPanel({
         {/* The condensed chrome's second row: the tabs that the closing fold takes with it,
             and compact copies of the branch pair and diff stat so they stay in sight while
             the full rows are folded away. Same zero-track mechanism as the fold, inverted. */}
-        <div className={cn("col-span-2 grid", condensed ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
+        <div
+          className={cn(
+            "col-span-2 grid",
+            // Inverse of the fold's track: closing eases while the fold above eases open,
+            // so the chrome trades rows in one motion instead of two jumps.
+            condensed
+              ? "grid-rows-[1fr]"
+              : "grid-rows-[0fr] transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
+          )}
+        >
           <div
             ref={condensedRowRef}
             className={cn(
@@ -1112,10 +1121,13 @@ export function PullRequestDetailPanel({
         <div
           className={cn(
             "col-span-2 grid",
-            // Instant in both directions: the scroll compensation keeps the content pinned
-            // through either flip, and an animated track would fight it frame by frame. The
-            // top row's crossfade is the transition.
-            condensed ? "grid-rows-[0fr]" : "grid-rows-[1fr]",
+            // Collapse is instant: it happens mid-scroll, and the compensation that keeps the
+            // content pinned would fight an animated track frame by frame. Reopening happens
+            // at the top with no compensation, so the fold can ease back in instead of
+            // snapping the content down.
+            condensed
+              ? "grid-rows-[0fr]"
+              : "grid-rows-[1fr] transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none",
           )}
         >
           <div
