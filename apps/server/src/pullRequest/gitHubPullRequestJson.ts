@@ -10,6 +10,7 @@ import type {
   PullRequestCommit,
   PullRequestLabel,
   PullRequestMergeCapabilities,
+  PullRequestOmittedFileStat,
   PullRequestMergeability,
   PullRequestReviewCommentDraft,
   PullRequestReviewThread,
@@ -1539,6 +1540,8 @@ export interface GitHubPullRequestFilesPatch {
   readonly truncated: boolean;
   /** Files GitHub returned, counted before decoding, so the caller can page. */
   readonly rawCount: number;
+  /** GitHub's own counts for the files whose hunks it withheld. */
+  readonly omittedFileStats: ReadonlyArray<PullRequestOmittedFileStat>;
 }
 
 /**
@@ -1554,6 +1557,7 @@ export function decodePullRequestFilesJson(
     return Result.fail(decoded.failure);
   }
   const sections: string[] = [];
+  const omittedFileStats: PullRequestOmittedFileStat[] = [];
   let truncated = false;
   for (const entry of decoded.success) {
     const file = decodeFileEntry(entry);
@@ -1565,7 +1569,12 @@ export function decodePullRequestFilesJson(
       // A file with no hunks is still a file that changed: a pure rename has none to give, and
       // a binary one has none that can be shown. Both are listed, and only the second is a hole
       // in the patch — leaving them out entirely would drop them from the change altogether.
-      if ((value.additions ?? 0) + (value.deletions ?? 0) > 0) truncated = true;
+      const additions = value.additions ?? 0;
+      const deletions = value.deletions ?? 0;
+      if (additions + deletions > 0) {
+        truncated = true;
+        omittedFileStats.push({ path: value.filename, additions, deletions });
+      }
     }
     // A rename counts its hunks against the old path, which is the only place it is named.
     const oldPath =
@@ -1586,5 +1595,6 @@ export function decodePullRequestFilesJson(
     patch: sections.join(""),
     truncated,
     rawCount: decoded.success.length,
+    omittedFileStats,
   });
 }

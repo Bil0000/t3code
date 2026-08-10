@@ -562,6 +562,14 @@ export const PullRequestDiffInput = Schema.Struct({
 });
 export type PullRequestDiffInput = typeof PullRequestDiffInput.Type;
 
+/** Real line counts for a file whose hunks the host withheld from the patch. */
+export const PullRequestOmittedFileStat = Schema.Struct({
+  path: TrimmedNonEmptyString,
+  additions: Schema.Number,
+  deletions: Schema.Number,
+});
+export type PullRequestOmittedFileStat = typeof PullRequestOmittedFileStat.Type;
+
 export const PullRequestDiffResult = Schema.Struct({
   patch: Schema.String,
   /**
@@ -571,6 +579,11 @@ export const PullRequestDiffResult = Schema.Struct({
   truncated: Schema.Boolean,
   /** Where the next slice starts, or null once the diff is whole. */
   nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * The host's own counts for the files whose hunks it withheld, so a file the patch cannot
+   * show still reports what changed instead of a zero the diff never had.
+   */
+  omittedFileStats: Schema.optional(Schema.Array(PullRequestOmittedFileStat)),
 });
 export type PullRequestDiffResult = typeof PullRequestDiffResult.Type;
 

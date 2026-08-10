@@ -13,6 +13,7 @@ import type {
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
   PullRequestMergeability,
+  PullRequestOmittedFileStat,
   PullRequestReviewCommentDraft,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
@@ -165,6 +166,8 @@ export interface ProviderDiffSlice {
   /** Something in this slice could not be shown, as opposed to there being more slices. */
   readonly truncated: boolean;
   readonly nextCursor: string | null;
+  /** The host's own counts for the files whose hunks it withheld from this slice. */
+  readonly omittedFileStats?: ReadonlyArray<PullRequestOmittedFileStat>;
 }
 
 export interface ProviderDiffFileContents {

@@ -4,6 +4,7 @@ import type {
   EnvironmentId,
   PullRequestDetailView,
   PullRequestDiffSide,
+  PullRequestOmittedFileStat,
   PullRequestRef,
   PullRequestReviewThread,
 } from "@t3tools/contracts";
@@ -95,7 +96,19 @@ interface DiffSlice {
   readonly patch: string;
   readonly truncated: boolean;
   readonly nextCursor: string | null;
+  readonly omittedFileStats: ReadonlyArray<PullRequestOmittedFileStat>;
 }
+
+/**
+ * The viewer's own per-file counts are hidden and drawn from this side of its shadow root
+ * instead: its counts are hunk sums, and a file whose hunks the host withheld would read as
+ * an empty change rather than as the counts the host did report.
+ */
+const REPLACE_FILE_COUNTS_CSS = `
+[data-diffs-header] [data-additions-count],
+[data-diffs-header] [data-deletions-count] {
+  display: none !important;
+}`;
 
 /** Nothing loaded yet, as one identity, so the memos below do not see a new array every render. */
 const NO_SLICES: ReadonlyArray<DiffSlice> = [];
@@ -246,6 +259,7 @@ export function PullRequestCodeTab({
         patch: data.patch,
         truncated: data.truncated,
         nextCursor: data.nextCursor,
+        omittedFileStats: data.omittedFileStats ?? [],
       };
       const index = slices.findIndex((slice) => slice.cursor === cursor);
       if (index === -1) {
@@ -471,6 +485,15 @@ export function PullRequestCodeTab({
     ],
   );
   const lineStat = useMemo(() => getDiffLineStat(files), [files]);
+  const omittedFileStats = useMemo(
+    () =>
+      new Map(
+        loadedSlices.flatMap((slice) =>
+          slice.omittedFileStats.map((file) => [file.path, file] as const),
+        ),
+      ),
+    [loadedSlices],
+  );
   const fileKeys = useMemo(() => items.map((item) => item.id), [items]);
   const collapsedFileKeys = useMemo(
     () => new Set(items.filter((item) => item.collapsed === true).map((item) => item.id)),
@@ -647,6 +670,30 @@ export function PullRequestCodeTab({
       );
     },
     [toggleFile],
+  );
+
+  const renderHeaderMetadata = useCallback(
+    (item: CodeViewItem<ReviewAnnotationGroup>) => {
+      if (item.type !== "diff") return null;
+      let additions = 0;
+      let deletions = 0;
+      for (const hunk of item.fileDiff.hunks) {
+        additions += hunk.additionLines;
+        deletions += hunk.deletionLines;
+      }
+      if (additions === 0 && deletions === 0) {
+        const withheld = omittedFileStats.get(resolveFileDiffPath(item.fileDiff));
+        if (withheld) ({ additions, deletions } = withheld);
+      }
+      return (
+        <PullRequestDiffStat
+          additions={additions}
+          deletions={deletions}
+          className="font-mono text-[11px]"
+        />
+      );
+    },
+    [omittedFileStats],
   );
 
   const diffViewOptions = useMemo(
@@ -1222,7 +1269,9 @@ export function PullRequestCodeTab({
             // is running out of diff.
             renderCodeViewFooter={renderCodeViewFooter}
             renderHeaderPrefix={renderHeaderPrefix}
+            renderHeaderMetadata={renderHeaderMetadata}
             renderAnnotation={renderAnnotation}
+            unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
           />
           {reviewOverlay}
         </div>

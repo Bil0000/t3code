@@ -9,6 +9,7 @@ import type {
   PullRequestInvolvement,
   PullRequestListState,
   PullRequestMergeMethod,
+  PullRequestOmittedFileStat,
   PullRequestReviewCommentDraft,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
@@ -270,6 +271,8 @@ export interface GitHubPullRequestDiffSlice {
   readonly truncated: boolean;
   /** Where the next slice starts, or null once the patch is whole. */
   readonly nextCursor: string | null;
+  /** GitHub's own counts for the files whose hunks it withheld from this slice. */
+  readonly omittedFileStats?: ReadonlyArray<PullRequestOmittedFileStat>;
 }
 
 export class GitHubPullRequestCli extends Context.Service<
@@ -796,6 +799,9 @@ export const make = Effect.gen(function* () {
             patch: decoded.success.patch,
             truncated: decoded.success.truncated,
             nextCursor: morePages ? String(input.page + 1) : null,
+            ...(decoded.success.omittedFileStats.length === 0
+              ? {}
+              : { omittedFileStats: decoded.success.omittedFileStats }),
           });
         }),
       );
