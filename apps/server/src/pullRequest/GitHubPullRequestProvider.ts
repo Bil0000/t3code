@@ -98,6 +98,10 @@ export function loginAvatarUrl(login: string, host: string): string | null {
   return /^[a-z0-9][a-z0-9-]{0,38}$/iu.test(login) ? `https://${host}/${login}.png?size=80` : null;
 }
 
+/** True where markdown would render nothing: whitespace, or only HTML comments. */
+const rendersEmpty = (body: string): boolean =>
+  body.replace(/<!--[\s\S]*?-->/g, "").trim().length === 0;
+
 export const make = Effect.gen(function* () {
   const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
@@ -268,11 +272,13 @@ export const make = Effect.gen(function* () {
               .map((comment) => ({
                 ...comment,
                 // GitHub keeps the dismissal reason on the timeline event, not on the review,
-                // so a bodiless dismissed review reads its words from there.
+                // so a dismissed review with nothing visible of its own reads its words from
+                // there. "Visible" and not "empty": bot reviews often carry only an HTML
+                // marker comment, which markdown renders as nothing.
                 body:
                   comment.kind === "review" &&
                   comment.reviewState?.toUpperCase() === "DISMISSED" &&
-                  comment.body.trim().length === 0
+                  rendersEmpty(comment.body)
                     ? (reviewThreads.dismissalsByReviewId.get(comment.id) ?? comment.body)
                     : comment.body,
                 author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),

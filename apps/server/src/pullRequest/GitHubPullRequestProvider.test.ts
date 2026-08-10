@@ -201,6 +201,66 @@ describe("getChangeRequest commits", () => {
   );
 });
 
+describe("getChangeRequestActivity dismissed reviews", () => {
+  const dismissedReview = (body: string) => ({
+    id: "PRR_1",
+    kind: "review" as const,
+    author: null,
+    body,
+    createdAt: "2026-07-03T00:00:00Z",
+    url: null,
+    path: null,
+    reviewState: "DISMISSED",
+  });
+  const threadComments: GitHubReviewThreadComments = {
+    comments: [],
+    dismissalsByReviewId: new Map([["PRR_1", "Dismissing prior approval to re-evaluate 9b66581"]]),
+    reviewThreads: [],
+    commentCount: 0,
+    truncated: false,
+    reviewers: [],
+    avatarsByLogin: new Map(),
+    commitStats: new Map(),
+    commits: [],
+    viewer: { canUpdate: true, didAuthor: false },
+  };
+  const layerFor = (body: string) =>
+    Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+      getPullRequestActivity: () =>
+        Effect.succeed({ author: null, comments: [dismissedReview(body)], commits: [] }),
+      listReviewThreadComments: () => Effect.succeed(threadComments),
+    });
+  const readActivity = Effect.gen(function* () {
+    const provider = yield* make;
+    return yield* provider.getChangeRequestActivity({
+      cwd: "/w",
+      repository: "acme/web",
+      host: "github.com",
+      number: 7,
+    });
+  });
+
+  it.effect("fills a marker-only dismissed review with the timeline's reason", () =>
+    // Macroscope's approvals carry only an HTML comment, which markdown renders as nothing —
+    // an empty-string check misses them and the card opens onto nothing.
+    readActivity.pipe(
+      Effect.map((activity) => {
+        expect(activity.comments[0]?.body).toBe("Dismissing prior approval to re-evaluate 9b66581");
+      }),
+      Effect.provide(layerFor("<!-- Macroscope (Approvability) review body marker -->")),
+    ),
+  );
+
+  it.effect("keeps the words of a dismissed review that has its own", () =>
+    readActivity.pipe(
+      Effect.map((activity) => {
+        expect(activity.comments[0]?.body).toBe("These findings still stand.");
+      }),
+      Effect.provide(layerFor("These findings still stand.")),
+    ),
+  );
+});
+
 describe("loginAvatarUrl", () => {
   it("serves a user's picture from the host they belong to", () => {
     expect(loginAvatarUrl("octocat", "github.com")).toBe("https://github.com/octocat.png?size=80");
