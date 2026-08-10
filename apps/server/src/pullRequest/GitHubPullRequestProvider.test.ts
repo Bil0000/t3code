@@ -133,6 +133,7 @@ describe("getChangeRequest commits", () => {
 
   const baseThreadComments = {
     comments: [],
+    dismissalsByReviewId: new Map<string, string>(),
     reviewThreads: [],
     commentCount: 0,
     truncated: false,

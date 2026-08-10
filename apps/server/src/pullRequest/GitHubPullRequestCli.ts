@@ -1224,6 +1224,7 @@ export const make = Effect.gen(function* () {
         let reviewers: ReadonlyArray<PullRequestActor> = [];
         let commits: GitHubReviewThreadPage["commits"] = [];
         let viewer: GitHubReviewThreadPage["viewer"] = { canUpdate: true, didAuthor: false };
+        let dismissalsByReviewId: GitHubReviewThreadPage["dismissalsByReviewId"] = new Map();
         let cursor: string | null = null;
         let page = 0;
         do {
@@ -1237,6 +1238,7 @@ export const make = Effect.gen(function* () {
             reviewers = read.reviewers;
             commits = read.commits;
             viewer = read.viewer;
+            dismissalsByReviewId = read.dismissalsByReviewId;
             for (const [oid, stat] of read.commitStats) commitStats.set(oid, stat);
           }
           cursor = read.nextCursor;
@@ -1270,6 +1272,7 @@ export const make = Effect.gen(function* () {
         const reviewThreads = finished.map((entry) => entry.thread);
         return {
           comments: reviewThreadConversation(reviewThreads),
+          dismissalsByReviewId,
           reviewThreads,
           // GitHub's own count of each thread, so the number the page shows is the host's even
           // where a bound kept some of the words on GitHub.

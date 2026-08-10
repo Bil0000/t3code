@@ -232,6 +232,7 @@ export const make = Effect.gen(function* () {
           cli.listReviewThreadComments(input).pipe(
             Effect.orElseSucceed(() => ({
               comments: [],
+              dismissalsByReviewId: new Map<string, string>(),
               reviewThreads: [],
               commentCount: 0,
               truncated: true,
@@ -266,6 +267,14 @@ export const make = Effect.gen(function* () {
             comments: [...pullRequest.comments, ...reviewThreads.comments]
               .map((comment) => ({
                 ...comment,
+                // GitHub keeps the dismissal reason on the timeline event, not on the review,
+                // so a bodiless dismissed review reads its words from there.
+                body:
+                  comment.kind === "review" &&
+                  comment.reviewState?.toUpperCase() === "DISMISSED" &&
+                  comment.body.trim().length === 0
+                    ? (reviewThreads.dismissalsByReviewId.get(comment.id) ?? comment.body)
+                    : comment.body,
                 author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
               }))
               .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),

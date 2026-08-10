@@ -285,6 +285,22 @@ const RawReviewThreadsSchema = Schema.Struct({
             }),
           ),
         ),
+        reviewDismissals: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              nodes: Schema.Array(
+                Schema.Struct({
+                  dismissalMessage: Schema.optional(Schema.NullOr(Schema.String)),
+                  review: Schema.optional(
+                    Schema.NullOr(
+                      Schema.Struct({ id: Schema.optional(Schema.NullOr(Schema.String)) }),
+                    ),
+                  ),
+                }),
+              ),
+            }),
+          ),
+        ),
         commits: Schema.optional(
           Schema.NullOr(
             Schema.Struct({
@@ -495,6 +511,9 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
       }
       latestReviews(first: 50) {
         nodes { author { login avatarUrl } }
+      }
+      reviewDismissals: timelineItems(itemTypes: [REVIEW_DISMISSED_EVENT], last: 50) {
+        nodes { ... on ReviewDismissedEvent { dismissalMessage review { id } } }
       }
       commits(last: ${GRAPHQL_PAGE_SIZE}) {
         nodes {
@@ -1095,6 +1114,8 @@ export function decodePullRequestActivityJson(
 
 export interface GitHubReviewThreadComments {
   readonly comments: ReadonlyArray<PullRequestComment>;
+  /** Dismissal reasons by the dismissed review's node id, read off the timeline. */
+  readonly dismissalsByReviewId: ReadonlyMap<string, string>;
   /** Whole conversations, kept anchored so the diff can pin them to their line. */
   readonly reviewThreads: ReadonlyArray<PullRequestReviewThread>;
   /** The host's own count of the conversation, which a bounded read can fall short of. */
@@ -1149,6 +1170,8 @@ export interface GitHubReviewThreadPage {
   >;
   readonly commits: ReadonlyArray<PullRequestCommit>;
   readonly viewer: { readonly canUpdate: boolean; readonly didAuthor: boolean };
+  /** Dismissal reasons by the dismissed review's node id, which the review itself never carries. */
+  readonly dismissalsByReviewId: ReadonlyMap<string, string>;
 }
 
 /**
@@ -1261,6 +1284,12 @@ export function decodeReviewThreadsJson(
       }),
     });
   }
+  const dismissalsByReviewId = new Map<string, string>();
+  for (const node of pullRequest.reviewDismissals?.nodes ?? []) {
+    const reviewId = trimmed(node.review?.id);
+    const message = trimmed(node.dismissalMessage);
+    if (reviewId !== null && message !== null) dismissalsByReviewId.set(reviewId, message);
+  }
   return Result.succeed({
     threads: entries,
     nextCursor: nextCursorOf(threads.pageInfo),
@@ -1269,6 +1298,7 @@ export function decodeReviewThreadsJson(
     commitStats,
     commits,
     viewer: toPullRequestViewerFields(pullRequest),
+    dismissalsByReviewId,
   });
 }
 
