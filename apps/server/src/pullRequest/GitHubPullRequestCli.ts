@@ -1142,15 +1142,7 @@ export const make = Effect.gen(function* () {
       return github
         .execute({
           cwd: input.cwd,
-          args: [
-            "pr",
-            "diff",
-            String(input.number),
-            ...repositoryArgs(input),
-            "--color",
-            "never",
-            "--patch",
-          ],
+          args: ["pr", "diff", String(input.number), ...repositoryArgs(input), "--color", "never"],
           maxOutputBytes: DIFF_MAX_OUTPUT_BYTES,
           timeoutMs: DIFF_TIMEOUT_MS,
         })

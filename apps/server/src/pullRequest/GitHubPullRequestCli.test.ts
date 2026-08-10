@@ -964,6 +964,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
       assert.isFalse(diff.truncated);
       // The common case pays for one request and not the files API on top of it.
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      // `--patch` asks gh for a format-patch stream, which repeats a file once per commit.
+      // The review needs GitHub's combined pull-request diff: one section per changed file.
+      expect(callAt(0).args).not.toContain("--patch");
     }),
   );
 
