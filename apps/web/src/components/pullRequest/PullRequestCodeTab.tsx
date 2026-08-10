@@ -407,9 +407,13 @@ export function PullRequestCodeTab({
           if (!placedThreadIds.has(thread.id)) continue;
           groupAt(thread.side, thread.line).threads.push(thread);
         }
-        for (const comment of pendingComments) {
-          if (comment.path !== path) continue;
-          groupAt(comment.side, comment.line).pending.push(comment);
+        // Pending comments anchor to the head diff exactly like host threads do, so a
+        // commit's diff must not place them either — the same line means other code there.
+        if (commit === null) {
+          for (const comment of pendingComments) {
+            if (comment.path !== path) continue;
+            groupAt(comment.side, comment.line).pending.push(comment);
+          }
         }
         if (draft?.fileKey === fileKey) groupAt(draft.side, draft.line).draft = true;
 
@@ -453,6 +457,7 @@ export function PullRequestCodeTab({
         };
       }),
     [
+      commit,
       detail.reviewThreads,
       draft,
       files,

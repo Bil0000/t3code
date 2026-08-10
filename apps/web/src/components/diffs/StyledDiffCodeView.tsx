@@ -152,9 +152,18 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
   grid-column: 2 !important;
 }
 
+/* Visually hidden rather than display: none so the expand action stays keyboard-reachable. */
 :is([data-separator="line-info"], [data-separator="line-info-basic"])
   [data-expand-button] {
-  display: none !important;
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip-path: inset(50%) !important;
+  border: 0 !important;
+  white-space: nowrap !important;
 }
 
 :is([data-separator="line-info"], [data-separator="line-info-basic"]):has(
@@ -166,18 +175,18 @@ const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 
 :is([data-separator="line-info"], [data-separator="line-info-basic"]):has(
     [data-expand-button]
-  ):hover
+  ):is(:hover, :focus-within)
   [data-separator-content] {
   color: color-mix(in srgb, var(--code-foreground) 76%, var(--code-background)) !important;
 }
 
 :is([data-separator="line-info"], [data-separator="line-info-basic"]):has(
     [data-expand-button]
-  ):hover
+  ):is(:hover, :focus-within)
   [data-unmodified-lines]::before,
 :is([data-separator="line-info"], [data-separator="line-info-basic"]):has(
     [data-expand-button]
-  ):hover
+  ):is(:hover, :focus-within)
   [data-unmodified-lines]::after {
   background-color: color-mix(in srgb, var(--code-background) 84%, var(--code-foreground));
 }
