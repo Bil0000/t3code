@@ -54,6 +54,11 @@ import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhost
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
+import {
+  WorkspaceBreadcrumb,
+  WorkspaceBreadcrumbItem,
+  WorkspaceBreadcrumbSeparator,
+} from "../components/WorkspaceBreadcrumb";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
@@ -526,9 +531,6 @@ function PullRequestsRouteView() {
       if (previous === null || previous.key !== filterKey) {
         return { key: filterKey, entries: rankPullRequestMatches(answered.entries, sentQuery) };
       }
-      const arriving = new Map(
-        answered.entries.map((entry) => [pullRequestEntryKey(entry), entry] as const),
-      );
       if (sentCursors !== null) {
         // A continuation is a slice, not the list: it carries only what comes after the rows
         // already held, and says nothing about a repository that has run out. Everything on
@@ -1382,34 +1384,43 @@ function PullRequestsColumn({
         )}
       >
         {condensed ? (
-          <div className="flex min-w-0 items-center gap-1.5">
-            <h1 className="shrink-0 truncate text-sm font-medium">Pull Requests</h1>
-            <span aria-hidden className="text-muted-foreground/50">
-              /
-            </span>
-            <CompactFilterMenu
-              label="Filter by state"
-              value={state}
-              options={STATE_TABS}
-              onChange={onState}
-            />
-            <CompactFilterMenu
-              label="Filter by involvement"
-              value={involvement}
-              options={INVOLVEMENT_TABS}
-              onChange={onInvolvement}
-            />
-            {hostMenuOptions.length > 2 ? (
+          <WorkspaceBreadcrumb ariaLabel="Pull request scope">
+            {/* The page name remains the foreground anchor in both states; the live filters are
+                its compact scope, grouped as the second crumb rather than pretending each menu
+                is a separate page in the hierarchy. */}
+            <WorkspaceBreadcrumbItem current>
+              <h1 className="truncate">Pull Requests</h1>
+            </WorkspaceBreadcrumbItem>
+            <WorkspaceBreadcrumbSeparator />
+            <WorkspaceBreadcrumbItem className="gap-1.5 overflow-hidden">
               <CompactFilterMenu
-                label="Filter by host"
-                value={host ?? ""}
-                options={hostMenuOptions}
-                onChange={(next) => onHost(next === "" ? undefined : next)}
+                label="Filter by state"
+                value={state}
+                options={STATE_TABS}
+                onChange={onState}
               />
-            ) : null}
-          </div>
+              <CompactFilterMenu
+                label="Filter by involvement"
+                value={involvement}
+                options={INVOLVEMENT_TABS}
+                onChange={onInvolvement}
+              />
+              {hostMenuOptions.length > 2 ? (
+                <CompactFilterMenu
+                  label="Filter by host"
+                  value={host ?? ""}
+                  options={hostMenuOptions}
+                  onChange={(next) => onHost(next === "" ? undefined : next)}
+                />
+              ) : null}
+            </WorkspaceBreadcrumbItem>
+          </WorkspaceBreadcrumb>
         ) : (
-          <h1 className="min-w-0 shrink truncate text-sm font-medium">Pull Requests</h1>
+          <WorkspaceBreadcrumb ariaLabel="Pull requests breadcrumb">
+            <WorkspaceBreadcrumbItem current>
+              <h1 className="truncate">Pull Requests</h1>
+            </WorkspaceBreadcrumbItem>
+          </WorkspaceBreadcrumb>
         )}
         <div className="min-w-0 flex-1" />
         {condensed ? (
