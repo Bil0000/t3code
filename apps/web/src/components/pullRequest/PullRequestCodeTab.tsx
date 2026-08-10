@@ -1180,7 +1180,7 @@ export function PullRequestCodeTab({
               rows absolutely, so it has to own that element — the thread diff panel hands it the
               same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
           <StyledDiffCodeView<ReviewAnnotationGroup>
-            className="h-full overflow-auto"
+            className="h-full overflow-auto [scrollbar-gutter:stable]"
             items={items}
             selectedLines={selectedLines}
             onSelectedLinesChange={setSelectedLines}
