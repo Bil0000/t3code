@@ -31,6 +31,7 @@ import {
   decodePullRequestStatsJson,
   decodeRepositoryAccessJson,
   decodeReviewerCandidatesJson,
+  decodeReviewDismissalsJson,
   decodeReviewThreadCommentsJson,
   decodeReviewThreadsJson,
   buildPullRequestStatsGraphQlQuery,
@@ -44,6 +45,7 @@ import {
   RESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
   REVIEWER_CANDIDATES_GRAPHQL_QUERY,
   REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY,
+  REVIEW_DISMISSALS_GRAPHQL_QUERY,
   REVIEW_THREAD_REPLY_GRAPHQL_MUTATION,
   REVIEW_THREADS_GRAPHQL_QUERY,
   reviewThreadConversation,
@@ -1224,7 +1226,8 @@ export const make = Effect.gen(function* () {
         let reviewers: ReadonlyArray<PullRequestActor> = [];
         let commits: GitHubReviewThreadPage["commits"] = [];
         let viewer: GitHubReviewThreadPage["viewer"] = { canUpdate: true, didAuthor: false };
-        let dismissalsByReviewId: GitHubReviewThreadPage["dismissalsByReviewId"] = new Map();
+        const dismissalsByReviewId = new Map<string, string>();
+        let dismissalCursor: string | null = null;
         let cursor: string | null = null;
         let page = 0;
         do {
@@ -1238,12 +1241,41 @@ export const make = Effect.gen(function* () {
             reviewers = read.reviewers;
             commits = read.commits;
             viewer = read.viewer;
-            dismissalsByReviewId = read.dismissalsByReviewId;
+            for (const [id, message] of read.dismissalsByReviewId)
+              dismissalsByReviewId.set(id, message);
+            dismissalCursor = read.nextDismissalCursor;
             for (const [oid, stat] of read.commitStats) commitStats.set(oid, stat);
           }
           cursor = read.nextCursor;
           page += 1;
         } while (cursor !== null && page < REVIEW_THREAD_PAGES);
+
+        // Almost never entered: the embedded page already holds every dismissal a pull request
+        // ordinarily accrues. Followed so a review whose event fell past that page still finds
+        // its reason.
+        let dismissalPage = 0;
+        while (dismissalCursor !== null && dismissalPage < REVIEW_THREAD_PAGES) {
+          const read: {
+            readonly dismissalsByReviewId: ReadonlyMap<string, string>;
+            readonly nextCursor: string | null;
+          } = yield* graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "listReviewThreadComments",
+            variables: [
+              ["-f", `owner=${owner}`],
+              ["-f", `name=${name}`],
+              ["-F", `number=${input.number}`],
+              ["-f", `cursor=${dismissalCursor}`],
+            ],
+            query: REVIEW_DISMISSALS_GRAPHQL_QUERY,
+            decode: decodeReviewDismissalsJson,
+          });
+          for (const [id, message] of read.dismissalsByReviewId)
+            dismissalsByReviewId.set(id, message);
+          dismissalCursor = read.nextCursor;
+          dismissalPage += 1;
+        }
 
         // Only the threads GitHub said were unfinished cost a request; the rest arrived whole
         // with the page they were listed on.

@@ -288,6 +288,7 @@ const RawReviewThreadsSchema = Schema.Struct({
         reviewDismissals: Schema.optional(
           Schema.NullOr(
             Schema.Struct({
+              pageInfo: Schema.optional(RawPageInfoSchema),
               nodes: Schema.Array(
                 Schema.Struct({
                   dismissalMessage: Schema.optional(Schema.NullOr(Schema.String)),
@@ -512,7 +513,8 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
       latestReviews(first: 50) {
         nodes { author { login avatarUrl } }
       }
-      reviewDismissals: timelineItems(itemTypes: [REVIEW_DISMISSED_EVENT], last: 50) {
+      reviewDismissals: timelineItems(itemTypes: [REVIEW_DISMISSED_EVENT], first: ${GRAPHQL_PAGE_SIZE}) {
+        pageInfo { hasNextPage endCursor }
         nodes { ... on ReviewDismissedEvent { dismissalMessage review { id } } }
       }
       commits(last: ${GRAPHQL_PAGE_SIZE}) {
@@ -607,6 +609,21 @@ const REVIEW_EVENTS: Record<PullRequestReviewVerdict, "COMMENT" | "APPROVE" | "R
   approve: "APPROVE",
   "request-changes": "REQUEST_CHANGES",
 };
+
+/**
+ * The dismissal events past the page the thread read carries. A pull request rarely has any:
+ * this is followed only while the embedded page reports more.
+ */
+export const REVIEW_DISMISSALS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      timelineItems(itemTypes: [REVIEW_DISMISSED_EVENT], first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { ... on ReviewDismissedEvent { dismissalMessage review { id } } }
+      }
+    }
+  }
+}`;
 
 /** The whole review as one request body, which is how GitHub keeps it invisible until sent. */
 export function buildReviewSubmissionJson(input: {
@@ -1172,6 +1189,8 @@ export interface GitHubReviewThreadPage {
   readonly viewer: { readonly canUpdate: boolean; readonly didAuthor: boolean };
   /** Dismissal reasons by the dismissed review's node id, which the review itself never carries. */
   readonly dismissalsByReviewId: ReadonlyMap<string, string>;
+  /** Where the rest of the dismissal events start, or null once this page carried them all. */
+  readonly nextDismissalCursor: string | null;
 }
 
 /**
@@ -1199,6 +1218,64 @@ export function reviewThreadConversation(
 }
 
 /** One page of review threads. Following the cursors it hands back is the caller's job. */
+function toDismissalEntries(
+  nodes:
+    | ReadonlyArray<{
+        readonly dismissalMessage?: string | null | undefined;
+        readonly review?: { readonly id?: string | null | undefined } | null | undefined;
+      }>
+    | undefined,
+): Map<string, string> {
+  const entries = new Map<string, string>();
+  for (const node of nodes ?? []) {
+    const reviewId = trimmed(node.review?.id);
+    const message = trimmed(node.dismissalMessage);
+    if (reviewId !== null && message !== null) entries.set(reviewId, message);
+  }
+  return entries;
+}
+
+const RawReviewDismissalsSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      pullRequest: Schema.Struct({
+        timelineItems: Schema.Struct({
+          pageInfo: Schema.optional(RawPageInfoSchema),
+          nodes: Schema.Array(
+            Schema.Struct({
+              dismissalMessage: Schema.optional(Schema.NullOr(Schema.String)),
+              review: Schema.optional(
+                Schema.NullOr(Schema.Struct({ id: Schema.optional(Schema.NullOr(Schema.String)) })),
+              ),
+            }),
+          ),
+        }),
+      }),
+    }),
+  }),
+});
+
+const decodeReviewDismissals = decodeJsonResult(RawReviewDismissalsSchema);
+
+/** One further page of dismissal events, in the shape the thread read's own page carries. */
+export function decodeReviewDismissalsJson(raw: string): Result.Result<
+  {
+    readonly dismissalsByReviewId: ReadonlyMap<string, string>;
+    readonly nextCursor: string | null;
+  },
+  DecodeFailure
+> {
+  const decoded = decodeReviewDismissals(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const items = decoded.success.data.repository.pullRequest.timelineItems;
+  return Result.succeed({
+    dismissalsByReviewId: toDismissalEntries(items.nodes),
+    nextCursor: nextCursorOf(items.pageInfo),
+  });
+}
+
 export function decodeReviewThreadsJson(
   raw: string,
 ): Result.Result<GitHubReviewThreadPage, DecodeFailure> {
@@ -1284,12 +1361,6 @@ export function decodeReviewThreadsJson(
       }),
     });
   }
-  const dismissalsByReviewId = new Map<string, string>();
-  for (const node of pullRequest.reviewDismissals?.nodes ?? []) {
-    const reviewId = trimmed(node.review?.id);
-    const message = trimmed(node.dismissalMessage);
-    if (reviewId !== null && message !== null) dismissalsByReviewId.set(reviewId, message);
-  }
   return Result.succeed({
     threads: entries,
     nextCursor: nextCursorOf(threads.pageInfo),
@@ -1298,7 +1369,8 @@ export function decodeReviewThreadsJson(
     commitStats,
     commits,
     viewer: toPullRequestViewerFields(pullRequest),
-    dismissalsByReviewId,
+    dismissalsByReviewId: toDismissalEntries(pullRequest.reviewDismissals?.nodes),
+    nextDismissalCursor: nextCursorOf(pullRequest.reviewDismissals?.pageInfo),
   });
 }
 
