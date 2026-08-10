@@ -118,11 +118,6 @@ import {
 } from "./orchestration-v2/runtimeLayer.ts";
 import * as ResourceCleanupService from "./orchestration-v2/ResourceCleanupService.ts";
 import * as RunFinalizationService from "./orchestration-v2/RunFinalizationService.ts";
-import * as DesktopTelemetryReceiver from "./resourceTelemetry/DesktopTelemetryReceiver.ts";
-import * as NativeTelemetryClient from "./resourceTelemetry/NativeTelemetryClient.ts";
-import * as ResourceAttribution from "./resourceTelemetry/ResourceAttribution.ts";
-import * as ResourceMonitorBinary from "./resourceTelemetry/ResourceMonitorBinary.ts";
-import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import {
   clearPersistedServerRuntimeState,
   makePersistedServerRuntimeState,
@@ -457,10 +452,7 @@ export const makeRoutesLayer = Layer.mergeAll(
       Layer.provide(authHttpApiLayer),
       Layer.provide(connectHttpApiLayer),
       Layer.provide(orchestrationHttpApiLayer),
-<<<<<<< HEAD
       Layer.provide(pullRequestHttpApiLayer),
-=======
->>>>>>> 290392fac9 (fix: reconcile rebase with latest main)
       Layer.provide(projectHttpApiLayer),
       Layer.provide(serverEnvironmentHttpApiLayer),
       Layer.provide(environmentAuthenticatedAuthLayer),
@@ -470,7 +462,6 @@ export const makeRoutesLayer = Layer.mergeAll(
     staticAndDevRouteLayer,
     websocketRpcRouteLayer,
   ),
-<<<<<<< HEAD
   // The MCP session registry is provided globally (shared with V2 provider
   // sessions) rather than inline here.
   McpHttpServer.layer,
@@ -478,10 +469,6 @@ export const makeRoutesLayer = Layer.mergeAll(
   // Both transports consume the same service instance, so caches single-flight across clients
   // and mutations observed on WebSocket invalidate patches subsequently read over HTTP.
   Layer.provide(PullRequestServiceLive),
-=======
-  McpHttpServer.layer.pipe(Layer.provide(McpSessionRegistry.layer)),
-).pipe(
->>>>>>> 290392fac9 (fix: reconcile rebase with latest main)
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer.pipe(Layer.provide(DesktopAppUpdateLayerLive))),
   Layer.provide(commandReadinessLayer),

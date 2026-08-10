@@ -1,15 +1,9 @@
 import { threadPullRequestSearchTerms } from "@t3tools/shared/threadPullRequests";
 import * as React from "react";
-import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
-import {
-  isAtomCommandInterrupted,
-  type AtomCommandResult,
-} from "@t3tools/client-runtime/state/runtime";
 import { threadSearchMatchKey } from "@t3tools/client-runtime/state/thread-search";
 import type { ContextMenuItem, EnvironmentId, ThreadId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
 import {
-  activeThreadAnchorTimestampMs,
   getThreadSortTimestamp,
   sortThreads,
   toSortableTimestamp,
@@ -22,7 +16,7 @@ import { isLatestRunSettled } from "../session-logic";
 import { resolveServerBackedAppStageLabel } from "../branding.logic";
 
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
-export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
+export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 100;
 // Visible sidebar rows are prewarmed into the thread-detail cache so opening a
 // nearby thread usually reuses an already-hot subscription. Each prewarmed
 // thread holds a live, fully hydrated detail subscription (all messages and
@@ -81,12 +75,6 @@ export function useRetainedValue<T>(key: string | null, value: T | null): T | nu
   if (value !== null) return value;
   return key !== null && retained.current?.key === key ? retained.current.value : null;
 }
-
-// The list already reaches its destination through sortable transforms while
-// the pointer is down. dnd-kit's default also animates the committed DOM order
-// after release, replaying the same movement across every affected row.
-export const animatePinnedLayoutChanges: AnimateLayoutChanges = (args) =>
-  args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
 type SidebarProject = {
   id: string;
@@ -526,8 +514,40 @@ export function isContextMenuPointerDown(input: {
   return input.isMac && input.button === 0 && input.ctrlKey;
 }
 
-// ── Sidebar thread status model ─────────────────────────────────────
-// Five visual states, three colors: color is reserved for "act now"
+export function resolveThreadRowClassName(input: {
+  isActive: boolean;
+  isSelected: boolean;
+}): string {
+  const baseClassName =
+    "h-8 w-full translate-x-0 cursor-pointer justify-start rounded-md px-2 text-left text-sm select-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring";
+
+  if (input.isSelected && input.isActive) {
+    return cn(
+      baseClassName,
+      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
+    );
+  }
+
+  if (input.isSelected) {
+    return cn(
+      baseClassName,
+      "bg-sidebar-row-selected text-sidebar-foreground hover:bg-sidebar-row-active hover:text-sidebar-foreground",
+    );
+  }
+
+  if (input.isActive) {
+    return cn(
+      baseClassName,
+      "bg-sidebar-row-active text-sidebar-foreground font-medium hover:bg-sidebar-row-active hover:text-sidebar-foreground",
+    );
+  }
+
+  return cn(
+    baseClassName,
+    "text-sidebar-muted-foreground/80 hover:bg-sidebar-row-hover hover:text-sidebar-foreground",
+  );
+}
+
 // ── Sidebar v2 status model ─────────────────────────────────────────
 // Six visual states, three colors: color is reserved for "act now"
 // (approval), "in motion" (working), and "broken" (failed). Ready is the
@@ -538,14 +558,7 @@ export function isContextMenuPointerDown(input: {
 // false Done.
 // Unread completion is tracked separately: it describes whether a ready
 // thread needs attention, not what the thread is currently doing.
-export type SidebarThreadStatus =
-  | "approval"
-  | "input"
-  | "working"
-  | "monitoring"
-  | "failed"
-  | "ready";
-export type SidebarV2Status = "approval" | "input" | "working" | "waiting" | "failed" | "ready";
+export type SidebarThreadStatus = "approval" | "input" | "working" | "waiting" | "failed" | "ready";
 
 export function shouldRecedeSidebarThread(input: {
   status: SidebarThreadStatus;
@@ -599,7 +612,7 @@ export type SidebarV2TopStatusKind =
   | "working";
 
 export function resolveSidebarV2TopStatus(input: {
-  readonly status: SidebarV2Status;
+  readonly status: SidebarThreadStatus;
   readonly isUnread: boolean;
   readonly isWoke: boolean;
 }): SidebarV2TopStatusKind | null {
@@ -624,7 +637,7 @@ export function resolveSidebarV2TopStatus(input: {
   return input.isUnread ? "done" : null;
 }
 
-export function shouldShowSidebarV2Duration(status: SidebarV2Status): boolean {
+export function shouldShowSidebarV2Duration(status: SidebarThreadStatus): boolean {
   return status === "working";
 }
 
@@ -661,23 +674,16 @@ export function firstValidTimestamp(
   return null;
 }
 
-// Sidebar sort: static order, newest anchor on top. Activity NEVER reorders
-// the list — a row holds its position between lifecycle transitions, so the
-// screen only moves when a thread enters or leaves the active list. The
-// anchor is creation time until an un-settle re-anchors it (see
-// activeThreadAnchorTimestampMs), so an un-settled thread surfaces at the
-// top instead of sinking back to its creation-order slot. Status (including
-// pending approval) is carried by each card's edge strip, not by position.
+// v2 sort: static creation order, newest thread on top. Activity NEVER
+// reorders the list — a row holds its position from open until settled, so
+// the screen only moves at lifecycle transitions. Status (including pending
+// approval) is carried by each card's edge strip, not by position.
 export function sortThreadsForSidebar<
-  T extends {
-    readonly id: string;
-    readonly createdAt: string;
-    readonly unsettledAt?: string | null | undefined;
-  },
+  T extends { readonly id: string; readonly createdAt: string },
 >(threads: readonly T[]): T[] {
   return [...threads].toSorted(
     (left, right) =>
-      activeThreadAnchorTimestampMs(right) - activeThreadAnchorTimestampMs(left) ||
+      parseTimestampMs(right.createdAt) - parseTimestampMs(left.createdAt) ||
       left.id.localeCompare(right.id),
   );
 }

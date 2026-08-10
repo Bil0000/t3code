@@ -87,6 +87,7 @@ interface RightPanelTabsProps {
   widthStorageKey?: string;
   /** Forwarded to PreviewPanelShell as the initial width before a user resize. */
   defaultWidth?: number;
+  inlineSize?: PreviewPanelInlineSize;
   layoutControls?: ReactNode;
   surfaces: readonly RightPanelSurface[];
   /** Fallback environment for surfaces that do not carry their own. */
@@ -1105,6 +1106,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       {...(props.open !== undefined ? { open: props.open } : {})}
       {...(props.widthStorageKey !== undefined ? { widthStorageKey: props.widthStorageKey } : {})}
       {...(props.defaultWidth !== undefined ? { defaultWidth: props.defaultWidth } : {})}
+      {...(props.inlineSize ? { inlineSize: props.inlineSize } : {})}
     >
       <div
         className={cn(
