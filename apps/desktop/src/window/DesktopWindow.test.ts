@@ -37,6 +37,8 @@ import * as DesktopConfig from "../app/DesktopConfig.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopState from "../app/DesktopState.ts";
 import * as DesktopAppSettings from "../settings/DesktopAppSettings.ts";
+import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
+import * as ElectronApp from "../electron/ElectronApp.ts";
 import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
@@ -121,6 +123,14 @@ function makeFakeBrowserWindow() {
     windowListeners,
   };
 }
+
+const desktopClientSettingsLayer = Layer.mock(DesktopClientSettings.DesktopClientSettings)({
+  get: Effect.succeed(Option.none()),
+});
+
+const electronAppLayer = Layer.mock(ElectronApp.ElectronApp)({
+  quit: Effect.void,
+});
 
 const desktopAssetsLayer = Layer.succeed(DesktopAssets.DesktopAssets, {
   iconPaths: Effect.succeed({
@@ -246,8 +256,10 @@ function makeTestLayer(input: {
         desktopAssetsLayer,
         desktopEnvironmentLayer,
         desktopAppSettingsLayer,
+        desktopClientSettingsLayer,
         desktopServerExposureLayer,
         DesktopState.layer,
+        electronAppLayer,
         electronMenuLayer,
         Layer.succeed(ElectronShell.ElectronShell, {
           openExternal: (url) =>

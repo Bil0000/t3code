@@ -151,7 +151,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "quit-confirmation",
-    title: "Quit confirmation",
+    title: "Hold to quit",
     to: "/settings/general",
     desktopOnly: true,
   },

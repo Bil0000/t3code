@@ -1,8 +1,6 @@
-import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 import * as Scope from "effect/Scope";
@@ -12,11 +10,8 @@ import type * as Electron from "electron";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import { makeComponentLogger } from "./DesktopObservability.ts";
 import * as DesktopShutdown from "./DesktopShutdown.ts";
-import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as ElectronApp from "../electron/ElectronApp.ts";
-import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
-import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopState from "./DesktopState.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 
@@ -33,18 +28,15 @@ export class DesktopLifecycleRelaunchError extends Schema.TaggedErrorClass<Deskt
 }
 
 export type DesktopLifecycleRuntimeServices =
-  | DesktopClientSettings.DesktopClientSettings
   | DesktopEnvironment.DesktopEnvironment
   | DesktopShutdown.DesktopShutdown
   | DesktopState.DesktopState
   | DesktopWindow.DesktopWindow
   | ElectronApp.ElectronApp
-  | ElectronDialog.ElectronDialog
-  | ElectronTheme.ElectronTheme
-  | ElectronWindow.ElectronWindow;
+  | ElectronTheme.ElectronTheme;
 
 /**
- * @effect-expect-leaking DesktopClientSettings | DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronDialog | ElectronTheme | ElectronWindow
+ * @effect-expect-leaking DesktopEnvironment | DesktopShutdown | DesktopState | DesktopWindow | ElectronApp | ElectronTheme
  */
 export class DesktopLifecycle extends Context.Service<
   DesktopLifecycle,
@@ -94,80 +86,13 @@ const requestDesktopShutdownAndWait = Effect.fn("desktop.lifecycle.requestShutdo
   },
 );
 
-const QUIT_BUTTON_INDEX = 1;
-
-// Quits that no user asked for (a second instance handing over to the running
-// one, the last window closing on Windows/Linux, a failed startup) leave no
-// window behind, and a prompt there could strand the app with no way back.
-const confirmQuitRequested = Effect.fn("desktop.lifecycle.confirmQuitRequested")(
-  function* (): Effect.fn.Return<
-    boolean,
-    never,
-    | DesktopClientSettings.DesktopClientSettings
-    | ElectronApp.ElectronApp
-    | ElectronDialog.ElectronDialog
-    | ElectronWindow.ElectronWindow
-  > {
-    const electronWindow = yield* ElectronWindow.ElectronWindow;
-    const owner = yield* electronWindow.currentMainOrFirst;
-    if (Option.isNone(owner)) {
-      return true;
-    }
-
-    const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
-    const settings = yield* clientSettings.get;
-    const confirmQuit = Option.match(settings, {
-      onNone: () => DEFAULT_CLIENT_SETTINGS.confirmQuit,
-      onSome: (value) => value.confirmQuit,
-    });
-    if (!confirmQuit) {
-      yield* logLifecycleInfo("quit confirmation disabled, quitting");
-      return true;
-    }
-
-    const electronApp = yield* ElectronApp.ElectronApp;
-    const electronDialog = yield* ElectronDialog.ElectronDialog;
-    const appName = yield* electronApp.name;
-    // The dialog is window-modal: a hidden or minimized owner would hide it
-    // too, leaving a prompt nobody can answer and an app that won't quit.
-    yield* electronWindow.reveal(owner.value);
-    const result = yield* electronDialog
-      .showMessageBox(
-        {
-          type: "question",
-          title: `Quit ${appName}`,
-          message: `Quit ${appName}?`,
-          detail: "Running agents and terminals will be stopped.",
-          buttons: ["Cancel", "Quit"],
-          defaultId: QUIT_BUTTON_INDEX,
-          cancelId: 0,
-          noLink: true,
-        },
-        owner,
-      )
-      .pipe(
-        Effect.catch((error: ElectronDialog.ElectronDialogShowMessageBoxError) =>
-          logLifecycleError("quit confirmation dialog failed", { error }).pipe(
-            Effect.as({ response: QUIT_BUTTON_INDEX, checkboxChecked: false }),
-          ),
-        ),
-      );
-    return result.response === QUIT_BUTTON_INDEX;
-  },
-);
-
-interface QuitGate {
-  allowed: boolean;
-  updaterAllowed: boolean;
-  confirming: boolean;
-}
-
 function handleBeforeQuit(
   event: Electron.Event,
   runEffect: <A, E>(effect: Effect.Effect<A, E, DesktopLifecycleRuntimeServices>) => Promise<A>,
-  gate: QuitGate,
+  allowQuit: () => boolean,
+  markQuitAllowed: () => void,
 ): void {
-  if (gate.allowed || gate.updaterAllowed) {
+  if (allowQuit()) {
     void runEffect(
       Effect.gen(function* () {
         const state = yield* DesktopState.DesktopState;
@@ -179,48 +104,22 @@ function handleBeforeQuit(
   }
 
   event.preventDefault();
-  // Quitting again while a confirmation is still up means the user is
-  // insisting, so honour it instead of asking twice. Swallowing the request
-  // would strand the app for good if the prompt is never answered.
-  const skipConfirmation = gate.confirming;
-  gate.confirming = true;
-
-  const quitAfterShutdown = () => {
-    gate.allowed = true;
-    void runEffect(
-      Effect.gen(function* () {
-        const electronApp = yield* ElectronApp.ElectronApp;
-        yield* logLifecycleInfo("shutdown finished, quitting");
-        yield* electronApp.quit;
-      }).pipe(Effect.withSpan("desktop.lifecycle.quitAfterShutdown")),
-    );
-  };
-
   void runEffect(
     Effect.gen(function* () {
       const state = yield* DesktopState.DesktopState;
-      const wasQuitting = yield* Ref.get(state.quitting);
-      if (!skipConfirmation && !wasQuitting && !(yield* confirmQuitRequested())) {
-        yield* logLifecycleInfo("quit cancelled from confirmation dialog");
-        return false;
-      }
       yield* Ref.set(state.quitting, true);
       yield* logLifecycleInfo("before-quit received");
       yield* requestDesktopShutdownAndWait();
-      return true;
     }).pipe(Effect.withSpan("desktop.lifecycle.beforeQuit")),
-  ).then(
-    (shouldQuit) => {
-      gate.confirming = false;
-      if (shouldQuit) {
-        quitAfterShutdown();
-      }
-    },
-    () => {
-      gate.confirming = false;
-      quitAfterShutdown();
-    },
-  );
+  ).finally(() => {
+    markQuitAllowed();
+    void runEffect(
+      Effect.gen(function* () {
+        const electronApp = yield* ElectronApp.ElectronApp;
+        yield* electronApp.quit;
+      }).pipe(Effect.withSpan("desktop.lifecycle.quitAfterShutdown")),
+    );
+  });
 }
 
 function quitFromSignal(
@@ -276,7 +175,8 @@ export const make = DesktopLifecycle.of({
     const environment = yield* DesktopEnvironment.DesktopEnvironment;
     const context = yield* Effect.context<DesktopLifecycleRuntimeServices>();
     const runEffect = Effect.runPromiseWith(context);
-    const quitGate: QuitGate = { allowed: false, updaterAllowed: false, confirming: false };
+    let quitAllowed = false;
+    let updaterQuitAllowed = false;
     yield* electronTheme.onUpdated(() => {
       void runEffect(
         desktopWindow.syncAppearance.pipe(Effect.withSpan("desktop.lifecycle.themeUpdated")),
@@ -286,7 +186,7 @@ export const make = DesktopLifecycle.of({
       // Electron's updater owns the remaining quit/install/relaunch sequence.
       // Cancelling the following app "before-quit" event breaks that sequence,
       // most visibly on macOS where the native updater performs the relaunch.
-      quitGate.updaterAllowed = true;
+      updaterQuitAllowed = true;
       void runEffect(
         logLifecycleInfo("allowing updater-controlled quit").pipe(
           Effect.withSpan("desktop.lifecycle.beforeQuitForUpdate"),
@@ -294,7 +194,14 @@ export const make = DesktopLifecycle.of({
       );
     });
     yield* electronApp.on("before-quit", (event: Electron.Event) => {
-      handleBeforeQuit(event, runEffect, quitGate);
+      handleBeforeQuit(
+        event,
+        runEffect,
+        () => quitAllowed || updaterQuitAllowed,
+        () => {
+          quitAllowed = true;
+        },
+      );
     });
     yield* electronApp.on("activate", () => {
       void runEffect(desktopWindow.activate.pipe(Effect.withSpan("desktop.lifecycle.activate")));

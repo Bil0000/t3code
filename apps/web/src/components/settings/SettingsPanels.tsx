@@ -2140,7 +2140,7 @@ export function GeneralSettingsPanel() {
         {isElectron ? (
           <SettingsRow
             {...searchableSetting("quit-confirmation")}
-            description="Ask before quitting the desktop app."
+            description="Require holding the quit shortcut before the desktop app quits. A quick tap shows a hint instead."
             resetAction={
               settings.confirmQuit !== DEFAULT_UNIFIED_SETTINGS.confirmQuit ? (
                 <SettingResetButton
@@ -2155,7 +2155,7 @@ export function GeneralSettingsPanel() {
               <Switch
                 checked={settings.confirmQuit}
                 onCheckedChange={(checked) => updateSettings({ confirmQuit: Boolean(checked) })}
-                aria-label="Confirm quitting"
+                aria-label="Hold to quit"
               />
             }
           />
