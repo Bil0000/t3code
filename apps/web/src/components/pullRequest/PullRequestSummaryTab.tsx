@@ -71,8 +71,16 @@ function reviewStateLabel(state: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-/** A resolved conversation is finished work, so it opens collapsed the way the timeline folds. */
-function ResolvedComment({ comment, cwd }: { comment: PullRequestComment; cwd: string }) {
+/** Finished work — a resolved conversation or a dismissed approval — opens collapsed. */
+function CollapsedComment({
+  comment,
+  cwd,
+  label,
+}: {
+  comment: PullRequestComment;
+  cwd: string;
+  label: string;
+}) {
   const [open, setOpen] = useState(false);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -86,7 +94,7 @@ function ResolvedComment({ comment, cwd }: { comment: PullRequestComment; cwd: s
           <span className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
             <CommentAuthor actor={comment.author} />
             <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
-            <span>Resolved</span>
+            <span>{label}</span>
           </span>
           <ChevronDownIcon
             aria-hidden
@@ -484,22 +492,21 @@ export function PullRequestSummaryTab({
                 ) : null}
                 {visibleComments.map((comment) => {
                   const thread = threadByCommentId.get(comment.id);
-                  if (thread?.isResolved) {
+                  const reviewState = comment.reviewState?.toLowerCase();
+                  if (thread?.isResolved || reviewState === "dismissed") {
                     return (
-                      <ResolvedComment
+                      <CollapsedComment
                         key={comment.id}
                         comment={comment}
                         cwd={detail.workspaceRoot}
+                        label={thread?.isResolved ? "Resolved" : "Approval dismissed"}
                       />
                     );
                   }
-                  // An approval or a dismissed review is a verdict, not a finding: there is
-                  // nothing in it to fix.
-                  const reviewState = comment.reviewState?.toLowerCase();
+                  // An approval is a verdict, not a finding: there is nothing in it to fix.
                   const finding: PullRequestFinding | null =
                     (comment.kind !== "review" && comment.kind !== "review-comment") ||
-                    reviewState === "approved" ||
-                    reviewState === "dismissed"
+                    reviewState === "approved"
                       ? null
                       : thread === undefined
                         ? { kind: "comment", comment }
