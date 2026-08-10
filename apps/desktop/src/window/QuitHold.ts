@@ -86,8 +86,14 @@ export function makeQuitHoldHandler(
     if (!modifierDown || input.alt || input.shift || key !== "q") {
       // Any other key (or an extra modifier) pressed mid-hold breaks the
       // gesture; without this the hold timer keeps running through the
-      // interruption and the next qualifying repeat would quit early.
-      if (holding && !input.isAutoRepeat) release();
+      // interruption and the next qualifying repeat would quit early. The
+      // interrupted press also stops counting toward a double tap — but only
+      // here, not in release(), which runs mid-restart on an unseen-release
+      // re-press and must not wipe that press's own tap timestamp.
+      if (holding && !input.isAutoRepeat) {
+        lastPressAt = 0;
+        release();
+      }
       return;
     }
 

@@ -171,6 +171,17 @@ describe("makeQuitHoldHandler", () => {
     expect(harness.quit).not.toHaveBeenCalled();
   });
 
+  it("does not count an interrupted press toward a double tap", async () => {
+    const harness = makeHarness();
+    await harness.send(makeInput({}));
+    await harness.send(makeInput({ shift: true }));
+    // A fresh press right after the interruption starts a new hold, not a
+    // double-tap quit.
+    await harness.send(makeInput({}));
+    expect(harness.quit).not.toHaveBeenCalled();
+    expect(harness.notifications).toEqual(["down", "up", "down"]);
+  });
+
   it("ignores other shortcuts", async () => {
     const harness = makeHarness();
     await harness.send(makeInput({ key: "w" }));
