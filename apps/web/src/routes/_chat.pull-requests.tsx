@@ -74,7 +74,8 @@ import {
 } from "../rightPanelStore";
 import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
-import { usePrimaryEnvironmentId } from "../state/environments";
+import { serverSupportsPullRequests } from "../state/environmentCapabilities";
+import { usePrimaryEnvironment } from "../state/environments";
 import { pullRequestEnvironment } from "../state/pullRequests";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -159,7 +160,13 @@ export const Route = createFileRoute("/_chat/pull-requests")({
 function PullRequestsRouteView() {
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
-  const environmentId = usePrimaryEnvironmentId();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const environmentId = primaryEnvironment?.environmentId ?? null;
+  const capabilityKnown = primaryEnvironment !== null && primaryEnvironment.serverConfig !== null;
+  const pullRequestsSupported = serverSupportsPullRequests(primaryEnvironment?.serverConfig);
+  // The primary environment may still be connecting, or may predate this feature. In either
+  // case every query remains idle until the server has explicitly advertised these APIs.
+  const pullRequestEnvironmentId = pullRequestsSupported ? environmentId : null;
   const allProjects = useProjects();
   // Whether the workspace has said what it holds yet. Until it has, an empty project list is
   // "not loaded" rather than "none", and telling a reader to add a project they already have is
@@ -283,10 +290,10 @@ function PullRequestsRouteView() {
   }, [filterKey]);
 
   const listQuery = useEnvironmentQuery(
-    environmentId === null
+    pullRequestEnvironmentId === null
       ? null
       : pullRequestEnvironment.list({
-          environmentId,
+          environmentId: pullRequestEnvironmentId,
           input: {
             state: search.state,
             // The hosts narrow by involvement themselves — GitHub by author and review request,
@@ -313,10 +320,10 @@ function PullRequestsRouteView() {
    * not, and a search's answer would file itself under the workspace.
    */
   const baselineQuery = useEnvironmentQuery(
-    environmentId === null
+    pullRequestEnvironmentId === null
       ? null
       : pullRequestEnvironment.list({
-          environmentId,
+          environmentId: pullRequestEnvironmentId,
           input: {
             state: search.state,
             involvement: search.involvement,
@@ -334,10 +341,10 @@ function PullRequestsRouteView() {
   // ask for, so switching to either is answered from cache.
   const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;
   const authoredQuery = useEnvironmentQuery(
-    environmentId === null || !partitionsWanted
+    pullRequestEnvironmentId === null || !partitionsWanted
       ? null
       : pullRequestEnvironment.list({
-          environmentId,
+          environmentId: pullRequestEnvironmentId,
           input: {
             state: search.state,
             involvement: "authored",
@@ -348,10 +355,10 @@ function PullRequestsRouteView() {
         }),
   );
   const reviewingQuery = useEnvironmentQuery(
-    environmentId === null || !partitionsWanted
+    pullRequestEnvironmentId === null || !partitionsWanted
       ? null
       : pullRequestEnvironment.list({
-          environmentId,
+          environmentId: pullRequestEnvironmentId,
           input: {
             state: search.state,
             involvement: "reviewing",
@@ -375,8 +382,8 @@ function PullRequestsRouteView() {
   const refreshFromHost = async () => {
     setInvalidating(true);
     try {
-      if (environmentId !== null) {
-        await invalidate({ environmentId, input: {} });
+      if (pullRequestEnvironmentId !== null) {
+        await invalidate({ environmentId: pullRequestEnvironmentId, input: {} });
       }
     } finally {
       setInvalidating(false);
@@ -604,7 +611,7 @@ function PullRequestsRouteView() {
       authoredQuery.refresh();
       reviewingQuery.refresh();
     },
-    { enabled: environmentId !== null },
+    { enabled: pullRequestEnvironmentId !== null },
   );
 
   const viewers = baselineQuery.data?.viewers ?? listData?.viewers ?? EMPTY_VIEWERS;
@@ -748,9 +755,12 @@ function PullRequestsRouteView() {
     [groups],
   );
   const statsQuery = useEnvironmentQuery(
-    environmentId === null || statsInput.refs.length === 0
+    pullRequestEnvironmentId === null || statsInput.refs.length === 0
       ? null
-      : pullRequestEnvironment.listStats({ environmentId, input: statsInput }),
+      : pullRequestEnvironment.listStats({
+          environmentId: pullRequestEnvironmentId,
+          input: statsInput,
+        }),
   );
   // Adding or removing one row keys a fresh stats query with nothing in it yet, so the counts
   // are merged into what is already held rather than rebuilt: every count on screen stays until
@@ -802,9 +812,9 @@ function PullRequestsRouteView() {
     [search.number, search.repository, selectedProjectId],
   );
   useEffect(() => {
-    if (rightPanelRef === null || linkedSelection === null) return;
+    if (!pullRequestsSupported || rightPanelRef === null || linkedSelection === null) return;
     useRightPanelStore.getState().openPullRequest(rightPanelRef, linkedSelection);
-  }, [linkedSelection, rightPanelRef]);
+  }, [linkedSelection, pullRequestsSupported, rightPanelRef]);
 
   const selected =
     rightPanelState.isOpen && activePullRequestSurface !== null
@@ -921,7 +931,14 @@ function PullRequestsRouteView() {
     showingCarried && listQuery.isPending && entries.length === 0 && typedQuery.length === 0;
   const listBody = (
     <>
-      {firstLoad ? (
+      {!capabilityKnown ? (
+        <PullRequestListGhost rows={7} />
+      ) : !pullRequestsSupported ? (
+        <PullRequestsUnavailableState
+          title="Pull requests unavailable"
+          error="Update this environment's T3 Code server to browse pull requests."
+        />
+      ) : firstLoad ? (
         <PullRequestListGhost rows={7} />
       ) : listQuery.error && listData === null ? (
         <PullRequestsUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
@@ -1051,7 +1068,8 @@ function PullRequestsRouteView() {
     onHost: (host: string | undefined) => updateListScope({ host }),
     searchInput,
     filtersMenu,
-    rightPanelControl: rightPanelState.isOpen ? null : panelToggleControls,
+    rightPanelControl:
+      !pullRequestsSupported || rightPanelState.isOpen ? null : panelToggleControls,
     listBody,
   };
 
@@ -1092,10 +1110,10 @@ function PullRequestsRouteView() {
   return (
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="relative flex min-h-0 flex-1">
-        {rightPanelState.isOpen ? openPanelControls : null}
+        {pullRequestsSupported && rightPanelState.isOpen ? openPanelControls : null}
         <PullRequestsColumn {...columnProps} />
 
-        {rightPanelState.isOpen && activePullRequestSurface && environmentId !== null ? (
+        {rightPanelState.isOpen && activePullRequestSurface && pullRequestEnvironmentId !== null ? (
           <RightPanelTabs
             mode="inline"
             widthStorageKey="t3code:pull-request-panel-width"
@@ -1139,7 +1157,7 @@ function PullRequestsRouteView() {
           >
             <PullRequestDetailPanel
               key={activePullRequestSurface.id}
-              environmentId={environmentId}
+              environmentId={pullRequestEnvironmentId}
               reference={{
                 projectId: activePullRequestSurface.projectId as ProjectId,
                 repository: activePullRequestSurface.repository,

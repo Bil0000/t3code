@@ -10,7 +10,9 @@ import { readLocalApi } from "../localApi";
 import { useRightPanelStore } from "../rightPanelStore";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
-import { useProjects } from "../state/entities";
+import { useProjects, useServerConfigs } from "../state/entities";
+import { serverSupportsPullRequests } from "../state/environmentCapabilities";
+import { usePrimaryEnvironmentId } from "../state/environments";
 
 export class PullRequestLinkOpenError extends Schema.TaggedErrorClass<PullRequestLinkOpenError>()(
   "PullRequestLinkOpenError",
@@ -181,18 +183,19 @@ export function useOpenChangeRequestLink(
 ) => boolean {
   const navigate = useNavigate();
   const allProjects = useProjects();
+  const serverConfigs = useServerConfigs();
+  const primaryEnvironmentId = usePrimaryEnvironmentId();
   return useCallback(
     (event, targetUrl, targetThreadRef) => {
       const resolvedThreadRef = targetThreadRef ?? threadRef;
+      const environmentId = resolvedThreadRef?.environmentId ?? primaryEnvironmentId;
+      if (environmentId === null || !serverSupportsPullRequests(serverConfigs.get(environmentId))) {
+        return false;
+      }
       // Beside a thread the panel reads on that thread's environment, so a project from another
       // one could not be read there whatever its remote says: two environments can hold the same
       // repository, and handing the panel the wrong one's id opens a surface that never loads.
-      const projects =
-        resolvedThreadRef === undefined
-          ? allProjects
-          : allProjects.filter(
-              (project) => project.environmentId === resolvedThreadRef.environmentId,
-            );
+      const projects = allProjects.filter((project) => project.environmentId === environmentId);
       const parsed = parseChangeRequestUrl(targetUrl);
       const project = parsed === null ? undefined : findProjectForChangeRequest(projects, parsed);
       if (parsed === null || project === undefined) return false;
@@ -222,7 +225,7 @@ export function useOpenChangeRequestLink(
       });
       return true;
     },
-    [allProjects, navigate, threadRef],
+    [allProjects, navigate, primaryEnvironmentId, serverConfigs, threadRef],
   );
 }
 

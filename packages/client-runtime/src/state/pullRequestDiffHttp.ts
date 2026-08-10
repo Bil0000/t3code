@@ -6,11 +6,11 @@ import * as Option from "effect/Option";
 import { HttpClient } from "effect/unstable/http";
 
 import type { PreparedConnection } from "../connection/model.ts";
-import { environmentEndpointUrl } from "../environment/endpoint.ts";
 import { ManagedRelayDpopSigner } from "../relay/managedRelay.ts";
 import {
   executeEnvironmentHttpRequest,
   makeEnvironmentHttpApiClient,
+  makeEnvironmentHttpApiUrlBuilder,
   type RemoteEnvironmentRequestError,
 } from "../rpc/http.ts";
 import { buildEnvironmentAuthHeaders, withEnvironmentCredentials } from "./environmentHttpAuth.ts";
@@ -25,7 +25,9 @@ export const fetchEnvironmentPullRequestDiff = Effect.fn(
   readonly signer: Option.Option<ManagedRelayDpopSigner["Service"]>;
   readonly timeoutMs?: number;
 }) {
-  const requestUrl = environmentEndpointUrl(input.prepared.httpBaseUrl, "/api/pull-requests/diff");
+  const requestUrl = makeEnvironmentHttpApiUrlBuilder(
+    input.prepared.httpBaseUrl,
+  ).pullRequests.diff();
   const client = yield* makeEnvironmentHttpApiClient(input.prepared.httpBaseUrl);
   const headers = yield* buildEnvironmentAuthHeaders(
     input.prepared.httpAuthorization,

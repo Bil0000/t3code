@@ -4,6 +4,8 @@ import { Link, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
+import { serverSupportsPullRequests } from "../../state/environmentCapabilities";
+import { usePrimaryEnvironment } from "../../state/environments";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -111,6 +113,8 @@ function T3Wordmark() {
 export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
   const navigate = useNavigate();
   const { isMobile, setOpenMobile } = useSidebar();
+  const primaryEnvironment = usePrimaryEnvironment();
+  const pullRequestsSupported = serverSupportsPullRequests(primaryEnvironment?.serverConfig);
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -137,12 +141,14 @@ export const SidebarChromeFooter = memo(function SidebarChromeFooter() {
       <SidebarProviderUpdatePill />
       <SidebarUpdatePill />
       <SidebarMenu>
-        <SidebarMenuItem>
-          <SidebarMenuButton onClick={handlePullRequestsClick}>
-            <GitPullRequestIcon />
-            <span>Pull Requests</span>
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+        {pullRequestsSupported ? (
+          <SidebarMenuItem>
+            <SidebarMenuButton onClick={handlePullRequestsClick}>
+              <GitPullRequestIcon />
+              <span>Pull Requests</span>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        ) : null}
         <SidebarMenuItem>
           <SidebarMenuButton onClick={handleUsageClick}>
             <ChartNoAxesColumnIcon />
