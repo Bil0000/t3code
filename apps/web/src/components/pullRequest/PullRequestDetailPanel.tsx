@@ -1,4 +1,4 @@
-import { scopeProjectRef } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
@@ -6,6 +6,7 @@ import type {
   PullRequestMergeMethod,
   PullRequestRef,
   PullRequestState,
+  ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
@@ -159,7 +160,10 @@ const PullRequestCodeTab = lazy(loadCodeTab);
  * is closed by the time the next one opens. It is how a prompt the reader has since edited is told
  * apart from the one they were handed: only the sentence still exactly as written may be replaced.
  */
-const lastHandoffPromptByDraft = new Map<DraftId, string>();
+const lastHandoffPromptByDraft = new Map<string, string>();
+
+const composerTargetKey = (target: ScopedThreadRef | DraftId): string =>
+  typeof target === "string" ? target : scopedThreadKey(target);
 
 export function PullRequestDetailPanel({
   environmentId,
@@ -170,6 +174,7 @@ export function PullRequestDetailPanel({
   onStateChange,
   context = "page",
   chromeVariant = "full",
+  composerDraftTarget,
 }: {
   environmentId: EnvironmentId;
   reference: PullRequestRef;
@@ -206,6 +211,11 @@ export function PullRequestDetailPanel({
    * top — the chrome spends its height on what is being read.
    */
   chromeVariant?: "full" | "collapse";
+  /**
+   * The open thread's composer. Beside the thread whose own pull request this is, hand-offs
+   * land here instead of opening a new thread — the branch is already under the reader's feet.
+   */
+  composerDraftTarget?: ScopedThreadRef | DraftId;
 }) {
   const pullRequestKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
   const [tab, setTab] = useState<DetailTab>("summary");
@@ -393,6 +403,27 @@ export function PullRequestDetailPanel({
     reviewComments?: ReadonlyArray<ReviewCommentContext>;
   };
 
+  // Beside the thread whose own pull request this is, a task belongs in that thread's composer:
+  // the branch is already checked out under it, so opening a second thread would only scatter
+  // the work.
+  const attachTarget = context === "thread" ? (composerDraftTarget ?? null) : null;
+
+  const writeTaskToComposer = (target: ScopedThreadRef | DraftId, task: ThreadTask) => {
+    const store = useComposerDraftStore.getState();
+    const draft = store.getComposerDraft(target);
+    const key = composerTargetKey(target);
+    const prompt = handoffPrompt(
+      { prompt: draft?.prompt ?? "", lastHandoffPrompt: lastHandoffPromptByDraft.get(key) },
+      task.prompt,
+    );
+    lastHandoffPromptByDraft.set(key, task.prompt);
+    store.setPrompt(target, prompt);
+    store.setReviewComments(
+      target,
+      handoffReviewComments(draft?.reviewComments ?? [], task.reviewComments ?? []),
+    );
+  };
+
   /**
    * Opens a thread on this project and leaves the task in its composer for the reader to send.
    *
@@ -412,35 +443,30 @@ export function PullRequestDetailPanel({
         () => null,
       ));
     if (session === null) return null;
-    const store = useComposerDraftStore.getState();
     if (task === null) return session;
     // The latest press is the ask: it takes over what an earlier hand-off left, prompt and chips
     // both, rather than stacking a second one under the first. What the reader typed themselves
     // survives — the composer they are handed is not always a fresh one, and a prompt they have
     // since edited is theirs rather than the hand-off's.
-    const draft = store.getComposerDraft(session.draftId);
-    const existingComments = draft?.reviewComments ?? [];
-    const prompt = handoffPrompt(
-      {
-        prompt: draft?.prompt ?? "",
-        lastHandoffPrompt: lastHandoffPromptByDraft.get(session.draftId),
-      },
-      task.prompt,
-    );
-    // Remember the hand-off's own contribution, not the merged prompt: only that sentence is
-    // this session's to take back next time, and the reader's text around it is not.
-    lastHandoffPromptByDraft.set(session.draftId, task.prompt);
-    store.setPrompt(session.draftId, prompt);
-    store.setReviewComments(
-      session.draftId,
-      handoffReviewComments(existingComments, task.reviewComments ?? []),
-    );
+    writeTaskToComposer(session.draftId, task);
     return session;
   };
 
   /** A question about the change, which needs a thread and nothing else. */
   const startAsk = async (kind: string, task: ThreadTask) => {
     if (!detail || handoff !== null) return;
+    if (attachTarget !== null) {
+      writeTaskToComposer(attachTarget, task);
+      toastManager.add({
+        type: "success",
+        title: "Added to the composer",
+        description:
+          task.prompt.length > 0
+            ? "The question is in the composer — read it over, then send."
+            : "The pull request is in the composer — type your question, then send.",
+      });
+      return;
+    }
     setHandoff(kind);
     const projectRef = scopeProjectRef(environmentId, detail.projectId);
     const opened = await openThreadWithTask(projectRef, task);
@@ -477,6 +503,15 @@ export function PullRequestDetailPanel({
     mode: "worktree" | "local" = "worktree",
   ) => {
     if (!detail || handoff !== null) return;
+    if (attachTarget !== null && task !== null) {
+      writeTaskToComposer(attachTarget, task);
+      toastManager.add({
+        type: "success",
+        title: "Added to the composer",
+        description: "The task is in the composer — read it over, then send.",
+      });
+      return;
+    }
     setHandoff(kind);
     // The menu closes on the press and takes its "Preparing..." label with it, so this is the
     // only thing answering for the checkout. It carries no timeout of its own: a loading toast
