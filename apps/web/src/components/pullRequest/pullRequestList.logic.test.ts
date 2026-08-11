@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   filterPullRequestsByInvolvement,
+  findScopedProject,
   mergePullRequestLists,
   pullRequestEntryKey,
   pullRequestEnvironmentSetKey,
@@ -274,10 +275,11 @@ describe("reading qualifiers out of a typed query", () => {
     });
   });
 
-  it("leaves an unknown key, an unknown value and a stray colon as text", () => {
+  it("leaves an unknown value and a stray colon as text, and reads an unknown key as a label", () => {
     const parsed = parsePullRequestQuery("milestone:v2 draft:maybe status: parser");
-    expect(parsed.filters).toEqual({});
-    expect(parsed.text).toBe("milestone:v2 draft:maybe status: parser");
+    expect(parsed.filters).toEqual({ labels: ["milestone:v2"] });
+    // A known key whose value it does not take is text, so "status:" itself stays findable.
+    expect(parsed.text).toBe("draft:maybe status: parser");
   });
 
   it("answers an empty query with an empty everything", () => {
@@ -616,5 +618,118 @@ describe("merging the environments' own listings", () => {
     expect(pullRequestEnvironmentSetKey(["env-2", "env-1"])).toBe(
       pullRequestEnvironmentSetKey(["env-1", "env-2"]),
     );
+  });
+});
+
+describe('who "I" am, per server', () => {
+  const answer = (viewers: Record<string, string>, entries: ReadonlyArray<PullRequestListEntry>) =>
+    ({
+      viewers,
+      providers: [],
+      entries,
+      errors: [],
+      truncated: false,
+      nextCursors: {},
+    }) as Parameters<typeof mergePullRequestLists>[0][number][1];
+  const byBilal = { login: "Bilal", name: null, avatarUrl: null };
+
+  it("does not let one server's account decide who authored another server's rows", () => {
+    // Both servers reach github.com, signed in as different people. Folded into one host-keyed
+    // record, whichever answered last spoke for both — and every row of the reader's own work
+    // was filed under Others.
+    const merged = mergePullRequestLists([
+      [ENV_1, answer({ "github.com": "Bilal" }, [entry({ number: 1, author: byBilal })])],
+      [ENV_2, answer({ "github.com": "Octocat" }, [entry({ number: 2, author: byBilal })])],
+    ])!;
+
+    const groups = groupPullRequestsByInvolvement(merged.entries, merged.viewers);
+    expect(
+      groups.find((group) => group.key === "authored")?.entries.map((row) => row.number),
+    ).toEqual([1]);
+    expect(
+      filterPullRequestsByInvolvement(merged.entries, merged.viewers, "authored").map(
+        (row) => row.number,
+      ),
+    ).toEqual([1]);
+  });
+
+  it("still reads a single server's host-keyed viewers, which is what a snapshot carries", () => {
+    expect(
+      filterPullRequestsByInvolvement(
+        [entry({ number: 1, author: byBilal })],
+        { "github.com": "Bilal" },
+        "authored",
+      ).map((row) => row.number),
+    ).toEqual([1]);
+  });
+
+  it("names the servers with more rows and no cursor to reach them by", () => {
+    const merged = mergePullRequestLists([
+      [
+        ENV_1,
+        { ...answer({}, []), truncated: true, nextCursors: { "github.com acme/web": "cursor-1" } },
+      ],
+      [ENV_2, { ...answer({}, []), truncated: true }],
+    ])!;
+
+    expect(merged.truncatedEnvironments).toEqual([ENV_1, ENV_2]);
+    expect(Object.keys(merged.nextCursors)).toEqual([ENV_1]);
+  });
+});
+
+describe("the project an id names", () => {
+  const projects = [
+    { id: "project-1", environmentId: ENV_1 },
+    { id: "project-1", environmentId: ENV_2 },
+    { id: "project-2", environmentId: ENV_2 },
+  ];
+
+  it("takes the server it was given", () => {
+    expect(findScopedProject(projects, ENV_2, "project-1")?.environmentId).toBe(ENV_2);
+  });
+
+  it("answers a bare id only where one server has it", () => {
+    expect(findScopedProject(projects, null, "project-2")?.environmentId).toBe(ENV_2);
+    // Two servers hold this id: narrowing to either would be a coin toss the reader cannot see.
+    expect(findScopedProject(projects, null, "project-1")).toBeUndefined();
+  });
+
+  it("answers nothing for a server that does not have it", () => {
+    expect(findScopedProject(projects, ENV_1, "project-2")).toBeUndefined();
+  });
+});
+
+describe("colon-namespaced labels typed as a search", () => {
+  it("reads an unknown key as the label it almost always is", () => {
+    expect(parsePullRequestQuery("size:XXL").filters.labels).toEqual(["size:XXL"]);
+    expect(parsePullRequestQuery("vouch:trusted").filters.labels).toEqual(["vouch:trusted"]);
+    expect(parsePullRequestQuery("size:XXL").text).toBe("");
+  });
+
+  it("excludes one the same way", () => {
+    expect(parsePullRequestQuery("-size:XXL").filters.excludedLabels).toEqual(["size:XXL"]);
+  });
+
+  it("keeps a quoted token as text, which is the way back to a literal search", () => {
+    const parsed = parsePullRequestQuery('"size:XXL"');
+    expect(parsed.filters.labels).toBeUndefined();
+    expect(parsed.text).toBe('"size:XXL"');
+  });
+
+  it("leaves a pasted link alone rather than naming a label after its scheme", () => {
+    const parsed = parsePullRequestQuery("https://github.com/pingdotgg/t3code/pull/1");
+    expect(parsed.filters.labels).toBeUndefined();
+    expect(parsed.text).toBe("https://github.com/pingdotgg/t3code/pull/1");
+  });
+
+  it("mixes with the keys it does know, and with plain words", () => {
+    const parsed = parsePullRequestQuery("area:web draft:true wizard label:bug");
+    expect(parsed.filters).toEqual({ labels: ["area:web", "bug"], draft: "only" });
+    expect(parsed.text).toBe("wizard");
+  });
+
+  it("shares the ceiling with the labels typed as labels", () => {
+    const many = Array.from({ length: 12 }, (_, index) => `area:${index}`).join(" ");
+    expect(parsePullRequestQuery(many).filters.labels).toHaveLength(10);
   });
 });

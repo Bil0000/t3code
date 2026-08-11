@@ -30,8 +30,19 @@ export interface PullRequestGroup<Entry extends PullRequestListEntry = PullReque
   readonly entries: ReadonlyArray<Entry>;
 }
 
-/** The signed-in account per host, as the listing reports it. */
+/**
+ * The signed-in account per host. Keyed `"<environmentId> <host>"` once a listing spans more than
+ * one environment: two machines can both reach github.com signed in as different people, and a
+ * single host-keyed record would let whichever answered last decide who "I" am — which is how
+ * every row of somebody's own work came to be filed under Others.
+ */
 export type PullRequestViewers = PullRequestListResult["viewers"];
+
+/** A row plus the environment that read it, where the caller has one to give. */
+type ScopedEntry = PullRequestListEntry & { readonly environmentId?: string };
+
+export const pullRequestViewerKey = (entry: ScopedEntry): string =>
+  `${entry.environmentId ?? ""} ${entry.host}`;
 
 const GROUP_LABELS: Record<PullRequestGroupKey, string> = {
   reviewRequested: "Review requested",
@@ -49,8 +60,10 @@ function normalize(value: string | null | undefined): string | null {
  * GitHub, GitLab and a GitHub Enterprise install, and the account that owns one says nothing
  * about the others.
  */
-function isAuthoredByViewer(entry: PullRequestListEntry, viewers: PullRequestViewers): boolean {
-  const viewer = normalize(viewers[entry.host]);
+function isAuthoredByViewer(entry: ScopedEntry, viewers: PullRequestViewers): boolean {
+  // The environment's own answer first; a plain host key is what a single-environment listing
+  // still writes, and what the snapshot from one carries.
+  const viewer = normalize(viewers[pullRequestViewerKey(entry)] ?? viewers[entry.host]);
   return viewer !== null && normalize(entry.author?.login) === viewer;
 }
 
@@ -89,8 +102,13 @@ function qualifierValue(raw: string): string {
  * `review:approved`, `status:success` — because a project's labels are its own and a menu cannot
  * list them.
  *
- * Anything else is text: an unknown key, a value a known key does not take, a bare word. Sending
- * it on rather than dropping it is what keeps a search for "status:" itself findable.
+ * A key this does not know is read as a label of that whole name: repositories namespace their
+ * labels with a colon — `size:XXL`, `area:web`, `vouch:trusted` — and someone typing one means
+ * the label, not a description that happens to contain it. `-size:XXL` excludes the same way.
+ *
+ * Quoting is the way back to plain text: `"size:XXL"` is searched for as written, which is what
+ * makes a literal search for a colon still possible. A known key whose value it does not take is
+ * text too, so a search for "status:" itself is still findable.
  */
 export function parsePullRequestQuery(raw: string): {
   readonly text: string;
@@ -132,6 +150,15 @@ export function parsePullRequestQuery(raw: string): {
         checks = state;
         continue;
       }
+      case "":
+        break;
+      default:
+        // An unknown key, read as the namespaced label it almost always is. A pasted link is
+        // not one — `https://…` would otherwise become a label named after its own scheme.
+        if (!value.startsWith("/")) {
+          (negated ? excludedLabels : labels).push(`${qualifier?.[2] ?? ""}:${value}`);
+          continue;
+        }
     }
     text.push(token);
   }
@@ -163,7 +190,7 @@ export function matchesPullRequestQuery(entry: PullRequestListEntry, query: stri
  * The server returns the involvement superset for a state, so switching between the Reviewing
  * and Authored tabs never waits on the network.
  */
-export function filterPullRequestsByInvolvement<Entry extends PullRequestListEntry>(
+export function filterPullRequestsByInvolvement<Entry extends ScopedEntry>(
   entries: ReadonlyArray<Entry>,
   viewers: PullRequestViewers,
   involvement: PullRequestInvolvement,
@@ -236,7 +263,7 @@ export function matchesPullRequestFilters(
  * Only relationships the list data actually carries: no "previously reviewed" bucket is
  * inferred, because the listing has no review history.
  */
-export function groupPullRequestsByInvolvement<Entry extends PullRequestListEntry>(
+export function groupPullRequestsByInvolvement<Entry extends ScopedEntry>(
   entries: ReadonlyArray<Entry>,
   viewers: PullRequestViewers,
 ): ReadonlyArray<PullRequestGroup<Entry>> {
@@ -264,9 +291,7 @@ export function groupPullRequestsByInvolvement<Entry extends PullRequestListEntr
  * the environment on top of that, because two connected machines can hold the same repository and
  * would otherwise contribute two rows under one key.
  */
-export function pullRequestEntryKey(
-  entry: PullRequestListEntry & { readonly environmentId?: string },
-): string {
+export function pullRequestEntryKey(entry: ScopedEntry): string {
   const scope = entry.environmentId === undefined ? "" : `${entry.environmentId}:`;
   return `${scope}${entry.host}:${entry.repository}#${entry.number}`;
 }
@@ -360,12 +385,19 @@ const diffStatKey = (row: {
  * a host names one account, and the same host reached from two machines is the same account.
  */
 export interface MergedPullRequestList {
+  /** Keyed `"<environmentId> <host>"`, so one host's two accounts stay two accounts. */
   readonly viewers: PullRequestViewers;
   readonly providers: PullRequestListResult["providers"];
   readonly entries: ReadonlyArray<EnvironmentPullRequestEntry>;
   readonly errors: PullRequestListResult["errors"];
   readonly truncated: boolean;
   readonly nextCursors: Readonly<Record<string, PullRequestListCursors>>;
+  /**
+   * The environments with rows still on their hosts. Those with a cursor are continued from it;
+   * the rest can only be reached by asking them for a longer page, and are named here so that
+   * asking still happens once every other environment has run out of cursors.
+   */
+  readonly truncatedEnvironments: ReadonlyArray<string>;
 }
 
 /**
@@ -378,13 +410,16 @@ export function mergePullRequestLists(
 ): MergedPullRequestList | null {
   if (answers.length === 0) return null;
   const viewers: Record<string, string> = {};
+  const truncatedEnvironments: string[] = [];
   const providers = new Map<string, PullRequestListResult["providers"][number]>();
   const entries: EnvironmentPullRequestEntry[] = [];
   const errors: Array<PullRequestListResult["errors"][number]> = [];
   const nextCursors: Record<string, PullRequestListCursors> = {};
   let truncated = false;
   for (const [environmentId, answer] of answers) {
-    Object.assign(viewers, answer.viewers);
+    for (const [host, login] of Object.entries(answer.viewers)) {
+      viewers[`${environmentId} ${host}`] = login;
+    }
     for (const provider of answer.providers) {
       const held = providers.get(provider.host);
       providers.set(
@@ -402,6 +437,7 @@ export function mergePullRequestLists(
     entries.push(...answer.entries.map((entry) => ({ ...entry, environmentId })));
     errors.push(...answer.errors);
     truncated ||= answer.truncated;
+    if (answer.truncated) truncatedEnvironments.push(environmentId);
     if (Object.keys(answer.nextCursors).length > 0) {
       nextCursors[environmentId] = answer.nextCursors;
     }
@@ -413,6 +449,7 @@ export function mergePullRequestLists(
     errors,
     truncated,
     nextCursors,
+    truncatedEnvironments,
   };
 }
 
@@ -467,6 +504,7 @@ const decodeSnapshot = Schema.decodeUnknownOption(
       entries: Schema.Array(EnvironmentPullRequestEntrySchema),
       // Per environment here, unlike the wire shape, which is per repository within one.
       nextCursors: Schema.Record(Schema.String, PullRequestListResult.fields.nextCursors),
+      truncatedEnvironments: Schema.Array(Schema.String),
     }),
     // Optional so a snapshot written before the partitions existed still hydrates the feed.
     partitions: Schema.optional(
@@ -516,6 +554,8 @@ export function writePullRequestListSnapshot(
           // position in a listing the host has long since forgotten.
           errors: [],
           nextCursors: {},
+          // Where a listing stopped is as stale as the cursor that named it.
+          truncatedEnvironments: [],
         },
         ...(snapshot.partitions === undefined
           ? {}
@@ -549,6 +589,27 @@ export function resolveProjectScope<Id extends string>(
 ): Id | undefined {
   if (projectId === undefined || !projectsKnown) return projectId;
   return projects.some((project) => project.id === projectId) ? projectId : undefined;
+}
+
+/**
+ * The project an id names, on the server that owns it. A project id is only unique within its own
+ * environment, so an id alone can name two projects on two connected machines: with a server in
+ * hand the answer is exact, and without one it is only given where a single environment has that
+ * id — narrowing to the wrong machine reads an empty list nobody asked for.
+ */
+export function findScopedProject<
+  Project extends { readonly id: string; readonly environmentId: string },
+>(
+  projects: ReadonlyArray<Project>,
+  environmentId: string | null | undefined,
+  projectId: string | undefined,
+): Project | undefined {
+  if (projectId === undefined) return undefined;
+  const matches = projects.filter((project) => project.id === projectId);
+  if (environmentId === null || environmentId === undefined) {
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+  return matches.find((project) => project.environmentId === environmentId);
 }
 
 /**
