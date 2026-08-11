@@ -2828,6 +2828,47 @@ it.effect("keeps a row of a host that ignored the filters if any name of a label
   }),
 );
 
+it.effect('resolves an author filter of "me" to the viewer before narrowing a host\'s rows', () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/a",
+          repository: "acme/web",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        // Only GitHub narrows a listing for itself, so this fixture's "me" has to be resolved
+        // locally too — the same helper both call sites lean on.
+        fakeProvider("gitlab", {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [
+                changeRequest(1, "2026-07-02T00:00:00Z"),
+                {
+                  ...changeRequest(2, "2026-07-01T00:00:00Z"),
+                  author: { login: "bilal", name: null, avatarUrl: null },
+                },
+              ],
+              truncated: false,
+              continues: false,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open", filters: { author: "me" } });
+
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.number),
+      [2],
+    );
+  }),
+);
+
 it.effect("refuses a way of updating a branch that the host or the viewer does not allow", () =>
   Effect.gen(function* () {
     let taken: string | null = null;

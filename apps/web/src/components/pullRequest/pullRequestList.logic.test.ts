@@ -250,6 +250,30 @@ describe("narrowing rows by the filters a host may not have applied", () => {
     expect(narrow({ author: "hubot" })).toEqual([4]);
   });
 
+  it("resolves author:me to the given viewer, case-insensitively", () => {
+    const mine = entry({ number: 30, author: { login: "Bilal", name: null, avatarUrl: null } });
+    const theirs = entry({ number: 31, author: { login: "Hubot", name: null, avatarUrl: null } });
+    expect(matchesPullRequestFilters(mine, { author: "me" }, "bilal")).toBe(true);
+    expect(matchesPullRequestFilters(theirs, { author: "me" }, "bilal")).toBe(false);
+  });
+
+  it("resolves author:@me the same way as author:me", () => {
+    const mine = entry({ number: 32, author: { login: "Bilal", name: null, avatarUrl: null } });
+    const theirs = entry({ number: 33, author: { login: "Hubot", name: null, avatarUrl: null } });
+    expect(matchesPullRequestFilters(mine, { author: "@me" }, "Bilal")).toBe(true);
+    expect(matchesPullRequestFilters(theirs, { author: "@me" }, "Bilal")).toBe(false);
+  });
+
+  it("compares author:me against the literal name when there is no viewer", () => {
+    const literalMe = entry({ number: 34, author: { login: "me", name: null, avatarUrl: null } });
+    const someoneElse = entry({
+      number: 35,
+      author: { login: "Bilal", name: null, avatarUrl: null },
+    });
+    expect(matchesPullRequestFilters(literalMe, { author: "me" })).toBe(true);
+    expect(matchesPullRequestFilters(someoneElse, { author: "me" })).toBe(false);
+  });
+
   it("takes a group of labels as an either-or", () => {
     const sized = [
       entry({ number: 10, labels: [{ name: "size:S", color: null }] }),

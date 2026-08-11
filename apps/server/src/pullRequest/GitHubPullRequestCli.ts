@@ -3,22 +3,23 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import type {
-  PullRequestAction,
-  PullRequestActor,
-  PullRequestInvolvement,
-  PullRequestListFilters,
-  PullRequestListState,
-  PullRequestMergeMethod,
-  PullRequestOmittedFileStat,
-  PullRequestReaction,
-  PullRequestReactionContent,
-  PullRequestReviewCommentDraft,
-  PullRequestReviewVerdict,
-  PullRequestReviewerCandidateList,
-  PullRequestReviewerKind,
-  PullRequestThreadComment,
-  PullRequestUpdateMethod,
+import {
+  resolvePullRequestAuthorFilter,
+  type PullRequestAction,
+  type PullRequestActor,
+  type PullRequestInvolvement,
+  type PullRequestListFilters,
+  type PullRequestListState,
+  type PullRequestMergeMethod,
+  type PullRequestOmittedFileStat,
+  type PullRequestReaction,
+  type PullRequestReactionContent,
+  type PullRequestReviewCommentDraft,
+  type PullRequestReviewVerdict,
+  type PullRequestReviewerCandidateList,
+  type PullRequestReviewerKind,
+  type PullRequestThreadComment,
+  type PullRequestUpdateMethod,
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
@@ -568,7 +569,10 @@ function qualifierValue(value: string): string {
   return `"${value.replaceAll('"', "").trim()}"`;
 }
 
-function filterQualifiers(filters: PullRequestListFilters | undefined): ReadonlyArray<string> {
+function filterQualifiers(
+  filters: PullRequestListFilters | undefined,
+  viewer: string,
+): ReadonlyArray<string> {
   if (filters === undefined) return [];
   return [
     // One qualifier per group, its names joined by commas — GitHub's own OR.
@@ -576,7 +580,9 @@ function filterQualifiers(filters: PullRequestListFilters | undefined): Readonly
       group.length === 0 ? [] : [`label:${group.map(qualifierValue).join(",")}`],
     ),
     ...(filters.excludedLabels ?? []).map((label) => `-label:${qualifierValue(label)}`),
-    ...(filters.author === undefined ? [] : [`author:${qualifierValue(filters.author)}`]),
+    ...(filters.author === undefined
+      ? []
+      : [`author:${qualifierValue(resolvePullRequestAuthorFilter(filters.author, viewer))}`]),
     ...(filters.draft === undefined ? [] : [`draft:${filters.draft === "only"}`]),
     ...(filters.review === undefined ? [] : [`review:${REVIEW_QUALIFIERS[filters.review]}`]),
     ...(filters.checks === undefined
@@ -592,6 +598,7 @@ function filterQualifiers(filters: PullRequestListFilters | undefined): Readonly
 function matchesFilters(
   item: GitHubPullRequestListItem,
   filters: PullRequestListFilters | undefined,
+  viewer: string,
 ): boolean {
   if (filters === undefined) return true;
   const labels = item.labels.map((label) => label.name.trim().toLowerCase());
@@ -605,7 +612,8 @@ function matchesFilters(
     (filters.labels === undefined || filters.labels.every((group) => group.some(holds))) &&
     (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
     (filters.author === undefined ||
-      item.author?.login.toLowerCase() === filters.author.trim().toLowerCase())
+      item.author?.login.toLowerCase() ===
+        resolvePullRequestAuthorFilter(filters.author, viewer).toLowerCase())
   );
 }
 
@@ -640,7 +648,7 @@ function involvementArgs(input: {
         // sharing one instant are ordinary and the caller drops the ones it has already sent —
         // asking for strictly older would lose the rest of them instead.
         ...(input.cursor === undefined ? [] : [`updated:<=${input.cursor.updatedBefore}`]),
-        ...filterQualifiers(input.filters),
+        ...filterQualifiers(input.filters, input.viewer),
         // `gh pr list` answers newest-created first, which is not the order the page reads rows in
         // and not an order a continuation can carry on from: a change request opened last year and
         // touched this morning belongs at the top of the list and at the front of the first slice.
@@ -671,7 +679,7 @@ function matchesUnsortedListing(
       ? item.author?.login.toLowerCase() === viewer
       : item.hasTeamReviewRequest ||
         item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer));
-  return matchesState && matchesInvolvement && matchesFilters(item, input.filters);
+  return matchesState && matchesInvolvement && matchesFilters(item, input.filters, input.viewer);
 }
 
 /** What a repository selector may hold before it goes into a search as itself. */
@@ -715,7 +723,7 @@ function searchQuery(input: {
     ...(query.length === 0 ? [] : [searchPhrase(query)]),
     // Inclusive, and de-duplicated by the caller, for the reason the per-repository read gives.
     ...(input.cursor === undefined ? [] : [`updated:<=${input.cursor.updatedBefore}`]),
-    ...filterQualifiers(input.filters),
+    ...filterQualifiers(input.filters, input.viewer),
     // The order the page reads its rows in, and the only order a continuation can carry on from.
     "sort:updated-desc",
     ...repositories.map((repository) => `repo:${repository}`),

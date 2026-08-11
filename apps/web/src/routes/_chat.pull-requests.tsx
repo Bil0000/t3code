@@ -39,6 +39,7 @@ import {
   mergePullRequestDiffStats,
   partitionPullRequestsWithPriority,
   pullRequestEntryKey,
+  pullRequestEntryViewer,
   rankPullRequestMatches,
   pullRequestEnvironmentSetKey,
   readPullRequestListSnapshot,
@@ -949,7 +950,9 @@ function PullRequestsRouteView() {
     // a host with no filter of its own answers unnarrowed, and so does one whose answer for the
     // new filters has not arrived yet. Checks are absent here, because no row carries them.
     const narrowedEntries = hasLocalFilters
-      ? involvementEntries.filter((entry) => matchesPullRequestFilters(entry, localFilters))
+      ? involvementEntries.filter((entry) =>
+          matchesPullRequestFilters(entry, localFilters, pullRequestEntryViewer(entry, viewers)),
+        )
       : involvementEntries;
     // Newest update first once nothing is typed, so a list merged from several hosts reads in
     // one order rather than in each host's. With a search on, the relevance ranking above is
@@ -1050,7 +1053,9 @@ function PullRequestsRouteView() {
     const narrow = (rows: ReadonlyArray<EnvironmentPullRequestEntry> | undefined) =>
       rows === undefined || !hasLocalFilters
         ? rows
-        : rows.filter((entry) => matchesPullRequestFilters(entry, localFilters));
+        : rows.filter((entry) =>
+            matchesPullRequestFilters(entry, localFilters, pullRequestEntryViewer(entry, viewers)),
+          );
     const authored = narrow(
       partitionsWanted ? (authoredQuery.data?.entries ?? held?.authored) : undefined,
     );

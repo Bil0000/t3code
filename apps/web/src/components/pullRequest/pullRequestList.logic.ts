@@ -1,6 +1,11 @@
 import * as Schema from "effect/Schema";
 
-import { EnvironmentId, PullRequestListEntry, PullRequestListResult } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  PullRequestListEntry,
+  PullRequestListResult,
+  resolvePullRequestAuthorFilter,
+} from "@t3tools/contracts";
 import type {
   PullRequestDiffStat,
   PullRequestInvolvement,
@@ -56,14 +61,25 @@ function normalize(value: string | null | undefined): string | null {
 }
 
 /**
+ * The signed-in login for the host a row came from, or null where none was given. Shared by
+ * authorship matching here and by `author:me` resolution wherever a row's own viewer is needed.
+ */
+export function pullRequestEntryViewer(
+  entry: ScopedEntry,
+  viewers: PullRequestViewers,
+): string | null {
+  // The environment's own answer first; a plain host key is what a single-environment listing
+  // still writes, and what the snapshot from one carries.
+  return normalize(viewers[pullRequestViewerKey(entry)] ?? viewers[entry.host]);
+}
+
+/**
  * Authorship is per host, not per provider kind: the same list can hold change requests from
  * GitHub, GitLab and a GitHub Enterprise install, and the account that owns one says nothing
  * about the others.
  */
 function isAuthoredByViewer(entry: ScopedEntry, viewers: PullRequestViewers): boolean {
-  // The environment's own answer first; a plain host key is what a single-environment listing
-  // still writes, and what the snapshot from one carries.
-  const viewer = normalize(viewers[pullRequestViewerKey(entry)] ?? viewers[entry.host]);
+  const viewer = pullRequestEntryViewer(entry, viewers);
   return viewer !== null && normalize(entry.author?.login) === viewer;
 }
 
@@ -281,10 +297,14 @@ export function narrowPullRequestsToFilters<Entry extends PullRequestListEntry>(
  *
  * `checks` is absent because no listed row carries its check state: that one filter is the
  * host's alone, and a row a host did not narrow stays rather than being guessed at.
+ *
+ * `viewer` is the row's own host's signed-in login, so `author:me` resolves against it rather
+ * than being compared as the literal name "me". Optional, and left unresolved without one.
  */
 export function matchesPullRequestFilters(
   entry: PullRequestListEntry,
   filters: PullRequestListFilters,
+  viewer?: string | null,
 ): boolean {
   const labels = entry.labels.map((label) => label.name.trim().toLowerCase());
   const holds = (label: string) => labels.includes(label.trim().toLowerCase());
@@ -297,7 +317,8 @@ export function matchesPullRequestFilters(
     (filters.labels === undefined || filters.labels.every((group) => group.some(holds))) &&
     (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
     (filters.author === undefined ||
-      entry.author?.login.toLowerCase() === filters.author.trim().toLowerCase())
+      entry.author?.login.toLowerCase() ===
+        resolvePullRequestAuthorFilter(filters.author, viewer).toLowerCase())
   );
 }
 

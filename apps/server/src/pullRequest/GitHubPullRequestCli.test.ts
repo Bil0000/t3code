@@ -584,6 +584,26 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect('resolves an author filter of "me" to the viewer, not the literal word', () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        filters: { author: "me" },
+      });
+
+      expect(searchOfCall(0)).toBe('author:"bilal" sort:updated-desc');
+    }),
+  );
+
   it.effect("sends one label qualifier per group, its names joined the way GitHub ors them", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("[]")));

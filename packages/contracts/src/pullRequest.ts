@@ -924,6 +924,26 @@ export function pullRequestHostOf(
 }
 
 /**
+ * `author:me` names whoever is signed in to the host being read, GitHub's `@me` spelled either
+ * way. A host's own search would answer it, but the page and the server both re-check an author
+ * against the row's login, so the name is resolved before either comparison rather than being
+ * matched as the literal login "me".
+ *
+ * Null viewer where the host has not said who the reader is; the filter then stands as typed,
+ * which is the same answer a search for a user named "me" would give.
+ *
+ * Shared between the server and the page so both narrow by the same login.
+ */
+export function resolvePullRequestAuthorFilter(
+  author: string,
+  viewer: string | null | undefined,
+): string {
+  const trimmed = author.trim();
+  if (!/^@?me$/i.test(trimmed)) return trimmed;
+  return viewer === null || viewer === undefined || viewer.trim().length === 0 ? trimmed : viewer;
+}
+
+/**
  * What a host needs before it can be read, as a sentence to show wherever that host is reported
  * as unusable — the whole page when nothing can be read, and one entry in the host switcher when
  * only that host cannot. Null when the reason is not about setting a host up.

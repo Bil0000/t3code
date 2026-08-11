@@ -10,6 +10,7 @@ import {
   PullRequestUnavailableError,
   pullRequestHostOf,
   pullRequestProviderRequirement,
+  resolvePullRequestAuthorFilter,
   type OrchestrationProjectShell,
   type PullRequestAction,
   type PullRequestActionInput,
@@ -639,6 +640,7 @@ export const make = Effect.gen(function* () {
   const matchesRowFilters = (
     item: ProviderChangeRequest,
     filters: PullRequestListFilters | undefined,
+    viewer: string,
   ): boolean => {
     if (filters === undefined) return true;
     const labels = item.labels.map((label) => label.name.trim().toLowerCase());
@@ -658,7 +660,8 @@ export const make = Effect.gen(function* () {
       (filters.labels === undefined || filters.labels.every((group) => group.some(holds))) &&
       (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
       (filters.author === undefined ||
-        item.author?.login.toLowerCase() === filters.author.trim().toLowerCase())
+        item.author?.login.toLowerCase() ===
+          resolvePullRequestAuthorFilter(filters.author, viewer).toLowerCase())
     );
   };
 
@@ -845,7 +848,7 @@ export const make = Effect.gen(function* () {
                 return {
                   key,
                   entries: items
-                    .filter((item) => matchesRowFilters(item, input.filters))
+                    .filter((item) => matchesRowFilters(item, input.filters, viewer))
                     .map((item) => toEntry({ project, item, viewer })),
                   errors: [],
                   truncated: page.truncated,
@@ -951,7 +954,7 @@ export const make = Effect.gen(function* () {
                 return Effect.succeed({
                   key: listCursorKey(project.host, project.repository),
                   entries: items
-                    .filter((item) => matchesRowFilters(item, input.filters))
+                    .filter((item) => matchesRowFilters(item, input.filters, viewer))
                     .map((item) => toEntry({ project, item, viewer })),
                   errors: [],
                   truncated: page.truncated,
