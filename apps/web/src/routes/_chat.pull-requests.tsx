@@ -326,14 +326,16 @@ function PullRequestsRouteView() {
   const selectedProjectId = linkedProjectId ?? projectIdForRepository ?? scopedProjectId;
   // Which server the selection belongs to. Named by the URL where a link had one to give;
   // otherwise the project id decides, and only where exactly one server has that project.
+  // Kept only while that server is one this workspace still has, the same way the scope above
+  // treats a stale name: a saved link naming a server that has since gone would otherwise open
+  // nothing, even where the project id it also carries names exactly one remaining server.
+  const selectedEnvironmentId =
+    capableEnvironments.find(
+      (environment) => environment.environmentId === search.selectedEnvironmentId,
+    )?.environmentId ?? scopedEnvironmentId;
   const selectedProject = useMemo(
-    () =>
-      findScopedProject(
-        projects,
-        search.selectedEnvironmentId ?? scopedEnvironmentId,
-        selectedProjectId,
-      ),
-    [projects, scopedEnvironmentId, search.selectedEnvironmentId, selectedProjectId],
+    () => findScopedProject(projects, selectedEnvironmentId, selectedProjectId),
+    [projects, selectedEnvironmentId, selectedProjectId],
   );
   // One panel for the page rather than one per server: the surfaces carry the server they were
   // read from, so tabs from two of them sit side by side instead of replacing each other. Its
