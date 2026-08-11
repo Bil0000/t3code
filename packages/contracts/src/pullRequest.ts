@@ -33,6 +33,12 @@ export const PullRequestReviewDecision = Schema.Literals([
 ]);
 export type PullRequestReviewDecision = typeof PullRequestReviewDecision.Type;
 
+/** One qualifier's value, bounded because it is written into a host's own search query. */
+const PullRequestQualifierValue = TrimmedNonEmptyString.check(Schema.isMaxLength(200));
+const PullRequestQualifierValues = Schema.Array(PullRequestQualifierValue).check(
+  Schema.isMaxLength(10),
+);
+
 /**
  * Narrowings beyond state and involvement, each absent by default — an absent field filters
  * nothing, which is what every listing did before there were any. Optional as a whole so a page
@@ -43,10 +49,19 @@ export type PullRequestReviewDecision = typeof PullRequestReviewDecision.Type;
  */
 export const PullRequestListFilters = Schema.Struct({
   draft: Schema.optional(Schema.Literals(["only", "hide"])),
-  review: Schema.optional(Schema.Literals(["approved"])),
-  checks: Schema.optional(Schema.Literals(["passing"])),
-  /** Excludes the sizes above medium, which are read off the `size:` labels a repository sets. */
-  maxSize: Schema.optional(Schema.Literals(["m"])),
+  review: Schema.optional(
+    Schema.Literals(["approved", "changes-requested", "review-required", "none"]),
+  ),
+  checks: Schema.optional(Schema.Literals(["passing", "failing"])),
+  /**
+   * Labels a row must carry all of, and labels it must carry none of — typed as `label:` and
+   * `-label:` qualifiers, since a project's labels are its own and no menu can list them.
+   * Bounded because each becomes a qualifier of a host's search.
+   */
+  labels: Schema.optional(PullRequestQualifierValues),
+  excludedLabels: Schema.optional(PullRequestQualifierValues),
+  /** One login, as `author:` names it. */
+  author: Schema.optional(PullRequestQualifierValue),
 });
 export type PullRequestListFilters = typeof PullRequestListFilters.Type;
 

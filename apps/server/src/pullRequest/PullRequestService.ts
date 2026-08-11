@@ -23,6 +23,7 @@ import {
   type PullRequestDiffResult,
   type PullRequestInvalidateInput,
   type PullRequestListEntry,
+  type PullRequestListFilters,
   type PullRequestListInput,
   type PullRequestListProjectError,
   type PullRequestListResult,
@@ -1455,6 +1456,21 @@ export const make = Effect.gen(function* () {
     refEpochs.set(scope, ++epochCounter);
   };
 
+  /** The positional filter slot of a cache key, back as the record `listUncached` takes. */
+  const filtersOfKey = (
+    slots: ReadonlyArray<string | ReadonlyArray<string> | null>,
+  ): PullRequestListFilters => {
+    const [draft, review, checks, author, labels, excludedLabels] = slots;
+    return {
+      ...(typeof draft === "string" ? { draft: draft as "only" | "hide" } : {}),
+      ...(typeof review === "string" ? { review: review as PullRequestListFilters["review"] } : {}),
+      ...(typeof checks === "string" ? { checks: checks as PullRequestListFilters["checks"] } : {}),
+      ...(typeof author === "string" ? { author } : {}),
+      ...(Array.isArray(labels) ? { labels } : {}),
+      ...(Array.isArray(excludedLabels) ? { excludedLabels } : {}),
+    };
+  };
+
   // Keys serialize positionally and parse back in the lookup, so the cache is the only holder
   // of in-flight state: concurrent identical reads coalesce on the key into one host request.
   // The continuation cursors are part of the key, entries sorted so one continuation is one
@@ -1468,7 +1484,7 @@ export const make = Effect.gen(function* () {
           number,
           string,
           string | null,
-          ReadonlyArray<string | null> | null,
+          ReadonlyArray<string | ReadonlyArray<string> | null> | null,
           string | null,
           string | null,
           number | null,
@@ -1478,16 +1494,7 @@ export const make = Effect.gen(function* () {
       return listUncached({
         state,
         ...(involvement === null ? {} : { involvement }),
-        ...(filters === null
-          ? {}
-          : {
-              filters: {
-                ...(filters[0] === null ? {} : { draft: filters[0] }),
-                ...(filters[1] === null ? {} : { review: filters[1] }),
-                ...(filters[2] === null ? {} : { checks: filters[2] }),
-                ...(filters[3] === null ? {} : { maxSize: filters[3] }),
-              },
-            }),
+        ...(filters === null ? {} : { filters: filtersOfKey(filters) }),
         ...(projectId === null ? {} : { projectId }),
         ...(host === null ? {} : { host }),
         ...(limit === null ? {} : { limit }),
@@ -1516,7 +1523,9 @@ export const make = Effect.gen(function* () {
             input.filters.draft ?? null,
             input.filters.review ?? null,
             input.filters.checks ?? null,
-            input.filters.maxSize ?? null,
+            input.filters.author ?? null,
+            input.filters.labels ?? null,
+            input.filters.excludedLabels ?? null,
           ],
       input.projectId ?? null,
       input.host ?? null,

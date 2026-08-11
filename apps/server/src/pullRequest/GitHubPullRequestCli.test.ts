@@ -564,12 +564,21 @@ layer("GitHubPullRequestCli.layer", (it) => {
         involvement: "all",
         viewer: "bilal",
         limit: 10,
-        filters: { draft: "hide", review: "approved", checks: "passing", maxSize: "m" },
+        filters: {
+          draft: "hide",
+          review: "changes-requested",
+          checks: "failing",
+          labels: ["needs design", 'quo"te'],
+          excludedLabels: ["wip"],
+          author: "octocat",
+        },
       });
 
+      // Quotes around anything a reader typed, and the one character that could end a quoted
+      // value early dropped rather than escaped.
       expect(searchOfCall(0)).toBe(
-        'draft:false review:approved status:success -label:"size:L" -label:"size:XL" ' +
-          '-label:"size:XXL" sort:updated-desc',
+        'label:"needs design" label:"quote" -label:"wip" author:"octocat" draft:false ' +
+          "review:changes_requested status:failure sort:updated-desc",
       );
     }),
   );
@@ -582,7 +591,8 @@ layer("GitHubPullRequestCli.layer", (it) => {
           output(
             pullRequests(3, 1, (number) => ({
               isDraft: number === 2,
-              labels: number === 3 ? [{ name: "size:XL", color: "ff0000" }] : [],
+              author: { login: number === 1 ? "octocat" : "hubot" },
+              labels: number === 3 ? [{ name: "WIP", color: "ff0000" }] : [],
             })),
           ),
         ),
@@ -597,7 +607,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         involvement: "all",
         viewer: "bilal",
         limit: 10,
-        filters: { draft: "hide", checks: "passing", maxSize: "m" },
+        filters: { draft: "hide", checks: "passing", excludedLabels: ["wip"], author: "OctoCat" },
       });
 
       // The fallback reads without a search, so the qualifiers cannot travel with it; checks
@@ -620,12 +630,12 @@ layer("GitHubPullRequestCli.layer", (it) => {
         involvement: "all",
         viewer: "bilal",
         limit: 10,
-        filters: { draft: "only", review: "approved" },
+        filters: { draft: "only", review: "none", labels: ["bug"] },
       });
 
       assert.strictEqual(
         searchQueryOfCall(0),
-        "is:pr is:open draft:true review:approved sort:updated-desc repo:acme/web",
+        'is:pr is:open label:"bug" draft:true review:none sort:updated-desc repo:acme/web',
       );
     }),
   );

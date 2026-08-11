@@ -510,24 +510,34 @@ function searchPhrase(query: string): string {
   return `"${query.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
-/**
- * The labels a repository puts on a change request too large to be reviewed in one sitting.
- * Sizing is a convention rather than a GitHub feature, so an unlabelled row is not excluded:
- * a repository that labels nothing would otherwise show nothing under a size filter.
- */
-const OVERSIZED_LABELS = ["size:L", "size:XL", "size:XXL"] as const;
+/** GitHub's own spelling of a review state, which is not the contract's. */
+const REVIEW_QUALIFIERS = {
+  approved: "approved",
+  "changes-requested": "changes_requested",
+  "review-required": "required",
+  none: "none",
+} as const;
 
 /**
- * The extra narrowings as GitHub search qualifiers. Label values are quoted because a label
- * holds a colon and a space; the rest are fixed words of this module's own.
+ * The extra narrowings as GitHub search qualifiers. Values a reader typed are quoted, and the
+ * one character that could end the quoted value early is dropped rather than escaped: no GitHub
+ * label or login holds a double quote, so there is nothing to preserve and everything to lose.
  */
+function qualifierValue(value: string): string {
+  return `"${value.replaceAll('"', "").trim()}"`;
+}
+
 function filterQualifiers(filters: PullRequestListFilters | undefined): ReadonlyArray<string> {
   if (filters === undefined) return [];
   return [
+    ...(filters.labels ?? []).map((label) => `label:${qualifierValue(label)}`),
+    ...(filters.excludedLabels ?? []).map((label) => `-label:${qualifierValue(label)}`),
+    ...(filters.author === undefined ? [] : [`author:${qualifierValue(filters.author)}`]),
     ...(filters.draft === undefined ? [] : [`draft:${filters.draft === "only"}`]),
-    ...(filters.review === undefined ? [] : ["review:approved"]),
-    ...(filters.checks === undefined ? [] : ["status:success"]),
-    ...(filters.maxSize === undefined ? [] : OVERSIZED_LABELS.map((label) => `-label:"${label}"`)),
+    ...(filters.review === undefined ? [] : [`review:${REVIEW_QUALIFIERS[filters.review]}`]),
+    ...(filters.checks === undefined
+      ? []
+      : [`status:${filters.checks === "passing" ? "success" : "failure"}`]),
   ];
 }
 
@@ -541,11 +551,17 @@ function matchesFilters(
 ): boolean {
   if (filters === undefined) return true;
   const labels = item.labels.map((label) => label.name.trim().toLowerCase());
+  const holds = (label: string) => labels.includes(label.trim().toLowerCase());
   return (
     (filters.draft === undefined || item.isDraft === (filters.draft === "only")) &&
-    (filters.review === undefined || item.reviewDecision === "approved") &&
-    (filters.maxSize === undefined ||
-      !OVERSIZED_LABELS.some((label) => labels.includes(label.toLowerCase())))
+    (filters.review === undefined ||
+      (filters.review === "none"
+        ? item.reviewDecision === null
+        : item.reviewDecision === filters.review)) &&
+    (filters.labels === undefined || filters.labels.every(holds)) &&
+    (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
+    (filters.author === undefined ||
+      item.author?.login.toLowerCase() === filters.author.trim().toLowerCase())
   );
 }
 
