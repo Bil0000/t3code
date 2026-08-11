@@ -1,5 +1,3 @@
-import type { PullRequestListEntry } from "@t3tools/contracts";
-
 import { memo } from "react";
 
 import { cn } from "~/lib/utils";
@@ -7,6 +5,7 @@ import { getSourceControlPresentationForKind } from "~/sourceControlPresentation
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import type { EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import {
   PullRequestActorLabel,
   PullRequestDiffStat,
@@ -22,7 +21,7 @@ function PullRequestRowImpl({
   matchedElsewhere,
   onSelect,
 }: {
-  entry: PullRequestListEntry;
+  entry: EnvironmentPullRequestEntry;
   selected: boolean;
   showProjectTitle: boolean;
   /** Only when the list spans more than one host, where the repository alone is ambiguous. */
@@ -32,7 +31,7 @@ function PullRequestRowImpl({
    * commit message. Saying so is the difference between a result and an apparently random row.
    */
   matchedElsewhere?: boolean;
-  onSelect: (entry: PullRequestListEntry) => void;
+  onSelect: (entry: EnvironmentPullRequestEntry) => void;
 }) {
   const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
   return (

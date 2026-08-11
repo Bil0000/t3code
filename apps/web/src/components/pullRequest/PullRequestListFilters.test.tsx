@@ -1,4 +1,4 @@
-import type { ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { CircleIcon } from "lucide-react";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -58,7 +58,6 @@ function menu(overrides: Partial<Parameters<typeof PullRequestFiltersMenu>[0]>) 
     host: undefined,
     hostOptions: [],
     onHost: () => undefined,
-    environmentId: null,
     projects: [],
     projectId: undefined,
     unavailable: new Map(),
@@ -110,7 +109,14 @@ describe("pull request filters menu", () => {
     const projectId = "project-1" as ProjectId;
     const onProject = vi.fn();
     const view = menu({
-      projects: [{ id: projectId, title: "T3 Code", workspaceRoot: "/work/t3code" }],
+      projects: [
+        {
+          id: projectId,
+          environmentId: "env-1" as EnvironmentId,
+          title: "T3 Code",
+          workspaceRoot: "/work/t3code",
+        },
+      ],
       projectId,
       onProject,
     });

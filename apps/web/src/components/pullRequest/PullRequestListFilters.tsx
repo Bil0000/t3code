@@ -187,7 +187,6 @@ export function PullRequestFiltersMenu({
   host,
   hostOptions,
   onHost,
-  environmentId,
   projects,
   projectId,
   unavailable,
@@ -209,10 +208,10 @@ export function PullRequestFiltersMenu({
    */
   hostOptions: ReadonlyArray<PullRequestFilterOption<string>>;
   onHost: (host: string | undefined) => void;
-  /** Where the projects' own favicons are read from; null before the environment is known. */
-  environmentId: EnvironmentId | null;
+  /** The projects of every connected environment, each carrying the one its favicon is read from. */
   projects: ReadonlyArray<{
     readonly id: ProjectId;
+    readonly environmentId: EnvironmentId;
     readonly title: string;
     readonly workspaceRoot: string;
   }>;
@@ -336,16 +335,12 @@ export function PullRequestFiltersMenu({
                   title={reason}
                 >
                   <span className="flex min-w-0 flex-1 items-center gap-2">
-                    {environmentId === null ? (
-                      <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
-                    ) : (
-                      <ProjectFavicon
-                        environmentId={environmentId}
-                        cwd={project.workspaceRoot}
-                        fallbackIcon={FolderGit2Icon}
-                        className="size-3.5 shrink-0"
-                      />
-                    )}
+                    <ProjectFavicon
+                      environmentId={project.environmentId}
+                      cwd={project.workspaceRoot}
+                      fallbackIcon={FolderGit2Icon}
+                      className="size-3.5 shrink-0"
+                    />
                     <span className="min-w-0 flex-1 truncate">{project.title}</span>
                     {reason === undefined ? null : (
                       <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
