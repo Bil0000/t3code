@@ -561,8 +561,9 @@ export function decodeStatusesJson(
     const name = trimmed(status.name) ?? trimmed(status.key);
     if (name === null) continue;
     // Bitbucket re-uses a status key when a pipeline is run again, so the same check can appear
-    // twice on one page. Nothing decoded here says which copy is newer or what pipeline it came
-    // from, so the later one wins, which is the order Bitbucket writes an update in.
+    // twice on one page. Nothing decoded here says which copy is newer, so the later one wins,
+    // which is the order Bitbucket writes an update in. The key is kept as the workflow name so
+    // two different pipelines that display the same name are not folded into one.
     checks.push({
       check: {
         name,
@@ -570,7 +571,7 @@ export function decodeStatusesJson(
         description: trimmed(status.description),
         url: trimmed(status.url),
       },
-      workflowName: null,
+      workflowName: trimmed(status.key),
       at: null,
     });
   }
