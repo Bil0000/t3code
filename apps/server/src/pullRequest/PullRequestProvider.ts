@@ -5,6 +5,7 @@ import type {
   PullRequestActor,
   PullRequestBaseComparison,
   PullRequestCapabilities,
+  PullRequestChecksState,
   PullRequestCheck,
   PullRequestComment,
   PullRequestCommit,
@@ -71,6 +72,8 @@ export interface ProviderChangeRequest {
   readonly labels: ReadonlyArray<PullRequestLabel>;
   /** Absent from a host that does not summarise its reviews, which is every host but GitHub. */
   readonly reviewDecision?: PullRequestReviewDecision | null | undefined;
+  /** Absent from a host that reports no check rollup on its listings. */
+  readonly checksState?: PullRequestChecksState | null | undefined;
 }
 
 export interface ProviderChangeRequestPage {

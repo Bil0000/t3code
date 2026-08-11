@@ -549,7 +549,10 @@ function qualifierValue(value: string): string {
 function filterQualifiers(filters: PullRequestListFilters | undefined): ReadonlyArray<string> {
   if (filters === undefined) return [];
   return [
-    ...(filters.labels ?? []).map((label) => `label:${qualifierValue(label)}`),
+    // One qualifier per group, its names joined by commas — GitHub's own OR.
+    ...(filters.labels ?? []).flatMap((group) =>
+      group.length === 0 ? [] : [`label:${group.map(qualifierValue).join(",")}`],
+    ),
     ...(filters.excludedLabels ?? []).map((label) => `-label:${qualifierValue(label)}`),
     ...(filters.author === undefined ? [] : [`author:${qualifierValue(filters.author)}`]),
     ...(filters.draft === undefined ? [] : [`draft:${filters.draft === "only"}`]),
@@ -577,7 +580,7 @@ function matchesFilters(
       (filters.review === "none"
         ? item.reviewDecision === null
         : item.reviewDecision === filters.review)) &&
-    (filters.labels === undefined || filters.labels.every(holds)) &&
+    (filters.labels === undefined || filters.labels.every((group) => group.some(holds))) &&
     (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
     (filters.author === undefined ||
       item.author?.login.toLowerCase() === filters.author.trim().toLowerCase())

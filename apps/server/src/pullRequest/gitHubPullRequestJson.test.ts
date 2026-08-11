@@ -9,6 +9,7 @@ import {
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
   decodePullRequestListJson,
+  decodePullRequestSearchJson,
   decodeRepositoryAccessJson,
   decodeReviewerCandidatesJson,
   decodeReviewThreadCommentsJson,
@@ -87,11 +88,94 @@ describe("pull request list decoding", () => {
     ]);
   });
 
+  it("rolls the head commit's checks up to the one word a row has space for", () => {
+    const batch = expectSuccess(
+      decodePullRequestListJson(
+        listJson([
+          // A failure outranks a run still going, and a completed run has to be read through its
+          // conclusion rather than its status.
+          {
+            statusCheckRollup: [
+              { name: "lint", status: "COMPLETED", conclusion: "SUCCESS" },
+              { name: "build", status: "IN_PROGRESS" },
+              { name: "test", status: "COMPLETED", conclusion: "FAILURE" },
+            ],
+          },
+          {
+            statusCheckRollup: [
+              { name: "lint", status: "COMPLETED", conclusion: "SUCCESS" },
+              { name: "build", status: "QUEUED" },
+            ],
+          },
+          { statusCheckRollup: [{ name: "lint", status: "COMPLETED", conclusion: "SUCCESS" }] },
+          // A commit status reports one `state` and no `status` at all.
+          { statusCheckRollup: [{ context: "ci/legacy", state: "ERROR" }] },
+          // Neither a pass, a failure nor a wait is no verdict rather than a green tick.
+          { statusCheckRollup: [{ name: "lint", status: "COMPLETED", conclusion: "SKIPPED" }] },
+          { statusCheckRollup: [] },
+          {},
+        ]),
+      ),
+    );
+    expect(batch.items.map((entry) => entry.checksState)).toEqual([
+      "failing",
+      "pending",
+      "passing",
+      "failing",
+      null,
+      null,
+      null,
+    ]);
+  });
+
   it("skips malformed entries but still counts them, so paging does not stop early", () => {
     const raw = `[${listJson([{}]).slice(1, -1)},{"number":"not-a-number"}]`;
     const batch = expectSuccess(decodePullRequestListJson(raw));
     expect(batch.items).toHaveLength(1);
     expect(batch.rawCount).toBe(2);
+  });
+});
+
+describe("pull request search decoding", () => {
+  function searchJson(rollupStates: ReadonlyArray<string | null>): string {
+    return JSON.stringify({
+      data: {
+        search: {
+          pageInfo: { hasNextPage: false },
+          nodes: rollupStates.map((state, index) => ({
+            number: index + 1,
+            title: "Add the pull requests page",
+            url: "https://github.com/pingdotgg/t3code/pull/1",
+            headRefName: "feat/page",
+            baseRefName: "main",
+            createdAt: "2026-07-01T00:00:00Z",
+            updatedAt: "2026-07-02T00:00:00Z",
+            repository: { nameWithOwner: "pingdotgg/t3code" },
+            commits: {
+              nodes: [{ commit: { statusCheckRollup: state === null ? null : { state } } }],
+            },
+          })),
+        },
+      },
+    });
+  }
+
+  it("maps the rollup enum the search answers with onto the same three words", () => {
+    // The search asks GitHub for the verdict rather than the checks behind it, so this path sees
+    // one enum where the listing sees an array.
+    const batch = expectSuccess(
+      decodePullRequestSearchJson(
+        searchJson(["SUCCESS", "FAILURE", "ERROR", "PENDING", "EXPECTED", null]),
+      ),
+    );
+    expect(batch.items.map((entry) => entry.checksState)).toEqual([
+      "passing",
+      "failing",
+      "failing",
+      "pending",
+      "pending",
+      null,
+    ]);
   });
 });
 

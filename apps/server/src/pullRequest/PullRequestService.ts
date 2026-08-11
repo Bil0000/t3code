@@ -377,7 +377,7 @@ export const make = Effect.gen(function* () {
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
 
   const listWorkspaceProjects = (
-    filter: Pick<PullRequestListInput, "projectId" | "host">,
+    filter: Pick<PullRequestListInput, "projectId" | "projectIds" | "host">,
   ): Effect.Effect<WorkspaceProjects, PullRequestError> =>
     projections.getShellSnapshot().pipe(
       Effect.mapError(
@@ -398,6 +398,7 @@ export const make = Effect.gen(function* () {
         const seen = new Set<string>();
         for (const project of snapshot.projects) {
           if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
+          if (filter.projectIds !== undefined && !filter.projectIds.includes(project.id)) continue;
           const kind = project.repositoryIdentity?.provider as
             | SourceControlProviderKind
             | undefined;
@@ -576,7 +577,7 @@ export const make = Effect.gen(function* () {
         (filters.review === "none"
           ? item.reviewDecision === null
           : item.reviewDecision === filters.review)) &&
-      (filters.labels === undefined || filters.labels.every(holds)) &&
+      (filters.labels === undefined || filters.labels.every((group) => group.some(holds))) &&
       (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
       (filters.author === undefined ||
         item.author?.login.toLowerCase() === filters.author.trim().toLowerCase())
@@ -608,6 +609,9 @@ export const make = Effect.gen(function* () {
       deletions: input.item.deletions,
       createdAt: input.item.createdAt,
       updatedAt: input.item.updatedAt,
+      ...(input.item.checksState === undefined || input.item.checksState === null
+        ? {}
+        : { checksState: input.item.checksState }),
       viewerReviewRequested:
         input.item.author?.login.toLowerCase() !== viewer &&
         input.item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer),
@@ -1542,7 +1546,9 @@ export const make = Effect.gen(function* () {
 
   /** The positional filter slot of a cache key, back as the record `listUncached` takes. */
   const filtersOfKey = (
-    slots: ReadonlyArray<string | ReadonlyArray<string> | null>,
+    slots: ReadonlyArray<
+      string | ReadonlyArray<string> | ReadonlyArray<ReadonlyArray<string>> | null
+    >,
   ): PullRequestListFilters => {
     const [draft, review, checks, author, labels, excludedLabels] = slots;
     return {
@@ -1550,7 +1556,7 @@ export const make = Effect.gen(function* () {
       ...(typeof review === "string" ? { review: review as PullRequestListFilters["review"] } : {}),
       ...(typeof checks === "string" ? { checks: checks as PullRequestListFilters["checks"] } : {}),
       ...(typeof author === "string" ? { author } : {}),
-      ...(Array.isArray(labels) ? { labels } : {}),
+      ...(Array.isArray(labels) ? { labels: labels as ReadonlyArray<ReadonlyArray<string>> } : {}),
       ...(Array.isArray(excludedLabels) ? { excludedLabels } : {}),
     };
   };

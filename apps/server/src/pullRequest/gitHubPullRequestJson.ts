@@ -6,6 +6,7 @@ import type {
   PullRequestActor,
   PullRequestCheck,
   PullRequestCheckStatus,
+  PullRequestChecksState,
   PullRequestComment,
   PullRequestCommit,
   PullRequestLabel,
@@ -53,6 +54,18 @@ const RawReviewRequestSchema = Schema.Struct({
   name: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+const RawCheckSchema = Schema.Struct({
+  __typename: Schema.optional(Schema.String),
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  context: Schema.optional(Schema.NullOr(Schema.String)),
+  status: Schema.optional(Schema.NullOr(Schema.String)),
+  conclusion: Schema.optional(Schema.NullOr(Schema.String)),
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  detailsUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  targetUrl: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 const RawListItemSchema = Schema.Struct({
   number: Schema.Int,
   title: Schema.String,
@@ -71,6 +84,14 @@ const RawListItemSchema = Schema.Struct({
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
   reviewRequests: Schema.optional(Schema.Array(RawReviewRequestSchema)),
   labels: Schema.optional(Schema.Array(RawLabelSchema)),
+  /**
+   * Every check of the head commit, which is the only rollup `gh pr list --json` can give: there
+   * is no field for the one-word verdict. Measured against `pingdotgg/t3code`, asking for it costs
+   * 0.6s -> 7.9s at a hundred rows and 0.9s -> 2.1s at thirty, for 425 KB of checks a listing
+   * reduces to one word. The listing pays it because the alternative is a request per row; the
+   * cross-repository search below asks GitHub for the verdict itself instead.
+   */
+  statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawCheckSchema))),
 });
 
 /**
@@ -117,6 +138,36 @@ const RawSearchItemSchema = Schema.Struct({
       }),
     ),
   ),
+  /**
+   * GraphQL answers the rollup a listing actually wants — one enum for the head commit, rather
+   * than the whole check array `gh pr list --json` insists on. Measured at a hundred rows across
+   * this repository: 0.8s -> 3.0s and 15 KB, against 425 KB for the same verdict over `gh`.
+   */
+  commits: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.optional(
+          Schema.NullOr(
+            Schema.Array(
+              Schema.NullOr(
+                Schema.Struct({
+                  commit: Schema.optional(
+                    Schema.NullOr(
+                      Schema.Struct({
+                        statusCheckRollup: Schema.optional(
+                          Schema.NullOr(Schema.Struct({ state: Schema.String })),
+                        ),
+                      }),
+                    ),
+                  ),
+                }),
+              ),
+            ),
+          ),
+        ),
+      }),
+    ),
+  ),
 });
 
 const RawSearchSchema = Schema.Struct({
@@ -151,18 +202,6 @@ const RawStatsSchema = Schema.Struct({
       ),
     ),
   ),
-});
-
-const RawCheckSchema = Schema.Struct({
-  __typename: Schema.optional(Schema.String),
-  name: Schema.optional(Schema.NullOr(Schema.String)),
-  context: Schema.optional(Schema.NullOr(Schema.String)),
-  status: Schema.optional(Schema.NullOr(Schema.String)),
-  conclusion: Schema.optional(Schema.NullOr(Schema.String)),
-  state: Schema.optional(Schema.NullOr(Schema.String)),
-  description: Schema.optional(Schema.NullOr(Schema.String)),
-  detailsUrl: Schema.optional(Schema.NullOr(Schema.String)),
-  targetUrl: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawCommentSchema = Schema.Struct({
@@ -205,7 +244,6 @@ const RawDetailSchema = Schema.Struct({
   body: Schema.optional(Schema.String),
   changedFiles: Schema.optional(Schema.Int),
   closedAt: Schema.optional(Schema.NullOr(Schema.String)),
-  statusCheckRollup: Schema.optional(Schema.NullOr(Schema.Array(RawCheckSchema))),
 });
 
 const RawActivitySchema = Schema.Struct({
@@ -407,9 +445,9 @@ export function decodeActorAvatarsJson(
 }
 
 export const PULL_REQUEST_LIST_JSON_FIELDS =
-  "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels";
+  "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,statusCheckRollup";
 
-export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,statusCheckRollup,headRepositoryOwner`;
+export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,headRepositoryOwner`;
 export const PULL_REQUEST_ACTIVITY_JSON_FIELDS = "author,comments,reviews,commits";
 
 /** GitHub's own ceiling on a connection page, which is what both thread reads ask for. */
@@ -459,6 +497,7 @@ export function pullRequestSearchGraphQlQuery(rows: number): string {
         repository { nameWithOwner }
         reviewRequests(first: 20) { nodes { requestedReviewer { ... on User { login } } } }
         labels(first: 20) { nodes { name color } }
+        commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
       }
     }
   }
@@ -679,6 +718,8 @@ export interface GitHubPullRequestListItem {
   /** At least one outstanding request targets a team rather than an individual login. */
   readonly hasTeamReviewRequest: boolean;
   readonly labels: ReadonlyArray<PullRequestLabel>;
+  /** Null where the head commit reported no checks, which is not the same as passing none. */
+  readonly checksState: PullRequestChecksState | null;
 }
 
 export interface GitHubPullRequestDetail extends GitHubPullRequestListItem {
@@ -852,6 +893,24 @@ function toCheckStatus(raw: Schema.Schema.Type<typeof RawCheckSchema>): PullRequ
   }
 }
 
+/**
+ * The one word a listing row has space for. A failure outranks anything still running, the way
+ * GitHub's own indicator reads: a run that has already gone red will not go green by finishing.
+ *
+ * Null rather than "passing" for a head commit with no checks at all, so a repository that runs
+ * none shows nothing instead of a green tick it never earned. Checks whose verdict is neither a
+ * pass, a failure nor a wait — skipped, cancelled, neutral — count towards neither.
+ */
+function rollupChecksState(
+  raw: ReadonlyArray<Schema.Schema.Type<typeof RawCheckSchema>> | null | undefined,
+): PullRequestChecksState | null {
+  const statuses = (raw ?? []).map((check) => toCheckStatus(check));
+  if (statuses.length === 0) return null;
+  if (statuses.includes("failure")) return "failing";
+  if (statuses.includes("pending")) return "pending";
+  return statuses.includes("success") ? "passing" : null;
+}
+
 function toChecks(
   raw: ReadonlyArray<Schema.Schema.Type<typeof RawCheckSchema>> | null | undefined,
 ): ReadonlyArray<PullRequestCheck> {
@@ -962,6 +1021,7 @@ function toListItem(raw: Schema.Schema.Type<typeof RawListItemSchema>): GitHubPu
     reviewRequestLogins: toReviewRequestLogins(raw.reviewRequests),
     hasTeamReviewRequest: hasTeamReviewRequest(raw.reviewRequests),
     labels: toLabels(raw.labels),
+    checksState: rollupChecksState(raw.statusCheckRollup),
   };
 }
 
@@ -1068,6 +1128,12 @@ export function decodePullRequestSearchJson(
           return login === null ? [] : [{ login }];
         }),
         labels: (node.labels?.nodes ?? []).flatMap((label) => (label === null ? [] : [label])),
+        // The search asks for the verdict rather than the checks behind it, so it arrives as one
+        // enum. Dressed as a single check here so the rollup is read the same way on both paths.
+        statusCheckRollup: (node.commits?.nodes ?? []).flatMap((commitNode) => {
+          const state = trimmed(commitNode?.commit?.statusCheckRollup?.state);
+          return state === null ? [] : [{ state }];
+        }),
       }),
       repository,
     });

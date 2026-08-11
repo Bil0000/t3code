@@ -2337,6 +2337,53 @@ it.effect("narrows the rows of a host that ignored the filters it was handed", (
   }),
 );
 
+it.effect("keeps a row of a host that ignored the filters if any name of a label group holds", () =>
+  Effect.gen(function* () {
+    const sized = (number: number, updatedAt: string, ...names: ReadonlyArray<string>) => ({
+      ...changeRequest(number, updatedAt),
+      labels: names.map((name) => ({ name, color: null })),
+    });
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/a",
+          repository: "acme/web",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("gitlab", {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [
+                sized(1, "2026-07-04T00:00:00Z", "size:S", "bug"),
+                sized(2, "2026-07-03T00:00:00Z", "size:XS", "bug"),
+                sized(3, "2026-07-02T00:00:00Z", "size:L", "bug"),
+                sized(4, "2026-07-01T00:00:00Z", "size:S"),
+              ],
+              truncated: false,
+              continues: false,
+            }),
+        }),
+      ],
+    });
+
+    // Either size satisfies the first group; the second group is its own question, so the row
+    // carrying a size but no bug goes.
+    const result = yield* service.list({
+      state: "open",
+      filters: { labels: [["size:S", "size:XS"], ["bug"]] },
+    });
+
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.number),
+      [1, 2],
+    );
+  }),
+);
+
 it.effect("refuses a way of updating a branch that the host or the viewer does not allow", () =>
   Effect.gen(function* () {
     let taken: string | null = null;

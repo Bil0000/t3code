@@ -569,7 +569,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           draft: "hide",
           review: "changes-requested",
           checks: "failing",
-          labels: ["needs design", 'quo"te'],
+          labels: [["needs design"], ['quo"te']],
           excludedLabels: ["wip"],
           author: "octocat",
         },
@@ -581,6 +581,28 @@ layer("GitHubPullRequestCli.layer", (it) => {
         'label:"needs design" label:"quote" -label:"wip" author:"octocat" draft:false ' +
           "review:changes_requested status:failure sort:updated-desc",
       );
+    }),
+  );
+
+  it.effect("sends one label qualifier per group, its names joined the way GitHub ors them", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        filters: { labels: [["size:S", "size:XS"], ["bug"]] },
+      });
+
+      // One qualifier satisfied by either size, and a second one that must hold as well.
+      expect(searchOfCall(0)).toBe('label:"size:S","size:XS" label:"bug" sort:updated-desc');
+      expect(callAt(0).args).toContain('label:"size:S","size:XS" label:"bug" sort:updated-desc');
     }),
   );
 
@@ -621,7 +643,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         involvement: "all",
         viewer: "bilal",
         limit: 10,
-        filters: { draft: "only", review: "none", labels: ["bug"] },
+        filters: { draft: "only", review: "none", labels: [["bug"]] },
       });
 
       assert.strictEqual(
@@ -1586,7 +1608,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       expect(detail.body).toBe("Core body");
       expect(activity.author?.login).toBe("octocat");
       expect(callAt(0).args.at(-1)).toBe(
-        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,body,changedFiles,closedAt,statusCheckRollup,headRepositoryOwner",
+        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,statusCheckRollup,body,changedFiles,closedAt,headRepositoryOwner",
       );
       expect(callAt(1).args.at(-1)).toBe("author,comments,reviews,commits");
     }),
