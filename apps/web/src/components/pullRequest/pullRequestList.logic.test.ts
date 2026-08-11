@@ -332,6 +332,29 @@ describe("reading qualifiers out of a typed query", () => {
     expect(parsed.text).toBe("draft:maybe status: parser");
   });
 
+  it("reads a quoted name holding a comma as the one label it is", () => {
+    expect(parsePullRequestQuery('label:"needs,triage"').filters.labels).toEqual([
+      ["needs,triage"],
+    ]);
+    expect(parsePullRequestQuery('-label:"needs,triage"').filters.excludedLabels).toEqual([
+      "needs,triage",
+    ]);
+  });
+
+  it("cuts a typed query back to what the contract carries", () => {
+    const many = Array.from({ length: 14 }, (_, index) => `l${index}`).join(",");
+    const long = "x".repeat(240);
+    const parsed = parsePullRequestQuery(`label:${many} label:${long} author:${long}`);
+    expect(parsed.filters.labels?.[0]).toHaveLength(10);
+    expect(parsed.filters.labels?.[1]).toEqual(["x".repeat(200)]);
+    expect(parsed.filters.author).toBe("x".repeat(200));
+  });
+
+  it("cuts a namespaced label after its key is prefixed on", () => {
+    const parsed = parsePullRequestQuery(`size:${"x".repeat(240)}`);
+    expect(parsed.filters.labels).toEqual([[`size:${"x".repeat(240)}`.slice(0, 200)]]);
+  });
+
   it("answers an empty query with an empty everything", () => {
     expect(parsePullRequestQuery("   ")).toEqual({ text: "", filters: {} });
   });

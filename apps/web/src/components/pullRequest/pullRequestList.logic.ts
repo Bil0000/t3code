@@ -89,8 +89,9 @@ const CHECKS_VALUES: Record<string, PullRequestListFilters["checks"]> = {
  * than swallowing the rest of the line.
  */
 const QUERY_TOKEN = /(?:[^\s"]|"[^"]*")+/g;
-/** The contract's own ceiling on a qualifier list, past which further ones are ignored. */
+/** The contract's own ceilings on a qualifier: this many names, each this long. */
 const MAX_QUALIFIER_VALUES = 10;
+const MAX_QUALIFIER_LENGTH = 200;
 
 function qualifierValue(raw: string): string {
   return raw.replaceAll('"', "").trim();
@@ -98,10 +99,27 @@ function qualifierValue(raw: string): string {
 
 /** A qualifier's value as the list it may be: split on commas, each name unquoted on its own. */
 function splitQualifierList(raw: string): string[] {
+  // Quoting names one whole label however many commas it holds: `label:"needs,triage"` asks for
+  // the label written that way, not for either half of it.
+  if (/^\s*"[^"]*"\s*$/.test(raw)) {
+    const whole = qualifierValue(raw);
+    return whole.length === 0 ? [] : [whole];
+  }
   return raw
     .split(",")
     .map((part) => qualifierValue(part))
     .filter((part) => part.length > 0);
+}
+
+/**
+ * A typed query is written by hand, and the contract bounds what a qualifier may carry — so what
+ * is typed past those bounds is cut here rather than refused by the request that carries it.
+ */
+function boundedNames(names: ReadonlyArray<string>): string[] {
+  return names
+    .slice(0, MAX_QUALIFIER_VALUES)
+    .map((name) => name.slice(0, MAX_QUALIFIER_LENGTH).trim())
+    .filter((name) => name.length > 0);
 }
 
 /**
@@ -137,14 +155,15 @@ export function parsePullRequestQuery(raw: string): {
       case "label": {
         // GitHub's own OR: `label:a,b` is one qualifier satisfied by either name. Negated, the
         // comma excludes each — a row carrying any of them goes.
-        const names = splitQualifierList(qualifier?.[3] ?? "");
+        const names = boundedNames(splitQualifierList(qualifier?.[3] ?? ""));
+        if (names.length === 0) break;
         if (negated) excludedLabels.push(...names);
         else labels.push(names);
         continue;
       }
       case "author":
         if (negated) break;
-        author = value;
+        author = value.slice(0, MAX_QUALIFIER_LENGTH).trim();
         continue;
       case "draft":
         if (negated || (value.toLowerCase() !== "true" && value.toLowerCase() !== "false")) break;
@@ -172,9 +191,12 @@ export function parsePullRequestQuery(raw: string): {
           // The key names the namespace, so the bare parts of `size:S,XS` are both sizes. A part
           // that already carries a colon names its whole label — `size:S,size:XS` is the same
           // pair written out, and prefixing it again would ask for `size:size:XS`.
-          const names = splitQualifierList(qualifier?.[3] ?? "").map((name) =>
-            name.includes(":") ? name : `${qualifier?.[2] ?? ""}:${name}`,
+          const names = boundedNames(
+            splitQualifierList(qualifier?.[3] ?? "").map((name) =>
+              name.includes(":") ? name : `${qualifier?.[2] ?? ""}:${name}`,
+            ),
           );
+          if (names.length === 0) break;
           if (negated) excludedLabels.push(...names);
           else labels.push(names);
           continue;
