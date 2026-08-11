@@ -12,6 +12,30 @@ import type {
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
 
+/**
+ * Whether the pull request on a right-panel surface is the thread's own one. Repository and
+ * number are not enough: one environment can hold two checkouts of the same repository under
+ * different projects, and the other project's checkout is somebody else's branch.
+ */
+export function isThreadOwnPullRequest(
+  thread: {
+    readonly projectId: string | null;
+    readonly repository: string | null;
+    readonly number: number | null;
+  },
+  surface: {
+    readonly projectId: string;
+    readonly repository: string;
+    readonly number: number;
+  },
+): boolean {
+  return (
+    thread.projectId === surface.projectId &&
+    thread.repository === surface.repository &&
+    thread.number === surface.number
+  );
+}
+
 /** Plain-language state, shown beside the author. Conflicts are a merge signal, not a state. */
 export function describePullRequestState(state: PullRequestState, isDraft: boolean): string {
   if (state === "merged") return "Merged";
@@ -657,8 +681,9 @@ export function readableFailure(failure: unknown, hint: string): string {
  * still cleanly mergeable, or conflicting. Only the middle one is an offer — the conflicts row
  * already speaks for a branch that collides, and a current branch has nothing to report.
  *
- * Null where there is nothing to show, which is also every host that cannot compare: silence is
- * not the same claim as "up to date", and a banner nobody can act on is noise.
+ * Null where there is nothing to show, which is also every host that cannot compare or has not
+ * said yet: silence is not the same claim as "up to date", and a banner nobody can act on is
+ * noise. Only a host verdict of "mergeable" earns the clean-merge wording.
  */
 export function resolveBaseFreshness(detail: {
   readonly state: PullRequestState;
@@ -678,8 +703,8 @@ export function resolveBaseFreshness(detail: {
 } | null {
   if (detail.state !== "open" || detail.baseComparison !== "behind") return null;
   // A conflicting branch cannot be updated cleanly either, and the conflicts row is already
-  // saying the more useful half of that.
-  if (detail.mergeability === "conflicting") return null;
+  // saying the more useful half of that. An unknown verdict is not a clean merge in waiting.
+  if (detail.mergeability !== "mergeable") return null;
   const offered = detail.capabilities.updateMethods ?? [];
   const allowed = detail.viewerPermissions.updateMethods ?? [];
   return {

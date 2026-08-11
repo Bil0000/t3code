@@ -15,6 +15,7 @@ import {
   groupPullRequestTimelineConversations,
   handoffPrompt,
   handoffReviewComments,
+  isThreadOwnPullRequest,
   orderPullRequestComments,
   pullRequestFindingKey,
   readableFailure,
@@ -818,6 +819,10 @@ describe("how the branch stands against its base", () => {
     expect(resolveBaseFreshness(detail({ mergeability: "conflicting" }))).toBeNull();
   });
 
+  it("says nothing where the host has no merge verdict yet", () => {
+    expect(resolveBaseFreshness(detail({ mergeability: "unknown" }))).toBeNull();
+  });
+
   it("says nothing about a merged or closed pull request", () => {
     expect(resolveBaseFreshness(detail({ state: "merged" }))).toBeNull();
     expect(resolveBaseFreshness(detail({ state: "closed" }))).toBeNull();
@@ -840,5 +845,42 @@ describe("how the branch stands against its base", () => {
 
   it("reports a count only where the host counted", () => {
     expect(resolveBaseFreshness(detail({ behindBy: undefined }))?.behindBy).toBeNull();
+  });
+});
+
+describe("whether the panel is showing the thread's own pull request", () => {
+  const surface = { projectId: "proj-a", repository: "acme/app", number: 7 };
+
+  it("matches on project, repository and number together", () => {
+    expect(
+      isThreadOwnPullRequest({ projectId: "proj-a", repository: "acme/app", number: 7 }, surface),
+    ).toBe(true);
+  });
+
+  it("rejects a second checkout of the same repository under another project", () => {
+    expect(
+      isThreadOwnPullRequest({ projectId: "proj-b", repository: "acme/app", number: 7 }, surface),
+    ).toBe(false);
+  });
+
+  it("rejects another repository or another number", () => {
+    expect(
+      isThreadOwnPullRequest({ projectId: "proj-a", repository: "acme/web", number: 7 }, surface),
+    ).toBe(false);
+    expect(
+      isThreadOwnPullRequest({ projectId: "proj-a", repository: "acme/app", number: 8 }, surface),
+    ).toBe(false);
+  });
+
+  it("rejects a thread with no project or no pull request of its own", () => {
+    expect(
+      isThreadOwnPullRequest({ projectId: null, repository: "acme/app", number: 7 }, surface),
+    ).toBe(false);
+    expect(
+      isThreadOwnPullRequest(
+        { projectId: "proj-a", repository: "acme/app", number: null },
+        surface,
+      ),
+    ).toBe(false);
   });
 });
