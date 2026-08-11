@@ -159,7 +159,10 @@ function Section({
   const [open, setOpen] = useState(defaultOpen);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="flex w-full items-center border-t border-border/60 pr-4">
+      {/* The heading rides the top of the scroll box the way a diff's file header does, so a
+          section can be collapsed from wherever its body has been read to rather than only from
+          where it started. Opaque, because the rows it covers scroll beneath it. */}
+      <div className="sticky top-0 z-10 flex w-full items-center border-t border-border/60 bg-background pr-4">
         {/* Title first, chevron riding to its right, count last: the row reads as a heading
             with an affordance rather than a tree node. */}
         <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
@@ -392,12 +395,14 @@ export function PullRequestSummaryTab({
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
           <div className="space-y-0.5">
-            {detail.checks.map((check) => {
+            {detail.checks.map((check, index) => {
               const finding = { kind: "check", check } as const;
               const failing = check.status === "failure" || check.status === "cancelled";
               return (
                 <div
-                  key={`${check.name}:${check.url ?? ""}`}
+                  // Position too: the host decides how many runs share a name, and a repeated
+                  // key would be a rendering fault on top of whatever the list already says.
+                  key={`${index}:${check.name}:${check.url ?? ""}`}
                   className="group flex items-center gap-1 rounded-md pr-1 hover:bg-accent/60"
                 >
                   <button

@@ -7,6 +7,7 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import type { EnvironmentPullRequestEntry } from "./pullRequestList.logic";
+import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLinkContextMenu";
 import {
   PullRequestActorLabel,
   PullRequestDiffStat,
@@ -70,16 +71,27 @@ function PullRequestRowImpl({
                 <TooltipPopup>{providerName}</TooltipPopup>
               </Tooltip>
             ) : null}
-            #{entry.number}
+            {/* The number carries the link, here as much as on the detail: a right-click on it
+                copies the pull request's own address rather than opening the editing menu. */}
+            <span
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void showPullRequestLinkContextMenu({
+                  url: entry.url,
+                  openLabel: openOnHostLabel(entry.provider),
+                  position: { x: event.clientX, y: event.clientY },
+                });
+              }}
+            >
+              #{entry.number}
+            </span>
           </span>
           {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
           {environmentLabel ? (
             <span className="max-w-32 shrink-0 truncate">{environmentLabel}</span>
           ) : null}
           <PullRequestActorLabel actor={entry.author} className="max-w-40 shrink-0" />
-          <span className="truncate" title={`${entry.headBranch} to ${entry.baseBranch}`}>
-            {entry.headBranch}
-          </span>
           {/* Only a verdict somebody has actually given: "review required" is the absence of
               one, and saying so on every unreviewed row would say nothing. */}
           {entry.reviewDecision === "approved" || entry.reviewDecision === "changes-requested" ? (

@@ -37,6 +37,7 @@ import {
 import {
   lazy,
   Suspense,
+  type MouseEvent as ReactMouseEvent,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -80,12 +81,14 @@ import {
   MenuSeparator,
   MenuTrigger,
 } from "../ui/menu";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAskSelectionInput } from "./PullRequestCodeTab";
+import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLinkContextMenu";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import {
@@ -125,6 +128,8 @@ const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string> = {
   close: "Pull request closed",
   reopen: "Pull request reopened",
   "update-branch": "Branch updated with the base branch",
+  "enable-auto-merge": "The host will merge this once it is ready",
+  "disable-auto-merge": "Auto-merge turned off",
 };
 
 /** Said as the thing that did not happen, rather than as the operation that returned an error. */
@@ -135,6 +140,8 @@ const ACTION_FAILURE_LABELS: Record<PullRequestAction, string> = {
   close: "Could not close this pull request",
   reopen: "Could not reopen this pull request",
   "update-branch": "Could not update this branch",
+  "enable-auto-merge": "Could not turn on auto-merge",
+  "disable-auto-merge": "Could not turn off auto-merge",
 };
 
 /** What to try, for the times the host says only that it refused. */
@@ -150,14 +157,12 @@ const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
   // the first that does not apply, which is a conflict the reader has to resolve themselves.
   "update-branch":
     "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.",
-};
-
-/** Named for the host rather than "externally": the point is where you will land. */
-const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
-  github: "Open on GitHub",
-  gitlab: "Open on GitLab",
-  bitbucket: "Open on Bitbucket",
-  "azure-devops": "Open on Azure DevOps",
+  // The one refusal that is usually a repository setting rather than anything about this branch:
+  // GitHub will not arm an auto-merge at all unless the repository has the feature switched on.
+  "enable-auto-merge":
+    "The host refused it. Check that this repository allows auto-merge, that you have write access, and that there is something left for it to wait on.",
+  "disable-auto-merge":
+    "The host refused it. Check that you have write access, and that the merge has not already happened.",
 };
 
 const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
@@ -222,6 +227,101 @@ function ActOnEnvironmentPicker({
         ))}
       </MenuRadioGroup>
     </>
+  );
+}
+
+/** The number is a link in every place the host writes it, so the right-click that copies one
+    has to answer here too — otherwise the platform's own cut/paste menu opens over it. */
+const openNumberContextMenu = (
+  event: ReactMouseEvent,
+  detail: { readonly url: string; readonly provider: string },
+): void => {
+  event.preventDefault();
+  event.stopPropagation();
+  void showPullRequestLinkContextMenu({
+    url: detail.url,
+    openLabel: openOnHostLabel(detail.provider),
+    position: { x: event.clientX, y: event.clientY },
+  });
+};
+
+/**
+ * The stale-branch warning, said beside the branch it is about rather than as a bar of its own.
+ * The banner this replaces held a row of chrome open across the top of every pull request that
+ * had fallen behind, pushing the reading down to say something that is true of the base branch
+ * and nothing else; as a mark on the base branch it is where a reader would look for it, and the
+ * sentence and the way out of it arrive together the moment the mark is pointed at.
+ *
+ * A popover rather than a tooltip because what it holds can be pressed: a tooltip's layer takes
+ * no pointer, and a control nobody can reach is worse than no control.
+ */
+function PullRequestBaseFreshnessWarning({
+  baseBranch,
+  freshness,
+  pending,
+  onUpdate,
+  iconClassName,
+}: {
+  readonly baseBranch: string;
+  readonly freshness: {
+    readonly behindBy: number | null;
+    readonly methods: ReadonlyArray<PullRequestUpdateMethod>;
+  };
+  readonly pending: boolean;
+  readonly onUpdate: (method: PullRequestUpdateMethod) => void;
+  readonly iconClassName?: string;
+}) {
+  const behind =
+    freshness.behindBy === null
+      ? ""
+      : ` by ${freshness.behindBy.toLocaleString()} ${
+          freshness.behindBy === 1 ? "commit" : "commits"
+        }`;
+  const summary = `This branch is out-of-date with ${baseBranch}${behind}.`;
+  return (
+    <Popover>
+      <PopoverTrigger
+        openOnHover
+        delay={0}
+        closeDelay={120}
+        render={
+          <button
+            type="button"
+            aria-label={summary}
+            className="inline-flex shrink-0 cursor-help items-center rounded-sm text-amber-600 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        }
+      >
+        <TriangleAlertIcon aria-hidden className={cn("size-3.5", iconClassName)} />
+      </PopoverTrigger>
+      <PopoverPopup
+        align="start"
+        side="bottom"
+        className="max-w-80"
+        viewportClassName="py-2.5 [--viewport-inline-padding:--spacing(3)]"
+      >
+        <p className="text-xs text-foreground">{summary}</p>
+        <p className="mt-0.5 text-xs text-muted-foreground">Changes can be cleanly merged.</p>
+        {/* Each way the host offers and this reader may take, as its own button: a split button
+            would need a menu inside a popover, and two buttons say the same thing in one layer. */}
+        {freshness.methods.length > 0 ? (
+          <span className="mt-2 flex flex-wrap items-center gap-1.5">
+            {freshness.methods.map((method) => (
+              <Button
+                key={method}
+                size="xs"
+                variant="outline"
+                disabled={pending}
+                onClick={() => onUpdate(method)}
+              >
+                <GitMergeIcon aria-hidden className="size-3" />
+                {method === "rebase" ? "Update with rebase" : "Update branch"}
+              </Button>
+            ))}
+          </span>
+        ) : null}
+      </PopoverPopup>
+    </Popover>
   );
 }
 
@@ -822,6 +922,9 @@ export function PullRequestDetailPanel({
     ? mergeMethod
     : (allowedMergeMethods[0] ?? "merge");
   const conflicting = detail?.state === "open" && detail.mergeability === "conflicting";
+  // Only an outright yes arms it. A host that reports nothing has not said the merge is already
+  // spoken for, and an off switch for something that may not be on says the wrong thing twice.
+  const autoMergeArmed = detail?.state === "open" && detail.autoMergeEnabled === true;
   // Out of date with the base, and still cleanly mergeable — the one pairing an update button
   // exists for. Null everywhere else, including hosts that cannot compare at all.
   const freshness = detail === null ? null : resolveBaseFreshness(detail);
@@ -893,11 +996,12 @@ export function PullRequestDetailPanel({
                 <button
                   type="button"
                   onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}
+                  onContextMenu={(event) => openNumberContextMenu(event, detail)}
                   className={cn(
                     "shrink-0 font-medium underline-offset-2 hover:underline",
                     statePresentation.toneClassName,
                   )}
-                  title={OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  title={openOnHostLabel(detail.provider)}
                   aria-label={`Open pull request #${detail.number} on host`}
                 >
                   #{detail.number}
@@ -921,11 +1025,12 @@ export function PullRequestDetailPanel({
                   type="button"
                   tabIndex={condensed ? 0 : -1}
                   onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}
+                  onContextMenu={(event) => openNumberContextMenu(event, detail)}
                   className={cn(
                     "shrink-0 font-medium underline-offset-2 hover:underline",
                     statePresentation.toneClassName,
                   )}
-                  title={OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  title={openOnHostLabel(detail.provider)}
                   aria-label={`Open pull request #${detail.number} on host`}
                 >
                   #{detail.number}
@@ -1018,6 +1123,32 @@ export function PullRequestDetailPanel({
                           {detail.isDraft ? "Ready for review" : "Convert to draft"}
                         </MenuItem>
                       ) : null}
+                      {/* The same merge, left with the host to carry out once the things it
+                          waits on are done. It is offered beside the merge rather than instead
+                          of it, because the reader who can wait and the reader who cannot are
+                          the same person on different days — and a conflicting branch is neither,
+                          since nothing the host waits for will clear it. */}
+                      {autoMergeArmed && can("disable-auto-merge") ? (
+                        <MenuItem
+                          disabled={actionPending}
+                          onClick={() => void perform("disable-auto-merge")}
+                        >
+                          <GitMergeIcon className="size-3.5" />
+                          Disable auto-merge
+                        </MenuItem>
+                      ) : !autoMergeArmed &&
+                        !detail.isDraft &&
+                        !conflicting &&
+                        can("enable-auto-merge") &&
+                        allowedMergeMethods.length > 0 ? (
+                        <MenuItem
+                          disabled={actionPending}
+                          onClick={() => void perform("enable-auto-merge", selectedMergeMethod)}
+                        >
+                          <GitMergeIcon className="size-3.5" />
+                          Enable auto-merge
+                        </MenuItem>
+                      ) : null}
                       {/* A preference for the merge action rather than a second action, so it
                           is a radio group here instead of a chevron welded to the Merge pill.
                           Hidden while conflicting: every method would fail. */}
@@ -1053,7 +1184,7 @@ export function PullRequestDetailPanel({
                   ) : null}
                   <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}>
                     <ArrowUpRightIcon className="size-3.5" />
-                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                    {openOnHostLabel(detail.provider)}
                   </MenuItem>
                   <MenuItem onClick={() => void writeTextToClipboard(detail.url)}>
                     <LinkIcon className="size-3.5" />
@@ -1142,6 +1273,18 @@ export function PullRequestDetailPanel({
                   </MenuPopup>
                 </Menu>
               ) : null}
+              {/* Said where the Merge button is, because it is the answer to why nobody has
+                  pressed it: the merge is already asked for, and the host is holding it. */}
+              {autoMergeArmed ? (
+                <Badge
+                  variant="info"
+                  className="h-5 shrink-0 gap-1 rounded px-1.5 text-[10px]"
+                  title="The host will merge this on its own once its requirements are met"
+                >
+                  <GitMergeIcon aria-hidden className="size-3" />
+                  Auto-merge
+                </Badge>
+              ) : null}
               {primaryAction === "ready" ? (
                 <Button size="xs" disabled={actionPending} onClick={() => void perform("ready")}>
                   Ready for review
@@ -1218,6 +1361,15 @@ export function PullRequestDetailPanel({
                   title={`${detail.baseBranch} ← ${detail.headBranch}`}
                 >
                   <span className="truncate">{detail.baseBranch}</span>
+                  {freshness ? (
+                    <PullRequestBaseFreshnessWarning
+                      baseBranch={detail.baseBranch}
+                      freshness={freshness}
+                      pending={actionPending}
+                      onUpdate={(method) => void perform("update-branch", undefined, method)}
+                      iconClassName="size-3"
+                    />
+                  ) : null}
                   <ArrowLeftIcon aria-label="receives changes from" className="size-3 shrink-0" />
                   <span className="truncate">{detail.headBranch}</span>
                 </span>
@@ -1280,6 +1432,14 @@ export function PullRequestDetailPanel({
                   >
                     {detail.baseBranch}
                   </code>
+                  {freshness ? (
+                    <PullRequestBaseFreshnessWarning
+                      baseBranch={detail.baseBranch}
+                      freshness={freshness}
+                      pending={actionPending}
+                      onUpdate={(method) => void perform("update-branch", undefined, method)}
+                    />
+                  ) : null}
                   <ArrowLeftIcon aria-label="receives changes from" className="size-4 shrink-0" />
                   <button
                     type="button"
@@ -1446,61 +1606,6 @@ export function PullRequestDetailPanel({
           </div>
         </div>
       </div>
-
-      {freshness ? (
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-amber-500/30 bg-amber-500/5 px-4 py-2 text-xs">
-          <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0 text-amber-600" />
-          <span className="min-w-0 text-foreground">
-            This branch is out-of-date with {detail?.baseBranch ?? "the base branch"}
-            {freshness.behindBy === null
-              ? ""
-              : ` by ${freshness.behindBy.toLocaleString()} ${
-                  freshness.behindBy === 1 ? "commit" : "commits"
-                }`}
-            .
-          </span>
-          <span className="min-w-0 text-muted-foreground">Changes can be cleanly merged.</span>
-          {freshness.methods.length > 0 ? (
-            <span className="ml-auto flex shrink-0 items-center">
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={actionPending}
-                className={cn(freshness.methods.length > 1 && "rounded-r-none border-r-0")}
-                onClick={() => void perform("update-branch", undefined, freshness.methods[0])}
-              >
-                <GitMergeIcon aria-hidden className="size-3" />
-                {freshness.methods[0] === "rebase" ? "Update with rebase" : "Update branch"}
-              </Button>
-              {/* The second way only where the host offers it and this reader may take it:
-                  GitHub replays the commits for a rebase and refuses the ones it cannot. */}
-              {freshness.methods.length > 1 ? (
-                <Menu>
-                  <MenuTrigger
-                    disabled={actionPending}
-                    aria-label="Choose how to update this branch"
-                    className="inline-flex h-6 items-center rounded-md rounded-l-none border border-input px-1 text-muted-foreground hover:bg-accent hover:text-foreground"
-                  >
-                    <ChevronDownIcon aria-hidden className="size-3" />
-                  </MenuTrigger>
-                  <MenuPopup align="end" side="bottom" className="min-w-52">
-                    {freshness.methods.map((method) => (
-                      <MenuItem
-                        key={method}
-                        disabled={actionPending}
-                        onClick={() => void perform("update-branch", undefined, method)}
-                      >
-                        <GitMergeIcon aria-hidden className="size-3.5" />
-                        {method === "rebase" ? "Update with rebase" : "Update with merge commit"}
-                      </MenuItem>
-                    ))}
-                  </MenuPopup>
-                </Menu>
-              ) : null}
-            </span>
-          ) : null}
-        </div>
-      ) : null}
 
       <div
         className="relative min-h-0 flex-1 overflow-hidden"
