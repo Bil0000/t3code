@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   filterPullRequestsByInvolvement,
   groupPullRequestsByInvolvement,
+  matchesPullRequestFilters,
   matchesPullRequestQuery,
   mergePullRequestDiffStats,
   narrowPullRequestsToFilters,
@@ -205,6 +206,34 @@ describe("carrying rows already read into filters nothing has answered yet", () 
 
   it("holds on to everything when nothing narrows it", () => {
     expect(narrowPullRequestsToFilters(rows, everything)).toEqual(rows);
+  });
+});
+
+describe("narrowing rows by the filters a host may not have applied", () => {
+  const rows = [
+    entry({ number: 1 }),
+    entry({ number: 2, isDraft: true }),
+    entry({ number: 3, reviewDecision: "approved" }),
+    entry({ number: 4, labels: [{ name: "size:XL", color: null }] }),
+  ];
+  const narrow = (filters: Parameters<typeof matchesPullRequestFilters>[1]) =>
+    rows.filter((row) => matchesPullRequestFilters(row, filters)).map((row) => row.number);
+
+  it("keeps or drops drafts as asked", () => {
+    expect(narrow({ draft: "only" })).toEqual([2]);
+    expect(narrow({ draft: "hide" })).toEqual([1, 3, 4]);
+  });
+
+  it("keeps only what somebody has approved", () => {
+    expect(narrow({ review: "approved" })).toEqual([3]);
+  });
+
+  it("excludes the labelled sizes above medium, and keeps the unlabelled", () => {
+    expect(narrow({ maxSize: "m" })).toEqual([1, 2, 3]);
+  });
+
+  it("holds on to every row for a filter no row carries the answer to", () => {
+    expect(narrow({ checks: "passing" })).toEqual([1, 2, 3, 4]);
   });
 });
 

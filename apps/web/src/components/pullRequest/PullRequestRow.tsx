@@ -74,6 +74,20 @@ function PullRequestRowImpl({
           <span className="truncate" title={`${entry.headBranch} to ${entry.baseBranch}`}>
             {entry.headBranch}
           </span>
+          {/* Only a verdict somebody has actually given: "review required" is the absence of
+              one, and saying so on every unreviewed row would say nothing. */}
+          {entry.reviewDecision === "approved" || entry.reviewDecision === "changes-requested" ? (
+            <span
+              className={cn(
+                "shrink-0",
+                entry.reviewDecision === "approved"
+                  ? "text-emerald-600/90 dark:text-emerald-400/80"
+                  : "text-amber-600/90 dark:text-amber-400/80",
+              )}
+            >
+              {entry.reviewDecision === "approved" ? "Approved" : "Changes requested"}
+            </span>
+          ) : null}
           {matchedElsewhere ? (
             <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px]">
               matched in the description

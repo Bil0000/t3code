@@ -2,10 +2,22 @@ import type {
   EnvironmentId,
   ProjectId,
   PullRequestInvolvement,
+  PullRequestListFilters,
   PullRequestListState,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
-import { FolderGit2Icon, LayersIcon, ListFilterIcon, LoaderIcon, SearchIcon } from "lucide-react";
+import {
+  CircleCheckIcon,
+  CircleDashedIcon,
+  EyeOffIcon,
+  FolderGit2Icon,
+  GitPullRequestDraftIcon,
+  LayersIcon,
+  ListFilterIcon,
+  LoaderIcon,
+  RulerIcon,
+  SearchIcon,
+} from "lucide-react";
 import type { ElementType } from "react";
 
 import { cn } from "~/lib/utils";
@@ -101,6 +113,29 @@ export function PullRequestSearchInput({
 const ALL_PROJECTS_VALUE = "all";
 /** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
 const ALL_HOSTS_VALUE = "";
+/** The unset value of each narrowing group, which no filter of theirs is named after. */
+const UNFILTERED_VALUE = "all";
+
+const DRAFT_OPTIONS = [
+  { value: UNFILTERED_VALUE, label: "All", Icon: LayersIcon },
+  { value: "only", label: "Drafts only", Icon: GitPullRequestDraftIcon },
+  { value: "hide", label: "Hide drafts", Icon: EyeOffIcon },
+] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
+
+const REVIEW_OPTIONS = [
+  { value: UNFILTERED_VALUE, label: "All", Icon: LayersIcon },
+  { value: "approved", label: "Approved", Icon: CircleCheckIcon },
+] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
+
+const CHECKS_OPTIONS = [
+  { value: UNFILTERED_VALUE, label: "All", Icon: LayersIcon },
+  { value: "passing", label: "Passing", Icon: CircleDashedIcon },
+] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
+
+const SIZE_OPTIONS = [
+  { value: UNFILTERED_VALUE, label: "Any size", Icon: LayersIcon },
+  { value: "m", label: "Medium or smaller", Icon: RulerIcon },
+] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
 function PullRequestFilterRadioGroup<Value extends string>({
   label,
@@ -147,6 +182,8 @@ export function PullRequestFiltersMenu({
   involvement,
   involvementOptions,
   onInvolvement,
+  filters,
+  onFilters,
   host,
   hostOptions,
   onHost,
@@ -162,6 +199,9 @@ export function PullRequestFiltersMenu({
   involvement: PullRequestInvolvement;
   involvementOptions: ReadonlyArray<PullRequestFilterOption<PullRequestInvolvement>>;
   onInvolvement: (involvement: PullRequestInvolvement) => void;
+  /** The narrowings beyond state and involvement; an absent field is that group unfiltered. */
+  filters: PullRequestListFilters;
+  onFilters: (filters: PullRequestListFilters) => void;
   host: string | undefined;
   /**
    * Includes the "all hosts" entry, whose value is the empty string. With fewer than two real
@@ -186,7 +226,21 @@ export function PullRequestFiltersMenu({
   onProject: (projectId: ProjectId | undefined) => void;
 }) {
   const filtered =
-    state !== "open" || involvement !== "all" || host !== undefined || projectId !== undefined;
+    state !== "open" ||
+    involvement !== "all" ||
+    host !== undefined ||
+    projectId !== undefined ||
+    Object.keys(filters).length > 0;
+  /**
+   * Rebuilt rather than spread so an unfiltered group leaves the record instead of lingering in
+   * it as an explicit `undefined`, which the listing input does not accept.
+   */
+  const withFilter = (key: keyof PullRequestListFilters, value: string): PullRequestListFilters =>
+    Object.fromEntries(
+      Object.entries({ ...filters, [key]: value === UNFILTERED_VALUE ? undefined : value }).filter(
+        ([, held]) => held !== undefined,
+      ),
+    ) as PullRequestListFilters;
   return (
     <Menu>
       <MenuTrigger
@@ -218,6 +272,34 @@ export function PullRequestFiltersMenu({
           value={involvement}
           options={involvementOptions}
           onChange={onInvolvement}
+        />
+        <MenuSeparator />
+        <PullRequestFilterRadioGroup
+          label="Draft"
+          value={filters.draft ?? UNFILTERED_VALUE}
+          options={DRAFT_OPTIONS}
+          onChange={(next) => onFilters(withFilter("draft", next))}
+        />
+        <MenuSeparator />
+        <PullRequestFilterRadioGroup
+          label="Review"
+          value={filters.review ?? UNFILTERED_VALUE}
+          options={REVIEW_OPTIONS}
+          onChange={(next) => onFilters(withFilter("review", next))}
+        />
+        <MenuSeparator />
+        <PullRequestFilterRadioGroup
+          label="Checks"
+          value={filters.checks ?? UNFILTERED_VALUE}
+          options={CHECKS_OPTIONS}
+          onChange={(next) => onFilters(withFilter("checks", next))}
+        />
+        <MenuSeparator />
+        <PullRequestFilterRadioGroup
+          label="Size"
+          value={filters.maxSize ?? UNFILTERED_VALUE}
+          options={SIZE_OPTIONS}
+          onChange={(next) => onFilters(withFilter("maxSize", next))}
         />
         {hostOptions.length > 2 ? (
           <>

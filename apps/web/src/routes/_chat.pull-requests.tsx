@@ -5,6 +5,7 @@ import type {
   ProjectId,
   PullRequestInvolvement,
   PullRequestListEntry,
+  PullRequestListFilters,
   PullRequestListResult,
   PullRequestListState,
   SourceControlProviderKind,
@@ -27,6 +28,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   filterPullRequestsByInvolvement,
   groupPullRequestsByInvolvement,
+  matchesPullRequestFilters,
   matchesPullRequestQuery,
   narrowPullRequestsToFilters,
   mergePullRequestDiffStats,
@@ -96,6 +98,14 @@ export interface PullRequestsSearch {
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
   readonly q?: string;
+  /**
+   * The narrowings beyond state and involvement, each absent when that group is unfiltered. Flat
+   * in the URL because a link is read and edited by hand; folded into one record for the listing.
+   */
+  readonly draft?: "only" | "hide";
+  readonly review?: "approved";
+  readonly checks?: "passing";
+  readonly size?: "m";
 }
 
 // The state filters wear the same glyphs the rows do, so the two read as one vocabulary.
@@ -152,6 +162,10 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
       : {}),
     ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
+    ...(raw.draft === "only" || raw.draft === "hide" ? { draft: raw.draft } : {}),
+    ...(raw.review === "approved" ? { review: raw.review } : {}),
+    ...(raw.checks === "passing" ? { checks: raw.checks } : {}),
+    ...(raw.size === "m" ? { size: raw.size } : {}),
   }),
   component: PullRequestsRouteView,
 });
@@ -237,6 +251,10 @@ function PullRequestsRouteView() {
             ...(next.host ? { host: next.host } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
             ...(next.q ? { q: next.q } : {}),
+            ...(next.draft ? { draft: next.draft } : {}),
+            ...(next.review ? { review: next.review } : {}),
+            ...(next.checks ? { checks: next.checks } : {}),
+            ...(next.size ? { size: next.size } : {}),
           };
         },
         replace: true,
@@ -268,8 +286,20 @@ function PullRequestsRouteView() {
   const sentQuery = useDebouncedValue(typedQuery, SEARCH_DEBOUNCE_MS);
   const querySettled = typedQuery === sentQuery;
 
+  // One record for the hosts, rebuilt only when the URL's own fields change so the listing
+  // inputs stay identical between renders.
+  const filters = useMemo(
+    (): PullRequestListFilters => ({
+      ...(search.draft ? { draft: search.draft } : {}),
+      ...(search.review ? { review: search.review } : {}),
+      ...(search.checks ? { checks: search.checks } : {}),
+      ...(search.size ? { maxSize: search.size } : {}),
+    }),
+    [search.checks, search.draft, search.review, search.size],
+  );
+  const hasFilters = Object.keys(filters).length > 0;
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
+  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.size ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   // Where the next slice carries on from, per repository, as the server handed it back. Sending
   // it is what makes a second page cost a second page rather than the whole list again — and a
@@ -303,6 +333,7 @@ function PullRequestsRouteView() {
             limit: pageSize,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
+            ...(hasFilters ? { filters } : {}),
             ...(sentQuery ? { query: sentQuery } : {}),
             ...(sentCursors ? { cursors: sentCursors } : {}),
           },
@@ -330,6 +361,7 @@ function PullRequestsRouteView() {
             limit: PAGE_SIZE,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
+            ...(hasFilters ? { filters } : {}),
           },
         }),
   );
@@ -351,6 +383,7 @@ function PullRequestsRouteView() {
             limit: PAGE_SIZE,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
+            ...(hasFilters ? { filters } : {}),
           },
         }),
   );
@@ -365,6 +398,7 @@ function PullRequestsRouteView() {
             limit: PAGE_SIZE,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
+            ...(hasFilters ? { filters } : {}),
           },
         }),
   );
@@ -636,15 +670,30 @@ function PullRequestsRouteView() {
     // The local pass stands in for the answer that has not arrived yet, and for the hosts that
     // answered without searching at all: Azure DevOps has no text filter, so its rows arrive
     // whole and would otherwise sit under a search that never touched them.
-    if (typedQuery.length === 0) return involvementEntries;
+    // The rows the hosts could not narrow themselves, for the fields a row actually carries:
+    // a host with no filter of its own answers unnarrowed, and so does one whose answer for the
+    // new filters has not arrived yet. Checks are absent here, because no row carries them.
+    const narrowedEntries = hasFilters
+      ? involvementEntries.filter((entry) => matchesPullRequestFilters(entry, filters))
+      : involvementEntries;
+    // Newest update first once nothing is typed, so a list merged from several hosts reads in
+    // one order rather than in each host's. With a search on, the relevance ranking above is
+    // the order, and re-sorting by date here would undo it.
+    if (typedQuery.length === 0) {
+      return narrowedEntries.toSorted((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt),
+      );
+    }
     const answeredLocally = querySettled && !showingCarried;
-    return involvementEntries.filter(
+    return narrowedEntries.filter(
       (entry) =>
         (answeredLocally && searchingHosts.has(entry.host)) ||
         matchesPullRequestQuery(entry, typedQuery),
     );
   }, [
     filterKey,
+    filters,
+    hasFilters,
     listData,
     ordered,
     querySettled,
@@ -1045,6 +1094,15 @@ function PullRequestsRouteView() {
       involvement={search.involvement}
       involvementOptions={INVOLVEMENT_TABS}
       onInvolvement={(involvement) => updateListScope({ involvement })}
+      filters={filters}
+      onFilters={(next) =>
+        updateListScope({
+          draft: next.draft,
+          review: next.review,
+          checks: next.checks,
+          size: next.maxSize,
+        })
+      }
       host={search.host}
       hostOptions={hostMenuOptions}
       onHost={(host) => updateListScope({ host })}

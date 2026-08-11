@@ -1,7 +1,11 @@
 import * as Schema from "effect/Schema";
 
 import { PullRequestListEntry, PullRequestListResult } from "@t3tools/contracts";
-import type { PullRequestInvolvement, PullRequestListState } from "@t3tools/contracts";
+import type {
+  PullRequestInvolvement,
+  PullRequestListFilters,
+  PullRequestListState,
+} from "@t3tools/contracts";
 
 export type PullRequestGroupKey = "reviewRequested" | "authored" | "others";
 
@@ -88,6 +92,32 @@ export function narrowPullRequestsToFilters(
       (filters.state === "all" || entry.state === filters.state) &&
       (filters.projectId === undefined || entry.projectId === filters.projectId) &&
       (filters.host === undefined || entry.host === filters.host),
+  );
+}
+
+/**
+ * The labels a repository puts on a change request too large to review in one sitting. An
+ * unlabelled row passes: sizing is a convention rather than a field, and a repository that
+ * labels nothing would otherwise show nothing under a size filter.
+ */
+const OVERSIZED_LABELS = ["size:l", "size:xl", "size:xxl"];
+
+/**
+ * The further narrowings over rows that have already arrived, for the hosts that could not apply
+ * them themselves and for the moment before an answer that did lands.
+ *
+ * `checks` is absent because no listed row carries its check state: that one filter is the
+ * host's alone, and a row a host did not narrow stays rather than being guessed at.
+ */
+export function matchesPullRequestFilters(
+  entry: PullRequestListEntry,
+  filters: PullRequestListFilters,
+): boolean {
+  const labels = entry.labels.map((label) => label.name.trim().toLowerCase());
+  return (
+    (filters.draft === undefined || entry.isDraft === (filters.draft === "only")) &&
+    (filters.review === undefined || entry.reviewDecision === "approved") &&
+    (filters.maxSize === undefined || !OVERSIZED_LABELS.some((label) => labels.includes(label)))
   );
 }
 

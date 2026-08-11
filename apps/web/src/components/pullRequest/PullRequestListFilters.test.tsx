@@ -53,6 +53,8 @@ function menu(overrides: Partial<Parameters<typeof PullRequestFiltersMenu>[0]>) 
     involvement: "all",
     involvementOptions: [{ value: "all", label: "All", Icon: CircleIcon }],
     onInvolvement: () => undefined,
+    filters: {},
+    onFilters: () => undefined,
     host: undefined,
     hostOptions: [],
     onHost: () => undefined,
@@ -77,6 +79,28 @@ describe("pull request filters menu", () => {
     group?.props.onValueChange("closed");
     expect(onState).toHaveBeenCalledOnce();
     expect(onState).toHaveBeenCalledWith("closed");
+  });
+
+  it("names the chosen narrowing and leaves the others alone", () => {
+    const onFilters = vi.fn();
+    const group = findValueChange(
+      findLabeledGroup(menu({ filters: { review: "approved" }, onFilters }), "Draft"),
+    );
+    expect(group).toBeDefined();
+
+    group?.props.onValueChange("hide");
+    expect(onFilters).toHaveBeenCalledWith({ review: "approved", draft: "hide" });
+  });
+
+  it("drops a narrowing chosen back to all rather than sending it as undefined", () => {
+    const onFilters = vi.fn();
+    const group = findValueChange(
+      findLabeledGroup(menu({ filters: { maxSize: "m", checks: "passing" }, onFilters }), "Size"),
+    );
+    expect(group).toBeDefined();
+
+    group?.props.onValueChange("all");
+    expect(onFilters).toHaveBeenCalledWith({ checks: "passing" });
   });
 
   it("does not emit a change when the selected project is chosen again", () => {
