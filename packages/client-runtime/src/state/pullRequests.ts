@@ -143,6 +143,12 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),
+    setReaction: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:set-reaction",
+      tag: WS_METHODS.pullRequestsSetReaction,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     /**
      * Explicit refresh: forget the server's cached answers, then re-run the reads. A separate
      * request rather than a flag on a read, so only a person's refresh spends host requests

@@ -1086,6 +1086,89 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("awards an emoji through a POST naming it, not a body", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.setReaction({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        content: "thumbs-up",
+        reacted: true,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      expect(argsOfCall(0)).toEqual([
+        "api",
+        "projects/acme%2Fweb/merge_requests/7/award_emoji?name=thumbsup",
+        "--method",
+        "POST",
+      ]);
+    }),
+  );
+
+  it.effect("removes an award by listing them and deleting the reader's own id", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        Effect.succeed(output(JSON.stringify({ username: "bilal" }))),
+      );
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify([
+              { id: 5, name: "thumbsup", user: { username: "bilal" } },
+              { id: 6, name: "thumbsup", user: { username: "julius" } },
+            ]),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.setReaction({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        content: "thumbs-up",
+        reacted: false,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 3);
+      expect(argsOfCall(2)).toEqual([
+        "api",
+        "projects/acme%2Fweb/merge_requests/7/award_emoji/5",
+        "--method",
+        "DELETE",
+      ]);
+    }),
+  );
+
+  it.effect("does nothing when the reader has no award of that name to take back", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        Effect.succeed(output(JSON.stringify({ username: "bilal" }))),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.setReaction({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        content: "thumbs-up",
+        reacted: false,
+      });
+
+      // Nothing to delete: the reaction the caller asked to take back is already gone.
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+    }),
+  );
+
   it.effect("names a merge request with no diff revisions rather than calling it unreadable", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(

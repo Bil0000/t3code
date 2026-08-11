@@ -1610,6 +1610,90 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("reacts to a given subject in one request, without looking up its id", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.setReaction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        subjectId: "IC_1",
+        content: "heart",
+        reacted: true,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const request = JSON.parse(callAt(0).stdin ?? "") as {
+        query: string;
+        variables: Record<string, string>;
+      };
+      expect(request.query).toContain("addReaction(");
+      expect(request.variables).toEqual({ subjectId: "IC_1", content: "HEART" });
+    }),
+  );
+
+  it.effect("looks up the pull request's own node id when no subject was given", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({ data: { repository: { pullRequest: { id: "PR_kwDOA" } } } }),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.setReaction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        content: "rocket",
+        reacted: true,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      const lookup = callAt(0).args;
+      expect(lookup).toContain("owner=acme");
+      expect(lookup).toContain("name=web");
+      expect(lookup).toContain("number=7");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const request = JSON.parse(callAt(1).stdin ?? "") as {
+        query: string;
+        variables: Record<string, string>;
+      };
+      expect(request.query).toContain("addReaction(");
+      expect(request.variables).toEqual({ subjectId: "PR_kwDOA", content: "ROCKET" });
+    }),
+  );
+
+  it.effect("takes a reaction back through the remove mutation", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.setReaction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        subjectId: "IC_1",
+        content: "heart",
+        reacted: false,
+      });
+
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const request = JSON.parse(callAt(0).stdin ?? "") as { query: string };
+      expect(request.query).toContain("removeReaction(");
+    }),
+  );
+
   it.effect("fails the read when gh returns something unreadable", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"message":"not found"}')));

@@ -113,6 +113,7 @@ function fakeProvider(
       actions: ["merge", "ready", "draft", "close", "reopen"],
       mergeMethods: ["merge"],
       search: true,
+      reactions: true,
       review: FULL_REVIEW,
       reviewers: FULL_REVIEWERS,
     },
@@ -135,6 +136,7 @@ function fakeProvider(
     submitReview: () => Effect.void,
     replyToThread: () => Effect.void,
     setThreadResolution: () => Effect.void,
+    setReaction: () => Effect.void,
     listReviewerCandidates: () => Effect.succeed({ candidates: [], truncated: false }),
     setReviewerRequest: () => Effect.void,
     ...overrides,
@@ -836,6 +838,7 @@ it.effect("refuses an action the host never claimed it could run", () =>
             actions: ["merge", "close"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -911,6 +914,7 @@ it.effect("gates arming a merge for later exactly as it gates merging now", () =
             actions: ["merge", "close", "enable-auto-merge", "disable-auto-merge"],
             mergeMethods: ["merge", "squash"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -965,6 +969,7 @@ it.effect("hands the host the strategy an armed merge was asked for", () =>
             actions: ["merge", "enable-auto-merge", "disable-auto-merge"],
             mergeMethods: ["merge", "squash"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -1073,6 +1078,7 @@ it.effect("asks nobody what the viewer may do when the host cannot do it at all"
             actions: ["merge", "close"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -1111,6 +1117,7 @@ it.effect("refuses a comment on a host that cannot post one", () =>
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -1290,6 +1297,7 @@ it.effect("refuses a diff on a host that cannot produce one", () =>
             actions: ["merge", "close"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -1349,6 +1357,7 @@ it.effect("refuses a verdict the host never claimed, without asking the provider
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             // GitLab's shape: it approves, and has nothing that rejects.
             review: {
               inlineComment: true,
@@ -1396,6 +1405,7 @@ it.effect("refuses line comments on a host that takes only a summary", () =>
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: { inlineComment: false, reply: false, resolve: false, verdicts: ["comment"] },
             reviewers: FULL_REVIEWERS,
           },
@@ -1473,6 +1483,7 @@ it.effect("refuses to resolve a conversation on a host that cannot", () =>
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: { inlineComment: true, reply: false, resolve: false, verdicts: ["comment"] },
             reviewers: FULL_REVIEWERS,
           },
@@ -1496,6 +1507,113 @@ it.effect("refuses to resolve a conversation on a host that cannot", () =>
 
     assert.strictEqual(resolveError._tag, "PullRequestOperationError");
     assert.strictEqual(replyError._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect("refuses to react on a host with no reactions", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+            search: true,
+            reactions: false,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          setReaction: () => Effect.die("must not be called"),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.setReaction({
+        projectId: "p1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 1,
+        content: "heart",
+        reacted: true,
+      }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect("passes a reaction through with its subject id on a host that has them", () =>
+  Effect.gen(function* () {
+    let received: {
+      readonly subjectId: string | undefined;
+      readonly content: string;
+      readonly reacted: boolean;
+    } | null = null;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          setReaction: (input) => {
+            received = {
+              subjectId: input.subjectId,
+              content: input.content,
+              reacted: input.reacted,
+            };
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    yield* service.setReaction({
+      projectId: "p1" as ProjectId,
+      repository: "pingdotgg/t3code",
+      number: 1,
+      subjectId: "IC_1",
+      content: "heart",
+      reacted: true,
+    });
+
+    assert.deepStrictEqual(received, { subjectId: "IC_1", content: "heart", reacted: true });
+  }),
+);
+
+it.effect("invalidates the cached activity after reacting, like the other mutations", () =>
+  Effect.gen(function* () {
+    let activityCalls = 0;
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestActivity: () => {
+            activityCalls += 1;
+            return Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            });
+          },
+        }),
+      ],
+    });
+
+    yield* service.activity(reference);
+    assert.strictEqual(activityCalls, 1);
+
+    yield* service.setReaction({ ...reference, content: "heart", reacted: true });
+    yield* service.activity(reference);
+
+    assert.strictEqual(activityCalls, 2);
   }),
 );
 
@@ -1540,6 +1658,7 @@ it.effect("refuses a merge strategy the host does not offer", () =>
             // Azure DevOps's shape: it squashes as a completion option and has no rebase.
             mergeMethods: ["merge", "squash"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -1723,6 +1842,7 @@ it.effect("refuses to ask for a review on a host that cannot, before any call is
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: { request: false, listCandidates: false },
           },
@@ -1763,6 +1883,7 @@ it.effect("refuses the candidate list on a host that has no such list to give", 
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: false,
+            reactions: true,
             review: FULL_REVIEW,
             // Azure's shape: it takes a reviewer, and names nobody who could be one.
             reviewers: { request: true, listCandidates: false },
@@ -2573,6 +2694,7 @@ it.effect("refuses a way of updating a branch that the host or the viewer does n
             // This host brings a stale branch up to date with a merge commit and nothing else.
             updateMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -2630,6 +2752,7 @@ it.effect("refuses to merge a target branch into a source branch on a host that 
             // target back in.
             updateMethods: ["rebase"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },

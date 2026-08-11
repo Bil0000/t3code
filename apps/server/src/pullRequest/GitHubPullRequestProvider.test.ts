@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type { PullRequestReaction } from "@t3tools/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullRequestProvider.ts";
@@ -245,6 +246,8 @@ describe("getChangeRequest commits", () => {
     reviewThreads: [],
     commentCount: 0,
     truncated: false,
+    reactions: [],
+    reactionsById: new Map<string, ReadonlyArray<PullRequestReaction>>(),
     reviewers: [],
     avatarsByLogin: new Map<string, string>(),
     commitStats: new Map<string, { readonly additions: number; readonly deletions: number }>(),
@@ -326,6 +329,8 @@ describe("getChangeRequestActivity dismissed reviews", () => {
     reviewThreads: [],
     commentCount: 0,
     truncated: false,
+    reactions: [],
+    reactionsById: new Map(),
     reviewers: [],
     avatarsByLogin: new Map(),
     commitStats: new Map(),

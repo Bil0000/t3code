@@ -1,5 +1,9 @@
 import * as Effect from "effect/Effect";
-import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
+import type {
+  PullRequestCapabilities,
+  PullRequestReaction,
+  PullRequestViewerPermissions,
+} from "@t3tools/contracts";
 
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import {
@@ -29,6 +33,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   // does is what lets a request to merge the target in be refused instead of quietly rebasing.
   updateMethods: ["rebase"],
   search: true,
+  reactions: true,
   review: {
     inlineComment: true,
     reply: true,
@@ -169,19 +174,37 @@ export const make = Effect.gen(function* () {
           cli
             .listDiscussions(input)
             .pipe(Effect.orElseSucceed(() => ({ threads: [], truncated: true }))),
+          // The notes endpoint carries no award of any kind, so they are read alongside it. A
+          // failed read costs the conversation its reactions rather than its words.
+          cli.listReactions(input).pipe(
+            Effect.orElseSucceed(() => ({
+              reactions: [] as ReadonlyArray<PullRequestReaction>,
+              reactionsByNoteId: new Map<string, ReadonlyArray<PullRequestReaction>>(),
+            })),
+          ),
         ],
-        { concurrency: 3 },
+        { concurrency: 4 },
       ).pipe(
         Effect.mapError(fail("getChangeRequestActivity")),
         Effect.map(
-          ([notes, commits, discussions]): ProviderChangeRequestActivity => ({
-            comments: notes.comments,
+          ([notes, commits, discussions, awards]): ProviderChangeRequestActivity => ({
+            reactions: awards.reactions,
+            comments: notes.comments.map((comment) => ({
+              ...comment,
+              reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
+            })),
             // GitLab reports no count of its own, so the walk's own total is the host's: the
             // notes endpoint carries every comment on the merge request, including the ones
             // written under a discussion, and it is read until GitLab runs out.
             commentCount: notes.comments.length,
             commentsTruncated: notes.truncated || discussions.truncated,
-            reviewThreads: discussions.threads,
+            reviewThreads: discussions.threads.map((thread) => ({
+              ...thread,
+              comments: thread.comments.map((comment) => ({
+                ...comment,
+                reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
+              })),
+            })),
             commits,
           }),
         ),
@@ -243,6 +266,18 @@ export const make = Effect.gen(function* () {
           body: input.body,
         })
         .pipe(Effect.mapError(fail("replyToThread"))),
+
+    setReaction: (input) =>
+      cli
+        .setReaction({
+          cwd: input.cwd,
+          repository: input.repository,
+          number: input.number,
+          ...(input.subjectId === undefined ? {} : { noteId: input.subjectId }),
+          content: input.content,
+          reacted: input.reacted,
+        })
+        .pipe(Effect.mapError(fail("setReaction"))),
 
     setThreadResolution: (input) =>
       cli

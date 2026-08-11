@@ -2,6 +2,7 @@ import * as Effect from "effect/Effect";
 import type {
   PullRequestActor,
   PullRequestCapabilities,
+  PullRequestReaction,
   PullRequestViewerPermissions,
 } from "@t3tools/contracts";
 
@@ -30,6 +31,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   mergeMethods: ["merge", "squash", "rebase"],
   updateMethods: ["merge", "rebase"],
   search: true,
+  reactions: true,
   review: {
     inlineComment: true,
     reply: true,
@@ -284,6 +286,8 @@ export const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => ({
               comments: [],
               dismissalsByReviewId: new Map<string, string>(),
+              reactions: [],
+              reactionsById: new Map<string, ReadonlyArray<PullRequestReaction>>(),
               reviewThreads: [],
               commentCount: 0,
               truncated: true,
@@ -305,6 +309,7 @@ export const make = Effect.gen(function* () {
           ([pullRequest, reviewThreads]): ProviderChangeRequestActivity => ({
             author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin, input.host),
             reviewers: reviewThreads.reviewers,
+            reactions: reviewThreads.reactions,
             commits: (reviewThreads.commits.length > 0
               ? reviewThreads.commits
               : pullRequest.commits
@@ -329,6 +334,9 @@ export const make = Effect.gen(function* () {
                     ? (reviewThreads.dismissalsByReviewId.get(comment.id) ?? comment.body)
                     : comment.body,
                 author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
+                // A comment out of `gh pr view --json` carries none of its own: that read
+                // reports no reaction at all, so they arrive from the GraphQL page by node id.
+                reactions: comment.reactions ?? reviewThreads.reactionsById.get(comment.id) ?? [],
               }))
               .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
             // `gh pr view --json comments,reviews` follows GitHub's cursors itself, so those two
@@ -423,6 +431,19 @@ export const make = Effect.gen(function* () {
           body: input.body,
         })
         .pipe(Effect.mapError(fail("replyToThread"))),
+
+    setReaction: (input) =>
+      cli
+        .setReaction({
+          cwd: input.cwd,
+          repository: input.repository,
+          host: input.host,
+          number: input.number,
+          ...(input.subjectId === undefined ? {} : { subjectId: input.subjectId }),
+          content: input.content,
+          reacted: input.reacted,
+        })
+        .pipe(Effect.mapError(fail("setReaction"))),
 
     setThreadResolution: (input) =>
       cli

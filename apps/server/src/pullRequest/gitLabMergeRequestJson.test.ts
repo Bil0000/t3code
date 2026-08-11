@@ -2,12 +2,15 @@ import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  decodeAwardEmojiJson,
   decodeCommitsJson,
   decodeMergeRequestDetailJson,
   decodeMergeRequestDiffsJson,
   decodeMergeRequestListJson,
   decodeNotesJson,
+  decodeOwnAwardIdJson,
   decodeViewerJson,
+  gitLabAwardName,
 } from "./gitLabMergeRequestJson.ts";
 
 function listJson(entries: ReadonlyArray<Record<string, unknown>>): string {
@@ -476,5 +479,104 @@ describe("merge request viewer fields", () => {
     expect(
       expectSuccess(decodeMergeRequestDetailJson(detailJson({ user: null }))).viewerCanMerge,
     ).toBe(true);
+  });
+});
+
+describe("decodeAwardEmojiJson", () => {
+  it("reads MR-level awards, keys per-note awards by the REST id inside their gid, and ignores an award outside the eight", () => {
+    const result = expectSuccess(
+      decodeAwardEmojiJson(
+        JSON.stringify({
+          data: {
+            currentUser: { username: "bilal" },
+            project: {
+              mergeRequest: {
+                awardEmoji: {
+                  nodes: [
+                    { name: "thumbsup", user: { username: "bilal" } },
+                    { name: "thumbsup", user: { username: "julius" } },
+                  ],
+                },
+                notes: {
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                  nodes: [
+                    {
+                      id: "gid://gitlab/DiffNote/42",
+                      awardEmoji: { nodes: [{ name: "heart", user: { username: "julius" } }] },
+                    },
+                    {
+                      id: "gid://gitlab/Note/7",
+                      // Not one of the eight the contract carries.
+                      awardEmoji: {
+                        nodes: [{ name: "partyparrot", user: { username: "bilal" } }],
+                      },
+                    },
+                  ],
+                },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    // `bilal` is `currentUser`, so the group they are in reads back as reacted; `julius` alone
+    // does not turn a group's own `viewerHasReacted` on.
+    expect(result.reactions).toEqual([
+      { content: "thumbs-up", count: 2, actors: ["bilal", "julius"], viewerHasReacted: true },
+    ]);
+    // Note 7's only award named nobody the eight recognise, so it carries no reactions and is
+    // left out of the map rather than kept empty.
+    expect([...result.reactionsByNoteId]).toEqual([
+      ["42", [{ content: "heart", count: 1, actors: ["julius"], viewerHasReacted: false }]],
+    ]);
+    expect(result.nextCursor).toBeNull();
+  });
+
+  it("hands back a cursor when GitLab has more notes to page", () => {
+    const result = expectSuccess(
+      decodeAwardEmojiJson(
+        JSON.stringify({
+          data: {
+            currentUser: null,
+            project: {
+              mergeRequest: {
+                awardEmoji: { nodes: [] },
+                notes: { pageInfo: { hasNextPage: true, endCursor: "Y3Vyc29yOjE" }, nodes: [] },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(result.nextCursor).toBe("Y3Vyc29yOjE");
+  });
+});
+
+describe("decodeOwnAwardIdJson", () => {
+  const awards = JSON.stringify([
+    { id: 101, name: "thumbsup", user: { username: "julius" } },
+    { id: 102, name: "thumbsup", user: { username: "bilal" } },
+  ]);
+
+  it("finds the reader's own award of that name, which is the one a removal deletes", () => {
+    expect(
+      expectSuccess(decodeOwnAwardIdJson(awards, { content: "thumbs-up", viewer: "bilal" })),
+    ).toBe(102);
+  });
+
+  it("returns nothing where the reader has no award of that name", () => {
+    expect(
+      expectSuccess(decodeOwnAwardIdJson(awards, { content: "heart", viewer: "bilal" })),
+    ).toBeNull();
+  });
+});
+
+describe("gitLabAwardName", () => {
+  it("spells the contents whose GitLab award name is not their own kebab-case", () => {
+    expect(gitLabAwardName("thumbs-up")).toBe("thumbsup");
+    expect(gitLabAwardName("laugh")).toBe("laughing");
+    expect(gitLabAwardName("hooray")).toBe("tada");
   });
 });

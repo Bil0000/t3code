@@ -11,6 +11,8 @@ import type {
   PullRequestListState,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
+  PullRequestReaction,
+  PullRequestReactionContent,
   PullRequestReviewCommentDraft,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
@@ -19,6 +21,8 @@ import type {
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import {
+  AWARD_EMOJI_GRAPHQL_QUERY,
+  decodeAwardEmojiJson,
   decodeCommitDiffRefsJson,
   decodeCommitsJson,
   decodeDiffRefsJson,
@@ -27,9 +31,11 @@ import {
   decodeMergeRequestDiffsJson,
   decodeMergeRequestListJson,
   decodeNotesJson,
+  decodeOwnAwardIdJson,
   decodeProjectMergeCapabilitiesJson,
   decodeProjectUsersJson,
   decodeViewerJson,
+  gitLabAwardName,
   type GitLabDiffRefs,
   type GitLabMergeRequestDetail,
   type GitLabMergeRequestListItem,
@@ -342,6 +348,32 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly number: number;
       readonly discussionId: string;
       readonly resolved: boolean;
+    }) => Effect.Effect<void, GitLabPullRequestCliError>;
+
+    /** The awards on the merge request and on every note of it, keyed by the note's REST id. */
+    readonly listReactions: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+    }) => Effect.Effect<
+      {
+        readonly reactions: ReadonlyArray<PullRequestReaction>;
+        readonly reactionsByNoteId: ReadonlyMap<string, ReadonlyArray<PullRequestReaction>>;
+      },
+      GitLabPullRequestCliError
+    >;
+
+    /**
+     * Awards an emoji, or takes the award back. `noteId` is a note of the merge request; absent
+     * awards the merge request itself, which is where its description's reactions live.
+     */
+    readonly setReaction: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly noteId?: string | undefined;
+      readonly content: PullRequestReactionContent;
+      readonly reacted: boolean;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
   }
 >()("t3/pullRequest/GitLabPullRequestCli") {}
@@ -884,26 +916,104 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /** Where an award is written: a note of the merge request, or the merge request itself. */
+  const awardSubjectPath = (input: {
+    readonly repository: string;
+    readonly number: number;
+    readonly noteId?: string | undefined;
+  }) => {
+    const mergeRequest = `projects/${projectPath(input.repository)}/merge_requests/${input.number}`;
+    return input.noteId === undefined
+      ? `${mergeRequest}/award_emoji`
+      : `${mergeRequest}/notes/${encodeURIComponent(input.noteId)}/award_emoji`;
+  };
+
+  /**
+   * The awards on the merge request and its notes, a page of notes at a time. Bounded by the same
+   * count as the conversation itself: awards past the notes that were read belong to notes the
+   * page is not showing.
+   */
+  const awardsPage = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly cursor: string | null;
+    readonly page: number;
+    readonly collected: {
+      readonly reactions: ReadonlyArray<PullRequestReaction>;
+      readonly reactionsByNoteId: Map<string, ReadonlyArray<PullRequestReaction>>;
+    } | null;
+  }): Effect.Effect<
+    {
+      readonly reactions: ReadonlyArray<PullRequestReaction>;
+      readonly reactionsByNoteId: ReadonlyMap<string, ReadonlyArray<PullRequestReaction>>;
+    },
+    GitLabPullRequestCliError
+  > =>
+    api({
+      cwd: input.cwd,
+      path: "graphql",
+      method: "POST",
+      stdin: JSON.stringify({
+        query: AWARD_EMOJI_GRAPHQL_QUERY,
+        variables: {
+          fullPath: input.repository,
+          iid: String(input.number),
+          cursor: input.cursor,
+        },
+      }),
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeAwardEmojiJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            new GitLabMergeRequestReadError({
+              command: "glab",
+              cwd: input.cwd,
+              operation: "listReactions",
+              cause: decoded.failure,
+            }),
+          );
+        }
+        const collected = input.collected ?? {
+          reactions: decoded.success.reactions,
+          reactionsByNoteId: new Map<string, ReadonlyArray<PullRequestReaction>>(),
+        };
+        for (const [id, reactions] of decoded.success.reactionsByNoteId)
+          collected.reactionsByNoteId.set(id, reactions);
+        return decoded.success.nextCursor === null || input.page >= CONVERSATION_PAGES
+          ? Effect.succeed(collected)
+          : awardsPage({
+              ...input,
+              cursor: decoded.success.nextCursor,
+              page: input.page + 1,
+              collected,
+            });
+      }),
+    );
+
+  const viewerUsername = (input: { readonly cwd: string }) =>
+    api({ cwd: input.cwd, path: "user" }).pipe(
+      Effect.flatMap((result): Effect.Effect<string, GitLabPullRequestCliError> => {
+        const decoded = decodeViewerJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            new GitLabMergeRequestReadError({
+              command: "glab",
+              cwd: input.cwd,
+              operation: "getViewerUsername",
+              cause: decoded.failure,
+            }),
+          );
+        }
+        return decoded.success === null
+          ? Effect.fail(new GitLabViewerUnavailableError({ command: "glab", cwd: input.cwd }))
+          : Effect.succeed(decoded.success);
+      }),
+    );
+
   return GitLabPullRequestCli.of({
-    getViewerUsername: (input) =>
-      api({ cwd: input.cwd, path: "user" }).pipe(
-        Effect.flatMap((result): Effect.Effect<string, GitLabPullRequestCliError> => {
-          const decoded = decodeViewerJson(result.stdout.trim());
-          if (!Result.isSuccess(decoded)) {
-            return Effect.fail(
-              new GitLabMergeRequestReadError({
-                command: "glab",
-                cwd: input.cwd,
-                operation: "getViewerUsername",
-                cause: decoded.failure,
-              }),
-            );
-          }
-          return decoded.success === null
-            ? Effect.fail(new GitLabViewerUnavailableError({ command: "glab", cwd: input.cwd }))
-            : Effect.succeed(decoded.success);
-        }),
-      ),
+    getViewerUsername: viewerUsername,
 
     listMergeRequests: (input) => {
       const perPage = Math.min(input.limit + 1, MAX_PAGE_SIZE);
@@ -914,6 +1024,44 @@ export const make = Effect.gen(function* () {
     getMergeRequestDetail: mergeRequestDetail,
 
     listNotes: (input) => notesPage({ ...input, page: 1, collected: [] }),
+
+    listReactions: (input) => awardsPage({ ...input, cursor: null, page: 1, collected: null }),
+
+    setReaction: (input) =>
+      Effect.gen(function* () {
+        const subject = awardSubjectPath(input);
+        if (input.reacted) {
+          yield* api({
+            cwd: input.cwd,
+            path: `${subject}?${query([["name", gitLabAwardName(input.content)]])}`,
+            method: "POST",
+          });
+          return;
+        }
+        // GitLab deletes an award by its id and takes no emoji name there, so the reader's own
+        // award of that name is looked up first. Nothing to delete is success: the reaction the
+        // caller asked to take back is already gone.
+        const viewer = yield* viewerUsername({ cwd: input.cwd });
+        const listed = yield* api({ cwd: input.cwd, path: subject });
+        const own = decodeOwnAwardIdJson(listed.stdout.trim(), {
+          content: input.content,
+          viewer,
+        });
+        if (!Result.isSuccess(own)) {
+          return yield* new GitLabMergeRequestReadError({
+            command: "glab",
+            cwd: input.cwd,
+            operation: "setReaction",
+            cause: own.failure,
+          });
+        }
+        if (own.success === null) return;
+        yield* api({
+          cwd: input.cwd,
+          path: `${subject}/${own.success}`,
+          method: "DELETE",
+        });
+      }),
 
     listCommits: (input) =>
       api({

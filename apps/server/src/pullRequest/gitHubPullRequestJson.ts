@@ -13,6 +13,8 @@ import type {
   PullRequestMergeCapabilities,
   PullRequestOmittedFileStat,
   PullRequestMergeability,
+  PullRequestReaction,
+  PullRequestReactionContent,
   PullRequestReviewCommentDraft,
   PullRequestReviewDecision,
   PullRequestReviewThread,
@@ -215,12 +217,108 @@ const RawStatsSchema = Schema.Struct({
   ),
 });
 
+/** How many of a reaction's people the hover names before it counts the rest. */
+const REACTORS_PER_GROUP = 10;
+
+/**
+ * A reaction group as every reactable node reports it. `reactors` is bounded rather than paged:
+ * a hover says who reacted, and a hundred and forty names is a count, not a sentence.
+ */
+const REACTION_GROUPS_FIELDS = `reactionGroups {
+  content
+  viewerHasReacted
+  reactors(first: ${REACTORS_PER_GROUP}) {
+    totalCount
+    nodes {
+      ... on User { login }
+      ... on Bot { login }
+      ... on Organization { login }
+      ... on Mannequin { login }
+    }
+  }
+}`;
+
+/** GitHub's reaction names, which are the same eight the contract carries under other spellings. */
+const REACTION_CONTENT_BY_GITHUB: Readonly<Record<string, PullRequestReactionContent>> = {
+  THUMBS_UP: "thumbs-up",
+  THUMBS_DOWN: "thumbs-down",
+  LAUGH: "laugh",
+  HOORAY: "hooray",
+  CONFUSED: "confused",
+  HEART: "heart",
+  ROCKET: "rocket",
+  EYES: "eyes",
+};
+
+const GITHUB_REACTION_BY_CONTENT: Readonly<Record<PullRequestReactionContent, string>> = {
+  "thumbs-up": "THUMBS_UP",
+  "thumbs-down": "THUMBS_DOWN",
+  laugh: "LAUGH",
+  hooray: "HOORAY",
+  confused: "CONFUSED",
+  heart: "HEART",
+  rocket: "ROCKET",
+  eyes: "EYES",
+};
+
+export function gitHubReactionContent(content: PullRequestReactionContent): string {
+  return GITHUB_REACTION_BY_CONTENT[content];
+}
+
+const RawReactionGroupsSchema = Schema.optional(
+  Schema.NullOr(
+    Schema.Array(
+      Schema.Struct({
+        content: Schema.optional(Schema.NullOr(Schema.String)),
+        viewerHasReacted: Schema.optional(Schema.Boolean),
+        reactors: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              totalCount: Schema.optional(Schema.Int),
+              nodes: Schema.optional(
+                Schema.NullOr(
+                  Schema.Array(
+                    Schema.NullOr(
+                      Schema.Struct({ login: Schema.optional(Schema.NullOr(Schema.String)) }),
+                    ),
+                  ),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    ),
+  ),
+);
+
+type RawReactionGroups = typeof RawReactionGroupsSchema.Type;
+
+/**
+ * The groups GitHub answered with, as the contract carries them. A group with nobody behind it is
+ * dropped: GitHub answers with a group per content it knows, including the ones nobody chose.
+ */
+function toReactions(groups: RawReactionGroups): ReadonlyArray<PullRequestReaction> {
+  const reactions: PullRequestReaction[] = [];
+  for (const group of groups ?? []) {
+    const content = REACTION_CONTENT_BY_GITHUB[trimmed(group.content)?.toUpperCase() ?? ""];
+    if (content === undefined) continue;
+    const actors = (group.reactors?.nodes ?? []).flatMap((node) => trimmed(node?.login) ?? []);
+    const count = Math.max(group.reactors?.totalCount ?? actors.length, actors.length);
+    if (count <= 0) continue;
+    reactions.push({ content, count, actors, viewerHasReacted: group.viewerHasReacted === true });
+  }
+  return reactions;
+}
+
 const RawCommentSchema = Schema.Struct({
   id: Schema.String,
   author: Schema.optional(Schema.NullOr(RawActorSchema)),
   body: Schema.optional(Schema.String),
   createdAt: Schema.String,
   url: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Only ever present on a GraphQL read; `gh pr view --json` reports no reaction at all. */
+  reactionGroups: RawReactionGroupsSchema,
 });
 
 const RawReviewSchema = Schema.Struct({
@@ -315,11 +413,32 @@ const RawReviewThreadsSchema = Schema.Struct({
         }),
         ...RawViewerFieldsSchema.fields,
         author: Schema.optional(Schema.NullOr(RawActorSchema)),
+        reactionGroups: RawReactionGroupsSchema,
         comments: Schema.optional(
           Schema.NullOr(
             Schema.Struct({
               nodes: Schema.Array(
-                Schema.Struct({ author: Schema.optional(Schema.NullOr(RawActorSchema)) }),
+                Schema.Struct({
+                  id: Schema.optional(Schema.NullOr(Schema.String)),
+                  author: Schema.optional(Schema.NullOr(RawActorSchema)),
+                  reactionGroups: RawReactionGroupsSchema,
+                }),
+              ),
+            }),
+          ),
+        ),
+        /**
+         * Reviews for their reactions alone: the words and the verdict arrive with
+         * `gh pr view --json reviews`, which reports no reaction of any kind.
+         */
+        reviews: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              nodes: Schema.Array(
+                Schema.Struct({
+                  id: Schema.optional(Schema.NullOr(Schema.String)),
+                  reactionGroups: RawReactionGroupsSchema,
+                }),
               ),
             }),
           ),
@@ -556,14 +675,18 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
           comments(first: ${GRAPHQL_PAGE_SIZE}) {
             totalCount
             pageInfo { hasNextPage endCursor }
-            nodes { id author { login avatarUrl } body createdAt url }
+            nodes { id author { login avatarUrl } body createdAt url ${REACTION_GROUPS_FIELDS} }
           }
         }
       }
       viewerCanUpdate
       viewerDidAuthor
       author { login avatarUrl }
-      comments(first: ${GRAPHQL_PAGE_SIZE}) { nodes { author { login avatarUrl } } }
+      ${REACTION_GROUPS_FIELDS}
+      comments(first: ${GRAPHQL_PAGE_SIZE}) {
+        nodes { id author { login avatarUrl } ${REACTION_GROUPS_FIELDS} }
+      }
+      reviews(first: ${GRAPHQL_PAGE_SIZE}) { nodes { id ${REACTION_GROUPS_FIELDS} } }
       reviewRequests(first: 50) {
         nodes {
           requestedReviewer {
@@ -605,7 +728,7 @@ export const REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY = `query($threadId: ID!, $curs
     ... on PullRequestReviewThread {
       comments(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
         pageInfo { hasNextPage endCursor }
-        nodes { id author { login avatarUrl } body createdAt url }
+        nodes { id author { login avatarUrl } body createdAt url ${REACTION_GROUPS_FIELDS} }
       }
     }
   }
@@ -622,6 +745,40 @@ export const REVIEW_THREAD_REPLY_GRAPHQL_MUTATION = `mutation($threadId: ID!, $b
   addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
     comment { id }
   }
+}`;
+
+/**
+ * The pull request's own node id, which is what a reaction on its description is addressed by.
+ * Read only when one is being written: the conversation carries an id for every remark in it, and
+ * the pull request is the one subject nothing in it names.
+ */
+export const PULL_REQUEST_NODE_ID_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { id } }
+}`;
+
+const RawPullRequestNodeIdSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      pullRequest: Schema.Struct({ id: Schema.String }),
+    }),
+  }),
+});
+
+const decodePullRequestNodeId = decodeJsonResult(RawPullRequestNodeIdSchema);
+
+export function decodePullRequestNodeIdJson(raw: string): Result.Result<string, DecodeFailure> {
+  const decoded = decodePullRequestNodeId(raw);
+  return Result.isSuccess(decoded)
+    ? Result.succeed(decoded.success.data.repository.pullRequest.id)
+    : Result.fail(decoded.failure);
+}
+
+export const ADD_REACTION_GRAPHQL_MUTATION = `mutation($subjectId: ID!, $content: ReactionContent!) {
+  addReaction(input: { subjectId: $subjectId, content: $content }) { reaction { content } }
+}`;
+
+export const REMOVE_REACTION_GRAPHQL_MUTATION = `mutation($subjectId: ID!, $content: ReactionContent!) {
+  removeReaction(input: { subjectId: $subjectId, content: $content }) { reaction { content } }
 }`;
 
 export const RESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION = `mutation($threadId: ID!) {
@@ -1293,6 +1450,10 @@ export interface GitHubReviewThreadComments {
   /** The host's own count of the conversation, which a bounded read can fall short of. */
   readonly commentCount: number;
   readonly truncated: boolean;
+  /** The pull request's own reactions, which sit on its description. */
+  readonly reactions: ReadonlyArray<PullRequestReaction>;
+  /** Reactions by node id, for the comments and reviews the `gh` JSON read carries no reaction on. */
+  readonly reactionsById: ReadonlyMap<string, ReadonlyArray<PullRequestReaction>>;
   /**
    * Everyone on the review: those still asked and those who have already answered. Whoever has
    * reviewed is no longer an outstanding request, so asking only for requests reports nobody on
@@ -1334,6 +1495,13 @@ export interface GitHubReviewThreadPage {
   readonly threads: ReadonlyArray<GitHubReviewThreadEntry>;
   /** Where the next page of threads starts, or null once the host has handed them all over. */
   readonly nextCursor: string | null;
+  /** The pull request's own reactions, which sit on its description. */
+  readonly reactions: ReadonlyArray<PullRequestReaction>;
+  /**
+   * Reactions by node id, for the conversation comments and reviews `gh pr view --json` answers
+   * for without any. Only ids with a reaction are here; the rest carry none.
+   */
+  readonly reactionsById: ReadonlyMap<string, ReadonlyArray<PullRequestReaction>>;
   readonly reviewers: ReadonlyArray<PullRequestActor>;
   readonly avatarsByLogin: ReadonlyMap<string, string>;
   readonly commitStats: ReadonlyMap<
@@ -1367,6 +1535,7 @@ export function reviewThreadConversation(
         url: comment.url,
         path: thread.path,
         reviewState: null,
+        reactions: comment.reactions ?? [],
       }),
     ),
   );
@@ -1463,6 +1632,7 @@ export function decodeReviewThreadsJson(
             body: comment.body ?? "",
             createdAt: comment.createdAt,
             url: trimmed(comment.url),
+            reactions: toReactions(comment.reactionGroups),
           })),
         },
         commentCount: thread.comments.totalCount ?? thread.comments.nodes.length,
@@ -1516,9 +1686,21 @@ export function decodeReviewThreadsJson(
       }),
     });
   }
+  const reactionsById = new Map<string, ReadonlyArray<PullRequestReaction>>();
+  for (const node of [
+    ...(pullRequest.comments?.nodes ?? []),
+    ...(pullRequest.reviews?.nodes ?? []),
+  ]) {
+    const id = trimmed(node.id);
+    if (id === null) continue;
+    const reactions = toReactions(node.reactionGroups);
+    if (reactions.length > 0) reactionsById.set(id, reactions);
+  }
   return Result.succeed({
     threads: entries,
     nextCursor: nextCursorOf(threads.pageInfo),
+    reactions: toReactions(pullRequest.reactionGroups),
+    reactionsById,
     reviewers: [...reviewers.values()],
     avatarsByLogin,
     commitStats,
@@ -1549,6 +1731,7 @@ export function decodeReviewThreadCommentsJson(raw: string): Result.Result<
       body: comment.body ?? "",
       createdAt: comment.createdAt,
       url: trimmed(comment.url),
+      reactions: toReactions(comment.reactionGroups),
     })),
     nextCursor: nextCursorOf(comments?.pageInfo),
   });

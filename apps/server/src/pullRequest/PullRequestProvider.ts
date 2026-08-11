@@ -17,6 +17,8 @@ import type {
   PullRequestMergeMethod,
   PullRequestMergeability,
   PullRequestOmittedFileStat,
+  PullRequestReaction,
+  PullRequestReactionContent,
   PullRequestReviewCommentDraft,
   PullRequestReviewDecision,
   PullRequestReviewThread,
@@ -173,6 +175,8 @@ export interface ProviderChangeRequestActivity {
   readonly commentsTruncated: boolean;
   readonly reviewThreads: ReadonlyArray<PullRequestReviewThread>;
   readonly commits: ReadonlyArray<PullRequestCommit>;
+  /** The change request's own reactions, from a host that has them. */
+  readonly reactions?: ReadonlyArray<PullRequestReaction>;
 }
 
 export interface ProviderDiffSlice {
@@ -400,6 +404,22 @@ export interface PullRequestProviderApi {
       readonly number: number;
       readonly threadId: string;
       readonly body: string;
+    },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /**
+   * Adds a reaction, or takes it back. Only called when `capabilities.reactions` is true.
+   *
+   * `subjectId` is a remark's id as the conversation carried it; absent means the change request
+   * itself, whose reactions sit on its description. Whatever a host needs to address either of
+   * them is worked out here, because the id a conversation travels with is the one the reader has.
+   */
+  readonly setReaction: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly subjectId?: string | undefined;
+      readonly content: PullRequestReactionContent;
+      readonly reacted: boolean;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 

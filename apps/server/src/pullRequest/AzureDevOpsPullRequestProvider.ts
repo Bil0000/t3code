@@ -31,6 +31,7 @@ const CAPABILITIES: PullRequestCapabilities = {
   mergeMethods: ["merge", "squash"],
   // `az repos pr list` filters by status, creator, reviewer and branch, and by no text at all.
   search: false,
+  reactions: false,
   // With no patch to show there are no lines to write against, so nothing here is offered.
   review: { inlineComment: false, reply: false, resolve: false, verdicts: [] },
   // `az repos pr reviewer add` and `remove` name identities, and nothing anywhere in `az repos`
@@ -249,6 +250,8 @@ export const make = Effect.gen(function* () {
     replyToThread: () => unsupported("replyToThread"),
 
     setThreadResolution: () => unsupported("setThreadResolution"),
+
+    setReaction: () => unsupported("setReaction"),
   };
 
   return provider;

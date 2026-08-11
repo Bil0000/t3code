@@ -30,6 +30,7 @@ import {
   type PullRequestListStatsInput,
   type PullRequestListStatsResult,
   type PullRequestProviderSummary,
+  type PullRequestReactionInput,
   type PullRequestRef,
   type PullRequestReviewVerdict,
   type PullRequestReviewerCandidateList,
@@ -141,6 +142,9 @@ export class PullRequestService extends Context.Service<
     ) => Effect.Effect<void, PullRequestError>;
     readonly setThreadResolution: (
       input: PullRequestThreadResolutionInput,
+    ) => Effect.Effect<void, PullRequestError>;
+    readonly setReaction: (
+      input: PullRequestReactionInput,
     ) => Effect.Effect<void, PullRequestError>;
     readonly reviewerCandidates: (
       input: PullRequestRef,
@@ -1014,6 +1018,7 @@ export const make = Effect.gen(function* () {
                 commentsTruncated: activity.commentsTruncated,
                 reviewThreads: activity.reviewThreads,
                 commits: activity.commits,
+                ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
               }),
             ),
           ),
@@ -1325,6 +1330,36 @@ export const make = Effect.gen(function* () {
               .pipe(Effect.mapError(toPullRequestError("setThreadResolution")));
           }),
         );
+      }),
+    );
+
+  /**
+   * Reacting is gated on the host alone. Every host with reactions takes one from whoever can read
+   * the change request, so there is no access left to check that reading it has not already
+   * settled.
+   */
+  const setReaction: PullRequestService["Service"]["setReaction"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        if (!project.api.capabilities.reactions) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "setReaction",
+              detail: "This host has no reactions.",
+            }),
+          );
+        }
+        return project.api
+          .setReaction({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            host: project.host,
+            number: input.number,
+            ...(input.subjectId === undefined ? {} : { subjectId: input.subjectId }),
+            content: input.content,
+            reacted: input.reacted,
+          })
+          .pipe(Effect.mapError(toPullRequestError("setReaction")));
       }),
     );
 
@@ -1790,6 +1825,7 @@ export const make = Effect.gen(function* () {
     submitReview: invalidatedByMutation(submitReview),
     replyToThread: invalidatedByMutation(replyToThread),
     setThreadResolution: invalidatedByMutation(setThreadResolution),
+    setReaction: invalidatedByMutation(setReaction),
     // The candidate list is deliberately read fresh per menu-open, so it stays uncached.
     reviewerCandidates,
     requestReviewers: invalidatedByMutation(requestReviewers),

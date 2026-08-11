@@ -11,6 +11,8 @@ import type {
   PullRequestListState,
   PullRequestMergeMethod,
   PullRequestOmittedFileStat,
+  PullRequestReaction,
+  PullRequestReactionContent,
   PullRequestReviewCommentDraft,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
@@ -22,6 +24,7 @@ import type {
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import {
   ACTOR_AVATARS_GRAPHQL_QUERY,
+  ADD_REACTION_GRAPHQL_MUTATION,
   buildReviewSubmissionJson,
   buildReviewerRequestJson,
   decodeActorAvatarsJson,
@@ -29,6 +32,7 @@ import {
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
   decodePullRequestListJson,
+  decodePullRequestNodeIdJson,
   decodePullRequestSearchJson,
   decodePullRequestStatsJson,
   decodeRepositoryAccessJson,
@@ -45,6 +49,9 @@ import {
   decodeBaseComparisonJson,
   PULL_REQUEST_DETAIL_JSON_FIELDS,
   PULL_REQUEST_LIST_JSON_FIELDS,
+  PULL_REQUEST_NODE_ID_GRAPHQL_QUERY,
+  REMOVE_REACTION_GRAPHQL_MUTATION,
+  gitHubReactionContent,
   REPOSITORY_ACCESS_JSON_FIELDS,
   RESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
   REVIEWER_CANDIDATES_GRAPHQL_QUERY,
@@ -481,6 +488,21 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly threadId: string;
       readonly resolved: boolean;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
+
+    /**
+     * Adds a reaction to a remark, or takes it back. `subjectId` is any node GitHub calls
+     * reactable — a comment, a review, or the pull request itself, which is looked up here
+     * because nothing in the conversation names it.
+     */
+    readonly setReaction: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly subjectId?: string | undefined;
+      readonly content: PullRequestReactionContent;
+      readonly reacted: boolean;
+    }) => Effect.Effect<void, GitHubPullRequestCliError>;
   }
 >()("t3/pullRequest/GitHubPullRequestCli") {}
 
@@ -743,6 +765,28 @@ export const make = Effect.gen(function* () {
   // `gh` resolves a bare `owner/repo` against whichever host it defaults to, which is
   // github.com. Naming the host makes a GitHub Enterprise repository resolve to its own
   // install rather than to a same-named repository on github.com.
+  /** The pull request's own node id, for a reaction written against its description. */
+  const pullRequestNodeId = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly host: string;
+    readonly number: number;
+  }) => {
+    const { owner, name } = parseRepositorySelector(input.repository);
+    return graphqlRead({
+      cwd: input.cwd,
+      host: input.host,
+      operation: "setReaction",
+      variables: [
+        ["-f", `owner=${owner}`],
+        ["-f", `name=${name}`],
+        ["-F", `number=${input.number}`],
+      ],
+      query: PULL_REQUEST_NODE_ID_GRAPHQL_QUERY,
+      decode: decodePullRequestNodeIdJson,
+    });
+  };
+
   const repositoryArgs = (input: { readonly host: string; readonly repository: string }) => [
     "--repo",
     `${input.host}/${input.repository}`,
@@ -1342,6 +1386,8 @@ export const make = Effect.gen(function* () {
           { readonly additions: number; readonly deletions: number }
         >();
         let reviewers: ReadonlyArray<PullRequestActor> = [];
+        let reactions: GitHubReviewThreadPage["reactions"] = [];
+        const reactionsById = new Map<string, ReadonlyArray<PullRequestReaction>>();
         let commits: GitHubReviewThreadPage["commits"] = [];
         let viewer: GitHubReviewThreadPage["viewer"] = { canUpdate: true, didAuthor: false };
         const dismissalsByReviewId = new Map<string, string>();
@@ -1357,6 +1403,8 @@ export const make = Effect.gen(function* () {
           // first one already carries all of them.
           if (page === 0) {
             reviewers = read.reviewers;
+            reactions = read.reactions;
+            for (const [id, entry] of read.reactionsById) reactionsById.set(id, entry);
             commits = read.commits;
             viewer = read.viewer;
             for (const [id, message] of read.dismissalsByReviewId)
@@ -1428,6 +1476,8 @@ export const make = Effect.gen(function* () {
           // where a bound kept some of the words on GitHub.
           commentCount: finished.reduce((total, entry) => total + entry.commentCount, 0),
           truncated: cursor !== null || finished.some((entry) => entry.truncated),
+          reactions,
+          reactionsById,
           reviewers,
           avatarsByLogin,
           commitStats,
@@ -1630,6 +1680,21 @@ export const make = Effect.gen(function* () {
           : UNRESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
         variables: { threadId: input.threadId },
       }),
+
+    setReaction: (input) =>
+      (input.subjectId === undefined
+        ? pullRequestNodeId(input)
+        : Effect.succeed(input.subjectId)
+      ).pipe(
+        Effect.flatMap((subjectId) =>
+          graphql({
+            cwd: input.cwd,
+            host: input.host,
+            query: input.reacted ? ADD_REACTION_GRAPHQL_MUTATION : REMOVE_REACTION_GRAPHQL_MUTATION,
+            variables: { subjectId, content: gitHubReactionContent(input.content) },
+          }),
+        ),
+      ),
   });
 });
 
