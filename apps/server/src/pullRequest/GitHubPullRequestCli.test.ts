@@ -583,20 +583,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("narrows the search-free fallback by the fields its rows carry", () =>
+  it.effect("takes an empty filtered answer as an answer rather than falling back", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
-      mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            pullRequests(3, 1, (number) => ({
-              isDraft: number === 2,
-              author: { login: number === 1 ? "octocat" : "hubot" },
-              labels: number === 3 ? [{ name: "WIP", color: "ff0000" }] : [],
-            })),
-          ),
-        ),
-      );
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const batch = yield* cli.listPullRequests({
@@ -610,10 +599,11 @@ layer("GitHubPullRequestCli.layer", (it) => {
         filters: { draft: "hide", checks: "passing", excludedLabels: ["wip"], author: "OctoCat" },
       });
 
-      // The fallback reads without a search, so the qualifiers cannot travel with it; checks
-      // are dropped rather than guessed at, since no listed row says anything about them.
-      expect(searchOfCall(1)).toBeUndefined();
-      expect(batch.items.map((item) => item.number)).toEqual([1]);
+      // The filters were qualifiers on that very search, so nothing matching them exists. The
+      // search-free fallback is for a repository the index does not cover, and it could not
+      // judge `checks` at all — no listed row says anything about them.
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      assert.deepStrictEqual(batch.items, []);
     }),
   );
 

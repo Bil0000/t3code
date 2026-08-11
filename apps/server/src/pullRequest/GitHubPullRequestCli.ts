@@ -1049,7 +1049,12 @@ export const make = Effect.gen(function* () {
       // repository's whole list, which is every row the reader did not search for. The fallback
       // is for a repository the index does not cover, and a listing with no text to match is the
       // only place an empty answer can mean that.
-      const searched = (input.query?.trim().length ?? 0) > 0;
+      // Filters are qualifiers on the very same search, so a filtered read that comes back empty
+      // has also been answered: falling back would hand over rows the filters exclude, and the
+      // fallback cannot judge `checks` at all — no listed row carries its check state.
+      const searched =
+        (input.query?.trim().length ?? 0) > 0 ||
+        (input.filters !== undefined && Object.keys(input.filters).length > 0);
       return read(true).pipe(
         Effect.flatMap((batch) =>
           batch.items.length === 0 && input.cursor === undefined && !searched
