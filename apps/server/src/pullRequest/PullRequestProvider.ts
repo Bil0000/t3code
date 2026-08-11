@@ -3,6 +3,7 @@ import * as Schema from "effect/Schema";
 import type {
   PullRequestAction,
   PullRequestActor,
+  PullRequestBaseComparison,
   PullRequestCapabilities,
   PullRequestCheck,
   PullRequestComment,
@@ -22,6 +23,7 @@ import type {
   PullRequestReviewerCandidateList,
   PullRequestReviewerKind,
   PullRequestState,
+  PullRequestUpdateMethod,
   PullRequestViewerPermissions,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
@@ -145,6 +147,9 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
   readonly checks: ReadonlyArray<PullRequestCheck>;
   readonly mergeCapabilities: PullRequestMergeCapabilities;
   readonly viewerPermissions: PullRequestViewerPermissions;
+  /** Absent from a host that cannot compare the branch with its base, which is most of them. */
+  readonly baseComparison?: PullRequestBaseComparison;
+  readonly behindBy?: number;
 }
 
 /** The conversation-shaped half of a detail, loaded after the core can already render. */
@@ -329,6 +334,8 @@ export interface PullRequestProviderApi {
       readonly number: number;
       readonly action: PullRequestAction;
       readonly mergeMethod?: PullRequestMergeMethod;
+      /** Only meaningful for `update-branch`; absent takes the host's own default. */
+      readonly updateMethod?: PullRequestUpdateMethod;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 

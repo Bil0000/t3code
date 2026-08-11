@@ -200,6 +200,8 @@ const RawCommitSchema = Schema.Struct({
 
 const RawDetailSchema = Schema.Struct({
   ...RawListItemSchema.fields,
+  /** Names the fork a pull request came from, which is what qualifies its head ref. */
+  headRepositoryOwner: Schema.optional(Schema.NullOr(Schema.Struct({ login: Schema.String }))),
   body: Schema.optional(Schema.String),
   changedFiles: Schema.optional(Schema.Int),
   closedAt: Schema.optional(Schema.NullOr(Schema.String)),
@@ -407,7 +409,7 @@ export function decodeActorAvatarsJson(
 export const PULL_REQUEST_LIST_JSON_FIELDS =
   "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels";
 
-export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,statusCheckRollup`;
+export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,statusCheckRollup,headRepositoryOwner`;
 export const PULL_REQUEST_ACTIVITY_JSON_FIELDS = "author,comments,reviews,commits";
 
 /** GitHub's own ceiling on a connection page, which is what both thread reads ask for. */
@@ -680,6 +682,8 @@ export interface GitHubPullRequestListItem {
 }
 
 export interface GitHubPullRequestDetail extends GitHubPullRequestListItem {
+  /** The owner of the head branch's repository; null where `gh` did not say. */
+  readonly headRepositoryOwner: string | null;
   readonly body: string;
   readonly changedFiles: number;
   readonly mergedAt: string | null;
@@ -964,6 +968,7 @@ function toListItem(raw: Schema.Schema.Type<typeof RawListItemSchema>): GitHubPu
 function toDetail(raw: Schema.Schema.Type<typeof RawDetailSchema>): GitHubPullRequestDetail {
   return {
     ...toListItem(raw),
+    headRepositoryOwner: trimmed(raw.headRepositoryOwner?.login),
     body: raw.body ?? "",
     changedFiles: raw.changedFiles ?? 0,
     mergedAt: trimmed(raw.mergedAt),
@@ -1474,6 +1479,75 @@ export function decodeRepositoryAccessJson(
  * need `read:org`, which a repository-scoped token need not carry — and a query GitHub refuses
  * fails whole, taking the people down with the teams.
  */
+/**
+ * Where the branch stands against its base, and whether this viewer may move it.
+ *
+ * `mergeStateStatus` is not the answer: GitHub only reports BEHIND where the repository requires
+ * branches to be up to date before merging, so on every other repository a stale branch reads as
+ * CLEAN or BLOCKED like any other. The comparison counts the commits instead, which is the same
+ * number GitHub's own "out-of-date" banner shows.
+ *
+ * `headRef` is qualified `owner:branch` because a pull request from a fork has no branch of that
+ * name in the base repository, and an unqualified name is simply not found there.
+ */
+export const BASE_COMPARISON_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $headRef: String!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      viewerCanUpdateBranch
+      baseRef {
+        compare(headRef: $headRef) {
+          behindBy
+        }
+      }
+    }
+  }
+}`;
+
+const RawBaseComparisonSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.NullOr(
+      Schema.Struct({
+        pullRequest: Schema.NullOr(
+          Schema.Struct({
+            viewerCanUpdateBranch: Schema.optional(Schema.NullOr(Schema.Boolean)),
+            /** Null where the head repository is gone, which is a comparison nobody can make. */
+            baseRef: Schema.optional(
+              Schema.NullOr(
+                Schema.Struct({
+                  compare: Schema.optional(
+                    Schema.NullOr(Schema.Struct({ behindBy: Schema.Number })),
+                  ),
+                }),
+              ),
+            ),
+          }),
+        ),
+      }),
+    ),
+  }),
+});
+
+const decodeBaseComparison = decodeJsonResult(RawBaseComparisonSchema);
+
+export interface GitHubBaseComparison {
+  /** Null where the host could not compare, which the page reads as "unknown". */
+  readonly behindBy: number | null;
+  readonly viewerCanUpdate: boolean;
+}
+
+export function decodeBaseComparisonJson(
+  raw: string,
+): Result.Result<GitHubBaseComparison, DecodeFailure> {
+  const decoded = decodeBaseComparison(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const pullRequest = decoded.success.data.repository?.pullRequest;
+  const behindBy = pullRequest?.baseRef?.compare?.behindBy;
+  return Result.succeed({
+    behindBy: typeof behindBy === "number" && behindBy >= 0 ? behindBy : null,
+    viewerCanUpdate: pullRequest?.viewerCanUpdateBranch === true,
+  });
+}
+
 export const REVIEWER_CANDIDATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     assignableUsers(first: ${GRAPHQL_PAGE_SIZE}) {
@@ -1615,6 +1689,12 @@ export interface GitHubViewerAccess {
   /** GitHub's own `viewerCanUpdate`, true for the author as well as for anyone with write. */
   readonly canUpdate: boolean;
   readonly didAuthor: boolean;
+  /**
+   * GitHub's own `viewerCanUpdateBranch`, read with the base comparison rather than here: it is
+   * false for a branch that is already current, so it answers "may update, and there is
+   * something to update" at once. Absent where the comparison was not read.
+   */
+  readonly canUpdateBranch?: boolean;
 }
 
 /**

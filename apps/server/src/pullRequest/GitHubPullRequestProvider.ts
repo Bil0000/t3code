@@ -17,8 +17,9 @@ import type { GitHubViewerAccess } from "./gitHubPullRequestJson.ts";
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
   comment: true,
-  actions: ["merge", "ready", "draft", "close", "reopen"],
+  actions: ["merge", "ready", "draft", "close", "reopen", "update-branch"],
   mergeMethods: ["merge", "squash", "rebase"],
+  updateMethods: ["merge", "rebase"],
   search: true,
   review: {
     inlineComment: true,
@@ -51,6 +52,9 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
     actions: [
       ...(access.canWrite ? (["merge"] as const) : []),
       ...(access.canUpdate ? (["ready", "draft", "close", "reopen"] as const) : []),
+      // Whether this viewer may update the branch is GitHub's own answer, read with the
+      // comparison; without it the action is offered to nobody rather than to everybody.
+      ...(access.canUpdateBranch === true ? (["update-branch"] as const) : []),
     ],
     comment: true,
     resolve: access.canWrite || access.didAuthor,
@@ -59,6 +63,7 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
     // leaves them commenting, which is what an author has to say about their own change anyway.
     verdicts: access.didAuthor ? (["comment"] as const) : CAPABILITIES.review.verdicts,
     requestReviewers: access.canWrite,
+    ...(access.canUpdateBranch === true ? { updateMethods: CAPABILITIES.updateMethods } : {}),
   };
 }
 
@@ -202,7 +207,24 @@ export const make = Effect.gen(function* () {
     getChangeRequest: (input) =>
       Effect.all(
         [
-          cli.getPullRequestDetail(input),
+          cli.getPullRequestDetail(input).pipe(
+            Effect.flatMap((pullRequest) =>
+              // Only an open pull request can be behind anything worth saying so about, and only
+              // one whose head repository is known can be compared at all. A comparison that
+              // fails is left unknown: the banner is an offer, never a blocker.
+              pullRequest.state !== "open" || pullRequest.headRepositoryOwner === null
+                ? Effect.succeed({ pullRequest, comparison: null })
+                : cli
+                    .getPullRequestBaseComparison({
+                      ...input,
+                      headRef: `${pullRequest.headRepositoryOwner}:${pullRequest.headBranch}`,
+                    })
+                    .pipe(
+                      Effect.map((comparison) => ({ pullRequest, comparison })),
+                      Effect.orElseSucceed(() => ({ pullRequest, comparison: null })),
+                    ),
+            ),
+          ),
           cli.getRepositoryAccess({
             cwd: input.cwd,
             repository: input.repository,
@@ -216,15 +238,27 @@ export const make = Effect.gen(function* () {
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
         Effect.map(
-          ([pullRequest, repository, viewerAccess]): ProviderChangeRequestDetail => ({
-            ...pullRequest,
-            reviewers: pullRequest.reviewRequestLogins.map((login) => ({
+          ([detail, repository, viewerAccess]): ProviderChangeRequestDetail => ({
+            ...detail.pullRequest,
+            reviewers: detail.pullRequest.reviewRequestLogins.map((login) => ({
               login,
               name: null,
               avatarUrl: null,
             })),
             mergeCapabilities: repository.mergeCapabilities,
-            viewerPermissions: gitHubViewerPermissions(viewerAccess),
+            viewerPermissions: gitHubViewerPermissions({
+              ...viewerAccess,
+              canUpdateBranch: detail.comparison?.viewerCanUpdate === true,
+            }),
+            baseComparison:
+              detail.comparison === null || detail.comparison.behindBy === null
+                ? "unknown"
+                : detail.comparison.behindBy > 0
+                  ? "behind"
+                  : "up-to-date",
+            ...(detail.comparison?.behindBy == null
+              ? {}
+              : { behindBy: detail.comparison.behindBy }),
           }),
         ),
       ),
@@ -335,6 +369,7 @@ export const make = Effect.gen(function* () {
           number: input.number,
           action: input.action,
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+          ...(input.updateMethod === undefined ? {} : { updateMethod: input.updateMethod }),
         })
         .pipe(Effect.mapError(fail("runAction"))),
 

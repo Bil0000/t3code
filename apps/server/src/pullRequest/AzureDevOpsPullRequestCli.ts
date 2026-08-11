@@ -218,6 +218,9 @@ function actionArgs(
       return ["--draft", "true"];
     case "close":
       return ["--status", "abandoned"];
+    // Never reached: this host does not declare the action, so nothing offers it.
+    case "update-branch":
+      return [];
     case "reopen":
       return ["--status", "active"];
   }

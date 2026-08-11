@@ -16,6 +16,7 @@ import type {
   PullRequestReviewerCandidateList,
   PullRequestReviewerKind,
   PullRequestThreadComment,
+  PullRequestUpdateMethod,
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
@@ -40,6 +41,8 @@ import {
   pullRequestSearchGraphQlQuery,
   PULL_REQUEST_SEARCH_MAX_ROWS,
   PULL_REQUEST_ACTIVITY_JSON_FIELDS,
+  BASE_COMPARISON_GRAPHQL_QUERY,
+  decodeBaseComparisonJson,
   PULL_REQUEST_DETAIL_JSON_FIELDS,
   PULL_REQUEST_LIST_JSON_FIELDS,
   REPOSITORY_ACCESS_JSON_FIELDS,
@@ -53,6 +56,7 @@ import {
   UNRESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
   VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   decodeViewerPermissionsJson,
+  type GitHubBaseComparison,
   type GitHubPullRequestDetail,
   type GitHubPullRequestActivity,
   type GitHubPullRequestListItem,
@@ -337,6 +341,20 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
     }) => Effect.Effect<GitHubPullRequestDetail, GitHubPullRequestCliError>;
 
+    /**
+     * How far the branch trails its base, and whether this viewer may update it. Its own read
+     * because the comparison needs the head ref the detail answers with — a fork's branch is not
+     * addressable in the base repository by name alone.
+     */
+    readonly getPullRequestBaseComparison: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      /** Qualified `owner:branch`, which is the only form a fork's head resolves under. */
+      readonly headRef: string;
+    }) => Effect.Effect<GitHubBaseComparison, GitHubPullRequestCliError>;
+
     readonly getPullRequestActivity: (input: {
       readonly cwd: string;
       readonly repository: string;
@@ -427,6 +445,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
       readonly action: PullRequestAction;
       readonly mergeMethod?: PullRequestMergeMethod;
+      readonly updateMethod?: PullRequestUpdateMethod;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
 
     readonly commentOnPullRequest: (input: {
@@ -690,10 +709,14 @@ function cursorVariable(cursor: string | null): readonly [string, string] {
 function actionArgs(
   action: PullRequestAction,
   mergeMethod: PullRequestMergeMethod | undefined,
+  updateMethod: PullRequestUpdateMethod | undefined,
 ): ReadonlyArray<string> {
   switch (action) {
     case "merge":
       return ["merge", `--${mergeMethod ?? "merge"}`];
+    // `gh` updates with a merge commit unless asked to rebase, which is GitHub's own default.
+    case "update-branch":
+      return ["update-branch", ...(updateMethod === "rebase" ? ["--rebase"] : [])];
     case "ready":
       return ["ready"];
     case "draft":
@@ -1162,6 +1185,23 @@ export const make = Effect.gen(function* () {
           }),
         ),
 
+    getPullRequestBaseComparison: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "getPullRequestBaseComparison",
+        variables: [
+          ["owner", owner],
+          ["name", name],
+          ["number", String(input.number)],
+          ["headRef", input.headRef],
+        ],
+        query: BASE_COMPARISON_GRAPHQL_QUERY,
+        decode: decodeBaseComparisonJson,
+      });
+    },
+
     getPullRequestActivity: (input) =>
       github
         .execute({
@@ -1506,7 +1546,11 @@ export const make = Effect.gen(function* () {
     },
 
     runPullRequestAction: (input) => {
-      const [subcommand, ...flags] = actionArgs(input.action, input.mergeMethod);
+      const [subcommand, ...flags] = actionArgs(
+        input.action,
+        input.mergeMethod,
+        input.updateMethod,
+      );
       return github
         .execute({
           cwd: input.cwd,

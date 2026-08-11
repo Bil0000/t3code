@@ -172,6 +172,8 @@ const ACTION_ACCESS_REFUSALS: Record<PullRequestAction, string> = {
     "You need write access on this repository, or to have opened this change request, to return it to a draft.",
   close:
     "You need write access on this repository, or to have opened this change request, to close it.",
+  "update-branch":
+    "You need write access on this repository, or to have opened this change request, to update its branch.",
   reopen:
     "You need write access on this repository, or to have opened this change request, to reopen it.",
 };
@@ -962,6 +964,12 @@ export const make = Effect.gen(function* () {
                 checks: changeRequest.checks,
                 mergeCapabilities: changeRequest.mergeCapabilities,
                 viewerPermissions: changeRequest.viewerPermissions,
+                ...(changeRequest.baseComparison === undefined
+                  ? {}
+                  : { baseComparison: changeRequest.baseComparison }),
+                ...(changeRequest.behindBy === undefined
+                  ? {}
+                  : { behindBy: changeRequest.behindBy }),
               }),
             ),
           ),
@@ -1069,6 +1077,19 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
+        // The same for the way a stale branch is brought up to date: a host that only merges
+        // must not be asked to rebase and left to pick something else.
+        if (
+          input.updateMethod !== undefined &&
+          !(project.api.capabilities.updateMethods ?? []).includes(input.updateMethod)
+        ) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "runAction",
+              detail: `This host cannot update a branch by ${input.updateMethod}.`,
+            }),
+          );
+        }
         // What the host can do and what this account may ask of it are two questions, and both
         // have to say yes. The second is asked last, because it costs a request and the checks
         // above do not.
@@ -1082,6 +1103,17 @@ export const make = Effect.gen(function* () {
                 }),
               );
             }
+            if (
+              input.updateMethod !== undefined &&
+              !(viewer.updateMethods ?? []).includes(input.updateMethod)
+            ) {
+              return Effect.fail(
+                new PullRequestOperationError({
+                  operation: "runAction",
+                  detail: ACTION_ACCESS_REFUSALS["update-branch"],
+                }),
+              );
+            }
             return project.api
               .runAction({
                 cwd: project.project.workspaceRoot,
@@ -1090,6 +1122,7 @@ export const make = Effect.gen(function* () {
                 number: input.number,
                 action: input.action,
                 ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+                ...(input.updateMethod === undefined ? {} : { updateMethod: input.updateMethod }),
               })
               .pipe(Effect.mapError(toPullRequestError("runAction")));
           }),

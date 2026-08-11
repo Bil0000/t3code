@@ -898,6 +898,40 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("updates a stale branch with a merge commit unless asked to rebase", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "update-branch",
+      });
+      // GitHub's own default, and `gh`'s: a merge commit unless the rebase flag says otherwise.
+      expect(callAt(0).args).toEqual(["pr", "update-branch", "7", "--repo", "github.com/acme/web"]);
+
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "update-branch",
+        updateMethod: "rebase",
+      });
+      expect(callAt(1).args).toEqual([
+        "pr",
+        "update-branch",
+        "7",
+        "--repo",
+        "github.com/acme/web",
+        "--rebase",
+      ]);
+    }),
+  );
+
   it.effect("merges with the strategy it was asked for", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("")));
@@ -1551,7 +1585,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       expect(detail.body).toBe("Core body");
       expect(activity.author?.login).toBe("octocat");
       expect(callAt(0).args.at(-1)).toBe(
-        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,body,changedFiles,closedAt,statusCheckRollup",
+        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,body,changedFiles,closedAt,statusCheckRollup,headRepositoryOwner",
       );
       expect(callAt(1).args.at(-1)).toBe("author,comments,reviews,commits");
     }),

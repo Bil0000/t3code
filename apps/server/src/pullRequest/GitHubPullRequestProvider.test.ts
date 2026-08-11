@@ -71,6 +71,7 @@ describe("gitHubViewerPermissions", () => {
               title: "Pull request 7",
               url: "https://github.com/acme/web/pull/7",
               author: null,
+              headRepositoryOwner: null,
               headBranch: "feat/page",
               baseBranch: "main",
               state: "open",

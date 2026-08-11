@@ -2336,3 +2336,51 @@ it.effect("narrows the rows of a host that ignored the filters it was handed", (
     );
   }),
 );
+
+it.effect("refuses a way of updating a branch that the host or the viewer does not allow", () =>
+  Effect.gen(function* () {
+    let taken: string | null = null;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge", "close", "update-branch"],
+            mergeMethods: ["merge"],
+            // This host brings a stale branch up to date with a merge commit and nothing else.
+            updateMethods: ["merge"],
+            search: true,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: ["close", "update-branch"],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment"],
+              requestReviewers: false,
+              updateMethods: ["merge"],
+            }),
+          runAction: (input) => {
+            taken = input.updateMethod ?? "default";
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+
+    // Asking for a rebase a host does not offer must fail rather than quietly merge instead.
+    const error = yield* Effect.flip(
+      service.runAction({ ...reference, action: "update-branch", updateMethod: "rebase" }),
+    );
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.strictEqual(taken, null);
+
+    yield* service.runAction({ ...reference, action: "update-branch", updateMethod: "merge" });
+    assert.strictEqual(taken, "merge");
+  }),
+);

@@ -71,8 +71,35 @@ export type PullRequestMergeability = typeof PullRequestMergeability.Type;
 export const PullRequestMergeMethod = Schema.Literals(["merge", "squash", "rebase"]);
 export type PullRequestMergeMethod = typeof PullRequestMergeMethod.Type;
 
-export const PullRequestAction = Schema.Literals(["merge", "ready", "draft", "close", "reopen"]);
+export const PullRequestAction = Schema.Literals([
+  "merge",
+  "ready",
+  "draft",
+  "close",
+  "reopen",
+  /** Bring the base branch's commits into this one, which is what unblocks a stale branch. */
+  "update-branch",
+]);
 export type PullRequestAction = typeof PullRequestAction.Type;
+
+/**
+ * How a stale branch catches up with its base: a merge commit, or a rebase onto it. The two are
+ * the host's own choices, not this page's — GitHub offers both and refuses a rebase it cannot
+ * replay, so what is offered comes from the host and what is allowed comes from the viewer.
+ */
+export const PullRequestUpdateMethod = Schema.Literals(["merge", "rebase"]);
+export type PullRequestUpdateMethod = typeof PullRequestUpdateMethod.Type;
+
+/**
+ * Where the branch stands against the base it would merge into. Separate from `mergeability`,
+ * which answers a different question: a branch can be behind and still merge cleanly, and that
+ * pairing — out of date, no conflicts — is the one an update button exists for.
+ *
+ * "unknown" where the host was not asked or could not say, which is every host but GitHub and
+ * every pull request whose head repository could not be compared.
+ */
+export const PullRequestBaseComparison = Schema.Literals(["up-to-date", "behind", "unknown"]);
+export type PullRequestBaseComparison = typeof PullRequestBaseComparison.Type;
 
 export const PullRequestActor = Schema.Struct({
   login: TrimmedNonEmptyString,
@@ -271,6 +298,11 @@ export const PullRequestCapabilities = Schema.Struct({
   /** Merge strategies the provider itself offers, before repository settings narrow them. */
   mergeMethods: Schema.Array(PullRequestMergeMethod),
   /**
+   * How this host can bring a stale branch up to date. Absent where it cannot at all, which is
+   * every host that has not said otherwise — so a provider that says nothing offers nothing.
+   */
+  updateMethods: Schema.optional(Schema.Array(PullRequestUpdateMethod)),
+  /**
    * The host can narrow a listing by free text. False means it answers unnarrowed and whoever
    * asked has to do the narrowing — which is a different promise, so the page is told rather
    * than left to show every change request on that host as a search result.
@@ -302,6 +334,11 @@ export const PullRequestViewerPermissions = Schema.Struct({
   verdicts: Schema.Array(PullRequestReviewVerdict),
   /** This viewer may ask somebody for a review, and take the request back again. */
   requestReviewers: Schema.Boolean,
+  /**
+   * The ways this viewer may bring the branch up to date, narrowed from what the host offers.
+   * Absent or empty means they may not, which is also what a host with no such action says.
+   */
+  updateMethods: Schema.optional(Schema.Array(PullRequestUpdateMethod)),
 });
 export type PullRequestViewerPermissions = typeof PullRequestViewerPermissions.Type;
 
@@ -542,6 +579,14 @@ export const PullRequestDetail = Schema.Struct({
   labels: Schema.Array(PullRequestLabel),
   checks: Schema.Array(PullRequestCheck),
   mergeCapabilities: PullRequestMergeCapabilities,
+  /**
+   * Where the branch stands against its base. Optional so a host that cannot compare says
+   * nothing rather than claiming the branch is current — the page shows a banner only where the
+   * answer is "behind", and silence is not that answer.
+   */
+  baseComparison: Schema.optional(PullRequestBaseComparison),
+  /** How many commits the base is ahead by, where the host counted them. */
+  behindBy: Schema.optional(NonNegativeInt),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 
@@ -651,6 +696,8 @@ export const PullRequestActionInput = Schema.Struct({
   ...PullRequestRef.fields,
   action: PullRequestAction,
   mergeMethod: Schema.optional(PullRequestMergeMethod),
+  /** Only read for `update-branch`, where absent means the host's own default. */
+  updateMethod: Schema.optional(PullRequestUpdateMethod),
 });
 export type PullRequestActionInput = typeof PullRequestActionInput.Type;
 

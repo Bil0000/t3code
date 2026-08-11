@@ -2,6 +2,7 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  PullRequestActionInput,
   PullRequestListInput,
   PullRequestListResult,
   PullRequestReviewerRequestInput,
@@ -151,5 +152,29 @@ describe("PullRequestReviewerRequestInput", () => {
         requested: true,
       }).reviewers.map((entry) => entry.kind),
     ).toEqual(["user", "team"]);
+  });
+});
+
+describe("updating a branch that has fallen behind its base", () => {
+  const decodeAction = Schema.decodeUnknownSync(PullRequestActionInput);
+  const ref = { projectId: "project-1", repository: "acme/web", number: 7 };
+
+  it("carries the way the branch should be brought up to date", () => {
+    expect(decodeAction({ ...ref, action: "update-branch", updateMethod: "rebase" })).toMatchObject(
+      {
+        action: "update-branch",
+        updateMethod: "rebase",
+      },
+    );
+  });
+
+  it("takes the action without a method, which is the host's own default", () => {
+    expect(decodeAction({ ...ref, action: "update-branch" }).updateMethod).toBeUndefined();
+  });
+
+  it("refuses a way no host offers", () => {
+    expect(() =>
+      decodeAction({ ...ref, action: "update-branch", updateMethod: "squash" }),
+    ).toThrow();
   });
 });
