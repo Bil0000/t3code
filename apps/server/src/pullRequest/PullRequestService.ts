@@ -1639,23 +1639,35 @@ export const make = Effect.gen(function* () {
     (key: string) => {
       // The parse undoes this module's own serialization, so the shapes are known exactly;
       // the cast restores the branded field types JSON cannot carry.
-      const [, state, involvement, filters, projectId, host, limit, query, cursorEntries] =
-        JSON.parse(key) as [
-          number,
-          string,
-          string | null,
-          ReadonlyArray<string | ReadonlyArray<string> | null> | null,
-          string | null,
-          string | null,
-          number | null,
-          string | null,
-          ReadonlyArray<[string, string]> | null,
-        ];
+      const [
+        ,
+        state,
+        involvement,
+        filters,
+        projectId,
+        projectIds,
+        host,
+        limit,
+        query,
+        cursorEntries,
+      ] = JSON.parse(key) as [
+        number,
+        string,
+        string | null,
+        ReadonlyArray<string | ReadonlyArray<string> | null> | null,
+        string | null,
+        ReadonlyArray<string> | null,
+        string | null,
+        number | null,
+        string | null,
+        ReadonlyArray<[string, string]> | null,
+      ];
       return listUncached({
         state,
         ...(involvement === null ? {} : { involvement }),
         ...(filters === null ? {} : { filters: filtersOfKey(filters) }),
         ...(projectId === null ? {} : { projectId }),
+        ...(projectIds === null ? {} : { projectIds }),
         ...(host === null ? {} : { host }),
         ...(limit === null ? {} : { limit }),
         ...(query === null ? {} : { query }),
@@ -1688,6 +1700,8 @@ export const make = Effect.gen(function* () {
             input.filters.excludedLabels ?? null,
           ],
       input.projectId ?? null,
+      // Sorted so the same narrowing keys alike however the caller ordered it.
+      input.projectIds === undefined ? null : [...input.projectIds].sort(),
       input.host ?? null,
       input.limit ?? null,
       input.query ?? null,

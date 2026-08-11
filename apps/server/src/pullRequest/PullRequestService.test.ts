@@ -1911,6 +1911,45 @@ it.effect("answers a repeated listing from cache, and concurrent readers share o
   }),
 );
 
+it.effect("a listing narrowed to some projects is its own cache entry", () =>
+  Effect.gen(function* () {
+    const asked: ReadonlyArray<string>[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+        project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequestsAcross: (input) => {
+            asked.push(input.repositories);
+            return Effect.succeed({
+              items: input.repositories.map((repository, index) =>
+                batchedChangeRequest(index + 1, repository, "2026-07-02T00:00:00Z"),
+              ),
+              truncated: false,
+            });
+          },
+        }),
+      ],
+    });
+
+    yield* service.list({ state: "open" });
+    const narrowed = yield* service.list({ state: "open", projectIds: ["p2" as ProjectId] });
+
+    // The narrowing is part of the key, so it reads its own scope instead of the wider answer.
+    assert.deepStrictEqual(asked, [["acme/web", "acme/docs"], ["acme/docs"]]);
+    assert.deepStrictEqual(
+      narrowed.entries.map((entry) => entry.repository),
+      ["acme/docs"],
+    );
+
+    // Asking again with the same narrowing, ordered differently, is still the same answer.
+    yield* service.list({ state: "open", projectIds: ["p2" as ProjectId] });
+    assert.strictEqual(asked.length, 2);
+  }),
+);
+
 it.effect("an explicit invalidation makes the next listing ask the host again", () =>
   Effect.gen(function* () {
     let hostCalls = 0;

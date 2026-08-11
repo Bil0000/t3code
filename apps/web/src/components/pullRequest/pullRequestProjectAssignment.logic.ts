@@ -8,6 +8,17 @@ export interface AssignableProject {
 }
 
 /**
+ * `canonicalKey` has the shape `host/owner/repo`. The host is case-insensitive (DNS), but the
+ * owner/repo path is case-sensitive on most Git hosts, so only the host segment is normalized.
+ */
+function repositoryKey(canonicalKey: string | undefined): string | undefined {
+  if (!canonicalKey) return undefined;
+  const separatorIndex = canonicalKey.indexOf("/");
+  if (separatorIndex === -1) return canonicalKey.toLowerCase();
+  return `${canonicalKey.slice(0, separatorIndex).toLowerCase()}${canonicalKey.slice(separatorIndex)}`;
+}
+
+/**
  * Two servers can hold the same repository, and both would list the same pull requests. The
  * remote's normalized URL (`canonicalKey`) is what says "same repository" across machines — it
  * comes from the remote, not from a local path — so it is what one copy is picked by.
@@ -24,7 +35,7 @@ export function assignProjectsToEnvironments(
   // Which server lists each repository: the preferred one where it has it, else the first.
   const owner = new Map<string, EnvironmentId>();
   for (const project of projects) {
-    const key = project.repositoryIdentity?.canonicalKey?.toLowerCase();
+    const key = repositoryKey(project.repositoryIdentity?.canonicalKey);
     if (!key) continue;
     const environmentRank = rank.get(project.environmentId);
     if (environmentRank === undefined) continue;
@@ -44,7 +55,7 @@ export function assignProjectsToEnvironments(
   const assignment = new Map<EnvironmentId, ProjectId[]>();
   for (const project of projects) {
     if (!rank.has(project.environmentId)) continue;
-    const key = project.repositoryIdentity?.canonicalKey?.toLowerCase();
+    const key = repositoryKey(project.repositoryIdentity?.canonicalKey);
     if (key && owner.get(key) !== project.environmentId) continue;
     const listed = assignment.get(project.environmentId);
     if (listed === undefined) assignment.set(project.environmentId, [project.id]);

@@ -130,7 +130,7 @@ export function parsePullRequestQuery(raw: string): {
   let review: PullRequestListFilters["review"];
   let checks: PullRequestListFilters["checks"];
   for (const [token] of raw.matchAll(QUERY_TOKEN)) {
-    const qualifier = /^(-?)([A-Za-z]+):(.*)$/.exec(token);
+    const qualifier = /^(-?)([A-Za-z][A-Za-z0-9_-]*):(.*)$/.exec(token);
     const value = qualifier === null ? "" : qualifierValue(qualifier[3] ?? "");
     const negated = qualifier?.[1] === "-";
     switch (value.length === 0 ? "" : (qualifier?.[2]?.toLowerCase() ?? "")) {

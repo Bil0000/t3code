@@ -90,6 +90,21 @@ describe("one server per repository", () => {
     expect(plain(assignment)).toEqual({ "env-1": ["a1", "a1-wt"] });
   });
 
+  it("treats differently-cased repository paths on the same host as distinct repositories", () => {
+    const assignment = assignProjectsToEnvironments(
+      [
+        project("a1", "env-1", "git.example.com/Team/App"),
+        project("b1", "env-1", "git.example.com/team/app"),
+        project("a2", "env-2", "GIT.example.com/Team/App"),
+      ],
+      envs("env-1", "env-2"),
+      "env-1" as EnvironmentId,
+    );
+    // Host casing still collapses (env-1's "Team/App" wins over env-2's), but the
+    // differently-cased path "team/app" is a separate repository, not a duplicate.
+    expect(plain(assignment)).toEqual({ "env-1": ["a1", "b1"] });
+  });
+
   it("ignores a project on a server that is not being read", () => {
     const assignment = assignProjectsToEnvironments(
       [

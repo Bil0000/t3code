@@ -779,6 +779,11 @@ describe("colon-namespaced labels typed as a search", () => {
     expect(parsed.text).toBe('"size:XXL"');
   });
 
+  it("reads a hyphenated namespace as a label too", () => {
+    expect(parsePullRequestQuery("priority-1:high").filters.labels).toEqual([["priority-1:high"]]);
+    expect(parsePullRequestQuery("priority-1:high").text).toBe("");
+  });
+
   it("leaves a pasted link alone rather than naming a label after its scheme", () => {
     const parsed = parsePullRequestQuery("https://github.com/pingdotgg/t3code/pull/1");
     expect(parsed.filters.labels).toBeUndefined();
