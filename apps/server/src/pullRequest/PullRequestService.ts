@@ -562,6 +562,9 @@ export const make = Effect.gen(function* () {
         input.item.author?.login.toLowerCase() !== viewer &&
         input.item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer),
       labels: input.item.labels,
+      ...(input.item.reviewDecision === undefined || input.item.reviewDecision === null
+        ? {}
+        : { reviewDecision: input.item.reviewDecision }),
     };
   };
 
@@ -685,6 +688,7 @@ export const make = Effect.gen(function* () {
               // Each host matches this its own way, and one that cannot match text at all
               // answers unnarrowed rather than failing.
               query: input.query,
+              filters: input.filters,
               // Only the two fields a host can act on: which rows have already been sent at the
               // boundary instant is this service's business, not a provider's.
               ...(cursor === undefined
@@ -766,6 +770,7 @@ export const make = Effect.gen(function* () {
           viewer,
           limit,
           query: input.query,
+          filters: input.filters,
           ...(cursor === undefined
             ? {}
             : { cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered } }),
@@ -1458,21 +1463,31 @@ export const make = Effect.gen(function* () {
     (key: string) => {
       // The parse undoes this module's own serialization, so the shapes are known exactly;
       // the cast restores the branded field types JSON cannot carry.
-      const [, state, involvement, projectId, host, limit, query, cursorEntries] = JSON.parse(
-        key,
-      ) as [
-        number,
-        string,
-        string | null,
-        string | null,
-        string | null,
-        number | null,
-        string | null,
-        ReadonlyArray<[string, string]> | null,
-      ];
+      const [, state, involvement, filters, projectId, host, limit, query, cursorEntries] =
+        JSON.parse(key) as [
+          number,
+          string,
+          string | null,
+          ReadonlyArray<string | null> | null,
+          string | null,
+          string | null,
+          number | null,
+          string | null,
+          ReadonlyArray<[string, string]> | null,
+        ];
       return listUncached({
         state,
         ...(involvement === null ? {} : { involvement }),
+        ...(filters === null
+          ? {}
+          : {
+              filters: {
+                ...(filters[0] === null ? {} : { draft: filters[0] }),
+                ...(filters[1] === null ? {} : { review: filters[1] }),
+                ...(filters[2] === null ? {} : { checks: filters[2] }),
+                ...(filters[3] === null ? {} : { maxSize: filters[3] }),
+              },
+            }),
         ...(projectId === null ? {} : { projectId }),
         ...(host === null ? {} : { host }),
         ...(limit === null ? {} : { limit }),
@@ -1494,6 +1509,15 @@ export const make = Effect.gen(function* () {
       listingsEpoch,
       input.state,
       input.involvement ?? null,
+      // Positional so two identical filter sets key alike however their record was assembled.
+      input.filters === undefined
+        ? null
+        : [
+            input.filters.draft ?? null,
+            input.filters.review ?? null,
+            input.filters.checks ?? null,
+            input.filters.maxSize ?? null,
+          ],
       input.projectId ?? null,
       input.host ?? null,
       input.limit ?? null,

@@ -551,6 +551,85 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("carries the further narrowings into the search as qualifiers", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        filters: { draft: "hide", review: "approved", checks: "passing", maxSize: "m" },
+      });
+
+      expect(searchOfCall(0)).toBe(
+        'draft:false review:approved status:success -label:"size:L" -label:"size:XL" ' +
+          '-label:"size:XXL" sort:updated-desc',
+      );
+    }),
+  );
+
+  it.effect("narrows the search-free fallback by the fields its rows carry", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            pullRequests(3, 1, (number) => ({
+              isDraft: number === 2,
+              labels: number === 3 ? [{ name: "size:XL", color: "ff0000" }] : [],
+            })),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const batch = yield* cli.listPullRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        filters: { draft: "hide", checks: "passing", maxSize: "m" },
+      });
+
+      // The fallback reads without a search, so the qualifiers cannot travel with it; checks
+      // are dropped rather than guessed at, since no listed row says anything about them.
+      expect(searchOfCall(1)).toBeUndefined();
+      expect(batch.items.map((item) => item.number)).toEqual([1]);
+    }),
+  );
+
+  it.effect("carries the further narrowings into a batched search", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.searchPullRequests({
+        cwd: "/w",
+        host: "github.com",
+        repositories: ["acme/web"],
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        filters: { draft: "only", review: "approved" },
+      });
+
+      assert.strictEqual(
+        searchQueryOfCall(0),
+        "is:pr is:open draft:true review:approved sort:updated-desc repo:acme/web",
+      );
+    }),
+  );
+
   it.effect("quotes a search, so it cannot add a qualifier or a flag of its own", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("[]")));
@@ -1472,7 +1551,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       expect(detail.body).toBe("Core body");
       expect(activity.author?.login).toBe("octocat");
       expect(callAt(0).args.at(-1)).toBe(
-        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,body,changedFiles,closedAt,statusCheckRollup",
+        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,body,changedFiles,closedAt,statusCheckRollup",
       );
       expect(callAt(1).args.at(-1)).toBe("author,comments,reviews,commits");
     }),

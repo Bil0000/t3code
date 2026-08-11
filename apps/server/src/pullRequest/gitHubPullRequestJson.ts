@@ -13,6 +13,7 @@ import type {
   PullRequestOmittedFileStat,
   PullRequestMergeability,
   PullRequestReviewCommentDraft,
+  PullRequestReviewDecision,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidate,
@@ -62,6 +63,7 @@ const RawListItemSchema = Schema.Struct({
   state: Schema.optional(Schema.NullOr(Schema.String)),
   isDraft: Schema.optional(Schema.Boolean),
   mergeable: Schema.optional(Schema.NullOr(Schema.String)),
+  reviewDecision: Schema.optional(Schema.NullOr(Schema.String)),
   additions: Schema.optional(Schema.Int),
   deletions: Schema.optional(Schema.Int),
   createdAt: Schema.String,
@@ -86,6 +88,7 @@ const RawSearchItemSchema = Schema.Struct({
   state: Schema.optional(Schema.NullOr(Schema.String)),
   isDraft: Schema.optional(Schema.Boolean),
   mergeable: Schema.optional(Schema.NullOr(Schema.String)),
+  reviewDecision: Schema.optional(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
   updatedAt: Schema.String,
   mergedAt: Schema.optional(Schema.NullOr(Schema.String)),
@@ -402,7 +405,7 @@ export function decodeActorAvatarsJson(
 }
 
 export const PULL_REQUEST_LIST_JSON_FIELDS =
-  "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels";
+  "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels";
 
 export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,statusCheckRollup`;
 export const PULL_REQUEST_ACTIVITY_JSON_FIELDS = "author,comments,reviews,commits";
@@ -447,6 +450,7 @@ export function pullRequestSearchGraphQlQuery(rows: number): string {
         state
         isDraft
         mergeable
+        reviewDecision
         createdAt
         updatedAt
         mergedAt
@@ -663,6 +667,8 @@ export interface GitHubPullRequestListItem {
   readonly state: PullRequestState;
   readonly isDraft: boolean;
   readonly mergeability: PullRequestMergeability;
+  /** Null where GitHub has no verdict to summarise, which includes a draft nobody has reviewed. */
+  readonly reviewDecision: PullRequestReviewDecision | null;
   readonly additions: number;
   readonly deletions: number;
   readonly createdAt: string;
@@ -765,6 +771,19 @@ function toMergeability(value: string | null | undefined): PullRequestMergeabili
       return "conflicting";
     default:
       return "unknown";
+  }
+}
+
+function toReviewDecision(value: string | null | undefined): PullRequestReviewDecision | null {
+  switch (value?.trim().toUpperCase()) {
+    case "APPROVED":
+      return "approved";
+    case "CHANGES_REQUESTED":
+      return "changes-requested";
+    case "REVIEW_REQUIRED":
+      return "review-required";
+    default:
+      return null;
   }
 }
 
@@ -931,6 +950,7 @@ function toListItem(raw: Schema.Schema.Type<typeof RawListItemSchema>): GitHubPu
     state: toState(raw),
     isDraft: raw.isDraft ?? false,
     mergeability: toMergeability(raw.mergeable),
+    reviewDecision: toReviewDecision(raw.reviewDecision),
     additions: raw.additions ?? 0,
     deletions: raw.deletions ?? 0,
     createdAt: raw.createdAt,

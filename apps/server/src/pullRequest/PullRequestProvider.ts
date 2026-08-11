@@ -9,12 +9,14 @@ import type {
   PullRequestCommit,
   PullRequestInvolvement,
   PullRequestLabel,
+  PullRequestListFilters,
   PullRequestListState,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
   PullRequestMergeability,
   PullRequestOmittedFileStat,
   PullRequestReviewCommentDraft,
+  PullRequestReviewDecision,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
@@ -65,6 +67,8 @@ export interface ProviderChangeRequest {
   /** Accounts with a review requested. Team-level requests are excluded by each provider. */
   readonly reviewRequestLogins: ReadonlyArray<string>;
   readonly labels: ReadonlyArray<PullRequestLabel>;
+  /** Absent from a host that does not summarise its reviews, which is every host but GitHub. */
+  readonly reviewDecision?: PullRequestReviewDecision | null | undefined;
 }
 
 export interface ProviderChangeRequestPage {
@@ -219,6 +223,12 @@ export interface PullRequestProviderApi {
        * asks for the first slice, which is every listing that has not been continued.
        */
       readonly cursor?: ProviderListCursor | undefined;
+      /**
+       * Further narrowings, which a host applies as far as it can and ignores the rest of —
+       * an unnarrowed page is a wider answer rather than a wrong one, and the caller narrows
+       * what it gets for the fields a row carries.
+       */
+      readonly filters?: PullRequestListFilters | undefined;
     },
   ) => Effect.Effect<ProviderChangeRequestPage, PullRequestProviderError>;
 
@@ -247,6 +257,7 @@ export interface PullRequestProviderApi {
     readonly limit: number;
     readonly query?: string | undefined;
     readonly cursor?: ProviderListCursor | undefined;
+    readonly filters?: PullRequestListFilters | undefined;
   }) => Effect.Effect<ProviderBatchedChangeRequestPage, PullRequestProviderError>;
 
   /**

@@ -7,6 +7,7 @@ import type {
   PullRequestAction,
   PullRequestActor,
   PullRequestInvolvement,
+  PullRequestListFilters,
   PullRequestListState,
   PullRequestMergeMethod,
   PullRequestOmittedFileStat,
@@ -296,6 +297,8 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly query?: string | undefined;
       /** Where to carry on from, as a `updated:` qualifier on the same search. */
       readonly cursor?: ProviderListCursor | undefined;
+      /** Further narrowings, as qualifiers on the search and as a local pass on the fallback. */
+      readonly filters?: PullRequestListFilters | undefined;
     }) => Effect.Effect<GitHubPullRequestListBatch, GitHubPullRequestCliError>;
 
     /**
@@ -314,6 +317,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly limit: number;
       readonly query?: string | undefined;
       readonly cursor?: ProviderListCursor | undefined;
+      readonly filters?: PullRequestListFilters | undefined;
     }) => Effect.Effect<GitHubPullRequestSearchBatch, GitHubPullRequestCliError>;
 
     /** The line counts the search leaves out, for rows already on the page. */
@@ -506,6 +510,45 @@ function searchPhrase(query: string): string {
   return `"${query.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
 }
 
+/**
+ * The labels a repository puts on a change request too large to be reviewed in one sitting.
+ * Sizing is a convention rather than a GitHub feature, so an unlabelled row is not excluded:
+ * a repository that labels nothing would otherwise show nothing under a size filter.
+ */
+const OVERSIZED_LABELS = ["size:L", "size:XL", "size:XXL"] as const;
+
+/**
+ * The extra narrowings as GitHub search qualifiers. Label values are quoted because a label
+ * holds a colon and a space; the rest are fixed words of this module's own.
+ */
+function filterQualifiers(filters: PullRequestListFilters | undefined): ReadonlyArray<string> {
+  if (filters === undefined) return [];
+  return [
+    ...(filters.draft === undefined ? [] : [`draft:${filters.draft === "only"}`]),
+    ...(filters.review === undefined ? [] : ["review:approved"]),
+    ...(filters.checks === undefined ? [] : ["status:success"]),
+    ...(filters.maxSize === undefined ? [] : OVERSIZED_LABELS.map((label) => `-label:"${label}"`)),
+  ];
+}
+
+/**
+ * The same narrowings over a row that has already arrived, for the search-free fallback. Checks
+ * are not here: no listed row carries its check state, so that one filter is the host's alone.
+ */
+function matchesFilters(
+  item: GitHubPullRequestListItem,
+  filters: PullRequestListFilters | undefined,
+): boolean {
+  if (filters === undefined) return true;
+  const labels = item.labels.map((label) => label.name.trim().toLowerCase());
+  return (
+    (filters.draft === undefined || item.isDraft === (filters.draft === "only")) &&
+    (filters.review === undefined || item.reviewDecision === "approved") &&
+    (filters.maxSize === undefined ||
+      !OVERSIZED_LABELS.some((label) => labels.includes(label.toLowerCase())))
+  );
+}
+
 function involvementArgs(input: {
   readonly state: PullRequestListState;
   readonly involvement: PullRequestInvolvement;
@@ -518,6 +561,7 @@ function involvementArgs(input: {
    * cannot use search at all and takes whatever order `gh pr list` answers in.
    */
   readonly sorted: boolean;
+  readonly filters?: PullRequestListFilters | undefined;
 }): ReadonlyArray<string> {
   // `--state closed` includes merged pull requests, so the Closed tab additionally excludes
   // them through search; `--author` and `review-requested:` are GitHub's own filters. `gh`
@@ -536,6 +580,7 @@ function involvementArgs(input: {
         // sharing one instant are ordinary and the caller drops the ones it has already sent —
         // asking for strictly older would lose the rest of them instead.
         ...(input.cursor === undefined ? [] : [`updated:<=${input.cursor.updatedBefore}`]),
+        ...filterQualifiers(input.filters),
         // `gh pr list` answers newest-created first, which is not the order the page reads rows in
         // and not an order a continuation can carry on from: a change request opened last year and
         // touched this morning belongs at the top of the list and at the front of the first slice.
@@ -555,6 +600,7 @@ function matchesUnsortedListing(
     readonly state: PullRequestListState;
     readonly involvement: PullRequestInvolvement;
     readonly viewer: string;
+    readonly filters?: PullRequestListFilters | undefined;
   },
 ): boolean {
   const matchesState = input.state === "all" || item.state === input.state;
@@ -565,7 +611,7 @@ function matchesUnsortedListing(
       ? item.author?.login.toLowerCase() === viewer
       : item.hasTeamReviewRequest ||
         item.reviewRequestLogins.some((login) => login.toLowerCase() === viewer));
-  return matchesState && matchesInvolvement;
+  return matchesState && matchesInvolvement && matchesFilters(item, input.filters);
 }
 
 /** What a repository selector may hold before it goes into a search as itself. */
@@ -592,6 +638,7 @@ function searchQuery(input: {
   readonly viewer: string;
   readonly query?: string | undefined;
   readonly cursor?: ProviderListCursor | undefined;
+  readonly filters?: PullRequestListFilters | undefined;
 }): string | null {
   if (input.repositories.length === 0) return null;
   const repositories = input.repositories.map((repository) => repository.trim());
@@ -608,6 +655,7 @@ function searchQuery(input: {
     ...(query.length === 0 ? [] : [searchPhrase(query)]),
     // Inclusive, and de-duplicated by the caller, for the reason the per-repository read gives.
     ...(input.cursor === undefined ? [] : [`updated:<=${input.cursor.updatedBefore}`]),
+    ...filterQualifiers(input.filters),
     // The order the page reads its rows in, and the only order a continuation can carry on from.
     "sort:updated-desc",
     ...repositories.map((repository) => `repo:${repository}`),

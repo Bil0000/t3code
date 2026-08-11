@@ -67,6 +67,25 @@ describe("pull request list decoding", () => {
     expect(entry?.reviewRequestLogins).toEqual(["octocat"]);
   });
 
+  it("normalizes the review decision and reports nothing for one GitHub does not summarize", () => {
+    const batch = expectSuccess(
+      decodePullRequestListJson(
+        listJson([
+          { reviewDecision: "APPROVED" },
+          { reviewDecision: "CHANGES_REQUESTED" },
+          { reviewDecision: "REVIEW_REQUIRED" },
+          { reviewDecision: null },
+        ]),
+      ),
+    );
+    expect(batch.items.map((entry) => entry.reviewDecision)).toEqual([
+      "approved",
+      "changes-requested",
+      "review-required",
+      null,
+    ]);
+  });
+
   it("skips malformed entries but still counts them, so paging does not stop early", () => {
     const raw = `[${listJson([{}]).slice(1, -1)},{"number":"not-a-number"}]`;
     const batch = expectSuccess(decodePullRequestListJson(raw));

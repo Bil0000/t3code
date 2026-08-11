@@ -76,6 +76,7 @@ describe("gitHubViewerPermissions", () => {
               state: "open",
               isDraft: false,
               mergeability: "mergeable",
+              reviewDecision: null,
               additions: 1,
               deletions: 1,
               createdAt: "2026-07-01T00:00:00Z",
