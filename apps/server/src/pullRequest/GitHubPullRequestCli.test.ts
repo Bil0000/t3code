@@ -5,6 +5,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
+import { BASE_COMPARISON_GRAPHQL_QUERY } from "./gitHubPullRequestJson.ts";
 
 const mockedExecute = vi.fn<GitHubCli.GitHubCli["Service"]["execute"]>();
 
@@ -1745,6 +1746,58 @@ layer("GitHubPullRequestCli.layer", (it) => {
         expect(callAt(0).args).toContain("number=7");
         expect(access).toEqual({ canWrite: false, canUpdate: true, didAuthor: true });
       }),
+  );
+
+  it.effect("sends the base comparison's variables as gh flags, not as bare words", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    viewerCanUpdateBranch: true,
+                    baseRef: { compare: { behindBy: 4 } },
+                  },
+                },
+              },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const comparison = yield* cli.getPullRequestBaseComparison({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        headRef: "fork:feat/page",
+      });
+
+      // The tuples are flattened straight into argv, so a variable without its flag is a
+      // positional argument gh refuses outright.
+      const args = callAt(0).args;
+      expect(args).toEqual([
+        "api",
+        "graphql",
+        "--hostname",
+        "github.com",
+        "-f",
+        "owner=acme",
+        "-f",
+        "name=web",
+        "-F",
+        "number=7",
+        "-f",
+        "headRef=fork:feat/page",
+        "-f",
+        `query=${BASE_COMPARISON_GRAPHQL_QUERY}`,
+      ]);
+      expect(comparison).toEqual({ behindBy: 4, viewerCanUpdate: true });
+    }),
   );
 
   it.effect("reads the viewer's role off the same call as the merge settings", () =>

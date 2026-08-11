@@ -558,22 +558,28 @@ export const make = Effect.gen(function* () {
    * host's alone, and a row nobody narrowed stays rather than being guessed at.
    */
   const matchesRowFilters = (
-    entry: PullRequestListEntry,
+    item: ProviderChangeRequest,
     filters: PullRequestListFilters | undefined,
   ): boolean => {
     if (filters === undefined) return true;
-    const labels = entry.labels.map((label) => label.name.trim().toLowerCase());
+    const labels = item.labels.map((label) => label.name.trim().toLowerCase());
     const holds = (label: string) => labels.includes(label.trim().toLowerCase());
     return (
-      (filters.draft === undefined || entry.isDraft === (filters.draft === "only")) &&
+      (filters.draft === undefined || item.isDraft === (filters.draft === "only")) &&
+      // Judged on the provider row rather than the entry, because the two absences mean
+      // different things and the entry keeps only one of them: `null` is a host that summarises
+      // its reviews saying there is no decision yet, which is what "none" asks for, while
+      // `undefined` is a host that does not summarise at all — an unjudgeable row, left alone
+      // the way an unreadable check state is.
       (filters.review === undefined ||
+        item.reviewDecision === undefined ||
         (filters.review === "none"
-          ? entry.reviewDecision === undefined
-          : entry.reviewDecision === filters.review)) &&
+          ? item.reviewDecision === null
+          : item.reviewDecision === filters.review)) &&
       (filters.labels === undefined || filters.labels.every(holds)) &&
       (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
       (filters.author === undefined ||
-        entry.author?.login.toLowerCase() === filters.author.trim().toLowerCase())
+        item.author?.login.toLowerCase() === filters.author.trim().toLowerCase())
     );
   };
 
@@ -757,8 +763,8 @@ export const make = Effect.gen(function* () {
                 return {
                   key,
                   entries: items
-                    .map((item) => toEntry({ project, item, viewer }))
-                    .filter((entry) => matchesRowFilters(entry, input.filters)),
+                    .filter((item) => matchesRowFilters(item, input.filters))
+                    .map((item) => toEntry({ project, item, viewer })),
                   errors: [],
                   truncated: page.truncated,
                   nextCursor:
@@ -863,8 +869,8 @@ export const make = Effect.gen(function* () {
                 return Effect.succeed({
                   key: listCursorKey(project.host, project.repository),
                   entries: items
-                    .map((item) => toEntry({ project, item, viewer }))
-                    .filter((entry) => matchesRowFilters(entry, input.filters)),
+                    .filter((item) => matchesRowFilters(item, input.filters))
+                    .map((item) => toEntry({ project, item, viewer })),
                   errors: [],
                   truncated: page.truncated,
                   nextCursor:

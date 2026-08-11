@@ -106,6 +106,100 @@ describe("gitHubViewerPermissions", () => {
   );
 });
 
+describe("getViewerPermissions", () => {
+  const openDetail = {
+    authorId: null,
+    number: 7,
+    title: "Pull request 7",
+    url: "https://github.com/acme/web/pull/7",
+    author: null,
+    headRepositoryOwner: "acme",
+    headBranch: "feat/page",
+    baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
+    mergeability: "mergeable" as const,
+    reviewDecision: null,
+    additions: 1,
+    deletions: 1,
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
+    reviewRequestLogins: [],
+    hasTeamReviewRequest: false,
+    labels: [],
+    body: "",
+    changedFiles: 1,
+    mergedAt: null,
+    closedAt: null,
+    checks: [],
+    comments: [],
+    commits: [],
+  };
+
+  const layerWithComparison = (
+    comparison: Effect.Effect<{
+      readonly behindBy: number | null;
+      readonly viewerCanUpdate: boolean;
+    }>,
+  ) =>
+    Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+      getPullRequestDetail: () => Effect.succeed(openDetail),
+      getPullRequestBaseComparison: () => comparison,
+      getViewerAccess: () => Effect.succeed({ canWrite: true, canUpdate: true, didAuthor: false }),
+    });
+
+  it.effect("offers update-branch when the comparison grants it", () =>
+    Effect.gen(function* () {
+      const provider = yield* make;
+      const permissions = yield* provider.getViewerPermissions({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      expect(permissions.actions).toContain("update-branch");
+      expect(permissions.updateMethods).toEqual(["merge", "rebase"]);
+    }).pipe(
+      Effect.provide(layerWithComparison(Effect.succeed({ behindBy: 3, viewerCanUpdate: true }))),
+    ),
+  );
+
+  it.effect("withholds update-branch when the comparison cannot be read", () =>
+    Effect.gen(function* () {
+      const provider = yield* make;
+      const permissions = yield* provider.getViewerPermissions({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      expect(permissions.actions).not.toContain("update-branch");
+      expect(permissions.updateMethods).toBeUndefined();
+      // The rest of the answer survives a comparison nobody could make.
+      expect(permissions.actions).toContain("merge");
+    }).pipe(
+      Effect.provide(
+        Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+          getPullRequestDetail: () => Effect.succeed(openDetail),
+          getPullRequestBaseComparison: () =>
+            Effect.fail(
+              new GitHubPullRequestCli.GitHubPullRequestReadError({
+                command: "gh",
+                cwd: "/w",
+                operation: "getPullRequestBaseComparison",
+                cause: new Error("unreadable"),
+              }),
+            ),
+          getViewerAccess: () =>
+            Effect.succeed({ canWrite: true, canUpdate: true, didAuthor: false }),
+        }),
+      ),
+    ),
+  );
+});
+
 describe("getChangeRequest commits", () => {
   const baseDetail = {
     authorId: null,

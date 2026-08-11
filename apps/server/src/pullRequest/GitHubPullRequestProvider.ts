@@ -336,9 +336,34 @@ export const make = Effect.gen(function* () {
       ),
 
     getViewerPermissions: (input) =>
-      cli
-        .getViewerAccess(input)
-        .pipe(Effect.mapError(fail("getViewerPermissions")), Effect.map(gitHubViewerPermissions)),
+      Effect.all(
+        [
+          cli.getViewerAccess(input),
+          // Whether this viewer may update the branch is only on the comparison, and the
+          // comparison only resolves through the head ref the detail carries. A failure here
+          // withholds that one action rather than the whole answer, the way the detail path
+          // leaves the banner unknown.
+          cli.getPullRequestDetail(input).pipe(
+            Effect.flatMap((pullRequest) =>
+              pullRequest.state !== "open" || pullRequest.headRepositoryOwner === null
+                ? Effect.succeed(false)
+                : cli
+                    .getPullRequestBaseComparison({
+                      ...input,
+                      headRef: `${pullRequest.headRepositoryOwner}:${pullRequest.headBranch}`,
+                    })
+                    .pipe(Effect.map((comparison) => comparison.viewerCanUpdate === true)),
+            ),
+            Effect.orElseSucceed(() => false),
+          ),
+        ],
+        { concurrency: 2 },
+      ).pipe(
+        Effect.mapError(fail("getViewerPermissions")),
+        Effect.map(([access, canUpdateBranch]) =>
+          gitHubViewerPermissions({ ...access, canUpdateBranch }),
+        ),
+      ),
 
     getDiff: (input) => cli.getPullRequestDiff(input).pipe(Effect.mapError(fail("getDiff"))),
 
