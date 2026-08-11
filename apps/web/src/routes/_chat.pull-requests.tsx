@@ -51,6 +51,7 @@ import {
   type PullRequestDiffStats,
   type PullRequestPartitionsSnapshot,
 } from "../components/pullRequest/pullRequestList.logic";
+import { assignProjectsToEnvironments } from "../components/pullRequest/pullRequestProjectAssignment.logic";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
   PullRequestFiltersMenu,
@@ -457,8 +458,61 @@ function PullRequestsRouteView() {
     [menuFilters, typedParsed.filters],
   );
   const hasLocalFilters = Object.keys(localFilters).length > 0;
+  // Scoping to a project scopes to the server that owns it, saving every other server a read
+  // that could only answer with nothing. Where an id is ambiguous — two servers holding the
+  // same project id, with no server named — every server is asked for it, and the ones without
+  // it answer empty: two honest copies beat a coin toss between them.
+  const queryEnvironmentIds = useMemo(
+    () =>
+      scopedProject === undefined
+        ? environmentIds
+        : environmentIds.filter((environmentId) => environmentId === scopedProject.environmentId),
+    [environmentIds, scopedProject],
+  );
+  /**
+   * Which projects each server is asked about. Two servers holding the same repository would both
+   * list the same pull requests, so each repository is listed by one of them — the first, which is
+   * where the page's actions land — and the others are asked only for what is theirs alone. A
+   * server left with nothing of its own is not read at all.
+   *
+   * Left alone while the projects are still arriving, and while the scope is a single project:
+   * that path deliberately asks both servers holding an ambiguous id.
+   */
+  const environmentQueries = useMemo((): ReadonlyArray<{
+    readonly environmentId: EnvironmentId;
+    readonly projectIds?: ReadonlyArray<ProjectId>;
+  }> => {
+    const plain = queryEnvironmentIds.map((environmentId) => ({ environmentId }));
+    if (!projectsKnown || scopedProjectId !== undefined) return plain;
+    const assignment = assignProjectsToEnvironments(
+      projects,
+      queryEnvironmentIds,
+      queryEnvironmentIds[0],
+    );
+    const totals = new Map<EnvironmentId, number>();
+    for (const project of projects) {
+      totals.set(project.environmentId, (totals.get(project.environmentId) ?? 0) + 1);
+    }
+    return queryEnvironmentIds.flatMap((environmentId) => {
+      const projectIds = assignment.get(environmentId);
+      if (projectIds === undefined) return [];
+      // It lists everything it holds anyway, so the filter is left off and a one-server workspace
+      // asks exactly the question it asked before.
+      if (projectIds.length === (totals.get(environmentId) ?? 0)) return [{ environmentId }];
+      return [{ environmentId, projectIds }];
+    });
+  }, [projects, projectsKnown, queryEnvironmentIds, scopedProjectId]);
+  // Part of the scope, since a different split is a different question and its answers must not
+  // be filed under the same page state.
+  const assignmentKey = useMemo(
+    () =>
+      environmentQueries
+        .map(({ environmentId, projectIds }) => `${environmentId}#${projectIds?.join("+") ?? "*"}`)
+        .join("|"),
+    [environmentQueries],
+  );
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const scopeKey = `${environmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}`;
+  const scopeKey = `${environmentKey}:${assignmentKey}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   // Where the next slice carries on from, per repository within each environment, as that
   // environment handed it back. Sending it is what makes a second page cost a second page rather
@@ -487,21 +541,10 @@ function PullRequestsRouteView() {
     setPage({ key: filterKey, size: PAGE_SIZE, cursors: null, regrown: [] });
   }, [filterKey]);
 
-  // Scoping to a project scopes to the server that owns it, saving every other server a read
-  // that could only answer with nothing. Where an id is ambiguous — two servers holding the
-  // same project id, with no server named — every server is asked for it, and the ones without
-  // it answer empty: two honest copies beat a coin toss between them.
-  const queryEnvironmentIds = useMemo(
-    () =>
-      scopedProject === undefined
-        ? environmentIds
-        : environmentIds.filter((environmentId) => environmentId === scopedProject.environmentId),
-    [environmentIds, scopedProject],
-  );
   /** The listing input each environment is asked for, which differs only in its continuation. */
   const listTargets = useMemo(
     () =>
-      queryEnvironmentIds.flatMap((environmentId) => {
+      environmentQueries.flatMap(({ environmentId, projectIds }) => {
         const cursors = sentCursors?.[environmentId];
         // A continuation asks the environments that said where to carry on from, plus the ones
         // that have more to give but no cursor to give it from — those are read again at the
@@ -521,6 +564,7 @@ function PullRequestsRouteView() {
               involvement: search.involvement,
               limit: pageSize,
               ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+              ...(projectIds ? { projectIds } : {}),
               ...(search.host ? { host: search.host } : {}),
               ...(hasFilters ? { filters } : {}),
               ...(sentParsed.text ? { query: sentParsed.text } : {}),
@@ -533,7 +577,7 @@ function PullRequestsRouteView() {
       filters,
       hasFilters,
       pageSize,
-      queryEnvironmentIds,
+      environmentQueries,
       scopedProjectId,
       search.host,
       search.involvement,
@@ -557,13 +601,14 @@ function PullRequestsRouteView() {
    */
   const baselineTargets = useMemo(
     () =>
-      queryEnvironmentIds.map((environmentId) => ({
+      environmentQueries.map(({ environmentId, projectIds }) => ({
         environmentId,
         input: {
           state: search.state,
           involvement: search.involvement,
           limit: PAGE_SIZE,
           ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+          ...(projectIds ? { projectIds } : {}),
           ...(search.host ? { host: search.host } : {}),
           ...(menuFiltered ? { filters: menuFilters } : {}),
         } satisfies PullRequestListInput,
@@ -571,7 +616,7 @@ function PullRequestsRouteView() {
     [
       menuFiltered,
       menuFilters,
-      queryEnvironmentIds,
+      environmentQueries,
       scopedProjectId,
       search.host,
       search.involvement,
@@ -591,13 +636,14 @@ function PullRequestsRouteView() {
   const partitionTargets = useMemo(() => {
     if (!partitionsWanted) return { authored: NO_LIST_TARGETS, reviewing: NO_LIST_TARGETS };
     const targetsFor = (involvement: PullRequestInvolvement) =>
-      queryEnvironmentIds.map((environmentId) => ({
+      environmentQueries.map(({ environmentId, projectIds }) => ({
         environmentId,
         input: {
           state: search.state,
           involvement,
           limit: PAGE_SIZE,
           ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
+          ...(projectIds ? { projectIds } : {}),
           ...(search.host ? { host: search.host } : {}),
           ...(menuFiltered ? { filters: menuFilters } : {}),
         } satisfies PullRequestListInput,
@@ -607,7 +653,7 @@ function PullRequestsRouteView() {
     menuFiltered,
     menuFilters,
     partitionsWanted,
-    queryEnvironmentIds,
+    environmentQueries,
     scopedProjectId,
     search.host,
     search.state,

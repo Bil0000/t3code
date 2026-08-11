@@ -96,6 +96,14 @@ function qualifierValue(raw: string): string {
   return raw.replaceAll('"', "").trim();
 }
 
+/** A qualifier's value as the list it may be: split on commas, each name unquoted on its own. */
+function splitQualifierList(raw: string): string[] {
+  return raw
+    .split(",")
+    .map((part) => qualifierValue(part))
+    .filter((part) => part.length > 0);
+}
+
 /**
  * A typed query split into the qualifiers the hosts can act on and the text that is left. Written
  * GitHub's way — `label:foo`, `-label:"needs design"`, `author:octocat`, `draft:true`,
@@ -115,7 +123,7 @@ export function parsePullRequestQuery(raw: string): {
   readonly filters: PullRequestListFilters;
 } {
   const text: string[] = [];
-  const labels: string[] = [];
+  const labels: string[][] = [];
   const excludedLabels: string[] = [];
   let author: string | undefined;
   let draft: PullRequestListFilters["draft"];
@@ -126,9 +134,14 @@ export function parsePullRequestQuery(raw: string): {
     const value = qualifier === null ? "" : qualifierValue(qualifier[3] ?? "");
     const negated = qualifier?.[1] === "-";
     switch (value.length === 0 ? "" : (qualifier?.[2]?.toLowerCase() ?? "")) {
-      case "label":
-        (negated ? excludedLabels : labels).push(value);
+      case "label": {
+        // GitHub's own OR: `label:a,b` is one qualifier satisfied by either name. Negated, the
+        // comma excludes each — a row carrying any of them goes.
+        const names = splitQualifierList(qualifier?.[3] ?? "");
+        if (negated) excludedLabels.push(...names);
+        else labels.push(names);
         continue;
+      }
       case "author":
         if (negated) break;
         author = value;
@@ -156,7 +169,14 @@ export function parsePullRequestQuery(raw: string): {
         // An unknown key, read as the namespaced label it almost always is. A pasted link is
         // not one — `https://…` would otherwise become a label named after its own scheme.
         if (!value.startsWith("/")) {
-          (negated ? excludedLabels : labels).push(`${qualifier?.[2] ?? ""}:${value}`);
+          // The key names the namespace, so the bare parts of `size:S,XS` are both sizes. A part
+          // that already carries a colon names its whole label — `size:S,size:XS` is the same
+          // pair written out, and prefixing it again would ask for `size:size:XS`.
+          const names = splitQualifierList(qualifier?.[3] ?? "").map((name) =>
+            name.includes(":") ? name : `${qualifier?.[2] ?? ""}:${name}`,
+          );
+          if (negated) excludedLabels.push(...names);
+          else labels.push(names);
           continue;
         }
     }
@@ -252,7 +272,7 @@ export function matchesPullRequestFilters(
       (filters.review === "none"
         ? entry.reviewDecision === undefined
         : entry.reviewDecision === filters.review)) &&
-    (filters.labels === undefined || filters.labels.every(holds)) &&
+    (filters.labels === undefined || filters.labels.every((group) => group.some(holds))) &&
     (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
     (filters.author === undefined ||
       entry.author?.login.toLowerCase() === filters.author.trim().toLowerCase())

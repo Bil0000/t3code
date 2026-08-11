@@ -245,9 +245,35 @@ describe("narrowing rows by the filters a host may not have applied", () => {
   });
 
   it("matches labels and authors however either was capitalized", () => {
-    expect(narrow({ labels: ["needs DESIGN"] })).toEqual([4]);
+    expect(narrow({ labels: [["needs DESIGN"]] })).toEqual([4]);
     expect(narrow({ excludedLabels: ["needs design"] })).toEqual([1, 2, 3]);
     expect(narrow({ author: "hubot" })).toEqual([4]);
+  });
+
+  it("takes a group of labels as an either-or", () => {
+    const sized = [
+      entry({ number: 10, labels: [{ name: "size:S", color: null }] }),
+      entry({ number: 11, labels: [{ name: "size:XS", color: null }] }),
+      entry({ number: 12, labels: [{ name: "size:L", color: null }] }),
+    ];
+    const kept = (labels: ReadonlyArray<ReadonlyArray<string>>) =>
+      sized.filter((row) => matchesPullRequestFilters(row, { labels })).map((row) => row.number);
+
+    expect(kept([["size:S", "size:XS"]])).toEqual([10, 11]);
+    expect(kept([["size:XXL"]])).toEqual([]);
+  });
+
+  it("takes two groups as an and, each satisfied on its own", () => {
+    const row = entry({
+      number: 20,
+      labels: [
+        { name: "size:S", color: null },
+        { name: "bug", color: null },
+      ],
+    });
+    expect(matchesPullRequestFilters(row, { labels: [["size:S", "size:XS"], ["bug"]] })).toBe(true);
+    // The second group holds nothing this row carries, so the first one satisfied is not enough.
+    expect(matchesPullRequestFilters(row, { labels: [["size:S"], ["wip"]] })).toBe(false);
   });
 
   it("holds on to every row for a filter no row carries the answer to", () => {
@@ -259,8 +285,32 @@ describe("reading qualifiers out of a typed query", () => {
   it("keeps quoted values whole and separates negation", () => {
     expect(parsePullRequestQuery('label:"needs design" -label:wip Fix the parser')).toEqual({
       text: "Fix the parser",
-      filters: { labels: ["needs design"], excludedLabels: ["wip"] },
+      filters: { labels: [["needs design"]], excludedLabels: ["wip"] },
     });
+  });
+
+  it("reads a comma-separated list as one group either name satisfies", () => {
+    expect(parsePullRequestQuery("label:size:S,size:XS").filters.labels).toEqual([
+      ["size:S", "size:XS"],
+    ]);
+  });
+
+  it("keeps the spaces in a quoted name of a list, and drops an empty part", () => {
+    expect(parsePullRequestQuery('label:"needs design","wip"').filters.labels).toEqual([
+      ["needs design", "wip"],
+    ]);
+    expect(parsePullRequestQuery("label:a,,b").filters.labels).toEqual([["a", "b"]]);
+  });
+
+  it("excludes every name of a negated list", () => {
+    expect(parsePullRequestQuery("-label:a,b").filters).toEqual({ excludedLabels: ["a", "b"] });
+  });
+
+  it("makes each label qualifier its own group, so the groups are an AND", () => {
+    expect(parsePullRequestQuery("label:bug label:a,b").filters.labels).toEqual([
+      ["bug"],
+      ["a", "b"],
+    ]);
   });
 
   it("reads the scalar qualifiers in GitHub's own spelling", () => {
@@ -277,7 +327,7 @@ describe("reading qualifiers out of a typed query", () => {
 
   it("leaves an unknown value and a stray colon as text, and reads an unknown key as a label", () => {
     const parsed = parsePullRequestQuery("milestone:v2 draft:maybe status: parser");
-    expect(parsed.filters).toEqual({ labels: ["milestone:v2"] });
+    expect(parsed.filters).toEqual({ labels: [["milestone:v2"]] });
     // A known key whose value it does not take is text, so "status:" itself stays findable.
     expect(parsed.text).toBe("draft:maybe status: parser");
   });
@@ -701,13 +751,26 @@ describe("the project an id names", () => {
 
 describe("colon-namespaced labels typed as a search", () => {
   it("reads an unknown key as the label it almost always is", () => {
-    expect(parsePullRequestQuery("size:XXL").filters.labels).toEqual(["size:XXL"]);
-    expect(parsePullRequestQuery("vouch:trusted").filters.labels).toEqual(["vouch:trusted"]);
+    expect(parsePullRequestQuery("size:XXL").filters.labels).toEqual([["size:XXL"]]);
+    expect(parsePullRequestQuery("vouch:trusted").filters.labels).toEqual([["vouch:trusted"]]);
     expect(parsePullRequestQuery("size:XXL").text).toBe("");
+  });
+
+  it("reads the key as the namespace of every bare name in its list", () => {
+    expect(parsePullRequestQuery("size:S,XS").filters.labels).toEqual([["size:S", "size:XS"]]);
+  });
+
+  it("leaves a name that already carries its own namespace alone", () => {
+    // `size:S,size:XS` is the same pair written out; prefixing again would ask for `size:size:XS`.
+    expect(parsePullRequestQuery("size:S,size:XS").filters.labels).toEqual([["size:S", "size:XS"]]);
   });
 
   it("excludes one the same way", () => {
     expect(parsePullRequestQuery("-size:XXL").filters.excludedLabels).toEqual(["size:XXL"]);
+    expect(parsePullRequestQuery("-size:S,XS").filters.excludedLabels).toEqual([
+      "size:S",
+      "size:XS",
+    ]);
   });
 
   it("keeps a quoted token as text, which is the way back to a literal search", () => {
@@ -724,7 +787,7 @@ describe("colon-namespaced labels typed as a search", () => {
 
   it("mixes with the keys it does know, and with plain words", () => {
     const parsed = parsePullRequestQuery("area:web draft:true wizard label:bug");
-    expect(parsed.filters).toEqual({ labels: ["area:web", "bug"], draft: "only" });
+    expect(parsed.filters).toEqual({ labels: [["area:web"], ["bug"]], draft: "only" });
     expect(parsed.text).toBe("wizard");
   });
 
