@@ -1,18 +1,33 @@
 import * as Schema from "effect/Schema";
 
-import { PullRequestListEntry, PullRequestListResult } from "@t3tools/contracts";
+import { EnvironmentId, PullRequestListEntry, PullRequestListResult } from "@t3tools/contracts";
 import type {
+  PullRequestDiffStat,
   PullRequestInvolvement,
+  PullRequestListCursors,
   PullRequestListFilters,
   PullRequestListState,
 } from "@t3tools/contracts";
 
+/**
+ * A listed change request with the environment that read it. Nothing on a row says which machine
+ * it came from, and the page unions every connected one — so acting on a row, refreshing it, or
+ * opening its detail all need the tag the listing itself does not carry.
+ */
+export interface EnvironmentPullRequestEntry extends PullRequestListEntry {
+  readonly environmentId: EnvironmentId;
+}
+
+export interface EnvironmentPullRequestStat extends PullRequestDiffStat {
+  readonly environmentId: EnvironmentId;
+}
+
 export type PullRequestGroupKey = "reviewRequested" | "authored" | "others";
 
-export interface PullRequestGroup {
+export interface PullRequestGroup<Entry extends PullRequestListEntry = PullRequestListEntry> {
   readonly key: PullRequestGroupKey;
   readonly label: string;
-  readonly entries: ReadonlyArray<PullRequestListEntry>;
+  readonly entries: ReadonlyArray<Entry>;
 }
 
 /** The signed-in account per host, as the listing reports it. */
@@ -148,11 +163,11 @@ export function matchesPullRequestQuery(entry: PullRequestListEntry, query: stri
  * The server returns the involvement superset for a state, so switching between the Reviewing
  * and Authored tabs never waits on the network.
  */
-export function filterPullRequestsByInvolvement(
-  entries: ReadonlyArray<PullRequestListEntry>,
+export function filterPullRequestsByInvolvement<Entry extends PullRequestListEntry>(
+  entries: ReadonlyArray<Entry>,
   viewers: PullRequestViewers,
   involvement: PullRequestInvolvement,
-): ReadonlyArray<PullRequestListEntry> {
+): ReadonlyArray<Entry> {
   if (involvement === "reviewing") {
     return entries.filter((entry) => entry.viewerReviewRequested);
   }
@@ -175,14 +190,14 @@ export function filterPullRequestsByInvolvement(
  * it needs to know who is signed in on each host, and the search text because searching is the
  * hosts' own answer; both are narrowed where that knowledge already lives.
  */
-export function narrowPullRequestsToFilters(
-  entries: ReadonlyArray<PullRequestListEntry>,
+export function narrowPullRequestsToFilters<Entry extends PullRequestListEntry>(
+  entries: ReadonlyArray<Entry>,
   filters: {
     readonly state: PullRequestListState;
     readonly projectId: string | undefined;
     readonly host: string | undefined;
   },
-): ReadonlyArray<PullRequestListEntry> {
+): ReadonlyArray<Entry> {
   return entries.filter(
     (entry) =>
       (filters.state === "all" || entry.state === filters.state) &&
@@ -221,11 +236,11 @@ export function matchesPullRequestFilters(
  * Only relationships the list data actually carries: no "previously reviewed" bucket is
  * inferred, because the listing has no review history.
  */
-export function groupPullRequestsByInvolvement(
-  entries: ReadonlyArray<PullRequestListEntry>,
+export function groupPullRequestsByInvolvement<Entry extends PullRequestListEntry>(
+  entries: ReadonlyArray<Entry>,
   viewers: PullRequestViewers,
-): ReadonlyArray<PullRequestGroup> {
-  const buckets: Record<PullRequestGroupKey, PullRequestListEntry[]> = {
+): ReadonlyArray<PullRequestGroup<Entry>> {
+  const buckets: Record<PullRequestGroupKey, Entry[]> = {
     reviewRequested: [],
     authored: [],
     others: [],
@@ -244,9 +259,16 @@ export function groupPullRequestsByInvolvement(
     .map((key) => ({ key, label: GROUP_LABELS[key], entries: buckets[key] }));
 }
 
-/** Repository plus number is unique on one host, so the host makes the key unique overall. */
-export function pullRequestEntryKey(entry: PullRequestListEntry): string {
-  return `${entry.host}:${entry.repository}#${entry.number}`;
+/**
+ * Repository plus number is unique on one host, so the host makes the key unique overall — and
+ * the environment on top of that, because two connected machines can hold the same repository and
+ * would otherwise contribute two rows under one key.
+ */
+export function pullRequestEntryKey(
+  entry: PullRequestListEntry & { readonly environmentId?: string },
+): string {
+  const scope = entry.environmentId === undefined ? "" : `${entry.environmentId}:`;
+  return `${scope}${entry.host}:${entry.repository}#${entry.number}`;
 }
 
 /**
@@ -257,11 +279,11 @@ export function pullRequestEntryKey(entry: PullRequestListEntry): string {
  * server-filtered reads, the feed fills "Others" in its own order, and a continuation can only
  * append — a row it carries that a partition already holds is dropped rather than moved.
  */
-export function partitionPullRequestsWithPriority(
-  entries: ReadonlyArray<PullRequestListEntry>,
-  authored: ReadonlyArray<PullRequestListEntry>,
-  reviewRequested: ReadonlyArray<PullRequestListEntry>,
-): ReadonlyArray<PullRequestGroup> {
+export function partitionPullRequestsWithPriority<Entry extends PullRequestListEntry>(
+  entries: ReadonlyArray<Entry>,
+  authored: ReadonlyArray<Entry>,
+  reviewRequested: ReadonlyArray<Entry>,
+): ReadonlyArray<PullRequestGroup<Entry>> {
   const authoredByKey = new Map(authored.map((entry) => [pullRequestEntryKey(entry), entry]));
   // A row can be both authored and review-requested; authored wins, as the local grouping has it.
   const reviewByKey = new Map(
@@ -270,7 +292,7 @@ export function partitionPullRequestsWithPriority(
       return authoredByKey.has(key) ? [] : [[key, entry] as const];
     }),
   );
-  const others: PullRequestListEntry[] = [];
+  const others: Entry[] = [];
   for (const entry of entries) {
     const key = pullRequestEntryKey(entry);
     // The feed's copy of a partitioned row is at least as fresh — it replaces in place.
@@ -282,8 +304,7 @@ export function partitionPullRequestsWithPriority(
       others.push(entry);
     }
   }
-  const byRecency = (left: PullRequestListEntry, right: PullRequestListEntry) =>
-    right.updatedAt.localeCompare(left.updatedAt);
+  const byRecency = (left: Entry, right: Entry) => right.updatedAt.localeCompare(left.updatedAt);
   return (
     [
       { key: "reviewRequested", entries: [...reviewByKey.values()].toSorted(byRecency) },
@@ -309,6 +330,7 @@ export type PullRequestDiffStats = ReadonlyMap<
 export function mergePullRequestDiffStats(
   previous: PullRequestDiffStats,
   stats: ReadonlyArray<{
+    readonly environmentId: string;
     readonly projectId: string;
     readonly number: number;
     readonly additions: number;
@@ -318,12 +340,80 @@ export function mergePullRequestDiffStats(
   if (stats.length === 0) return previous;
   const next = new Map(previous);
   for (const stat of stats) {
-    next.set(`${stat.projectId} ${stat.number}`, {
-      additions: stat.additions,
-      deletions: stat.deletions,
-    });
+    next.set(diffStatKey(stat), { additions: stat.additions, deletions: stat.deletions });
   }
   return next;
+}
+
+/** A project id only names a project within its own environment, so the key carries both. */
+const diffStatKey = (row: {
+  readonly environmentId: string;
+  readonly projectId: string;
+  readonly number: number;
+}) => `${row.environmentId} ${row.projectId} ${row.number}`;
+
+/**
+ * Every connected environment's listing, read as one list.
+ *
+ * `nextCursors` is keyed by environment rather than by repository: a cursor only means anything
+ * to the host that issued it, and two machines can hold the same repository. `viewers` is not —
+ * a host names one account, and the same host reached from two machines is the same account.
+ */
+export interface MergedPullRequestList {
+  readonly viewers: PullRequestViewers;
+  readonly providers: PullRequestListResult["providers"];
+  readonly entries: ReadonlyArray<EnvironmentPullRequestEntry>;
+  readonly errors: PullRequestListResult["errors"];
+  readonly truncated: boolean;
+  readonly nextCursors: Readonly<Record<string, PullRequestListCursors>>;
+}
+
+/**
+ * The environments' answers folded into one. A host reached from more than one environment is one
+ * row in the switcher, readable if any environment could read it and searched on the host only if
+ * every one of them did — a host answering unnarrowed anywhere still needs the local pass.
+ */
+export function mergePullRequestLists(
+  answers: ReadonlyArray<readonly [EnvironmentId, PullRequestListResult]>,
+): MergedPullRequestList | null {
+  if (answers.length === 0) return null;
+  const viewers: Record<string, string> = {};
+  const providers = new Map<string, PullRequestListResult["providers"][number]>();
+  const entries: EnvironmentPullRequestEntry[] = [];
+  const errors: Array<PullRequestListResult["errors"][number]> = [];
+  const nextCursors: Record<string, PullRequestListCursors> = {};
+  let truncated = false;
+  for (const [environmentId, answer] of answers) {
+    Object.assign(viewers, answer.viewers);
+    for (const provider of answer.providers) {
+      const held = providers.get(provider.host);
+      providers.set(
+        provider.host,
+        held === undefined
+          ? provider
+          : {
+              ...(held.configured ? held : provider),
+              projectCount: held.projectCount + provider.projectCount,
+              searchesOnHost: held.searchesOnHost && provider.searchesOnHost,
+              configured: held.configured || provider.configured,
+            },
+      );
+    }
+    entries.push(...answer.entries.map((entry) => ({ ...entry, environmentId })));
+    errors.push(...answer.errors);
+    truncated ||= answer.truncated;
+    if (Object.keys(answer.nextCursors).length > 0) {
+      nextCursors[environmentId] = answer.nextCursors;
+    }
+  }
+  return {
+    viewers,
+    providers: [...providers.values()],
+    entries: entries.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+    errors,
+    truncated,
+    nextCursors,
+  };
 }
 
 /** One page is what the list itself starts with, and all a cold start needs to look warm. */
@@ -331,7 +421,16 @@ const SNAPSHOT_MAX_ENTRIES = 99;
 
 type SnapshotStorage = Pick<Storage, "getItem" | "setItem">;
 
-const snapshotStorageKey = (environmentId: string) => `t3.pullRequests.list:${environmentId}`;
+/**
+ * Keyed by the whole set of environments the list was read from: connecting or dropping one
+ * changes which rows belong on the page, and a snapshot taken from a different set would
+ * hydrate rows no longer being read.
+ */
+export const pullRequestEnvironmentSetKey = (environmentIds: ReadonlyArray<string>): string =>
+  [...environmentIds].sort((left, right) => left.localeCompare(right)).join(",");
+
+const snapshotStorageKey = (environmentSetKey: string) =>
+  `t3.pullRequests.list:${environmentSetKey}`;
 
 /**
  * The priority groups' own server-filtered answers, carried with the feed. An authored pull
@@ -339,13 +438,13 @@ const snapshotStorageKey = (environmentId: string) => `t3.pullRequests.list:${en
  * cold-starts into an Authored group missing exactly the rows that made it worth having.
  */
 export interface PullRequestPartitionsSnapshot {
-  readonly authored: ReadonlyArray<PullRequestListEntry>;
-  readonly reviewing: ReadonlyArray<PullRequestListEntry>;
+  readonly authored: ReadonlyArray<EnvironmentPullRequestEntry>;
+  readonly reviewing: ReadonlyArray<EnvironmentPullRequestEntry>;
 }
 
 export interface PullRequestListSnapshot {
   readonly scope: string;
-  readonly data: PullRequestListResult;
+  readonly data: MergedPullRequestList;
   readonly partitions?: PullRequestPartitionsSnapshot | undefined;
 }
 
@@ -355,15 +454,25 @@ export interface PullRequestListSnapshot {
  * otherwise crash the list on every reload until the key is cleared. A snapshot from before a
  * schema change is rejected the same way, which is exactly the cold start it would have broken.
  */
+const EnvironmentPullRequestEntrySchema = Schema.Struct({
+  ...PullRequestListEntry.fields,
+  environmentId: EnvironmentId,
+});
+
 const decodeSnapshot = Schema.decodeUnknownOption(
   Schema.Struct({
     scope: Schema.String,
-    data: PullRequestListResult,
+    data: Schema.Struct({
+      ...PullRequestListResult.fields,
+      entries: Schema.Array(EnvironmentPullRequestEntrySchema),
+      // Per environment here, unlike the wire shape, which is per repository within one.
+      nextCursors: Schema.Record(Schema.String, PullRequestListResult.fields.nextCursors),
+    }),
     // Optional so a snapshot written before the partitions existed still hydrates the feed.
     partitions: Schema.optional(
       Schema.Struct({
-        authored: Schema.Array(PullRequestListEntry),
-        reviewing: Schema.Array(PullRequestListEntry),
+        authored: Schema.Array(EnvironmentPullRequestEntrySchema),
+        reviewing: Schema.Array(EnvironmentPullRequestEntrySchema),
       }),
     ),
   }),
@@ -378,10 +487,10 @@ const decodeSnapshot = Schema.decodeUnknownOption(
  */
 export function readPullRequestListSnapshot(
   storage: SnapshotStorage | undefined,
-  environmentId: string,
+  environmentSetKey: string,
 ): PullRequestListSnapshot | null {
   try {
-    const raw = storage?.getItem(snapshotStorageKey(environmentId));
+    const raw = storage?.getItem(snapshotStorageKey(environmentSetKey));
     if (!raw) return null;
     const decoded = decodeSnapshot(JSON.parse(raw));
     return decoded._tag === "Some" ? decoded.value : null;
@@ -392,12 +501,12 @@ export function readPullRequestListSnapshot(
 
 export function writePullRequestListSnapshot(
   storage: SnapshotStorage | undefined,
-  environmentId: string,
+  environmentSetKey: string,
   snapshot: PullRequestListSnapshot,
 ): void {
   try {
     storage?.setItem(
-      snapshotStorageKey(environmentId),
+      snapshotStorageKey(environmentSetKey),
       JSON.stringify({
         scope: snapshot.scope,
         data: {
@@ -479,10 +588,10 @@ export function scorePullRequestMatch(entry: PullRequestListEntry, query: string
  * Search results in the order they answer the question, most convincing first, and by recency
  * among equals. Only for a search: without one, a listing is a timeline and recency is the order.
  */
-export function rankPullRequestMatches(
-  entries: ReadonlyArray<PullRequestListEntry>,
+export function rankPullRequestMatches<Entry extends PullRequestListEntry>(
+  entries: ReadonlyArray<Entry>,
   query: string,
-): ReadonlyArray<PullRequestListEntry> {
+): ReadonlyArray<Entry> {
   if (query.trim().length === 0) return entries;
   return entries.toSorted((left, right) => {
     const byScore = scorePullRequestMatch(right, query) - scorePullRequestMatch(left, query);
@@ -495,11 +604,13 @@ export function rankPullRequestMatches(
  * listing that carried them is not second-guessed — and only where they have arrived, since a row
  * draws perfectly well without them in the meantime.
  */
-export function withDiffStat(
-  entry: PullRequestListEntry,
+export function withDiffStat<
+  Entry extends PullRequestListEntry & { readonly environmentId: string },
+>(
+  entry: Entry,
   statsByRow: ReadonlyMap<string, { readonly additions: number; readonly deletions: number }>,
-): PullRequestListEntry {
+): Entry {
   if (entry.additions !== 0 || entry.deletions !== 0) return entry;
-  const stat = statsByRow.get(`${entry.projectId} ${entry.number}`);
+  const stat = statsByRow.get(diffStatKey(entry));
   return stat === undefined ? entry : { ...entry, ...stat };
 }

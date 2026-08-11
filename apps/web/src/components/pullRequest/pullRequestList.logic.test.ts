@@ -1,8 +1,11 @@
-import type { PullRequestListEntry } from "@t3tools/contracts";
+import type { EnvironmentId, PullRequestListEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
   filterPullRequestsByInvolvement,
+  mergePullRequestLists,
+  pullRequestEntryKey,
+  pullRequestEnvironmentSetKey,
   groupPullRequestsByInvolvement,
   matchesPullRequestFilters,
   matchesPullRequestQuery,
@@ -16,13 +19,17 @@ import {
   scorePullRequestMatch,
   withDiffStat,
   resolveProjectScope,
+  type EnvironmentPullRequestEntry,
 } from "./pullRequestList.logic";
 
 const VIEWERS = { "github.com": "Bilal" } as const;
 const NO_VIEWERS = {} as const;
 
-function entry(overrides: Partial<PullRequestListEntry> & Pick<PullRequestListEntry, "number">) {
+function entry(
+  overrides: Partial<EnvironmentPullRequestEntry> & Pick<PullRequestListEntry, "number">,
+) {
   return {
+    environmentId: "env-1",
     provider: "github",
     host: "github.com",
     projectId: "project-1",
@@ -43,7 +50,7 @@ function entry(overrides: Partial<PullRequestListEntry> & Pick<PullRequestListEn
     viewerReviewRequested: false,
     labels: [],
     ...overrides,
-  } as PullRequestListEntry;
+  } as EnvironmentPullRequestEntry;
 }
 
 describe("pull request involvement filtering", () => {
@@ -353,7 +360,7 @@ describe("ranking what a search found", () => {
 });
 
 describe("line counts that arrive after the rows", () => {
-  const stats = new Map([["project-1 7", { additions: 42, deletions: 3 }]]);
+  const stats = new Map([["env-1 project-1 7", { additions: 42, deletions: 3 }]]);
 
   it("fills in a row whose host left the counts for later", () => {
     const row = entry({ number: 7, additions: 0, deletions: 0 });
@@ -374,33 +381,33 @@ describe("line counts that arrive after the rows", () => {
 describe("merging line counts across keyed stats queries", () => {
   it("keeps counts already held while a fresh batch says nothing about them", () => {
     const held = mergePullRequestDiffStats(new Map(), [
-      { projectId: "project-1", number: 1, additions: 10, deletions: 2 },
-      { projectId: "project-1", number: 2, additions: 5, deletions: 1 },
+      { environmentId: "env-1", projectId: "project-1", number: 1, additions: 10, deletions: 2 },
+      { environmentId: "env-1", projectId: "project-1", number: 2, additions: 5, deletions: 1 },
     ]);
     // A third row appeared; its batch is still pending and contributes nothing yet.
     const merged = mergePullRequestDiffStats(held, []);
-    expect(merged.get("project-1 1")).toEqual({ additions: 10, deletions: 2 });
-    expect(merged.get("project-1 2")).toEqual({ additions: 5, deletions: 1 });
+    expect(merged.get("env-1 project-1 1")).toEqual({ additions: 10, deletions: 2 });
+    expect(merged.get("env-1 project-1 2")).toEqual({ additions: 5, deletions: 1 });
   });
 
   it("replaces a count once its replacement arrives, keeping its neighbours", () => {
     const held = mergePullRequestDiffStats(new Map(), [
-      { projectId: "project-1", number: 1, additions: 10, deletions: 2 },
+      { environmentId: "env-1", projectId: "project-1", number: 1, additions: 10, deletions: 2 },
     ]);
     const merged = mergePullRequestDiffStats(held, [
-      { projectId: "project-1", number: 1, additions: 11, deletions: 2 },
-      { projectId: "project-1", number: 3, additions: 7, deletions: 0 },
+      { environmentId: "env-1", projectId: "project-1", number: 1, additions: 11, deletions: 2 },
+      { environmentId: "env-1", projectId: "project-1", number: 3, additions: 7, deletions: 0 },
     ]);
-    expect(merged.get("project-1 1")).toEqual({ additions: 11, deletions: 2 });
-    expect(merged.get("project-1 3")).toEqual({ additions: 7, deletions: 0 });
+    expect(merged.get("env-1 project-1 1")).toEqual({ additions: 11, deletions: 2 });
+    expect(merged.get("env-1 project-1 3")).toEqual({ additions: 7, deletions: 0 });
   });
 
   it("does not mutate the map it was handed", () => {
-    const held = new Map([["project-1 1", { additions: 1, deletions: 1 }]]);
+    const held = new Map([["env-1 project-1 1", { additions: 1, deletions: 1 }]]);
     mergePullRequestDiffStats(held, [
-      { projectId: "project-1", number: 1, additions: 2, deletions: 2 },
+      { environmentId: "env-1", projectId: "project-1", number: 1, additions: 2, deletions: 2 },
     ]);
-    expect(held.get("project-1 1")).toEqual({ additions: 1, deletions: 1 });
+    expect(held.get("env-1 project-1 1")).toEqual({ additions: 1, deletions: 1 });
   });
 });
 
@@ -511,5 +518,103 @@ describe("the list snapshot across a reload", () => {
     storage.setItem("t3.pullRequests.list:env-1", "{not json");
     expect(readPullRequestListSnapshot(storage, "env-1")).toBeNull();
     expect(readPullRequestListSnapshot(undefined, "env-1")).toBeNull();
+  });
+});
+
+const ENV_1 = "env-1" as EnvironmentId;
+const ENV_2 = "env-2" as EnvironmentId;
+
+describe("merging the environments' own listings", () => {
+  const answer = (
+    overrides: Partial<Parameters<typeof mergePullRequestLists>[0][number][1]> = {},
+  ) =>
+    ({
+      viewers: { "github.com": "Bilal" },
+      providers: [
+        {
+          host: "github.com",
+          kind: "github",
+          searchesOnHost: true,
+          projectCount: 1,
+          configured: true,
+          detail: null,
+        },
+      ],
+      entries: [],
+      errors: [],
+      truncated: false,
+      nextCursors: {},
+      ...overrides,
+    }) as Parameters<typeof mergePullRequestLists>[0][number][1];
+
+  it("answers nothing until an environment has", () => {
+    expect(mergePullRequestLists([])).toBeNull();
+  });
+
+  it("tags every row with the environment that read it, newest first", () => {
+    const merged = mergePullRequestLists([
+      [ENV_1, answer({ entries: [entry({ number: 1, updatedAt: "2026-07-01T00:00:00Z" })] })],
+      [ENV_2, answer({ entries: [entry({ number: 2, updatedAt: "2026-08-01T00:00:00Z" })] })],
+    ]);
+    expect(merged?.entries.map((row) => [row.environmentId, row.number])).toEqual([
+      [ENV_2, 2],
+      [ENV_1, 1],
+    ]);
+  });
+
+  it("tells two environments' copies of one pull request apart", () => {
+    const row = entry({ number: 4 });
+    expect(pullRequestEntryKey({ ...row, environmentId: ENV_1 })).not.toBe(
+      pullRequestEntryKey({ ...row, environmentId: ENV_2 }),
+    );
+  });
+
+  it("folds a host reached from two environments into one switcher row", () => {
+    const merged = mergePullRequestLists([
+      [ENV_1, answer()],
+      [
+        ENV_2,
+        answer({
+          providers: [
+            {
+              host: "github.com",
+              kind: "github",
+              searchesOnHost: false,
+              projectCount: 2,
+              configured: false,
+              detail: "Not signed in.",
+            },
+          ],
+        }),
+      ],
+    ]);
+    // Readable because one environment could read it, but narrowed locally because the other
+    // answers unsearched.
+    expect(merged?.providers).toEqual([
+      {
+        host: "github.com",
+        kind: "github",
+        searchesOnHost: false,
+        projectCount: 3,
+        configured: true,
+        detail: null,
+      },
+    ]);
+  });
+
+  it("keeps each environment's continuation to itself", () => {
+    const merged = mergePullRequestLists([
+      [ENV_1, answer({ nextCursors: { "github.com pingdotgg/t3code": "cursor-1" } })],
+      [ENV_2, answer()],
+    ]);
+    expect(merged?.nextCursors).toEqual({
+      [ENV_1]: { "github.com pingdotgg/t3code": "cursor-1" },
+    });
+  });
+
+  it("reads the same key whichever order the environments connected in", () => {
+    expect(pullRequestEnvironmentSetKey(["env-2", "env-1"])).toBe(
+      pullRequestEnvironmentSetKey(["env-1", "env-2"]),
+    );
   });
 });
