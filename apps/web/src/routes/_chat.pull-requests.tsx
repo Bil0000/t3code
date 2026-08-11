@@ -15,6 +15,8 @@ import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   ChevronDownIcon,
   EyeIcon,
+  MonitorIcon,
+  ServerIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
   GitPullRequestIcon,
@@ -28,6 +30,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 
 import {
   filterPullRequestsByInvolvement,
+  findScopedProject,
   groupPullRequestsByInvolvement,
   matchesPullRequestFilters,
   matchesPullRequestQuery,
@@ -96,6 +99,11 @@ import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 export interface PullRequestsSearch {
   readonly involvement: PullRequestInvolvement;
   readonly state: PullRequestListState;
+  /**
+   * Narrows the list to one server. Absent means every connected one, which is the default the
+   * page has now — so a link written before servers could be chosen still opens the whole list.
+   */
+  readonly environmentId?: EnvironmentId;
   /** Scopes the list. Separate from the selection so one cannot silently change the other. */
   readonly projectId?: ProjectId;
   /**
@@ -106,6 +114,12 @@ export interface PullRequestsSearch {
   readonly repository?: string;
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
+  /**
+   * Which server the selected pull request was read from. A project id only names a project on
+   * its own server, so this is what tells two servers holding one project apart. Optional: a
+   * link without it still opens, resolved by project id alone where that is unambiguous.
+   */
+  readonly selectedEnvironmentId?: EnvironmentId;
   readonly q?: string;
   /**
    * The narrowings beyond state and involvement, each absent when that group is unfiltered. Flat
@@ -167,9 +181,15 @@ export const Route = createFileRoute("/_chat/pull-requests")({
     ...(typeof raw.projectId === "string" && raw.projectId
       ? { projectId: raw.projectId as ProjectId }
       : {}),
+    ...(typeof raw.environmentId === "string" && raw.environmentId
+      ? { environmentId: raw.environmentId as EnvironmentId }
+      : {}),
     ...(typeof raw.host === "string" && raw.host ? { host: raw.host.slice(0, 200) } : {}),
     ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
       ? { selectedProjectId: raw.selectedProjectId as ProjectId }
+      : {}),
+    ...(typeof raw.selectedEnvironmentId === "string" && raw.selectedEnvironmentId
+      ? { selectedEnvironmentId: raw.selectedEnvironmentId as EnvironmentId }
       : {}),
     ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
     ...(raw.draft === "only" || raw.draft === "hide" ? { draft: raw.draft } : {}),
@@ -191,15 +211,29 @@ function PullRequestsRouteView() {
   // Every connected environment that has said it can list pull requests. Sorted, so the query
   // keys, the scope key and the stored snapshot all read the same whichever order the
   // connections happened to come up in.
-  const environmentIds = useMemo(
+  const capableEnvironments = useMemo(
     () =>
       environments
         .filter(
           (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
         )
-        .map((environment) => environment.environmentId)
-        .toSorted((left, right) => left.localeCompare(right)),
+        .toSorted((left, right) => left.environmentId.localeCompare(right.environmentId)),
     [environments],
+  );
+  // The server the URL asks for, kept only while it is one the page could read: a link naming a
+  // server this workspace no longer has falls back to all of them rather than to nothing.
+  const scopedEnvironmentId =
+    capableEnvironments.find((environment) => environment.environmentId === search.environmentId)
+      ?.environmentId ?? null;
+  const environmentIds = useMemo(
+    () =>
+      capableEnvironments
+        .filter(
+          (environment) =>
+            scopedEnvironmentId === null || environment.environmentId === scopedEnvironmentId,
+        )
+        .map((environment) => environment.environmentId),
+    [capableEnvironments, scopedEnvironmentId],
   );
   const environmentKey = useMemo(
     () => pullRequestEnvironmentSetKey(environmentIds),
@@ -253,8 +287,8 @@ function PullRequestsRouteView() {
     [projects, projectsKnown, search.projectId],
   );
   const scopedProject = useMemo(
-    () => projects.find((project) => project.id === scopedProjectId),
-    [projects, scopedProjectId],
+    () => findScopedProject(projects, scopedEnvironmentId, scopedProjectId),
+    [projects, scopedEnvironmentId, scopedProjectId],
   );
 
   // A link from a thread or the sidebar only knows the repository, so the owning project is
@@ -289,19 +323,27 @@ function PullRequestsRouteView() {
   // whose identity the inference above cannot match, and refusing to open it because of the
   // weaker signal would ignore the stronger one the URL spelled out.
   const selectedProjectId = linkedProjectId ?? projectIdForRepository ?? scopedProjectId;
-  // The panel belongs to the environment whose row is open: the detail it shows and the actions
-  // it offers all run against that machine. With nothing selected it belongs to the first
-  // environment, so the panel has a stable home before anything has been opened.
-  const panelEnvironmentId =
-    projects.find((project) => project.id === selectedProjectId)?.environmentId ??
-    environmentIds[0] ??
-    null;
+  // Which server the selection belongs to. Named by the URL where a link had one to give;
+  // otherwise the project id decides, and only where exactly one server has that project.
+  const selectedProject = useMemo(
+    () =>
+      findScopedProject(
+        projects,
+        search.selectedEnvironmentId ?? scopedEnvironmentId,
+        selectedProjectId,
+      ),
+    [projects, scopedEnvironmentId, search.selectedEnvironmentId, selectedProjectId],
+  );
+  // One panel for the page rather than one per server: the surfaces carry the server they were
+  // read from, so tabs from two of them sit side by side instead of replacing each other. Its
+  // ref is fixed to the first environment so that the tab strip survives changing the scope.
+  const panelHomeEnvironmentId = capableEnvironments[0]?.environmentId ?? null;
   const rightPanelRef = useMemo(
     () =>
-      panelEnvironmentId === null
+      panelHomeEnvironmentId === null
         ? null
-        : scopeThreadRef(panelEnvironmentId, PULL_REQUESTS_PANEL_ID),
-    [panelEnvironmentId],
+        : scopeThreadRef(panelHomeEnvironmentId, PULL_REQUESTS_PANEL_ID),
+    [panelHomeEnvironmentId],
   );
   const rightPanelState = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, rightPanelRef),
@@ -312,6 +354,12 @@ function PullRequestsRouteView() {
   const selectedPullRequestSurface =
     selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
   const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
+  // The open tab names its own server; a link that arrived before any tab was opened names it
+  // through the project it selected.
+  const panelEnvironmentId =
+    (activePullRequestSurface?.environmentId as EnvironmentId | undefined) ??
+    selectedProject?.environmentId ??
+    null;
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});
@@ -339,8 +387,12 @@ function PullRequestsRouteView() {
             ...(next.repository ? { repository: next.repository } : {}),
             ...(next.number ? { number: next.number } : {}),
             ...(next.projectId ? { projectId: next.projectId } : {}),
+            ...(next.environmentId ? { environmentId: next.environmentId } : {}),
             ...(next.host ? { host: next.host } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
+            ...(next.selectedEnvironmentId
+              ? { selectedEnvironmentId: next.selectedEnvironmentId }
+              : {}),
             ...(next.q ? { q: next.q } : {}),
             ...(next.draft ? { draft: next.draft } : {}),
             ...(next.review ? { review: next.review } : {}),
@@ -358,6 +410,7 @@ function PullRequestsRouteView() {
     repository: undefined,
     number: undefined,
     selectedProjectId: undefined,
+    selectedEnvironmentId: undefined,
   };
   const updateListScope = (patch: {
     [Key in keyof PullRequestsSearch]?: PullRequestsSearch[Key] | undefined;
@@ -415,19 +468,29 @@ function PullRequestsRouteView() {
     key: string;
     size: number;
     cursors: Readonly<Record<string, PullRequestListCursors>> | null;
-  }>({ key: filterKey, size: PAGE_SIZE, cursors: null });
+    /**
+     * The environments read again from the top at the larger page rather than continued. An
+     * environment can say it has more without saying where to carry on from — its provider has
+     * no cursor to give — and a continuation naming only the others would strand its rows on
+     * the host forever.
+     */
+    regrown: ReadonlyArray<string>;
+  }>({ key: filterKey, size: PAGE_SIZE, cursors: null, regrown: [] });
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
   const sentCursors = page.key === filterKey ? page.cursors : null;
+  const sentRegrown = page.key === filterKey ? page.regrown : [];
 
   // Typing a search, or clearing one, starts the list again at its first page. Without this the
   // paging state from before the search is still filed under these filters and comes back with
   // it, so clearing would return to the slice that had been scrolled to rather than to the list.
   useEffect(() => {
-    setPage({ key: filterKey, size: PAGE_SIZE, cursors: null });
+    setPage({ key: filterKey, size: PAGE_SIZE, cursors: null, regrown: [] });
   }, [filterKey]);
 
-  // Scoping to a project scopes to its environment: no other machine has that project, and
-  // asking them for it would answer with everything they hold instead.
+  // Scoping to a project scopes to the server that owns it, saving every other server a read
+  // that could only answer with nothing. Where an id is ambiguous — two servers holding the
+  // same project id, with no server named — every server is asked for it, and the ones without
+  // it answer empty: two honest copies beat a coin toss between them.
   const queryEnvironmentIds = useMemo(
     () =>
       scopedProject === undefined
@@ -440,9 +503,13 @@ function PullRequestsRouteView() {
     () =>
       queryEnvironmentIds.flatMap((environmentId) => {
         const cursors = sentCursors?.[environmentId];
-        // A continuation asks only the environments that said where to carry on from. The rest
-        // have nothing more to give, and re-reading them would answer this page with the last.
-        if (sentCursors !== null && cursors === undefined) return [];
+        // A continuation asks the environments that said where to carry on from, plus the ones
+        // that have more to give but no cursor to give it from — those are read again at the
+        // larger page. The rest have run out, and re-reading them would answer with the page
+        // that is already on screen.
+        if (sentCursors !== null && cursors === undefined && !sentRegrown.includes(environmentId)) {
+          return [];
+        }
         return [
           {
             environmentId,
@@ -472,6 +539,7 @@ function PullRequestsRouteView() {
       search.involvement,
       search.state,
       sentCursors,
+      sentRegrown,
       sentParsed.text,
     ],
   );
@@ -749,16 +817,27 @@ function PullRequestsRouteView() {
   // continuation is a boundary in one listing, and carrying one across a search would ask the
   // new question to start where the old one stopped — skipping its newest matches entirely.
   const nextCursors = answered?.nextCursors ?? {};
+  // The environments with more rows and no cursor to reach them by. They come along with any
+  // continuation, read again at a page one step larger, which is the only way they grow.
+  const regrown = (answered?.truncatedEnvironments ?? []).filter(
+    (environmentId) => nextCursors[environmentId] === undefined,
+  );
   const canContinue = !showingCarried && Object.keys(nextCursors).length > 0;
   const loadMore = () => {
     if (canContinue) {
-      setPage({ key: filterKey, size: pageSize, cursors: nextCursors });
+      setPage({
+        key: filterKey,
+        size: regrown.length === 0 ? pageSize : Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE),
+        cursors: nextCursors,
+        regrown,
+      });
       return;
     }
     setPage({
       key: filterKey,
       size: Math.min(pageSize + PAGE_SIZE, MAX_PAGE_SIZE),
       cursors: null,
+      regrown: [],
     });
   };
 
@@ -774,6 +853,7 @@ function PullRequestsRouteView() {
     const loadedCount = ordered?.key === filterKey ? ordered.entries.length : pageSize;
     setPage({
       key: filterKey,
+      regrown: [],
       size: Math.min(
         Math.max(pageSize, Math.ceil(loadedCount / PAGE_SIZE) * PAGE_SIZE),
         MAX_PAGE_SIZE,
@@ -918,15 +998,26 @@ function PullRequestsRouteView() {
       loaded !== null && loaded.environmentKey === environmentKey && loaded.scope === scopeKey
         ? loaded.partitions
         : undefined;
-    const authored = partitionsWanted ? (authoredQuery.data?.entries ?? held?.authored) : undefined;
-    const reviewing = partitionsWanted
-      ? (reviewingQuery.data?.entries ?? held?.reviewing)
-      : undefined;
+    // The priority reads answer the same question the feed does, so they take the same local
+    // narrowing: a host that cannot filter for itself would otherwise put rows into Authored
+    // that the filters above just took out of the feed.
+    const narrow = (rows: ReadonlyArray<EnvironmentPullRequestEntry> | undefined) =>
+      rows === undefined || !hasLocalFilters
+        ? rows
+        : rows.filter((entry) => matchesPullRequestFilters(entry, localFilters));
+    const authored = narrow(
+      partitionsWanted ? (authoredQuery.data?.entries ?? held?.authored) : undefined,
+    );
+    const reviewing = narrow(
+      partitionsWanted ? (reviewingQuery.data?.entries ?? held?.reviewing) : undefined,
+    );
     if (authored === undefined || reviewing === undefined) {
       return groupPullRequestsByInvolvement(entries, viewers);
     }
     return partitionPullRequestsWithPriority(entries, authored, reviewing);
   }, [
+    hasLocalFilters,
+    localFilters,
     authoredQuery.data?.entries,
     entries,
     environmentKey,
@@ -975,10 +1066,15 @@ function PullRequestsRouteView() {
 
   const linkedSelection = useMemo(
     () =>
-      search.repository && search.number && selectedProjectId
-        ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
+      search.repository && search.number && selectedProject
+        ? {
+            environmentId: selectedProject.environmentId,
+            repository: search.repository,
+            number: search.number,
+            projectId: selectedProject.id,
+          }
         : null,
-    [search.number, search.repository, selectedProjectId],
+    [search.number, search.repository, selectedProject],
   );
   useEffect(() => {
     if (!pullRequestsSupported || rightPanelRef === null || linkedSelection === null) return;
@@ -988,6 +1084,7 @@ function PullRequestsRouteView() {
   const selected =
     rightPanelState.isOpen && activePullRequestSurface !== null
       ? {
+          environmentId: activePullRequestSurface.environmentId,
           repository: activePullRequestSurface.repository,
           number: activePullRequestSurface.number,
           projectId: activePullRequestSurface.projectId as ProjectId,
@@ -1002,6 +1099,9 @@ function PullRequestsRouteView() {
             repository: surface.repository,
             number: surface.number,
             selectedProjectId: surface.projectId as ProjectId,
+            ...(surface.environmentId === undefined
+              ? {}
+              : { selectedEnvironmentId: surface.environmentId as EnvironmentId }),
           },
     );
 
@@ -1054,18 +1154,17 @@ function PullRequestsRouteView() {
   // Stable so the memoized rows can skip re-rendering when the list around them changes.
   const selectEntry = useCallback(
     (entry: EnvironmentPullRequestEntry) => {
-      // The panel is the row's own environment's, not the page's: its reads and its actions run
-      // against the machine that listed the row. The URL's project id brings it back on reload.
-      useRightPanelStore
-        .getState()
-        .openPullRequest(scopeThreadRef(entry.environmentId, PULL_REQUESTS_PANEL_ID), entry);
+      // The surface carries the row's own server, which is what its detail reads and acts on.
+      if (rightPanelRef === null) return;
+      useRightPanelStore.getState().openPullRequest(rightPanelRef, entry);
       updateSearch({
         repository: entry.repository,
         number: entry.number,
         selectedProjectId: entry.projectId,
+        selectedEnvironmentId: entry.environmentId,
       });
     },
-    [updateSearch],
+    [rightPanelRef, updateSearch],
   );
 
   const searchInput = (
@@ -1152,6 +1251,10 @@ function PullRequestsRouteView() {
                   entry={withDiffStat(entry, statsByRow)}
                   showProjectTitle
                   showProvider={showProvider}
+                  {...(capableEnvironments.length > 1 &&
+                  environmentLabels.get(entry.environmentId) !== undefined
+                    ? { environmentLabel: environmentLabels.get(entry.environmentId)! }
+                    : {})}
                   // Ten is the floor the ranking gives a row whose own fields say nothing
                   // about the search: the host matched something this row cannot show.
                   matchedElsewhere={
@@ -1159,8 +1262,8 @@ function PullRequestsRouteView() {
                     scorePullRequestMatch(entry, typedParsed.text) <= MATCHED_ELSEWHERE_SCORE
                   }
                   selected={
-                    entry.environmentId === panelEnvironmentId &&
-                    selected?.repository === entry.repository &&
+                    selected?.environmentId === entry.environmentId &&
+                    selected.repository === entry.repository &&
                     selected.number === entry.number
                   }
                   onSelect={selectEntry}
@@ -1211,6 +1314,16 @@ function PullRequestsRouteView() {
       };
     }),
   ];
+  // The same shape the host pills take, so the two groups read as one control. A local
+  // connection wears the screen it is on; every other server wears a server.
+  const serverMenuOptions: ReadonlyArray<PullRequestFilterOption<string>> = [
+    { value: "", label: "All servers", Icon: LayersIcon },
+    ...capableEnvironments.map((environment) => ({
+      value: environment.environmentId,
+      label: environment.label,
+      Icon: environment.displayUrl === null ? MonitorIcon : ServerIcon,
+    })),
+  ];
   const filtersMenu = (
     <PullRequestFiltersMenu
       state={search.state}
@@ -1226,6 +1339,11 @@ function PullRequestsRouteView() {
       host={search.host}
       hostOptions={hostMenuOptions}
       onHost={(host) => updateListScope({ host })}
+      server={scopedEnvironmentId ?? undefined}
+      serverOptions={serverMenuOptions}
+      // Narrowing to one server drops a project scope belonging to another, which would
+      // otherwise narrow the list to nothing with no visible filter to explain it.
+      onServer={(server) => updateListScope({ environmentId: server, projectId: undefined })}
       projects={scopedProjects}
       projectId={scopedProjectId}
       unavailable={unavailableProjects}

@@ -18,6 +18,7 @@ function PullRequestRowImpl({
   selected,
   showProjectTitle,
   showProvider,
+  environmentLabel,
   matchedElsewhere,
   onSelect,
 }: {
@@ -26,6 +27,8 @@ function PullRequestRowImpl({
   showProjectTitle: boolean;
   /** Only when the list spans more than one host, where the repository alone is ambiguous. */
   showProvider: boolean;
+  /** Names the server this row was read from, where the list spans more than one. */
+  environmentLabel?: string;
   /**
    * A search found this, but in something the row does not show — a description, a comment, a
    * commit message. Saying so is the difference between a result and an apparently random row.
@@ -69,6 +72,9 @@ function PullRequestRowImpl({
             #{entry.number}
           </span>
           {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
+          {environmentLabel ? (
+            <span className="max-w-32 shrink-0 truncate">{environmentLabel}</span>
+          ) : null}
           <PullRequestActorLabel actor={entry.author} className="max-w-40 shrink-0" />
           <span className="truncate" title={`${entry.headBranch} to ${entry.baseBranch}`}>
             {entry.headBranch}

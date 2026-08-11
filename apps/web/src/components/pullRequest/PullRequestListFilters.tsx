@@ -114,6 +114,8 @@ export function PullRequestSearchInput({
 const ALL_PROJECTS_VALUE = "all";
 /** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
 const ALL_HOSTS_VALUE = "";
+/** The same trick for the servers, which are named by an id no empty string can collide with. */
+const ALL_SERVERS_VALUE = "";
 /** The unset value of each narrowing group, which no filter of theirs is named after. */
 const UNFILTERED_VALUE = "all";
 
@@ -187,6 +189,9 @@ export function PullRequestFiltersMenu({
   host,
   hostOptions,
   onHost,
+  server,
+  serverOptions,
+  onServer,
   projects,
   projectId,
   unavailable,
@@ -208,6 +213,13 @@ export function PullRequestFiltersMenu({
    */
   hostOptions: ReadonlyArray<PullRequestFilterOption<string>>;
   onHost: (host: string | undefined) => void;
+  server: EnvironmentId | undefined;
+  /**
+   * Includes the "all servers" entry, whose value is the empty string. With one server there is
+   * nothing to switch between, so the whole group stays out of the menu.
+   */
+  serverOptions: ReadonlyArray<PullRequestFilterOption<string>>;
+  onServer: (server: EnvironmentId | undefined) => void;
   /** The projects of every connected environment, each carrying the one its favicon is read from. */
   projects: ReadonlyArray<{
     readonly id: ProjectId;
@@ -228,6 +240,7 @@ export function PullRequestFiltersMenu({
     state !== "open" ||
     involvement !== "all" ||
     host !== undefined ||
+    server !== undefined ||
     projectId !== undefined ||
     Object.keys(filters).length > 0;
   /**
@@ -301,6 +314,19 @@ export function PullRequestFiltersMenu({
               value={host ?? ALL_HOSTS_VALUE}
               options={hostOptions}
               onChange={(next) => onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
+            />
+          </>
+        ) : null}
+        {serverOptions.length > 2 ? (
+          <>
+            <MenuSeparator />
+            <PullRequestFilterRadioGroup
+              label="Server"
+              value={server ?? ALL_SERVERS_VALUE}
+              options={serverOptions}
+              onChange={(next) =>
+                onServer(next === ALL_SERVERS_VALUE ? undefined : (next as EnvironmentId))
+              }
             />
           </>
         ) : null}
