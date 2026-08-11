@@ -733,3 +733,30 @@ describe("colon-namespaced labels typed as a search", () => {
     expect(parsePullRequestQuery(many).filters.labels).toHaveLength(10);
   });
 });
+
+describe("the priority groups against a paginated feed", () => {
+  const authoredRow = (number: number, updatedAt: string) =>
+    entry({ number, updatedAt, author: { login: "Bilal", name: null, avatarUrl: null } });
+
+  it("shows every authored row the host reported, not only the ones the feed page holds", () => {
+    // The feed is one page ordered by recency, so on a busy repository it can hold exactly one of
+    // somebody's own pull requests while the rest sit further down the host's list. The Authored
+    // group comes from its own server-filtered read for that reason: grouping the page instead
+    // leaves the older ones under Others, or off the page altogether.
+    const newest = authoredRow(6039, "2026-08-11T08:00:00Z");
+    const older = [
+      authoredRow(5499, "2026-08-10T17:00:00Z"),
+      authoredRow(5544, "2026-08-10T16:00:00Z"),
+    ];
+    const feed = [newest, entry({ number: 6123, updatedAt: "2026-08-11T09:00:00Z" })];
+
+    const groups = partitionPullRequestsWithPriority(feed, [newest, ...older], []);
+
+    expect(
+      groups.find((group) => group.key === "authored")?.entries.map((row) => row.number),
+    ).toEqual([6039, 5499, 5544]);
+    expect(
+      groups.find((group) => group.key === "others")?.entries.map((row) => row.number),
+    ).toEqual([6123]);
+  });
+});
