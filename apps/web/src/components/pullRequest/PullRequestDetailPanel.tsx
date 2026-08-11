@@ -31,6 +31,7 @@ import {
   MoreHorizontalIcon,
   PanelRightIcon,
   RefreshCwIcon,
+  ServerIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import {
@@ -51,6 +52,8 @@ import { usePreparePullRequestThreadAction } from "~/lib/sourceControlActions";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
+import { useProjects } from "~/state/entities";
+import { useEnvironments } from "~/state/environments";
 import { useEnvironmentQuery } from "~/state/query";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -99,6 +102,10 @@ import {
   resolveBaseFreshness,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
+import {
+  resolvePickableEnvironments,
+  type PickableEnvironment,
+} from "./pullRequestProjectAssignment.logic";
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import {
   PullRequestActorLabel,
@@ -174,6 +181,49 @@ const lastHandoffPromptByDraft = new Map<string, string>();
 
 const composerTargetKey = (target: ScopedThreadRef | DraftId): string =>
   typeof target === "string" ? target : scopedThreadKey(target);
+
+/**
+ * Which server the checkout and the hand-offs land on, where more than one of them holds this
+ * repository. The list picked one of them to show the pull request under, so that everything on
+ * it is read from somewhere; where the reader wants to work is a separate answer, and this is
+ * where they give it.
+ */
+function ActOnEnvironmentPicker({
+  environments,
+  value,
+  onChange,
+  disabled,
+}: {
+  environments: ReadonlyArray<PickableEnvironment>;
+  value: EnvironmentId;
+  onChange: (environmentId: EnvironmentId) => void;
+  disabled: boolean;
+}) {
+  return (
+    <>
+      <MenuSeparator />
+      <MenuRadioGroup
+        value={value}
+        onValueChange={(environmentId) => onChange(environmentId as EnvironmentId)}
+      >
+        {environments.map((environment) => (
+          <MenuRadioItem
+            key={environment.environmentId}
+            value={environment.environmentId}
+            disabled={disabled}
+          >
+            {/* The radio item lays its children out as one block, so the icon and the label
+                need their own row to share a line. */}
+            <span className="flex min-w-0 items-center gap-2">
+              <ServerIcon className="size-3.5 shrink-0" />
+              <span className="truncate">{environment.label}</span>
+            </span>
+          </MenuRadioItem>
+        ))}
+      </MenuRadioGroup>
+    </>
+  );
+}
 
 export function PullRequestDetailPanel({
   environmentId,
@@ -377,9 +427,37 @@ export function PullRequestDetailPanel({
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
   const [actionPending, setActionPending] = useState(false);
   const newThread = useNewThreadHandler();
+  const { environments } = useEnvironments();
+  const projects = useProjects();
+  // Beside a thread there is nothing to pick: the hand-offs land in that thread's composer, and
+  // the thread is already on one server's copy of the branch.
+  const pickableEnvironments = useMemo(
+    () =>
+      context === "page"
+        ? resolvePickableEnvironments(
+            { environmentId, projectId: reference.projectId },
+            projects,
+            environments,
+          )
+        : [],
+    [context, environmentId, environments, projects, reference.projectId],
+  );
+  // Which server the reader chose, and only for the pull request they chose it on: this one panel
+  // shows a different pull request every time it is opened, and the choice does not follow.
+  const [actingScope, setActingScope] = useState<{
+    readonly pullRequestKey: string;
+    readonly environmentId: EnvironmentId;
+  } | null>(null);
+  const chosenEnvironmentId =
+    actingScope?.pullRequestKey === pullRequestKey ? actingScope.environmentId : environmentId;
+  // Null wherever there is no choice on offer — one server, or a chosen one that has since gone —
+  // and then the panel's own server and its own checkout are the answer, as they always were.
+  const acting =
+    pickableEnvironments.find((entry) => entry.environmentId === chosenEnvironmentId) ?? null;
+  const actingEnvironmentId = acting?.environmentId ?? environmentId;
   const prepareThread = usePreparePullRequestThreadAction({
-    environmentId,
-    cwd: detail?.workspaceRoot ?? null,
+    environmentId: actingEnvironmentId,
+    cwd: acting?.workspaceRoot ?? detail?.workspaceRoot ?? null,
   });
 
   const perform = async (
@@ -487,7 +565,7 @@ export function PullRequestDetailPanel({
       return;
     }
     setHandoff(kind);
-    const projectRef = scopeProjectRef(environmentId, detail.projectId);
+    const projectRef = scopeProjectRef(actingEnvironmentId, acting?.projectId ?? detail.projectId);
     const opened = await openThreadWithTask(projectRef, task);
     setHandoff(null);
     if (opened === null) {
@@ -539,7 +617,9 @@ export function PullRequestDetailPanel({
       type: "loading",
       title: "Preparing the pull request checkout...",
     });
-    const projectRef = scopeProjectRef(environmentId, detail.projectId);
+    // Wherever the reader chose to act: the thread, the checkout it is pointed at and the composer
+    // the task lands in are all one server's, and picking another one moves all three.
+    const projectRef = scopeProjectRef(actingEnvironmentId, acting?.projectId ?? detail.projectId);
     // The thread is opened before the checkout rather than after it, because the project's setup
     // script only runs for a checkout that knows which thread it is for — and a worktree with no
     // dependencies installed is not something anyone can test.
@@ -910,6 +990,14 @@ export function PullRequestDetailPanel({
                     <HammerIcon className="size-3.5" />
                     {handoff === "findings" ? "Preparing..." : "Fix findings in a thread"}
                   </MenuItem>
+                  {pickableEnvironments.length > 0 ? (
+                    <ActOnEnvironmentPicker
+                      environments={pickableEnvironments}
+                      value={actingEnvironmentId}
+                      onChange={(next) => setActingScope({ pullRequestKey, environmentId: next })}
+                      disabled={handoff !== null}
+                    />
+                  ) : null}
                   <MenuSeparator />
                   {detail.state === "open" ? (
                     <>
@@ -1043,6 +1131,14 @@ export function PullRequestDetailPanel({
                         </span>
                       </span>
                     </MenuItem>
+                    {pickableEnvironments.length > 0 ? (
+                      <ActOnEnvironmentPicker
+                        environments={pickableEnvironments}
+                        value={actingEnvironmentId}
+                        onChange={(next) => setActingScope({ pullRequestKey, environmentId: next })}
+                        disabled={handoff !== null}
+                      />
+                    ) : null}
                   </MenuPopup>
                 </Menu>
               ) : null}
