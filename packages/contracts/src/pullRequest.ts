@@ -25,6 +25,31 @@ export type PullRequestState = typeof PullRequestState.Type;
 export const PullRequestListState = Schema.Literals(["all", "open", "closed", "merged"]);
 export type PullRequestListState = typeof PullRequestListState.Type;
 
+/** Where a review stands overall, as a host that summarises its reviews reports it. */
+export const PullRequestReviewDecision = Schema.Literals([
+  "approved",
+  "changes-requested",
+  "review-required",
+]);
+export type PullRequestReviewDecision = typeof PullRequestReviewDecision.Type;
+
+/**
+ * Narrowings beyond state and involvement, each absent by default — an absent field filters
+ * nothing, which is what every listing did before there were any. Optional as a whole so a page
+ * and a server of different ages still speak to each other.
+ *
+ * `checks` is host-side only: no row carries its own check state, so a host that cannot match it
+ * answers unnarrowed rather than the page pretending to know.
+ */
+export const PullRequestListFilters = Schema.Struct({
+  draft: Schema.optional(Schema.Literals(["only", "hide"])),
+  review: Schema.optional(Schema.Literals(["approved"])),
+  checks: Schema.optional(Schema.Literals(["passing"])),
+  /** Excludes the sizes above medium, which are read off the `size:` labels a repository sets. */
+  maxSize: Schema.optional(Schema.Literals(["m"])),
+});
+export type PullRequestListFilters = typeof PullRequestListFilters.Type;
+
 export const PullRequestMergeability = Schema.Literals(["mergeable", "conflicting", "unknown"]);
 export type PullRequestMergeability = typeof PullRequestMergeability.Type;
 
@@ -303,6 +328,8 @@ export const PullRequestListEntry = Schema.Struct({
   updatedAt: IsoDateTime,
   viewerReviewRequested: Schema.Boolean,
   labels: Schema.Array(PullRequestLabel),
+  /** Absent where the host does not summarise its reviews, which is every host but GitHub. */
+  reviewDecision: Schema.optional(PullRequestReviewDecision),
 });
 export type PullRequestListEntry = typeof PullRequestListEntry.Type;
 
@@ -324,6 +351,7 @@ export type PullRequestListCursors = typeof PullRequestListCursors.Type;
 export const PullRequestListInput = Schema.Struct({
   state: PullRequestListState,
   involvement: Schema.optional(PullRequestInvolvement),
+  filters: Schema.optional(PullRequestListFilters),
   projectId: Schema.optional(ProjectId),
   /**
    * Narrows the listing to one host, named as the host itself rather than as its provider kind:
