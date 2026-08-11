@@ -18,6 +18,7 @@ import {
   orderPullRequestComments,
   pullRequestFindingKey,
   readableFailure,
+  resolveBaseFreshness,
   buildPullRequestTimeline,
   describePullRequestState,
 } from "./pullRequestDetail.logic";
@@ -785,5 +786,59 @@ describe("a second ask into the same composer", () => {
       "file-comment:3",
       "pull-request-context:42",
     ]);
+  });
+});
+
+describe("how the branch stands against its base", () => {
+  const detail = (overrides: Record<string, unknown> = {}) =>
+    ({
+      state: "open",
+      mergeability: "mergeable",
+      baseComparison: "behind",
+      behindBy: 12,
+      capabilities: { updateMethods: ["merge", "rebase"] },
+      viewerPermissions: { updateMethods: ["merge", "rebase"] },
+      ...overrides,
+    }) as Parameters<typeof resolveBaseFreshness>[0];
+
+  it("offers both ways where the host and the reader both allow them", () => {
+    expect(resolveBaseFreshness(detail())).toEqual({ behindBy: 12, methods: ["merge", "rebase"] });
+  });
+
+  it("says nothing about a branch that is already current", () => {
+    expect(resolveBaseFreshness(detail({ baseComparison: "up-to-date" }))).toBeNull();
+  });
+
+  it("says nothing where the host could not compare, rather than claiming it is current", () => {
+    expect(resolveBaseFreshness(detail({ baseComparison: "unknown" }))).toBeNull();
+    expect(resolveBaseFreshness(detail({ baseComparison: undefined }))).toBeNull();
+  });
+
+  it("leaves a conflicting branch to the conflicts row", () => {
+    expect(resolveBaseFreshness(detail({ mergeability: "conflicting" }))).toBeNull();
+  });
+
+  it("says nothing about a merged or closed pull request", () => {
+    expect(resolveBaseFreshness(detail({ state: "merged" }))).toBeNull();
+    expect(resolveBaseFreshness(detail({ state: "closed" }))).toBeNull();
+  });
+
+  it("narrows to what this reader may actually take", () => {
+    expect(
+      resolveBaseFreshness(detail({ viewerPermissions: { updateMethods: ["merge"] } }))?.methods,
+    ).toEqual(["merge"]);
+  });
+
+  it("still reports the news where the reader may take none of it", () => {
+    // Somebody reading another account's pull request is told why it is blocked without being
+    // offered a button the host would refuse.
+    expect(resolveBaseFreshness(detail({ viewerPermissions: {} }))).toEqual({
+      behindBy: 12,
+      methods: [],
+    });
+  });
+
+  it("reports a count only where the host counted", () => {
+    expect(resolveBaseFreshness(detail({ behindBy: undefined }))?.behindBy).toBeNull();
   });
 });

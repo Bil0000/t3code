@@ -4,6 +4,7 @@ import type {
   EnvironmentId,
   PullRequestAction,
   PullRequestMergeMethod,
+  PullRequestUpdateMethod,
   PullRequestRef,
   PullRequestState,
   ScopedThreadRef,
@@ -95,6 +96,7 @@ import {
   handoffReviewComments,
   pullRequestFindingKey,
   readableFailure,
+  resolveBaseFreshness,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
 import {
@@ -113,6 +115,7 @@ const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string> = {
   draft: "Converted to draft",
   close: "Pull request closed",
   reopen: "Pull request reopened",
+  "update-branch": "Branch updated with the base branch",
 };
 
 /** Said as the thing that did not happen, rather than as the operation that returned an error. */
@@ -122,6 +125,7 @@ const ACTION_FAILURE_LABELS: Record<PullRequestAction, string> = {
   draft: "Could not convert this to a draft",
   close: "Could not close this pull request",
   reopen: "Could not reopen this pull request",
+  "update-branch": "Could not update this branch",
 };
 
 /** What to try, for the times the host says only that it refused. */
@@ -133,6 +137,10 @@ const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
   close: "The host refused it. Check that you have write access, or that you opened it.",
   reopen:
     "The host refused it. Check that you have write access, and that the branch still exists.",
+  // A rebase is the one that fails on its own merits: GitHub replays the commits and stops at
+  // the first that does not apply, which is a conflict the reader has to resolve themselves.
+  "update-branch":
+    "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.",
 };
 
 /** Named for the host rather than "externally": the point is where you will land. */
@@ -372,12 +380,21 @@ export function PullRequestDetailPanel({
     cwd: detail?.workspaceRoot ?? null,
   });
 
-  const perform = async (action: PullRequestAction, method?: PullRequestMergeMethod) => {
+  const perform = async (
+    action: PullRequestAction,
+    method?: PullRequestMergeMethod,
+    updateMethod?: PullRequestUpdateMethod,
+  ) => {
     if (actionPending) return;
     setActionPending(true);
     const result = await runAction({
       environmentId,
-      input: { ...reference, action, ...(method ? { mergeMethod: method } : {}) },
+      input: {
+        ...reference,
+        action,
+        ...(method ? { mergeMethod: method } : {}),
+        ...(updateMethod ? { updateMethod } : {}),
+      },
     });
     setActionPending(false);
     if (result._tag === "Failure") {
@@ -723,6 +740,9 @@ export function PullRequestDetailPanel({
     ? mergeMethod
     : (allowedMergeMethods[0] ?? "merge");
   const conflicting = detail?.state === "open" && detail.mergeability === "conflicting";
+  // Out of date with the base, and still cleanly mergeable — the one pairing an update button
+  // exists for. Null everywhere else, including hosts that cannot compare at all.
+  const freshness = detail === null ? null : resolveBaseFreshness(detail);
   // A host that cannot produce a patch has no Code tab to open. The tabs themselves stay hidden
   // until the detail arrives, so the loading ghost is the panel's only unfinished UI.
   const visibleTabs = TABS.filter(
@@ -1318,6 +1338,61 @@ export function PullRequestDetailPanel({
           </div>
         </div>
       </div>
+
+      {freshness ? (
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t border-amber-500/30 bg-amber-500/5 px-4 py-2 text-xs">
+          <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0 text-amber-600" />
+          <span className="min-w-0 text-foreground">
+            This branch is out-of-date with {detail?.baseBranch ?? "the base branch"}
+            {freshness.behindBy === null
+              ? ""
+              : ` by ${freshness.behindBy.toLocaleString()} ${
+                  freshness.behindBy === 1 ? "commit" : "commits"
+                }`}
+            .
+          </span>
+          <span className="min-w-0 text-muted-foreground">Changes can be cleanly merged.</span>
+          {freshness.methods.length > 0 ? (
+            <span className="ml-auto flex shrink-0 items-center">
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={actionPending}
+                className={cn(freshness.methods.length > 1 && "rounded-r-none border-r-0")}
+                onClick={() => void perform("update-branch", undefined, freshness.methods[0])}
+              >
+                <GitMergeIcon aria-hidden className="size-3" />
+                {freshness.methods[0] === "rebase" ? "Update with rebase" : "Update branch"}
+              </Button>
+              {/* The second way only where the host offers it and this reader may take it:
+                  GitHub replays the commits for a rebase and refuses the ones it cannot. */}
+              {freshness.methods.length > 1 ? (
+                <Menu>
+                  <MenuTrigger
+                    disabled={actionPending}
+                    aria-label="Choose how to update this branch"
+                    className="inline-flex h-6 items-center rounded-md rounded-l-none border border-input px-1 text-muted-foreground hover:bg-accent hover:text-foreground"
+                  >
+                    <ChevronDownIcon aria-hidden className="size-3" />
+                  </MenuTrigger>
+                  <MenuPopup align="end" side="bottom" className="min-w-52">
+                    {freshness.methods.map((method) => (
+                      <MenuItem
+                        key={method}
+                        disabled={actionPending}
+                        onClick={() => void perform("update-branch", undefined, method)}
+                      >
+                        <GitMergeIcon aria-hidden className="size-3.5" />
+                        {method === "rebase" ? "Update with rebase" : "Update with merge commit"}
+                      </MenuItem>
+                    ))}
+                  </MenuPopup>
+                </Menu>
+              ) : null}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
 
       <div
         className="relative min-h-0 flex-1 overflow-hidden"

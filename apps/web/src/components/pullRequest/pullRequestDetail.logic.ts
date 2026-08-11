@@ -1,10 +1,13 @@
 import type {
   PullRequestActor,
+  PullRequestBaseComparison,
   PullRequestCheck,
   PullRequestComment,
   PullRequestDetailView,
+  PullRequestMergeability,
   PullRequestReviewThread,
   PullRequestState,
+  PullRequestUpdateMethod,
 } from "@t3tools/contracts";
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
@@ -647,4 +650,40 @@ export function readableFailure(failure: unknown, hint: string): string {
   // The host's words alone: the hint is a guess about why, and a guess printed under a reason
   // that contradicts it is worse than no guess at all.
   return bounded;
+}
+
+/**
+ * Where the branch stands against its base, said the way GitHub says it: current, out of date but
+ * still cleanly mergeable, or conflicting. Only the middle one is an offer — the conflicts row
+ * already speaks for a branch that collides, and a current branch has nothing to report.
+ *
+ * Null where there is nothing to show, which is also every host that cannot compare: silence is
+ * not the same claim as "up to date", and a banner nobody can act on is noise.
+ */
+export function resolveBaseFreshness(detail: {
+  readonly state: PullRequestState;
+  readonly mergeability: PullRequestMergeability;
+  readonly baseComparison?: PullRequestBaseComparison | undefined;
+  readonly behindBy?: number | undefined;
+  readonly capabilities: {
+    readonly updateMethods?: ReadonlyArray<PullRequestUpdateMethod> | undefined;
+  };
+  readonly viewerPermissions: {
+    readonly updateMethods?: ReadonlyArray<PullRequestUpdateMethod> | undefined;
+  };
+}): {
+  readonly behindBy: number | null;
+  /** Empty where the branch is stale but this reader may not move it: news, not an offer. */
+  readonly methods: ReadonlyArray<PullRequestUpdateMethod>;
+} | null {
+  if (detail.state !== "open" || detail.baseComparison !== "behind") return null;
+  // A conflicting branch cannot be updated cleanly either, and the conflicts row is already
+  // saying the more useful half of that.
+  if (detail.mergeability === "conflicting") return null;
+  const offered = detail.capabilities.updateMethods ?? [];
+  const allowed = detail.viewerPermissions.updateMethods ?? [];
+  return {
+    behindBy: detail.behindBy ?? null,
+    methods: offered.filter((method) => allowed.includes(method)),
+  };
 }
