@@ -29,6 +29,7 @@ import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
+import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
   fnv1a32,
@@ -361,16 +362,12 @@ export function PullRequestCodeTab({
       }),
     [loadedSlices, resolvedTheme, scopeKey],
   );
-  // Sorted within a slice rather than across them: sorting the accumulated set would let a late
+  // Ordered within a slice rather than across them: ordering the accumulated set would let a late
   // slice push a file the reader is part way through further down the page.
   const files = useMemo(
     () =>
       parsedSlices.flatMap((parsed) =>
-        parsed?.kind === "files"
-          ? parsed.files.toSorted((left, right) =>
-              resolveFileDiffPath(left).localeCompare(resolveFileDiffPath(right)),
-            )
-          : [],
+        parsed?.kind === "files" ? orderDiffFiles(parsed.files) : [],
       ),
     [parsedSlices],
   );
