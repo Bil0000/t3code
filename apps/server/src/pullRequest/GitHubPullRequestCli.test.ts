@@ -980,6 +980,74 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("arms auto-merge with the same strategy a merge would have used", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "enable-auto-merge",
+        mergeMethod: "squash",
+      });
+      expect(callAt(0).args).toEqual([
+        "pr",
+        "merge",
+        "7",
+        "--repo",
+        "github.com/acme/web",
+        "--auto",
+        "--squash",
+      ]);
+
+      // No strategy asked for is GitHub's own default, exactly as it is for a merge now.
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "enable-auto-merge",
+      });
+      expect(callAt(1).args).toEqual([
+        "pr",
+        "merge",
+        "7",
+        "--repo",
+        "github.com/acme/web",
+        "--auto",
+        "--merge",
+      ]);
+    }),
+  );
+
+  it.effect("takes auto-merge back off without naming a strategy", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "disable-auto-merge",
+        mergeMethod: "squash",
+      });
+
+      expect(callAt(0).args).toEqual([
+        "pr",
+        "merge",
+        "7",
+        "--repo",
+        "github.com/acme/web",
+        "--disable-auto",
+      ]);
+    }),
+  );
+
   it.effect("returns a pull request to draft by undoing ready", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("")));
@@ -1542,6 +1610,90 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("reacts to a given subject in one request, without looking up its id", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.setReaction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        subjectId: "IC_1",
+        content: "heart",
+        reacted: true,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const request = JSON.parse(callAt(0).stdin ?? "") as {
+        query: string;
+        variables: Record<string, string>;
+      };
+      expect(request.query).toContain("addReaction(");
+      expect(request.variables).toEqual({ subjectId: "IC_1", content: "HEART" });
+    }),
+  );
+
+  it.effect("looks up the pull request's own node id when no subject was given", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({ data: { repository: { pullRequest: { id: "PR_kwDOA" } } } }),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.setReaction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        content: "rocket",
+        reacted: true,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      const lookup = callAt(0).args;
+      expect(lookup).toContain("owner=acme");
+      expect(lookup).toContain("name=web");
+      expect(lookup).toContain("number=7");
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const request = JSON.parse(callAt(1).stdin ?? "") as {
+        query: string;
+        variables: Record<string, string>;
+      };
+      expect(request.query).toContain("addReaction(");
+      expect(request.variables).toEqual({ subjectId: "PR_kwDOA", content: "ROCKET" });
+    }),
+  );
+
+  it.effect("takes a reaction back through the remove mutation", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.setReaction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        subjectId: "IC_1",
+        content: "heart",
+        reacted: false,
+      });
+
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      const request = JSON.parse(callAt(0).stdin ?? "") as { query: string };
+      expect(request.query).toContain("removeReaction(");
+    }),
+  );
+
   it.effect("fails the read when gh returns something unreadable", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"message":"not found"}')));
@@ -1608,7 +1760,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       expect(detail.body).toBe("Core body");
       expect(activity.author?.login).toBe("octocat");
       expect(callAt(0).args.at(-1)).toBe(
-        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,statusCheckRollup,body,changedFiles,closedAt,headRepositoryOwner",
+        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,statusCheckRollup,body,changedFiles,closedAt,headRepositoryOwner,autoMergeRequest",
       );
       expect(callAt(1).args.at(-1)).toBe("author,comments,reviews,commits");
     }),

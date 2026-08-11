@@ -342,7 +342,40 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("stores the squash choice with an auto-completion, as a merge now does", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        number: 42,
+        action: "enable-auto-merge",
+        mergeMethod: "squash",
+      });
+
+      expect(argsOfCall(0)).toEqual([
+        "repos",
+        "pr",
+        "update",
+        "--detect",
+        "true",
+        "--id",
+        "42",
+        "--auto-complete",
+        "true",
+        "--squash",
+        "true",
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+    }),
+  );
+
   it.effect.each([
+    { action: "enable-auto-merge", expected: ["--auto-complete", "true", "--squash", "false"] },
+    { action: "disable-auto-merge", expected: ["--auto-complete", "false"] },
     { action: "draft", expected: ["--draft", "true"] },
     { action: "ready", expected: ["--draft", "false"] },
     { action: "close", expected: ["--status", "abandoned"] },

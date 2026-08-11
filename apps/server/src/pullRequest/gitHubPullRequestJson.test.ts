@@ -9,6 +9,7 @@ import {
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
   decodePullRequestListJson,
+  decodePullRequestNodeIdJson,
   decodePullRequestSearchJson,
   decodeRepositoryAccessJson,
   decodeReviewerCandidatesJson,
@@ -16,6 +17,7 @@ import {
   decodeReviewThreadsJson,
   decodeViewerPermissionsJson,
   reviewThreadConversation,
+  REVIEW_THREADS_GRAPHQL_QUERY,
 } from "./gitHubPullRequestJson.ts";
 
 function listJson(entries: ReadonlyArray<Record<string, unknown>>): string {
@@ -219,6 +221,58 @@ describe("pull request detail decoding", () => {
       ["test", "failure"],
       ["ci/legacy", "success"],
     ]);
+  });
+
+  it("reads an auto-merge request as armed, its null as off and its absence as neither", () => {
+    const raw = JSON.parse(detailJson) as Record<string, unknown>;
+    const armed = (entry: Record<string, unknown>) =>
+      expectSuccess(decodePullRequestDetailJson(JSON.stringify({ ...raw, ...entry })))
+        .autoMergeEnabled;
+
+    expect(
+      armed({ autoMergeRequest: { enabledBy: { login: "octocat" }, mergeMethod: "SQUASH" } }),
+    ).toBe(true);
+    expect(armed({ autoMergeRequest: null })).toBe(false);
+    // `gh` not answering for the field at all is not GitHub saying the merge is unarmed.
+    expect(armed({})).toBeUndefined();
+  });
+
+  it("shows a re-running check once, as the run that is happening now", () => {
+    // What `statusCheckRollup` reports while a workflow is being re-run: the same check twice,
+    // the finished run and the one that replaced it, with no id to tell them apart.
+    const raw = JSON.parse(detailJson) as Record<string, unknown>;
+    const detail = expectSuccess(
+      decodePullRequestDetailJson(
+        JSON.stringify({
+          ...raw,
+          statusCheckRollup: [
+            {
+              __typename: "CheckRun",
+              name: "Prepare PR size config",
+              workflowName: "PR Size",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              startedAt: "2026-08-11T16:06:20Z",
+              completedAt: "2026-08-11T16:06:25Z",
+            },
+            {
+              __typename: "CheckRun",
+              name: "Prepare PR size config",
+              workflowName: "PR Size",
+              status: "IN_PROGRESS",
+              conclusion: "",
+              startedAt: "2026-08-11T17:01:04Z",
+              completedAt: "0001-01-01T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(detail.checks.map((check) => [check.name, check.status])).toEqual([
+      ["Prepare PR size config", "pending"],
+    ]);
+    expect(detail.checksState).toBe("pending");
   });
 
   it("merges reviews with comments in time order and keeps a bodyless approval", () => {
@@ -565,6 +619,51 @@ describe("review thread decoding", () => {
   });
 });
 
+describe("reaction decoding", () => {
+  const commentWithGroups = (reactionGroups: ReadonlyArray<Record<string, unknown>>) =>
+    JSON.stringify({
+      data: {
+        node: {
+          comments: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [{ id: "t1", body: "nice", createdAt: "2026-07-01T00:00:00Z", reactionGroups }],
+          },
+        },
+      },
+    });
+
+  it("keeps a named group, widens a group whose reactors were cut short, drops an unknown content and an empty group", () => {
+    const decoded = expectSuccess(
+      decodeReviewThreadCommentsJson(
+        commentWithGroups([
+          {
+            content: "THUMBS_UP",
+            viewerHasReacted: true,
+            reactors: { totalCount: 2, nodes: [{ login: "julius" }, { login: "bilal" }] },
+          },
+          // Not one of the eight the contract carries.
+          {
+            content: "PARTY_PARROT",
+            reactors: { totalCount: 1, nodes: [{ login: "hubot" }] },
+          },
+          // Nobody behind it, which GitHub still answers a group for.
+          { content: "HEART", reactors: { totalCount: 0, nodes: [] } },
+          // More reactors than the bounded read named, and no `viewerHasReacted` at all.
+          {
+            content: "ROCKET",
+            reactors: { totalCount: 140, nodes: [{ login: "a" }, { login: "b" }, { login: "c" }] },
+          },
+        ]),
+      ),
+    );
+
+    expect(decoded.comments[0]?.reactions).toEqual([
+      { content: "thumbs-up", count: 2, actors: ["julius", "bilal"], viewerHasReacted: true },
+      { content: "rocket", count: 140, actors: ["a", "b", "c"], viewerHasReacted: false },
+    ]);
+  });
+});
+
 describe("repository access decoding", () => {
   const repositoryJson = (viewerPermission?: string | null) =>
     JSON.stringify({
@@ -722,6 +821,7 @@ describe("review thread decoding", () => {
             body: "first",
             createdAt: "2026-07-01T00:00:00Z",
             url: "https://github.com/acme/web/pull/1#discussion_rc1",
+            reactions: [],
           },
           {
             id: "c2",
@@ -729,6 +829,7 @@ describe("review thread decoding", () => {
             body: "second",
             createdAt: "2026-07-01T00:00:00Z",
             url: "https://github.com/acme/web/pull/1#discussion_rc2",
+            reactions: [],
           },
         ],
       },
@@ -779,6 +880,73 @@ describe("review thread decoding", () => {
     const threads = decoded.threads.map((entry) => entry.thread);
     expect(reviewThreadConversation(threads).map((comment) => comment.id)).toEqual(["c4"]);
     expect(threads).toHaveLength(1);
+  });
+
+  it("puts an issue comment's and a review's reactions in reactionsById, and the pull request's own in reactions", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        threadsJson([], {
+          reactionGroups: [
+            {
+              content: "HEART",
+              viewerHasReacted: true,
+              reactors: { totalCount: 1, nodes: [{ login: "bilal" }] },
+            },
+          ],
+          comments: {
+            nodes: [
+              {
+                id: "c1",
+                reactionGroups: [
+                  {
+                    content: "THUMBS_UP",
+                    reactors: { totalCount: 1, nodes: [{ login: "julius" }] },
+                  },
+                ],
+              },
+            ],
+          },
+          reviews: {
+            nodes: [
+              {
+                id: "r1",
+                reactionGroups: [
+                  { content: "EYES", reactors: { totalCount: 1, nodes: [{ login: "hubot" }] } },
+                ],
+              },
+            ],
+          },
+        }),
+      ),
+    );
+
+    expect(result.reactions).toEqual([
+      { content: "heart", count: 1, actors: ["bilal"], viewerHasReacted: true },
+    ]);
+    expect([...result.reactionsById]).toEqual([
+      ["c1", [{ content: "thumbs-up", count: 1, actors: ["julius"], viewerHasReacted: false }]],
+      ["r1", [{ content: "eyes", count: 1, actors: ["hubot"], viewerHasReacted: false }]],
+    ]);
+  });
+});
+
+describe("decodePullRequestNodeIdJson", () => {
+  it("reads the pull request's own node id, which a reaction on its description is addressed by", () => {
+    expect(
+      expectSuccess(
+        decodePullRequestNodeIdJson(
+          JSON.stringify({ data: { repository: { pullRequest: { id: "PR_kwDOA" } } } }),
+        ),
+      ),
+    ).toBe("PR_kwDOA");
+  });
+});
+
+describe("REVIEW_THREADS_GRAPHQL_QUERY", () => {
+  it("asks for reactionGroups on the pull request itself, its comments, its reviews and each thread's comments", () => {
+    expect(REVIEW_THREADS_GRAPHQL_QUERY.match(/reactionGroups/g)).toHaveLength(4);
+    // The reviews connection is new: only reactions were ever wanted off it.
+    expect(REVIEW_THREADS_GRAPHQL_QUERY).toContain("reviews(first:");
   });
 });
 

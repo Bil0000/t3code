@@ -19,6 +19,9 @@ const CAPABILITIES: PullRequestCapabilities = {
   actions: ["merge", "close"],
   mergeMethods: ["merge", "squash", "rebase"],
   search: true,
+  // Bitbucket Cloud's API exposes no reaction on a pull request or on a comment, so none is
+  // read and none is offered.
+  reactions: false,
   review: {
     inlineComment: true,
     reply: true,
@@ -274,6 +277,17 @@ export const make = Effect.gen(function* () {
           body: input.body,
         })
         .pipe(Effect.mapError(fail("replyToThread"))),
+
+    // Never called: `capabilities.reactions` is false, and the service refuses without it.
+    setReaction: () =>
+      Effect.fail(
+        new PullRequestProviderError({
+          provider: "bitbucket",
+          operation: "setReaction",
+          reason: "failed",
+          detail: "Bitbucket does not support reactions.",
+        }),
+      ),
 
     setThreadResolution: (input) =>
       api

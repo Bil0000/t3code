@@ -84,6 +84,15 @@ export const PullRequestAction = Schema.Literals([
   "reopen",
   /** Bring the base branch's commits into this one, which is what unblocks a stale branch. */
   "update-branch",
+  /**
+   * Hand the merge to the host: it waits for whatever it requires — a green pipeline, the
+   * approvals, an unblocked branch — and merges without anybody coming back. Separate from
+   * `merge` because the two answer different questions. `merge` is refused outright by a host
+   * that is not ready yet, and this one is for exactly that moment.
+   */
+  "enable-auto-merge",
+  /** Take the standing instruction back, which leaves the change request where it was. */
+  "disable-auto-merge",
 ]);
 export type PullRequestAction = typeof PullRequestAction.Type;
 
@@ -138,6 +147,37 @@ export const PullRequestCheck = Schema.Struct({
 });
 export type PullRequestCheck = typeof PullRequestCheck.Type;
 
+/**
+ * The reactions a remark can carry. GitHub's eight, which is also what the picker offers: GitLab
+ * accepts any emoji as an award, and the ones outside this set are read as nothing rather than
+ * shown under a name no other host would recognise.
+ */
+export const PullRequestReactionContent = Schema.Literals([
+  "thumbs-up",
+  "thumbs-down",
+  "laugh",
+  "hooray",
+  "confused",
+  "heart",
+  "rocket",
+  "eyes",
+]);
+export type PullRequestReactionContent = typeof PullRequestReactionContent.Type;
+
+/** One reaction and everyone behind it, which is what the hover on a reaction pill says. */
+export const PullRequestReaction = Schema.Struct({
+  content: PullRequestReactionContent,
+  count: PositiveInt,
+  /**
+   * Who reacted, as far as the host named them. A host that reports fewer names than it counts
+   * leaves the rest out, so this is never longer than `count` and may be shorter.
+   */
+  actors: Schema.Array(TrimmedNonEmptyString),
+  /** The signed-in account is one of them, so pressing the pill takes the reaction back. */
+  viewerHasReacted: Schema.Boolean,
+});
+export type PullRequestReaction = typeof PullRequestReaction.Type;
+
 export const PullRequestCommentKind = Schema.Literals([
   "issue-comment",
   "review-comment",
@@ -154,6 +194,8 @@ export const PullRequestComment = Schema.Struct({
   url: Schema.NullOr(Schema.String),
   path: Schema.NullOr(Schema.String),
   reviewState: Schema.NullOr(Schema.String),
+  /** Absent from a host with no reactions at all, which is a different thing from none on this. */
+  reactions: Schema.optional(Schema.Array(PullRequestReaction)),
 });
 export type PullRequestComment = typeof PullRequestComment.Type;
 
@@ -175,6 +217,7 @@ export const PullRequestThreadComment = Schema.Struct({
   body: Schema.String,
   createdAt: IsoDateTime,
   url: Schema.NullOr(Schema.String),
+  reactions: Schema.optional(Schema.Array(PullRequestReaction)),
 });
 export type PullRequestThreadComment = typeof PullRequestThreadComment.Type;
 
@@ -313,6 +356,12 @@ export const PullRequestCapabilities = Schema.Struct({
    * than left to show every change request on that host as a search result.
    */
   search: Schema.Boolean,
+  /**
+   * Reactions can be read from a remark, and added to one or taken back. One flag for both:
+   * neither host here reports reactions it will not also take, and a surface that could show a
+   * pill it may never press is a surface offering nothing.
+   */
+  reactions: Schema.Boolean,
   review: PullRequestReviewCapabilities,
   reviewers: PullRequestReviewerCapabilities,
 });
@@ -600,6 +649,12 @@ export const PullRequestDetail = Schema.Struct({
   baseComparison: Schema.optional(PullRequestBaseComparison),
   /** How many commits the base is ahead by, where the host counted them. */
   behindBy: Schema.optional(NonNegativeInt),
+  /**
+   * Whether the host is already armed to merge this on its own. Absent where the host does not
+   * report it, which is not the same as off: a page that reads silence as "not armed" offers to
+   * arm something that is already armed, and a second arming is a write nobody asked for.
+   */
+  autoMergeEnabled: Schema.optional(Schema.Boolean),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 
@@ -628,6 +683,11 @@ export const PullRequestActivity = Schema.Struct({
   commentsTruncated: Schema.Boolean,
   reviewThreads: Schema.Array(PullRequestReviewThread),
   commits: Schema.Array(PullRequestCommit),
+  /**
+   * The change request's own reactions — the ones on its description, which every host counts
+   * against the change request itself rather than against a remark in the conversation.
+   */
+  reactions: Schema.optional(Schema.Array(PullRequestReaction)),
 });
 export type PullRequestActivity = typeof PullRequestActivity.Type;
 
@@ -708,6 +768,11 @@ export type PullRequestDiffFileContentsResult = typeof PullRequestDiffFileConten
 export const PullRequestActionInput = Schema.Struct({
   ...PullRequestRef.fields,
   action: PullRequestAction,
+  /**
+   * Which strategy the merge uses, read for `merge` and for `enable-auto-merge` alike — a merge
+   * the host performs later is still a merge, and the strategy is chosen when it is armed rather
+   * than at the moment it happens. Absent means the host's own default.
+   */
   mergeMethod: Schema.optional(PullRequestMergeMethod),
   /** Only read for `update-branch`, where absent means the host's own default. */
   updateMethod: Schema.optional(PullRequestUpdateMethod),
@@ -768,6 +833,23 @@ export const PullRequestThreadResolutionInput = Schema.Struct({
   resolved: Schema.Boolean,
 });
 export type PullRequestThreadResolutionInput = typeof PullRequestThreadResolutionInput.Type;
+
+/**
+ * Reacting and taking the reaction back are one operation with `reacted` turned around, which is
+ * what pressing the same pill twice is.
+ */
+export const PullRequestReactionInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  /**
+   * Which remark to react to, as it arrived in the conversation. Absent reacts to the change
+   * request itself, which is where its description's reactions live — the id a host uses for
+   * that is its own to work out.
+   */
+  subjectId: Schema.optional(TrimmedNonEmptyString),
+  content: PullRequestReactionContent,
+  reacted: Schema.Boolean,
+});
+export type PullRequestReactionInput = typeof PullRequestReactionInput.Type;
 
 /**
  * Asking for a review and taking the request back are one operation with `requested` turned

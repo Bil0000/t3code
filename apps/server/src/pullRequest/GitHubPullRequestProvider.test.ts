@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import type { PullRequestReaction } from "@t3tools/contracts";
 
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullRequestProvider.ts";
@@ -9,7 +10,16 @@ import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
 describe("gitHubViewerPermissions", () => {
   it("offers everything to a viewer who can write to the repository", () => {
     expect(gitHubViewerPermissions({ canWrite: true, canUpdate: true, didAuthor: false })).toEqual({
-      actions: ["merge", "ready", "draft", "close", "reopen"],
+      // Arming a merge for later is the merge, so it travels with it.
+      actions: [
+        "merge",
+        "enable-auto-merge",
+        "disable-auto-merge",
+        "ready",
+        "draft",
+        "close",
+        "reopen",
+      ],
       comment: true,
       resolve: true,
       verdicts: ["comment", "approve", "request-changes"],
@@ -34,7 +44,7 @@ describe("gitHubViewerPermissions", () => {
 
   it("keeps an author's own pull request theirs to close, with read access and no more", () => {
     expect(gitHubViewerPermissions({ canWrite: false, canUpdate: true, didAuthor: true })).toEqual({
-      // Merging is the one thing writing is needed for; the rest an author may do.
+      // Merging is the one thing writing is needed for, now or later; the rest an author may do.
       actions: ["ready", "draft", "close", "reopen"],
       comment: true,
       resolve: true,
@@ -236,6 +246,8 @@ describe("getChangeRequest commits", () => {
     reviewThreads: [],
     commentCount: 0,
     truncated: false,
+    reactions: [],
+    reactionsById: new Map<string, ReadonlyArray<PullRequestReaction>>(),
     reviewers: [],
     avatarsByLogin: new Map<string, string>(),
     commitStats: new Map<string, { readonly additions: number; readonly deletions: number }>(),
@@ -317,6 +329,8 @@ describe("getChangeRequestActivity dismissed reviews", () => {
     reviewThreads: [],
     commentCount: 0,
     truncated: false,
+    reactions: [],
+    reactionsById: new Map(),
     reviewers: [],
     avatarsByLogin: new Map(),
     commitStats: new Map(),

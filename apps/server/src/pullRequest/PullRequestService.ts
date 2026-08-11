@@ -30,6 +30,7 @@ import {
   type PullRequestListStatsInput,
   type PullRequestListStatsResult,
   type PullRequestProviderSummary,
+  type PullRequestReactionInput,
   type PullRequestRef,
   type PullRequestReviewVerdict,
   type PullRequestReviewerCandidateList,
@@ -145,6 +146,9 @@ export class PullRequestService extends Context.Service<
     readonly setThreadResolution: (
       input: PullRequestThreadResolutionInput,
     ) => Effect.Effect<void, PullRequestError>;
+    readonly setReaction: (
+      input: PullRequestReactionInput,
+    ) => Effect.Effect<void, PullRequestError>;
     readonly reviewerCandidates: (
       input: PullRequestRef,
     ) => Effect.Effect<PullRequestReviewerCandidateList, PullRequestError>;
@@ -179,6 +183,10 @@ const ACTION_ACCESS_REFUSALS: Record<PullRequestAction, string> = {
     "You need write access on this repository, or to have opened this change request, to update its branch.",
   reopen:
     "You need write access on this repository, or to have opened this change request, to reopen it.",
+  "enable-auto-merge":
+    "You need write access on this repository to have it merged for you once it is ready.",
+  "disable-auto-merge":
+    "You need write access on this repository to stop it being merged for you once it is ready.",
 };
 
 /**
@@ -1050,6 +1058,9 @@ export const make = Effect.gen(function* () {
                 ...(changeRequest.behindBy === undefined
                   ? {}
                   : { behindBy: changeRequest.behindBy }),
+                ...(changeRequest.autoMergeEnabled === undefined
+                  ? {}
+                  : { autoMergeEnabled: changeRequest.autoMergeEnabled }),
               }),
             ),
           ),
@@ -1077,6 +1088,7 @@ export const make = Effect.gen(function* () {
                 commentsTruncated: activity.commentsTruncated,
                 reviewThreads: activity.reviewThreads,
                 commits: activity.commits,
+                ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
               }),
             ),
           ),
@@ -1388,6 +1400,36 @@ export const make = Effect.gen(function* () {
               .pipe(Effect.mapError(toPullRequestError("setThreadResolution")));
           }),
         );
+      }),
+    );
+
+  /**
+   * Reacting is gated on the host alone. Every host with reactions takes one from whoever can read
+   * the change request, so there is no access left to check that reading it has not already
+   * settled.
+   */
+  const setReaction: PullRequestService["Service"]["setReaction"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        if (!project.api.capabilities.reactions) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "setReaction",
+              detail: "This host has no reactions.",
+            }),
+          );
+        }
+        return project.api
+          .setReaction({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            host: project.host,
+            number: input.number,
+            ...(input.subjectId === undefined ? {} : { subjectId: input.subjectId }),
+            content: input.content,
+            reacted: input.reacted,
+          })
+          .pipe(Effect.mapError(toPullRequestError("setReaction")));
       }),
     );
 
@@ -1867,6 +1909,7 @@ export const make = Effect.gen(function* () {
     submitReview: invalidatedByMutation(submitReview),
     replyToThread: invalidatedByMutation(replyToThread),
     setThreadResolution: invalidatedByMutation(setThreadResolution),
+    setReaction: invalidatedByMutation(setReaction),
     // The candidate list is deliberately read fresh per menu-open, so it stays uncached.
     reviewerCandidates,
     requestReviewers: invalidatedByMutation(requestReviewers),

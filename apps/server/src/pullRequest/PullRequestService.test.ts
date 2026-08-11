@@ -114,6 +114,7 @@ function fakeProvider(
       actions: ["merge", "ready", "draft", "close", "reopen"],
       mergeMethods: ["merge"],
       search: true,
+      reactions: true,
       review: FULL_REVIEW,
       reviewers: FULL_REVIEWERS,
     },
@@ -136,6 +137,7 @@ function fakeProvider(
     submitReview: () => Effect.void,
     replyToThread: () => Effect.void,
     setThreadResolution: () => Effect.void,
+    setReaction: () => Effect.void,
     listReviewerCandidates: () => Effect.succeed({ candidates: [], truncated: false }),
     setReviewerRequest: () => Effect.void,
     ...overrides,
@@ -946,6 +948,7 @@ it.effect("refuses an action the host never claimed it could run", () =>
             actions: ["merge", "close"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -1008,6 +1011,136 @@ it.effect("refuses an action this viewer may not take, and says what access it t
   }),
 );
 
+it.effect("gates arming a merge for later exactly as it gates merging now", () =>
+  Effect.gen(function* () {
+    let ranWith: { readonly action: string; readonly mergeMethod?: string } | null = null;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge", "close", "enable-auto-merge", "disable-auto-merge"],
+            mergeMethods: ["merge", "squash"],
+            search: true,
+            reactions: true,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          // This account may close the change request it opened, and nothing else here.
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: ["close"],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment", "approve", "request-changes"],
+              requestReviewers: false,
+            }),
+          runAction: (input) => {
+            ranWith = {
+              action: input.action,
+              ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+            };
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+
+    const refused = yield* Effect.flip(
+      service.runAction({ ...reference, action: "enable-auto-merge", mergeMethod: "squash" }),
+    );
+    assert.strictEqual(refused._tag, "PullRequestOperationError");
+    assert.include(refused.message, "merged for you once it is ready");
+    assert.strictEqual(ranWith, null);
+
+    // The strategy is checked against the host for an armed merge too: a merge it performs
+    // later is still a merge, and one it cannot spell must not be passed on.
+    const wrongStrategy = yield* Effect.flip(
+      service.runAction({ ...reference, action: "enable-auto-merge", mergeMethod: "rebase" }),
+    );
+    assert.strictEqual(wrongStrategy._tag, "PullRequestOperationError");
+    assert.strictEqual(ranWith, null);
+  }),
+);
+
+it.effect("hands the host the strategy an armed merge was asked for", () =>
+  Effect.gen(function* () {
+    let ranWith: { readonly action: string; readonly mergeMethod?: string } | null = null;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge", "enable-auto-merge", "disable-auto-merge"],
+            mergeMethods: ["merge", "squash"],
+            search: true,
+            reactions: true,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: ["merge", "enable-auto-merge", "disable-auto-merge"],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment", "approve", "request-changes"],
+              requestReviewers: true,
+            }),
+          runAction: (input) => {
+            ranWith = {
+              action: input.action,
+              ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+            };
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+
+    yield* service.runAction({ ...reference, action: "enable-auto-merge", mergeMethod: "squash" });
+    assert.deepStrictEqual(ranWith, { action: "enable-auto-merge", mergeMethod: "squash" });
+
+    yield* service.runAction({ ...reference, action: "disable-auto-merge" });
+    assert.deepStrictEqual(ranWith, { action: "disable-auto-merge" });
+  }),
+);
+
+it.effect("refuses an auto-merge the host never claimed, without asking it", () =>
+  Effect.gen(function* () {
+    let ran = false;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        // Bitbucket's shape: it merges, and has nothing that merges later on its own.
+        fakeProvider("github", {
+          runAction: () => {
+            ran = true;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.runAction({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        action: "enable-auto-merge",
+      }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.isFalse(ran);
+  }),
+);
+
 it.effect("refuses to resolve a conversation this viewer may not, without asking the host", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
@@ -1055,6 +1188,7 @@ it.effect("asks nobody what the viewer may do when the host cannot do it at all"
             actions: ["merge", "close"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -1093,6 +1227,7 @@ it.effect("refuses a comment on a host that cannot post one", () =>
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -1272,6 +1407,7 @@ it.effect("refuses a diff on a host that cannot produce one", () =>
             actions: ["merge", "close"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -1331,6 +1467,7 @@ it.effect("refuses a verdict the host never claimed, without asking the provider
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             // GitLab's shape: it approves, and has nothing that rejects.
             review: {
               inlineComment: true,
@@ -1378,6 +1515,7 @@ it.effect("refuses line comments on a host that takes only a summary", () =>
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: { inlineComment: false, reply: false, resolve: false, verdicts: ["comment"] },
             reviewers: FULL_REVIEWERS,
           },
@@ -1455,6 +1593,7 @@ it.effect("refuses to resolve a conversation on a host that cannot", () =>
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: { inlineComment: true, reply: false, resolve: false, verdicts: ["comment"] },
             reviewers: FULL_REVIEWERS,
           },
@@ -1478,6 +1617,113 @@ it.effect("refuses to resolve a conversation on a host that cannot", () =>
 
     assert.strictEqual(resolveError._tag, "PullRequestOperationError");
     assert.strictEqual(replyError._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect("refuses to react on a host with no reactions", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+            search: true,
+            reactions: false,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          setReaction: () => Effect.die("must not be called"),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.setReaction({
+        projectId: "p1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 1,
+        content: "heart",
+        reacted: true,
+      }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+  }),
+);
+
+it.effect("passes a reaction through with its subject id on a host that has them", () =>
+  Effect.gen(function* () {
+    let received: {
+      readonly subjectId: string | undefined;
+      readonly content: string;
+      readonly reacted: boolean;
+    } | null = null;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          setReaction: (input) => {
+            received = {
+              subjectId: input.subjectId,
+              content: input.content,
+              reacted: input.reacted,
+            };
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    yield* service.setReaction({
+      projectId: "p1" as ProjectId,
+      repository: "pingdotgg/t3code",
+      number: 1,
+      subjectId: "IC_1",
+      content: "heart",
+      reacted: true,
+    });
+
+    assert.deepStrictEqual(received, { subjectId: "IC_1", content: "heart", reacted: true });
+  }),
+);
+
+it.effect("invalidates the cached activity after reacting, like the other mutations", () =>
+  Effect.gen(function* () {
+    let activityCalls = 0;
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequestActivity: () => {
+            activityCalls += 1;
+            return Effect.succeed({
+              comments: [],
+              commentCount: 0,
+              commentsTruncated: false,
+              reviewThreads: [],
+              commits: [],
+            });
+          },
+        }),
+      ],
+    });
+
+    yield* service.activity(reference);
+    assert.strictEqual(activityCalls, 1);
+
+    yield* service.setReaction({ ...reference, content: "heart", reacted: true });
+    yield* service.activity(reference);
+
+    assert.strictEqual(activityCalls, 2);
   }),
 );
 
@@ -1522,6 +1768,7 @@ it.effect("refuses a merge strategy the host does not offer", () =>
             // Azure DevOps's shape: it squashes as a completion option and has no rebase.
             mergeMethods: ["merge", "squash"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -1705,6 +1952,7 @@ it.effect("refuses to ask for a review on a host that cannot, before any call is
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: { request: false, listCandidates: false },
           },
@@ -1745,6 +1993,7 @@ it.effect("refuses the candidate list on a host that has no such list to give", 
             actions: ["merge"],
             mergeMethods: ["merge"],
             search: false,
+            reactions: true,
             review: FULL_REVIEW,
             // Azure's shape: it takes a reviewer, and names nobody who could be one.
             reviewers: { request: true, listCandidates: false },
@@ -2411,6 +2660,52 @@ it.effect(
     }),
 );
 
+it.effect("carries an armed auto-merge through to the detail, and silence as silence", () =>
+  Effect.gen(function* () {
+    const detailWith = (autoMergeEnabled: boolean | undefined) =>
+      Effect.gen(function* () {
+        const service = yield* makeService({
+          projects: [
+            project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+          ],
+          providers: [
+            fakeProvider("github", {
+              getChangeRequest: () =>
+                Effect.succeed({
+                  ...changeRequest(1, "2026-07-02T00:00:00Z"),
+                  body: "",
+                  changedFiles: 0,
+                  mergedAt: null,
+                  closedAt: null,
+                  reviewers: [],
+                  checks: [],
+                  mergeCapabilities: { merge: true, squash: true, rebase: true },
+                  viewerPermissions: {
+                    actions: ["merge"],
+                    comment: true,
+                    resolve: true,
+                    verdicts: ["comment", "approve", "request-changes"],
+                    requestReviewers: true,
+                  },
+                  ...(autoMergeEnabled === undefined ? {} : { autoMergeEnabled }),
+                }),
+            }),
+          ],
+        });
+        return yield* service.detail({
+          projectId: "p1" as ProjectId,
+          repository: "acme/web",
+          number: 1,
+        });
+      });
+
+    assert.strictEqual((yield* detailWith(true)).autoMergeEnabled, true);
+    assert.strictEqual((yield* detailWith(false)).autoMergeEnabled, false);
+    // A host that says nothing leaves the field absent rather than claiming the merge is unarmed.
+    assert.isUndefined((yield* detailWith(undefined)).autoMergeEnabled);
+  }),
+);
+
 it("names an Azure DevOps repository by its own name, not its project path", () => {
   // `az repos pr list --repository` takes a name and detects the organisation and project from
   // the checkout; the recorded `org/project/_git/repo` path is refused, and the repository then
@@ -2548,6 +2843,7 @@ it.effect("refuses a way of updating a branch that the host or the viewer does n
             // This host brings a stale branch up to date with a merge commit and nothing else.
             updateMethods: ["merge"],
             search: true,
+            reactions: true,
             review: FULL_REVIEW,
             reviewers: FULL_REVIEWERS,
           },
@@ -2578,6 +2874,65 @@ it.effect("refuses a way of updating a branch that the host or the viewer does n
 
     yield* service.runAction({ ...reference, action: "update-branch", updateMethod: "merge" });
     assert.strictEqual(taken, "merge");
+  }),
+);
+
+it.effect("refuses to merge a target branch into a source branch on a host that only rebases", () =>
+  Effect.gen(function* () {
+    let taken = 0;
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "on gitlab",
+          workspaceRoot: "/a",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("gitlab", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge", "close", "update-branch"],
+            mergeMethods: ["merge"],
+            // What GitLab declares: it replays the branch, and has no update that merges the
+            // target back in.
+            updateMethods: ["rebase"],
+            search: true,
+            reactions: true,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: ["close", "update-branch"],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment"],
+              requestReviewers: false,
+              updateMethods: ["rebase"],
+            }),
+          runAction: () => {
+            taken += 1;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "group/project", number: 1 };
+
+    // A merge asked of a host that rebases must fail here rather than reach the provider, which
+    // would rebase instead and report the wrong thing as done.
+    const error = yield* Effect.flip(
+      service.runAction({ ...reference, action: "update-branch", updateMethod: "merge" }),
+    );
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.strictEqual(taken, 0);
+
+    yield* service.runAction({ ...reference, action: "update-branch", updateMethod: "rebase" });
+    assert.strictEqual(taken, 1);
   }),
 );
 

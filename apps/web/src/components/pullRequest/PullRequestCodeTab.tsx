@@ -758,6 +758,9 @@ export function PullRequestCodeTab({
         workspaceRoot={detail.workspaceRoot}
         canReply={review.reply}
         canResolve={review.resolve}
+        canReact={detail.capabilities.reactions}
+        environmentId={environmentId}
+        reference={reference}
         pending={threadPending}
         fixPending={pendingFinding === pullRequestFindingKey({ kind: "thread", thread })}
         {...(onFixFinding ? { onFix: () => onFixFinding({ kind: "thread", thread }) } : {})}
@@ -777,11 +780,14 @@ export function PullRequestCodeTab({
             }),
           )
         }
+        onReacted={onRefresh}
       />
     ),
     [
+      detail.capabilities.reactions,
       detail.workspaceRoot,
       environmentId,
+      onRefresh,
       onFixFinding,
       pendingFinding,
       reference,

@@ -13,6 +13,8 @@ import type {
   PullRequestMergeCapabilities,
   PullRequestOmittedFileStat,
   PullRequestMergeability,
+  PullRequestReaction,
+  PullRequestReactionContent,
   PullRequestReviewCommentDraft,
   PullRequestReviewDecision,
   PullRequestReviewThread,
@@ -24,6 +26,8 @@ import type {
   PullRequestThreadComment,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+
+import { dedupeChecks } from "./pullRequestChecks.ts";
 
 /**
  * Enum-ish GitHub CLI fields are decoded as plain strings and normalized here: a `gh`
@@ -64,6 +68,15 @@ const RawCheckSchema = Schema.Struct({
   description: Schema.optional(Schema.NullOr(Schema.String)),
   detailsUrl: Schema.optional(Schema.NullOr(Schema.String)),
   targetUrl: Schema.optional(Schema.NullOr(Schema.String)),
+  /**
+   * What tells two same-named checks apart, and which run of one is the newest. All three ride
+   * along with `statusCheckRollup` already — it is asked for as a whole field — so reading them
+   * costs no request. Empty for an app-provided check run, which belongs to no workflow, and
+   * absent entirely on a commit status, which is not a run at all.
+   */
+  workflowName: Schema.optional(Schema.NullOr(Schema.String)),
+  startedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  completedAt: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawListItemSchema = Schema.Struct({
@@ -204,12 +217,108 @@ const RawStatsSchema = Schema.Struct({
   ),
 });
 
+/** How many of a reaction's people the hover names before it counts the rest. */
+const REACTORS_PER_GROUP = 10;
+
+/**
+ * A reaction group as every reactable node reports it. `reactors` is bounded rather than paged:
+ * a hover says who reacted, and a hundred and forty names is a count, not a sentence.
+ */
+const REACTION_GROUPS_FIELDS = `reactionGroups {
+  content
+  viewerHasReacted
+  reactors(first: ${REACTORS_PER_GROUP}) {
+    totalCount
+    nodes {
+      ... on User { login }
+      ... on Bot { login }
+      ... on Organization { login }
+      ... on Mannequin { login }
+    }
+  }
+}`;
+
+/** GitHub's reaction names, which are the same eight the contract carries under other spellings. */
+const REACTION_CONTENT_BY_GITHUB: Readonly<Record<string, PullRequestReactionContent>> = {
+  THUMBS_UP: "thumbs-up",
+  THUMBS_DOWN: "thumbs-down",
+  LAUGH: "laugh",
+  HOORAY: "hooray",
+  CONFUSED: "confused",
+  HEART: "heart",
+  ROCKET: "rocket",
+  EYES: "eyes",
+};
+
+const GITHUB_REACTION_BY_CONTENT: Readonly<Record<PullRequestReactionContent, string>> = {
+  "thumbs-up": "THUMBS_UP",
+  "thumbs-down": "THUMBS_DOWN",
+  laugh: "LAUGH",
+  hooray: "HOORAY",
+  confused: "CONFUSED",
+  heart: "HEART",
+  rocket: "ROCKET",
+  eyes: "EYES",
+};
+
+export function gitHubReactionContent(content: PullRequestReactionContent): string {
+  return GITHUB_REACTION_BY_CONTENT[content];
+}
+
+const RawReactionGroupsSchema = Schema.optional(
+  Schema.NullOr(
+    Schema.Array(
+      Schema.Struct({
+        content: Schema.optional(Schema.NullOr(Schema.String)),
+        viewerHasReacted: Schema.optional(Schema.Boolean),
+        reactors: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              totalCount: Schema.optional(Schema.Int),
+              nodes: Schema.optional(
+                Schema.NullOr(
+                  Schema.Array(
+                    Schema.NullOr(
+                      Schema.Struct({ login: Schema.optional(Schema.NullOr(Schema.String)) }),
+                    ),
+                  ),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    ),
+  ),
+);
+
+type RawReactionGroups = typeof RawReactionGroupsSchema.Type;
+
+/**
+ * The groups GitHub answered with, as the contract carries them. A group with nobody behind it is
+ * dropped: GitHub answers with a group per content it knows, including the ones nobody chose.
+ */
+function toReactions(groups: RawReactionGroups): ReadonlyArray<PullRequestReaction> {
+  const reactions: PullRequestReaction[] = [];
+  for (const group of groups ?? []) {
+    const content = REACTION_CONTENT_BY_GITHUB[trimmed(group.content)?.toUpperCase() ?? ""];
+    if (content === undefined) continue;
+    const actors = (group.reactors?.nodes ?? []).flatMap((node) => trimmed(node?.login) ?? []);
+    const count = Math.max(group.reactors?.totalCount ?? actors.length, actors.length);
+    if (count <= 0) continue;
+    reactions.push({ content, count, actors, viewerHasReacted: group.viewerHasReacted === true });
+  }
+  return reactions;
+}
+
 const RawCommentSchema = Schema.Struct({
   id: Schema.String,
   author: Schema.optional(Schema.NullOr(RawActorSchema)),
   body: Schema.optional(Schema.String),
   createdAt: Schema.String,
   url: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Only ever present on a GraphQL read; `gh pr view --json` reports no reaction at all. */
+  reactionGroups: RawReactionGroupsSchema,
 });
 
 const RawReviewSchema = Schema.Struct({
@@ -244,6 +353,12 @@ const RawDetailSchema = Schema.Struct({
   body: Schema.optional(Schema.String),
   changedFiles: Schema.optional(Schema.Int),
   closedAt: Schema.optional(Schema.NullOr(Schema.String)),
+  /**
+   * The standing instruction to merge once GitHub's own requirements are met, which is an object
+   * describing who armed it and how, and a JSON null where nobody has. Nothing inside it is read:
+   * the question the page asks is whether one exists.
+   */
+  autoMergeRequest: Schema.optional(Schema.NullOr(Schema.Unknown)),
 });
 
 const RawActivitySchema = Schema.Struct({
@@ -298,11 +413,32 @@ const RawReviewThreadsSchema = Schema.Struct({
         }),
         ...RawViewerFieldsSchema.fields,
         author: Schema.optional(Schema.NullOr(RawActorSchema)),
+        reactionGroups: RawReactionGroupsSchema,
         comments: Schema.optional(
           Schema.NullOr(
             Schema.Struct({
               nodes: Schema.Array(
-                Schema.Struct({ author: Schema.optional(Schema.NullOr(RawActorSchema)) }),
+                Schema.Struct({
+                  id: Schema.optional(Schema.NullOr(Schema.String)),
+                  author: Schema.optional(Schema.NullOr(RawActorSchema)),
+                  reactionGroups: RawReactionGroupsSchema,
+                }),
+              ),
+            }),
+          ),
+        ),
+        /**
+         * Reviews for their reactions alone: the words and the verdict arrive with
+         * `gh pr view --json reviews`, which reports no reaction of any kind.
+         */
+        reviews: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              nodes: Schema.Array(
+                Schema.Struct({
+                  id: Schema.optional(Schema.NullOr(Schema.String)),
+                  reactionGroups: RawReactionGroupsSchema,
+                }),
               ),
             }),
           ),
@@ -447,7 +583,7 @@ export function decodeActorAvatarsJson(
 export const PULL_REQUEST_LIST_JSON_FIELDS =
   "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,statusCheckRollup";
 
-export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,headRepositoryOwner`;
+export const PULL_REQUEST_DETAIL_JSON_FIELDS = `${PULL_REQUEST_LIST_JSON_FIELDS},body,changedFiles,closedAt,headRepositoryOwner,autoMergeRequest`;
 export const PULL_REQUEST_ACTIVITY_JSON_FIELDS = "author,comments,reviews,commits";
 
 /** GitHub's own ceiling on a connection page, which is what both thread reads ask for. */
@@ -539,14 +675,18 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
           comments(first: ${GRAPHQL_PAGE_SIZE}) {
             totalCount
             pageInfo { hasNextPage endCursor }
-            nodes { id author { login avatarUrl } body createdAt url }
+            nodes { id author { login avatarUrl } body createdAt url ${REACTION_GROUPS_FIELDS} }
           }
         }
       }
       viewerCanUpdate
       viewerDidAuthor
       author { login avatarUrl }
-      comments(first: ${GRAPHQL_PAGE_SIZE}) { nodes { author { login avatarUrl } } }
+      ${REACTION_GROUPS_FIELDS}
+      comments(first: ${GRAPHQL_PAGE_SIZE}) {
+        nodes { id author { login avatarUrl } ${REACTION_GROUPS_FIELDS} }
+      }
+      reviews(first: ${GRAPHQL_PAGE_SIZE}) { nodes { id ${REACTION_GROUPS_FIELDS} } }
       reviewRequests(first: 50) {
         nodes {
           requestedReviewer {
@@ -588,7 +728,7 @@ export const REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY = `query($threadId: ID!, $curs
     ... on PullRequestReviewThread {
       comments(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
         pageInfo { hasNextPage endCursor }
-        nodes { id author { login avatarUrl } body createdAt url }
+        nodes { id author { login avatarUrl } body createdAt url ${REACTION_GROUPS_FIELDS} }
       }
     }
   }
@@ -605,6 +745,40 @@ export const REVIEW_THREAD_REPLY_GRAPHQL_MUTATION = `mutation($threadId: ID!, $b
   addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $threadId, body: $body }) {
     comment { id }
   }
+}`;
+
+/**
+ * The pull request's own node id, which is what a reaction on its description is addressed by.
+ * Read only when one is being written: the conversation carries an id for every remark in it, and
+ * the pull request is the one subject nothing in it names.
+ */
+export const PULL_REQUEST_NODE_ID_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { id } }
+}`;
+
+const RawPullRequestNodeIdSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      pullRequest: Schema.Struct({ id: Schema.String }),
+    }),
+  }),
+});
+
+const decodePullRequestNodeId = decodeJsonResult(RawPullRequestNodeIdSchema);
+
+export function decodePullRequestNodeIdJson(raw: string): Result.Result<string, DecodeFailure> {
+  const decoded = decodePullRequestNodeId(raw);
+  return Result.isSuccess(decoded)
+    ? Result.succeed(decoded.success.data.repository.pullRequest.id)
+    : Result.fail(decoded.failure);
+}
+
+export const ADD_REACTION_GRAPHQL_MUTATION = `mutation($subjectId: ID!, $content: ReactionContent!) {
+  addReaction(input: { subjectId: $subjectId, content: $content }) { reaction { content } }
+}`;
+
+export const REMOVE_REACTION_GRAPHQL_MUTATION = `mutation($subjectId: ID!, $content: ReactionContent!) {
+  removeReaction(input: { subjectId: $subjectId, content: $content }) { reaction { content } }
 }`;
 
 export const RESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION = `mutation($threadId: ID!) {
@@ -730,6 +904,8 @@ export interface GitHubPullRequestDetail extends GitHubPullRequestListItem {
   readonly mergedAt: string | null;
   readonly closedAt: string | null;
   readonly checks: ReadonlyArray<PullRequestCheck>;
+  /** Absent where `gh` did not answer for auto-merge at all, which is not the same as off. */
+  readonly autoMergeEnabled?: boolean;
 }
 
 export interface GitHubPullRequestActivity {
@@ -893,6 +1069,49 @@ function toCheckStatus(raw: Schema.Schema.Type<typeof RawCheckSchema>): PullRequ
   }
 }
 
+/** What GitHub writes where a run has not reached that moment yet, which is not a time. */
+const UNSET_TIMESTAMP = "0001-01-01T00:00:00Z";
+
+function realTimestamp(value: string | null | undefined): string | null {
+  const at = trimmed(value);
+  return at === null || at === UNSET_TIMESTAMP ? null : at;
+}
+
+/** Only a row the rollup gives no name of any kind, which is not a check anyone can show. */
+function isNamelessCheck(raw: Schema.Schema.Type<typeof RawCheckSchema>): boolean {
+  return trimmed(raw.name) === null && trimmed(raw.context) === null;
+}
+
+/**
+ * The rollup as the deduper reads it: a check, the workflow that owns it, and when the run last
+ * had something to say. A queued run reports a completion time it has not reached, so the start
+ * stands in for it rather than sorting the newest run to the bottom.
+ */
+function toCheckEntries(
+  raw: ReadonlyArray<Schema.Schema.Type<typeof RawCheckSchema>> | null | undefined,
+): ReadonlyArray<{
+  readonly check: PullRequestCheck;
+  readonly workflowName: string | null;
+  readonly at: string | null;
+}> {
+  return (raw ?? []).flatMap((check) => {
+    const name = trimmed(check.name) ?? trimmed(check.context);
+    if (name === null) return [];
+    return [
+      {
+        check: {
+          name,
+          status: toCheckStatus(check),
+          description: trimmed(check.description),
+          url: trimmed(check.detailsUrl) ?? trimmed(check.targetUrl),
+        },
+        workflowName: trimmed(check.workflowName),
+        at: realTimestamp(check.completedAt) ?? realTimestamp(check.startedAt),
+      },
+    ];
+  });
+}
+
 /**
  * The one word a listing row has space for. A failure outranks anything still running, the way
  * GitHub's own indicator reads: a run that has already gone red will not go green by finishing.
@@ -900,11 +1119,19 @@ function toCheckStatus(raw: Schema.Schema.Type<typeof RawCheckSchema>): PullRequ
  * Null rather than "passing" for a head commit with no checks at all, so a repository that runs
  * none shows nothing instead of a green tick it never earned. Checks whose verdict is neither a
  * pass, a failure nor a wait — skipped, cancelled, neutral — count towards neither.
+ *
+ * Counted off the deduped checks rather than the raw rollup, so the word and the list under it
+ * cannot disagree: the run a re-run replaced is not a verdict twice. A row with no name at all is
+ * counted as it comes, since the cross-repository search dresses GitHub's own rollup enum as one
+ * nameless row, and nothing nameless can collide with anything.
  */
 function rollupChecksState(
   raw: ReadonlyArray<Schema.Schema.Type<typeof RawCheckSchema>> | null | undefined,
 ): PullRequestChecksState | null {
-  const statuses = (raw ?? []).map((check) => toCheckStatus(check));
+  const statuses = [
+    ...toChecks(raw).map((check) => check.status),
+    ...(raw ?? []).filter(isNamelessCheck).map((check) => toCheckStatus(check)),
+  ];
   if (statuses.length === 0) return null;
   if (statuses.includes("failure")) return "failing";
   if (statuses.includes("pending")) return "pending";
@@ -914,18 +1141,7 @@ function rollupChecksState(
 function toChecks(
   raw: ReadonlyArray<Schema.Schema.Type<typeof RawCheckSchema>> | null | undefined,
 ): ReadonlyArray<PullRequestCheck> {
-  return (raw ?? []).flatMap((check) => {
-    const name = trimmed(check.name) ?? trimmed(check.context);
-    if (name === null) return [];
-    return [
-      {
-        name,
-        status: toCheckStatus(check),
-        description: trimmed(check.description),
-        url: trimmed(check.detailsUrl) ?? trimmed(check.targetUrl),
-      },
-    ];
-  });
+  return dedupeChecks(toCheckEntries(raw));
 }
 
 /** The states that are a verdict in themselves, rather than a wrapper around line comments. */
@@ -1034,6 +1250,11 @@ function toDetail(raw: Schema.Schema.Type<typeof RawDetailSchema>): GitHubPullRe
     mergedAt: trimmed(raw.mergedAt),
     closedAt: trimmed(raw.closedAt),
     checks: toChecks(raw.statusCheckRollup),
+    // A JSON null is GitHub saying "nobody armed this"; a missing key is GitHub not saying, and
+    // the difference survives here rather than being flattened into false.
+    ...(raw.autoMergeRequest === undefined
+      ? {}
+      : { autoMergeEnabled: raw.autoMergeRequest !== null }),
   };
 }
 
@@ -1229,6 +1450,10 @@ export interface GitHubReviewThreadComments {
   /** The host's own count of the conversation, which a bounded read can fall short of. */
   readonly commentCount: number;
   readonly truncated: boolean;
+  /** The pull request's own reactions, which sit on its description. */
+  readonly reactions: ReadonlyArray<PullRequestReaction>;
+  /** Reactions by node id, for the comments and reviews the `gh` JSON read carries no reaction on. */
+  readonly reactionsById: ReadonlyMap<string, ReadonlyArray<PullRequestReaction>>;
   /**
    * Everyone on the review: those still asked and those who have already answered. Whoever has
    * reviewed is no longer an outstanding request, so asking only for requests reports nobody on
@@ -1270,6 +1495,13 @@ export interface GitHubReviewThreadPage {
   readonly threads: ReadonlyArray<GitHubReviewThreadEntry>;
   /** Where the next page of threads starts, or null once the host has handed them all over. */
   readonly nextCursor: string | null;
+  /** The pull request's own reactions, which sit on its description. */
+  readonly reactions: ReadonlyArray<PullRequestReaction>;
+  /**
+   * Reactions by node id, for the conversation comments and reviews `gh pr view --json` answers
+   * for without any. Only ids with a reaction are here; the rest carry none.
+   */
+  readonly reactionsById: ReadonlyMap<string, ReadonlyArray<PullRequestReaction>>;
   readonly reviewers: ReadonlyArray<PullRequestActor>;
   readonly avatarsByLogin: ReadonlyMap<string, string>;
   readonly commitStats: ReadonlyMap<
@@ -1303,6 +1535,7 @@ export function reviewThreadConversation(
         url: comment.url,
         path: thread.path,
         reviewState: null,
+        reactions: comment.reactions ?? [],
       }),
     ),
   );
@@ -1399,6 +1632,7 @@ export function decodeReviewThreadsJson(
             body: comment.body ?? "",
             createdAt: comment.createdAt,
             url: trimmed(comment.url),
+            reactions: toReactions(comment.reactionGroups),
           })),
         },
         commentCount: thread.comments.totalCount ?? thread.comments.nodes.length,
@@ -1452,9 +1686,21 @@ export function decodeReviewThreadsJson(
       }),
     });
   }
+  const reactionsById = new Map<string, ReadonlyArray<PullRequestReaction>>();
+  for (const node of [
+    ...(pullRequest.comments?.nodes ?? []),
+    ...(pullRequest.reviews?.nodes ?? []),
+  ]) {
+    const id = trimmed(node.id);
+    if (id === null) continue;
+    const reactions = toReactions(node.reactionGroups);
+    if (reactions.length > 0) reactionsById.set(id, reactions);
+  }
   return Result.succeed({
     threads: entries,
     nextCursor: nextCursorOf(threads.pageInfo),
+    reactions: toReactions(pullRequest.reactionGroups),
+    reactionsById,
     reviewers: [...reviewers.values()],
     avatarsByLogin,
     commitStats,
@@ -1485,6 +1731,7 @@ export function decodeReviewThreadCommentsJson(raw: string): Result.Result<
       body: comment.body ?? "",
       createdAt: comment.createdAt,
       url: trimmed(comment.url),
+      reactions: toReactions(comment.reactionGroups),
     })),
     nextCursor: nextCursorOf(comments?.pageInfo),
   });

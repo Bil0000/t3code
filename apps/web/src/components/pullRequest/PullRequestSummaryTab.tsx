@@ -42,6 +42,7 @@ import {
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
 
 /** A host colour only when it is one, so a malformed value falls back to the neutral dot. */
@@ -76,15 +77,17 @@ function CollapsedComment({
   comment,
   cwd,
   label,
+  reactionBar,
 }: {
   comment: PullRequestComment;
   cwd: string;
   label: string;
+  reactionBar: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <article className="rounded-lg border border-border/60 [contain-intrinsic-block-size:44px] [content-visibility:auto]">
+      <article className="group rounded-lg border border-border/60 [contain-intrinsic-block-size:44px] [content-visibility:auto]">
         <CollapsibleTrigger
           className={cn(
             "flex w-full items-center gap-2 p-3 text-left transition-opacity hover:opacity-100",
@@ -113,6 +116,7 @@ function CollapsedComment({
                 </p>
               ) : null}
               <PullRequestMarkdown className="mt-2" text={comment.body} cwd={cwd} />
+              {reactionBar}
             </div>
           ) : null}
         </CollapsiblePanel>
@@ -159,7 +163,10 @@ function Section({
   const [open, setOpen] = useState(defaultOpen);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="flex w-full items-center border-t border-border/60 pr-4">
+      {/* The heading rides the top of the scroll box the way a diff's file header does, so a
+          section can be collapsed from wherever its body has been read to rather than only from
+          where it started. Opaque, because the rows it covers scroll beneath it. */}
+      <div className="sticky top-0 z-10 flex w-full items-center border-t border-border/60 bg-background pr-4">
         {/* Title first, chevron riding to its right, count last: the row reads as a heading
             with an affordance rather than a tree node. */}
         <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
@@ -381,10 +388,20 @@ export function PullRequestSummaryTab({
       </section>
 
       <Section title="Description">
-        <PullRequestMarkdown
-          text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
-          cwd={detail.workspaceRoot}
-        />
+        <div className="group">
+          <PullRequestMarkdown
+            text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
+            cwd={detail.workspaceRoot}
+          />
+          <PullRequestReactionBar
+            className="mt-2"
+            reactions={detail.reactions ?? []}
+            canReact={detail.capabilities.reactions}
+            environmentId={environmentId}
+            reference={reference}
+            onRefresh={onRefresh}
+          />
+        </div>
       </Section>
 
       <Section title="Checks" count={detail.checks.length}>
@@ -392,12 +409,14 @@ export function PullRequestSummaryTab({
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
           <div className="space-y-0.5">
-            {detail.checks.map((check) => {
+            {detail.checks.map((check, index) => {
               const finding = { kind: "check", check } as const;
               const failing = check.status === "failure" || check.status === "cancelled";
               return (
                 <div
-                  key={`${check.name}:${check.url ?? ""}`}
+                  // Position too: the host decides how many runs share a name, and a repeated
+                  // key would be a rendering fault on top of whatever the list already says.
+                  key={`${index}:${check.name}:${check.url ?? ""}`}
                   className="group flex items-center gap-1 rounded-md pr-1 hover:bg-accent/60"
                 >
                   <button
@@ -500,6 +519,17 @@ export function PullRequestSummaryTab({
                         comment={comment}
                         cwd={detail.workspaceRoot}
                         label={thread?.isResolved ? "Resolved" : "Approval dismissed"}
+                        reactionBar={
+                          <PullRequestReactionBar
+                            className="mt-2"
+                            reactions={comment.reactions ?? []}
+                            canReact={detail.capabilities.reactions}
+                            subjectId={comment.id}
+                            environmentId={environmentId}
+                            reference={reference}
+                            onRefresh={onRefresh}
+                          />
+                        }
                       />
                     );
                   }
@@ -516,7 +546,7 @@ export function PullRequestSummaryTab({
                       key={comment.id}
                       // Offscreen comments skip style, layout and paint. Bot comments carry pages of
                       // highlighted code, and the conversation is below the description either way.
-                      className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
+                      className="group rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
                     >
                       <div className="flex items-start gap-2">
                         <span className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
@@ -555,6 +585,15 @@ export function PullRequestSummaryTab({
                         className="mt-2"
                         text={comment.body}
                         cwd={detail.workspaceRoot}
+                      />
+                      <PullRequestReactionBar
+                        className="mt-2"
+                        reactions={comment.reactions ?? []}
+                        canReact={detail.capabilities.reactions}
+                        subjectId={comment.id}
+                        environmentId={environmentId}
+                        reference={reference}
+                        onRefresh={onRefresh}
                       />
                     </article>
                   );

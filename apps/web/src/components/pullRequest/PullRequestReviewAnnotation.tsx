@@ -2,7 +2,7 @@
  * Pull-request-specific annotations: conversations already on the host and comments queued for
  * the review being written. New comment composition uses the shared diff annotation.
  */
-import type { PullRequestReviewThread } from "@t3tools/contracts";
+import type { EnvironmentId, PullRequestRef, PullRequestReviewThread } from "@t3tools/contracts";
 import {
   CheckCircle2Icon,
   CircleIcon,
@@ -20,6 +20,7 @@ import { Textarea } from "../ui/textarea";
 import { isCommentSubmitShortcut } from "../diffs/commentSubmitShortcut";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { PullRequestReactionBar } from "./PullRequestReactions";
 import type { PendingReviewComment } from "./pullRequestReviewStore";
 
 const CARD_CLASS =
@@ -82,16 +83,23 @@ export function ReviewThreadCard({
   workspaceRoot,
   canReply,
   canResolve,
+  canReact,
+  environmentId,
+  reference,
   pending,
   fixPending,
   onFix,
   onReply,
   onToggleResolved,
+  onReacted,
 }: {
   thread: PullRequestReviewThread;
   workspaceRoot: string;
   canReply: boolean;
   canResolve: boolean;
+  canReact: boolean;
+  environmentId: EnvironmentId;
+  reference: PullRequestRef;
   pending: boolean;
   /** True while this thread's own hand-off is preparing, so only its button says so. */
   fixPending?: boolean;
@@ -100,6 +108,7 @@ export function ReviewThreadCard({
   /** Resolves to whether the host took it, so a reply that failed keeps the words it was given. */
   onReply: (body: string) => Promise<boolean>;
   onToggleResolved: () => void;
+  onReacted: () => void;
 }) {
   // A resolved thread is finished work, so it opens collapsed and stays one line until asked for.
   const [expanded, setExpanded] = useState(!thread.isResolved);
@@ -174,7 +183,7 @@ export function ReviewThreadCard({
         <>
           <div className="mt-2 space-y-3">
             {thread.comments.map((comment) => (
-              <article key={comment.id} className="min-w-0">
+              <article key={comment.id} className="group min-w-0">
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <PullRequestActorLabel actor={comment.author} className="text-foreground" />
                   <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
@@ -183,6 +192,15 @@ export function ReviewThreadCard({
                   className="mt-1 text-sm"
                   text={comment.body}
                   cwd={workspaceRoot}
+                />
+                <PullRequestReactionBar
+                  className="mt-1.5"
+                  reactions={comment.reactions ?? []}
+                  canReact={canReact}
+                  subjectId={comment.id}
+                  environmentId={environmentId}
+                  reference={reference}
+                  onRefresh={onReacted}
                 />
               </article>
             ))}
