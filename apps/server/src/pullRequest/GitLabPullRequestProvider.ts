@@ -18,11 +18,16 @@ const CAPABILITIES: PullRequestCapabilities = {
     "draft",
     "close",
     "reopen",
+    "update-branch",
     "enable-auto-merge",
     "disable-auto-merge",
   ],
   // GitLab offers all three, though a project settles on one; `mergeCapabilities` narrows it.
   mergeMethods: ["merge", "squash", "rebase"],
+  // Rebase alone: GitLab moves a stale branch onto its target by replaying it, and has nothing
+  // that merges the target back in the way GitHub's update button can. Declaring only what it
+  // does is what lets a request to merge the target in be refused instead of quietly rebasing.
+  updateMethods: ["rebase"],
   search: true,
   review: {
     inlineComment: true,
@@ -35,8 +40,14 @@ const CAPABILITIES: PullRequestCapabilities = {
   reviewers: { request: true, listCandidates: true },
 };
 
+/**
+ * The actions `user.can_merge` answers for. Rebasing writes to the source branch rather than to
+ * the target, so it is not literally the same permission — but GitLab reports nothing narrower,
+ * and someone it will not let land this change has no business rewriting its branch either.
+ */
 const MERGE_ACTIONS: ReadonlySet<string> = new Set([
   "merge",
+  "update-branch",
   "enable-auto-merge",
   "disable-auto-merge",
 ]);
@@ -68,6 +79,7 @@ export function gitLabViewerPermissions(input: {
     resolve: true,
     verdicts: CAPABILITIES.review.verdicts,
     requestReviewers: true,
+    ...(input.viewerCanMerge ? { updateMethods: CAPABILITIES.updateMethods } : {}),
   };
 }
 
@@ -132,6 +144,17 @@ export const make = Effect.gen(function* () {
             ...mergeRequest,
             mergeCapabilities,
             viewerPermissions: gitLabViewerPermissions(mergeRequest),
+            // A GitLab too old to count the divergence says nothing here rather than "up to
+            // date": the banner is worth missing, and a wrong all-clear is not worth showing.
+            baseComparison:
+              mergeRequest.divergedCommits === undefined
+                ? "unknown"
+                : mergeRequest.divergedCommits > 0
+                  ? "behind"
+                  : "up-to-date",
+            ...(mergeRequest.divergedCommits === undefined
+              ? {}
+              : { behindBy: mergeRequest.divergedCommits }),
           }),
         ),
       ),

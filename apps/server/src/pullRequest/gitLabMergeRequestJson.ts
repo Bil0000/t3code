@@ -78,6 +78,13 @@ const RawMergeRequestSchema = Schema.Struct({
    */
   merge_when_pipeline_succeeds: Schema.optional(Schema.NullOr(Schema.Boolean)),
   auto_merge_enabled: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  /**
+   * How far the target branch has moved on since this one left it, which is the same number
+   * GitLab's own "out of date" wording counts. It costs a walk of the two branches, so GitLab
+   * withholds it unless `include_diverged_commits_count` asks for it, and answers it only for a
+   * single merge request — a list never carries it, however it is asked for.
+   */
+  diverged_commits_count: Schema.optional(Schema.NullOr(Schema.Int)),
 });
 
 const RawNoteSchema = Schema.Struct({
@@ -219,6 +226,11 @@ export interface GitLabMergeRequestDetail extends GitLabMergeRequestListItem {
   readonly reviewerIds: ReadonlyArray<number>;
   /** Absent where GitLab named neither auto-merge field, which is not the same as off. */
   readonly autoMergeEnabled?: boolean;
+  /**
+   * Absent where GitLab did not count, which is not the same as a branch that has nothing behind
+   * it: an install too old to answer must not be read as saying the branch is current.
+   */
+  readonly divergedCommits?: number;
 }
 
 function trimmed(value: string | null | undefined): string | null {
@@ -365,6 +377,7 @@ function toDetail(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): GitLab
       reviewer.id === undefined ? [] : [reviewer.id],
     ),
     ...(autoMerge === undefined ? {} : { autoMergeEnabled: autoMerge }),
+    ...(raw.diverged_commits_count == null ? {} : { divergedCommits: raw.diverged_commits_count }),
   };
 }
 

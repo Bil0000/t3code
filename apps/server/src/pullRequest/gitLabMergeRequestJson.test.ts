@@ -189,6 +189,19 @@ describe("decodeMergeRequestDetailJson", () => {
     expect(armed({})).toBeUndefined();
   });
 
+  it("keeps a divergence GitLab did not count apart from a divergence of none", () => {
+    const behind = (entry: Record<string, unknown>) =>
+      expectSuccess(decodeMergeRequestDetailJson(detailJson(entry))).divergedCommits;
+
+    expect(behind({ diverged_commits_count: 3 })).toBe(3);
+    // Counted and found level, which is the one answer that entitles the page to say so.
+    expect(behind({ diverged_commits_count: 0 })).toBe(0);
+    // An install that does not answer, and a null where the answer would have gone, are both
+    // silence: reading either as zero would tell a stale branch it is current.
+    expect(behind({})).toBeUndefined();
+    expect(behind({ diverged_commits_count: null })).toBeUndefined();
+  });
+
   it("maps a pipeline waiting on a person to neutral, not failure", () => {
     const detail = expectSuccess(
       decodeMergeRequestDetailJson(detailJson({ head_pipeline: { status: "manual" } })),

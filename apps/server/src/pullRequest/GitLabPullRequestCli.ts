@@ -431,9 +431,11 @@ function actionArgs(
       return ["update", "--draft"];
     case "close":
       return ["close"];
-    // Never reached: this host does not declare the action, so nothing offers it.
+    // A rebase, because GitLab has no other way to move a branch onto its target: there is no
+    // merge-the-target-in equivalent of GitHub's update button, which is why this host declares
+    // `rebase` alone and never has to read the method it was handed.
     case "update-branch":
-      return [];
+      return ["rebase"];
     case "reopen":
       return ["reopen"];
   }
@@ -835,7 +837,11 @@ export const make = Effect.gen(function* () {
   }): Effect.Effect<GitLabMergeRequestDetail, GitLabPullRequestCliError> =>
     api({
       cwd: input.cwd,
-      path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
+      // How far behind the target branch this one is comes only when asked for by name, and it
+      // is asked for here rather than on a second read because it is the same merge request.
+      path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}?${query([
+        ["include_diverged_commits_count", "true"],
+      ])}`,
     }).pipe(
       Effect.flatMap((result) => {
         const decoded = decodeMergeRequestDetailJson(result.stdout.trim());

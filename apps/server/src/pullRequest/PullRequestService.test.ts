@@ -2606,6 +2606,64 @@ it.effect("refuses a way of updating a branch that the host or the viewer does n
   }),
 );
 
+it.effect("refuses to merge a target branch into a source branch on a host that only rebases", () =>
+  Effect.gen(function* () {
+    let taken = 0;
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "on gitlab",
+          workspaceRoot: "/a",
+          repository: "group/project",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("gitlab", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge", "close", "update-branch"],
+            mergeMethods: ["merge"],
+            // What GitLab declares: it replays the branch, and has no update that merges the
+            // target back in.
+            updateMethods: ["rebase"],
+            search: true,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: ["close", "update-branch"],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment"],
+              requestReviewers: false,
+              updateMethods: ["rebase"],
+            }),
+          runAction: () => {
+            taken += 1;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "group/project", number: 1 };
+
+    // A merge asked of a host that rebases must fail here rather than reach the provider, which
+    // would rebase instead and report the wrong thing as done.
+    const error = yield* Effect.flip(
+      service.runAction({ ...reference, action: "update-branch", updateMethod: "merge" }),
+    );
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.strictEqual(taken, 0);
+
+    yield* service.runAction({ ...reference, action: "update-branch", updateMethod: "rebase" });
+    assert.strictEqual(taken, 1);
+  }),
+);
+
 it.effect("judges the review filter only on a host that summarises its reviews", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

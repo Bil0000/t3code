@@ -461,6 +461,22 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("brings a stale branch up to date by rebasing it, the only way GitLab has", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.runMergeRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        action: "update-branch",
+      });
+
+      expect(argsOfCall(0)).toEqual(["mr", "rebase", "7", "--repo", "acme/web"]);
+    }),
+  );
+
   it.effect("moves a merge request back to draft through glab", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("")));
@@ -835,6 +851,21 @@ layer("GitLabPullRequestCli.layer", (it) => {
       });
 
       assert.deepStrictEqual(capabilities, { merge: false, squash: false, rebase: true });
+    }),
+  );
+
+  it.effect("asks the detail read for the divergence GitLab withholds by default", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"message":"404 Not Found"}')));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* Effect.ignore(
+        cli.getMergeRequestDetail({ cwd: "/w", repository: "acme/web", number: 7 }),
+      );
+
+      expect(argsOfCall(0)[1]).toBe(
+        "projects/acme%2Fweb/merge_requests/7?include_diverged_commits_count=true",
+      );
     }),
   );
 

@@ -1,6 +1,9 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
 
-import { gitLabViewerPermissions } from "./GitLabPullRequestProvider.ts";
+import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
+import { gitLabViewerPermissions, make } from "./GitLabPullRequestProvider.ts";
 
 describe("gitLabViewerPermissions", () => {
   it("offers everything to a viewer GitLab says can merge", () => {
@@ -12,6 +15,7 @@ describe("gitLabViewerPermissions", () => {
         "draft",
         "close",
         "reopen",
+        "update-branch",
         "enable-auto-merge",
         "disable-auto-merge",
       ],
@@ -20,6 +24,9 @@ describe("gitLabViewerPermissions", () => {
       verdicts: ["comment", "approve"],
       // GitLab says nothing about who may set a reviewer, and an unreported permission is granted.
       requestReviewers: true,
+      // Rebase and nothing else: GitLab cannot merge a target branch into a source branch, so
+      // offering the choice would be offering something no request could carry out.
+      updateMethods: ["rebase"],
     });
   });
 
@@ -35,6 +42,12 @@ describe("gitLabViewerPermissions", () => {
     });
   });
 
+  it("names no way of updating a branch it will not let this viewer update", () => {
+    // The action and the strategy behind it go together: a button offered with nothing to press
+    // it with, or a strategy left standing next to a withheld button, is a half-refusal.
+    expect(gitLabViewerPermissions({ viewerCanMerge: false }).updateMethods).toBeUndefined();
+  });
+
   it("treats an author with read access as any other reader, which is all GitLab says", () => {
     // Its REST API names no relationship between the viewer and the merge request beyond
     // `can_merge`, so the four an author keeps stay offered to everyone rather than being taken
@@ -46,4 +59,80 @@ describe("gitLabViewerPermissions", () => {
       "reopen",
     ]);
   });
+});
+
+describe("getChangeRequest base freshness", () => {
+  const detail = {
+    number: 7,
+    title: "Merge request 7",
+    url: "https://gitlab.com/acme/web/-/merge_requests/7",
+    author: null,
+    headBranch: "feat/page",
+    baseBranch: "main",
+    state: "open" as const,
+    isDraft: false,
+    mergeability: "mergeable" as const,
+    additions: 0,
+    deletions: 0,
+    createdAt: "2026-07-01T00:00:00Z",
+    updatedAt: "2026-07-02T00:00:00Z",
+    reviewRequestLogins: [],
+    labels: [],
+    body: "",
+    changedFiles: 1,
+    mergedAt: null,
+    closedAt: null,
+    reviewers: [],
+    checks: [],
+    viewerCanMerge: true,
+    reviewerIds: [],
+  };
+
+  const readWith = (divergence: { readonly divergedCommits?: number }) =>
+    Effect.gen(function* () {
+      const provider = yield* make;
+      return yield* provider.getChangeRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "gitlab.com",
+        number: 7,
+      });
+    }).pipe(
+      Effect.provide(
+        Layer.mock(GitLabPullRequestCli.GitLabPullRequestCli)({
+          getMergeRequestDetail: () => Effect.succeed({ ...detail, ...divergence }),
+          getProjectMergeCapabilities: () =>
+            Effect.succeed({ merge: true, squash: true, rebase: true }),
+        }),
+      ),
+    );
+
+  it.effect("reads a counted divergence as a branch that has fallen behind", () =>
+    Effect.gen(function* () {
+      const changeRequest = yield* readWith({ divergedCommits: 3 });
+
+      expect(changeRequest.baseComparison).toBe("behind");
+      expect(changeRequest.behindBy).toBe(3);
+    }),
+  );
+
+  it.effect("reads a divergence of none as a branch that is current", () =>
+    Effect.gen(function* () {
+      const changeRequest = yield* readWith({ divergedCommits: 0 });
+
+      expect(changeRequest.baseComparison).toBe("up-to-date");
+      expect(changeRequest.behindBy).toBe(0);
+    }),
+  );
+
+  it.effect("says nothing at all where GitLab counted nothing", () =>
+    Effect.gen(function* () {
+      // An install too old to answer has to leave the page silent rather than let it claim the
+      // branch is current, which is the one wrong thing this banner could say.
+      const changeRequest = yield* readWith({});
+
+      expect(changeRequest.baseComparison).toBe("unknown");
+      expect(changeRequest.behindBy).toBeUndefined();
+    }),
+  );
 });
