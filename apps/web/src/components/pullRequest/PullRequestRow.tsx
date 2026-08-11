@@ -5,6 +5,7 @@ import { getSourceControlPresentationForKind } from "~/sourceControlPresentation
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import type { EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import {
   PullRequestActorLabel,
@@ -93,6 +94,17 @@ function PullRequestRowImpl({
               {entry.reviewDecision === "approved" ? "Approved" : "Changes requested"}
             </span>
           ) : null}
+          {entry.checksState === undefined ? null : (
+            <PullRequestChecksPopover
+              checksState={entry.checksState}
+              environmentId={entry.environmentId}
+              reference={{
+                projectId: entry.projectId,
+                repository: entry.repository,
+                number: entry.number,
+              }}
+            />
+          )}
           {matchedElsewhere ? (
             <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px]">
               matched in the description

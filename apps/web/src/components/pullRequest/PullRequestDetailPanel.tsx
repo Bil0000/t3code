@@ -99,10 +99,12 @@ import {
   resolveBaseFreshness,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
+import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import {
   PullRequestActorLabel,
   PullRequestDiffStat,
   PullRequestMetaLine,
+  pullRequestChecksState,
   resolvePullRequestState,
   summarizePullRequestChecks,
 } from "./pullRequestPresentation";
@@ -780,6 +782,7 @@ export function PullRequestDetailPanel({
     ? resolvePullRequestState({ state: detail.state, isDraft: detail.isDraft })
     : null;
   const checksSummary = detail ? summarizePullRequestChecks(detail.checks) : null;
+  const checksState = detail ? pullRequestChecksState(detail.checks) : null;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -859,7 +862,10 @@ export function PullRequestDetailPanel({
                     Conflicts
                   </Badge>
                 ) : checksSummary ? (
-                  <span className="shrink-0 text-[10px] text-muted-foreground">
+                  <span className="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground">
+                    {detail && checksState !== null ? (
+                      <PullRequestChecksPopover checks={detail.checks} checksState={checksState} />
+                    ) : null}
                     {checksSummary}
                   </span>
                 ) : null}
@@ -1269,7 +1275,13 @@ export function PullRequestDetailPanel({
                     className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
                     aria-label={checksSummary ? `Checks: ${checksSummary}` : "Checks"}
                   >
-                    <CircleDotIcon aria-hidden className="size-3.5" />
+                    {/* The rollup icon opens the checks behind the summary; with none reported
+                        there is nothing to open, so the plain glyph stays. */}
+                    {detail && checksState !== null ? (
+                      <PullRequestChecksPopover checks={detail.checks} checksState={checksState} />
+                    ) : (
+                      <CircleDotIcon aria-hidden className="size-3.5" />
+                    )}
                     {checksSummary}
                   </span>
                 ) : tab === "timeline" ? (
