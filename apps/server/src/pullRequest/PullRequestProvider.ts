@@ -153,6 +153,8 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
   /** Absent from a host that cannot compare the branch with its base, which is most of them. */
   readonly baseComparison?: PullRequestBaseComparison;
   readonly behindBy?: number;
+  /** Absent from a host that does not report whether it is armed to merge this on its own. */
+  readonly autoMergeEnabled?: boolean;
 }
 
 /** The conversation-shaped half of a detail, loaded after the core can already render. */
@@ -336,6 +338,7 @@ export interface PullRequestProviderApi {
     input: ProviderRepositoryRef & {
       readonly number: number;
       readonly action: PullRequestAction;
+      /** Meaningful for `merge` and `enable-auto-merge`; absent takes the host's own default. */
       readonly mergeMethod?: PullRequestMergeMethod;
       /** Only meaningful for `update-branch`; absent takes the host's own default. */
       readonly updateMethod?: PullRequestUpdateMethod;

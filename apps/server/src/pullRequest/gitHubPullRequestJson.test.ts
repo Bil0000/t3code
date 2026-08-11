@@ -221,6 +221,58 @@ describe("pull request detail decoding", () => {
     ]);
   });
 
+  it("reads an auto-merge request as armed, its null as off and its absence as neither", () => {
+    const raw = JSON.parse(detailJson) as Record<string, unknown>;
+    const armed = (entry: Record<string, unknown>) =>
+      expectSuccess(decodePullRequestDetailJson(JSON.stringify({ ...raw, ...entry })))
+        .autoMergeEnabled;
+
+    expect(
+      armed({ autoMergeRequest: { enabledBy: { login: "octocat" }, mergeMethod: "SQUASH" } }),
+    ).toBe(true);
+    expect(armed({ autoMergeRequest: null })).toBe(false);
+    // `gh` not answering for the field at all is not GitHub saying the merge is unarmed.
+    expect(armed({})).toBeUndefined();
+  });
+
+  it("shows a re-running check once, as the run that is happening now", () => {
+    // What `statusCheckRollup` reports while a workflow is being re-run: the same check twice,
+    // the finished run and the one that replaced it, with no id to tell them apart.
+    const raw = JSON.parse(detailJson) as Record<string, unknown>;
+    const detail = expectSuccess(
+      decodePullRequestDetailJson(
+        JSON.stringify({
+          ...raw,
+          statusCheckRollup: [
+            {
+              __typename: "CheckRun",
+              name: "Prepare PR size config",
+              workflowName: "PR Size",
+              status: "COMPLETED",
+              conclusion: "SUCCESS",
+              startedAt: "2026-08-11T16:06:20Z",
+              completedAt: "2026-08-11T16:06:25Z",
+            },
+            {
+              __typename: "CheckRun",
+              name: "Prepare PR size config",
+              workflowName: "PR Size",
+              status: "IN_PROGRESS",
+              conclusion: "",
+              startedAt: "2026-08-11T17:01:04Z",
+              completedAt: "0001-01-01T00:00:00Z",
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(detail.checks.map((check) => [check.name, check.status])).toEqual([
+      ["Prepare PR size config", "pending"],
+    ]);
+    expect(detail.checksState).toBe("pending");
+  });
+
   it("merges reviews with comments in time order and keeps a bodyless approval", () => {
     const detail = expectSuccess(decodePullRequestActivityJson(detailJson));
     // r2 approved without writing anything, which is still the event worth seeing.

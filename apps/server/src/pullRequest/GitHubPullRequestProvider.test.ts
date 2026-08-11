@@ -9,7 +9,16 @@ import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
 describe("gitHubViewerPermissions", () => {
   it("offers everything to a viewer who can write to the repository", () => {
     expect(gitHubViewerPermissions({ canWrite: true, canUpdate: true, didAuthor: false })).toEqual({
-      actions: ["merge", "ready", "draft", "close", "reopen"],
+      // Arming a merge for later is the merge, so it travels with it.
+      actions: [
+        "merge",
+        "enable-auto-merge",
+        "disable-auto-merge",
+        "ready",
+        "draft",
+        "close",
+        "reopen",
+      ],
       comment: true,
       resolve: true,
       verdicts: ["comment", "approve", "request-changes"],
@@ -34,7 +43,7 @@ describe("gitHubViewerPermissions", () => {
 
   it("keeps an author's own pull request theirs to close, with read access and no more", () => {
     expect(gitHubViewerPermissions({ canWrite: false, canUpdate: true, didAuthor: true })).toEqual({
-      // Merging is the one thing writing is needed for; the rest an author may do.
+      // Merging is the one thing writing is needed for, now or later; the rest an author may do.
       actions: ["ready", "draft", "close", "reopen"],
       comment: true,
       resolve: true,

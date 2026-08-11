@@ -5,7 +5,16 @@ import { gitLabViewerPermissions } from "./GitLabPullRequestProvider.ts";
 describe("gitLabViewerPermissions", () => {
   it("offers everything to a viewer GitLab says can merge", () => {
     expect(gitLabViewerPermissions({ viewerCanMerge: true })).toEqual({
-      actions: ["merge", "ready", "draft", "close", "reopen"],
+      // Arming a merge for later and taking the arming back answer to the same `can_merge`.
+      actions: [
+        "merge",
+        "ready",
+        "draft",
+        "close",
+        "reopen",
+        "enable-auto-merge",
+        "disable-auto-merge",
+      ],
       comment: true,
       resolve: true,
       verdicts: ["comment", "approve"],
@@ -14,7 +23,7 @@ describe("gitLabViewerPermissions", () => {
     });
   });
 
-  it("keeps merge from a viewer GitLab says cannot", () => {
+  it("keeps merge, now and later, from a viewer GitLab says cannot", () => {
     // `user.can_merge` already accounts for the role, the approval rules and a protected target
     // branch, so it is the one answer here that does not have to be inferred.
     expect(gitLabViewerPermissions({ viewerCanMerge: false })).toEqual({

@@ -717,6 +717,12 @@ function actionArgs(
   switch (action) {
     case "merge":
       return ["merge", `--${mergeMethod ?? "merge"}`];
+    // `--auto` arms the same command instead of running it, and still needs the strategy: GitHub
+    // stores the strategy with the standing instruction rather than choosing one at merge time.
+    case "enable-auto-merge":
+      return ["merge", "--auto", `--${mergeMethod ?? "merge"}`];
+    case "disable-auto-merge":
+      return ["merge", "--disable-auto"];
     // `gh` updates with a merge commit unless asked to rebase, which is GitHub's own default.
     case "update-branch":
       return ["update-branch", ...(updateMethod === "rebase" ? ["--rebase"] : [])];

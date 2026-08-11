@@ -177,6 +177,18 @@ describe("decodeMergeRequestDetailJson", () => {
     expect(detail.changedFiles).toBe(0);
   });
 
+  it("reads either auto-merge field, and says nothing where GitLab named neither", () => {
+    const armed = (entry: Record<string, unknown>) =>
+      expectSuccess(decodeMergeRequestDetailJson(detailJson(entry))).autoMergeEnabled;
+
+    expect(armed({ merge_when_pipeline_succeeds: true })).toBe(true);
+    // The newer name for the same fact, which older GitLab installs do not send.
+    expect(armed({ auto_merge_enabled: true })).toBe(true);
+    expect(armed({ merge_when_pipeline_succeeds: false })).toBe(false);
+    // Absent is GitLab not saying, which the page must not read as "not armed".
+    expect(armed({})).toBeUndefined();
+  });
+
   it("maps a pipeline waiting on a person to neutral, not failure", () => {
     const detail = expectSuccess(
       decodeMergeRequestDetailJson(detailJson({ head_pipeline: { status: "manual" } })),

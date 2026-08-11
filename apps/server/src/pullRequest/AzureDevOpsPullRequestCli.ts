@@ -212,6 +212,12 @@ function actionArgs(
   switch (action) {
     case "merge":
       return ["--status", "completed", "--squash", mergeMethod === "squash" ? "true" : "false"];
+    // Auto-complete is Azure's own name for it: the pull request stays active and Azure completes
+    // it once its policies pass. The squash choice is stored with it, as it is for a merge now.
+    case "enable-auto-merge":
+      return ["--auto-complete", "true", "--squash", mergeMethod === "squash" ? "true" : "false"];
+    case "disable-auto-merge":
+      return ["--auto-complete", "false"];
     case "ready":
       return ["--draft", "false"];
     case "draft":

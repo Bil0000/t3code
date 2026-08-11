@@ -414,6 +414,53 @@ layer("GitLabPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("arms auto-merge with the same strategy a merge would have used", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.runMergeRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        action: "enable-auto-merge",
+        mergeMethod: "squash",
+      });
+
+      expect(argsOfCall(0)).toEqual([
+        "mr",
+        "merge",
+        "7",
+        "--repo",
+        "acme/web",
+        "--auto-merge=true",
+        "--yes",
+        "--squash",
+      ]);
+    }),
+  );
+
+  it.effect("cancels an armed auto-merge through the API glab has no flag for", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.runMergeRequestAction({
+        cwd: "/w",
+        repository: "acme/platform/web",
+        number: 7,
+        action: "disable-auto-merge",
+      });
+
+      expect(argsOfCall(0)).toEqual([
+        "api",
+        "projects/acme%2Fplatform%2Fweb/merge_requests/7/cancel_merge_when_pipeline_succeeds",
+        "--method",
+        "POST",
+      ]);
+    }),
+  );
+
   it.effect("moves a merge request back to draft through glab", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("")));

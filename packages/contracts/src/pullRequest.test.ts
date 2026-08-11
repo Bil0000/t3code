@@ -178,3 +178,18 @@ describe("updating a branch that has fallen behind its base", () => {
     ).toThrow();
   });
 });
+
+describe("leaving a merge for the host to make once it is ready", () => {
+  const decodeAction = Schema.decodeUnknownSync(PullRequestActionInput);
+  const ref = { projectId: "project-1", repository: "acme/web", number: 7 };
+
+  it("carries the strategy the deferred merge should use, as merging now does", () => {
+    expect(
+      decodeAction({ ...ref, action: "enable-auto-merge", mergeMethod: "squash" }),
+    ).toMatchObject({ action: "enable-auto-merge", mergeMethod: "squash" });
+  });
+
+  it("takes the arming back without a strategy, because there is nothing to choose", () => {
+    expect(decodeAction({ ...ref, action: "disable-auto-merge" }).mergeMethod).toBeUndefined();
+  });
+});

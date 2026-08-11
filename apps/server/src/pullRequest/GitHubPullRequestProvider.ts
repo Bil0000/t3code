@@ -17,7 +17,16 @@ import type { GitHubViewerAccess } from "./gitHubPullRequestJson.ts";
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
   comment: true,
-  actions: ["merge", "ready", "draft", "close", "reopen", "update-branch"],
+  actions: [
+    "merge",
+    "ready",
+    "draft",
+    "close",
+    "reopen",
+    "update-branch",
+    "enable-auto-merge",
+    "disable-auto-merge",
+  ],
   mergeMethods: ["merge", "squash", "rebase"],
   updateMethods: ["merge", "rebase"],
   search: true,
@@ -50,7 +59,9 @@ const CAPABILITIES: PullRequestCapabilities = {
 export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequestViewerPermissions {
   return {
     actions: [
-      ...(access.canWrite ? (["merge"] as const) : []),
+      // Arming a merge and taking the arming back are the merge, deferred: whoever may not
+      // merge here may not leave an instruction to merge later either.
+      ...(access.canWrite ? (["merge", "enable-auto-merge", "disable-auto-merge"] as const) : []),
       ...(access.canUpdate ? (["ready", "draft", "close", "reopen"] as const) : []),
       // Whether this viewer may update the branch is GitHub's own answer, read with the
       // comparison; without it the action is offered to nobody rather than to everybody.

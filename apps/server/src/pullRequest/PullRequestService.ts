@@ -176,6 +176,10 @@ const ACTION_ACCESS_REFUSALS: Record<PullRequestAction, string> = {
     "You need write access on this repository, or to have opened this change request, to update its branch.",
   reopen:
     "You need write access on this repository, or to have opened this change request, to reopen it.",
+  "enable-auto-merge":
+    "You need write access on this repository to have it merged for you once it is ready.",
+  "disable-auto-merge":
+    "You need write access on this repository to stop it being merged for you once it is ready.",
 };
 
 /**
@@ -980,6 +984,9 @@ export const make = Effect.gen(function* () {
                 ...(changeRequest.behindBy === undefined
                   ? {}
                   : { behindBy: changeRequest.behindBy }),
+                ...(changeRequest.autoMergeEnabled === undefined
+                  ? {}
+                  : { autoMergeEnabled: changeRequest.autoMergeEnabled }),
               }),
             ),
           ),

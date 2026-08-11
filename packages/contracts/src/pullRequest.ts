@@ -84,6 +84,15 @@ export const PullRequestAction = Schema.Literals([
   "reopen",
   /** Bring the base branch's commits into this one, which is what unblocks a stale branch. */
   "update-branch",
+  /**
+   * Hand the merge to the host: it waits for whatever it requires — a green pipeline, the
+   * approvals, an unblocked branch — and merges without anybody coming back. Separate from
+   * `merge` because the two answer different questions. `merge` is refused outright by a host
+   * that is not ready yet, and this one is for exactly that moment.
+   */
+  "enable-auto-merge",
+  /** Take the standing instruction back, which leaves the change request where it was. */
+  "disable-auto-merge",
 ]);
 export type PullRequestAction = typeof PullRequestAction.Type;
 
@@ -600,6 +609,12 @@ export const PullRequestDetail = Schema.Struct({
   baseComparison: Schema.optional(PullRequestBaseComparison),
   /** How many commits the base is ahead by, where the host counted them. */
   behindBy: Schema.optional(NonNegativeInt),
+  /**
+   * Whether the host is already armed to merge this on its own. Absent where the host does not
+   * report it, which is not the same as off: a page that reads silence as "not armed" offers to
+   * arm something that is already armed, and a second arming is a write nobody asked for.
+   */
+  autoMergeEnabled: Schema.optional(Schema.Boolean),
 });
 export type PullRequestDetail = typeof PullRequestDetail.Type;
 
@@ -708,6 +723,11 @@ export type PullRequestDiffFileContentsResult = typeof PullRequestDiffFileConten
 export const PullRequestActionInput = Schema.Struct({
   ...PullRequestRef.fields,
   action: PullRequestAction,
+  /**
+   * Which strategy the merge uses, read for `merge` and for `enable-auto-merge` alike — a merge
+   * the host performs later is still a merge, and the strategy is chosen when it is armed rather
+   * than at the moment it happens. Absent means the host's own default.
+   */
   mergeMethod: Schema.optional(PullRequestMergeMethod),
   /** Only read for `update-branch`, where absent means the host's own default. */
   updateMethod: Schema.optional(PullRequestUpdateMethod),

@@ -412,6 +412,19 @@ function actionArgs(
         ...(mergeMethod === "squash" ? ["--squash"] : []),
         ...(mergeMethod === "rebase" ? ["--rebase"] : []),
       ];
+    // The same command with the flag the other way up: here the wait is the whole point, so
+    // glab is told to arm the merge rather than talked out of it.
+    case "enable-auto-merge":
+      return [
+        "merge",
+        "--auto-merge=true",
+        "--yes",
+        ...(mergeMethod === "squash" ? ["--squash"] : []),
+        ...(mergeMethod === "rebase" ? ["--rebase"] : []),
+      ];
+    // Never reached: taking the arming back has no `glab mr` command, so it goes to the API.
+    case "disable-auto-merge":
+      return [];
     case "ready":
       return ["update", "--ready"];
     case "draft":
@@ -1056,6 +1069,16 @@ export const make = Effect.gen(function* () {
       ),
 
     runMergeRequestAction: (input) => {
+      // `glab mr merge` arms auto-merge and never disarms it, so the one direction the CLI has
+      // no flag for is asked of GitLab directly through the same `api` passthrough the rest of
+      // this module writes with.
+      if (input.action === "disable-auto-merge") {
+        return api({
+          cwd: input.cwd,
+          path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/cancel_merge_when_pipeline_succeeds`,
+          method: "POST",
+        }).pipe(Effect.asVoid);
+      }
       const [subcommand, ...flags] = actionArgs(input.action, input.mergeMethod);
       return gitlab
         .execute({

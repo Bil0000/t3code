@@ -18,7 +18,15 @@ const CAPABILITIES: PullRequestCapabilities = {
   // Reading a conversation is a plain REST read, but posting one is not something this can
   // claim without having run it, so the composer stays hidden.
   comment: false,
-  actions: ["merge", "ready", "draft", "close", "reopen"],
+  actions: [
+    "merge",
+    "ready",
+    "draft",
+    "close",
+    "reopen",
+    "enable-auto-merge",
+    "disable-auto-merge",
+  ],
   // Azure squashes as a completion option; it has no rebase strategy of its own.
   mergeMethods: ["merge", "squash"],
   // `az repos pr list` filters by status, creator, reviewer and branch, and by no text at all.
@@ -153,6 +161,7 @@ export const make = Effect.gen(function* () {
             checks: [],
             mergeCapabilities: { merge: true, squash: true, rebase: false },
             viewerPermissions: AZURE_DEVOPS_VIEWER_PERMISSIONS,
+            autoMergeEnabled: pullRequest.autoMergeEnabled,
           }),
         ),
       ),

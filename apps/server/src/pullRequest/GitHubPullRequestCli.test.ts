@@ -980,6 +980,74 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("arms auto-merge with the same strategy a merge would have used", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "enable-auto-merge",
+        mergeMethod: "squash",
+      });
+      expect(callAt(0).args).toEqual([
+        "pr",
+        "merge",
+        "7",
+        "--repo",
+        "github.com/acme/web",
+        "--auto",
+        "--squash",
+      ]);
+
+      // No strategy asked for is GitHub's own default, exactly as it is for a merge now.
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "enable-auto-merge",
+      });
+      expect(callAt(1).args).toEqual([
+        "pr",
+        "merge",
+        "7",
+        "--repo",
+        "github.com/acme/web",
+        "--auto",
+        "--merge",
+      ]);
+    }),
+  );
+
+  it.effect("takes auto-merge back off without naming a strategy", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("")));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.runPullRequestAction({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        action: "disable-auto-merge",
+        mergeMethod: "squash",
+      });
+
+      expect(callAt(0).args).toEqual([
+        "pr",
+        "merge",
+        "7",
+        "--repo",
+        "github.com/acme/web",
+        "--disable-auto",
+      ]);
+    }),
+  );
+
   it.effect("returns a pull request to draft by undoing ready", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("")));
@@ -1608,7 +1676,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       expect(detail.body).toBe("Core body");
       expect(activity.author?.login).toBe("octocat");
       expect(callAt(0).args.at(-1)).toBe(
-        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,statusCheckRollup,body,changedFiles,closedAt,headRepositoryOwner",
+        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,statusCheckRollup,body,changedFiles,closedAt,headRepositoryOwner,autoMergeRequest",
       );
       expect(callAt(1).args.at(-1)).toBe("author,comments,reviews,commits");
     }),

@@ -70,6 +70,14 @@ const RawMergeRequestSchema = Schema.Struct({
   user: Schema.optional(
     Schema.NullOr(Schema.Struct({ can_merge: Schema.optional(Schema.Boolean) })),
   ),
+  /**
+   * Whether GitLab is holding this merge request to merge it once its pipeline goes green.
+   * `merge_when_pipeline_succeeds` is the field every version answers with; newer ones also
+   * carry `auto_merge_enabled`, which is the same fact under the name GitLab settled on, so
+   * either one saying yes is a yes.
+   */
+  merge_when_pipeline_succeeds: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  auto_merge_enabled: Schema.optional(Schema.NullOr(Schema.Boolean)),
 });
 
 const RawNoteSchema = Schema.Struct({
@@ -209,6 +217,8 @@ export interface GitLabMergeRequestDetail extends GitLabMergeRequestListItem {
   readonly viewerCanMerge: boolean;
   /** The reviewers as GitLab addresses them, which is what writing the set back takes. */
   readonly reviewerIds: ReadonlyArray<number>;
+  /** Absent where GitLab named neither auto-merge field, which is not the same as off. */
+  readonly autoMergeEnabled?: boolean;
 }
 
 function trimmed(value: string | null | undefined): string | null {
@@ -334,6 +344,10 @@ function toListItem(
 
 function toDetail(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): GitLabMergeRequestDetail {
   const listItem = toListItem(raw);
+  const autoMerge =
+    raw.merge_when_pipeline_succeeds == null && raw.auto_merge_enabled == null
+      ? undefined
+      : raw.merge_when_pipeline_succeeds === true || raw.auto_merge_enabled === true;
   return {
     ...listItem,
     body: raw.description ?? "",
@@ -350,6 +364,7 @@ function toDetail(raw: Schema.Schema.Type<typeof RawMergeRequestSchema>): GitLab
     reviewerIds: (raw.reviewers ?? []).flatMap((reviewer) =>
       reviewer.id === undefined ? [] : [reviewer.id],
     ),
+    ...(autoMerge === undefined ? {} : { autoMergeEnabled: autoMerge }),
   };
 }
 

@@ -898,6 +898,134 @@ it.effect("refuses an action this viewer may not take, and says what access it t
   }),
 );
 
+it.effect("gates arming a merge for later exactly as it gates merging now", () =>
+  Effect.gen(function* () {
+    let ranWith: { readonly action: string; readonly mergeMethod?: string } | null = null;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge", "close", "enable-auto-merge", "disable-auto-merge"],
+            mergeMethods: ["merge", "squash"],
+            search: true,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          // This account may close the change request it opened, and nothing else here.
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: ["close"],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment", "approve", "request-changes"],
+              requestReviewers: false,
+            }),
+          runAction: (input) => {
+            ranWith = {
+              action: input.action,
+              ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+            };
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+
+    const refused = yield* Effect.flip(
+      service.runAction({ ...reference, action: "enable-auto-merge", mergeMethod: "squash" }),
+    );
+    assert.strictEqual(refused._tag, "PullRequestOperationError");
+    assert.include(refused.message, "merged for you once it is ready");
+    assert.strictEqual(ranWith, null);
+
+    // The strategy is checked against the host for an armed merge too: a merge it performs
+    // later is still a merge, and one it cannot spell must not be passed on.
+    const wrongStrategy = yield* Effect.flip(
+      service.runAction({ ...reference, action: "enable-auto-merge", mergeMethod: "rebase" }),
+    );
+    assert.strictEqual(wrongStrategy._tag, "PullRequestOperationError");
+    assert.strictEqual(ranWith, null);
+  }),
+);
+
+it.effect("hands the host the strategy an armed merge was asked for", () =>
+  Effect.gen(function* () {
+    let ranWith: { readonly action: string; readonly mergeMethod?: string } | null = null;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge", "enable-auto-merge", "disable-auto-merge"],
+            mergeMethods: ["merge", "squash"],
+            search: true,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          getViewerPermissions: () =>
+            Effect.succeed({
+              actions: ["merge", "enable-auto-merge", "disable-auto-merge"],
+              comment: true,
+              resolve: true,
+              verdicts: ["comment", "approve", "request-changes"],
+              requestReviewers: true,
+            }),
+          runAction: (input) => {
+            ranWith = {
+              action: input.action,
+              ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
+            };
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+
+    yield* service.runAction({ ...reference, action: "enable-auto-merge", mergeMethod: "squash" });
+    assert.deepStrictEqual(ranWith, { action: "enable-auto-merge", mergeMethod: "squash" });
+
+    yield* service.runAction({ ...reference, action: "disable-auto-merge" });
+    assert.deepStrictEqual(ranWith, { action: "disable-auto-merge" });
+  }),
+);
+
+it.effect("refuses an auto-merge the host never claimed, without asking it", () =>
+  Effect.gen(function* () {
+    let ran = false;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        // Bitbucket's shape: it merges, and has nothing that merges later on its own.
+        fakeProvider("github", {
+          runAction: () => {
+            ran = true;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.runAction({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        action: "enable-auto-merge",
+      }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.isFalse(ran);
+  }),
+);
+
 it.effect("refuses to resolve a conversation this viewer may not, without asking the host", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
@@ -2260,6 +2388,52 @@ it.effect(
       yield* service.activity(reference);
       assert.strictEqual(activityCalls, 2);
     }),
+);
+
+it.effect("carries an armed auto-merge through to the detail, and silence as silence", () =>
+  Effect.gen(function* () {
+    const detailWith = (autoMergeEnabled: boolean | undefined) =>
+      Effect.gen(function* () {
+        const service = yield* makeService({
+          projects: [
+            project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+          ],
+          providers: [
+            fakeProvider("github", {
+              getChangeRequest: () =>
+                Effect.succeed({
+                  ...changeRequest(1, "2026-07-02T00:00:00Z"),
+                  body: "",
+                  changedFiles: 0,
+                  mergedAt: null,
+                  closedAt: null,
+                  reviewers: [],
+                  checks: [],
+                  mergeCapabilities: { merge: true, squash: true, rebase: true },
+                  viewerPermissions: {
+                    actions: ["merge"],
+                    comment: true,
+                    resolve: true,
+                    verdicts: ["comment", "approve", "request-changes"],
+                    requestReviewers: true,
+                  },
+                  ...(autoMergeEnabled === undefined ? {} : { autoMergeEnabled }),
+                }),
+            }),
+          ],
+        });
+        return yield* service.detail({
+          projectId: "p1" as ProjectId,
+          repository: "acme/web",
+          number: 1,
+        });
+      });
+
+    assert.strictEqual((yield* detailWith(true)).autoMergeEnabled, true);
+    assert.strictEqual((yield* detailWith(false)).autoMergeEnabled, false);
+    // A host that says nothing leaves the field absent rather than claiming the merge is unarmed.
+    assert.isUndefined((yield* detailWith(undefined)).autoMergeEnabled);
+  }),
 );
 
 it("names an Azure DevOps repository by its own name, not its project path", () => {

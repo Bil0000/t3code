@@ -12,7 +12,15 @@ import {
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
   comment: true,
-  actions: ["merge", "ready", "draft", "close", "reopen"],
+  actions: [
+    "merge",
+    "ready",
+    "draft",
+    "close",
+    "reopen",
+    "enable-auto-merge",
+    "disable-auto-merge",
+  ],
   // GitLab offers all three, though a project settles on one; `mergeCapabilities` narrows it.
   mergeMethods: ["merge", "squash", "rebase"],
   search: true,
@@ -26,6 +34,12 @@ const CAPABILITIES: PullRequestCapabilities = {
   },
   reviewers: { request: true, listCandidates: true },
 };
+
+const MERGE_ACTIONS: ReadonlySet<string> = new Set([
+  "merge",
+  "enable-auto-merge",
+  "disable-auto-merge",
+]);
 
 /**
  * What the signed-in account may do here. GitLab answers exactly one of these questions per
@@ -45,7 +59,11 @@ export function gitLabViewerPermissions(input: {
   readonly viewerCanMerge: boolean;
 }): PullRequestViewerPermissions {
   return {
-    actions: CAPABILITIES.actions.filter((action) => action !== "merge" || input.viewerCanMerge),
+    // Arming the merge and taking the arming back are the merge, deferred, so they answer to
+    // the same `can_merge` the merge itself does.
+    actions: CAPABILITIES.actions.filter(
+      (action) => !MERGE_ACTIONS.has(action) || input.viewerCanMerge,
+    ),
     comment: true,
     resolve: true,
     verdicts: CAPABILITIES.review.verdicts,
