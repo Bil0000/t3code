@@ -1,4 +1,9 @@
-import type { PullRequestActor, PullRequestDetailView } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  PullRequestActor,
+  PullRequestDetailView,
+  PullRequestRef,
+} from "@t3tools/contracts";
 import {
   ChevronDownIcon,
   ExternalLinkIcon,
@@ -23,11 +28,20 @@ import {
   type PullRequestTimelineEvent,
 } from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { PullRequestReactionBar } from "./PullRequestReactions";
 import {
   PullRequestActorAvatar,
   PullRequestDiffStat,
   PullRequestMetaLine,
 } from "./pullRequestPresentation";
+
+/** What every comment on the timeline needs to react; only the subject differs between them. */
+interface ReactionSurface {
+  readonly canReact: boolean;
+  readonly environmentId: EnvironmentId;
+  readonly reference: PullRequestRef;
+  readonly onRefresh: () => void;
+}
 
 function TimelineBody({ body, markdown, cwd }: { body: string; markdown: boolean; cwd: string }) {
   return (
@@ -132,13 +146,15 @@ function ConversationCard({
   event,
   cwd,
   onOpen,
+  reactions,
 }: {
   event: PullRequestTimelineEvent;
   cwd: string;
   onOpen: (url: string) => void;
+  reactions: ReactionSurface;
 }) {
   return (
-    <article className="py-2">
+    <article className="group py-2">
       <div className="px-2">
         <div className="flex min-w-0 items-start gap-2">
           <div className="min-w-0 flex-1">
@@ -165,6 +181,18 @@ function ConversationCard({
           <TimelineBody body={event.body} markdown={event.markdown} cwd={cwd} />
         </div>
       ) : null}
+      {reactions.canReact || event.reactions.length > 0 ? (
+        <div className="px-2 pb-2">
+          <PullRequestReactionBar
+            reactions={event.reactions}
+            canReact={reactions.canReact}
+            subjectId={event.id}
+            environmentId={reactions.environmentId}
+            reference={reactions.reference}
+            onRefresh={reactions.onRefresh}
+          />
+        </div>
+      ) : null}
     </article>
   );
 }
@@ -182,10 +210,12 @@ function ConversationGroup({
   events,
   cwd,
   onOpen,
+  reactions,
 }: {
   events: ReadonlyArray<PullRequestTimelineEvent>;
   cwd: string;
   onOpen: (url: string) => void;
+  reactions: ReactionSurface;
 }) {
   const [open, setOpen] = useState(false);
   const actors = uniqueConversationActors(events);
@@ -229,7 +259,13 @@ function ConversationGroup({
             {open ? (
               <div className="mt-1 space-y-1">
                 {events.map((event) => (
-                  <ConversationCard key={event.id} event={event} cwd={cwd} onOpen={onOpen} />
+                  <ConversationCard
+                    key={event.id}
+                    event={event}
+                    cwd={cwd}
+                    onOpen={onOpen}
+                    reactions={reactions}
+                  />
                 ))}
               </div>
             ) : null}
@@ -315,14 +351,26 @@ function LifecycleEvent({ event }: { event: PullRequestTimelineEvent }) {
 
 export function PullRequestTimelineTab({
   detail,
+  environmentId,
+  reference,
   order,
   onOpenCommit,
+  onRefresh,
 }: {
   detail: PullRequestDetailView;
+  environmentId: EnvironmentId;
+  reference: PullRequestRef;
   order: "newest" | "oldest";
   onOpenCommit: (oid: string) => void;
+  onRefresh: () => void;
 }) {
   const events = buildPullRequestTimeline(detail);
+  const reactions: ReactionSurface = {
+    canReact: detail.capabilities.reactions,
+    environmentId,
+    reference,
+    onRefresh,
+  };
   const orderedEvents = order === "newest" ? events : events.toReversed();
   const rows = groupPullRequestTimelineConversations(orderedEvents);
   const openOnHost = (url: string) => {
@@ -342,6 +390,7 @@ export function PullRequestTimelineTab({
                   events={row.events}
                   cwd={detail.workspaceRoot}
                   onOpen={openOnHost}
+                  reactions={reactions}
                 />
               );
             }

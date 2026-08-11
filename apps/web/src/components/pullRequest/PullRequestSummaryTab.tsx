@@ -42,6 +42,7 @@ import {
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
 
 /** A host colour only when it is one, so a malformed value falls back to the neutral dot. */
@@ -76,15 +77,17 @@ function CollapsedComment({
   comment,
   cwd,
   label,
+  reactionBar,
 }: {
   comment: PullRequestComment;
   cwd: string;
   label: string;
+  reactionBar: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
-      <article className="rounded-lg border border-border/60 [contain-intrinsic-block-size:44px] [content-visibility:auto]">
+      <article className="group rounded-lg border border-border/60 [contain-intrinsic-block-size:44px] [content-visibility:auto]">
         <CollapsibleTrigger
           className={cn(
             "flex w-full items-center gap-2 p-3 text-left transition-opacity hover:opacity-100",
@@ -113,6 +116,7 @@ function CollapsedComment({
                 </p>
               ) : null}
               <PullRequestMarkdown className="mt-2" text={comment.body} cwd={cwd} />
+              {reactionBar}
             </div>
           ) : null}
         </CollapsiblePanel>
@@ -384,10 +388,20 @@ export function PullRequestSummaryTab({
       </section>
 
       <Section title="Description">
-        <PullRequestMarkdown
-          text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
-          cwd={detail.workspaceRoot}
-        />
+        <div className="group">
+          <PullRequestMarkdown
+            text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
+            cwd={detail.workspaceRoot}
+          />
+          <PullRequestReactionBar
+            className="mt-2"
+            reactions={detail.reactions ?? []}
+            canReact={detail.capabilities.reactions}
+            environmentId={environmentId}
+            reference={reference}
+            onRefresh={onRefresh}
+          />
+        </div>
       </Section>
 
       <Section title="Checks" count={detail.checks.length}>
@@ -505,6 +519,17 @@ export function PullRequestSummaryTab({
                         comment={comment}
                         cwd={detail.workspaceRoot}
                         label={thread?.isResolved ? "Resolved" : "Approval dismissed"}
+                        reactionBar={
+                          <PullRequestReactionBar
+                            className="mt-2"
+                            reactions={comment.reactions ?? []}
+                            canReact={detail.capabilities.reactions}
+                            subjectId={comment.id}
+                            environmentId={environmentId}
+                            reference={reference}
+                            onRefresh={onRefresh}
+                          />
+                        }
                       />
                     );
                   }
@@ -521,7 +546,7 @@ export function PullRequestSummaryTab({
                       key={comment.id}
                       // Offscreen comments skip style, layout and paint. Bot comments carry pages of
                       // highlighted code, and the conversation is below the description either way.
-                      className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
+                      className="group rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
                     >
                       <div className="flex items-start gap-2">
                         <span className="flex min-w-0 flex-1 items-center gap-2 text-xs text-muted-foreground">
@@ -560,6 +585,15 @@ export function PullRequestSummaryTab({
                         className="mt-2"
                         text={comment.body}
                         cwd={detail.workspaceRoot}
+                      />
+                      <PullRequestReactionBar
+                        className="mt-2"
+                        reactions={comment.reactions ?? []}
+                        canReact={detail.capabilities.reactions}
+                        subjectId={comment.id}
+                        environmentId={environmentId}
+                        reference={reference}
+                        onRefresh={onRefresh}
                       />
                     </article>
                   );

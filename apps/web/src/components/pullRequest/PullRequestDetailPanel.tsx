@@ -480,6 +480,7 @@ export function PullRequestDetailPanel({
             commentsTruncated: activity?.commentsTruncated ?? false,
             reviewThreads: activity?.reviewThreads ?? [],
             commits: activity?.commits ?? [],
+            reactions: activity?.reactions ?? [],
           },
     [activity, coreDetail],
   );
@@ -1680,8 +1681,11 @@ export function PullRequestDetailPanel({
                 ) : (
                   <PullRequestTimelineTab
                     detail={detail}
+                    environmentId={environmentId}
+                    reference={reference}
                     order={timelineOrder}
                     onOpenCommit={openCommit}
+                    onRefresh={refreshDetail}
                   />
                 )}
               </div>

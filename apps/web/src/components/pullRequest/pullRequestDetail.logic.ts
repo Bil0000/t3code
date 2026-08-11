@@ -5,6 +5,7 @@ import type {
   PullRequestComment,
   PullRequestDetailView,
   PullRequestMergeability,
+  PullRequestReaction,
   PullRequestReviewThread,
   PullRequestState,
   PullRequestUpdateMethod,
@@ -68,6 +69,8 @@ export interface PullRequestTimelineEvent {
   readonly deletions: number | null;
   readonly path: string | null;
   readonly reviewState: string | null;
+  /** Empty for everything but a comment, which is the only entry a host lets anyone react to. */
+  readonly reactions: ReadonlyArray<PullRequestReaction>;
 }
 
 export type PullRequestTimelineRow =
@@ -138,6 +141,7 @@ export function buildPullRequestTimeline(
       deletions: null,
       path: null,
       reviewState: null,
+      reactions: [],
     },
     ...detail.commits.map((commit) => ({
       id: commit.oid,
@@ -153,6 +157,7 @@ export function buildPullRequestTimeline(
       deletions: commit.deletions ?? null,
       path: null,
       reviewState: null,
+      reactions: [],
     })),
     ...detail.comments.map((comment) => ({
       id: comment.id,
@@ -168,6 +173,7 @@ export function buildPullRequestTimeline(
       deletions: null,
       path: comment.path,
       reviewState: comment.reviewState,
+      reactions: comment.reactions ?? [],
     })),
     ...(detail.mergedAt
       ? [
@@ -185,6 +191,7 @@ export function buildPullRequestTimeline(
             deletions: null,
             path: null,
             reviewState: null,
+            reactions: [],
           },
         ]
       : []),
@@ -204,6 +211,7 @@ export function buildPullRequestTimeline(
             deletions: null,
             path: null,
             reviewState: null,
+            reactions: [],
           },
         ]
       : []),
