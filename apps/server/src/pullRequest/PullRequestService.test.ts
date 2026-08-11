@@ -325,8 +325,9 @@ it.effect("uses a provider's raw cursor advance when it consumed malformed rows"
 
     const result = yield* service.list({ state: "open" });
 
+    // Keyed by the selector Azure is actually asked with, which is the repository's own name.
     assert.deepStrictEqual(result.nextCursors, {
-      "dev.azure.com acme/web": "2026-07-02T00:00:00Z|4|7",
+      "dev.azure.com web": "2026-07-02T00:00:00Z|4|7",
     });
   }),
 );
@@ -2259,4 +2260,79 @@ it.effect(
       yield* service.activity(reference);
       assert.strictEqual(activityCalls, 2);
     }),
+);
+
+it("names an Azure DevOps repository by its own name, not its project path", () => {
+  // `az repos pr list --repository` takes a name and detects the organisation and project from
+  // the checkout; the recorded `org/project/_git/repo` path is refused, and the repository then
+  // reads as unavailable on the page.
+  const selector = PullRequestService.repositoryIdentityOf({
+    repositoryIdentity: {
+      provider: "azure-devops",
+      displayName: "contoso/payments/_git/checkout",
+      owner: "contoso",
+      name: "checkout",
+    },
+  } as never);
+  assert.strictEqual(selector, "checkout");
+});
+
+it("falls back to the path's last segment where an Azure identity has no name", () => {
+  const selector = PullRequestService.repositoryIdentityOf({
+    repositoryIdentity: {
+      provider: "azure-devops",
+      displayName: "contoso/payments/_git/checkout",
+    },
+  } as never);
+  assert.strictEqual(selector, "checkout");
+});
+
+it("keeps a GitLab identity's whole path, because a nested group is part of the name", () => {
+  const selector = PullRequestService.repositoryIdentityOf({
+    repositoryIdentity: {
+      provider: "gitlab",
+      displayName: "group/subgroup/service",
+      owner: "group",
+      name: "service",
+    },
+  } as never);
+  assert.strictEqual(selector, "group/subgroup/service");
+});
+
+it.effect("narrows the rows of a host that ignored the filters it was handed", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/a",
+          repository: "acme/web",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        // Only GitHub narrows a listing for itself; every other host answers unnarrowed, and
+        // sending it a draft filter it quietly ignores used to put drafts on a filtered page.
+        fakeProvider("gitlab", {
+          listChangeRequests: () =>
+            Effect.succeed({
+              items: [
+                { ...changeRequest(1, "2026-07-02T00:00:00Z"), isDraft: true },
+                changeRequest(2, "2026-07-01T00:00:00Z"),
+              ],
+              truncated: false,
+              continues: false,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open", filters: { draft: "hide" } });
+
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.number),
+      [2],
+    );
+  }),
 );

@@ -347,13 +347,25 @@ function toPullRequestError(
 }
 
 /**
- * The provider-native repository identity. `displayName` is the full path below the host, which
- * is what nested GitLab groups and Azure project paths need; owner/name is the two-segment
- * fallback for identities recorded before that field existed.
+ * The provider-native repository selector. `displayName` is the full path below the host, which
+ * is what nested GitLab groups need; owner/name is the two-segment fallback for identities
+ * recorded before that field existed.
+ *
+ * Azure DevOps is the exception: `az repos pr list --repository` takes a repository name, and
+ * takes the organisation and project from the checkout it detects — so the recorded
+ * `org/project/_git/repo` path is refused outright and the whole repository reads as
+ * unavailable. Its name is the last segment, which is what this hands over.
+ *
+ * One function because everything downstream is keyed by what it answers: the rows' own
+ * `repository`, the per-repository cursors, and the detail and diff reads a row leads to.
  */
-function repositoryIdentityOf(project: OrchestrationProjectShell): string | null {
+export function repositoryIdentityOf(project: OrchestrationProjectShell): string | null {
   const identity = project.repositoryIdentity;
   if (!identity) return null;
+  if (identity.provider === "azure-devops") {
+    const segments = (identity.displayName ?? "").split("/").filter((part) => part !== "_git");
+    return identity.name || segments.at(-1) || null;
+  }
   if (identity.displayName) return identity.displayName;
   return identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
 }
@@ -534,6 +546,35 @@ export const make = Effect.gen(function* () {
       { concurrency: REPOSITORY_CONCURRENCY },
     );
 
+  /**
+   * The narrowings a row can be judged by from its own fields, applied here rather than trusted
+   * to the host. Only GitHub is asked to narrow a listing for itself; every other provider
+   * answers unnarrowed, and without this pass a draft filter or a label filter would be sent,
+   * accepted and quietly ignored. Idempotent for the hosts that did narrow.
+   *
+   * `checks` is absent because no listed row carries its check state: that one filter is the
+   * host's alone, and a row nobody narrowed stays rather than being guessed at.
+   */
+  const matchesRowFilters = (
+    entry: PullRequestListEntry,
+    filters: PullRequestListFilters | undefined,
+  ): boolean => {
+    if (filters === undefined) return true;
+    const labels = entry.labels.map((label) => label.name.trim().toLowerCase());
+    const holds = (label: string) => labels.includes(label.trim().toLowerCase());
+    return (
+      (filters.draft === undefined || entry.isDraft === (filters.draft === "only")) &&
+      (filters.review === undefined ||
+        (filters.review === "none"
+          ? entry.reviewDecision === undefined
+          : entry.reviewDecision === filters.review)) &&
+      (filters.labels === undefined || filters.labels.every(holds)) &&
+      (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
+      (filters.author === undefined ||
+        entry.author?.login.toLowerCase() === filters.author.trim().toLowerCase())
+    );
+  };
+
   const toEntry = (input: {
     readonly project: SupportedProject;
     readonly item: ProviderChangeRequest;
@@ -713,7 +754,9 @@ export const make = Effect.gen(function* () {
                       );
                 return {
                   key,
-                  entries: items.map((item) => toEntry({ project, item, viewer })),
+                  entries: items
+                    .map((item) => toEntry({ project, item, viewer }))
+                    .filter((entry) => matchesRowFilters(entry, input.filters)),
                   errors: [],
                   truncated: page.truncated,
                   nextCursor:
@@ -817,7 +860,9 @@ export const make = Effect.gen(function* () {
                       );
                 return Effect.succeed({
                   key: listCursorKey(project.host, project.repository),
-                  entries: items.map((item) => toEntry({ project, item, viewer })),
+                  entries: items
+                    .map((item) => toEntry({ project, item, viewer }))
+                    .filter((entry) => matchesRowFilters(entry, input.filters)),
                   errors: [],
                   truncated: page.truncated,
                   nextCursor:
