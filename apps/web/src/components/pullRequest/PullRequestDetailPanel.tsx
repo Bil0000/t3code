@@ -128,7 +128,10 @@ const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string> = {
   close: "Pull request closed",
   reopen: "Pull request reopened",
   "update-branch": "Branch updated with the base branch",
-  "enable-auto-merge": "The host will merge this once it is ready",
+  // True whichever it did: a pull request that was already mergeable merges the moment this is
+  // armed, and the client has no way to tell that apart from one still waiting on something.
+  "enable-auto-merge":
+    "Auto-merge turned on — merges as soon as this is ready, sooner if it already is",
   "disable-auto-merge": "Auto-merge turned off",
 };
 
@@ -437,7 +440,9 @@ export function PullRequestDetailPanel({
     if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
   }, [condensed]);
   const [mergeMethod, setMergeMethod] = useState<PullRequestMergeMethod>("merge");
-  const [confirmAction, setConfirmAction] = useState<"merge" | "close" | null>(null);
+  const [confirmAction, setConfirmAction] = useState<
+    "merge" | "close" | "enable-auto-merge" | null
+  >(null);
   // Which handoff is preparing, keyed so a per-finding button can say "Preparing..." on itself
   // alone. One at a time whatever the key: they all check the same pull request out.
   const [handoff, setHandoff] = useState<string | null>(null);
@@ -592,7 +597,16 @@ export function PullRequestDetailPanel({
       return;
     }
     toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
-    refreshDetail();
+    // A branch update moves the head commit, which leaves the diff atom pointed at a comparison
+    // that no longer exists — the same staleness the manual refresh button fixes, so it goes
+    // through that path rather than a second one. Every other action here only changes metadata;
+    // a merge does move the branch too, but it also closes the pull request, where the diff is
+    // no longer what anyone is looking at.
+    if (action === "update-branch") {
+      void refreshFromHost();
+    } else {
+      refreshDetail();
+    }
     onActed?.();
   };
 
@@ -967,6 +981,11 @@ export function PullRequestDetailPanel({
     : null;
   const checksSummary = detail ? summarizePullRequestChecks(detail.checks) : null;
   const checksState = detail ? pullRequestChecksState(detail.checks) : null;
+  // What arming auto-merge is about to do: `--auto` merges the instant nothing is left to wait
+  // on, so a pull request that is already mergeable with green (or no) checks merges right away
+  // rather than later. The confirmation reads this to say which one is about to happen.
+  const autoMergeWouldMergeNow =
+    detail?.mergeability === "mergeable" && (checksState === "passing" || checksState === null);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -1144,7 +1163,7 @@ export function PullRequestDetailPanel({
                         allowedMergeMethods.length > 0 ? (
                         <MenuItem
                           disabled={actionPending}
-                          onClick={() => void perform("enable-auto-merge", selectedMergeMethod)}
+                          onClick={() => setConfirmAction("enable-auto-merge")}
                         >
                           <GitMergeIcon className="size-3.5" />
                           Enable auto-merge
@@ -1719,12 +1738,21 @@ export function PullRequestDetailPanel({
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {confirmAction === "merge" ? "Merge pull request?" : "Close pull request?"}
+              {confirmAction === "merge"
+                ? "Merge pull request?"
+                : confirmAction === "enable-auto-merge"
+                  ? "Enable auto-merge?"
+                  : "Close pull request?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmAction === "merge"
                 ? `This merges #${reference.number} using ${selectedMergeMethod}.`
-                : `This closes #${reference.number} without merging it.`}
+                : confirmAction === "enable-auto-merge"
+                  ? autoMergeWouldMergeNow
+                    ? // Nothing left to wait on, so `--auto` merges it the moment it is armed.
+                      `#${reference.number} is already mergeable, so this merges it using ${selectedMergeMethod} right away.`
+                    : `This merges #${reference.number} using ${selectedMergeMethod} as soon as it is ready.`
+                  : `This closes #${reference.number} without merging it.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1739,10 +1767,16 @@ export function PullRequestDetailPanel({
                 const action = confirmAction;
                 setConfirmAction(null);
                 if (action === "merge") void perform("merge", selectedMergeMethod);
+                if (action === "enable-auto-merge")
+                  void perform("enable-auto-merge", selectedMergeMethod);
                 if (action === "close") void perform("close");
               }}
             >
-              {confirmAction === "merge" ? "Merge" : "Close"}
+              {confirmAction === "merge"
+                ? "Merge"
+                : confirmAction === "enable-auto-merge"
+                  ? "Enable auto-merge"
+                  : "Close"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

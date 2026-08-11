@@ -89,6 +89,32 @@ describe("reaction tooltip", () => {
       "1 person reacted with heart emoji",
     );
   });
+
+  it("names the viewer as You, ahead of the other people who reacted", () => {
+    // The host already leaves the viewer's own login out of `actors`.
+    expect(
+      pullRequestReactionTooltip(
+        reaction({ count: 3, actors: ["Bil0000", "octocat"], viewerHasReacted: true }),
+      ),
+    ).toBe("You, Bil0000, and octocat reacted with heart emoji");
+  });
+
+  it("names nobody as You when the viewer has not reacted", () => {
+    expect(
+      pullRequestReactionTooltip(
+        reaction({ count: 2, actors: ["Bil0000", "octocat"], viewerHasReacted: false }),
+      ),
+    ).toBe("Bil0000 and octocat reacted with heart emoji");
+  });
+
+  it("caps the sentence at count for a host that still leaves the viewer's login in actors", () => {
+    // `count` says two, but a non-compliant host left the viewer's own login in `actors` too.
+    expect(
+      pullRequestReactionTooltip(
+        reaction({ count: 2, actors: ["Bil0000", "octocat"], viewerHasReacted: true }),
+      ),
+    ).toBe("You and Bil0000 reacted with heart emoji");
+  });
 });
 
 describe("pending reactions", () => {

@@ -296,16 +296,26 @@ type RawReactionGroups = typeof RawReactionGroupsSchema.Type;
 
 /**
  * The groups GitHub answered with, as the contract carries them. A group with nobody behind it is
- * dropped: GitHub answers with a group per content it knows, including the ones nobody chose.
+ * dropped: GitHub answers with a group per content it knows, including the ones nobody chose. The
+ * viewer's own login is left out of `actors` — the page names them "You" instead, and leaving it
+ * in would name them twice — but `count` still counts them along with everyone else.
  */
-function toReactions(groups: RawReactionGroups): ReadonlyArray<PullRequestReaction> {
+function toReactions(
+  groups: RawReactionGroups,
+  viewer: string | null,
+): ReadonlyArray<PullRequestReaction> {
+  const normalizedViewer = viewer?.toLowerCase() ?? null;
   const reactions: PullRequestReaction[] = [];
   for (const group of groups ?? []) {
     const content = REACTION_CONTENT_BY_GITHUB[trimmed(group.content)?.toUpperCase() ?? ""];
     if (content === undefined) continue;
-    const actors = (group.reactors?.nodes ?? []).flatMap((node) => trimmed(node?.login) ?? []);
-    const count = Math.max(group.reactors?.totalCount ?? actors.length, actors.length);
+    const logins = (group.reactors?.nodes ?? []).flatMap((node) => trimmed(node?.login) ?? []);
+    const count = Math.max(group.reactors?.totalCount ?? logins.length, logins.length);
     if (count <= 0) continue;
+    const actors =
+      normalizedViewer === null
+        ? logins
+        : logins.filter((login) => login.toLowerCase() !== normalizedViewer);
     reactions.push({ content, count, actors, viewerHasReacted: group.viewerHasReacted === true });
   }
   return reactions;
@@ -393,6 +403,11 @@ const RawThreadCommentsSchema = Schema.Struct({
 /** `gh pr view --json` cannot reach review threads, so they come from the GraphQL API. */
 const RawReviewThreadsSchema = Schema.Struct({
   data: Schema.Struct({
+    // Rides along in the same request: GitHub names who reacted but never says whether that is
+    // the reader, so the comparison is made here rather than paid for with a request of its own.
+    viewer: Schema.optional(
+      Schema.NullOr(Schema.Struct({ login: Schema.optional(Schema.NullOr(Schema.String)) })),
+    ),
     repository: Schema.Struct({
       pullRequest: Schema.Struct({
         reviewThreads: Schema.Struct({
@@ -660,6 +675,7 @@ export function pullRequestSearchGraphQlQuery(rows: number): string {
  * wants, and stands in for the `gh` list wherever it came back non-empty.
  */
 export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
       reviewThreads(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
@@ -724,6 +740,7 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
  * GitHub makes necessary, and one no ordinary pull request ever provokes.
  */
 export const REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY = `query($threadId: ID!, $cursor: String) {
+  viewer { login }
   node(id: $threadId) {
     ... on PullRequestReviewThread {
       comments(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
@@ -736,6 +753,9 @@ export const REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY = `query($threadId: ID!, $curs
 
 const RawReviewThreadCommentsSchema = Schema.Struct({
   data: Schema.Struct({
+    viewer: Schema.optional(
+      Schema.NullOr(Schema.Struct({ login: Schema.optional(Schema.NullOr(Schema.String)) })),
+    ),
     /** Null for an id that names nothing the viewer can read, which is not a thread to page. */
     node: Schema.NullOr(Schema.Struct({ comments: Schema.optional(RawThreadCommentsSchema) })),
   }),
@@ -771,6 +791,50 @@ export function decodePullRequestNodeIdJson(raw: string): Result.Result<string, 
   return Result.isSuccess(decoded)
     ? Result.succeed(decoded.success.data.repository.pullRequest.id)
     : Result.fail(decoded.failure);
+}
+
+/**
+ * Where a client-given reaction subject actually hangs: the pull request itself, or the pull
+ * request an issue comment, a review comment, or a review belongs to. Read before a mutation
+ * reaches it, so a subject named for one pull request cannot react on another's behalf.
+ */
+export const REACTION_SUBJECT_PULL_REQUEST_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $subjectId: ID!) {
+  repository(owner: $owner, name: $name) { pullRequest(number: $number) { id } }
+  node(id: $subjectId) {
+    id
+    ... on IssueComment { pullRequest { id } }
+    ... on PullRequestReviewComment { pullRequest { id } }
+    ... on PullRequestReview { pullRequest { id } }
+  }
+}`;
+
+const RawReactionSubjectScopeSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.NullOr(
+      Schema.Struct({ pullRequest: Schema.NullOr(Schema.Struct({ id: Schema.String })) }),
+    ),
+    node: Schema.NullOr(
+      Schema.Struct({
+        id: Schema.String,
+        pullRequest: Schema.optional(Schema.Struct({ id: Schema.String })),
+      }),
+    ),
+  }),
+});
+
+const decodeReactionSubjectScope = decodeJsonResult(RawReactionSubjectScopeSchema);
+
+/**
+ * True when the subject named is the pull request itself, or hangs off it — false for anything
+ * else, including a subject or a pull request this host could not find.
+ */
+export function decodeReactionSubjectScopeJson(raw: string): Result.Result<boolean, DecodeFailure> {
+  const decoded = decodeReactionSubjectScope(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const expected = decoded.success.data.repository?.pullRequest?.id ?? null;
+  const node = decoded.success.data.node;
+  const actual = node === null ? null : (node.pullRequest?.id ?? node.id);
+  return Result.succeed(expected !== null && actual !== null && expected === actual);
 }
 
 export const ADD_REACTION_GRAPHQL_MUTATION = `mutation($subjectId: ID!, $content: ReactionContent!) {
@@ -1607,6 +1671,7 @@ export function decodeReviewThreadsJson(
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
   }
+  const viewer = trimmed(decoded.success.data.viewer?.login);
   const threads = decoded.success.data.repository.pullRequest.reviewThreads;
   const entries = threads.nodes.flatMap((thread): ReadonlyArray<GitHubReviewThreadEntry> => {
     const path = trimmed(thread.path);
@@ -1632,7 +1697,7 @@ export function decodeReviewThreadsJson(
             body: comment.body ?? "",
             createdAt: comment.createdAt,
             url: trimmed(comment.url),
-            reactions: toReactions(comment.reactionGroups),
+            reactions: toReactions(comment.reactionGroups, viewer),
           })),
         },
         commentCount: thread.comments.totalCount ?? thread.comments.nodes.length,
@@ -1693,13 +1758,13 @@ export function decodeReviewThreadsJson(
   ]) {
     const id = trimmed(node.id);
     if (id === null) continue;
-    const reactions = toReactions(node.reactionGroups);
+    const reactions = toReactions(node.reactionGroups, viewer);
     if (reactions.length > 0) reactionsById.set(id, reactions);
   }
   return Result.succeed({
     threads: entries,
     nextCursor: nextCursorOf(threads.pageInfo),
-    reactions: toReactions(pullRequest.reactionGroups),
+    reactions: toReactions(pullRequest.reactionGroups, viewer),
     reactionsById,
     reviewers: [...reviewers.values()],
     avatarsByLogin,
@@ -1723,6 +1788,7 @@ export function decodeReviewThreadCommentsJson(raw: string): Result.Result<
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
   }
+  const viewer = trimmed(decoded.success.data.viewer?.login);
   const comments = decoded.success.data.node?.comments;
   return Result.succeed({
     comments: (comments?.nodes ?? []).map((comment) => ({
@@ -1731,7 +1797,7 @@ export function decodeReviewThreadCommentsJson(raw: string): Result.Result<
       body: comment.body ?? "",
       createdAt: comment.createdAt,
       url: trimmed(comment.url),
-      reactions: toReactions(comment.reactionGroups),
+      reactions: toReactions(comment.reactionGroups, viewer),
     })),
     nextCursor: nextCursorOf(comments?.pageInfo),
   });

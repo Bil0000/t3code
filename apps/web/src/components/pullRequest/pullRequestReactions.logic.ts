@@ -60,12 +60,15 @@ function countRemainder(count: number, named: boolean): string {
 
 /**
  * Who reacted, in GitHub's sentence. The viewer reads as "You" and comes first, because that is
- * the name they are looking for. The remainder is counted rather than named: a host reports fewer
- * logins than it counts, so `count` is the only trustworthy total.
+ * the name they are looking for; the host already leaves the viewer's own login out of `actors`
+ * when they have reacted, so nothing here has to match it back out. The cap still guards a host
+ * that does not follow that rule: the sentence never names more people than `count` claims, and
+ * the remainder is counted rather than named — a host reports fewer logins than it counts, so
+ * `count` is the only trustworthy total.
  */
 export function pullRequestReactionTooltip(reaction: PullRequestReaction): string {
   const names = reaction.viewerHasReacted ? ["You", ...reaction.actors] : [...reaction.actors];
-  const shown = names.slice(0, NAMED_ACTOR_LIMIT);
+  const shown = names.slice(0, Math.min(NAMED_ACTOR_LIMIT, reaction.count));
   const others = Math.max(0, reaction.count - shown.length);
   const parts = [...shown, ...(others > 0 ? [countRemainder(others, shown.length > 0)] : [])];
   return `${joinNames(parts)} reacted with ${pullRequestReactionName(reaction.content)} emoji`;

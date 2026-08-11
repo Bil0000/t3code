@@ -170,7 +170,9 @@ export const PullRequestReaction = Schema.Struct({
   count: PositiveInt,
   /**
    * Who reacted, as far as the host named them. A host that reports fewer names than it counts
-   * leaves the rest out, so this is never longer than `count` and may be shorter.
+   * leaves the rest out, so this is never longer than `count` and may be shorter. When
+   * `viewerHasReacted` is true, the viewer's own login is left out of this list — the page names
+   * them "You" instead — but `count` still counts them along with everyone else.
    */
   actors: Schema.Array(TrimmedNonEmptyString),
   /** The signed-in account is one of them, so pressing the pill takes the reaction back. */

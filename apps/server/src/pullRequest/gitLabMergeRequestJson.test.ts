@@ -520,10 +520,11 @@ describe("decodeAwardEmojiJson", () => {
       ),
     );
 
-    // `bilal` is `currentUser`, so the group they are in reads back as reacted; `julius` alone
-    // does not turn a group's own `viewerHasReacted` on.
+    // `bilal` is `currentUser`, so the group they are in reads back as reacted, but their own
+    // username is left out of `actors` — the page names them "You" instead — while `count` still
+    // counts them; `julius` alone does not turn a group's own `viewerHasReacted` on.
     expect(result.reactions).toEqual([
-      { content: "thumbs-up", count: 2, actors: ["bilal", "julius"], viewerHasReacted: true },
+      { content: "thumbs-up", count: 2, actors: ["julius"], viewerHasReacted: true },
     ]);
     // Note 7's only award named nobody the eight recognise, so it carries no reactions and is
     // left out of the map rather than kept empty.
@@ -551,6 +552,33 @@ describe("decodeAwardEmojiJson", () => {
     );
 
     expect(result.nextCursor).toBe("Y3Vyc29yOjE");
+  });
+
+  it("matches the viewer's username case-insensitively, since GitLab is not consistent about case", () => {
+    const result = expectSuccess(
+      decodeAwardEmojiJson(
+        JSON.stringify({
+          data: {
+            currentUser: { username: "Bilal" },
+            project: {
+              mergeRequest: {
+                awardEmoji: {
+                  nodes: [
+                    { name: "heart", user: { username: "bilal" } },
+                    { name: "heart", user: { username: "julius" } },
+                  ],
+                },
+                notes: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(result.reactions).toEqual([
+      { content: "heart", count: 2, actors: ["julius"], viewerHasReacted: true },
+    ]);
   });
 });
 

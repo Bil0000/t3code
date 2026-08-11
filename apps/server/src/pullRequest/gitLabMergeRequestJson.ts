@@ -830,34 +830,40 @@ const RawAwardEmojiPageSchema = Schema.Struct({
 
 const decodeAwardEmojiPage = decodeJsonResult(RawAwardEmojiPageSchema);
 
-/** The awards on one subject, grouped the way a reaction pill is drawn. */
+/**
+ * The awards on one subject, grouped the way a reaction pill is drawn. The viewer's own username
+ * is left out of `actors` — the page names them "You" instead, and leaving it in would name them
+ * twice — but `count` still counts them along with everyone else.
+ */
 function toReactions(
   nodes: Schema.Schema.Type<typeof RawAwardEmojiNodesSchema>,
   viewer: string | null,
 ): ReadonlyArray<PullRequestReaction> {
-  const groups = new Map<PullRequestReactionContent, { actors: string[]; viewer: boolean }>();
+  const normalizedViewer = viewer?.toLowerCase() ?? null;
+  const groups = new Map<
+    PullRequestReactionContent,
+    { count: number; actors: string[]; viewer: boolean }
+  >();
   for (const node of nodes?.nodes ?? []) {
     // An award outside the eight is left out rather than shown under a name the picker has no
     // way to take back: GitLab accepts any emoji, and the other hosts accept none of them.
     const content = CONTENT_BY_GITLAB_AWARD[trimmed(node?.name)?.toLowerCase() ?? ""];
     if (content === undefined) continue;
     const username = trimmed(node?.user?.username);
-    const group = groups.get(content) ?? { actors: [], viewer: false };
-    if (username !== null) group.actors.push(username);
-    if (username !== null && username === viewer) group.viewer = true;
+    if (username === null) continue;
+    const group = groups.get(content) ?? { count: 0, actors: [], viewer: false };
+    group.count++;
+    if (normalizedViewer !== null && username.toLowerCase() === normalizedViewer) {
+      group.viewer = true;
+    } else {
+      group.actors.push(username);
+    }
     groups.set(content, group);
   }
   return [...groups].flatMap(([content, group]) =>
-    group.actors.length === 0
+    group.count === 0
       ? []
-      : [
-          {
-            content,
-            count: group.actors.length,
-            actors: group.actors,
-            viewerHasReacted: group.viewer,
-          },
-        ],
+      : [{ content, count: group.count, actors: group.actors, viewerHasReacted: group.viewer }],
   );
 }
 

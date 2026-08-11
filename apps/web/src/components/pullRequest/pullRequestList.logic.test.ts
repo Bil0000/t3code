@@ -618,6 +618,46 @@ describe("the list snapshot across a reload", () => {
     expect(readPullRequestListSnapshot(storage, "env-1")).toBeNull();
     expect(readPullRequestListSnapshot(undefined, "env-1")).toBeNull();
   });
+
+  it("caps the accumulated rows but keeps the whole host set", () => {
+    // The page keeps growing as the reader scrolls, so what gets written is the accumulated
+    // list rather than one round's answer — capped at the one page a cold start needs, while
+    // the hosts it was read from (which do not grow with the page) are kept in full.
+    const storage = makeStorage();
+    const manyEntries = Array.from({ length: 120 }, (_, index) => entry({ number: index + 1 }));
+    const viewers = { "github.com": "Bilal", "gitlab.com": "Bilal" };
+    const providers = [
+      {
+        host: "github.com",
+        kind: "github",
+        searchesOnHost: true,
+        projectCount: 1,
+        configured: true,
+        detail: null,
+      },
+      {
+        host: "gitlab.com",
+        kind: "gitlab",
+        searchesOnHost: true,
+        projectCount: 1,
+        configured: true,
+        detail: null,
+      },
+    ];
+    const accumulated = {
+      entries: manyEntries,
+      viewers,
+      providers,
+      errors: [],
+      truncated: true,
+      nextCursors: {},
+    } as never;
+    writePullRequestListSnapshot(storage, "env-1", { scope: "s", data: accumulated });
+    const snapshot = readPullRequestListSnapshot(storage, "env-1");
+    expect(snapshot?.data.entries).toHaveLength(99);
+    expect(snapshot?.data.viewers).toEqual(viewers);
+    expect(snapshot?.data.providers).toEqual(providers);
+  });
 });
 
 const ENV_1 = "env-1" as EnvironmentId;

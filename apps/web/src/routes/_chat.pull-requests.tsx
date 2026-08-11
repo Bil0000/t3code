@@ -77,7 +77,6 @@ import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../
 import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import {
-  pullRequestSurfaceId,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
@@ -365,14 +364,22 @@ function PullRequestsRouteView() {
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});
-  const handlePullRequestTabStatusChange = useCallback((status: PullRequestTabStatus) => {
-    const id = pullRequestSurfaceId(status);
-    setPullRequestTabStatuses((current) =>
-      current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
-        ? current
-        : { ...current, [id]: status },
-    );
-  }, []);
+  // Keyed by the surface the panel is showing rather than by a key rebuilt from the status: a
+  // surface opened from this page carries the environment its row was listed under, and a key
+  // assembled from the pull request alone would never name that surface back.
+  const activePullRequestSurfaceId = activePullRequestSurface?.id;
+  const handlePullRequestTabStatusChange = useCallback(
+    (status: PullRequestTabStatus) => {
+      const id = activePullRequestSurfaceId;
+      if (id === undefined) return;
+      setPullRequestTabStatuses((current) =>
+        current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
+          ? current
+          : { ...current, [id]: status },
+      );
+    },
+    [activePullRequestSurfaceId],
+  );
 
   const updateSearch = useCallback(
     (patch: {
@@ -461,15 +468,23 @@ function PullRequestsRouteView() {
   const hasLocalFilters = Object.keys(localFilters).length > 0;
   // Scoping to a project scopes to the server that owns it, saving every other server a read
   // that could only answer with nothing. Where an id is ambiguous — two servers holding the
-  // same project id, with no server named — every server is asked for it, and the ones without
-  // it answer empty: two honest copies beat a coin toss between them.
-  const queryEnvironmentIds = useMemo(
-    () =>
-      scopedProject === undefined
-        ? environmentIds
-        : environmentIds.filter((environmentId) => environmentId === scopedProject.environmentId),
-    [environmentIds, scopedProject],
-  );
+  // same project id, with no server named — only the servers that actually hold that id are
+  // asked: a server without it may still hold an unrelated project of its own under the same
+  // string, and asking it would return that project's rows rather than an honest empty answer.
+  const queryEnvironmentIds = useMemo(() => {
+    if (scopedProject !== undefined) {
+      return environmentIds.filter(
+        (environmentId) => environmentId === scopedProject.environmentId,
+      );
+    }
+    if (scopedProjectId === undefined) return environmentIds;
+    const holders = new Set(
+      projects
+        .filter((project) => project.id === scopedProjectId)
+        .map((project) => project.environmentId),
+    );
+    return environmentIds.filter((environmentId) => holders.has(environmentId));
+  }, [environmentIds, projects, scopedProject, scopedProjectId]);
   /**
    * Which projects each server is asked about. Two servers holding the same repository would both
    * list the same pull requests, so each repository is listed by one of them — the first, which is
@@ -704,6 +719,15 @@ function PullRequestsRouteView() {
     /** The priority groups' own answers, carried so a cold start has whole groups too. */
     partitions?: PullRequestPartitionsSnapshot;
   } | null>(null);
+  // A longer page is the same list with more on the end, so the rows already read stay where
+  // they were read: each answer is merged onto the last rather than replacing it, and anything
+  // new lands at the bottom. Only a different question — other filters, another search — starts
+  // the order again. Declared here, ahead of the snapshot write below, so that write can read
+  // this round's accumulation rather than only its own slice.
+  const [ordered, setOrdered] = useState<{
+    key: string;
+    entries: ReadonlyArray<EnvironmentPullRequestEntry>;
+  } | null>(null);
   // A reload recreates the registry the queries live in, so with nothing held the page would
   // cold-start into skeletons even though almost every row is unchanged. The last answer for
   // this set of environments is kept across reloads and hydrated here as the carried rows: they
@@ -752,11 +776,27 @@ function PullRequestsRouteView() {
       // A search's answer is the search's, not the workspace's, so only unsearched lists
       // persist. Written here where the held partitions are in reach, so a feed settling
       // ahead of them cannot overwrite a stored snapshot that already had both groups.
+      //
+      // What is written is what the reader is actually looking at, not this round's own
+      // answer: a continuation only asks the environments still paging, so its answer alone is
+      // missing both the rows read on earlier pages and the hosts of whichever environment had
+      // already run out of cursors. `ordered` carries the accumulated rows, and the baseline
+      // read — which never drops an environment for lack of a cursor — carries the full hosts.
       if (environmentKey.length > 0 && sentQuery.length === 0) {
+        const accumulatedEntries = ordered?.key === filterKey ? ordered.entries : data.entries;
         writePullRequestListSnapshot(
           typeof window === "undefined" ? undefined : window.localStorage,
           environmentKey,
-          { scope: scopeKey, data, ...(partitions === undefined ? {} : { partitions }) },
+          {
+            scope: scopeKey,
+            data: {
+              ...data,
+              entries: accumulatedEntries,
+              viewers: baselineQuery.data?.viewers ?? data.viewers,
+              providers: baselineQuery.data?.providers ?? data.providers,
+            },
+            ...(partitions === undefined ? {} : { partitions }),
+          },
         );
       }
       return {
@@ -776,6 +816,9 @@ function PullRequestsRouteView() {
     partitionsWanted,
     authoredQuery.data,
     reviewingQuery.data,
+    ordered,
+    filterKey,
+    baselineQuery.data,
   ]);
   // Changing a filter asks a question nothing has answered yet, and the page is already holding
   // perfectly good rows for the last one. Rather than blank out for the round trip, those rows
@@ -819,14 +862,8 @@ function PullRequestsRouteView() {
   /** Nothing read and nothing to carry, which is the one thing skeletons are for. */
   const firstLoad = listQuery.isPending && listData === null;
 
-  // A longer page is the same list with more on the end, so the rows already read stay where
-  // they were read: each answer is merged onto the last rather than replacing it, and anything
-  // new lands at the bottom. Only a different question — other filters, another search — starts
-  // the order again.
-  const [ordered, setOrdered] = useState<{
-    key: string;
-    entries: ReadonlyArray<EnvironmentPullRequestEntry>;
-  } | null>(null);
+  // `ordered` is declared above, ahead of the snapshot write, but grown here from this round's
+  // own answer.
   useEffect(() => {
     if (!answered) return;
     setOrdered((previous) => {

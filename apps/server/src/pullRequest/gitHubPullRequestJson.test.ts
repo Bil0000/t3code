@@ -662,6 +662,44 @@ describe("reaction decoding", () => {
       { content: "rocket", count: 140, actors: ["a", "b", "c"], viewerHasReacted: false },
     ]);
   });
+
+  it("leaves the viewer's own login out of actors, matched case-insensitively, while count still counts them", () => {
+    const decoded = expectSuccess(
+      decodeReviewThreadCommentsJson(
+        JSON.stringify({
+          data: {
+            viewer: { login: "Bilal" },
+            node: {
+              comments: {
+                pageInfo: { hasNextPage: false, endCursor: null },
+                nodes: [
+                  {
+                    id: "t1",
+                    body: "nice",
+                    createdAt: "2026-07-01T00:00:00Z",
+                    reactionGroups: [
+                      {
+                        content: "HEART",
+                        viewerHasReacted: true,
+                        reactors: {
+                          totalCount: 2,
+                          nodes: [{ login: "bilal" }, { login: "julius" }],
+                        },
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(decoded.comments[0]?.reactions).toEqual([
+      { content: "heart", count: 2, actors: ["julius"], viewerHasReacted: true },
+    ]);
+  });
 });
 
 describe("repository access decoding", () => {
@@ -926,6 +964,34 @@ describe("review thread decoding", () => {
     expect([...result.reactionsById]).toEqual([
       ["c1", [{ content: "thumbs-up", count: 1, actors: ["julius"], viewerHasReacted: false }]],
       ["r1", [{ content: "eyes", count: 1, actors: ["hubot"], viewerHasReacted: false }]],
+    ]);
+  });
+
+  it("leaves the viewer's own login out of the pull request's own reactions, matched case-insensitively, while count still counts them", () => {
+    const result = expectSuccess(
+      decodeReviewThreadsJson(
+        JSON.stringify({
+          data: {
+            viewer: { login: "Bilal" },
+            repository: {
+              pullRequest: {
+                reviewThreads: { totalCount: 0, nodes: [] },
+                reactionGroups: [
+                  {
+                    content: "HEART",
+                    viewerHasReacted: true,
+                    reactors: { totalCount: 2, nodes: [{ login: "bilal" }, { login: "julius" }] },
+                  },
+                ],
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(result.reactions).toEqual([
+      { content: "heart", count: 2, actors: ["julius"], viewerHasReacted: true },
     ]);
   });
 });

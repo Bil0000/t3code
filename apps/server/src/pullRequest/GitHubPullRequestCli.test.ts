@@ -650,6 +650,36 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect(
+    "falls back for a repository the index does not cover even under a judgeable filter",
+    () =>
+      Effect.gen(function* () {
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+        mockedExecute.mockReturnValueOnce(
+          Effect.succeed(output(pullRequests(2, 1, (number) => ({ isDraft: number === 1 })))),
+        );
+        const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+        const batch = yield* cli.listPullRequests({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          state: "open",
+          involvement: "all",
+          viewer: "bilal",
+          limit: 10,
+          filters: { draft: "hide" },
+        });
+
+        // `draft` is a filter the fallback can judge over its own rows just as search judges it,
+        // so an empty search answer under it alone is still ambiguous between "nothing matches"
+        // and "this repository is not indexed" — and the fallback applies the filter itself,
+        // keeping only the non-draft row.
+        expect(searchOfCall(1)).toBeUndefined();
+        expect(batch.items.map((item) => item.number)).toEqual([2]);
+      }),
+  );
+
   it.effect("carries the further narrowings into a batched search", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(searchPage([])));
@@ -1630,9 +1660,22 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("reacts to a given subject in one request, without looking up its id", () =>
+  it.effect("confirms a given subject belongs to the named pull request, then reacts to it", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                repository: { pullRequest: { id: "PR_kwDOA" } },
+                node: { id: "IC_1", pullRequest: { id: "PR_kwDOA" } },
+              },
+            }),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       yield* cli.setReaction({
@@ -1645,14 +1688,56 @@ layer("GitHubPullRequestCli.layer", (it) => {
         reacted: true,
       });
 
-      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      const scopeCheck = callAt(0).args;
+      expect(scopeCheck).toContain("owner=acme");
+      expect(scopeCheck).toContain("name=web");
+      expect(scopeCheck).toContain("number=7");
+      expect(scopeCheck).toContain("subjectId=IC_1");
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      const request = JSON.parse(callAt(0).stdin ?? "") as {
+      const request = JSON.parse(callAt(1).stdin ?? "") as {
         query: string;
         variables: Record<string, string>;
       };
       expect(request.query).toContain("addReaction(");
       expect(request.variables).toEqual({ subjectId: "IC_1", content: "HEART" });
+    }),
+  );
+
+  it.effect("refuses a given subject that belongs to a different pull request", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                repository: { pullRequest: { id: "PR_thisOne" } },
+                // A comment on pull request #99 of a different repository, named as though it
+                // belonged to #7 here.
+                node: { id: "IC_99", pullRequest: { id: "PR_someOtherOne" } },
+              },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.setReaction({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          subjectId: "IC_99",
+          content: "heart",
+          reacted: true,
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitHubReactionSubjectError");
+      // Refused before any mutation was sent.
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
     }),
   );
 
@@ -1695,7 +1780,20 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
   it.effect("takes a reaction back through the remove mutation", () =>
     Effect.gen(function* () {
-      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                repository: { pullRequest: { id: "PR_kwDOA" } },
+                node: { id: "IC_1", pullRequest: { id: "PR_kwDOA" } },
+              },
+            }),
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       yield* cli.setReaction({
@@ -1709,7 +1807,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       });
 
       // @effect-diagnostics-next-line preferSchemaOverJson:off
-      const request = JSON.parse(callAt(0).stdin ?? "") as { query: string };
+      const request = JSON.parse(callAt(1).stdin ?? "") as { query: string };
       expect(request.query).toContain("removeReaction(");
     }),
   );

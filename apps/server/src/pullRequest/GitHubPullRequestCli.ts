@@ -36,6 +36,7 @@ import {
   decodePullRequestNodeIdJson,
   decodePullRequestSearchJson,
   decodePullRequestStatsJson,
+  decodeReactionSubjectScopeJson,
   decodeRepositoryAccessJson,
   decodeReviewerCandidatesJson,
   decodeReviewDismissalsJson,
@@ -51,6 +52,7 @@ import {
   PULL_REQUEST_DETAIL_JSON_FIELDS,
   PULL_REQUEST_LIST_JSON_FIELDS,
   PULL_REQUEST_NODE_ID_GRAPHQL_QUERY,
+  REACTION_SUBJECT_PULL_REQUEST_GRAPHQL_QUERY,
   REMOVE_REACTION_GRAPHQL_MUTATION,
   gitHubReactionContent,
   REPOSITORY_ACCESS_JSON_FIELDS,
@@ -215,6 +217,23 @@ export class GitHubRepositorySelectorError extends Schema.TaggedErrorClass<GitHu
   }
 }
 
+/** Not a decode failure: the reader named a reaction subject this pull request never handed out. */
+export class GitHubReactionSubjectError extends Schema.TaggedErrorClass<GitHubReactionSubjectError>()(
+  "GitHubReactionSubjectError",
+  {
+    command: Schema.Literal("gh"),
+    cwd: Schema.String,
+  },
+) {
+  get detail(): string {
+    return "The reaction subject did not belong to the named pull request.";
+  }
+
+  override get message(): string {
+    return `GitHub CLI failed in setReaction: ${this.detail}`;
+  }
+}
+
 export type GitHubPullRequestCliError =
   | GitHubCli.GitHubCliError
   | GitHubPullRequestReadError
@@ -223,6 +242,7 @@ export type GitHubPullRequestCliError =
   | GitHubDiffRevisionsUnavailableError
   | GitHubDiffFileContentsUnavailableError
   | GitHubRepositorySelectorError
+  | GitHubReactionSubjectError
   | GitHubViewerLoginUnavailableError;
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
@@ -493,7 +513,8 @@ export class GitHubPullRequestCli extends Context.Service<
     /**
      * Adds a reaction to a remark, or takes it back. `subjectId` is any node GitHub calls
      * reactable — a comment, a review, or the pull request itself, which is looked up here
-     * because nothing in the conversation names it.
+     * because nothing in the conversation names it. A given `subjectId` is confirmed to belong
+     * to this pull request before the mutation runs, since nothing else ties the two together.
      */
     readonly setReaction: (input: {
       readonly cwd: string;
@@ -792,6 +813,35 @@ export const make = Effect.gen(function* () {
       ],
       query: PULL_REQUEST_NODE_ID_GRAPHQL_QUERY,
       decode: decodePullRequestNodeIdJson,
+    });
+  };
+
+  /**
+   * Whether a client-given reaction subject actually belongs to the pull request the request
+   * names. A subject id is trusted to be whatever node it names, and that node can hang off any
+   * pull request on the host — so the mutation itself would react wherever the id actually
+   * belongs, not wherever the request says it does, unless this confirms the two agree first.
+   */
+  const reactionSubjectBelongsToPullRequest = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly host: string;
+    readonly number: number;
+    readonly subjectId: string;
+  }) => {
+    const { owner, name } = parseRepositorySelector(input.repository);
+    return graphqlRead({
+      cwd: input.cwd,
+      host: input.host,
+      operation: "setReaction",
+      variables: [
+        ["-f", `owner=${owner}`],
+        ["-f", `name=${name}`],
+        ["-F", `number=${input.number}`],
+        ["-f", `subjectId=${input.subjectId}`],
+      ],
+      query: REACTION_SUBJECT_PULL_REQUEST_GRAPHQL_QUERY,
+      decode: decodeReactionSubjectScopeJson,
     });
   };
 
@@ -1133,15 +1183,19 @@ export const make = Effect.gen(function* () {
       // repository's whole list, which is every row the reader did not search for. The fallback
       // is for a repository the index does not cover, and a listing with no text to match is the
       // only place an empty answer can mean that.
-      // Filters are qualifiers on the very same search, so a filtered read that comes back empty
-      // has also been answered: falling back would hand over rows the filters exclude, and the
-      // fallback cannot judge `checks` at all — no listed row carries its check state.
-      const searched =
-        (input.query?.trim().length ?? 0) > 0 ||
-        (input.filters !== undefined && Object.keys(input.filters).length > 0);
+      // Most filters are qualifiers `matchesFilters` can judge over the fallback's own rows just
+      // as well as search judges them over its own, so carrying them into the fallback answers
+      // the same read rather than a wider one. `checks` is the one filter neither can judge
+      // locally — no listed row carries its check state — so it rules the fallback out the same
+      // way free text does: an empty answer under either is already the answer.
+      const hasQuery = (input.query?.trim().length ?? 0) > 0;
+      const hasUnjudgeableFilter = input.filters?.checks !== undefined;
       return read(true).pipe(
         Effect.flatMap((batch) =>
-          batch.items.length === 0 && input.cursor === undefined && !searched
+          batch.items.length === 0 &&
+          input.cursor === undefined &&
+          !hasQuery &&
+          !hasUnjudgeableFilter
             ? read(false)
             : Effect.succeed(batch),
         ),
@@ -1689,11 +1743,19 @@ export const make = Effect.gen(function* () {
         variables: { threadId: input.threadId },
       }),
 
-    setReaction: (input) =>
-      (input.subjectId === undefined
-        ? pullRequestNodeId(input)
-        : Effect.succeed(input.subjectId)
-      ).pipe(
+    setReaction: (input) => {
+      const givenSubjectId = input.subjectId;
+      const subjectId =
+        givenSubjectId === undefined
+          ? pullRequestNodeId(input)
+          : reactionSubjectBelongsToPullRequest({ ...input, subjectId: givenSubjectId }).pipe(
+              Effect.flatMap((belongs) =>
+                belongs
+                  ? Effect.succeed(givenSubjectId)
+                  : Effect.fail(new GitHubReactionSubjectError({ command: "gh", cwd: input.cwd })),
+              ),
+            );
+      return subjectId.pipe(
         Effect.flatMap((subjectId) =>
           graphql({
             cwd: input.cwd,
@@ -1702,7 +1764,8 @@ export const make = Effect.gen(function* () {
             variables: { subjectId, content: gitHubReactionContent(input.content) },
           }),
         ),
-      ),
+      );
+    },
   });
 });
 
