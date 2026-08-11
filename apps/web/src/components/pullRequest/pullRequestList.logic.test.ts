@@ -6,6 +6,7 @@ import {
   groupPullRequestsByInvolvement,
   matchesPullRequestFilters,
   matchesPullRequestQuery,
+  parsePullRequestQuery,
   mergePullRequestDiffStats,
   narrowPullRequestsToFilters,
   partitionPullRequestsWithPriority,
@@ -214,7 +215,12 @@ describe("narrowing rows by the filters a host may not have applied", () => {
     entry({ number: 1 }),
     entry({ number: 2, isDraft: true }),
     entry({ number: 3, reviewDecision: "approved" }),
-    entry({ number: 4, labels: [{ name: "size:XL", color: null }] }),
+    entry({
+      number: 4,
+      labels: [{ name: "Needs design", color: null }],
+      author: { login: "Hubot", name: null, avatarUrl: null },
+      reviewDecision: "changes-requested",
+    }),
   ];
   const narrow = (filters: Parameters<typeof matchesPullRequestFilters>[1]) =>
     rows.filter((row) => matchesPullRequestFilters(row, filters)).map((row) => row.number);
@@ -224,16 +230,51 @@ describe("narrowing rows by the filters a host may not have applied", () => {
     expect(narrow({ draft: "hide" })).toEqual([1, 3, 4]);
   });
 
-  it("keeps only what somebody has approved", () => {
+  it("keeps the review state that was asked for, and no reviews means none at all", () => {
     expect(narrow({ review: "approved" })).toEqual([3]);
+    expect(narrow({ review: "changes-requested" })).toEqual([4]);
+    expect(narrow({ review: "none" })).toEqual([1, 2]);
   });
 
-  it("excludes the labelled sizes above medium, and keeps the unlabelled", () => {
-    expect(narrow({ maxSize: "m" })).toEqual([1, 2, 3]);
+  it("matches labels and authors however either was capitalized", () => {
+    expect(narrow({ labels: ["needs DESIGN"] })).toEqual([4]);
+    expect(narrow({ excludedLabels: ["needs design"] })).toEqual([1, 2, 3]);
+    expect(narrow({ author: "hubot" })).toEqual([4]);
   });
 
   it("holds on to every row for a filter no row carries the answer to", () => {
     expect(narrow({ checks: "passing" })).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe("reading qualifiers out of a typed query", () => {
+  it("keeps quoted values whole and separates negation", () => {
+    expect(parsePullRequestQuery('label:"needs design" -label:wip Fix the parser')).toEqual({
+      text: "Fix the parser",
+      filters: { labels: ["needs design"], excludedLabels: ["wip"] },
+    });
+  });
+
+  it("reads the scalar qualifiers in GitHub's own spelling", () => {
+    expect(
+      parsePullRequestQuery("author:octocat DRAFT:false review:changes_requested status:failure")
+        .filters,
+    ).toEqual({
+      author: "octocat",
+      draft: "hide",
+      review: "changes-requested",
+      checks: "failing",
+    });
+  });
+
+  it("leaves an unknown key, an unknown value and a stray colon as text", () => {
+    const parsed = parsePullRequestQuery("milestone:v2 draft:maybe status: parser");
+    expect(parsed.filters).toEqual({});
+    expect(parsed.text).toBe("milestone:v2 draft:maybe status: parser");
+  });
+
+  it("answers an empty query with an empty everything", () => {
+    expect(parsePullRequestQuery("   ")).toEqual({ text: "", filters: {} });
   });
 });
 

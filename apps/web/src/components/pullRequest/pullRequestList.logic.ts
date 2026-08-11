@@ -39,6 +39,102 @@ function isAuthoredByViewer(entry: PullRequestListEntry, viewers: PullRequestVie
   return viewer !== null && normalize(entry.author?.login) === viewer;
 }
 
+/** What `review:` and `status:` take, in GitHub's spelling and in the contract's. */
+const REVIEW_VALUES: Record<string, PullRequestListFilters["review"]> = {
+  approved: "approved",
+  changes_requested: "changes-requested",
+  "changes-requested": "changes-requested",
+  required: "review-required",
+  "review-required": "review-required",
+  none: "none",
+};
+const CHECKS_VALUES: Record<string, PullRequestListFilters["checks"]> = {
+  success: "passing",
+  passing: "passing",
+  failure: "failing",
+  failing: "failing",
+};
+
+/**
+ * One token of a typed query: a run of non-space characters in which a quoted stretch counts as
+ * part of the token, so `label:"needs design"` stays whole. An unbalanced quote is dropped rather
+ * than swallowing the rest of the line.
+ */
+const QUERY_TOKEN = /(?:[^\s"]|"[^"]*")+/g;
+/** The contract's own ceiling on a qualifier list, past which further ones are ignored. */
+const MAX_QUALIFIER_VALUES = 10;
+
+function qualifierValue(raw: string): string {
+  return raw.replaceAll('"', "").trim();
+}
+
+/**
+ * A typed query split into the qualifiers the hosts can act on and the text that is left. Written
+ * GitHub's way — `label:foo`, `-label:"needs design"`, `author:octocat`, `draft:true`,
+ * `review:approved`, `status:success` — because a project's labels are its own and a menu cannot
+ * list them.
+ *
+ * Anything else is text: an unknown key, a value a known key does not take, a bare word. Sending
+ * it on rather than dropping it is what keeps a search for "status:" itself findable.
+ */
+export function parsePullRequestQuery(raw: string): {
+  readonly text: string;
+  readonly filters: PullRequestListFilters;
+} {
+  const text: string[] = [];
+  const labels: string[] = [];
+  const excludedLabels: string[] = [];
+  let author: string | undefined;
+  let draft: PullRequestListFilters["draft"];
+  let review: PullRequestListFilters["review"];
+  let checks: PullRequestListFilters["checks"];
+  for (const [token] of raw.matchAll(QUERY_TOKEN)) {
+    const qualifier = /^(-?)([A-Za-z]+):(.*)$/.exec(token);
+    const value = qualifier === null ? "" : qualifierValue(qualifier[3] ?? "");
+    const negated = qualifier?.[1] === "-";
+    switch (value.length === 0 ? "" : (qualifier?.[2]?.toLowerCase() ?? "")) {
+      case "label":
+        (negated ? excludedLabels : labels).push(value);
+        continue;
+      case "author":
+        if (negated) break;
+        author = value;
+        continue;
+      case "draft":
+        if (negated || (value.toLowerCase() !== "true" && value.toLowerCase() !== "false")) break;
+        draft = value.toLowerCase() === "true" ? "only" : "hide";
+        continue;
+      case "review": {
+        const decision = negated ? undefined : REVIEW_VALUES[value.toLowerCase()];
+        if (decision === undefined) break;
+        review = decision;
+        continue;
+      }
+      case "status":
+      case "checks": {
+        const state = negated ? undefined : CHECKS_VALUES[value.toLowerCase()];
+        if (state === undefined) break;
+        checks = state;
+        continue;
+      }
+    }
+    text.push(token);
+  }
+  return {
+    text: text.join(" "),
+    filters: {
+      ...(labels.length === 0 ? {} : { labels: labels.slice(0, MAX_QUALIFIER_VALUES) }),
+      ...(excludedLabels.length === 0
+        ? {}
+        : { excludedLabels: excludedLabels.slice(0, MAX_QUALIFIER_VALUES) }),
+      ...(author === undefined ? {} : { author }),
+      ...(draft === undefined ? {} : { draft }),
+      ...(review === undefined ? {} : { review }),
+      ...(checks === undefined ? {} : { checks }),
+    },
+  };
+}
+
 /** Free-text filter over the fields a row actually shows, plus `#123` / `123`. */
 export function matchesPullRequestQuery(entry: PullRequestListEntry, query: string): boolean {
   const normalizedQuery = query.trim().toLowerCase();
@@ -96,13 +192,6 @@ export function narrowPullRequestsToFilters(
 }
 
 /**
- * The labels a repository puts on a change request too large to review in one sitting. An
- * unlabelled row passes: sizing is a convention rather than a field, and a repository that
- * labels nothing would otherwise show nothing under a size filter.
- */
-const OVERSIZED_LABELS = ["size:l", "size:xl", "size:xxl"];
-
-/**
  * The further narrowings over rows that have already arrived, for the hosts that could not apply
  * them themselves and for the moment before an answer that did lands.
  *
@@ -114,10 +203,17 @@ export function matchesPullRequestFilters(
   filters: PullRequestListFilters,
 ): boolean {
   const labels = entry.labels.map((label) => label.name.trim().toLowerCase());
+  const holds = (label: string) => labels.includes(label.trim().toLowerCase());
   return (
     (filters.draft === undefined || entry.isDraft === (filters.draft === "only")) &&
-    (filters.review === undefined || entry.reviewDecision === "approved") &&
-    (filters.maxSize === undefined || !OVERSIZED_LABELS.some((label) => labels.includes(label)))
+    (filters.review === undefined ||
+      (filters.review === "none"
+        ? entry.reviewDecision === undefined
+        : entry.reviewDecision === filters.review)) &&
+    (filters.labels === undefined || filters.labels.every(holds)) &&
+    (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
+    (filters.author === undefined ||
+      entry.author?.login.toLowerCase() === filters.author.trim().toLowerCase())
   );
 }
 

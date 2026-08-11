@@ -95,12 +95,15 @@ describe("pull request filters menu", () => {
   it("drops a narrowing chosen back to all rather than sending it as undefined", () => {
     const onFilters = vi.fn();
     const group = findValueChange(
-      findLabeledGroup(menu({ filters: { maxSize: "m", checks: "passing" }, onFilters }), "Size"),
+      findLabeledGroup(
+        menu({ filters: { review: "none", checks: "failing" }, onFilters }),
+        "Review",
+      ),
     );
     expect(group).toBeDefined();
 
     group?.props.onValueChange("all");
-    expect(onFilters).toHaveBeenCalledWith({ checks: "passing" });
+    expect(onFilters).toHaveBeenCalledWith({ checks: "failing" });
   });
 
   it("does not emit a change when the selected project is chosen again", () => {

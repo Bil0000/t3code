@@ -30,6 +30,7 @@ import {
   groupPullRequestsByInvolvement,
   matchesPullRequestFilters,
   matchesPullRequestQuery,
+  parsePullRequestQuery,
   narrowPullRequestsToFilters,
   mergePullRequestDiffStats,
   partitionPullRequestsWithPriority,
@@ -103,9 +104,8 @@ export interface PullRequestsSearch {
    * in the URL because a link is read and edited by hand; folded into one record for the listing.
    */
   readonly draft?: "only" | "hide";
-  readonly review?: "approved";
-  readonly checks?: "passing";
-  readonly size?: "m";
+  readonly review?: NonNullable<PullRequestListFilters["review"]>;
+  readonly checks?: NonNullable<PullRequestListFilters["checks"]>;
 }
 
 // The state filters wear the same glyphs the rows do, so the two read as one vocabulary.
@@ -163,9 +163,13 @@ export const Route = createFileRoute("/_chat/pull-requests")({
       : {}),
     ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
     ...(raw.draft === "only" || raw.draft === "hide" ? { draft: raw.draft } : {}),
-    ...(raw.review === "approved" ? { review: raw.review } : {}),
-    ...(raw.checks === "passing" ? { checks: raw.checks } : {}),
-    ...(raw.size === "m" ? { size: raw.size } : {}),
+    ...(raw.review === "approved" ||
+    raw.review === "changes-requested" ||
+    raw.review === "review-required" ||
+    raw.review === "none"
+      ? { review: raw.review }
+      : {}),
+    ...(raw.checks === "passing" || raw.checks === "failing" ? { checks: raw.checks } : {}),
   }),
   component: PullRequestsRouteView,
 });
@@ -254,7 +258,6 @@ function PullRequestsRouteView() {
             ...(next.draft ? { draft: next.draft } : {}),
             ...(next.review ? { review: next.review } : {}),
             ...(next.checks ? { checks: next.checks } : {}),
-            ...(next.size ? { size: next.size } : {}),
           };
         },
         replace: true,
@@ -285,21 +288,37 @@ function PullRequestsRouteView() {
   const typedQuery = (search.q ?? "").trim();
   const sentQuery = useDebouncedValue(typedQuery, SEARCH_DEBOUNCE_MS);
   const querySettled = typedQuery === sentQuery;
+  // What was typed, split into the qualifiers the hosts can act on and the words that are left.
+  // The URL keeps the line as it was written; only the request sees the two halves.
+  const typedParsed = useMemo(() => parsePullRequestQuery(typedQuery), [typedQuery]);
+  const sentParsed = useMemo(() => parsePullRequestQuery(sentQuery), [sentQuery]);
 
   // One record for the hosts, rebuilt only when the URL's own fields change so the listing
   // inputs stay identical between renders.
-  const filters = useMemo(
+  const menuFilters = useMemo(
     (): PullRequestListFilters => ({
       ...(search.draft ? { draft: search.draft } : {}),
       ...(search.review ? { review: search.review } : {}),
       ...(search.checks ? { checks: search.checks } : {}),
-      ...(search.size ? { maxSize: search.size } : {}),
     }),
-    [search.checks, search.draft, search.review, search.size],
+    [search.checks, search.draft, search.review],
+  );
+  const menuFiltered = Object.keys(menuFilters).length > 0;
+  // A typed qualifier wins over the menu's own answer for the same thing, since it is the more
+  // recent word on it; labels only ever come from the query, so there is nothing to overrule.
+  const filters = useMemo(
+    (): PullRequestListFilters => ({ ...menuFilters, ...sentParsed.filters }),
+    [menuFilters, sentParsed.filters],
   );
   const hasFilters = Object.keys(filters).length > 0;
+  /** The same narrowings the moment they are typed, for the rows already on screen. */
+  const localFilters = useMemo(
+    (): PullRequestListFilters => ({ ...menuFilters, ...typedParsed.filters }),
+    [menuFilters, typedParsed.filters],
+  );
+  const hasLocalFilters = Object.keys(localFilters).length > 0;
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}:${search.size ?? ""}`;
+  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${search.draft ?? ""}:${search.review ?? ""}:${search.checks ?? ""}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   // Where the next slice carries on from, per repository, as the server handed it back. Sending
   // it is what makes a second page cost a second page rather than the whole list again — and a
@@ -334,7 +353,7 @@ function PullRequestsRouteView() {
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
             ...(hasFilters ? { filters } : {}),
-            ...(sentQuery ? { query: sentQuery } : {}),
+            ...(sentParsed.text ? { query: sentParsed.text } : {}),
             ...(sentCursors ? { cursors: sentCursors } : {}),
           },
         }),
@@ -361,7 +380,7 @@ function PullRequestsRouteView() {
             limit: PAGE_SIZE,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
-            ...(hasFilters ? { filters } : {}),
+            ...(menuFiltered ? { filters: menuFilters } : {}),
           },
         }),
   );
@@ -383,7 +402,7 @@ function PullRequestsRouteView() {
             limit: PAGE_SIZE,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
-            ...(hasFilters ? { filters } : {}),
+            ...(menuFiltered ? { filters: menuFilters } : {}),
           },
         }),
   );
@@ -398,7 +417,7 @@ function PullRequestsRouteView() {
             limit: PAGE_SIZE,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
-            ...(hasFilters ? { filters } : {}),
+            ...(menuFiltered ? { filters: menuFilters } : {}),
           },
         }),
   );
@@ -570,7 +589,10 @@ function PullRequestsRouteView() {
     if (!answered) return;
     setOrdered((previous) => {
       if (previous === null || previous.key !== filterKey) {
-        return { key: filterKey, entries: rankPullRequestMatches(answered.entries, sentQuery) };
+        return {
+          key: filterKey,
+          entries: rankPullRequestMatches(answered.entries, sentParsed.text),
+        };
       }
       if (sentCursors !== null) {
         // A continuation is a slice, not the list: it carries only what comes after the rows
@@ -581,7 +603,7 @@ function PullRequestsRouteView() {
         const arrived = answered.entries.filter((entry) => !held.has(pullRequestEntryKey(entry)));
         const appended = rankPullRequestMatches(
           arrived.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-          sentQuery,
+          sentParsed.text,
         );
         return { key: filterKey, entries: [...previous.entries, ...appended] };
       }
@@ -590,9 +612,9 @@ function PullRequestsRouteView() {
       // since the last read at the bottom of the page — below rows a week older — where "the
       // latest" is exactly what a refresh was for. The host answers in the order the page
       // reads, so its order stands; a row that moved was updated, and moving is the news.
-      return { key: filterKey, entries: rankPullRequestMatches(answered.entries, sentQuery) };
+      return { key: filterKey, entries: rankPullRequestMatches(answered.entries, sentParsed.text) };
     });
-  }, [answered, filterKey, sentCursors, sentQuery]);
+  }, [answered, filterKey, sentCursors, sentParsed.text]);
 
   // Carrying on where the last answer stopped, and only raising the page size for the hosts that
   // could not say where that was.
@@ -673,13 +695,13 @@ function PullRequestsRouteView() {
     // The rows the hosts could not narrow themselves, for the fields a row actually carries:
     // a host with no filter of its own answers unnarrowed, and so does one whose answer for the
     // new filters has not arrived yet. Checks are absent here, because no row carries them.
-    const narrowedEntries = hasFilters
-      ? involvementEntries.filter((entry) => matchesPullRequestFilters(entry, filters))
+    const narrowedEntries = hasLocalFilters
+      ? involvementEntries.filter((entry) => matchesPullRequestFilters(entry, localFilters))
       : involvementEntries;
     // Newest update first once nothing is typed, so a list merged from several hosts reads in
     // one order rather than in each host's. With a search on, the relevance ranking above is
     // the order, and re-sorting by date here would undo it.
-    if (typedQuery.length === 0) {
+    if (typedParsed.text.length === 0) {
       return narrowedEntries.toSorted((left, right) =>
         right.updatedAt.localeCompare(left.updatedAt),
       );
@@ -688,19 +710,19 @@ function PullRequestsRouteView() {
     return narrowedEntries.filter(
       (entry) =>
         (answeredLocally && searchingHosts.has(entry.host)) ||
-        matchesPullRequestQuery(entry, typedQuery),
+        matchesPullRequestQuery(entry, typedParsed.text),
     );
   }, [
     filterKey,
-    filters,
-    hasFilters,
+    hasLocalFilters,
+    localFilters,
     listData,
     ordered,
     querySettled,
     search.involvement,
     searchingHosts,
     showingCarried,
-    typedQuery,
+    typedParsed.text,
     viewers,
   ]);
 
@@ -1032,8 +1054,8 @@ function PullRequestsRouteView() {
                   // Ten is the floor the ranking gives a row whose own fields say nothing
                   // about the search: the host matched something this row cannot show.
                   matchedElsewhere={
-                    typedQuery.length > 0 &&
-                    scorePullRequestMatch(entry, typedQuery) <= MATCHED_ELSEWHERE_SCORE
+                    typedParsed.text.length > 0 &&
+                    scorePullRequestMatch(entry, typedParsed.text) <= MATCHED_ELSEWHERE_SCORE
                   }
                   selected={
                     selected?.repository === entry.repository && selected.number === entry.number
@@ -1094,14 +1116,9 @@ function PullRequestsRouteView() {
       involvement={search.involvement}
       involvementOptions={INVOLVEMENT_TABS}
       onInvolvement={(involvement) => updateListScope({ involvement })}
-      filters={filters}
+      filters={menuFilters}
       onFilters={(next) =>
-        updateListScope({
-          draft: next.draft,
-          review: next.review,
-          checks: next.checks,
-          size: next.maxSize,
-        })
+        updateListScope({ draft: next.draft, review: next.review, checks: next.checks })
       }
       host={search.host}
       hostOptions={hostMenuOptions}

@@ -9,13 +9,14 @@ import type {
 import {
   CircleCheckIcon,
   CircleDashedIcon,
+  CircleSlashIcon,
+  CircleXIcon,
   EyeOffIcon,
   FolderGit2Icon,
   GitPullRequestDraftIcon,
   LayersIcon,
   ListFilterIcon,
   LoaderIcon,
-  RulerIcon,
   SearchIcon,
 } from "lucide-react";
 import type { ElementType } from "react";
@@ -94,7 +95,7 @@ export function PullRequestSearchInput({
         type="text"
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
-        placeholder="Search pull requests"
+        placeholder="Search pull requests, or label:bug"
         aria-label="Search pull requests"
         // Tracks the shared input's height at both widths, so it stays level with the icon
         // button beside it rather than towering over it on wide screens.
@@ -125,16 +126,15 @@ const DRAFT_OPTIONS = [
 const REVIEW_OPTIONS = [
   { value: UNFILTERED_VALUE, label: "All", Icon: LayersIcon },
   { value: "approved", label: "Approved", Icon: CircleCheckIcon },
+  { value: "changes-requested", label: "Changes requested", Icon: CircleXIcon },
+  { value: "review-required", label: "Review required", Icon: CircleDashedIcon },
+  { value: "none", label: "No reviews", Icon: CircleSlashIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
 const CHECKS_OPTIONS = [
   { value: UNFILTERED_VALUE, label: "All", Icon: LayersIcon },
-  { value: "passing", label: "Passing", Icon: CircleDashedIcon },
-] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
-
-const SIZE_OPTIONS = [
-  { value: UNFILTERED_VALUE, label: "Any size", Icon: LayersIcon },
-  { value: "m", label: "Medium or smaller", Icon: RulerIcon },
+  { value: "passing", label: "Passing", Icon: CircleCheckIcon },
+  { value: "failing", label: "Failing", Icon: CircleXIcon },
 ] as const satisfies ReadonlyArray<PullRequestFilterOption<string>>;
 
 function PullRequestFilterRadioGroup<Value extends string>({
@@ -293,13 +293,6 @@ export function PullRequestFiltersMenu({
           value={filters.checks ?? UNFILTERED_VALUE}
           options={CHECKS_OPTIONS}
           onChange={(next) => onFilters(withFilter("checks", next))}
-        />
-        <MenuSeparator />
-        <PullRequestFilterRadioGroup
-          label="Size"
-          value={filters.maxSize ?? UNFILTERED_VALUE}
-          options={SIZE_OPTIONS}
-          onChange={(next) => onFilters(withFilter("maxSize", next))}
         />
         {hostOptions.length > 2 ? (
           <>
