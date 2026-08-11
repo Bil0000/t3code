@@ -54,16 +54,21 @@ export const PullRequestListFilters = Schema.Struct({
   ),
   checks: Schema.optional(Schema.Literals(["passing", "failing"])),
   /**
-   * Labels a row must carry all of, and labels it must carry none of — typed as `label:` and
-   * `-label:` qualifiers, since a project's labels are its own and no menu can list them.
-   * Bounded because each becomes a qualifier of a host's search.
+   * Labels as GitHub's own search reads them: each group is one `label:` qualifier, a row must
+   * satisfy every group, and a group holding several names is satisfied by any one of them —
+   * `label:size:S,size:XS` finds either size. Typed rather than picked, since a project's labels
+   * are its own and no menu can list them. Bounded because each becomes a host search qualifier.
    */
-  labels: Schema.optional(PullRequestQualifierValues),
+  labels: Schema.optional(Schema.Array(PullRequestQualifierValues).check(Schema.isMaxLength(10))),
   excludedLabels: Schema.optional(PullRequestQualifierValues),
   /** One login, as `author:` names it. */
   author: Schema.optional(PullRequestQualifierValue),
 });
 export type PullRequestListFilters = typeof PullRequestListFilters.Type;
+
+/** The one-glyph summary of a change request's checks, as its list row wears it. */
+export const PullRequestChecksState = Schema.Literals(["passing", "failing", "pending"]);
+export type PullRequestChecksState = typeof PullRequestChecksState.Type;
 
 export const PullRequestMergeability = Schema.Literals(["mergeable", "conflicting", "unknown"]);
 export type PullRequestMergeability = typeof PullRequestMergeability.Type;
@@ -382,6 +387,8 @@ export const PullRequestListEntry = Schema.Struct({
   labels: Schema.Array(PullRequestLabel),
   /** Absent where the host does not summarise its reviews, which is every host but GitHub. */
   reviewDecision: Schema.optional(PullRequestReviewDecision),
+  /** Absent where the host reports no check rollup, or the change request has no checks. */
+  checksState: Schema.optional(PullRequestChecksState),
 });
 export type PullRequestListEntry = typeof PullRequestListEntry.Type;
 
@@ -405,6 +412,12 @@ export const PullRequestListInput = Schema.Struct({
   involvement: Schema.optional(PullRequestInvolvement),
   filters: Schema.optional(PullRequestListFilters),
   projectId: Schema.optional(ProjectId),
+  /**
+   * Only these projects, for a client that assigns each shared repository to one of its
+   * connections and asks the others to stay quiet about it. Absent means every project, which
+   * is what every listing asked for before there were several connections to spread across.
+   */
+  projectIds: Schema.optional(Schema.Array(ProjectId).check(Schema.isMaxLength(100))),
   /**
    * Narrows the listing to one host, named as the host itself rather than as its provider kind:
    * github.com and a GitHub Enterprise install are two accounts, and a kind cannot tell them
