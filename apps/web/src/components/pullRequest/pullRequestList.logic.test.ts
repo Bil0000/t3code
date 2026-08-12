@@ -20,6 +20,7 @@ import {
   scorePullRequestMatch,
   withDiffStat,
   resolveProjectScope,
+  resolveQueryEnvironmentIds,
   type EnvironmentPullRequestEntry,
 } from "./pullRequestList.logic";
 
@@ -833,6 +834,49 @@ describe("the project an id names", () => {
 
   it("answers nothing for a server that does not have it", () => {
     expect(findScopedProject(projects, ENV_1, "project-2")).toBeUndefined();
+  });
+});
+
+describe("which environments a listing should ask", () => {
+  const ENV_3 = "env-3" as EnvironmentId;
+  const environmentIds = [ENV_1, ENV_2, ENV_3];
+
+  it("asks only the owning server once the project is unambiguous", () => {
+    const projects = [{ id: "project-1", environmentId: ENV_2 }];
+    expect(
+      resolveQueryEnvironmentIds(environmentIds, projects, { environmentId: ENV_2 }, "project-1"),
+    ).toEqual([ENV_2]);
+  });
+
+  it("asks every environment when there is no project narrowing at all", () => {
+    expect(resolveQueryEnvironmentIds(environmentIds, [], undefined, undefined)).toEqual(
+      environmentIds,
+    );
+  });
+
+  it("asks only the environments that actually hold an ambiguous bare id, never a third that doesn't", () => {
+    const projects = [
+      { id: "project-1", environmentId: ENV_1 },
+      { id: "project-1", environmentId: ENV_2 },
+    ];
+    // Two servers can genuinely hold the same project id string; the third holds no such project
+    // and asking it would return an unrelated project's rows rather than an honest empty answer.
+    expect(resolveQueryEnvironmentIds(environmentIds, projects, undefined, "project-1")).toEqual([
+      ENV_1,
+      ENV_2,
+    ]);
+  });
+
+  it("asks nothing for a bare id no environment holds", () => {
+    const projects = [{ id: "project-1", environmentId: ENV_1 }];
+    expect(resolveQueryEnvironmentIds(environmentIds, projects, undefined, "project-9")).toEqual(
+      [],
+    );
+  });
+
+  it("keeps the single-environment case unchanged", () => {
+    const projects = [{ id: "project-1", environmentId: ENV_1 }];
+    expect(resolveQueryEnvironmentIds([ENV_1], projects, undefined, "project-1")).toEqual([ENV_1]);
   });
 });
 

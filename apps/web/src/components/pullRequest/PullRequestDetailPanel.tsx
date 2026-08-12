@@ -92,6 +92,7 @@ import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLi
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import {
+  autoMergeWouldMergeNow,
   buildAskAboutLinesHandoff,
   buildAskAboutPullRequestHandoff,
   buildExplainPullRequestHandoff,
@@ -100,6 +101,7 @@ import {
   buildResolveConflictsPrompt,
   handoffPrompt,
   handoffReviewComments,
+  pullRequestActionNeedsHostRefresh,
   pullRequestFindingKey,
   readableFailure,
   resolveBaseFreshness,
@@ -602,7 +604,7 @@ export function PullRequestDetailPanel({
     // through that path rather than a second one. Every other action here only changes metadata;
     // a merge does move the branch too, but it also closes the pull request, where the diff is
     // no longer what anyone is looking at.
-    if (action === "update-branch") {
+    if (pullRequestActionNeedsHostRefresh(action)) {
       void refreshFromHost();
     } else {
       refreshDetail();
@@ -984,8 +986,8 @@ export function PullRequestDetailPanel({
   // What arming auto-merge is about to do: `--auto` merges the instant nothing is left to wait
   // on, so a pull request that is already mergeable with green (or no) checks merges right away
   // rather than later. The confirmation reads this to say which one is about to happen.
-  const autoMergeWouldMergeNow =
-    detail?.mergeability === "mergeable" && (checksState === "passing" || checksState === null);
+  const autoMergeWillMergeNow =
+    detail !== null && autoMergeWouldMergeNow(detail.mergeability, checksState);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -1748,7 +1750,7 @@ export function PullRequestDetailPanel({
               {confirmAction === "merge"
                 ? `This merges #${reference.number} using ${selectedMergeMethod}.`
                 : confirmAction === "enable-auto-merge"
-                  ? autoMergeWouldMergeNow
+                  ? autoMergeWillMergeNow
                     ? // Nothing left to wait on, so `--auto` merges it the moment it is armed.
                       `#${reference.number} is already mergeable, so this merges it using ${selectedMergeMethod} right away.`
                     : `This merges #${reference.number} using ${selectedMergeMethod} as soon as it is ready.`

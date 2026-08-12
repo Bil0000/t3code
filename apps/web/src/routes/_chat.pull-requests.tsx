@@ -44,6 +44,7 @@ import {
   pullRequestEnvironmentSetKey,
   readPullRequestListSnapshot,
   resolveProjectScope,
+  resolveQueryEnvironmentIds,
   withDiffStat,
   writePullRequestListSnapshot,
   scorePullRequestMatch,
@@ -80,6 +81,7 @@ import {
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
+  updatePullRequestTabStatus,
   useRightPanelStore,
   type PullRequestSurface,
 } from "../rightPanelStore";
@@ -374,11 +376,7 @@ function PullRequestsRouteView() {
     (status: PullRequestTabStatus) => {
       const id = activePullRequestSurfaceId;
       if (id === undefined) return;
-      setPullRequestTabStatuses((current) =>
-        current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
-          ? current
-          : { ...current, [id]: status },
-      );
+      setPullRequestTabStatuses((current) => updatePullRequestTabStatus(current, id, status));
     },
     [activePullRequestSurfaceId],
   );
@@ -473,20 +471,10 @@ function PullRequestsRouteView() {
   // same project id, with no server named — only the servers that actually hold that id are
   // asked: a server without it may still hold an unrelated project of its own under the same
   // string, and asking it would return that project's rows rather than an honest empty answer.
-  const queryEnvironmentIds = useMemo(() => {
-    if (scopedProject !== undefined) {
-      return environmentIds.filter(
-        (environmentId) => environmentId === scopedProject.environmentId,
-      );
-    }
-    if (scopedProjectId === undefined) return environmentIds;
-    const holders = new Set(
-      projects
-        .filter((project) => project.id === scopedProjectId)
-        .map((project) => project.environmentId),
-    );
-    return environmentIds.filter((environmentId) => holders.has(environmentId));
-  }, [environmentIds, projects, scopedProject, scopedProjectId]);
+  const queryEnvironmentIds = useMemo(
+    () => resolveQueryEnvironmentIds(environmentIds, projects, scopedProject, scopedProjectId),
+    [environmentIds, projects, scopedProject, scopedProjectId],
+  );
   /**
    * Which projects each server is asked about. Two servers holding the same repository would both
    * list the same pull requests, so each repository is listed by one of them — the first, which is

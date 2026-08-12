@@ -127,6 +127,7 @@ import {
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
   type RightPanelSurface,
+  updatePullRequestTabStatus,
   useRightPanelStore,
 } from "../rightPanelStore";
 import {
@@ -1600,11 +1601,7 @@ function ChatViewContent(props: ChatViewProps) {
     (status: PullRequestTabStatus) => {
       const id = activePullRequestSurfaceId;
       if (id === undefined) return;
-      setPullRequestTabStatuses((current) =>
-        current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
-          ? current
-          : { ...current, [id]: status },
-      );
+      setPullRequestTabStatuses((current) => updatePullRequestTabStatus(current, id, status));
     },
     [activePullRequestSurfaceId],
   );

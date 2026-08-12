@@ -1,12 +1,14 @@
-import type {
-  PullRequestCheck,
-  PullRequestComment,
-  PullRequestDetailView,
-  PullRequestReviewThread,
+import {
+  PullRequestAction,
+  type PullRequestCheck,
+  type PullRequestComment,
+  type PullRequestDetailView,
+  type PullRequestReviewThread,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  autoMergeWouldMergeNow,
   buildAskAboutLinesHandoff,
   buildAskAboutPullRequestHandoff,
   buildExplainPullRequestHandoff,
@@ -17,6 +19,7 @@ import {
   handoffReviewComments,
   isThreadOwnPullRequest,
   orderPullRequestComments,
+  pullRequestActionNeedsHostRefresh,
   pullRequestFindingKey,
   readableFailure,
   resolveBaseFreshness,
@@ -882,5 +885,58 @@ describe("whether the panel is showing the thread's own pull request", () => {
         surface,
       ),
     ).toBe(false);
+  });
+});
+
+describe("what arming auto-merge is about to do", () => {
+  it("merges right away when the branch is already mergeable with passing checks", () => {
+    expect(autoMergeWouldMergeNow("mergeable", "passing")).toBe(true);
+  });
+
+  it("merges right away when there are no checks at all to wait on", () => {
+    // No checks reported is not the same as a red pipeline: `--auto` has nothing left to wait on.
+    expect(autoMergeWouldMergeNow("mergeable", null)).toBe(true);
+  });
+
+  it("waits where checks are still pending or have failed", () => {
+    expect(autoMergeWouldMergeNow("mergeable", "pending")).toBe(false);
+    expect(autoMergeWouldMergeNow("mergeable", "failing")).toBe(false);
+  });
+
+  it("waits on a conflicting branch whatever the checks say", () => {
+    expect(autoMergeWouldMergeNow("conflicting", "passing")).toBe(false);
+    expect(autoMergeWouldMergeNow("conflicting", null)).toBe(false);
+  });
+
+  it("waits where the host has not given a merge verdict yet", () => {
+    expect(autoMergeWouldMergeNow("unknown", "passing")).toBe(false);
+  });
+});
+
+describe("which actions need the host read again after they run", () => {
+  it("classifies every action the contract knows about", () => {
+    // Imported from the contract rather than hand-listed, so a new PullRequestAction fails this
+    // test until somebody decides which side of the diff it belongs on.
+    expect(PullRequestAction.literals.map(pullRequestActionNeedsHostRefresh)).toEqual(
+      PullRequestAction.literals.map((action) => action === "update-branch"),
+    );
+  });
+
+  it("sends update-branch back to the host, having moved the head commit", () => {
+    expect(pullRequestActionNeedsHostRefresh("update-branch")).toBe(true);
+  });
+
+  it("leaves every action that only changes metadata to the cheaper detail refresh", () => {
+    for (const action of [
+      "ready",
+      "draft",
+      "close",
+      "reopen",
+      "enable-auto-merge",
+      "disable-auto-merge",
+      "merge",
+    ] as const) {
+      expect(pullRequestActionNeedsHostRefresh(action)).toBe(false);
+    }
   });
 });

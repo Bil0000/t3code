@@ -1,7 +1,9 @@
 import type {
+  PullRequestAction,
   PullRequestActor,
   PullRequestBaseComparison,
   PullRequestCheck,
+  PullRequestChecksState,
   PullRequestComment,
   PullRequestDetailView,
   PullRequestMergeability,
@@ -719,4 +721,38 @@ export function resolveBaseFreshness(detail: {
     behindBy: detail.behindBy ?? null,
     methods: offered.filter((method) => allowed.includes(method)),
   };
+}
+
+/**
+ * What arming auto-merge is about to do: `--auto` merges the instant nothing is left to wait on,
+ * so a pull request that is already mergeable with green (or no) checks merges right away rather
+ * than later. The confirmation reads this to say which one is about to happen.
+ */
+export function autoMergeWouldMergeNow(
+  mergeability: PullRequestMergeability,
+  checksState: PullRequestChecksState | null,
+): boolean {
+  return mergeability === "mergeable" && (checksState === "passing" || checksState === null);
+}
+
+/**
+ * Whether a completed action leaves the diff atom pointed at a comparison that no longer exists,
+ * the same staleness the manual refresh button fixes. Only `update-branch` moves the head commit;
+ * a merge moves the branch too, but it also closes the pull request, where the diff is no longer
+ * what anyone is looking at. Written as a `Record` so a new `PullRequestAction` fails to compile
+ * here until somebody decides which side of the diff it belongs on.
+ */
+const ACTION_NEEDS_HOST_REFRESH: Record<PullRequestAction, boolean> = {
+  "update-branch": true,
+  merge: false,
+  ready: false,
+  draft: false,
+  close: false,
+  reopen: false,
+  "enable-auto-merge": false,
+  "disable-auto-merge": false,
+};
+
+export function pullRequestActionNeedsHostRefresh(action: PullRequestAction): boolean {
+  return ACTION_NEEDS_HOST_REFRESH[action];
 }

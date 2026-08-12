@@ -676,6 +676,32 @@ export function findScopedProject<
 }
 
 /**
+ * Which environments a listing should ask, once the project scope is known. Scoping to a project
+ * scopes to the server that owns it, saving every other server a read that could only answer with
+ * nothing. Where an id is ambiguous — two servers holding the same project id, with no server
+ * named — only the servers that actually hold that id are asked: a server without it may still
+ * hold an unrelated project of its own under the same string, and asking it would return that
+ * project's rows rather than an honest empty answer.
+ */
+export function resolveQueryEnvironmentIds<Id extends string>(
+  environmentIds: ReadonlyArray<Id>,
+  projects: ReadonlyArray<{ readonly id: string; readonly environmentId: Id }>,
+  scopedProject: { readonly environmentId: Id } | undefined,
+  scopedProjectId: string | undefined,
+): ReadonlyArray<Id> {
+  if (scopedProject !== undefined) {
+    return environmentIds.filter((environmentId) => environmentId === scopedProject.environmentId);
+  }
+  if (scopedProjectId === undefined) return environmentIds;
+  const holders = new Set(
+    projects
+      .filter((project) => project.id === scopedProjectId)
+      .map((project) => project.environmentId),
+  );
+  return environmentIds.filter((environmentId) => holders.has(environmentId));
+}
+
+/**
  * How well a row answers the text that was searched for, as a number to order by.
  *
  * Every host searches more than a row shows — GitHub reads bodies and commit messages, GitLab
