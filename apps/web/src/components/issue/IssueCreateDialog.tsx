@@ -21,7 +21,7 @@ import {
   Minimize2Icon,
   PlusIcon,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 
 import { isMacPlatform } from "~/lib/utils";
 import { useProjects } from "~/state/entities";
@@ -316,6 +316,11 @@ export function IssueCreateDialog({
   const [labels, setLabels] = useState("");
   const [assignees, setAssignees] = useState("");
   const [filing, setFiling] = useState(false);
+  /**
+   * The same "already filing" as `filing`, kept where a second press can read it. State is only
+   * true after a render, and two ⌘ Enters land inside one — which is two issues on the host.
+   */
+  const filingRef = useRef(false);
   const [expanded, setExpanded] = useState(false);
   const [createMore, setCreateMore] = useState(false);
   const create = useAtomCommand(issueEnvironment.create, { reportFailure: false });
@@ -411,7 +416,8 @@ export function IssueCreateDialog({
   const canFile = selected !== undefined && trimmedTitle.length > 0 && complete && !filing;
 
   const submit = async () => {
-    if (selected === undefined || !canFile) return;
+    if (selected === undefined || !canFile || filingRef.current) return;
+    filingRef.current = true;
     setFiling(true);
     const result = await create({
       environmentId,
@@ -426,6 +432,7 @@ export function IssueCreateDialog({
         assignees: parseList(assignees),
       },
     });
+    filingRef.current = false;
     setFiling(false);
     if (result._tag === "Failure") {
       // The host's own sentence: a label that does not exist, a tracker switched off for this
