@@ -28,7 +28,7 @@ import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { IssueDetailPanel, type IssueHandoffTarget } from "./IssueDetailPanel";
 import { ListGhost } from "../sourceControl/ListGhosts";
-import { filterIssuesByInvolvement, issueEntryKey } from "./issueList.logic";
+import { filterIssuesByInvolvement, issueEntryKey, type IssueViewers } from "./issueList.logic";
 import { IssueFiltersMenu } from "./IssueListFilters";
 import { type ListFilterOption } from "../sourceControl/ListFilterMenu";
 import { IssueRow } from "./IssueRow";
@@ -244,6 +244,11 @@ function IssueBrowserList({
     entries: ReadonlyArray<IssueListEntry>;
     /** Held with the rows, because a read in flight answers nothing about what is left. */
     truncated: boolean;
+    /**
+     * Held with the rows for the same reason: who is signed in is what "assigned to me" is judged
+     * against, and forgetting it for the length of a continuation would hide every row on screen.
+     */
+    viewers: IssueViewers;
   } | null>(null);
   useEffect(() => {
     if (answered === null) return;
@@ -253,6 +258,7 @@ function IssueBrowserList({
           key: filterKey,
           entries: openFirst(answered.entries),
           truncated: answered.truncated,
+          viewers: answered.viewers,
         };
       }
       const held = new Set(previous.entries.map(issueEntryKey));
@@ -264,6 +270,7 @@ function IssueBrowserList({
           ...arrived.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
         ],
         truncated: answered.truncated,
+        viewers: answered.viewers,
       };
     });
   }, [answered, filterKey, sentCursors]);
@@ -271,10 +278,11 @@ function IssueBrowserList({
   // Involvement and the label are narrowed here as well as asked for: a host that cannot express
   // "mentioned" answers unnarrowed, and no host is asked about a label at all.
   const entries = useMemo(() => {
-    const held = ordered?.key === filterKey ? ordered.entries : (answered?.entries ?? []);
+    const shown = ordered?.key === filterKey ? ordered : null;
+    const held = shown?.entries ?? answered?.entries ?? [];
     const byInvolvement = filterIssuesByInvolvement(
       held,
-      answered?.viewers ?? {},
+      shown?.viewers ?? answered?.viewers ?? {},
       filters.involvement,
     );
     return filters.label === undefined
