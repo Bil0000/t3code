@@ -68,6 +68,18 @@ function notes(count: number, firstId: number): string {
   );
 }
 
+/** A page of `resource_label_events`, which is where the labellings are read from. */
+function labelEvents(count: number, firstId: number): string {
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => ({
+      id: firstId + index,
+      action: "add",
+      created_at: "2026-07-01T00:00:00Z",
+      label: { name: "backend" },
+    })),
+  );
+}
+
 /** A row of `templates/issues`, which names a template but carries none of it. */
 function templateEntries(
   entries: ReadonlyArray<{ readonly key: string; readonly name: string }>,
@@ -506,6 +518,28 @@ layer("GitLabIssueCli.layer", (it) => {
       // Ten pages of notes and ten of labellings, both bounded by the same limit.
       assert.strictEqual(mockedExecute.mock.calls.length, 20);
       assert.strictEqual(activity.comments.length, 1000);
+      assert.isTrue(activity.truncated);
+    }),
+  );
+
+  it.effect("says the history was cut short when only the labellings ran past the bound", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) => {
+        const path = input.args[1] ?? "";
+        // A quiet issue that has been relabelled all day: the conversation ends on its first page.
+        return Effect.succeed(output(path.includes("/notes?") ? notes(1, 1) : labelEvents(100, 1)));
+      });
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const activity = yield* cli.listActivity({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      assert.strictEqual(activity.comments.length, 1);
+      assert.strictEqual(activity.events.length, 1000);
+      // The labelling walk stopped at its bound, so the timeline is short whatever the notes did.
       assert.isTrue(activity.truncated);
     }),
   );
