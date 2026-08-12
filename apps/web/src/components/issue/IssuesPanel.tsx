@@ -67,6 +67,11 @@ interface PanelPage {
 }
 
 const SEARCH_DEBOUNCE_MS = 250;
+/**
+ * What `IssueListInput` accepts as a query. Past it the read is refused outright, so a pasted wall
+ * of text searches its opening rather than coming back as an error about its length.
+ */
+const MAX_QUERY_LENGTH = 200;
 const PAGE_SIZE = 30;
 /** The listing's own ceiling. Past it the search is the way to find something, not more rows. */
 const MAX_LIMIT = 500;
@@ -184,7 +189,7 @@ function IssueBrowserList({
   filters: PanelFilters;
   onFilters: (filters: PanelFilters) => void;
 }) {
-  const typed = query.trim();
+  const typed = query.trim().slice(0, MAX_QUERY_LENGTH);
   // Searching asks the host, which takes a round trip, so the text is held for a moment before it
   // is sent — the same bargain the issues page makes.
   const sent = useDebouncedValue(typed, SEARCH_DEBOUNCE_MS);
