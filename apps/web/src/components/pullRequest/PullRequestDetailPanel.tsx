@@ -1302,6 +1302,12 @@ export function PullRequestDetailPanel({
         onScrollCapture={(event) => {
           if (chromeVariant !== "collapse") return;
           const scroller = event.target as HTMLElement;
+          // Only the tab's own scrollport folds the chrome. A scrollable inside it — a code
+          // block running wide, the capped list of stranded conversations — is the reader
+          // moving something on the page rather than the page, and its `scrollTop` is not the
+          // one the compensation belongs to. Summary and timeline render their scroller as the
+          // marked wrapper's only child, so that is what the mark asks about.
+          if (scroller.parentElement?.hasAttribute("data-tab-scroller") !== true) return;
           scrollerRef.current = scroller;
           const top = scroller.scrollTop;
           setChromeCondensed((previous) => {
@@ -1343,7 +1349,10 @@ export function PullRequestDetailPanel({
         ) : detail ? (
           <>
             {mountedTabs.has("summary") ? (
-              <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
+              <div
+                data-tab-scroller
+                className={cn("absolute inset-0", tab !== "summary" && "invisible")}
+              >
                 <PullRequestSummaryTab
                   environmentId={environmentId}
                   reference={reference}
@@ -1359,7 +1368,10 @@ export function PullRequestDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("timeline") ? (
-              <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
+              <div
+                data-tab-scroller
+                className={cn("absolute inset-0", tab !== "timeline" && "invisible")}
+              >
                 {activityPending ? (
                   <TimelineGhost />
                 ) : activityError ? (
@@ -1378,6 +1390,8 @@ export function PullRequestDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("code") ? (
+              // No mark: the viewer keeps its scrollport inside itself, under its own toolbar,
+              // so no child of this wrapper is the tab's own scrollport to fold against.
               <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
                 <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
                   <PullRequestCodeTab
