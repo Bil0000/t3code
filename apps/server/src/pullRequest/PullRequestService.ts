@@ -16,6 +16,7 @@ import {
   type PullRequestActionInput,
   type PullRequestActivity,
   type PullRequestCommentInput,
+  type PullRequestCommentUpdateInput,
   type PullRequestDetail,
   type PullRequestDiffFileContentsInput,
   type PullRequestDiffFileContentsResult,
@@ -39,6 +40,7 @@ import {
   type PullRequestSubmitReviewInput,
   type PullRequestThreadReplyInput,
   type PullRequestThreadResolutionInput,
+  type PullRequestUpdateInput,
   type SourceControlProviderInfo,
   type SourceControlProviderKind,
 } from "@t3tools/contracts";
@@ -137,7 +139,11 @@ export class PullRequestService extends Context.Service<
       input: PullRequestDiffFileContentsInput,
     ) => Effect.Effect<PullRequestDiffFileContentsResult, PullRequestError>;
     readonly runAction: (input: PullRequestActionInput) => Effect.Effect<void, PullRequestError>;
+    readonly update: (input: PullRequestUpdateInput) => Effect.Effect<void, PullRequestError>;
     readonly comment: (input: PullRequestCommentInput) => Effect.Effect<void, PullRequestError>;
+    readonly updateComment: (
+      input: PullRequestCommentUpdateInput,
+    ) => Effect.Effect<void, PullRequestError>;
     readonly submitReview: (
       input: PullRequestSubmitReviewInput,
     ) => Effect.Effect<void, PullRequestError>;
@@ -1013,60 +1019,72 @@ export const make = Effect.gen(function* () {
       };
     });
 
+  /**
+   * Who this project's host says the reader is. Shared with the listing's own lookup — the same
+   * ten-minute answer per host — so a page that has already listed anything pays nothing for it,
+   * and a host that cannot say leaves it null rather than failing the read it decorates.
+   */
+  const viewerOf = (project: SupportedProject): Effect.Effect<string | null> =>
+    resolveViewers([project], new Map()).pipe(Effect.map(([resolved]) => resolved?.viewer ?? null));
+
   const detailUncached: PullRequestService["Service"]["detail"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
-        project.api
-          .getChangeRequest({
-            cwd: project.project.workspaceRoot,
-            repository: project.repository,
-            host: project.host,
-            number: input.number,
-          })
-          .pipe(
-            Effect.mapError(toPullRequestError("detail")),
-            Effect.map(
-              (changeRequest): PullRequestDetail => ({
-                provider: project.api.kind,
-                capabilities: project.api.capabilities,
-                projectId: project.project.id,
-                projectTitle: project.project.title,
-                workspaceRoot: project.project.workspaceRoot,
+        Effect.all(
+          [
+            project.api
+              .getChangeRequest({
+                cwd: project.project.workspaceRoot,
                 repository: project.repository,
-                number: changeRequest.number,
-                title: changeRequest.title,
-                body: changeRequest.body,
-                url: changeRequest.url,
-                author: changeRequest.author,
-                state: changeRequest.state,
-                isDraft: changeRequest.isDraft,
-                mergeability: changeRequest.mergeability,
-                additions: changeRequest.additions,
-                deletions: changeRequest.deletions,
-                changedFiles: changeRequest.changedFiles,
-                headBranch: changeRequest.headBranch,
-                baseBranch: changeRequest.baseBranch,
-                createdAt: changeRequest.createdAt,
-                updatedAt: changeRequest.updatedAt,
-                mergedAt: changeRequest.mergedAt,
-                closedAt: changeRequest.closedAt,
-                reviewers: changeRequest.reviewers,
-                labels: changeRequest.labels,
-                checks: changeRequest.checks,
-                mergeCapabilities: changeRequest.mergeCapabilities,
-                viewerPermissions: changeRequest.viewerPermissions,
-                ...(changeRequest.baseComparison === undefined
-                  ? {}
-                  : { baseComparison: changeRequest.baseComparison }),
-                ...(changeRequest.behindBy === undefined
-                  ? {}
-                  : { behindBy: changeRequest.behindBy }),
-                ...(changeRequest.autoMergeEnabled === undefined
-                  ? {}
-                  : { autoMergeEnabled: changeRequest.autoMergeEnabled }),
-              }),
-            ),
+                host: project.host,
+                number: input.number,
+              })
+              .pipe(Effect.mapError(toPullRequestError("detail"))),
+            viewerOf(project),
+          ],
+          { concurrency: 2 },
+        ).pipe(
+          Effect.map(
+            ([changeRequest, viewer]): PullRequestDetail => ({
+              provider: project.api.kind,
+              capabilities: project.api.capabilities,
+              projectId: project.project.id,
+              projectTitle: project.project.title,
+              workspaceRoot: project.project.workspaceRoot,
+              repository: project.repository,
+              number: changeRequest.number,
+              title: changeRequest.title,
+              body: changeRequest.body,
+              url: changeRequest.url,
+              author: changeRequest.author,
+              state: changeRequest.state,
+              isDraft: changeRequest.isDraft,
+              mergeability: changeRequest.mergeability,
+              additions: changeRequest.additions,
+              deletions: changeRequest.deletions,
+              changedFiles: changeRequest.changedFiles,
+              headBranch: changeRequest.headBranch,
+              baseBranch: changeRequest.baseBranch,
+              createdAt: changeRequest.createdAt,
+              updatedAt: changeRequest.updatedAt,
+              mergedAt: changeRequest.mergedAt,
+              closedAt: changeRequest.closedAt,
+              reviewers: changeRequest.reviewers,
+              labels: changeRequest.labels,
+              checks: changeRequest.checks,
+              mergeCapabilities: changeRequest.mergeCapabilities,
+              viewerPermissions: changeRequest.viewerPermissions,
+              ...(viewer === null || viewer.trim().length === 0 ? {} : { viewer }),
+              ...(changeRequest.baseComparison === undefined
+                ? {}
+                : { baseComparison: changeRequest.baseComparison }),
+              ...(changeRequest.behindBy === undefined ? {} : { behindBy: changeRequest.behindBy }),
+              ...(changeRequest.autoMergeEnabled === undefined
+                ? {}
+                : { autoMergeEnabled: changeRequest.autoMergeEnabled }),
+            }),
           ),
+        ),
       ),
     );
 
@@ -1268,6 +1286,76 @@ export const make = Effect.gen(function* () {
               .pipe(Effect.mapError(toPullRequestError("comment")));
           }),
         );
+      }),
+    );
+
+  /**
+   * Rewriting the change request's own words, and rewriting a remark, are both left to the host to
+   * allow or refuse. Neither is a question a permission read answers: every host lets the person
+   * who wrote something rewrite it whatever access they have otherwise, and none of them reports
+   * that as a permission — so a check here could only guess, and a wrong guess takes the control
+   * away from the one person certain to be allowed.
+   */
+  const update: PullRequestService["Service"]["update"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        const rewrite = project.api.updateChangeRequest;
+        if (project.api.capabilities.edit?.changeRequest !== true || rewrite === undefined) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "update",
+              detail: "This host cannot rewrite a change request.",
+            }),
+          );
+        }
+        if (input.title === undefined && input.body === undefined) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "update",
+              detail: "Nothing was changed.",
+            }),
+          );
+        }
+        return rewrite({
+          cwd: project.project.workspaceRoot,
+          repository: project.repository,
+          host: project.host,
+          number: input.number,
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.body === undefined ? {} : { body: input.body }),
+        }).pipe(Effect.mapError(toPullRequestError("update")));
+      }),
+    );
+
+  const updateComment: PullRequestService["Service"]["updateComment"] = (input) =>
+    (input.body.trim().length === 0
+      ? Effect.fail(
+          new PullRequestOperationError({
+            operation: "updateComment",
+            detail: "A comment cannot be empty.",
+          }),
+        )
+      : requireProject(input)
+    ).pipe(
+      Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
+        const rewrite = project.api.updateComment;
+        if (project.api.capabilities.edit?.comment !== true || rewrite === undefined) {
+          return Effect.fail(
+            new PullRequestOperationError({
+              operation: "updateComment",
+              detail: "This host cannot rewrite a comment.",
+            }),
+          );
+        }
+        return rewrite({
+          cwd: project.project.workspaceRoot,
+          repository: project.repository,
+          host: project.host,
+          number: input.number,
+          commentId: input.commentId,
+          kind: input.kind,
+          body: input.body,
+        }).pipe(Effect.mapError(toPullRequestError("updateComment")));
       }),
     );
 
@@ -1908,7 +1996,9 @@ export const make = Effect.gen(function* () {
     diff,
     diffFileContents,
     runAction: invalidatedByMutation(runAction),
+    update: invalidatedByMutation(update),
     comment: invalidatedByMutation(comment),
+    updateComment: invalidatedByMutation(updateComment),
     submitReview: invalidatedByMutation(submitReview),
     replyToThread: invalidatedByMutation(replyToThread),
     setThreadResolution: invalidatedByMutation(setThreadResolution),

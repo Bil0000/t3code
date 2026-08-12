@@ -349,8 +349,38 @@ export interface PullRequestProviderApi {
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 
+  /**
+   * Rewrites the change request's own words. Only called when `capabilities.edit.changeRequest`
+   * is true, and never with both fields absent — the caller refuses that before it gets here,
+   * because a host asked to change nothing answers differently on each of them.
+   */
+  readonly updateChangeRequest?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly title?: string | undefined;
+      readonly body?: string | undefined;
+    },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
   readonly comment: (
     input: ProviderRepositoryRef & { readonly number: number; readonly body: string },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /**
+   * Rewrites a remark somebody already posted. Only called when `capabilities.edit.comment` is
+   * true, with an id exactly as the conversation carried it.
+   *
+   * Whether this remark is the reader's to rewrite is the host's own answer: no read here can
+   * settle it, since access can be taken away between the conversation being read and the
+   * rewrite being sent, and a host refuses a stranger's remark with a sentence saying so.
+   */
+  readonly updateComment?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly commentId: string;
+      readonly kind: "issue-comment" | "review-comment";
+      readonly body: string;
+    },
   ) => Effect.Effect<void, PullRequestProviderError>;
 
   /**

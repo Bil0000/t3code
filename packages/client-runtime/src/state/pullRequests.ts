@@ -102,9 +102,21 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),
+    update: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:update",
+      tag: WS_METHODS.pullRequestsUpdate,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     comment: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:pull-requests:comment",
       tag: WS_METHODS.pullRequestsComment,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
+    updateComment: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-requests:update-comment",
+      tag: WS_METHODS.pullRequestsUpdateComment,
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),
