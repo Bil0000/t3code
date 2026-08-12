@@ -11,6 +11,7 @@ import {
   CircleCheckIcon,
   CircleDotIcon,
   LayersIcon,
+  LoaderIcon,
   PenLineIcon,
   UserCheckIcon,
 } from "lucide-react";
@@ -222,12 +223,18 @@ function IssueBrowserList({
   const [ordered, setOrdered] = useState<{
     key: string;
     entries: ReadonlyArray<IssueListEntry>;
+    /** Held with the rows, because a read in flight answers nothing about what is left. */
+    truncated: boolean;
   } | null>(null);
   useEffect(() => {
     if (answered === null) return;
     setOrdered((previous) => {
       if (previous === null || previous.key !== filterKey || sentCursors === null) {
-        return { key: filterKey, entries: openFirst(answered.entries) };
+        return {
+          key: filterKey,
+          entries: openFirst(answered.entries),
+          truncated: answered.truncated,
+        };
       }
       const held = new Set(previous.entries.map(issueEntryKey));
       const arrived = answered.entries.filter((entry) => !held.has(issueEntryKey(entry)));
@@ -237,6 +244,7 @@ function IssueBrowserList({
           ...previous.entries,
           ...arrived.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
         ],
+        truncated: answered.truncated,
       };
     });
   }, [answered, filterKey, sentCursors]);
@@ -254,6 +262,11 @@ function IssueBrowserList({
       ? byInvolvement
       : byInvolvement.filter((entry) => entry.labels.some((label) => label.name === filters.label));
   }, [answered, filterKey, filters.involvement, filters.label, ordered]);
+
+  /** From what is held rather than from the read in flight, which has not answered yet. */
+  const truncated = ordered?.key === filterKey ? ordered.truncated : (answered?.truncated ?? false);
+  /** Rows are on screen and another slice is on its way, which is what the reader is told. */
+  const loadingMore = listQuery.isPending && entries.length > 0;
 
   const nextCursors = answered?.nextCursors ?? {};
   const canContinue = Object.keys(nextCursors).length > 0;
@@ -275,7 +288,7 @@ function IssueBrowserList({
     if (
       !sentinel ||
       entries.length === 0 ||
-      answered?.truncated !== true ||
+      !truncated ||
       listQuery.isPending ||
       listQuery.error !== null ||
       // Asking past the ceiling is refused, and a continuation does not grow the page at all,
@@ -296,7 +309,7 @@ function IssueBrowserList({
     // `loadMore` is rebuilt every render and reads only what is listed here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    answered?.truncated,
+    truncated,
     canContinue,
     entries.length,
     filterKey,
@@ -377,12 +390,19 @@ function IssueBrowserList({
               ))}
               {/* Scrolling to here asks for the next slice; it says so only while one is on the
                   way, so a list that has run out ends on its last row rather than on a label. */}
-              <div
-                ref={sentinelRef}
-                className="flex justify-center py-2 text-xs text-muted-foreground"
-              >
-                {answered?.truncated === true && listQuery.isPending ? "Loading..." : null}
-              </div>
+              {truncated ? (
+                <div
+                  ref={sentinelRef}
+                  className="flex justify-center py-2 text-xs text-muted-foreground"
+                >
+                  {loadingMore ? (
+                    <span className="flex items-center gap-2">
+                      <LoaderIcon aria-hidden className="size-3.5 animate-spin" />
+                      Loading more
+                    </span>
+                  ) : null}
+                </div>
+              ) : null}
             </>
           )}
         </div>
