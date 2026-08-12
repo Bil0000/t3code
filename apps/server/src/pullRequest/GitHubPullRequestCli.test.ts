@@ -1887,7 +1887,6 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       // Each rewrite looks the pull request's node id up first, then mutates.
       const variablesAt = (index: number) =>
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         (JSON.parse(callAt(index).stdin ?? "") as { variables: Record<string, string> }).variables;
       expect(variablesAt(1)).toEqual({ pullRequestId: "PR_kwDOA", title: "A better title" });
       expect(variablesAt(3)).toEqual({
@@ -1935,7 +1934,6 @@ layer("GitHubPullRequestCli.layer", (it) => {
       yield* rewrite("review-comment");
 
       const parse = (index: number) =>
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.parse(callAt(index).stdin ?? "") as {
           query: string;
           variables: Record<string, string>;
