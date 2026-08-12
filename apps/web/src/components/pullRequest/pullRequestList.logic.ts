@@ -4,6 +4,11 @@ import { PullRequestListEntry, PullRequestListResult } from "@t3tools/contracts"
 import type { PullRequestInvolvement, PullRequestListState } from "@t3tools/contracts";
 
 import { isAuthoredByViewer } from "../sourceControl/listHelpers";
+import {
+  readListSnapshot,
+  writeListSnapshot,
+  type SnapshotStorage,
+} from "../sourceControl/listSnapshot";
 
 export type PullRequestGroupKey = "reviewRequested" | "authored" | "others";
 
@@ -187,22 +192,15 @@ export function mergePullRequestDiffStats(
   return next;
 }
 
-/** One page is what the list itself starts with, and all a cold start needs to look warm. */
-const SNAPSHOT_MAX_ENTRIES = 99;
-
-type SnapshotStorage = Pick<Storage, "getItem" | "setItem">;
-
-const snapshotStorageKey = (environmentId: string) => `t3.pullRequests.list:${environmentId}`;
-
 /**
  * The priority groups' own server-filtered answers, carried with the feed. An authored pull
  * request older than the feed's first page lives only in these, so a snapshot without them
  * cold-starts into an Authored group missing exactly the rows that made it worth having.
  */
-export interface PullRequestPartitionsSnapshot {
+export type PullRequestPartitionsSnapshot = {
   readonly authored: ReadonlyArray<PullRequestListEntry>;
   readonly reviewing: ReadonlyArray<PullRequestListEntry>;
-}
+};
 
 export interface PullRequestListSnapshot {
   readonly scope: string;
@@ -210,45 +208,25 @@ export interface PullRequestListSnapshot {
   readonly partitions?: PullRequestPartitionsSnapshot | undefined;
 }
 
-/**
- * Decoded with the contract's own schema rather than trusted from a cast: storage is writable
- * by anything in the origin and by any past version of this app, and one malformed row would
- * otherwise crash the list on every reload until the key is cleared. A snapshot from before a
- * schema change is rejected the same way, which is exactly the cold start it would have broken.
- */
-const decodeSnapshot = Schema.decodeUnknownOption(
-  Schema.Struct({
-    scope: Schema.String,
-    data: PullRequestListResult,
-    // Optional so a snapshot written before the partitions existed still hydrates the feed.
-    partitions: Schema.optional(
-      Schema.Struct({
-        authored: Schema.Array(PullRequestListEntry),
-        reviewing: Schema.Array(PullRequestListEntry),
-      }),
-    ),
-  }),
-);
+const SNAPSHOT_KEY_PREFIX = "t3.pullRequests.list";
 
-/**
- * The last list answered for this environment, brought back across a reload. The registry the
- * queries live in is recreated with the renderer, so without this a revisit cold-starts into
- * skeletons even though almost every row is unchanged; hydrated, the stale rows render at once
- * and the live read reconciles them in place by key. Errors are not carried — a failure is
- * never cached, and yesterday's is not this morning's.
- */
+const SnapshotSchema = Schema.Struct({
+  scope: Schema.String,
+  data: PullRequestListResult,
+  // Optional so a snapshot written before the partitions existed still hydrates the feed.
+  partitions: Schema.optional(
+    Schema.Struct({
+      authored: Schema.Array(PullRequestListEntry),
+      reviewing: Schema.Array(PullRequestListEntry),
+    }),
+  ),
+});
+
 export function readPullRequestListSnapshot(
   storage: SnapshotStorage | undefined,
   environmentId: string,
 ): PullRequestListSnapshot | null {
-  try {
-    const raw = storage?.getItem(snapshotStorageKey(environmentId));
-    if (!raw) return null;
-    const decoded = decodeSnapshot(JSON.parse(raw));
-    return decoded._tag === "Some" ? decoded.value : null;
-  } catch {
-    return null;
-  }
+  return readListSnapshot(storage, SnapshotSchema, SNAPSHOT_KEY_PREFIX, environmentId);
 }
 
 export function writePullRequestListSnapshot(
@@ -256,32 +234,7 @@ export function writePullRequestListSnapshot(
   environmentId: string,
   snapshot: PullRequestListSnapshot,
 ): void {
-  try {
-    storage?.setItem(
-      snapshotStorageKey(environmentId),
-      JSON.stringify({
-        scope: snapshot.scope,
-        data: {
-          ...snapshot.data,
-          entries: snapshot.data.entries.slice(0, SNAPSHOT_MAX_ENTRIES),
-          // A failure is never cached and yesterday's is not this morning's; a cursor names a
-          // position in a listing the host has long since forgotten.
-          errors: [],
-          nextCursors: {},
-        },
-        ...(snapshot.partitions === undefined
-          ? {}
-          : {
-              partitions: {
-                authored: snapshot.partitions.authored.slice(0, SNAPSHOT_MAX_ENTRIES),
-                reviewing: snapshot.partitions.reviewing.slice(0, SNAPSHOT_MAX_ENTRIES),
-              },
-            }),
-      }),
-    );
-  } catch {
-    // Storage can be full or denied; the snapshot is a convenience, not a record.
-  }
+  writeListSnapshot(storage, SNAPSHOT_KEY_PREFIX, environmentId, snapshot);
 }
 
 export { resolveProjectScope } from "../sourceControl/projectScope";
