@@ -115,6 +115,9 @@ const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
   "azure-devops": "Open on Azure DevOps",
 };
 
+/** Names no hand-off, which is the point: it holds the controls shut without claiming one is running. */
+const HANDOFF_WAITING_KIND = "waiting-for-activity";
+
 const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
   { value: "timeline", label: "Timeline" },
@@ -383,7 +386,7 @@ export function IssueDetailPanel({
     kind: string,
     build: (source: IssueHandoffSource) => IssueHandoff,
   ) => {
-    if (!detail || handoff !== null) return;
+    if (!detail || handoff !== null || activityPending) return;
     const task = build({
       number: detail.number,
       repository: detail.repository,
@@ -453,7 +456,14 @@ export function IssueDetailPanel({
     setTab("summary");
     setOpenPicker(picker);
   };
-  const handoffLabel = (kind: string, label: string) => (handoff === kind ? "Opening..." : label);
+  // Every hand-off quotes the conversation, and until the activity read lands there is none to
+  // quote — an agent handed the issue mid-read gets the argument with the argument missing, and
+  // the read that lands afterwards cannot amend a composer already written. So the controls wait
+  // and say what they are waiting for, rather than sending half an issue. A failed read is not
+  // waiting: nothing further is coming, and the issue itself is still worth handing over.
+  const handoffDisabled = handoff !== null || activityPending;
+  const handoffLabel = (kind: string, label: string) =>
+    handoff === kind ? "Opening..." : activityPending ? `${label} (loading comments)` : label;
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -549,7 +559,7 @@ export function IssueDetailPanel({
                     Refresh
                   </MenuItem>
                   <MenuItem
-                    disabled={handoff !== null}
+                    disabled={handoffDisabled}
                     onClick={() => void startHandoff("ask", buildAskAboutIssueHandoff)}
                   >
                     <MessageCircleQuestionIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
@@ -561,7 +571,7 @@ export function IssueDetailPanel({
                     </span>
                   </MenuItem>
                   <MenuItem
-                    disabled={handoff !== null}
+                    disabled={handoffDisabled}
                     onClick={() => void startHandoff("explain", buildExplainIssueHandoff)}
                   >
                     <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
@@ -576,11 +586,11 @@ export function IssueDetailPanel({
                       one, and "add to the thread you are in" would be that same thread. */}
                   {inPlaceDraft === null ? null : (
                     <MenuItem
-                      disabled={handoff !== null}
+                      disabled={handoffDisabled}
                       onClick={() => void startHandoff("attach", buildAttachIssueContext)}
                     >
                       <PaperclipIcon className="size-3.5" />
-                      Add to composer
+                      {handoffLabel("attach", "Add to composer")}
                     </MenuItem>
                   )}
                   {canEdit || canLabel || canAssign ? (
@@ -628,16 +638,20 @@ export function IssueDetailPanel({
               <Button
                 size="xs"
                 variant="outline"
-                disabled={handoff !== null}
+                disabled={handoffDisabled}
                 title={
-                  inPlaceDraft === null
-                    ? "Opens a thread on this project holding the task"
-                    : "Puts the task in this thread's composer"
+                  activityPending
+                    ? "Waiting for the issue's comments, which go with the task"
+                    : inPlaceDraft === null
+                      ? "Opens a thread on this project holding the task"
+                      : "Puts the task in this thread's composer"
                 }
                 onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
               >
                 {handoff === "solve" ? (
                   "Opening..."
+                ) : activityPending ? (
+                  "Loading..."
                 ) : (
                   <>
                     <HammerIcon className="size-3" />
@@ -878,7 +892,9 @@ export function IssueDetailPanel({
                   onEditingChange={setEditing}
                   openPicker={openPicker}
                   onOpenPickerChange={setOpenPicker}
-                  pendingHandoff={handoff}
+                  // The section's own button knows only about a hand-off already under way, so
+                  // "cannot go yet" is said to it in the one word it understands.
+                  pendingHandoff={handoff ?? (activityPending ? HANDOFF_WAITING_KIND : null)}
                   onLinkPullRequests={() =>
                     void startHandoff(LINK_PULL_REQUESTS_HANDOFF_KIND, buildLinkPullRequestsHandoff)
                   }
