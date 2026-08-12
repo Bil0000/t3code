@@ -413,7 +413,10 @@ export function IssueCreateDialog({
   };
 
   const complete = issueTemplateAnswersComplete(fields, answers);
-  const canFile = selected !== undefined && trimmedTitle.length > 0 && complete && !filing;
+  // Nothing has been started on the chooser, so there is nothing to file from it: the Create
+  // button is absent there, but the keyboard reaches this from every step of the dialog.
+  const canFile =
+    selected !== undefined && choice !== null && trimmedTitle.length > 0 && complete && !filing;
 
   const submit = async () => {
     if (selected === undefined || !canFile || filingRef.current) return;
