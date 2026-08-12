@@ -253,11 +253,9 @@ layer("GitLabIssueCli.layer", (it) => {
     }),
   );
 
-  it.effect("carries on from the number of rows already delivered", () =>
+  it.effect("carries on from the instant the last slice ended on", () =>
     Effect.gen(function* () {
-      mockedExecute
-        .mockReturnValueOnce(Effect.succeed(output(issues(11, 144))))
-        .mockReturnValueOnce(Effect.succeed(output(issues(11, 155))));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issues(11, 151))));
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
 
       const batch = yield* cli.listIssues({
@@ -270,15 +268,34 @@ layer("GitLabIssueCli.layer", (it) => {
         cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 150 },
       });
 
-      // GitLab's timestamp filter has no tie-breaker, so an offset is what advances through a
-      // boundary shared by more rows than one page can hold.
-      expect(pathOfCall(0)).not.toContain("updated_before=");
-      expect(pathOfCall(0)).toContain("page=14");
-      expect(pathOfCall(1)).toContain("page=15");
+      // The boundary bounds the row set, so an issue touched between the two reads cannot shift
+      // rows past the page. Inclusive, and the service drops what it has already sent at it.
+      expect(pathOfCall(0)).toContain("updated_before=2026-07-02T00%3A00%3A00Z");
+      // An offset into a list that moves under it would be the thing this replaces.
+      expect(pathOfCall(0)).toContain("page=1");
       expect(batch.items.map((item) => item.number)).toEqual([
         151, 152, 153, 154, 155, 156, 157, 158, 159, 160,
       ]);
       assert.isTrue(batch.truncated);
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+    }),
+  );
+
+  it.effect("asks for no boundary at all on a first page", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      yield* cli.listIssues({
+        cwd: "/w",
+        repository: "acme/web",
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+      });
+
+      expect(pathOfCall(0)).not.toContain("updated_before=");
     }),
   );
 

@@ -5,6 +5,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import * as AzureDevOpsIssueCli from "./AzureDevOpsIssueCli.ts";
+import * as AzureDevOpsIssueProvider from "./AzureDevOpsIssueProvider.ts";
 
 const mockedExecute = vi.fn<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>();
 
@@ -110,6 +111,35 @@ layer((it) => {
       );
 
       assert.strictEqual(error._tag, "AzureDevOpsIssueReadError");
+    }),
+  );
+
+  it.effect("says what failed once, rather than stacking the same sentence twice", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation(
+        (input) =>
+          Effect.succeed(output(input.args[0] === "repos" ? "web\n" : "not json")) as ReturnType<
+            AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]
+          >,
+      );
+      const provider = yield* AzureDevOpsIssueProvider.make;
+
+      const error = yield* Effect.flip(
+        provider.listIssues({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "dev.azure.com",
+          state: "all",
+          involvement: "all",
+          viewer: "someone",
+          limit: 30,
+        }),
+      );
+
+      assert.strictEqual(
+        error.message,
+        "azure-devops failed in listIssues: Azure CLI returned an unreadable listWorkItems response.",
+      );
     }),
   );
 

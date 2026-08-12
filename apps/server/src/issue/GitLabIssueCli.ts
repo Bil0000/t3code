@@ -255,6 +255,20 @@ function searchParams(search: string | undefined): ReadonlyArray<readonly [strin
   return trimmed.length === 0 ? [] : [["search", trimmed]];
 }
 
+/**
+ * Where a continuation carries on from, as the instant the last slice ended on and everything
+ * before it. Without it the next request would offset into the list as it stands now, and an issue
+ * touched between the two reads shifts every row past the boundary — sending some of them twice and
+ * hiding others for good. GitLab's filter is inclusive, like the one every other host here is given:
+ * rows sharing the boundary instant are ordinary, and the service drops the ones it has already sent
+ * rather than asking for strictly older and losing their neighbours.
+ */
+function cursorParams(
+  cursor: ProviderListCursor | undefined,
+): ReadonlyArray<readonly [string, string]> {
+  return cursor === undefined ? [] : [["updated_before", cursor.updatedBefore]];
+}
+
 function query(params: ReadonlyArray<readonly [string, string]>): string {
   return params.map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&");
 }
@@ -324,17 +338,11 @@ export const make = Effect.gen(function* () {
     readonly collected: ReadonlyArray<GitLabIssue>;
     readonly cursorAdvance: number;
   }): Effect.Effect<GitLabIssueListBatch, GitLabIssueCliError> => {
-    // A continuation uses GitLab's offset pagination. Its timestamp filter is inclusive and has
-    // no tie-breaker, so a page where many rows share the boundary would otherwise return the
-    // same prefix forever. `delivered` is the stable offset the service has already handed over.
-    const delivered = input.cursor?.delivered ?? 0;
     const perPage = Math.min(input.limit + 1, MAX_PAGE_SIZE);
-    const firstPage = Math.floor(delivered / perPage) + 1;
-    const skipOnFirstPage = input.page === firstPage ? delivered % perPage : 0;
     // A page made entirely of malformed rows has no item from which the service can build a
     // continuation. Bound the walk to the raw span this request asked for rather than recursing
     // forever on a host that keeps returning full unusable pages.
-    const lastPage = Math.floor((delivered + input.limit) / perPage) + 1;
+    const lastPage = Math.floor(input.limit / perPage) + 1;
     return api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/issues?${query([
@@ -345,6 +353,7 @@ export const make = Effect.gen(function* () {
         // URL-encoded like every other value here, so no text in it can become a parameter of
         // its own.
         ...searchParams(input.query),
+        ...cursorParams(input.cursor),
         ["order_by", "updated_at"],
         ["sort", "desc"],
         ["per_page", String(perPage)],
@@ -366,28 +375,19 @@ export const make = Effect.gen(function* () {
             readError({ cwd: input.cwd, operation: "listIssues" })(decoded.failure),
           );
         }
-        const pageItems: GitLabIssue[] = [];
-        const pageRawIndexes: number[] = [];
-        for (const [index, item] of decoded.success.items.entries()) {
-          const rawIndex = decoded.success.rawIndexes[index]!;
-          if (rawIndex < skipOnFirstPage) continue;
-          pageItems.push(item);
-          pageRawIndexes.push(rawIndex);
-        }
         const remaining = input.limit - input.collected.length;
-        const lastItemRawIndex = pageRawIndexes[remaining - 1];
+        const lastItemRawIndex = decoded.success.rawIndexes[remaining - 1];
         if (lastItemRawIndex !== undefined) {
-          const consumed = lastItemRawIndex + 1 - skipOnFirstPage;
           return Effect.succeed({
-            items: [...input.collected, ...pageItems.slice(0, remaining)],
+            items: [...input.collected, ...decoded.success.items.slice(0, remaining)],
             truncated:
               lastItemRawIndex + 1 < decoded.success.rawCount ||
               decoded.success.rawCount === perPage,
-            cursorAdvance: input.cursorAdvance + consumed,
+            cursorAdvance: input.cursorAdvance + lastItemRawIndex + 1,
           });
         }
-        const collected = [...input.collected, ...pageItems];
-        const consumed = Math.max(0, decoded.success.rawCount - skipOnFirstPage);
+        const collected = [...input.collected, ...decoded.success.items];
+        const consumed = decoded.success.rawCount;
         // Counted before decoding, so a skipped malformed row cannot end paging early.
         const exhausted = decoded.success.rawCount < perPage;
         if (exhausted) {
@@ -634,11 +634,9 @@ export const make = Effect.gen(function* () {
         }),
       ),
 
-    listIssues: (input) => {
-      const perPage = Math.min(input.limit + 1, MAX_PAGE_SIZE);
-      const page = Math.floor((input.cursor?.delivered ?? 0) / perPage) + 1;
-      return listPage({ ...input, page, collected: [], cursorAdvance: 0 });
-    },
+    // Every read starts at the first page: a continuation is the boundary instant, not an offset
+    // into a list that moves under it.
+    listIssues: (input) => listPage({ ...input, page: 1, collected: [], cursorAdvance: 0 }),
 
     getIssueDetail: issueDetail,
 

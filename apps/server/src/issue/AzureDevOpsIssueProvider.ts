@@ -99,7 +99,7 @@ export const make = Effect.gen(function* () {
         provider: "azure-devops",
         operation,
         reason: reasonFor(error),
-        detail: error.message,
+        detail: error.detail,
         cause: error,
       });
 
