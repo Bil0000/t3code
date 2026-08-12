@@ -29,8 +29,17 @@ function output(stdout: string) {
   };
 }
 
+/**
+ * Instants a minute apart, newest first, which is the order every listing here reads in. Rows share
+ * one only where a test hands them one, because sharing one is what a continuation has to work
+ * around.
+ */
+function instant(step: number): string {
+  return `2026-07-02T00:${String(59 - step).padStart(2, "0")}:00Z`;
+}
+
 /** Rows as `gh issue list --json` answers with them. */
-function issues(count: number, firstNumber: number): string {
+function issues(count: number, firstNumber: number, updatedAt?: string): string {
   return JSON.stringify(
     Array.from({ length: count }, (_, index) => ({
       number: firstNumber + index,
@@ -38,7 +47,7 @@ function issues(count: number, firstNumber: number): string {
       url: `https://github.com/acme/web/issues/${firstNumber + index}`,
       state: "OPEN",
       createdAt: "2026-07-01T00:00:00Z",
-      updatedAt: "2026-07-02T00:00:00Z",
+      updatedAt: updatedAt ?? instant(index),
     })),
   );
 }
@@ -57,7 +66,7 @@ function issueJson(entry: Record<string, unknown>): string {
 }
 
 /** One row as the cross-repository search answers it. */
-function searchItem(number: number, repository: string) {
+function searchItem(number: number, repository: string, updatedAt?: string) {
   return {
     number,
     title: `Issue ${number}`,
@@ -65,14 +74,23 @@ function searchItem(number: number, repository: string) {
     author: { login: "bilal", avatarUrl: "https://avatars/bilal" },
     state: "OPEN",
     createdAt: "2026-07-01T00:00:00Z",
-    updatedAt: "2026-07-02T00:00:00Z",
+    updatedAt: updatedAt ?? instant(number),
     repository: { nameWithOwner: repository },
     comments: { totalCount: 3 },
   };
 }
 
-function searchPage(nodes: ReadonlyArray<unknown>, hasNextPage = false) {
-  return output(JSON.stringify({ data: { search: { pageInfo: { hasNextPage }, nodes } } }));
+function searchPage(nodes: ReadonlyArray<unknown>, hasNextPage = false, endCursor?: string) {
+  return output(
+    JSON.stringify({
+      data: {
+        search: {
+          pageInfo: { hasNextPage, ...(endCursor === undefined ? {} : { endCursor }) },
+          nodes,
+        },
+      },
+    }),
+  );
 }
 
 /** A page of the conversation as the GraphQL reads answer with it, cursor and all. */
@@ -167,6 +185,23 @@ function searchOfCall(index: number): string | undefined {
 function searchQueryOfCall(index: number): string | undefined {
   const body = JSON.parse(callAt(index).stdin ?? "{}") as { variables?: { q?: string } };
   return body.variables?.q;
+}
+
+/** Where a batched read carries on from, which travels beside the search in the request body. */
+function searchCursorOfCall(index: number): string | undefined {
+  const body = JSON.parse(callAt(index).stdin ?? "{}") as { variables?: { cursor?: string } };
+  return body.variables?.cursor;
+}
+
+/** The page size a listing asked `gh` for. */
+function limitOfCall(index: number): string | undefined {
+  const args = argsOfCall(index);
+  return args[args.indexOf("--limit") + 1];
+}
+
+/** Several fixture arrays as one, which is how a page of rows sharing an instant is written. */
+function rowsOf(...parts: ReadonlyArray<string>): string {
+  return `[${parts.map((part) => part.slice(1, -1)).join(",")}]`;
 }
 
 /** The words a write carried, which every write sends over stdin. */
@@ -393,6 +428,55 @@ layer("GitHubIssueCli.layer", (it) => {
       // row must not end paging.
       assert.strictEqual(batch.items.length, 10);
       assert.isTrue(batch.truncated);
+    }),
+  );
+
+  // Half an instant is a slice nothing can carry on from: the read after it asks the same
+  // question, is handed the same rows, and drops every one of them as already sent.
+  it.effect("asks for a larger page rather than ending one inside an instant", () =>
+    Effect.gen(function* () {
+      const tied = "2026-07-02T00:30:00Z";
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output(issues(11, 1, tied))))
+        .mockReturnValueOnce(Effect.succeed(output(rowsOf(issues(11, 1, tied), issues(1, 12)))));
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+
+      const batch = yield* cli.listIssues({
+        ...repository,
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+      });
+
+      assert.strictEqual(limitOfCall(0), "11");
+      assert.strictEqual(limitOfCall(1), "22");
+      // The whole instant travels, page or no page, so the slice after it starts on rows that are
+      // strictly older.
+      expect(batch.items.map((item) => item.number)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      assert.isTrue(batch.truncated);
+      assert.isTrue(batch.continues);
+    }),
+  );
+
+  it.effect("says a page cannot be continued once one instant fills GitHub's own ceiling", () =>
+    Effect.gen(function* () {
+      const tied = "2026-07-02T00:30:00Z";
+      mockedExecute.mockReturnValue(Effect.succeed(output(issues(1000, 1, tied))));
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+
+      const batch = yield* cli.listIssues({
+        ...repository,
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+      });
+
+      // GitHub answers no search past its thousandth result, so there is no larger read left to
+      // finish the instant with — and a cursor would only be answered with these same rows.
+      assert.strictEqual(limitOfCall(mockedExecute.mock.calls.length - 1), "1000");
+      assert.isFalse(batch.continues);
     }),
   );
 
@@ -633,6 +717,82 @@ layer("GitHubIssueCli.layer", (it) => {
       assert.isTrue(overflowing.truncated);
       // A slice at GitHub's own ceiling has no extra row to probe with, so `hasNextPage` answers.
       assert.isTrue(capped.truncated);
+    }),
+  );
+
+  // GitHub's ceiling on a search page is a hundred rows, so an instant holding more than the page
+  // is read on past it: a slice ending inside one instant is one the read after it drops whole.
+  it.effect("reads on past the page GitHub cuts a search at to finish an instant", () =>
+    Effect.gen(function* () {
+      const tied = "2026-07-02T00:30:00Z";
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            searchPage(
+              [1, 2, 3].map((number) => searchItem(number, "acme/web", tied)),
+              true,
+              "PAGE_2",
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            searchPage(
+              [searchItem(4, "acme/web", tied), searchItem(5, "acme/web")],
+              true,
+              "PAGE_3",
+            ),
+          ),
+        );
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+
+      const batch = yield* cli.searchIssues({
+        cwd: "/w",
+        host: "github.com",
+        repositories: ["acme/web"],
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 2,
+      });
+
+      // The second read carries GitHub's own cursor: asking the same question again would answer
+      // with the same first rows for ever.
+      assert.isUndefined(searchCursorOfCall(0));
+      assert.strictEqual(searchCursorOfCall(1), "PAGE_2");
+      expect(batch.items.map((item) => item.number)).toEqual([1, 2, 3, 4]);
+      assert.isTrue(batch.truncated);
+    }),
+  );
+
+  it.effect("stops at GitHub's ceiling rather than offering a slice it cannot answer", () =>
+    Effect.gen(function* () {
+      const tied = "2026-07-02T00:30:00Z";
+      mockedExecute.mockReturnValue(
+        Effect.succeed(
+          searchPage(
+            Array.from({ length: 100 }, (_, index) => searchItem(index + 1, "acme/web", tied)),
+            true,
+            "MORE",
+          ),
+        ),
+      );
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+
+      const batch = yield* cli.searchIssues({
+        cwd: "/w",
+        host: "github.com",
+        repositories: ["acme/web"],
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 2,
+      });
+
+      // GitHub answers no search past its thousandth result, so those rows are everything this
+      // query has: a continuation could only be answered with them again.
+      assert.strictEqual(mockedExecute.mock.calls.length, 10);
+      assert.isFalse(batch.truncated);
     }),
   );
 

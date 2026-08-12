@@ -101,21 +101,21 @@ const RawSearchItemSchema = Schema.Struct({
   ),
 });
 
+/** Where a connection carries on from, which is what the comment and search walks below follow. */
+const RawPageInfoSchema = Schema.Struct({
+  hasNextPage: Schema.optional(Schema.Boolean),
+  endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 const RawSearchSchema = Schema.Struct({
   data: Schema.Struct({
     search: Schema.Struct({
-      pageInfo: Schema.optional(Schema.NullOr(Schema.Struct({ hasNextPage: Schema.Boolean }))),
+      pageInfo: Schema.optional(Schema.NullOr(RawPageInfoSchema)),
       // Row by row, like the listing's own: a node that is not an issue — or one field GitHub
       // changes — is skipped rather than blanking every repository at once.
       nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
     }),
   }),
-});
-
-/** Where a connection carries on from, which is what the comment walk below follows. */
-const RawPageInfoSchema = Schema.Struct({
-  hasNextPage: Schema.optional(Schema.Boolean),
-  endCursor: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 /**
@@ -429,6 +429,13 @@ const GRAPHQL_PAGE_SIZE = 100;
  */
 export const ISSUE_SEARCH_MAX_ROWS = GRAPHQL_PAGE_SIZE;
 
+/**
+ * How far GitHub lets a search be paged at all: the thousandth result is the last one it will
+ * answer with, whichever way it is asked for. A read that has taken this many rows has taken
+ * everything the host has to give for that query, so there is nothing further to carry on to.
+ */
+export const ISSUE_SEARCH_MAX_RESULTS = 1000;
+
 /** Timeline events kept per issue, newest last. An issue with more history than this is a bot log,
  *  and the recent end of it is the part anybody reads. */
 const TIMELINE_ITEMS = GRAPHQL_PAGE_SIZE;
@@ -447,11 +454,14 @@ const TIMELINE_ITEMS = GRAPHQL_PAGE_SIZE;
  *
  * `first` on the two inner connections is a bound rather than a page: an issue with more than
  * twenty labels shows twenty, and one assigned to more than twenty people is past what a row says.
+ *
+ * `after` is how a slice reads on past the page GitHub's ceiling cuts it at, which is what lets one
+ * instant holding more issues than a page be handed over whole.
  */
 export function issueSearchGraphQlQuery(rows: number): string {
-  return `query($q: String!) {
-  search(query: $q, type: ISSUE, first: ${Math.min(Math.max(Math.trunc(rows), 1), ISSUE_SEARCH_MAX_ROWS)}) {
-    pageInfo { hasNextPage }
+  return `query($q: String!, $cursor: String) {
+  search(query: $q, type: ISSUE, first: ${Math.min(Math.max(Math.trunc(rows), 1), ISSUE_SEARCH_MAX_ROWS)}, after: $cursor) {
+    pageInfo { hasNextPage endCursor }
     nodes {
       ... on Issue {
         number
@@ -1021,6 +1031,8 @@ export interface GitHubIssueSearchBatch {
   readonly rawCount: number;
   /** More rows than this slice asked for, which is truncation for every repository in it. */
   readonly hasNextPage: boolean;
+  /** Where the next page of the same search starts, or null once the search has nothing further. */
+  readonly nextCursor: string | null;
 }
 
 /**
@@ -1058,10 +1070,12 @@ export function decodeIssueSearchJson(
       repository,
     });
   }
+  const pageInfo = decoded.success.data.search.pageInfo;
   return Result.succeed({
     items,
     rawCount: nodes.length,
-    hasNextPage: decoded.success.data.search.pageInfo?.hasNextPage ?? false,
+    hasNextPage: pageInfo?.hasNextPage ?? false,
+    nextCursor: nextCursorOf(pageInfo),
   });
 }
 

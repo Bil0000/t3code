@@ -42,6 +42,7 @@ import {
   ISSUE_COMMENTS_GRAPHQL_QUERY,
   ISSUE_DETAIL_JSON_FIELDS,
   ISSUE_LIST_JSON_FIELDS,
+  ISSUE_SEARCH_MAX_RESULTS,
   ISSUE_SEARCH_MAX_ROWS,
   ISSUE_SUPPLEMENT_GRAPHQL_QUERY,
   ISSUE_TEMPLATES_GRAPHQL_QUERY,
@@ -49,6 +50,7 @@ import {
   ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   type GitHubIssue,
   type GitHubIssueDetail,
+  type GitHubIssueSearchBatch as GitHubSearchPage,
   type GitHubIssueSearchItem,
   type GitHubIssueSupplement,
   type GitHubIssueViewerAccess,
@@ -447,6 +449,42 @@ function searchQuery(input: {
 }
 
 /**
+ * How many rows a slice may hand over: the page that was asked for, plus the rest of the instant it
+ * would otherwise stop inside.
+ *
+ * A continuation is an instant asked for inclusively plus the rows already sent at it, so a slice
+ * that ends halfway through one instant cannot be carried on from at all: the read after it asks
+ * the same question, is handed the same rows, drops every one of them as already sent, and works
+ * out the cursor it started with. One afternoon of triage touches more issues in a second than a
+ * page holds, and the listing would stand on that second for good. Handing the instant over whole
+ * is what makes that impossible — the read after it drops the whole group and carries on with rows
+ * that are strictly older — and it is why a slice may run a little past the page it was asked for.
+ */
+function wholeInstantRows(
+  items: ReadonlyArray<{ readonly updatedAt: string }>,
+  limit: number,
+): number {
+  const last = items[Math.min(limit, items.length) - 1];
+  if (last === undefined) return 0;
+  let rows = Math.min(limit, items.length);
+  while (items[rows]?.updatedAt === last.updatedAt) rows += 1;
+  return rows;
+}
+
+/**
+ * Whether the instant the slice ends on runs to the end of what was read, which is the only reason
+ * to read further: the rest of that instant is somewhere past the rows in hand. A slice holding
+ * less than the page it asked for has nothing at its edge to be split.
+ */
+function instantRunsOn(
+  items: ReadonlyArray<{ readonly updatedAt: string }>,
+  limit: number,
+  rows: number,
+): boolean {
+  return items.length >= limit && rows === items.length;
+}
+
+/**
  * The `after` a paged read carries. gh sends a JSON null only through a typed field, and an untyped
  * `cursor=` would send the empty string, which GitHub refuses as a cursor rather than reading as
  * "start at the beginning".
@@ -674,7 +712,12 @@ export const make = Effect.gen(function* () {
       ),
 
     listIssues: (input) => {
-      const read = (continues: boolean): Effect.Effect<GitHubIssueListBatch, GitHubIssueCliError> =>
+      const read = (
+        continues: boolean,
+        // One extra row reveals that the repository has more than the page shows, and a read that
+        // ended inside one instant asks again with room for the whole of it.
+        rows: number = input.limit + 1,
+      ): Effect.Effect<GitHubIssueListBatch, GitHubIssueCliError> =>
         github
           .execute({
             cwd: input.cwd,
@@ -691,8 +734,7 @@ export const make = Effect.gen(function* () {
               "--state",
               input.state,
               "--limit",
-              // One extra row reveals that the repository has more than the page shows.
-              String(input.limit + 1),
+              String(rows),
               "--json",
               ISSUE_LIST_JSON_FIELDS,
             ],
@@ -704,17 +746,42 @@ export const make = Effect.gen(function* () {
                 return Effect.succeed({ items: [], truncated: false, continues });
               }
               const decoded = decodeIssueListJson(raw);
-              return Result.isSuccess(decoded)
-                ? Effect.succeed({
-                    items: decoded.success.items.slice(0, input.limit),
-                    // One row over the page size is the probe for a next page, and it is counted
-                    // before decoding: a skipped malformed row must not end paging.
-                    truncated: decoded.success.rawCount > input.limit,
-                    continues,
-                  })
-                : Effect.fail(
-                    readError({ cwd: input.cwd, operation: "listIssues" })(decoded.failure),
-                  );
+              if (!Result.isSuccess(decoded)) {
+                return Effect.fail(
+                  readError({ cwd: input.cwd, operation: "listIssues" })(decoded.failure),
+                );
+              }
+              // The fallback read is in no order a cursor can carry on from, so it has no instant
+              // to keep whole: it hands over the page it was asked for and says so.
+              if (!continues) {
+                return Effect.succeed({
+                  items: decoded.success.items.slice(0, input.limit),
+                  // One row over the page size is the probe for a next page, and it is counted
+                  // before decoding: a skipped malformed row must not end paging.
+                  truncated: decoded.success.rawCount > input.limit,
+                  continues,
+                });
+              }
+              const handed = wholeInstantRows(decoded.success.items, input.limit);
+              const runsOn =
+                instantRunsOn(decoded.success.items, input.limit, handed) &&
+                decoded.success.rawCount >= rows;
+              // Read again with room for the rest of the instant rather than splitting it. Twice
+              // the rows each time, so the ordinary tie — a handful of issues touched in the same
+              // second — costs one more read, and GitHub's own ceiling on a search ends the walk.
+              if (runsOn && rows < ISSUE_SEARCH_MAX_RESULTS) {
+                return read(continues, Math.min(rows * 2, ISSUE_SEARCH_MAX_RESULTS));
+              }
+              return Effect.succeed({
+                items: decoded.success.items.slice(0, handed),
+                // Rows read but not handed over are the probe for a next page, counted before
+                // decoding so a skipped malformed row cannot end paging.
+                truncated: decoded.success.rawCount > Math.max(input.limit, handed),
+                // A page still standing inside one instant at GitHub's ceiling cannot be carried
+                // on from: the read after it would be handed these same rows and nothing else, so
+                // the rest of that instant is reached by asking for a larger page instead.
+                continues: !runsOn,
+              });
             }),
           );
       // GitHub does not index every repository for search, and one it will not search answers with
@@ -771,20 +838,53 @@ export const make = Effect.gen(function* () {
       // per-repository read does — up to GitHub's own ceiling on a search page, past which
       // `hasNextPage` is what says there is more.
       const rows = Math.min(input.limit + 1, ISSUE_SEARCH_MAX_ROWS);
-      return graphqlRead({
-        cwd: input.cwd,
-        host: input.host,
-        operation: "searchIssues",
-        // The reader's own words are in the query, so it travels over stdin rather than in argv.
-        privateVariables: { q: query },
-        query: issueSearchGraphQlQuery(rows),
-        decode: decodeIssueSearchJson,
-      }).pipe(
-        Effect.map((batch) => ({
-          items: batch.items.slice(0, input.limit),
-          truncated: batch.rawCount > input.limit || batch.hasNextPage,
-        })),
-      );
+      const searchPage = (
+        cursor: string | null,
+        first: number,
+      ): Effect.Effect<GitHubSearchPage, GitHubIssueCliError> =>
+        graphqlRead({
+          cwd: input.cwd,
+          host: input.host,
+          operation: "searchIssues",
+          // The reader's own words are in the query, so it travels over stdin rather than in argv.
+          // An absent `cursor` is the first page: GitHub reads a variable nobody sent as null.
+          privateVariables: cursor === null ? { q: query } : { q: query, cursor },
+          query: issueSearchGraphQlQuery(first),
+          decode: decodeIssueSearchJson,
+        });
+      return Effect.gen(function* () {
+        const items: Array<GitHubIssueSearchItem> = [];
+        let read = 0;
+        let cursor: string | null = null;
+        let hasNextPage = false;
+        let handed = 0;
+        do {
+          // The pages after the first are only there to finish an instant, so they are asked for
+          // as wide as GitHub allows rather than as narrow as the page.
+          const batch: GitHubSearchPage = yield* searchPage(
+            cursor,
+            read === 0 ? rows : ISSUE_SEARCH_MAX_ROWS,
+          );
+          items.push(...batch.items);
+          read += batch.rawCount;
+          hasNextPage = batch.hasNextPage;
+          cursor = batch.nextCursor;
+          handed = wholeInstantRows(items, input.limit);
+        } while (
+          cursor !== null &&
+          read < ISSUE_SEARCH_MAX_RESULTS &&
+          instantRunsOn(items, input.limit, handed)
+        );
+        return {
+          items: items.slice(0, handed),
+          // A slice still standing inside one instant has run into GitHub's ceiling on how far a
+          // search may be paged, so this is every row the host will answer this query with:
+          // offering a continuation would hand back a cursor answered with these same rows.
+          truncated: instantRunsOn(items, input.limit, handed)
+            ? false
+            : read > Math.max(input.limit, handed) || hasNextPage,
+        };
+      });
     },
 
     getIssueDetail: issueDetail,

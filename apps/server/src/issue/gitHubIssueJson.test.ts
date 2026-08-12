@@ -60,8 +60,19 @@ function searchItem(entry: Record<string, unknown>): Record<string, unknown> {
   };
 }
 
-function searchJson(nodes: ReadonlyArray<unknown>, hasNextPage = false): string {
-  return JSON.stringify({ data: { search: { pageInfo: { hasNextPage }, nodes } } });
+function searchJson(
+  nodes: ReadonlyArray<unknown>,
+  hasNextPage = false,
+  endCursor?: string,
+): string {
+  return JSON.stringify({
+    data: {
+      search: {
+        pageInfo: { hasNextPage, ...(endCursor === undefined ? {} : { endCursor }) },
+        nodes,
+      },
+    },
+  });
 }
 
 /** A change request as a reference to it names it, wherever GitHub found the reference. */
@@ -315,6 +326,19 @@ describe("issue search decoding", () => {
     const batch = expectSuccess(decodeIssueSearchJson(searchJson([searchItem({})], true)));
 
     expect(batch.hasNextPage).toBe(true);
+  });
+
+  // Where a search reads on to finish an instant, this is what it reads on from. GitHub sends an
+  // `endCursor` on the last page too, so the flag is what decides, not the cursor.
+  it("carries the cursor a search page ends on, and none once there is nothing after it", () => {
+    expect(
+      expectSuccess(decodeIssueSearchJson(searchJson([searchItem({})], true, "Y3Vyc29y")))
+        .nextCursor,
+    ).toBe("Y3Vyc29y");
+    expect(
+      expectSuccess(decodeIssueSearchJson(searchJson([searchItem({})], false, "Y3Vyc29y")))
+        .nextCursor,
+    ).toBeNull();
   });
 
   it("fails when GitHub answered something other than a search", () => {
@@ -1182,6 +1206,8 @@ describe("issue search document", () => {
     expect(query).toContain("type: ISSUE");
     expect(query).toContain("... on Issue");
     expect(query).toContain("first: 10");
+    // The cursor is how one instant holding more rows than a page is read whole.
+    expect(query).toContain("after: $cursor");
   });
 
   it("clamps the page to what GitHub's search will serve", () => {
