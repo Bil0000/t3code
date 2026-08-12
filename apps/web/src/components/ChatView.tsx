@@ -124,11 +124,11 @@ import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
   issueSurfaceId,
-  pullRequestSurfaceId,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
   type RightPanelSurface,
+  updatePullRequestTabStatus,
   useRightPanelStore,
 } from "../rightPanelStore";
 import {
@@ -147,6 +147,7 @@ import {
 } from "../previewMiniPlayerStore";
 import { IssueDetailPanel } from "./issue/IssueDetailPanel";
 import { IssuesPanel } from "./issue/IssuesPanel";
+import { isThreadOwnPullRequest } from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { DetailGhost } from "./sourceControl/ListGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
@@ -1604,14 +1605,6 @@ function ChatViewContent(props: ChatViewProps) {
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});
-  const handlePullRequestTabStatusChange = useCallback((status: PullRequestTabStatus) => {
-    const id = pullRequestSurfaceId(status);
-    setPullRequestTabStatuses((current) =>
-      current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
-        ? current
-        : { ...current, [id]: status },
-    );
-  }, []);
   const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
   const handleIssueTabStatusChange = useCallback((status: IssueTabStatus) => {
     const id = issueSurfaceId(status);
@@ -1621,6 +1614,18 @@ function ChatViewContent(props: ChatViewProps) {
         : { ...current, [id]: status },
     );
   }, []);
+  // Keyed by the surface the panel is showing rather than by a key rebuilt from the status, so
+  // the tab is found again whether or not that surface was opened with an environment on it.
+  const activePullRequestSurfaceId =
+    activeRightPanelSurface?.kind === "pull-request" ? activeRightPanelSurface.id : undefined;
+  const handlePullRequestTabStatusChange = useCallback(
+    (status: PullRequestTabStatus) => {
+      const id = activePullRequestSurfaceId;
+      if (id === undefined) return;
+      setPullRequestTabStatuses((current) => updatePullRequestTabStatus(current, id, status));
+    },
+    [activePullRequestSurfaceId],
+  );
   const activeFileSurface =
     activeRightPanelSurface?.kind === "file" ? activeRightPanelSurface : null;
   const activePreviewState = useThreadPreviewState(activeThreadRef);
@@ -6156,11 +6161,23 @@ function ChatViewContent(props: ChatViewProps) {
           number: activeRightPanelSurface.number,
         }}
         context={
-          activeThreadPr?.number === activeRightPanelSurface.number &&
-          threadRepository === activeRightPanelSurface.repository
+          isThreadOwnPullRequest(
+            {
+              projectId: activeProject?.id ?? null,
+              repository: threadRepository,
+              number: activeThreadPr?.number ?? null,
+            },
+            {
+              projectId: activeRightPanelSurface.projectId,
+              repository: activeRightPanelSurface.repository,
+              number: activeRightPanelSurface.number,
+            },
+          )
             ? "thread"
             : "page"
         }
+        chromeVariant="collapse"
+        composerDraftTarget={composerDraftTarget}
         onStateChange={handlePullRequestTabStatusChange}
         onOpenLinkedIssue={openLinkedIssue}
       />

@@ -4,22 +4,30 @@ import type {
   IssueLink,
   PullRequestAction,
   PullRequestActor,
+  PullRequestBaseComparison,
   PullRequestCapabilities,
+  PullRequestChecksState,
   PullRequestCheck,
   PullRequestComment,
   PullRequestCommit,
   PullRequestInvolvement,
   PullRequestLabel,
+  PullRequestListFilters,
   PullRequestListState,
   PullRequestMergeCapabilities,
   PullRequestMergeMethod,
   PullRequestMergeability,
+  PullRequestOmittedFileStat,
+  PullRequestReaction,
+  PullRequestReactionContent,
   PullRequestReviewCommentDraft,
+  PullRequestReviewDecision,
   PullRequestReviewThread,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
   PullRequestReviewerKind,
   PullRequestState,
+  PullRequestUpdateMethod,
   PullRequestViewerPermissions,
   SourceControlProviderKind,
 } from "@t3tools/contracts";
@@ -65,6 +73,10 @@ export interface ProviderChangeRequest {
   /** Accounts with a review requested. Team-level requests are excluded by each provider. */
   readonly reviewRequestLogins: ReadonlyArray<string>;
   readonly labels: ReadonlyArray<PullRequestLabel>;
+  /** Absent from a host that does not summarise its reviews, which is every host but GitHub. */
+  readonly reviewDecision?: PullRequestReviewDecision | null | undefined;
+  /** Absent from a host that reports no check rollup on its listings. */
+  readonly checksState?: PullRequestChecksState | null | undefined;
 }
 
 export interface ProviderChangeRequestPage {
@@ -147,6 +159,11 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
    * read that failed — so a provider never guesses a link out of the words in a body.
    */
   readonly linkedIssues: ReadonlyArray<IssueLink>;
+  /** Absent from a host that cannot compare the branch with its base, which is most of them. */
+  readonly baseComparison?: PullRequestBaseComparison;
+  readonly behindBy?: number;
+  /** Absent from a host that does not report whether it is armed to merge this on its own. */
+  readonly autoMergeEnabled?: boolean;
 }
 
 /** The conversation-shaped half of a detail, loaded after the core can already render. */
@@ -165,6 +182,8 @@ export interface ProviderChangeRequestActivity {
   readonly commentsTruncated: boolean;
   readonly reviewThreads: ReadonlyArray<PullRequestReviewThread>;
   readonly commits: ReadonlyArray<PullRequestCommit>;
+  /** The change request's own reactions, from a host that has them. */
+  readonly reactions?: ReadonlyArray<PullRequestReaction>;
 }
 
 export interface ProviderDiffSlice {
@@ -172,6 +191,8 @@ export interface ProviderDiffSlice {
   /** Something in this slice could not be shown, as opposed to there being more slices. */
   readonly truncated: boolean;
   readonly nextCursor: string | null;
+  /** The host's own counts for the files whose hunks it withheld from this slice. */
+  readonly omittedFileStats?: ReadonlyArray<PullRequestOmittedFileStat>;
 }
 
 export interface ProviderDiffFileContents {
@@ -223,6 +244,12 @@ export interface PullRequestProviderApi {
        * asks for the first slice, which is every listing that has not been continued.
        */
       readonly cursor?: ProviderListCursor | undefined;
+      /**
+       * Further narrowings, which a host applies as far as it can and ignores the rest of —
+       * an unnarrowed page is a wider answer rather than a wrong one, and the caller narrows
+       * what it gets for the fields a row carries.
+       */
+      readonly filters?: PullRequestListFilters | undefined;
     },
   ) => Effect.Effect<ProviderChangeRequestPage, PullRequestProviderError>;
 
@@ -251,6 +278,7 @@ export interface PullRequestProviderApi {
     readonly limit: number;
     readonly query?: string | undefined;
     readonly cursor?: ProviderListCursor | undefined;
+    readonly filters?: PullRequestListFilters | undefined;
   }) => Effect.Effect<ProviderBatchedChangeRequestPage, PullRequestProviderError>;
 
   /**
@@ -321,12 +349,45 @@ export interface PullRequestProviderApi {
     input: ProviderRepositoryRef & {
       readonly number: number;
       readonly action: PullRequestAction;
+      /** Meaningful for `merge` and `enable-auto-merge`; absent takes the host's own default. */
       readonly mergeMethod?: PullRequestMergeMethod;
+      /** Only meaningful for `update-branch`; absent takes the host's own default. */
+      readonly updateMethod?: PullRequestUpdateMethod;
+    },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /**
+   * Rewrites the change request's own words. Only called when `capabilities.edit.changeRequest`
+   * is true, and never with both fields absent — the caller refuses that before it gets here,
+   * because a host asked to change nothing answers differently on each of them.
+   */
+  readonly updateChangeRequest?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly title?: string | undefined;
+      readonly body?: string | undefined;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 
   readonly comment: (
     input: ProviderRepositoryRef & { readonly number: number; readonly body: string },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /**
+   * Rewrites a remark somebody already posted. Only called when `capabilities.edit.comment` is
+   * true, with an id exactly as the conversation carried it.
+   *
+   * Whether this remark is the reader's to rewrite is the host's own answer: no read here can
+   * settle it, since access can be taken away between the conversation being read and the
+   * rewrite being sent, and a host refuses a stranger's remark with a sentence saying so.
+   */
+  readonly updateComment?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly commentId: string;
+      readonly kind: "issue-comment" | "review-comment";
+      readonly body: string;
+    },
   ) => Effect.Effect<void, PullRequestProviderError>;
 
   /**
@@ -380,6 +441,22 @@ export interface PullRequestProviderApi {
       readonly number: number;
       readonly threadId: string;
       readonly body: string;
+    },
+  ) => Effect.Effect<void, PullRequestProviderError>;
+
+  /**
+   * Adds a reaction, or takes it back. Only called when `capabilities.reactions` is true.
+   *
+   * `subjectId` is a remark's id as the conversation carried it; absent means the change request
+   * itself, whose reactions sit on its description. Whatever a host needs to address either of
+   * them is worked out here, because the id a conversation travels with is the one the reader has.
+   */
+  readonly setReaction: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly subjectId?: string | undefined;
+      readonly content: PullRequestReactionContent;
+      readonly reacted: boolean;
     },
   ) => Effect.Effect<void, PullRequestProviderError>;
 

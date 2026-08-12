@@ -64,12 +64,15 @@ export function listFilterHostLabel(
 
 export function ListSearchInput({
   label,
+  placeholder = label,
   value,
   busy,
   onChange,
 }: {
   /** What is being searched, said in the box and to the reader who is being read to. */
   label: string;
+  /** A visible hint when the search accepts more than plain text. */
+  placeholder?: string;
   value: string;
   /** A search is on its way to the hosts, said where the typing is rather than over the list. */
   busy?: boolean;
@@ -92,7 +95,7 @@ export function ListSearchInput({
         type="text"
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
-        placeholder={label}
+        placeholder={placeholder}
         aria-label={label}
         // Tracks the shared input's height at both widths, so it stays level with the icon
         // button beside it rather than towering over it on wide screens.
