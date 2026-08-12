@@ -1,5 +1,19 @@
-import type { EnvironmentId, IssueListEntry, ProjectId } from "@t3tools/contracts";
-import { ArrowLeftIcon } from "lucide-react";
+import type {
+  EnvironmentId,
+  IssueInvolvement,
+  IssueListEntry,
+  IssueListState,
+  ProjectId,
+} from "@t3tools/contracts";
+import {
+  ArrowLeftIcon,
+  AtSignIcon,
+  CircleCheckIcon,
+  CircleDotIcon,
+  LayersIcon,
+  PenLineIcon,
+  UserCheckIcon,
+} from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 
 import type { IssuesSurface } from "~/rightPanelStore";
@@ -13,8 +27,31 @@ import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { IssueDetailPanel, type IssueHandoffTarget } from "./IssueDetailPanel";
 import { IssueListGhost } from "./IssueGhosts";
-import { issueEntryKey } from "./issueList.logic";
+import { filterIssuesByInvolvement, issueEntryKey } from "./issueList.logic";
+import { IssueFiltersMenu, type IssueFilterOption } from "./IssueListFilters";
 import { IssueRow } from "./IssueRow";
+
+// The same vocabulary the issues page filters by, minus the two questions a panel already knows
+// the answer to: it lists one project, on one host.
+const STATE_OPTIONS = [
+  { value: "all", label: "All", Icon: LayersIcon },
+  { value: "open", label: "Open", Icon: CircleDotIcon },
+  { value: "closed", label: "Closed", Icon: CircleCheckIcon },
+] as const satisfies ReadonlyArray<IssueFilterOption<IssueListState>>;
+
+const INVOLVEMENT_OPTIONS = [
+  { value: "all", label: "All", Icon: LayersIcon },
+  { value: "assigned", label: "Assigned", Icon: UserCheckIcon },
+  { value: "authored", label: "Authored", Icon: PenLineIcon },
+  { value: "mentioned", label: "Mentioned", Icon: AtSignIcon },
+] as const satisfies ReadonlyArray<IssueFilterOption<IssueInvolvement>>;
+
+/** What the panel narrows by, held above the list so reading an issue does not throw it away. */
+interface PanelFilters {
+  readonly state: IssueListState;
+  readonly involvement: IssueInvolvement;
+  readonly label: string | undefined;
+}
 
 const SEARCH_DEBOUNCE_MS = 250;
 const PAGE_SIZE = 30;
@@ -57,6 +94,11 @@ export function IssuesPanel({
   // the search that found it — the list is unmounted while the issue is open.
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(PAGE_SIZE);
+  const [filters, setFilters] = useState<{
+    readonly state: IssueListState;
+    readonly involvement: IssueInvolvement;
+    readonly label: string | undefined;
+  }>({ state: "open", involvement: "all", label: undefined });
 
   if (selected) {
     return (
@@ -83,7 +125,6 @@ export function IssuesPanel({
               repository: selected.repository,
               number: selected.number,
             }}
-            context="thread"
             handoffTarget={handoffTarget}
             onStateChange={onStateChange}
           />
@@ -100,6 +141,8 @@ export function IssuesPanel({
       onQuery={setQuery}
       limit={limit}
       onLimit={setLimit}
+      filters={filters}
+      onFilters={setFilters}
     />
   );
 }
@@ -112,6 +155,8 @@ function IssueBrowserList({
   onQuery,
   limit,
   onLimit,
+  filters,
+  onFilters,
 }: {
   environmentId: EnvironmentId;
   projectId: ProjectId;
@@ -120,6 +165,8 @@ function IssueBrowserList({
   onQuery: (query: string) => void;
   limit: number;
   onLimit: (limit: number) => void;
+  filters: PanelFilters;
+  onFilters: (filters: PanelFilters) => void;
 }) {
   const typed = query.trim();
   // Searching asks the host, which takes a round trip, so the text is held for a moment before it
@@ -130,14 +177,46 @@ function IssueBrowserList({
     issueEnvironment.list({
       environmentId,
       input: {
-        state: "all",
+        state: filters.state,
+        involvement: filters.involvement,
         projectId,
         limit,
         ...(sent ? { query: sent } : {}),
       },
     }),
   );
-  const entries = useMemo(() => openFirst(listQuery.data?.entries ?? []), [listQuery.data]);
+  // Involvement and the label are narrowed here as well as asked for: a host that cannot express
+  // "mentioned" answers unnarrowed, and no host is asked about a label at all.
+  const entries = useMemo(() => {
+    const answered = listQuery.data;
+    if (answered === null) return [];
+    const byInvolvement = filterIssuesByInvolvement(
+      answered.entries,
+      answered.viewers,
+      filters.involvement,
+    );
+    const byLabel =
+      filters.label === undefined
+        ? byInvolvement
+        : byInvolvement.filter((entry) =>
+            entry.labels.some((label) => label.name === filters.label),
+          );
+    return openFirst(byLabel);
+  }, [filters.involvement, filters.label, listQuery.data]);
+
+  // Said apart from "there are none": a filter hiding every row is a different answer from a
+  // repository with nothing in it, and only one of them is worth widening a filter over.
+  const narrowed =
+    filters.state !== "open" || filters.involvement !== "all" || filters.label !== undefined;
+
+  /** Offered from what arrived: a label nothing here wears would narrow the list to nothing. */
+  const labelOptions = useMemo(() => {
+    const names = new Set(
+      (listQuery.data?.entries ?? []).flatMap((entry) => entry.labels.map((label) => label.name)),
+    );
+    if (filters.label !== undefined) names.add(filters.label);
+    return [...names].sort((left, right) => left.localeCompare(right));
+  }, [filters.label, listQuery.data]);
 
   // Stable, because the rows are memoized on it.
   const select = useCallback(
@@ -148,12 +227,23 @@ function IssueBrowserList({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="px-2 py-2">
+      <div className="flex items-center gap-2 px-2 py-2">
         <Input
           value={query}
           aria-label="Search issues"
           placeholder="Search issues"
           onChange={(event) => onQuery(event.target.value)}
+        />
+        <IssueFiltersMenu
+          state={filters.state}
+          stateOptions={STATE_OPTIONS}
+          onState={(state) => onFilters({ ...filters, state })}
+          involvement={filters.involvement}
+          involvementOptions={INVOLVEMENT_OPTIONS}
+          onInvolvement={(involvement) => onFilters({ ...filters, involvement })}
+          label={filters.label}
+          labels={labelOptions}
+          onLabel={(label) => onFilters({ ...filters, label })}
         />
       </div>
       <ScrollArea className="min-h-0 flex-1">
@@ -166,7 +256,9 @@ function IssueBrowserList({
             <p className="px-2 text-sm text-muted-foreground">
               {typed.length > 0
                 ? "No issue here matches that."
-                : "This repository has no issues to open."}
+                : narrowed
+                  ? "No issue here matches these filters."
+                  : "This repository has no issues to open."}
             </p>
           ) : (
             <>

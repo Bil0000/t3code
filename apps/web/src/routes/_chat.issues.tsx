@@ -1039,14 +1039,18 @@ function IssuesRouteView() {
       involvement={search.involvement}
       involvementOptions={INVOLVEMENT_TABS}
       onInvolvement={(involvement) => updateListScope({ involvement })}
-      host={search.host}
-      hostOptions={hostMenuOptions}
-      onHost={(host) => updateListScope({ host })}
-      environmentId={environmentId}
-      projects={scopedProjects}
-      projectId={scopedProjectId}
-      unavailable={unavailableProjects}
-      onProject={(projectId) => updateListScope({ projectId })}
+      hostFilter={{
+        host: search.host,
+        hostOptions: hostMenuOptions,
+        onHost: (host) => updateListScope({ host }),
+      }}
+      projectFilter={{
+        environmentId,
+        projects: scopedProjects,
+        projectId: scopedProjectId,
+        unavailable: unavailableProjects,
+        onProject: (projectId) => updateListScope({ projectId }),
+      }}
       label={search.label}
       labels={labelOptions}
       onLabel={(label) => updateListScope({ label })}

@@ -157,14 +157,8 @@ export function IssueFiltersMenu({
   involvement,
   involvementOptions,
   onInvolvement,
-  host,
-  hostOptions,
-  onHost,
-  environmentId,
-  projects,
-  projectId,
-  unavailable,
-  onProject,
+  hostFilter,
+  projectFilter,
   label,
   labels,
   onLabel,
@@ -175,28 +169,37 @@ export function IssueFiltersMenu({
   involvement: IssueInvolvement;
   involvementOptions: ReadonlyArray<IssueFilterOption<IssueInvolvement>>;
   onInvolvement: (involvement: IssueInvolvement) => void;
-  host: string | undefined;
   /**
-   * Includes the "all hosts" entry, whose value is the empty string. With fewer than two real
-   * hosts there is nothing to switch between, so the whole group stays out of the menu.
+   * Absent where the caller already knows the host, which is a surface listing one repository:
+   * a group offering the only host there is says nothing.
    */
-  hostOptions: ReadonlyArray<IssueFilterOption<string>>;
-  onHost: (host: string | undefined) => void;
-  /** Where the projects' own favicons are read from; null before the environment is known. */
-  environmentId: EnvironmentId | null;
-  projects: ReadonlyArray<{
-    readonly id: ProjectId;
-    readonly title: string;
-    readonly workspaceRoot: string;
-  }>;
-  projectId: ProjectId | undefined;
-  /**
-   * Projects whose repository could not be read this time round. They are named here, where
-   * the reader is already choosing between projects, rather than as a count above the list
-   * that says something is missing without saying which.
-   */
-  unavailable: ReadonlyMap<ProjectId, string>;
-  onProject: (projectId: ProjectId | undefined) => void;
+  hostFilter?: {
+    readonly host: string | undefined;
+    /**
+     * Includes the "all hosts" entry, whose value is the empty string. With fewer than two real
+     * hosts there is nothing to switch between, so the whole group stays out of the menu.
+     */
+    readonly hostOptions: ReadonlyArray<IssueFilterOption<string>>;
+    readonly onHost: (host: string | undefined) => void;
+  };
+  /** Absent for the same reason `hostFilter` is: one project is not a choice. */
+  projectFilter?: {
+    /** Where the projects' own favicons are read from; null before the environment is known. */
+    readonly environmentId: EnvironmentId | null;
+    readonly projects: ReadonlyArray<{
+      readonly id: ProjectId;
+      readonly title: string;
+      readonly workspaceRoot: string;
+    }>;
+    readonly projectId: ProjectId | undefined;
+    /**
+     * Projects whose repository could not be read this time round. They are named here, where
+     * the reader is already choosing between projects, rather than as a count above the list
+     * that says something is missing without saying which.
+     */
+    readonly unavailable: ReadonlyMap<ProjectId, string>;
+    readonly onProject: (projectId: ProjectId | undefined) => void;
+  };
   label: string | undefined;
   /**
    * The labels the loaded rows actually wear, as names. No host is asked about a label, so this
@@ -209,8 +212,8 @@ export function IssueFiltersMenu({
   const filtered =
     state !== "open" ||
     involvement !== "all" ||
-    host !== undefined ||
-    projectId !== undefined ||
+    hostFilter?.host !== undefined ||
+    projectFilter?.projectId !== undefined ||
     label !== undefined;
   return (
     <Menu>
@@ -244,69 +247,76 @@ export function IssueFiltersMenu({
           options={involvementOptions}
           onChange={onInvolvement}
         />
-        {hostOptions.length > 2 ? (
+        {hostFilter !== undefined && hostFilter.hostOptions.length > 2 ? (
           <>
             <MenuSeparator />
             <IssueFilterRadioGroup
               label="Host"
-              value={host ?? ALL_HOSTS_VALUE}
-              options={hostOptions}
-              onChange={(next) => onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
+              value={hostFilter.host ?? ALL_HOSTS_VALUE}
+              options={hostFilter.hostOptions}
+              onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
             />
           </>
         ) : null}
-        <MenuSeparator />
-        <MenuRadioGroup
-          value={projectId ?? ALL_PROJECTS_VALUE}
-          onValueChange={(next) => {
-            const nextProjectId = next === ALL_PROJECTS_VALUE ? undefined : (next as ProjectId);
-            if (nextProjectId !== projectId) onProject(nextProjectId);
-          }}
-        >
-          <MenuGroupLabel>Project</MenuGroupLabel>
-          <MenuRadioItem value={ALL_PROJECTS_VALUE}>
-            <span className="flex min-w-0 items-center gap-2">
-              <LayersIcon aria-hidden className="size-3.5" />
-              All projects
-            </span>
-          </MenuRadioItem>
-          {/* The ones that can be chosen first: a list that opens with three disabled rows reads
+        {projectFilter === undefined ? null : (
+          <>
+            <MenuSeparator />
+            <MenuRadioGroup
+              value={projectFilter.projectId ?? ALL_PROJECTS_VALUE}
+              onValueChange={(next) => {
+                const nextProjectId = next === ALL_PROJECTS_VALUE ? undefined : (next as ProjectId);
+                if (nextProjectId !== projectFilter.projectId)
+                  projectFilter.onProject(nextProjectId);
+              }}
+            >
+              <MenuGroupLabel>Project</MenuGroupLabel>
+              <MenuRadioItem value={ALL_PROJECTS_VALUE}>
+                <span className="flex min-w-0 items-center gap-2">
+                  <LayersIcon aria-hidden className="size-3.5" />
+                  All projects
+                </span>
+              </MenuRadioItem>
+              {/* The ones that can be chosen first: a list that opens with three disabled rows reads
               as a broken menu rather than as a workspace with three unreadable repositories. */}
-          {projects
-            .toSorted(
-              (left, right) => Number(unavailable.has(left.id)) - Number(unavailable.has(right.id)),
-            )
-            .map((project) => {
-              const reason = unavailable.get(project.id);
-              return (
-                <MenuRadioItem
-                  key={project.id}
-                  value={project.id}
-                  disabled={reason !== undefined}
-                  title={reason}
-                >
-                  <span className="flex min-w-0 flex-1 items-center gap-2">
-                    {environmentId === null ? (
-                      <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
-                    ) : (
-                      <ProjectFavicon
-                        environmentId={environmentId}
-                        cwd={project.workspaceRoot}
-                        fallbackIcon={FolderGit2Icon}
-                        className="size-3.5 shrink-0"
-                      />
-                    )}
-                    <span className="min-w-0 flex-1 truncate">{project.title}</span>
-                    {reason === undefined ? null : (
-                      <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
-                        Unavailable
+              {projectFilter.projects
+                .toSorted(
+                  (left, right) =>
+                    Number(projectFilter.unavailable.has(left.id)) -
+                    Number(projectFilter.unavailable.has(right.id)),
+                )
+                .map((project) => {
+                  const reason = projectFilter.unavailable.get(project.id);
+                  return (
+                    <MenuRadioItem
+                      key={project.id}
+                      value={project.id}
+                      disabled={reason !== undefined}
+                      title={reason}
+                    >
+                      <span className="flex min-w-0 flex-1 items-center gap-2">
+                        {projectFilter.environmentId === null ? (
+                          <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
+                        ) : (
+                          <ProjectFavicon
+                            environmentId={projectFilter.environmentId}
+                            cwd={project.workspaceRoot}
+                            fallbackIcon={FolderGit2Icon}
+                            className="size-3.5 shrink-0"
+                          />
+                        )}
+                        <span className="min-w-0 flex-1 truncate">{project.title}</span>
+                        {reason === undefined ? null : (
+                          <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
+                            Unavailable
+                          </span>
+                        )}
                       </span>
-                    )}
-                  </span>
-                </MenuRadioItem>
-              );
-            })}
-        </MenuRadioGroup>
+                    </MenuRadioItem>
+                  );
+                })}
+            </MenuRadioGroup>
+          </>
+        )}
         {/* Nothing loaded wears a label: there is no choice to offer, and a lone "All labels"
             row would only say so in the least useful place. */}
         {labels.length > 0 ? (

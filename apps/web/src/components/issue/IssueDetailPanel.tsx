@@ -152,7 +152,6 @@ export function IssueDetailPanel({
   onActed,
   onStateChange,
   onOpenLinkedPullRequest,
-  context = "page",
   chromeVariant = "full",
 }: {
   environmentId: EnvironmentId;
@@ -184,12 +183,6 @@ export function IssueDetailPanel({
    * one the row opens it on the host instead, which is never a dead control.
    */
   onOpenLinkedPullRequest?: (link: IssueLinkedPullRequest) => void;
-  /**
-   * Beside a thread the header is narrow and the reader is already in the conversation a hand-off
-   * would land in, so "Solve" stays in the menu with the other three; on a page it is the reason
-   * to have opened the issue at all, and rides the button row.
-   */
-  context?: "page" | "thread";
   /**
    * How the metadata above the content behaves: `full` keeps every row pinned; `collapse`
    * folds the whole of it into the top row once the active tab scrolls, and unfolds at the
@@ -560,24 +553,6 @@ export function IssueDetailPanel({
                     <RefreshCwIcon className="size-3.5" />
                     Refresh
                   </MenuItem>
-                  {/* Only where the button row could not take it: on a page "Solve" is the header
-                      button, so offering it here as well would show the same action twice. */}
-                  {context === "thread" ? (
-                    <MenuItem
-                      disabled={handoff !== null}
-                      onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
-                    >
-                      <HammerIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
-                      <span className="flex min-w-0 flex-col">
-                        <span>{handoffLabel("solve", "Solve this issue")}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {inPlaceDraft === null
-                            ? "Opens a thread on this project holding the task."
-                            : "Puts the task in this thread's composer."}
-                        </span>
-                      </span>
-                    </MenuItem>
-                  ) : null}
                   <MenuItem
                     disabled={handoff !== null}
                     onClick={() => void startHandoff("ask", buildAskAboutIssueHandoff)}
@@ -652,25 +627,29 @@ export function IssueDetailPanel({
                   </MenuItem>
                 </MenuPopup>
               </Menu>
-              {/* Handing the issue to an agent is the reason to open one here at all, so on a page
-                  it is a button of its own rather than a line in a menu. */}
-              {context === "page" ? (
-                <Button
-                  size="xs"
-                  variant="outline"
-                  disabled={handoff !== null}
-                  onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
-                >
-                  {handoff === "solve" ? (
-                    "Opening..."
-                  ) : (
-                    <>
-                      <HammerIcon className="size-3" />
-                      Solve
-                    </>
-                  )}
-                </Button>
-              ) : null}
+              {/* Handing the issue to an agent is the reason to open one at all, so it is a
+                  button of its own wherever the panel is — beside a thread as much as on the
+                  page. The label goes once the chrome condenses; the button itself does not. */}
+              <Button
+                size="xs"
+                variant="outline"
+                disabled={handoff !== null}
+                title={
+                  inPlaceDraft === null
+                    ? "Opens a thread on this project holding the task"
+                    : "Puts the task in this thread's composer"
+                }
+                onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
+              >
+                {handoff === "solve" ? (
+                  "Opening..."
+                ) : (
+                  <>
+                    <HammerIcon className="size-3" />
+                    <span className={cn(condensed && "sr-only")}>Solve</span>
+                  </>
+                )}
+              </Button>
               {detail.state === "open" && can("close") ? (
                 closeReasons.length > 0 ? (
                   // A reason is not a second action but a part of this one, so it is chosen on the

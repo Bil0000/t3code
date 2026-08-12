@@ -6147,7 +6147,6 @@ function ChatViewContent(props: ChatViewProps) {
           repository: activeRightPanelSurface.repository,
           number: activeRightPanelSurface.number,
         }}
-        context="thread"
         chromeVariant="full"
         handoffTarget={{
           kind: "existing-thread",
