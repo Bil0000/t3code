@@ -1295,20 +1295,27 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<IssueTemplateList, IssueError> =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<IssueTemplateList, IssueError> => {
+        const capabilities = project.api.capabilities;
         const read = project.api.listIssueTemplates;
-        if (!project.api.capabilities.issueTemplates || read === undefined) {
-          return Effect.fail(
-            new IssueOperationError({
-              operation: "templates",
-              detail: "This host cannot say what a repository offers a new issue.",
-            }),
-          );
+        // A host with nothing to offer still has to say what it can do: this is the only answer a
+        // composer gets before an issue exists, so refusing it would leave the form guessing about
+        // exactly the two hosts that take no template — and one of them takes no issue either.
+        if (!capabilities.issueTemplates || read === undefined) {
+          return Effect.succeed({
+            capabilities,
+            templates: [],
+            contactLinks: [],
+            blankIssuesEnabled: true,
+          });
         }
         return read({
           cwd: project.project.workspaceRoot,
           repository: project.repository,
           host: project.host,
-        }).pipe(Effect.mapError(toIssueError("templates")));
+        }).pipe(
+          Effect.map((offer): IssueTemplateList => ({ ...offer, capabilities })),
+          Effect.mapError(toIssueError("templates")),
+        );
       }),
     );
 

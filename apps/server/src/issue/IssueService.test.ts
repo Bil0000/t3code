@@ -1123,33 +1123,42 @@ const TEMPLATES: IssueTemplateList = {
   blankIssuesEnabled: false,
 };
 
-it.effect("keeps the chooser from a host that has no templates to report", () =>
+/**
+ * The host that offers no starting point is the one the composer most needs an answer from: it is
+ * also the host that may take no labels, or no new issue at all. So an empty offer, with what the
+ * host can do on it, rather than a refusal the form can read nothing out of.
+ */
+it.effect("tells a host with no templates apart by what it says it can do", () =>
   Effect.gen(function* () {
+    const capabilities = { ...FULL_CAPABILITIES, issueTemplates: false, create: false };
     const hostCannot = yield* makeService({
       projects: ONE_PROJECT,
       providers: [
         fakeProvider("github", {
-          capabilities: { ...FULL_CAPABILITIES, issueTemplates: false },
+          capabilities,
           listIssueTemplates: () => Effect.die("must not be called"),
         }),
       ],
     });
-    const refusedHost = yield* Effect.flip(hostCannot.templates(REPOSITORY));
-    assert.include(
-      refusedHost.message,
-      "This host cannot say what a repository offers a new issue.",
-    );
+    assert.deepStrictEqual(yield* hostCannot.templates(REPOSITORY), {
+      capabilities,
+      templates: [],
+      contactLinks: [],
+      blankIssuesEnabled: true,
+    });
 
-    // A host that claims the capability and implements nothing is the same refusal rather than a
-    // crash: the declaration is what the page believes, and it is the thing that was wrong.
+    // A host that claims the capability and implements nothing is the same empty offer rather than
+    // a crash: the declaration is what the page believes, and it is the thing that was wrong.
     const undeclared = yield* makeService({
       projects: ONE_PROJECT,
       providers: [fakeProvider("github")],
     });
-    assert.include(
-      (yield* Effect.flip(undeclared.templates(REPOSITORY))).message,
-      "This host cannot say what a repository offers a new issue.",
-    );
+    assert.deepStrictEqual(yield* undeclared.templates(REPOSITORY), {
+      capabilities: FULL_CAPABILITIES,
+      templates: [],
+      contactLinks: [],
+      blankIssuesEnabled: true,
+    });
   }),
 );
 
@@ -1169,7 +1178,12 @@ it.effect("hands a repository's templates back without asking who is reading the
       ],
     });
 
-    assert.deepStrictEqual(yield* service.templates(REPOSITORY), TEMPLATES);
+    // The host's own answer, with what the host can do added to it: a provider reports the offer,
+    // the service is what knows the capabilities.
+    assert.deepStrictEqual(yield* service.templates(REPOSITORY), {
+      ...TEMPLATES,
+      capabilities: FULL_CAPABILITIES,
+    });
   }),
 );
 
