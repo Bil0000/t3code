@@ -1,17 +1,14 @@
 import type { IssueDetailView, SourceControlActor } from "@t3tools/contracts";
-import { ChevronDownIcon, CircleDotIcon, ExternalLinkIcon, MessageSquareIcon } from "lucide-react";
+import { ChevronDownIcon, CircleDotIcon, MessageSquareIcon } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import {
-  SourceControlActorAvatar,
-  SourceControlMetaLine,
-} from "../sourceControl/actorPresentation";
+import { SourceControlActorAvatar } from "../sourceControl/actorPresentation";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
-import { Button } from "../ui/button";
+import { TimelineComment } from "../sourceControl/TimelineComment";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   buildIssueTimeline,
@@ -79,49 +76,6 @@ function ActorTimelineMarker({
   );
 }
 
-function ConversationCard({
-  entry,
-  cwd,
-  onOpen,
-}: {
-  entry: IssueTimelineEntry;
-  cwd: string;
-  onOpen: (url: string) => void;
-}) {
-  const url = entry.url;
-  return (
-    <article className="py-2">
-      <div className="flex min-w-0 items-start gap-2 px-2">
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
-            <ActorName actor={entry.actor} />
-            <span className="text-muted-foreground">{entry.title}</span>
-          </div>
-          <SourceControlMetaLine className="mt-1 flex-wrap text-[11px] text-muted-foreground">
-            <span>{formatRelativeTimeLabel(entry.at)}</span>
-          </SourceControlMetaLine>
-        </div>
-        {url === null ? null : (
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            className="-mr-1 -mt-1 shrink-0 text-muted-foreground"
-            aria-label="Open this comment on the host"
-            onClick={() => onOpen(url)}
-          >
-            <ExternalLinkIcon className="size-3" />
-          </Button>
-        )}
-      </div>
-      {entry.body === null ? null : (
-        <div className="px-2 pb-2">
-          <HostMarkdown className="mt-3" text={entry.body} cwd={cwd} />
-        </div>
-      )}
-    </article>
-  );
-}
-
 function uniqueConversationActors(entries: ReadonlyArray<IssueTimelineEntry>) {
   const actors = new Map<string, SourceControlActor>();
   for (const entry of entries) {
@@ -182,7 +136,15 @@ function ConversationGroup({
             {open ? (
               <div className="mt-1 space-y-1">
                 {entries.map((entry) => (
-                  <ConversationCard key={entry.id} entry={entry} cwd={cwd} onOpen={onOpen} />
+                  <TimelineComment
+                    key={entry.id}
+                    actor={entry.actor}
+                    title={entry.title}
+                    at={entry.at}
+                    url={entry.url}
+                    onOpen={onOpen}
+                    body={entry.body === null ? null : <HostMarkdown text={entry.body} cwd={cwd} />}
+                  />
                 ))}
               </div>
             ) : null}

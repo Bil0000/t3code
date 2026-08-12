@@ -1,7 +1,6 @@
 import type { PullRequestActor, PullRequestDetailView } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
-  ExternalLinkIcon,
   FileCode2Icon,
   GitCommitHorizontalIcon,
   GitMergeIcon,
@@ -15,7 +14,7 @@ import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import { Button } from "../ui/button";
+import { TimelineComment } from "../sourceControl/TimelineComment";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
   buildPullRequestTimeline,
@@ -23,21 +22,13 @@ import {
   type PullRequestTimelineEvent,
 } from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
-import {
-  PullRequestActorAvatar,
-  PullRequestDiffStat,
-  PullRequestMetaLine,
-} from "./pullRequestPresentation";
+import { PullRequestActorAvatar, PullRequestDiffStat } from "./pullRequestPresentation";
 
 function TimelineBody({ body, markdown, cwd }: { body: string; markdown: boolean; cwd: string }) {
-  return (
-    <div className="mt-3">
-      {markdown ? (
-        <PullRequestMarkdown text={body} cwd={cwd} />
-      ) : (
-        <p className="whitespace-pre-wrap text-xs text-muted-foreground">{body}</p>
-      )}
-    </div>
+  return markdown ? (
+    <PullRequestMarkdown text={body} cwd={cwd} />
+  ) : (
+    <p className="whitespace-pre-wrap text-xs text-muted-foreground">{body}</p>
   );
 }
 
@@ -114,61 +105,6 @@ function ReviewStateBadge({ state }: { state: string }) {
   );
 }
 
-function OpenOnHostButton({ url, onOpen }: { url: string | null; onOpen: (url: string) => void }) {
-  return url === null ? null : (
-    <Button
-      size="icon-xs"
-      variant="ghost"
-      className="-mr-1 -mt-1 shrink-0 text-muted-foreground"
-      aria-label="Open activity on host"
-      onClick={() => onOpen(url)}
-    >
-      <ExternalLinkIcon className="size-3" />
-    </Button>
-  );
-}
-
-function ConversationCard({
-  event,
-  cwd,
-  onOpen,
-}: {
-  event: PullRequestTimelineEvent;
-  cwd: string;
-  onOpen: (url: string) => void;
-}) {
-  return (
-    <article className="py-2">
-      <div className="px-2">
-        <div className="flex min-w-0 items-start gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
-              <ActorName actor={event.actor} />
-              <span className="text-muted-foreground">{event.title}</span>
-              {event.reviewState ? <ReviewStateBadge state={event.reviewState} /> : null}
-            </div>
-            <PullRequestMetaLine className="mt-1 flex-wrap text-[11px] text-muted-foreground">
-              <span>{formatRelativeTimeLabel(event.at)}</span>
-              {event.path ? (
-                <span className="inline-flex min-w-0 items-center gap-1">
-                  <FileCode2Icon aria-hidden className="size-3 shrink-0" />
-                  <span className="truncate">{event.path}</span>
-                </span>
-              ) : null}
-            </PullRequestMetaLine>
-          </div>
-          <OpenOnHostButton url={event.url} onOpen={onOpen} />
-        </div>
-      </div>
-      {event.body ? (
-        <div className="px-2 pb-2">
-          <TimelineBody body={event.body} markdown={event.markdown} cwd={cwd} />
-        </div>
-      ) : null}
-    </article>
-  );
-}
-
 function uniqueConversationActors(events: ReadonlyArray<PullRequestTimelineEvent>) {
   const actors = new Map<string, PullRequestActor>();
   for (const event of events) {
@@ -229,7 +165,30 @@ function ConversationGroup({
             {open ? (
               <div className="mt-1 space-y-1">
                 {events.map((event) => (
-                  <ConversationCard key={event.id} event={event} cwd={cwd} onOpen={onOpen} />
+                  <TimelineComment
+                    key={event.id}
+                    actor={event.actor}
+                    title={event.title}
+                    at={event.at}
+                    url={event.url}
+                    onOpen={onOpen}
+                    badge={
+                      event.reviewState ? <ReviewStateBadge state={event.reviewState} /> : null
+                    }
+                    meta={
+                      event.path ? (
+                        <span className="inline-flex min-w-0 items-center gap-1">
+                          <FileCode2Icon aria-hidden className="size-3 shrink-0" />
+                          <span className="truncate">{event.path}</span>
+                        </span>
+                      ) : null
+                    }
+                    body={
+                      event.body ? (
+                        <TimelineBody body={event.body} markdown={event.markdown} cwd={cwd} />
+                      ) : null
+                    }
+                  />
                 ))}
               </div>
             ) : null}
