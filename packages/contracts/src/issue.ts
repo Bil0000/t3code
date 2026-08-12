@@ -503,8 +503,13 @@ function answerBlock(field: IssueTemplateQuestion, answer: IssueTemplateFieldAns
       return text.length === 0 ? NO_RESPONSE : text;
     }
     case "textarea": {
-      const text = issueTemplateAnswerText(answer).trim();
-      if (text.length === 0) return NO_RESPONSE;
+      const written = issueTemplateAnswerText(answer);
+      if (written.trim().length === 0) return NO_RESPONSE;
+      // Only the whitespace at the end of the answer goes, because the blocks are joined with a
+      // blank line and a fence closes on a line of its own: whatever follows the last word would
+      // file as an empty line nobody wrote. Everything before the first word is the answer — four
+      // spaces are a code block, and dropping them files prose where the reader wrote code.
+      const text = written.trimEnd();
       return field.render === null ? text : `\`\`\`${field.render}\n${text}\n\`\`\``;
     }
     case "dropdown": {

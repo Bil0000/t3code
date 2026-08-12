@@ -469,6 +469,18 @@ describe("buildIssueTemplateBody", () => {
     );
   });
 
+  // Four spaces are a code block, so an answer trimmed at the front is filed as prose the reader
+  // never wrote. Only what follows the last word goes, which the blank line between blocks and the
+  // closing fence would otherwise file as an empty line.
+  it("files an indented answer with the indentation it was written with", () => {
+    expect(buildIssueTemplateBody([FIELDS[3]!], { "what-happened": "    boom()\n\n" })).toBe(
+      "### What happened?\n\n    boom()",
+    );
+    expect(buildIssueTemplateBody([FIELDS[4]!], { logs: "  Error: boom  \n" })).toBe(
+      "### Relevant log output\n\n```shell\n  Error: boom\n```",
+    );
+  });
+
   it("files the options a dropdown offers in its own order, not the order they were taken", () => {
     expect(buildIssueTemplateBody([FIELDS[5]!], { browsers: ["Safari", "Chrome"] })).toBe(
       "### Browsers\n\nChrome, Safari",
