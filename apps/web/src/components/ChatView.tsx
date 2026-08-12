@@ -123,6 +123,7 @@ import { buildTemporaryWorktreeBranchName } from "@t3tools/shared/git";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { RIGHT_PANEL_INLINE_LAYOUT_MEDIA_QUERY } from "../rightPanelLayout";
 import {
+  issueSurfaceId,
   pullRequestSurfaceId,
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
@@ -144,10 +145,11 @@ import {
   selectThreadPreviewMiniPlayer,
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
+import { IssueDetailPanel } from "./issue/IssueDetailPanel";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
-import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
+import { RightPanelTabs, type IssueTabStatus, type PullRequestTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import {
   deriveAgentPanelModel,
@@ -1608,6 +1610,15 @@ function ChatViewContent(props: ChatViewProps) {
         : { ...current, [id]: status },
     );
   }, []);
+  const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
+  const handleIssueTabStatusChange = useCallback((status: IssueTabStatus) => {
+    const id = issueSurfaceId(status);
+    setIssueTabStatuses((current) =>
+      current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
+        ? current
+        : { ...current, [id]: status },
+    );
+  }, []);
   const activeFileSurface =
     activeRightPanelSurface?.kind === "file" ? activeRightPanelSurface : null;
   const activePreviewState = useThreadPreviewState(activeThreadRef);
@@ -1992,6 +2003,7 @@ function ChatViewContent(props: ChatViewProps) {
     : (primaryEnvironment?.serverConfig ?? null);
   const pullRequestsCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
+  const supportsIssues = serverConfig?.environment.capabilities.issues === true;
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -3295,6 +3307,21 @@ function ChatViewContent(props: ChatViewProps) {
       });
     },
     [activeProject, activeThreadRef, supportsPullRequests, threadRepository],
+  );
+  /**
+   * An issue a pull request in this panel references, opened as a peer tab beside it. Only this
+   * view knows which thread's panel that is, which is why the panel is told rather than asking.
+   */
+  const openLinkedIssue = useCallback(
+    (link: { repository: string; number: number }) => {
+      if (!supportsIssues || !activeThreadRef || !activeProject) return;
+      useRightPanelStore.getState().openIssue(activeThreadRef, {
+        projectId: activeProject.id,
+        repository: link.repository,
+        number: link.number,
+      });
+    },
+    [activeProject, activeThreadRef, supportsIssues],
   );
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
@@ -6088,6 +6115,30 @@ function ChatViewContent(props: ChatViewProps) {
             : "page"
         }
         onStateChange={handlePullRequestTabStatusChange}
+        onOpenLinkedIssue={openLinkedIssue}
+      />
+    ) : activeRightPanelSurface?.kind === "issue" && activeProjectRef ? (
+      // Same as the pull request above: the surface tab's own X owns closing. What is different
+      // is where a hand-off lands — "Solve this issue", Ask, Explain and Add to composer write
+      // into the thread this panel is open beside, so reading an issue and acting on it stay one
+      // conversation instead of stranding the reader in a thread they did not ask for.
+      <IssueDetailPanel
+        key={`${activeRightPanelSurface.repository}#${activeRightPanelSurface.number}`}
+        environmentId={activeThread.environmentId}
+        reference={{
+          projectId: activeRightPanelSurface.projectId as ProjectId,
+          repository: activeRightPanelSurface.repository,
+          number: activeRightPanelSurface.number,
+        }}
+        context="thread"
+        chromeVariant="full"
+        handoffTarget={{
+          kind: "existing-thread",
+          projectRef: activeProjectRef,
+          draftId: composerDraftTarget,
+        }}
+        onStateChange={handleIssueTabStatusChange}
+        onOpenLinkedPullRequest={(link) => openThreadPullRequest(link.number)}
       />
     ) : activeRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
@@ -6545,6 +6596,7 @@ function ChatViewContent(props: ChatViewProps) {
           pullRequestAvailable={pullRequestSurfaceAvailable}
           agentsAvailable
           pullRequestStatuses={pullRequestTabStatuses}
+          issueStatuses={issueTabStatuses}
           liveAgentCount={agentPanelModel.liveCount}
         >
           {rightPanelContent}
@@ -6579,6 +6631,7 @@ function ChatViewContent(props: ChatViewProps) {
             pullRequestAvailable={pullRequestSurfaceAvailable}
             agentsAvailable
             pullRequestStatuses={pullRequestTabStatuses}
+            issueStatuses={issueTabStatuses}
             liveAgentCount={agentPanelModel.liveCount}
           >
             {rightPanelContent}

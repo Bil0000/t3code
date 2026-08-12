@@ -1,7 +1,14 @@
-import type { ContextMenuItem, PreviewSessionSnapshot, PullRequestState } from "@t3tools/contracts";
+import type {
+  ContextMenuItem,
+  IssueCloseReason,
+  IssueState,
+  PreviewSessionSnapshot,
+  PullRequestState,
+} from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
   Bot,
+  CircleDot,
   FileDiff,
   Files,
   GitPullRequest,
@@ -35,6 +42,7 @@ import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 import { PreviewPanelShell, type PreviewPanelMode } from "./preview/PreviewPanelShell";
 import { PierreEntryIcon } from "./chat/PierreEntryIcon";
+import { resolveIssueState } from "./issue/issuePresentation";
 
 interface RightPanelTabsProps {
   mode: PreviewPanelMode;
@@ -68,6 +76,7 @@ interface RightPanelTabsProps {
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
   pullRequestStatuses?: Readonly<Record<string, PullRequestTabStatus>>;
+  issueStatuses?: Readonly<Record<string, IssueTabStatus>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
   children: ReactNode;
@@ -79,6 +88,14 @@ export interface PullRequestTabStatus {
   number: number;
   state: PullRequestState;
   isDraft: boolean;
+}
+
+export interface IssueTabStatus {
+  projectId: string;
+  repository: string;
+  number: number;
+  state: IssueState;
+  stateReason: IssueCloseReason | null;
 }
 
 const SURFACE_DISABLED_REASONS = {
@@ -419,6 +436,7 @@ function surfaceTitle(
         getTerminalLabel(surface.activeTerminalId)
       );
     case "pull-request":
+    case "issue":
       return `#${surface.number}`;
     case "agents":
       return "Agents";
@@ -456,11 +474,13 @@ function SurfaceIcon({
   sessions,
   theme,
   pullRequestStatuses,
+  issueStatuses,
 }: {
   surface: RightPanelSurface;
   sessions: Readonly<Record<string, PreviewSessionSnapshot>>;
   theme: "light" | "dark";
   pullRequestStatuses: Readonly<Record<string, PullRequestTabStatus>> | undefined;
+  issueStatuses: Readonly<Record<string, IssueTabStatus>> | undefined;
 }) {
   switch (surface.kind) {
     case "preview": {
@@ -496,6 +516,18 @@ function SurfaceIcon({
                 ? "text-emerald-600 dark:text-emerald-300/90"
                 : "text-muted-foreground";
       return <GitPullRequest className={cn("size-3 shrink-0", toneClassName)} />;
+    }
+    case "issue": {
+      // Until the panel has read the issue, the tab wears the neutral glyph rather than
+      // claiming a state it has not been told.
+      const state = issueStatuses?.[surface.id] ?? null;
+      const presentation = state === null ? null : resolveIssueState(state);
+      const Icon = presentation?.Icon ?? CircleDot;
+      return (
+        <Icon
+          className={cn("size-3 shrink-0", presentation?.toneClassName ?? "text-muted-foreground")}
+        />
+      );
     }
     case "agents":
       return <Bot className="size-3 shrink-0" />;
@@ -612,6 +644,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
               const active = surface.id === props.activeSurfaceId;
               const pending = props.pendingSurfaceIds.has(surface.id);
               const title = surfaceTitle(surface, props.previewSessions, props.terminalLabelsById);
+              // An issue tab has room for its number and nothing else, so which repository it
+              // came from is what the hover is for.
+              const tooltip = surface.kind === "issue" ? surface.repository : title;
               return (
                 <div
                   key={surface.id}
@@ -638,6 +673,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                         sessions={props.previewSessions}
                         theme={resolvedTheme}
                         pullRequestStatuses={props.pullRequestStatuses}
+                        issueStatuses={props.issueStatuses}
                       />
                       {pending ? (
                         <span
@@ -660,7 +696,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                         </button>
                       }
                     />
-                    <TooltipPopup>{title}</TooltipPopup>
+                    <TooltipPopup>{tooltip}</TooltipPopup>
                   </Tooltip>
                 </div>
               );
