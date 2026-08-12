@@ -6,6 +6,7 @@ import { type MouseEvent, useCallback } from "react";
 import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
+import { useClientSettings } from "../hooks/useSettings";
 import { readLocalApi } from "../localApi";
 import { useRightPanelStore } from "../rightPanelStore";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
@@ -46,6 +47,15 @@ export async function openPullRequestLink(
   } catch (cause) {
     throw PullRequestLinkOpenError.fromCause(targetUrl, cause);
   }
+}
+
+/**
+ * Whether change requests belong in the app or in the browser. Read wherever the app would open
+ * one for a reader who did not ask for that surface by name — a link, or the header's shortcut to
+ * the thread's own change request — so the choice holds everywhere it is made for them.
+ */
+export function useOpenChangeRequestLinksInApp(): boolean {
+  return useClientSettings((settings) => settings.openChangeRequestLinksInApp);
 }
 
 /**
@@ -172,6 +182,9 @@ export function findProjectForChangeRequest(
  * the pull requests page: a reader following a link the agent wrote is reading the thread, and
  * should still be reading it afterwards. Any change request opens there, not only the thread's
  * own, since the panel is told which one to show.
+ *
+ * Readers who would rather stay in their browser turn `openChangeRequestLinksInApp` off, and every
+ * such link is left alone here — the caller then treats it as the ordinary link it was.
  */
 export function useOpenChangeRequestLink(
   threadRef?: ScopedThreadRef,
@@ -184,8 +197,10 @@ export function useOpenChangeRequestLink(
   const allProjects = useProjects();
   const serverConfigs = useServerConfigs();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
+  const opensInApp = useOpenChangeRequestLinksInApp();
   return useCallback(
     (event, targetUrl, targetThreadRef) => {
+      if (!opensInApp) return false;
       const resolvedThreadRef = targetThreadRef ?? threadRef;
       const environmentId = resolvedThreadRef?.environmentId ?? primaryEnvironmentId;
       if (
@@ -227,7 +242,7 @@ export function useOpenChangeRequestLink(
       });
       return true;
     },
-    [allProjects, navigate, primaryEnvironmentId, serverConfigs, threadRef],
+    [allProjects, navigate, opensInApp, primaryEnvironmentId, serverConfigs, threadRef],
   );
 }
 

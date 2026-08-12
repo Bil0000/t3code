@@ -49,6 +49,23 @@ describe("ClientSettings glass opacity", () => {
   });
 });
 
+describe("ClientSettings change request links", () => {
+  it("defaults to opening change request links in the app", () => {
+    expect(decodeClientSettings({}).openChangeRequestLinksInApp).toBe(true);
+  });
+
+  it("keeps a stored preference for the browser", () => {
+    expect(decodeClientSettings({ openChangeRequestLinksInApp: false })).toHaveProperty(
+      "openChangeRequestLinksInApp",
+      false,
+    );
+    expect(decodeClientSettingsPatch({ openChangeRequestLinksInApp: false })).toHaveProperty(
+      "openChangeRequestLinksInApp",
+      false,
+    );
+  });
+});
+
 describe("ClientSettings environment identification", () => {
   it("defaults to artwork and accepts each presentation mode", () => {
     expect(decodeClientSettings({}).environmentIdentificationMode).toBe("artwork");

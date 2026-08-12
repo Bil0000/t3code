@@ -168,6 +168,15 @@ export const ClientSettingsSchema = Schema.Struct({
       modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // Whether a link to a change request on a connected host (a GitHub or
+  // Bitbucket pull request, a GitLab merge request, an Azure DevOps pull
+  // request) opens inside the app — beside the thread, or on the pull requests
+  // page — instead of in the system browser. Only links to a repository this
+  // workspace has checked out are ever claimed, so turning this off is the
+  // difference between opening them here and opening them in the browser.
+  openChangeRequestLinksInApp: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
   // Legacy plan mode. The composer's Build/Plan toggle was removed from the
   // default UI; this beta flag restores it (plus the /plan and /default slash
   // commands) for users who still rely on the old workflow.
@@ -790,6 +799,7 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  openChangeRequestLinksInApp: Schema.optionalKey(Schema.Boolean),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),

@@ -11,13 +11,19 @@ import type {
   VcsDriverKind,
   VcsDiscoveryItem,
 } from "@t3tools/contracts";
+import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import {
   getBackgroundActivityBaseProfile,
   getBackgroundActivityPresetSettings,
   resolveServerBackgroundActivitySettings,
 } from "@t3tools/shared/backgroundActivitySettings";
 
-import { usePrimarySettings, useUpdatePrimarySettings } from "../../hooks/useSettings";
+import {
+  useClientSettings,
+  usePrimarySettings,
+  useUpdateClientSettings,
+  useUpdatePrimarySettings,
+} from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
 import { usePrimaryEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
@@ -54,7 +60,12 @@ import {
 } from "../Icons";
 import { RedactedSensitiveText } from "./RedactedSensitiveText";
 import { SourceControlWritingSettingsSection } from "./SourceControlWritingSettings";
-import { SettingResetButton, SettingsPageContainer, SettingsSection } from "./settingsLayout";
+import {
+  SettingResetButton,
+  SettingsPageContainer,
+  SettingsRow,
+  SettingsSection,
+} from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 
 const EMPTY_DISCOVERY_RESULT: SourceControlDiscoveryResult = {
@@ -426,6 +437,40 @@ function GitFetchIntervalSettings() {
   );
 }
 
+function ChangeRequestLinkSettings() {
+  const opensInApp = useClientSettings((settings) => settings.openChangeRequestLinksInApp);
+  const updateClientSettings = useUpdateClientSettings();
+  const defaultOpensInApp = DEFAULT_CLIENT_SETTINGS.openChangeRequestLinksInApp;
+
+  return (
+    <SettingsSection title="Links">
+      <SettingsRow
+        {...searchableSetting("change-request-links")}
+        description="Open pull and merge request links to a repository in this workspace on the Pull Requests page, or beside the thread they were written in. Turn this off to open every one of them in your browser instead."
+        resetAction={
+          opensInApp !== defaultOpensInApp ? (
+            <SettingResetButton
+              label="change request links"
+              onClick={() =>
+                updateClientSettings({ openChangeRequestLinksInApp: defaultOpensInApp })
+              }
+            />
+          ) : null
+        }
+        control={
+          <Switch
+            checked={opensInApp}
+            onCheckedChange={(checked) =>
+              updateClientSettings({ openChangeRequestLinksInApp: Boolean(checked) })
+            }
+            aria-label="Open change request links in T3 Code"
+          />
+        }
+      />
+    </SettingsSection>
+  );
+}
+
 function SourceControlSectionSkeleton({
   title,
   headerAction,
@@ -586,6 +631,8 @@ export function SourceControlSettingsPanel() {
           onScan={handleScan}
         />
       )}
+
+      <ChangeRequestLinkSettings />
 
       {environmentId !== null ? <SourceControlWritingSettingsSection /> : null}
     </SettingsPageContainer>
