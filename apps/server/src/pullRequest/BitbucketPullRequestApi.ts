@@ -716,32 +716,22 @@ export const make = Effect.gen(function* () {
       }),
 
     updateChangeRequest: (input) =>
-      withRepository(input.repository, (path) => {
-        const pullRequest = `${path}/pullrequests/${input.number}`;
-        return readPage({
-          operation: "getPullRequest",
-          url: pullRequest,
-          decode: decodePullRequestJson,
-        }).pipe(
-          Effect.flatMap((current) =>
-            // Only the words this call rewrites, so a title corrected while somebody else is
-            // rewriting the description does not put the description back. The reviewers are the
-            // exception: Bitbucket writes that collection whole, and a body without it takes
-            // everybody off the pull request — so the set that is there is read first and sent
-            // back as it stands.
-            bitbucket.request({
-              method: "PUT",
-              url: pullRequest,
-              body: JSON.stringify({
-                ...(input.title === undefined ? {} : { title: input.title }),
-                ...(input.body === undefined ? {} : { description: input.body }),
-                reviewers: current.reviewerIds.map((uuid) => ({ uuid })),
-              }),
+      withRepository(input.repository, (path) =>
+        // Only the words this call rewrites travel in the body: as `setReviewerRequest` above
+        // relies on, Bitbucket's PUT is a partial update, so any field left out is left as it
+        // was — sending `reviewers` back here would overwrite a change another user made to it
+        // between this call being issued and the request landing.
+        bitbucket
+          .request({
+            method: "PUT",
+            url: `${path}/pullrequests/${input.number}`,
+            body: JSON.stringify({
+              ...(input.title === undefined ? {} : { title: input.title }),
+              ...(input.body === undefined ? {} : { description: input.body }),
             }),
-          ),
-          Effect.asVoid,
-        );
-      }),
+          })
+          .pipe(Effect.asVoid),
+      ),
 
     comment: (input) =>
       withRepository(input.repository, (path) =>
