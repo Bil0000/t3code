@@ -3,16 +3,11 @@ import { MessageSquareIcon } from "lucide-react";
 
 import { memo } from "react";
 
-import { cn } from "~/lib/utils";
-import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
-import { formatRelativeTimeLabel } from "~/timestampFormat";
-
 import {
   SourceControlActorAvatar,
   SourceControlActorLabel,
-  SourceControlMetaLine,
 } from "../sourceControl/actorPresentation";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ListRow } from "../sourceControl/ListRow";
 import { IssueLabelChips, IssueStateGlyph } from "./issuePresentation";
 
 /** Faces, not names: past a few of them the meta line becomes a list nobody reads. */
@@ -38,67 +33,41 @@ function IssueRowImpl({
   matchedElsewhere?: boolean;
   onSelect: (entry: IssueListEntry) => void;
 }) {
-  const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
   return (
-    <button
-      type="button"
-      aria-current={selected ? "true" : undefined}
-      onClick={() => onSelect(entry)}
-      className={cn(
-        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-3 rounded-lg px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-        // Offscreen rows are skipped for style, layout and paint: a long list costs what the
-        // viewport shows, not what the pages have loaded. The intrinsic size keeps the
-        // scrollbar honest while a row is skipped.
-        "[contain-intrinsic-block-size:54px] [content-visibility:auto]",
-        selected ? "bg-accent" : "hover:bg-accent/60",
-      )}
-    >
-      <IssueStateGlyph state={entry.state} stateReason={entry.stateReason} />
-      <span className="min-w-0">
-        <span className="block truncate text-sm font-medium text-foreground">{entry.title}</span>
-        <SourceControlMetaLine className="mt-0.5 text-xs text-muted-foreground/70">
-          <span className="flex shrink-0 items-center gap-1">
-            {showProvider ? (
-              <Tooltip>
-                <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
-                  <Icon aria-label={providerName} className="size-3" />
-                </TooltipTrigger>
-                <TooltipPopup>{providerName}</TooltipPopup>
-              </Tooltip>
-            ) : null}
-            #{entry.number}
+    <ListRow
+      glyph={<IssueStateGlyph state={entry.state} stateReason={entry.stateReason} />}
+      title={entry.title}
+      provider={entry.provider}
+      showProvider={showProvider}
+      number={entry.number}
+      repository={showProjectTitle ? entry.repository : null}
+      meta={[
+        <SourceControlActorLabel key="author" actor={entry.author} className="max-w-40 shrink-0" />,
+        entry.assignees.length > 0 ? (
+          <span
+            key="assignees"
+            className="flex shrink-0 items-center -space-x-1"
+            title={`Assigned to ${entry.assignees.map((assignee) => assignee.login).join(", ")}`}
+          >
+            {entry.assignees.slice(0, ASSIGNEE_FACES).map((assignee) => (
+              <SourceControlActorAvatar
+                key={assignee.login}
+                actor={assignee}
+                className="ring-1 ring-background"
+              />
+            ))}
           </span>
-          {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
-          <SourceControlActorLabel actor={entry.author} className="max-w-40 shrink-0" />
-          {entry.assignees.length > 0 ? (
-            <span
-              className="flex shrink-0 items-center -space-x-1"
-              title={`Assigned to ${entry.assignees.map((assignee) => assignee.login).join(", ")}`}
-            >
-              {entry.assignees.slice(0, ASSIGNEE_FACES).map((assignee) => (
-                <SourceControlActorAvatar
-                  key={assignee.login}
-                  actor={assignee}
-                  className="ring-1 ring-background"
-                />
-              ))}
-            </span>
-          ) : null}
-          {/* Guarded here rather than left to the chips: a component that renders nothing is
-              still a child, and the meta line would draw a separator in front of it. */}
-          {entry.labels.length > 0 ? (
-            <IssueLabelChips labels={entry.labels} className="shrink-0" />
-          ) : null}
-          {matchedElsewhere ? (
-            <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px]">
-              matched in the description
-            </span>
-          ) : null}
-        </SourceControlMetaLine>
-      </span>
-      <span className="flex shrink-0 flex-col items-end gap-0.5 text-xs text-muted-foreground/70 tabular-nums">
-        <span>{formatRelativeTimeLabel(entry.updatedAt)}</span>
-        {entry.commentCount > 0 ? (
+        ) : null,
+        // Guarded here rather than left to the chips: a component that renders nothing is still a
+        // child, and the meta line would draw a separator in front of it.
+        entry.labels.length > 0 ? (
+          <IssueLabelChips key="labels" labels={entry.labels} className="shrink-0" />
+        ) : null,
+      ]}
+      matchedElsewhere={matchedElsewhere === true}
+      updatedAt={entry.updatedAt}
+      trailing={
+        entry.commentCount > 0 ? (
           <span
             className="flex items-center gap-1"
             title={`${entry.commentCount.toLocaleString()} comments`}
@@ -106,9 +75,11 @@ function IssueRowImpl({
             <MessageSquareIcon aria-hidden className="size-3" />
             {entry.commentCount.toLocaleString()}
           </span>
-        ) : null}
-      </span>
-    </button>
+        ) : null
+      }
+      selected={selected}
+      onSelect={() => onSelect(entry)}
+    />
   );
 }
 
