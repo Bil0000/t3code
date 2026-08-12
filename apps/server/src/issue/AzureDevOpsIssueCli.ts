@@ -53,9 +53,27 @@ export class AzureDevOpsWorkItemIncompleteError extends Schema.TaggedErrorClass<
   }
 }
 
+/** Not a decode failure either: az answered, and named no project for the checkout it ran in. */
+export class AzureDevOpsProjectUnknownError extends Schema.TaggedErrorClass<AzureDevOpsProjectUnknownError>()(
+  "AzureDevOpsProjectUnknownError",
+  {
+    command: Schema.Literal("az"),
+    cwd: Schema.String,
+  },
+) {
+  get detail(): string {
+    return "Azure DevOps named no project for this checkout.";
+  }
+
+  override get message(): string {
+    return `Azure CLI failed in resolveProject: ${this.detail}`;
+  }
+}
+
 export type AzureDevOpsIssueCliError =
   | AzureDevOpsCli.AzureDevOpsCliError
   | AzureDevOpsIssueReadError
+  | AzureDevOpsProjectUnknownError
   | AzureDevOpsWorkItemIncompleteError;
 
 export class AzureDevOpsIssueCli extends Context.Service<
@@ -188,14 +206,7 @@ export const make = Effect.gen(function* () {
         Effect.flatMap((result) => {
           const name = result.stdout.trim();
           return name.length === 0
-            ? Effect.fail(
-                new AzureDevOpsIssueReadError({
-                  command: "az",
-                  cwd,
-                  operation: "resolveProject",
-                  cause: new Error("Azure CLI named no project for this checkout."),
-                }),
-              )
+            ? Effect.fail(new AzureDevOpsProjectUnknownError({ command: "az", cwd }))
             : Effect.succeed(name);
         }),
       );

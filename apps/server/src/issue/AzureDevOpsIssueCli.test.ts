@@ -110,7 +110,12 @@ layer((it) => {
         cli.listWorkItems({ cwd: "/w", state: "open", involvement: "all", limit: 30 }),
       );
 
-      assert.strictEqual(error._tag, "AzureDevOpsIssueReadError");
+      assert.strictEqual(error._tag, "AzureDevOpsProjectUnknownError");
+      // az itself succeeded, so there is no underlying failure to report as the cause.
+      assert.strictEqual(
+        error.message,
+        "Azure CLI failed in resolveProject: Azure DevOps named no project for this checkout.",
+      );
     }),
   );
 

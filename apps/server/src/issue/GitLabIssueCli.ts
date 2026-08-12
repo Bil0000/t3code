@@ -474,14 +474,21 @@ export const make = Effect.gen(function* () {
       }),
     );
 
-  /** The labellings, walked the same way and stopped by the same bound. */
+  /**
+   * The labellings, walked the same way and stopped by the same bound — and reporting that bound
+   * the same way too: an issue relabelled more often than the walk follows has a history as
+   * incomplete as one talked over more than the walk reads.
+   */
   const labelEventsPage = (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
     readonly page: number;
     readonly collected: ReadonlyArray<IssueEvent>;
-  }): Effect.Effect<ReadonlyArray<IssueEvent>, GitLabIssueCliError> =>
+  }): Effect.Effect<
+    { readonly events: ReadonlyArray<IssueEvent>; readonly truncated: boolean },
+    GitLabIssueCliError
+  > =>
     api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/issues/${
@@ -499,8 +506,11 @@ export const make = Effect.gen(function* () {
           );
         }
         const collected = [...input.collected, ...decoded.success.events];
-        return decoded.success.rawCount < MAX_PAGE_SIZE || input.page >= CONVERSATION_PAGES
-          ? Effect.succeed(collected)
+        if (decoded.success.rawCount < MAX_PAGE_SIZE) {
+          return Effect.succeed({ events: collected, truncated: false });
+        }
+        return input.page >= CONVERSATION_PAGES
+          ? Effect.succeed({ events: collected, truncated: true })
           : labelEventsPage({ ...input, page: input.page + 1, collected });
       }),
     );
@@ -671,10 +681,12 @@ export const make = Effect.gen(function* () {
           comments: notes.comments,
           // Two reads, so the merged history is ordered here rather than left interleaved by
           // whichever of them answered first.
-          events: [...notes.events, ...labelEvents].sort((left, right) =>
+          events: [...notes.events, ...labelEvents.events].sort((left, right) =>
             left.createdAt === right.createdAt ? 0 : left.createdAt < right.createdAt ? -1 : 1,
           ),
-          truncated: notes.truncated,
+          // Either walk hitting its bound leaves the timeline short, and a history missing its
+          // labellings is no more complete than one missing its remarks.
+          truncated: notes.truncated || labelEvents.truncated,
         })),
       ),
 
