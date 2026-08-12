@@ -287,7 +287,7 @@ describe("decodeLinkedMergeRequestsJson", () => {
       decodeLinkedMergeRequestsJson(`[${mergeRequestJson({ state: "merged" })}]`, true),
     );
 
-    expect(links).toEqual([
+    expect(links.links).toEqual([
       {
         repository: "acme/web",
         number: 12,
@@ -310,8 +310,14 @@ describe("decodeLinkedMergeRequestsJson", () => {
     );
 
     // A locked merge request is an open one whose discussion is locked.
-    expect(links.map((link) => link.state)).toEqual(["open", "open", "closed", "merged", "open"]);
-    expect(links.every((link) => !link.closesIssue)).toBe(true);
+    expect(links.links.map((link) => link.state)).toEqual([
+      "open",
+      "open",
+      "closed",
+      "merged",
+      "open",
+    ]);
+    expect(links.links.every((link) => !link.closesIssue)).toBe(true);
   });
 
   it("reads the draft flag under either of the names GitLab has used", () => {
@@ -322,7 +328,7 @@ describe("decodeLinkedMergeRequestsJson", () => {
       ),
     );
 
-    expect(links.map((link) => link.isDraft)).toEqual([true, true]);
+    expect(links.links.map((link) => link.isDraft)).toEqual([true, true]);
   });
 
   it("skips a merge request that never names its own project", () => {
@@ -334,7 +340,9 @@ describe("decodeLinkedMergeRequestsJson", () => {
     );
 
     // A link with no repository cannot be opened, and there is nowhere else to get one from.
-    expect(links.map((link) => link.repository)).toEqual(["acme/web"]);
+    expect(links.links.map((link) => link.repository)).toEqual(["acme/web"]);
+    // The raw count is what says whether the host had more, so the skipped row still counts.
+    expect(links.rawCount).toBe(2);
   });
 });
 

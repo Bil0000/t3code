@@ -379,6 +379,12 @@ function toChangeRequestState(value: string | null | undefined): ChangeRequestSt
   }
 }
 
+export interface GitLabLinkedMergeRequests {
+  readonly links: ReadonlyArray<IssueLinkedPullRequest>;
+  /** Rows GitLab returned, counted before decoding, so a skipped row cannot hide a next page. */
+  readonly rawCount: number;
+}
+
 /**
  * The merge requests GitLab reports against an issue. `closesIssue` is the caller's, not the
  * payload's: GitLab answers the same shape for the ones that merely mention the issue and the
@@ -390,7 +396,7 @@ function toChangeRequestState(value: string | null | undefined): ChangeRequestSt
 export function decodeLinkedMergeRequestsJson(
   raw: string,
   closesIssue: boolean,
-): Result.Result<ReadonlyArray<IssueLinkedPullRequest>, DecodeFailure> {
+): Result.Result<GitLabLinkedMergeRequests, DecodeFailure> {
   const decoded = decodeUnknownList(raw);
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
@@ -414,7 +420,7 @@ export function decodeLinkedMergeRequestsJson(
       closesIssue,
     });
   }
-  return Result.succeed(links);
+  return Result.succeed({ links, rawCount: decoded.success.length });
 }
 
 export interface GitLabProjectLabels {

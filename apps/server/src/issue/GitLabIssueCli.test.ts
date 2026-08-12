@@ -80,6 +80,24 @@ function labelEvents(count: number, firstId: number): string {
   );
 }
 
+/** A page of either merge request link endpoint, which answer the same shape. */
+function mergeRequests(count: number, firstIid: number): string {
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => ({
+      iid: firstIid + index,
+      title: `Merge request ${firstIid + index}`,
+      web_url: `https://gitlab.com/acme/web/-/merge_requests/${firstIid + index}`,
+      state: "opened",
+      references: { full: `acme/web!${firstIid + index}` },
+    })),
+  );
+}
+
+/** Which page a paged read asked for, which `per_page` must not be mistaken for. */
+function pageOf(path: string): number {
+  return Number(/[?&]page=(\d+)/.exec(path)?.[1] ?? "1");
+}
+
 /** A row of `templates/issues`, which names a template but carries none of it. */
 function templateEntries(
   entries: ReadonlyArray<{ readonly key: string; readonly name: string }>,
@@ -449,6 +467,54 @@ layer("GitLabIssueCli.layer", (it) => {
         [12, true, "merged"],
         [13, false, "open"],
       ]);
+    }),
+  );
+
+  it.effect("reads the merge request links past the first hundred", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) => {
+        const path = input.args[1] ?? "";
+        if (!path.includes("closed_by")) return Effect.succeed(output("[]"));
+        // A full page says nothing about being the last, so the short one after it ends the walk.
+        return Effect.succeed(
+          pageOf(path) === 1 ? output(mergeRequests(100, 1)) : output(mergeRequests(3, 101)),
+        );
+      });
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const links = yield* cli.listLinkedMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      assert.strictEqual(links.length, 103);
+      assert.strictEqual(mockedExecute.mock.calls.length, 3);
+    }),
+  );
+
+  it.effect("stops the link walk at its bound, keeping one of a link answered twice", () =>
+    Effect.gen(function* () {
+      // A host that answers the same full page whatever page is asked for: the walk has to end
+      // itself, and the repeats must not reach the panel as separate links.
+      mockedExecute.mockImplementation((input) =>
+        Effect.succeed(
+          (input.args[1] ?? "").includes("closed_by")
+            ? output(mergeRequests(100, 1))
+            : output("[]"),
+        ),
+      );
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const links = yield* cli.listLinkedMergeRequests({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+      });
+
+      // Five pages of links and the one empty read beside them.
+      assert.strictEqual(mockedExecute.mock.calls.length, 6);
+      assert.strictEqual(links.length, 100);
     }),
   );
 

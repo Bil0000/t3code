@@ -87,6 +87,12 @@ const MAX_PAGE_SIZE = 100;
  * walk that ends whatever the host has.
  */
 const CONVERSATION_PAGES = 10;
+/**
+ * Pages of merge request links to follow, per endpoint — five hundred of them, which no issue a
+ * person opens has. The panel shows the links rather than counting them, so the bound is here to
+ * end the walk rather than to be reached.
+ */
+const LINKED_PAGES = 5;
 
 /**
  * Templates whose body is fetched, and how many of those reads run at once. Each one is a request
@@ -515,28 +521,43 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * One endpoint's links, a page at a time. Both endpoints page by offset like the rest of GitLab,
+   * so a single page would drop every link past the first hundred on an issue a whole release
+   * branched off. The walk is bounded like the conversation's: a short page ends it, and
+   * `LINKED_PAGES` ends it anyway.
+   */
   const linkedMergeRequests = (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly number: number;
     readonly endpoint: "closed_by" | "related_merge_requests";
+    readonly page: number;
+    readonly collected: ReadonlyArray<IssueLinkedPullRequest>;
   }): Effect.Effect<ReadonlyArray<IssueLinkedPullRequest>, GitLabIssueCliError> =>
     api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/issues/${input.number}/${
         input.endpoint
-      }?${query([["per_page", String(MAX_PAGE_SIZE)]])}`,
+      }?${query([
+        ["per_page", String(MAX_PAGE_SIZE)],
+        ["page", String(input.page)],
+      ])}`,
     }).pipe(
       Effect.flatMap((result) => {
         const decoded = decodeLinkedMergeRequestsJson(
           result.stdout.trim(),
           input.endpoint === "closed_by",
         );
-        return Result.isSuccess(decoded)
-          ? Effect.succeed(decoded.success)
-          : Effect.fail(
-              readError({ cwd: input.cwd, operation: "listLinkedMergeRequests" })(decoded.failure),
-            );
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            readError({ cwd: input.cwd, operation: "listLinkedMergeRequests" })(decoded.failure),
+          );
+        }
+        const collected = [...input.collected, ...decoded.success.links];
+        return decoded.success.rawCount < MAX_PAGE_SIZE || input.page >= LINKED_PAGES
+          ? Effect.succeed(collected)
+          : linkedMergeRequests({ ...input, page: input.page + 1, collected });
       }),
     );
 
@@ -653,19 +674,27 @@ export const make = Effect.gen(function* () {
     listLinkedMergeRequests: (input) =>
       Effect.all(
         [
-          linkedMergeRequests({ ...input, endpoint: "closed_by" }),
-          linkedMergeRequests({ ...input, endpoint: "related_merge_requests" }),
+          linkedMergeRequests({ ...input, endpoint: "closed_by", page: 1, collected: [] }),
+          linkedMergeRequests({
+            ...input,
+            endpoint: "related_merge_requests",
+            page: 1,
+            collected: [],
+          }),
         ],
         { concurrency: 2 },
       ).pipe(
         Effect.map(([closing, related]) => {
           // The two endpoints overlap: a merge request that closes the issue also mentions it.
           // The closing answer wins, so the stronger of the two relationships is the one shown.
-          const seen = new Set(closing.map((link) => `${link.repository}!${link.number}`));
-          return [
-            ...closing,
-            ...related.filter((link) => !seen.has(`${link.repository}!${link.number}`)),
-          ];
+          // One pass over both, so a link a paged endpoint repeats is dropped as well.
+          const seen = new Set<string>();
+          return [...closing, ...related].filter((link) => {
+            const key = `${link.repository}!${link.number}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          });
         }),
       ),
 
