@@ -249,7 +249,8 @@ function involvementParams(input: {
       return [["author_username", input.viewer]];
     // GitLab's project issue listing cannot express "mentioned" — its `scope` narrows to the
     // issues the viewer created or is assigned, which is a different question. The unnarrowed
-    // page is answered rather than a filter that means something else, and the service narrows.
+    // page is answered rather than a filter that means something else, and nothing between here
+    // and the reader narrows it back down: a `mentioned` listing is every issue in the project.
     case "mentioned":
     case "all":
       return [];
