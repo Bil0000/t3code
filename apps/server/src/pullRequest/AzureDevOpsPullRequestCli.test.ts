@@ -403,6 +403,79 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect.each([
+    { name: "a title", rewrite: { title: "Add the page" }, expected: ["--title=Add the page"] },
+    {
+      name: "a description",
+      rewrite: { body: "Why the page changed" },
+      expected: ["--description=Why the page changed"],
+    },
+    {
+      name: "both",
+      rewrite: { title: "Add the page", body: "Why the page changed" },
+      expected: ["--title=Add the page", "--description=Why the page changed"],
+    },
+  ] as const)("rewrites $name, sending nothing it was not given", ({ rewrite, expected }) =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      yield* cli.updatePullRequest({ cwd: "/w", number: 42, ...rewrite });
+
+      expect(argsOfCall(0)).toEqual([
+        "repos",
+        "pr",
+        "update",
+        "--detect",
+        "true",
+        "--id",
+        "42",
+        ...expected,
+        "--only-show-errors",
+        "--output",
+        "json",
+      ]);
+    }),
+  );
+
+  it.effect("sends a description that starts with a dash as one value, not as a flag", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+
+      yield* cli.updatePullRequest({
+        cwd: "/w",
+        number: 42,
+        body: "- rewrote the page\n- kept the rest",
+      });
+
+      // One argument, so the leading dash of an ordinary bullet list never reaches az as a flag,
+      // and the whole text stays together where `--description` would otherwise take several.
+      expect(argsOfCall(0)).toContain("--description=- rewrote the page\n- kept the rest");
+    }),
+  );
+
+  it.effect("rewrites through the provider, which says it takes one", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const provider = yield* AzureDevOpsPullRequestProvider.make;
+
+      // False for a remark because nothing here can post one, so there is none to rewrite.
+      expect(provider.capabilities.edit).toEqual({ changeRequest: true, comment: false });
+      assert.isDefined(provider.updateChangeRequest);
+      yield* provider.updateChangeRequest({
+        cwd: "/w",
+        repository: "web",
+        host: "dev.azure.com",
+        number: 42,
+        title: "Add the page",
+      });
+
+      expect(argsOfCall(0)).toContain("--title=Add the page");
+      expect(argsOfCall(0)).not.toContain("--description");
+    }),
+  );
+
   it.effect("reads the conversation through the REST API, pinned to a version", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(

@@ -39,6 +39,10 @@ const CAPABILITIES: PullRequestCapabilities = {
   // different service with its own permissions. So the page takes a name here rather than being
   // handed a menu built out of a guess.
   reviewers: { request: true, listCandidates: false },
+  // A new title and description travel on the same `az repos pr update` that moves a pull request.
+  // Rewriting a remark is false for the same reason posting one is: this cannot put a remark on
+  // Azure DevOps at all, so there is nothing here it could rewrite either.
+  edit: { changeRequest: true, comment: false },
 };
 
 /**
@@ -215,6 +219,16 @@ export const make = Effect.gen(function* () {
           ...(input.mergeMethod === undefined ? {} : { mergeMethod: input.mergeMethod }),
         })
         .pipe(Effect.mapError(fail("runAction"))),
+
+    updateChangeRequest: (input) =>
+      cli
+        .updatePullRequest({
+          cwd: input.cwd,
+          number: input.number,
+          title: input.title,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("updateChangeRequest"))),
 
     // Never called: `capabilities.reviewers.listCandidates` is false, and the service refuses the
     // list without it.
