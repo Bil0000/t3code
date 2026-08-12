@@ -395,10 +395,15 @@ export function IssueCreateDialog({
     );
   };
 
-  // Closing puts the chooser back: the form is a step inside this dialog, and reopening it should
-  // start where the host's own composer starts.
+  // Closing throws the draft away with the chooser: a draft that was abandoned is not one this
+  // dialog keeps, and the next "New issue" is a new issue — on the chooser, on whatever project
+  // the page is scoped to by then, with nothing of the last one still in the boxes.
   const setOpen = (next: boolean) => {
-    if (!next) setChosen(null);
+    if (!next) {
+      setChosen(null);
+      setSelectedId(null);
+      resetDraft(undefined);
+    }
     onOpenChange(next);
   };
 
