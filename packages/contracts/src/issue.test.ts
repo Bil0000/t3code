@@ -223,6 +223,21 @@ describe("IssueDetail", () => {
 
 describe("IssueTemplateList", () => {
   const TEMPLATES: IssueTemplateList = {
+    capabilities: {
+      comment: true,
+      actions: ["close", "reopen"],
+      closeReasons: ["completed", "not-planned"],
+      create: true,
+      issueTemplates: true,
+      edit: true,
+      labels: true,
+      assignees: true,
+      listLabelCandidates: true,
+      listAssigneeCandidates: true,
+      search: true,
+      linkedPullRequests: true,
+      timelineEvents: true,
+    },
     templates: [
       {
         key: "bug_report.md",
@@ -324,6 +339,7 @@ describe("IssueTemplateList", () => {
 
   it("takes a repository that offers nothing, which is where the blank form comes from", () => {
     const decoded = decodeTemplates({
+      capabilities: TEMPLATES.capabilities,
       templates: [],
       contactLinks: [],
       blankIssuesEnabled: true,
@@ -331,6 +347,18 @@ describe("IssueTemplateList", () => {
 
     expect(decoded.templates).toEqual([]);
     expect(decoded.blankIssuesEnabled).toBe(true);
+  });
+
+  // A server from before capabilities travelled here still answers the offer, and a composer that
+  // reads none is where it stood before: everything offered, and the host refuses what it cannot do.
+  it("takes an offer from a server that says nothing about what the host can do", () => {
+    const decoded = decodeTemplates({
+      templates: [],
+      contactLinks: [],
+      blankIssuesEnabled: true,
+    });
+
+    expect(decoded.capabilities).toBeUndefined();
   });
 
   // A markdown template supplies no questions, which is how the composer tells the two apart.

@@ -582,6 +582,16 @@ export const IssueContactLink = Schema.Struct({
 export type IssueContactLink = typeof IssueContactLink.Type;
 
 export const IssueTemplateList = Schema.Struct({
+  /**
+   * What the host can do with issues at all, which a composer has no other way to learn: every
+   * other answer carrying `IssueCapabilities` is about an issue that already exists, and the one
+   * question asked before filing is this one. A host that takes no new issue, or no labels on one,
+   * has to be known before the form is drawn rather than after the host refuses it.
+   *
+   * Optional because it arrives on the wire: a client talking to a server from before this was
+   * carried reads nothing here rather than failing to decode the offer at all.
+   */
+  capabilities: Schema.optional(IssueCapabilities),
   templates: Schema.Array(IssueTemplate),
   contactLinks: Schema.Array(IssueContactLink),
   /**
