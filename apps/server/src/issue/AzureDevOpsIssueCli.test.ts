@@ -84,6 +84,44 @@ function unreadableListing(project = "web") {
   });
 }
 
+/** The one rule error az reports for a state a project's workflow does not have. */
+const ruleError = (argumentCount: number) =>
+  new AzureDevOpsCli.AzureDevOpsCommandFailedError({
+    operation: "execute",
+    command: "az",
+    cwd: "/w",
+    argumentCount,
+    cause: new Error("TF401320: Rule Error for field State."),
+  });
+
+/** A project whose workflow has only the states named: every other write is refused. */
+function acceptsStates(...accepted: ReadonlyArray<string>) {
+  mockedExecute.mockImplementation((input) => {
+    const state = input.args[input.args.indexOf("--state") + 1] ?? "";
+    return (
+      accepted.includes(state)
+        ? Effect.succeed(output("{}"))
+        : Effect.fail(ruleError(input.args.length))
+    ) as ReturnType<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>;
+  });
+}
+
+const updateArgs = (state: string) => [
+  "boards",
+  "work-item",
+  "update",
+  "--id",
+  "7",
+  "--state",
+  state,
+  "--only-show-errors",
+  "--output",
+  "json",
+];
+
+const statesWritten = () =>
+  mockedExecute.mock.calls.map(([input]) => input.args[input.args.indexOf("--state") + 1]);
+
 const topsOf = () =>
   mockedExecute.mock.calls
     .filter(([input]) => input.args[0] === "boards")
@@ -400,42 +438,72 @@ layer((it) => {
 
   it.effect("writes a state, which is all Azure has in place of closing and reopening", () =>
     Effect.gen(function* () {
-      mockedExecute.mockImplementation(
-        () =>
-          Effect.succeed(output("{}")) as ReturnType<
-            AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]
-          >,
-      );
+      acceptsStates("Closed");
       const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
 
       yield* cli.runWorkItemAction({ cwd: "/w", number: 7, action: "close" });
 
-      expect(mockedExecute.mock.calls[0]?.[0].args).toEqual([
-        "boards",
-        "work-item",
-        "update",
-        "--id",
-        "7",
-        "--state",
-        "Closed",
-        "--only-show-errors",
-        "--output",
-        "json",
+      // Agile and CMMI spell it `Closed`, and are asked first: those projects cost one write.
+      assert.deepStrictEqual(
+        mockedExecute.mock.calls.map(([input]) => input.args),
+        [updateArgs("Closed")],
+      );
+    }),
+  );
+
+  it.effect("moves on to the name the next process template uses when Azure refuses one", () =>
+    Effect.gen(function* () {
+      acceptsStates("Done");
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+
+      yield* cli.runWorkItemAction({ cwd: "/w", number: 7, action: "close" });
+
+      // A Scrum or Basic project has no `Closed` state, and nothing in az boards says so: the
+      // documented name it does have is written next.
+      assert.deepStrictEqual(
+        mockedExecute.mock.calls.map(([input]) => input.args),
+        [updateArgs("Closed"), updateArgs("Done")],
+      );
+    }),
+  );
+
+  it.effect("names every state it tried, which a bare command failure does not", () =>
+    Effect.gen(function* () {
+      acceptsStates();
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+
+      const error = yield* Effect.flip(
+        cli.runWorkItemAction({ cwd: "/w", number: 7, action: "reopen" }),
+      );
+
+      // Every out-of-the-box name was refused, so this project runs a custom template: the list is
+      // what tells its owner which state of their own belongs here.
+      assert.strictEqual(error._tag, "AzureDevOpsWorkItemStateRefusedError");
+      expect(error.message).toContain(
+        "refused every state that would reopen work item 7: Active, Committed, Doing, To Do, New, Proposed",
+      );
+      assert.deepStrictEqual(statesWritten(), [
+        "Active",
+        "Committed",
+        "Doing",
+        "To Do",
+        "New",
+        "Proposed",
       ]);
     }),
   );
 
-  it.effect("names the state Azure refused, which a bare command failure does not", () =>
+  it.effect("writes no second state where az answered that it is not signed in", () =>
     Effect.gen(function* () {
       mockedExecute.mockImplementation(
-        () =>
+        (input) =>
           Effect.fail(
-            new AzureDevOpsCli.AzureDevOpsCommandFailedError({
+            new AzureDevOpsCli.AzureDevOpsCliAuthenticationError({
               operation: "execute",
               command: "az",
               cwd: "/w",
-              argumentCount: 10,
-              cause: new Error("TF401320: Rule Error for field State."),
+              argumentCount: input.args.length,
+              cause: new Error("az devops login"),
             }),
           ) as ReturnType<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>,
       );
@@ -445,10 +513,10 @@ layer((it) => {
         cli.runWorkItemAction({ cwd: "/w", number: 7, action: "close" }),
       );
 
-      // A project on the Basic or Scrum template has no `Closed` state, and nothing in az boards
-      // says so: the name that was written is the only clue the reader gets.
-      assert.strictEqual(error._tag, "AzureDevOpsWorkItemStateRefusedError");
-      expect(error.message).toContain('refused the state "Closed" for work item 7');
+      // Nothing about the state was wrong, so another name would fail the same way and bury the
+      // one answer that tells the reader what to do.
+      assert.strictEqual(error._tag, "AzureDevOpsCliAuthenticationError");
+      assert.deepStrictEqual(statesWritten(), ["Closed"]);
     }),
   );
 });

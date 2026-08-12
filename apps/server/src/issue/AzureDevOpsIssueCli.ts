@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import type { IssueAction, IssueInvolvement, IssueListState } from "@t3tools/contracts";
+import { IssueAction, type IssueInvolvement, type IssueListState } from "@t3tools/contracts";
 
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import {
@@ -71,9 +71,10 @@ export class AzureDevOpsProjectUnknownError extends Schema.TaggedErrorClass<Azur
 }
 
 /**
- * A state Azure refused to write. Nothing in `az boards` reads a project's workflow, so the name
- * that was attempted travels with the refusal: a process template without that state is the one
- * explanation a bare command failure cannot give.
+ * Every state Azure refused for one action. Nothing in `az boards` reads a project's workflow, so
+ * the names that were attempted travel with the refusal: a process template that spells its states
+ * some other way is the one explanation a bare command failure cannot give, and the list says
+ * exactly which name such a project would have to add.
  */
 export class AzureDevOpsWorkItemStateRefusedError extends Schema.TaggedErrorClass<AzureDevOpsWorkItemStateRefusedError>()(
   "AzureDevOpsWorkItemStateRefusedError",
@@ -81,12 +82,13 @@ export class AzureDevOpsWorkItemStateRefusedError extends Schema.TaggedErrorClas
     command: Schema.Literal("az"),
     cwd: Schema.String,
     number: Schema.Int,
-    state: Schema.String,
+    action: IssueAction,
+    states: Schema.Array(Schema.String),
     cause: Schema.Defect(),
   },
 ) {
   get detail(): string {
-    return `Azure DevOps refused the state "${this.state}" for work item ${this.number}. Only the Agile and CMMI process templates have that state, and az reads no project's own workflow.`;
+    return `Azure DevOps refused every state that would ${this.action} work item ${this.number}: ${this.states.join(", ")}. Those are the states the out-of-the-box process templates use, and az reads no project's own workflow.`;
   }
 
   override get message(): string {
@@ -138,13 +140,21 @@ export class AzureDevOpsIssueCli extends Context.Service<
 >()("t3/issue/AzureDevOpsIssueCli") {}
 
 /**
- * The state a work item is moved into. Azure has no close or reopen verb — a state is written like
- * any other field — and the two names below are the Agile and CMMI ones. A Basic project
- * (`To Do`/`Doing`/`Done`) or a Scrum one (`New`/`Committed`/`Done`) has neither, and `az boards`
- * has no command that reads a project's workflow: the write is attempted, and Azure's refusal is
- * reported against the name it was refused for rather than as a bare command failure.
+ * The states a work item is moved into, written in order until Azure accepts one. Azure has no
+ * close or reopen verb — a state is written like any other field — and `az boards` has no command
+ * that reads a project's workflow. This is not discovery, then: it is a walk through the names
+ * Microsoft documents for the four out-of-the-box process templates, Agile and CMMI first so those
+ * projects still cost exactly one write.
+ *
+ * Closing: `Closed` on Agile and CMMI, `Done` on Scrum and Basic. Reopening: `Active` on Agile and
+ * CMMI, `Committed` for Scrum's backlog items and `To Do` for its tasks, `Doing` on Basic — with
+ * `New` and `Proposed` behind them for a workflow that allows no transition straight back into
+ * work. A custom template can refuse all of them, and the refusal then names every one tried.
  */
-const ACTION_STATES: Record<IssueAction, string> = { close: "Closed", reopen: "Active" };
+const ACTION_STATES: Record<IssueAction, readonly [string, ...ReadonlyArray<string>]> = {
+  close: ["Closed", "Done"],
+  reopen: ["Active", "Committed", "Doing", "To Do", "New", "Proposed"],
+};
 
 /**
  * How often a listing doubles the window it asks Azure for when rows come back unreadable. Three
@@ -342,27 +352,39 @@ export const make = Effect.gen(function* () {
       ),
 
     runWorkItemAction: (input) => {
-      const state = ACTION_STATES[input.action];
-      return executeJson({
-        cwd: input.cwd,
-        args: ["boards", "work-item", "update", "--id", String(input.number), "--state", state],
-      }).pipe(
-        Effect.asVoid,
-        // Only the failure az reports for a rule it broke. An unusable tool or an unauthenticated
-        // one arrives under its own tag and keeps its own explanation.
-        Effect.catchTags({
-          AzureDevOpsCommandFailedError: (error) =>
-            Effect.fail(
-              new AzureDevOpsWorkItemStateRefusedError({
-                command: "az",
-                cwd: input.cwd,
-                number: input.number,
-                state,
-                cause: error,
-              }),
-            ),
-        }),
-      );
+      const write = (
+        state: string,
+        remaining: ReadonlyArray<string>,
+      ): Effect.Effect<void, AzureDevOpsIssueCliError> =>
+        executeJson({
+          cwd: input.cwd,
+          args: ["boards", "work-item", "update", "--id", String(input.number), "--state", state],
+        }).pipe(
+          Effect.asVoid,
+          // Only the failure az reports for a rule it broke moves on to the next name. An unusable
+          // tool, an unauthenticated one and a work item that is not there arrive under their own
+          // tags: they keep their own explanation, and no other state is written after them.
+          Effect.catchTags({
+            AzureDevOpsCommandFailedError: (error) => {
+              const [next, ...following] = remaining;
+              return next === undefined
+                ? Effect.fail(
+                    new AzureDevOpsWorkItemStateRefusedError({
+                      command: "az",
+                      cwd: input.cwd,
+                      number: input.number,
+                      action: input.action,
+                      states: ACTION_STATES[input.action],
+                      cause: error,
+                    }),
+                  )
+                : write(next, following);
+            },
+          }),
+        );
+
+      const [first, ...rest] = ACTION_STATES[input.action];
+      return write(first, rest);
     },
   });
 });
