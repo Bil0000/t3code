@@ -78,6 +78,7 @@ import {
   useRightPanelStore,
   type RightPanelSurface,
 } from "../rightPanelStore";
+import { findProjectForLink, openLinkInBrowser } from "../lib/openIssueLink";
 import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
 import { usePrimaryEnvironment } from "../state/environments";
@@ -1198,9 +1199,13 @@ function PullRequestsRouteView() {
                 }}
                 onStateChange={handleIssueTabStatusChange}
                 onOpenLinkedPullRequest={(link) => {
-                  if (rightPanelRef === null) return;
+                  const project = findProjectForLink(projects, link);
+                  if (rightPanelRef === null || project === undefined) {
+                    openLinkInBrowser(link.url);
+                    return;
+                  }
                   const target = {
-                    projectId: activeSurface.projectId,
+                    projectId: project.id,
                     repository: link.repository,
                     number: link.number,
                   };
@@ -1208,7 +1213,7 @@ function PullRequestsRouteView() {
                   updateSearch({
                     repository: target.repository,
                     number: target.number,
-                    selectedProjectId: target.projectId as ProjectId,
+                    selectedProjectId: target.projectId,
                   });
                 }}
                 chromeVariant="collapse"
@@ -1234,11 +1239,17 @@ function PullRequestsRouteView() {
                 onStateChange={handlePullRequestTabStatusChange}
                 // The issue a change request closes is read beside it, as a peer tab in this
                 // page's own panel: leaving for the issues page would take the change request
-                // it answers off the screen.
+                // it answers off the screen. The project is the one owning the repository the
+                // link names, which a cross-repository reference keeps; a repository this
+                // workspace does not hold opens on its host rather than against the wrong project.
                 onOpenLinkedIssue={(link) => {
-                  if (rightPanelRef === null) return;
+                  const project = findProjectForLink(projects, link);
+                  if (rightPanelRef === null || project === undefined) {
+                    openLinkInBrowser(link.url);
+                    return;
+                  }
                   useRightPanelStore.getState().openIssue(rightPanelRef, {
-                    projectId: activeSurface.projectId,
+                    projectId: project.id,
                     repository: link.repository,
                     number: link.number,
                   });

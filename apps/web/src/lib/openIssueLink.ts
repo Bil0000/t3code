@@ -162,6 +162,56 @@ export function findProjectForIssue(
 }
 
 /**
+ * The project a linked issue or change request belongs to, or nothing. A link carries the
+ * repository it was filed in, which need not be the one on screen — a cross-repository reference
+ * keeps its own — so the project is resolved from that repository rather than assumed from the
+ * open surface: pairing one repository with another project's id makes a reference the server
+ * refuses to read.
+ *
+ * The host comes from the link's own URL, because a repository path alone cannot tell two hosts
+ * apart. A host nothing here is checked out from matches no project, and the caller falls back to
+ * the browser, exactly as it would for a lookalike.
+ */
+export function findProjectForLink(
+  projects: ReadonlyArray<EnvironmentProject>,
+  link: { readonly repository: string; readonly number: number; readonly url: string },
+): EnvironmentProject | undefined {
+  let host: string;
+  try {
+    host = new URL(link.url).hostname.toLowerCase();
+  } catch {
+    return undefined;
+  }
+  return findProjectForIssue(projects, { host, repository: link.repository, number: link.number });
+}
+
+/**
+ * Hands a link to the system browser, which is where one this workspace cannot place belongs, and
+ * says so when the desktop bridge is missing rather than swallowing the press.
+ */
+export function openLinkInBrowser(targetUrl: string): void {
+  const api = readLocalApi();
+  if (!api) {
+    toastManager.add({
+      type: "error",
+      title: "Link opening is unavailable.",
+    });
+    return;
+  }
+
+  void openIssueLink(api.shell, targetUrl).catch((error) => {
+    console.error(error);
+    toastManager.add(
+      stackedThreadToast({
+        type: "error",
+        title: "Unable to open issue link",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      }),
+    );
+  });
+}
+
+/**
  * Returns a click handler that opens an issue link beside the thread it was read in, and says
  * whether it did. Anything else — another organisation's repository, a host nothing here is
  * checked out from, a link that merely looks like one — falls back to the system browser, exactly
@@ -206,25 +256,7 @@ export function useOpenIssueLink(threadRef?: ScopedThreadRef) {
         return true;
       }
 
-      const api = readLocalApi();
-      if (!api) {
-        toastManager.add({
-          type: "error",
-          title: "Link opening is unavailable.",
-        });
-        return false;
-      }
-
-      void openIssueLink(api.shell, issueUrl).catch((error) => {
-        console.error(error);
-        toastManager.add(
-          stackedThreadToast({
-            type: "error",
-            title: "Unable to open issue link",
-            description: error instanceof Error ? error.message : "An error occurred.",
-          }),
-        );
-      });
+      openLinkInBrowser(issueUrl);
       return false;
     },
     [allProjects, primaryEnvironmentId, serverConfigs, threadRef],

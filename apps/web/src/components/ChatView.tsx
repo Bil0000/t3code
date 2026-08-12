@@ -218,6 +218,7 @@ import {
   formatElementContextLabel,
 } from "../lib/elementContext";
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
+import { findProjectForLink, openLinkInBrowser } from "../lib/openIssueLink";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -3310,20 +3311,49 @@ function ChatViewContent(props: ChatViewProps) {
     [activeProject, activeThreadRef, supportsPullRequests, threadRepository],
   );
   /**
-   * An issue opened as its own tab in this thread's panel, referenced by a pull request already
-   * open beside it. Only this view knows which thread's panel that is, which is why the panel is
-   * told rather than asking.
+   * An issue or change request opened as its own tab in this thread's panel, referenced by the one
+   * already open beside it. Only this view knows which thread's panel that is, which is why the
+   * panel is told rather than asking.
+   *
+   * The project comes from the repository the link names, not from the thread: a link can cross
+   * repositories, and this thread's project need not own the one it points at. A repository no
+   * project here holds opens on its host instead — showing a different repository's item of the
+   * same number would be worse than not opening it at all.
    */
-  const openLinkedIssue = useCallback(
-    (link: { repository: string; number: number }) => {
-      if (!supportsIssues || !activeThreadRef || !activeProject) return;
-      useRightPanelStore.getState().openIssue(activeThreadRef, {
-        projectId: activeProject.id,
-        repository: link.repository,
-        number: link.number,
-      });
+  const openLinkedItem = useCallback(
+    (kind: "issue" | "pull-request", link: { repository: string; number: number; url: string }) => {
+      const supported = kind === "issue" ? supportsIssues : supportsPullRequests;
+      const project =
+        activeThreadEnvironmentId === null
+          ? undefined
+          : findProjectForLink(
+              allProjects.filter(
+                (candidate) => candidate.environmentId === activeThreadEnvironmentId,
+              ),
+              link,
+            );
+      if (!supported || !activeThreadRef || project === undefined) {
+        openLinkInBrowser(link.url);
+        return;
+      }
+      const reference = { projectId: project.id, repository: link.repository, number: link.number };
+      const panel = useRightPanelStore.getState();
+      if (kind === "issue") {
+        panel.openIssue(activeThreadRef, reference);
+      } else {
+        panel.openPullRequest(activeThreadRef, reference);
+      }
     },
-    [activeProject, activeThreadRef, supportsIssues],
+    [activeThreadEnvironmentId, activeThreadRef, allProjects, supportsIssues, supportsPullRequests],
+  );
+  const openLinkedIssue = useCallback(
+    (link: { repository: string; number: number; url: string }) => openLinkedItem("issue", link),
+    [openLinkedItem],
+  );
+  const openLinkedPullRequest = useCallback(
+    (link: { repository: string; number: number; url: string }) =>
+      openLinkedItem("pull-request", link),
+    [openLinkedItem],
   );
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
@@ -6154,7 +6184,7 @@ function ChatViewContent(props: ChatViewProps) {
           draftId: composerDraftTarget,
         }}
         onStateChange={handleIssueTabStatusChange}
-        onOpenLinkedPullRequest={(link) => openThreadPullRequest(link.number)}
+        onOpenLinkedPullRequest={openLinkedPullRequest}
       />
     ) : activeRightPanelSurface?.kind === "issues" && activeProject && activeProjectRef ? (
       <IssuesPanel
