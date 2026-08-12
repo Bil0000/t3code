@@ -1051,6 +1051,42 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /** GitLab paginates closing issues by offset and supplies no total, so a short page ends it. */
+  const linkedIssuesPage = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly page: number;
+    readonly collected: ReadonlyArray<IssueLink>;
+  }): Effect.Effect<ReadonlyArray<IssueLink>, GitLabPullRequestCliError> =>
+    api({
+      cwd: input.cwd,
+      path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/closes_issues?${query(
+        [
+          ["per_page", String(MAX_PAGE_SIZE)],
+          ["page", String(input.page)],
+        ],
+      )}`,
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeClosesIssuesJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            new GitLabMergeRequestReadError({
+              command: "glab",
+              cwd: input.cwd,
+              operation: "listLinkedIssues",
+              cause: decoded.failure,
+            }),
+          );
+        }
+        const collected = [...input.collected, ...decoded.success.links];
+        return decoded.success.rawCount < MAX_PAGE_SIZE
+          ? Effect.succeed(collected)
+          : linkedIssuesPage({ ...input, page: input.page + 1, collected });
+      }),
+    );
+
   return GitLabPullRequestCli.of({
     getViewerUsername: viewerUsername,
 
@@ -1064,27 +1100,7 @@ export const make = Effect.gen(function* () {
 
     listNotes: (input) => notesPage({ ...input, page: 1, collected: [] }),
 
-    listLinkedIssues: (input) =>
-      api({
-        cwd: input.cwd,
-        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/closes_issues?${query(
-          [["per_page", String(MAX_PAGE_SIZE)]],
-        )}`,
-      }).pipe(
-        Effect.flatMap((result) => {
-          const decoded = decodeClosesIssuesJson(result.stdout.trim());
-          return Result.isSuccess(decoded)
-            ? Effect.succeed(decoded.success)
-            : Effect.fail(
-                new GitLabMergeRequestReadError({
-                  command: "glab",
-                  cwd: input.cwd,
-                  operation: "listLinkedIssues",
-                  cause: decoded.failure,
-                }),
-              );
-        }),
-      ),
+    listLinkedIssues: (input) => linkedIssuesPage({ ...input, page: 1, collected: [] }),
 
     listCitedIssues: (input) =>
       input.numbers.length === 0

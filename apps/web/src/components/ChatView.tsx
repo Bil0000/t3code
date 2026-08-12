@@ -147,6 +147,7 @@ import {
 } from "../previewMiniPlayerStore";
 import { IssueDetailPanel } from "./issue/IssueDetailPanel";
 import { IssuesPanel } from "./issue/IssuesPanel";
+import { IssuesUnavailableState } from "./issue/IssuesUnavailableState";
 import { isThreadOwnPullRequest } from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { DetailGhost } from "./sourceControl/ListGhosts";
@@ -314,6 +315,7 @@ import {
   reconcileMountedTerminalThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  resolveSourceControlSurfaceCapability,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
   shouldWriteThreadErrorToCurrentServerThread,
@@ -2009,8 +2011,13 @@ function ChatViewContent(props: ChatViewProps) {
     ? (activeEnvironment?.serverConfig ?? null)
     : (primaryEnvironment?.serverConfig ?? null);
   const pullRequestsCapabilityKnown = serverConfig !== null;
+  const issuesCapabilityKnown = serverConfig !== null;
   const supportsPullRequests = serverConfig?.environment.capabilities.pullRequests === true;
   const supportsIssues = serverConfig?.environment.capabilities.issues === true;
+  const issuesSurfaceCapabilityState = resolveSourceControlSurfaceCapability({
+    capabilityKnown: issuesCapabilityKnown,
+    supported: supportsIssues,
+  });
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -6180,6 +6187,15 @@ function ChatViewContent(props: ChatViewProps) {
         composerDraftTarget={composerDraftTarget}
         onStateChange={handlePullRequestTabStatusChange}
         onOpenLinkedIssue={openLinkedIssue}
+      />
+    ) : (activeRightPanelSurface?.kind === "issue" || activeRightPanelSurface?.kind === "issues") &&
+      issuesSurfaceCapabilityState === "loading" ? (
+      <DetailGhost label="Loading issues" />
+    ) : (activeRightPanelSurface?.kind === "issue" || activeRightPanelSurface?.kind === "issues") &&
+      issuesSurfaceCapabilityState === "unavailable" ? (
+      <IssuesUnavailableState
+        title="Issues unavailable"
+        error="Update this environment's T3 Code server to browse issues."
       />
     ) : activeRightPanelSurface?.kind === "issue" && activeProjectRef ? (
       // Same as the pull request above: the surface tab's own X owns closing. What is different

@@ -598,6 +598,11 @@ const RawClosesIssueSchema = Schema.Struct({
 
 const decodeClosesIssueEntry = Schema.decodeUnknownExit(RawClosesIssueSchema);
 
+interface GitLabIssueLinksPage {
+  readonly links: ReadonlyArray<IssueLink>;
+  readonly rawCount: number;
+}
+
 /**
  * The issues merging this merge request closes, which is the whole of what GitLab reports as a
  * link. The ones it only mentions have no endpoint of their own — they would be a walk over every
@@ -609,7 +614,7 @@ const decodeClosesIssueEntry = Schema.decodeUnknownExit(RawClosesIssueSchema);
  */
 export function decodeClosesIssuesJson(
   raw: string,
-): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
+): Result.Result<GitLabIssueLinksPage, DecodeFailure> {
   return decodeIssueLinks(raw, true);
 }
 
@@ -623,13 +628,16 @@ export function decodeClosesIssuesJson(
 export function decodeCitedIssuesJson(
   raw: string,
 ): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
-  return decodeIssueLinks(raw, false);
+  const decoded = decodeIssueLinks(raw, false);
+  return Result.isSuccess(decoded)
+    ? Result.succeed(decoded.success.links)
+    : Result.fail(decoded.failure);
 }
 
 function decodeIssueLinks(
   raw: string,
   closesIssue: boolean,
-): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
+): Result.Result<GitLabIssueLinksPage, DecodeFailure> {
   const decoded = decodeUnknownList(raw);
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
@@ -653,7 +661,7 @@ function decodeIssueLinks(
       closesIssue,
     });
   }
-  return Result.succeed(links);
+  return Result.succeed({ links, rawCount: decoded.success.length });
 }
 
 export function decodeNotesJson(

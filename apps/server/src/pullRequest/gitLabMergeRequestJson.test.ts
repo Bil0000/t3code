@@ -626,13 +626,12 @@ describe("issue link decoding", () => {
   ]);
 
   it("reads what the closes endpoint answered as a closure", () => {
-    expect(
-      expectSuccess(decodeClosesIssuesJson(issuesJson)).map((link) => [
-        link.number,
-        link.state,
-        link.closesIssue,
-      ]),
-    ).toEqual([[12, "open", true]]);
+    const page = expectSuccess(decodeClosesIssuesJson(issuesJson));
+
+    expect(page.links.map((link) => [link.number, link.state, link.closesIssue])).toEqual([
+      [12, "open", true],
+    ]);
+    expect(page.rawCount).toBe(2);
   });
 
   it("reads the same rows as citations when they came from the words", () => {
