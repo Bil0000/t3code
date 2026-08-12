@@ -190,6 +190,7 @@ layer((it) => {
 
       assert.strictEqual(error._tag, "AzureDevOpsProjectUnknownError");
       // az itself succeeded, so there is no underlying failure to report as the cause.
+      assert.isFalse("cause" in error);
       assert.strictEqual(
         error.message,
         "Azure CLI failed in resolveProject: Azure DevOps named no project for this checkout.",

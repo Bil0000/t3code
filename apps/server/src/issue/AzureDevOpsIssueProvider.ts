@@ -94,14 +94,16 @@ export const make = Effect.gen(function* () {
 
   const fail =
     (operation: string) =>
-    (error: AzureDevOpsIssueCli.AzureDevOpsIssueCliError): IssueProviderError =>
-      new IssueProviderError({
+    (error: AzureDevOpsIssueCli.AzureDevOpsIssueCliError): IssueProviderError => {
+      const { detail } = error;
+      return new IssueProviderError({
         provider: "azure-devops",
         operation,
         reason: reasonFor(error),
-        detail: error.detail,
+        detail,
         cause: error,
       });
+    };
 
   /** Declared unavailable in `CAPABILITIES`, so the service refuses these before reaching here. */
   const unsupported = (operation: string) =>

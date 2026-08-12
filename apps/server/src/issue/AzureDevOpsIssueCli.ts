@@ -253,9 +253,8 @@ export const make = Effect.gen(function* () {
       .pipe(
         Effect.flatMap((result) => {
           const name = result.stdout.trim();
-          return name.length === 0
-            ? Effect.fail(new AzureDevOpsProjectUnknownError({ command: "az", cwd }))
-            : Effect.succeed(name);
+          if (name.length > 0) return Effect.succeed(name);
+          return Effect.fail(new AzureDevOpsProjectUnknownError({ command: "az", cwd }));
         }),
       );
 
