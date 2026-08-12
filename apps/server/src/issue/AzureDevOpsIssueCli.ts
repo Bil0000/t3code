@@ -76,6 +76,13 @@ export type AzureDevOpsIssueCliError =
   | AzureDevOpsProjectUnknownError
   | AzureDevOpsWorkItemIncompleteError;
 
+/**
+ * Involvement as Azure can answer it. `mentioned` is left out rather than answered unnarrowed:
+ * Azure records no mention of a person on a work item, so the only page this could hand back is
+ * the whole project — and nothing between here and the reader narrows it back down.
+ */
+export type AzureDevOpsInvolvement = Exclude<IssueInvolvement, "mentioned">;
+
 export class AzureDevOpsIssueCli extends Context.Service<
   AzureDevOpsIssueCli,
   {
@@ -85,7 +92,8 @@ export class AzureDevOpsIssueCli extends Context.Service<
     readonly listWorkItems: (input: {
       readonly cwd: string;
       readonly state: IssueListState;
-      readonly involvement: IssueInvolvement;
+      /** No `mentioned`: Azure records none, and the provider refuses that filter before here. */
+      readonly involvement: AzureDevOpsInvolvement;
       readonly limit: number;
       readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<
@@ -115,15 +123,12 @@ const ACTION_STATES: Record<IssueAction, string> = { close: "Closed", reopen: "A
 /** WIQL has one quote to escape, and a title filter never reaches it — but a cursor does. */
 const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
-function involvementClause(involvement: IssueInvolvement): string {
+function involvementClause(involvement: AzureDevOpsInvolvement): string {
   switch (involvement) {
     case "assigned":
       return " AND [System.AssignedTo] = @Me";
     case "authored":
       return " AND [System.CreatedBy] = @Me";
-    // Azure records no mention of a person on a work item, so the whole project is answered and
-    // the caller narrows what it gets — a wider answer rather than a wrong one.
-    case "mentioned":
     case "all":
       return "";
   }

@@ -183,14 +183,29 @@ layer((it) => {
     }),
   );
 
-  it.effect("answers a mention unnarrowed, which Azure records nothing about", () =>
+  it.effect("refuses a mention filter rather than answering with the whole project", () =>
     Effect.gen(function* () {
-      listing([]);
-      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      listing([workItem(1)]);
+      const provider = yield* AzureDevOpsIssueProvider.make;
 
-      yield* cli.listWorkItems({ cwd: "/w", state: "all", involvement: "mentioned", limit: 30 });
+      const error = yield* Effect.flip(
+        provider.listIssues({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "dev.azure.com",
+          state: "all",
+          involvement: "mentioned",
+          viewer: "someone",
+          limit: 30,
+        }),
+      );
 
-      expect(wiqlOf()).not.toContain("@Me");
+      assert.strictEqual(
+        error.detail,
+        "Azure DevOps records no mention of a person on a work item.",
+      );
+      // Azure was asked nothing, because there is no question here it could have answered.
+      assert.strictEqual(mockedExecute.mock.calls.length, 0);
     }),
   );
 

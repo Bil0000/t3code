@@ -120,25 +120,37 @@ export const make = Effect.gen(function* () {
 
     getViewer: (input) => cli.getViewer(input).pipe(Effect.mapError(fail("getViewer"))),
 
+    // Refused rather than answered with everything: Azure records no mention of a person on a
+    // work item, and nothing between here and the reader narrows a listing back down — so the
+    // page a mention filter would produce is every work item in the project.
     listIssues: (input) =>
-      cli
-        .listWorkItems({
-          cwd: input.cwd,
-          state: input.state,
-          involvement: input.involvement,
-          limit: input.limit,
-          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-        })
-        .pipe(
-          Effect.mapError(fail("listIssues")),
-          Effect.map((page) => ({
-            items: page.items.map(toIssue),
-            truncated: page.truncated,
-            // The query orders by the same date the cursor carries, so a further slice means
-            // exactly what it does on every other host here.
-            continues: true,
-          })),
-        ),
+      input.involvement === "mentioned"
+        ? Effect.fail(
+            new IssueProviderError({
+              provider: "azure-devops",
+              operation: "listIssues",
+              reason: "failed",
+              detail: "Azure DevOps records no mention of a person on a work item.",
+            }),
+          )
+        : cli
+            .listWorkItems({
+              cwd: input.cwd,
+              state: input.state,
+              involvement: input.involvement,
+              limit: input.limit,
+              ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
+            })
+            .pipe(
+              Effect.mapError(fail("listIssues")),
+              Effect.map((page) => ({
+                items: page.items.map(toIssue),
+                truncated: page.truncated,
+                // The query orders by the same date the cursor carries, so a further slice means
+                // exactly what it does on every other host here.
+                continues: true,
+              })),
+            ),
 
     getIssue: (input) =>
       cli.getWorkItem({ cwd: input.cwd, number: input.number }).pipe(
