@@ -1,4 +1,4 @@
-import { describe, expect, it } from "@effect/vitest";
+import { assert, describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
@@ -133,6 +133,65 @@ describe("getChangeRequest base freshness", () => {
 
       expect(changeRequest.baseComparison).toBe("unknown");
       expect(changeRequest.behindBy).toBeUndefined();
+    }),
+  );
+});
+
+describe("rewriting what has already been said", () => {
+  const updateMergeRequest = vi.fn(() => Effect.void);
+  const updateNote = vi.fn(() => Effect.void);
+
+  const providerWith = make.pipe(
+    Effect.provide(
+      Layer.mock(GitLabPullRequestCli.GitLabPullRequestCli)({ updateMergeRequest, updateNote }),
+    ),
+  );
+
+  it.effect("sends only the half of the merge request the reader rewrote", () =>
+    Effect.gen(function* () {
+      const provider = yield* providerWith;
+      assert.isDefined(provider.updateChangeRequest);
+
+      yield* provider.updateChangeRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "gitlab.com",
+        number: 7,
+        body: "What this changes.",
+      });
+
+      // GitLab calls it the description, and the title stays out of the request entirely.
+      expect(updateMergeRequest).toHaveBeenCalledWith({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        description: "What this changes.",
+      });
+    }),
+  );
+
+  it.effect("rewrites a positioned comment through the same note as any other", () =>
+    Effect.gen(function* () {
+      const provider = yield* providerWith;
+      assert.isDefined(provider.updateComment);
+
+      yield* provider.updateComment({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "gitlab.com",
+        number: 7,
+        commentId: "42",
+        kind: "review-comment",
+        body: "Reworded.",
+      });
+
+      expect(updateNote).toHaveBeenCalledWith({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        noteId: "42",
+        body: "Reworded.",
+      });
     }),
   );
 });

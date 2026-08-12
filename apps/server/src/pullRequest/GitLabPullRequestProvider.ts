@@ -43,6 +43,7 @@ const CAPABILITIES: PullRequestCapabilities = {
     verdicts: ["comment", "approve"],
   },
   reviewers: { request: true, listCandidates: true },
+  edit: { changeRequest: true, comment: true },
 };
 
 /**
@@ -252,7 +253,31 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(fail("runAction"))),
 
+    updateChangeRequest: (input) =>
+      cli
+        .updateMergeRequest({
+          cwd: input.cwd,
+          repository: input.repository,
+          number: input.number,
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.body === undefined ? {} : { description: input.body }),
+        })
+        .pipe(Effect.mapError(fail("updateChangeRequest"))),
+
     comment: (input) => cli.commentOnMergeRequest(input).pipe(Effect.mapError(fail("comment"))),
+
+    // The kind is not read: every comment this provider hands out, positioned or not, carries a
+    // plain REST note id, and one endpoint rewrites both.
+    updateComment: (input) =>
+      cli
+        .updateNote({
+          cwd: input.cwd,
+          repository: input.repository,
+          number: input.number,
+          noteId: input.commentId,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("updateComment"))),
 
     submitReview: (input) => cli.submitReview(input).pipe(Effect.mapError(fail("submitReview"))),
 

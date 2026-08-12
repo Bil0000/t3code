@@ -1302,4 +1302,99 @@ layer("GitLabPullRequestCli.layer", (it) => {
       expect(JSON.parse(callAt(1).stdin ?? "")).toEqual({ reviewer_ids: [5] });
     }),
   );
+
+  it.effect("rewrites a title without touching the description", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.updateMergeRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        title: "A better title",
+      });
+
+      expect(argsOfCall(0)).toEqual([
+        "api",
+        "projects/acme%2Fweb/merge_requests/7",
+        "--method",
+        "PUT",
+        "--input",
+        "-",
+        "--header",
+        "Content-Type: application/json",
+      ]);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({ title: "A better title" });
+    }),
+  );
+
+  it.effect("sends a rewritten body as GitLab's description, and nothing else", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.updateMergeRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        description: "What this changes.",
+      });
+
+      // A title sent as an empty string would wipe the one the merge request already has.
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({ description: "What this changes." });
+    }),
+  );
+
+  it.effect("rewrites title and description together in one request", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.updateMergeRequest({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        title: "A better title",
+        description: "What this changes.",
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(0).stdin ?? "")).toEqual({
+        title: "A better title",
+        description: "What this changes.",
+      });
+    }),
+  );
+
+  it.effect("rewrites a note in place through the note it names", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+
+      yield* cli.updateNote({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        noteId: "42",
+        body: "true",
+      });
+
+      expect(argsOfCall(0)).toEqual([
+        "api",
+        "projects/acme%2Fweb/merge_requests/7/notes/42",
+        "--method",
+        "PUT",
+        "--input",
+        "-",
+        "--header",
+        "Content-Type: application/json",
+      ]);
+      // A JSON body, so a note rewritten to a literal `true` stays text.
+      expect(callAt(0).stdin).toBe('{"body":"true"}');
+    }),
+  );
 });

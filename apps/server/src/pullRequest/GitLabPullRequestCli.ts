@@ -309,10 +309,27 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly mergeMethod?: PullRequestMergeMethod;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
+    /** Whichever of the two is given is sent. GitLab calls a merge request's body its description. */
+    readonly updateMergeRequest: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly title?: string | undefined;
+      readonly description?: string | undefined;
+    }) => Effect.Effect<void, GitLabPullRequestCliError>;
+
     readonly commentOnMergeRequest: (input: {
       readonly cwd: string;
       readonly repository: string;
       readonly number: number;
+      readonly body: string;
+    }) => Effect.Effect<void, GitLabPullRequestCliError>;
+
+    readonly updateNote: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly noteId: string;
       readonly body: string;
     }) => Effect.Effect<void, GitLabPullRequestCliError>;
 
@@ -1242,6 +1259,20 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.asVoid);
     },
 
+    updateMergeRequest: (input) =>
+      api({
+        cwd: input.cwd,
+        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
+        method: "PUT",
+        // Only the fields the caller asked to change: GitLab leaves out what it is not sent, and
+        // clears what it is sent empty — so a title corrected on its own must carry no
+        // description at all.
+        stdin: JSON.stringify({
+          ...(input.title === undefined ? {} : { title: input.title }),
+          ...(input.description === undefined ? {} : { description: input.description }),
+        }),
+      }).pipe(Effect.asVoid),
+
     commentOnMergeRequest: (input) =>
       api({
         cwd: input.cwd,
@@ -1249,6 +1280,16 @@ export const make = Effect.gen(function* () {
         method: "POST",
         // A JSON body rather than a `--raw-field`: glab coerces a field that reads as a
         // literal `true` or a number, and a comment body is text either way.
+        stdin: JSON.stringify({ body: input.body }),
+      }).pipe(Effect.asVoid),
+
+    updateNote: (input) =>
+      api({
+        cwd: input.cwd,
+        path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/notes/${encodeURIComponent(
+          input.noteId,
+        )}`,
+        method: "PUT",
         stdin: JSON.stringify({ body: input.body }),
       }).pipe(Effect.asVoid),
 
