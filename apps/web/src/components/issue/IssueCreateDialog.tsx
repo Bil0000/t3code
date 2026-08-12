@@ -542,8 +542,12 @@ export function IssueCreateDialog({
                   value={selected.id}
                   onValueChange={(value) => {
                     setSelectedId(value as ProjectId);
-                    // Another repository asks for other things, so its own chooser comes back.
+                    // Another repository asks for other things, so its own chooser comes back —
+                    // and the answers go with it. A repository that offers nothing derives
+                    // straight to the blank form, which never passes the chooser that would
+                    // otherwise have cleared them, so they are cleared here instead.
                     setChosen(null);
+                    resetDraft(undefined);
                   }}
                 >
                   <SelectTrigger id="issue-project" className="w-full" aria-label="Project">
