@@ -231,9 +231,13 @@ export function IssueDetailPanel({
     compensationRef.current = null;
     if (scroller) scroller.scrollTop = Math.max(0, scroller.scrollTop + delta);
   }, [condensed]);
-  const [confirmClose, setConfirmClose] = useState<{ reason: IssueCloseReason | null } | null>(
-    null,
-  );
+  // The issue the dialog was opened over travels with the question, because the panel shows a
+  // different issue every time it is opened and the dialog outlives that swap: without it, a
+  // confirmation asked about one issue closes whichever one the panel has moved on to.
+  const [confirmClose, setConfirmClose] = useState<{
+    reference: IssueRef;
+    reason: IssueCloseReason | null;
+  } | null>(null);
   const [actionPending, setActionPending] = useState(false);
   /** Which hand-off is under way, so only the item that was pressed says it is working. */
   const [handoff, setHandoff] = useState<string | null>(null);
@@ -306,12 +310,12 @@ export function IssueDetailPanel({
   const runAction = useAtomCommand(issueEnvironment.runAction, { reportFailure: false });
   const newThread = useNewThreadHandler();
 
-  const perform = async (action: IssueAction, reason?: IssueCloseReason) => {
+  const perform = async (action: IssueAction, target: IssueRef, reason?: IssueCloseReason) => {
     if (actionPending) return;
     setActionPending(true);
     const result = await runAction({
       environmentId,
-      input: { ...reference, action, ...(reason ? { reason } : {}) },
+      input: { ...target, action, ...(reason ? { reason } : {}) },
     });
     setActionPending(false);
     if (result._tag === "Failure") {
@@ -666,7 +670,7 @@ export function IssueDetailPanel({
                         <MenuItem
                           key={reason}
                           disabled={actionPending}
-                          onClick={() => setConfirmClose({ reason })}
+                          onClick={() => setConfirmClose({ reference, reason })}
                         >
                           {CLOSE_REASON_LABELS[reason]}
                         </MenuItem>
@@ -677,13 +681,17 @@ export function IssueDetailPanel({
                   <Button
                     size="xs"
                     disabled={actionPending}
-                    onClick={() => setConfirmClose({ reason: null })}
+                    onClick={() => setConfirmClose({ reference, reason: null })}
                   >
                     {actionPending ? "Closing..." : "Close"}
                   </Button>
                 )
               ) : detail.state === "closed" && can("reopen") ? (
-                <Button size="xs" disabled={actionPending} onClick={() => void perform("reopen")}>
+                <Button
+                  size="xs"
+                  disabled={actionPending}
+                  onClick={() => void perform("reopen", reference)}
+                >
                   {actionPending ? "Reopening..." : "Reopen"}
                 </Button>
               ) : null}
@@ -910,7 +918,7 @@ export function IssueDetailPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>Close issue?</AlertDialogTitle>
             <AlertDialogDescription>
-              {`This closes #${reference.number}${
+              {`This closes #${confirmClose?.reference.number ?? reference.number}${
                 confirmClose?.reason ? CLOSE_REASON_PHRASES[confirmClose.reason] : ""
               } on the host. You can reopen it afterwards.`}
             </AlertDialogDescription>
@@ -924,9 +932,10 @@ export function IssueDetailPanel({
               variant="destructive"
               disabled={actionPending}
               onClick={() => {
-                const reason = confirmClose?.reason ?? undefined;
+                const pending = confirmClose;
+                if (!pending) return;
                 setConfirmClose(null);
-                void perform("close", reason);
+                void perform("close", pending.reference, pending.reason ?? undefined);
               }}
             >
               Close issue
