@@ -66,6 +66,25 @@ import {
   OrchestrationRpcSchemas,
   OrchestrationGetWorkflowScriptError,
 } from "./orchestration.ts";
+import {
+  IssueActionInput,
+  IssueActivity,
+  IssueAssigneeCandidateList,
+  IssueAssigneesInput,
+  IssueCommentInput,
+  IssueCreateInput,
+  IssueCreateResult,
+  IssueDetail,
+  IssueInvalidateInput,
+  IssueLabelCandidateList,
+  IssueLabelsInput,
+  IssueListInput,
+  IssueListResult,
+  IssueOperationError,
+  IssueRef,
+  IssueUnavailableError,
+  IssueUpdateInput,
+} from "./issue.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
@@ -286,6 +305,20 @@ export const WS_METHODS = {
   pullRequestsInvalidate: "pullRequests.invalidate",
   pullRequestsReviewerCandidates: "pullRequests.reviewerCandidates",
   pullRequestsRequestReviewers: "pullRequests.requestReviewers",
+
+  // Issue methods
+  issuesList: "issues.list",
+  issuesDetail: "issues.detail",
+  issuesActivity: "issues.activity",
+  issuesRunAction: "issues.runAction",
+  issuesComment: "issues.comment",
+  issuesCreate: "issues.create",
+  issuesUpdate: "issues.update",
+  issuesSetLabels: "issues.setLabels",
+  issuesSetAssignees: "issues.setAssignees",
+  issuesLabelCandidates: "issues.labelCandidates",
+  issuesAssigneeCandidates: "issues.assigneeCandidates",
+  issuesInvalidate: "issues.invalidate",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -558,6 +591,89 @@ export const WsPullRequestsRequestReviewersRpc = Rpc.make(WS_METHODS.pullRequest
   payload: PullRequestReviewerRequestInput,
   success: Schema.Void,
   error: PullRequestRpcError,
+});
+
+const IssueRpcError = Schema.Union([
+  IssueUnavailableError,
+  IssueOperationError,
+  EnvironmentAuthorizationError,
+]);
+
+export const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
+  payload: IssueListInput,
+  success: IssueListResult,
+  error: IssueRpcError,
+});
+
+export const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
+  payload: IssueRef,
+  success: IssueDetail,
+  error: IssueRpcError,
+});
+
+export const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
+  payload: IssueRef,
+  success: IssueActivity,
+  error: IssueRpcError,
+});
+
+export const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
+  payload: IssueActionInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
+  payload: IssueCommentInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesCreateRpc = Rpc.make(WS_METHODS.issuesCreate, {
+  payload: IssueCreateInput,
+  success: IssueCreateResult,
+  error: IssueRpcError,
+});
+
+export const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
+  payload: IssueUpdateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesSetLabelsRpc = Rpc.make(WS_METHODS.issuesSetLabels, {
+  payload: IssueLabelsInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesSetAssigneesRpc = Rpc.make(WS_METHODS.issuesSetAssignees, {
+  payload: IssueAssigneesInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+/**
+ * Read on their own rather than as part of the detail: a repository's labels and the people who
+ * may be assigned are only wanted once somebody opens the menu, and reading them with every issue
+ * would spend a request per host on a list nobody looked at.
+ */
+export const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandidates, {
+  payload: IssueRef,
+  success: IssueLabelCandidateList,
+  error: IssueRpcError,
+});
+
+export const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
+  payload: IssueRef,
+  success: IssueAssigneeCandidateList,
+  error: IssueRpcError,
+});
+
+export const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
+  payload: IssueInvalidateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -983,6 +1099,18 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsInvalidateRpc,
   WsPullRequestsReviewerCandidatesRpc,
   WsPullRequestsRequestReviewersRpc,
+  WsIssuesListRpc,
+  WsIssuesDetailRpc,
+  WsIssuesActivityRpc,
+  WsIssuesRunActionRpc,
+  WsIssuesCommentRpc,
+  WsIssuesCreateRpc,
+  WsIssuesUpdateRpc,
+  WsIssuesSetLabelsRpc,
+  WsIssuesSetAssigneesRpc,
+  WsIssuesLabelCandidatesRpc,
+  WsIssuesAssigneeCandidatesRpc,
+  WsIssuesInvalidateRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
