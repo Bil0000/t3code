@@ -2,6 +2,8 @@ import * as Result from "effect/Result";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  decodeCitedIssuesJson,
+  decodeClosesIssuesJson,
   decodeCommitsJson,
   decodeMergeRequestDetailJson,
   decodeMergeRequestDiffsJson,
@@ -451,5 +453,40 @@ describe("merge request viewer fields", () => {
     expect(
       expectSuccess(decodeMergeRequestDetailJson(detailJson({ user: null }))).viewerCanMerge,
     ).toBe(true);
+  });
+});
+
+describe("issue link decoding", () => {
+  const issuesJson = JSON.stringify([
+    {
+      iid: 12,
+      title: "The dialog closes on the wrong click",
+      web_url: "https://gitlab.com/acme/web/-/issues/12",
+      state: "opened",
+      references: { full: "acme/web#12" },
+    },
+    // Nothing names the project, which is the one field of a link that cannot be filled in
+    // from anywhere else.
+    { iid: 34, title: "Nameless", web_url: "https://gitlab.com/acme/web/-/issues/34" },
+  ]);
+
+  it("reads what the closes endpoint answered as a closure", () => {
+    expect(
+      expectSuccess(decodeClosesIssuesJson(issuesJson)).map((link) => [
+        link.number,
+        link.state,
+        link.closesIssue,
+      ]),
+    ).toEqual([[12, "open", true]]);
+  });
+
+  it("reads the same rows as citations when they came from the words", () => {
+    // GitLab alone knows what merging will shut, and these were looked up from a description.
+    expect(
+      expectSuccess(decodeCitedIssuesJson(issuesJson)).map((link) => [
+        link.number,
+        link.closesIssue,
+      ]),
+    ).toEqual([[12, false]]);
   });
 });

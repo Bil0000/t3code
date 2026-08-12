@@ -571,14 +571,34 @@ const decodeClosesIssueEntry = Schema.decodeUnknownExit(RawClosesIssueSchema);
 /**
  * The issues merging this merge request closes, which is the whole of what GitLab reports as a
  * link. The ones it only mentions have no endpoint of their own — they would be a walk over every
- * note the merge request carries, a page at a time, for links nobody declared — so this half is
- * left to GitLab and the section shows the declared ones alone.
+ * note the merge request carries, a page at a time, for links nobody declared — so the mentions
+ * the section shows are read out of the words instead.
  *
  * A row is skipped where it cannot name its own project, which is the one field of the link that
  * cannot be filled in from anywhere else.
  */
 export function decodeClosesIssuesJson(
   raw: string,
+): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
+  return decodeIssueLinks(raw, true);
+}
+
+/**
+ * The issues a merge request's own words name, as GitLab's issues endpoint answered for them.
+ * Only what it hands back is kept, which is how a number that names no issue — or names one in a
+ * project this account cannot read — drops out silently.
+ *
+ * These cite rather than close: GitLab alone knows which of them merging will shut.
+ */
+export function decodeCitedIssuesJson(
+  raw: string,
+): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
+  return decodeIssueLinks(raw, false);
+}
+
+function decodeIssueLinks(
+  raw: string,
+  closesIssue: boolean,
 ): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
   const decoded = decodeUnknownList(raw);
   if (!Result.isSuccess(decoded)) {
@@ -600,7 +620,7 @@ export function decodeClosesIssuesJson(
       url,
       // GitLab spells an open issue `opened`, and `locked` is an open one whose discussion is.
       state: value.state?.trim().toLowerCase() === "closed" ? "closed" : "open",
-      closesIssue: true,
+      closesIssue,
     });
   }
   return Result.succeed(links);

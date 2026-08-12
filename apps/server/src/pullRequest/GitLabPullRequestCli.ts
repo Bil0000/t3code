@@ -20,6 +20,7 @@ import type {
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import {
+  decodeCitedIssuesJson,
   decodeClosesIssuesJson,
   decodeCommitDiffRefsJson,
   decodeCommitsJson,
@@ -249,6 +250,18 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
       readonly number: number;
+    }) => Effect.Effect<ReadonlyArray<IssueLink>, GitLabPullRequestCliError>;
+
+    /**
+     * The issues a merge request's own words name, looked up so that only ones which exist reach
+     * the section. One request for the batch, which is why the numbers are all read from the one
+     * project: GitLab's issues endpoint is per project, and another project would cost a request
+     * of its own.
+     */
+    readonly listCitedIssues: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly numbers: ReadonlyArray<number>;
     }) => Effect.Effect<ReadonlyArray<IssueLink>, GitLabPullRequestCliError>;
 
     readonly listCommits: (input: {
@@ -923,6 +936,31 @@ export const make = Effect.gen(function* () {
               );
         }),
       ),
+
+    listCitedIssues: (input) =>
+      input.numbers.length === 0
+        ? Effect.succeed<ReadonlyArray<IssueLink>>([])
+        : api({
+            cwd: input.cwd,
+            path: `projects/${projectPath(input.repository)}/issues?${query([
+              ...input.numbers.map((number) => ["iids[]", String(number)] as const),
+              ["per_page", String(MAX_PAGE_SIZE)],
+            ])}`,
+          }).pipe(
+            Effect.flatMap((result) => {
+              const decoded = decodeCitedIssuesJson(result.stdout.trim());
+              return Result.isSuccess(decoded)
+                ? Effect.succeed(decoded.success)
+                : Effect.fail(
+                    new GitLabMergeRequestReadError({
+                      command: "glab",
+                      cwd: input.cwd,
+                      operation: "listCitedIssues",
+                      cause: decoded.failure,
+                    }),
+                  );
+            }),
+          ),
 
     listCommits: (input) =>
       api({

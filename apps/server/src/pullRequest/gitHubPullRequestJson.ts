@@ -23,6 +23,8 @@ import type {
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
+import type { IssueReference } from "./issueReferences.ts";
+
 /**
  * Enum-ish GitHub CLI fields are decoded as plain strings and normalized here: a `gh`
  * release that adds a conclusion or a review state must not fail the whole payload.
@@ -1540,6 +1542,15 @@ export function decodeViewerPermissionsJson(
  */
 export const LINKED_ISSUES_MAX_ROWS = 25;
 
+/** The four things a link is opened by, shared by both reads that collect one. */
+const LINKED_ISSUE_FRAGMENT = `fragment LinkedIssue on Issue {
+  number
+  title
+  url
+  state
+  repository { nameWithOwner }
+}`;
+
 /**
  * The issues a pull request points at. GitHub keeps the two kinds of link apart and only reports
  * the closing ones as a field of their own; a mention that closes nothing is a cross-reference on
@@ -1565,13 +1576,7 @@ export const LINKED_ISSUES_GRAPHQL_QUERY = `query($owner: String!, $name: String
   }
 }
 
-fragment LinkedIssue on Issue {
-  number
-  title
-  url
-  state
-  repository { nameWithOwner }
-}`;
+${LINKED_ISSUE_FRAGMENT}`;
 
 const RawLinkedIssueSchema = Schema.Struct({
   number: Schema.optional(Schema.NullOr(Schema.Int)),
@@ -1674,6 +1679,77 @@ export function decodeLinkedIssuesJson(
     add(event.value.target, false);
   }
   return Result.succeed([...links.values()]);
+}
+
+/**
+ * The issues a pull request's own words name, as one aliased lookup each, so a body citing ten of
+ * them costs one request rather than ten.
+ *
+ * `issueOrPullRequest` because a bare number names either on GitHub and only one of the two
+ * belongs in this section: the fragment is on `Issue`, so a number that turns out to be a change
+ * request decodes as nothing and drops out silently.
+ *
+ * Owner, name and number are written into the document, so each is checked against what GitHub
+ * can name first. A reference that fails is left out rather than failing the batch, because these
+ * are read out of prose and a body may hold anything shaped like a path.
+ *
+ * A number that names neither an issue nor a pull request makes GitHub answer NOT_FOUND for the
+ * whole document, which `gh` reports as a failed command — so the whole batch is lost together and
+ * the caller falls back to the links the host reported itself.
+ */
+export function buildCitedIssuesGraphQlQuery(
+  references: ReadonlyArray<IssueReference>,
+): string | null {
+  const selections: string[] = [];
+  for (const [index, reference] of references.entries()) {
+    const [owner, name, ...rest] = reference.repository.trim().split("/");
+    if (rest.length > 0 || owner === undefined || name === undefined) continue;
+    if (!REPOSITORY_PART.test(owner) || !REPOSITORY_PART.test(name)) continue;
+    if (!Number.isSafeInteger(reference.number) || reference.number <= 0) continue;
+    selections.push(
+      `  c${index}: repository(owner: "${owner}", name: "${name}") { issueOrPullRequest(number: ${reference.number}) { ...LinkedIssue } }`,
+    );
+  }
+  return selections.length === 0
+    ? null
+    : `query {\n${selections.join("\n")}\n}\n\n${LINKED_ISSUE_FRAGMENT}`;
+}
+
+const RawCitedIssuesSchema = Schema.Struct({
+  data: Schema.optional(
+    Schema.NullOr(
+      Schema.Record(
+        Schema.String,
+        Schema.NullOr(
+          Schema.Struct({ issueOrPullRequest: Schema.optional(Schema.NullOr(Schema.Unknown)) }),
+        ),
+      ),
+    ),
+  ),
+});
+
+const decodeCitedIssues = decodeJsonResult(RawCitedIssuesSchema);
+
+/**
+ * The issues the aliases resolved to. A reference GitHub answered nothing for — a repository this
+ * account cannot see, a number that is a pull request — is simply absent, because a dead row in
+ * this section is worse than a missing one.
+ */
+export function decodeCitedIssuesJson(
+  raw: string,
+): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
+  const decoded = decodeCitedIssues(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const links: IssueLink[] = [];
+  for (const value of Object.values(decoded.success.data ?? {})) {
+    const entry = decodeLinkedIssueEntry(value?.issueOrPullRequest);
+    if (!Exit.isSuccess(entry)) continue;
+    const link = toLinkedIssue(entry.value, false);
+    if (link !== null) links.push(link);
+  }
+  return Result.succeed(links);
 }
 
 export interface GitHubPullRequestFilesPatch {

@@ -14,6 +14,11 @@ import {
   type PullRequestProviderApi,
 } from "./PullRequestProvider.ts";
 import type { GitHubViewerAccess } from "./gitHubPullRequestJson.ts";
+import {
+  mergeIssueLinks,
+  parseIssueReferences,
+  unlinkedIssueReferences,
+} from "./issueReferences.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
   diff: true,
@@ -110,6 +115,37 @@ export const make = Effect.gen(function* () {
       detail: error.detail,
       cause: error,
     });
+
+  /**
+   * The issues the pull request's own words name, resolved before any of them is shown: a number
+   * in a body is not proof that an issue exists, and a dead row in this section is worse than an
+   * absent one.
+   *
+   * Weaker than what GitHub itself reported, so a lookup that fails leaves the section with the
+   * host's own links rather than taking the detail down with it. What the host already reported is
+   * dropped first, which is what keeps an ordinary `Closes #12` from costing a request at all.
+   */
+  const citedIssues = (
+    input: { readonly cwd: string; readonly repository: string; readonly host: string },
+    pullRequest: { readonly title: string; readonly body: string },
+    hostLinks: ReadonlyArray<IssueLink>,
+  ): Effect.Effect<ReadonlyArray<IssueLink>> => {
+    const references = unlinkedIssueReferences(
+      parseIssueReferences({
+        kind: "github",
+        host: input.host,
+        repository: input.repository,
+        title: pullRequest.title,
+        body: pullRequest.body,
+      }),
+      hostLinks,
+    );
+    return references.length === 0
+      ? Effect.succeed([])
+      : cli
+          .listCitedIssues({ cwd: input.cwd, host: input.host, references })
+          .pipe(Effect.orElseSucceed((): ReadonlyArray<IssueLink> => []));
+  };
 
   const provider: PullRequestProviderApi = {
     kind: "github",
@@ -215,18 +251,22 @@ export const make = Effect.gen(function* () {
         { concurrency: 4 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
-        Effect.map(
-          ([pullRequest, repository, viewerAccess, linkedIssues]): ProviderChangeRequestDetail => ({
-            ...pullRequest,
-            reviewers: pullRequest.reviewRequestLogins.map((login) => ({
-              login,
-              name: null,
-              avatarUrl: null,
-            })),
-            mergeCapabilities: repository.mergeCapabilities,
-            viewerPermissions: gitHubViewerPermissions(viewerAccess),
-            linkedIssues,
-          }),
+        Effect.flatMap(([pullRequest, repository, viewerAccess, linkedIssues]) =>
+          citedIssues(input, pullRequest, linkedIssues).pipe(
+            Effect.map(
+              (cited): ProviderChangeRequestDetail => ({
+                ...pullRequest,
+                reviewers: pullRequest.reviewRequestLogins.map((login) => ({
+                  login,
+                  name: null,
+                  avatarUrl: null,
+                })),
+                mergeCapabilities: repository.mergeCapabilities,
+                viewerPermissions: gitHubViewerPermissions(viewerAccess),
+                linkedIssues: mergeIssueLinks(linkedIssues, cited),
+              }),
+            ),
+          ),
         ),
       ),
 

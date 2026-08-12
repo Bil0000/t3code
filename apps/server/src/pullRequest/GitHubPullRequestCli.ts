@@ -20,9 +20,11 @@ import type {
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import {
   ACTOR_AVATARS_GRAPHQL_QUERY,
+  buildCitedIssuesGraphQlQuery,
   buildReviewSubmissionJson,
   buildReviewerRequestJson,
   decodeActorAvatarsJson,
+  decodeCitedIssuesJson,
   decodeLinkedIssuesJson,
   decodePullRequestActivityJson,
   decodePullRequestDetailJson,
@@ -63,6 +65,7 @@ import {
   type GitHubReviewThreadPage,
   type GitHubViewerAccess,
 } from "./gitHubPullRequestJson.ts";
+import type { IssueReference } from "./issueReferences.ts";
 import type { ProviderListCursor } from "./PullRequestProvider.ts";
 
 /**
@@ -392,6 +395,16 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
+    }) => Effect.Effect<ReadonlyArray<IssueLink>, GitHubPullRequestCliError>;
+
+    /**
+     * The issues a pull request's own words name, looked up so that only ones which exist — and
+     * are issues rather than pull requests — reach the section. One request for the batch.
+     */
+    readonly listCitedIssues: (input: {
+      readonly cwd: string;
+      readonly host: string;
+      readonly references: ReadonlyArray<IssueReference>;
     }) => Effect.Effect<ReadonlyArray<IssueLink>, GitHubPullRequestCliError>;
 
     /** The viewer's standing on its own, for deciding a write without reading the whole detail. */
@@ -1366,6 +1379,19 @@ export const make = Effect.gen(function* () {
         query: LINKED_ISSUES_GRAPHQL_QUERY,
         decode: decodeLinkedIssuesJson,
       });
+    },
+
+    listCitedIssues: (input) => {
+      const query = buildCitedIssuesGraphQlQuery(input.references);
+      return query === null
+        ? Effect.succeed<ReadonlyArray<IssueLink>>([])
+        : graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "listCitedIssues",
+            query,
+            decode: decodeCitedIssuesJson,
+          });
     },
 
     getViewerAccess: (input) => {
