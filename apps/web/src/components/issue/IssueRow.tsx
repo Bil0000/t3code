@@ -42,7 +42,7 @@ function IssueRowImpl({
       number={entry.number}
       repository={showProjectTitle ? entry.repository : null}
       meta={[
-        <SourceControlActorLabel key="author" actor={entry.author} className="max-w-40 shrink-0" />,
+        <SourceControlActorLabel key="author" actor={entry.author} className="max-w-40" />,
         entry.assignees.length > 0 ? (
           <span
             key="assignees"

@@ -74,7 +74,7 @@ export function ListRow({
       {glyph}
       <span className="min-w-0">
         <span className="block truncate text-sm font-medium text-foreground">{title}</span>
-        <SourceControlMetaLine className="mt-0.5 text-xs text-muted-foreground/70">
+        <SourceControlMetaLine className="mt-0.5 overflow-hidden text-xs text-muted-foreground/70">
           <span className="flex shrink-0 items-center gap-1">
             {showProvider ? (
               <Tooltip>
