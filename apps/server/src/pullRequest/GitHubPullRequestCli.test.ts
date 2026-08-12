@@ -1784,7 +1784,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         }),
       );
 
-      assert.strictEqual(error._tag, "GitHubReactionSubjectError");
+      assert.strictEqual(error._tag, "GitHubSubjectScopeError");
       // Refused before any mutation was sent.
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
     }),
@@ -1858,6 +1858,129 @@ layer("GitHubPullRequestCli.layer", (it) => {
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       const request = JSON.parse(callAt(1).stdin ?? "") as { query: string };
       expect(request.query).toContain("removeReaction(");
+    }),
+  );
+
+  it.effect("rewrites only the words a request named", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({ data: { repository: { pullRequest: { id: "PR_kwDOA" } } } }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const rewrite = (fields: { readonly title?: string; readonly body?: string }) =>
+        cli.updatePullRequest({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          ...fields,
+        });
+
+      yield* rewrite({ title: "A better title" });
+      yield* rewrite({ body: "A better description." });
+      yield* rewrite({ title: "Both", body: "at once." });
+
+      // Each rewrite looks the pull request's node id up first, then mutates.
+      const variablesAt = (index: number) =>
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        (JSON.parse(callAt(index).stdin ?? "") as { variables: Record<string, string> }).variables;
+      expect(variablesAt(1)).toEqual({ pullRequestId: "PR_kwDOA", title: "A better title" });
+      expect(variablesAt(3)).toEqual({
+        pullRequestId: "PR_kwDOA",
+        body: "A better description.",
+      });
+      expect(variablesAt(5)).toEqual({
+        pullRequestId: "PR_kwDOA",
+        title: "Both",
+        body: "at once.",
+      });
+      // The reader's own words, so they travel the way every other body does.
+      expect(callAt(5).args.join(" ")).not.toContain("at once.");
+    }),
+  );
+
+  it.effect("rewrites a remark through the mutation its kind needs", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                repository: { pullRequest: { id: "PR_kwDOA" } },
+                node: { id: "IC_1", pullRequest: { id: "PR_kwDOA" } },
+              },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const rewrite = (kind: "issue-comment" | "review-comment") =>
+        cli.updateComment({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          commentId: "IC_1",
+          kind,
+          body: "Reworded.",
+        });
+
+      yield* rewrite("issue-comment");
+      yield* rewrite("review-comment");
+
+      const parse = (index: number) =>
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        JSON.parse(callAt(index).stdin ?? "") as {
+          query: string;
+          variables: Record<string, string>;
+        };
+      expect(callAt(0).args).toContain("subjectId=IC_1");
+      expect(parse(1).query).toContain("updateIssueComment(");
+      expect(parse(1).variables).toEqual({ commentId: "IC_1", body: "Reworded." });
+      expect(parse(3).query).toContain("updatePullRequestReviewComment(");
+      expect(parse(3).variables).toEqual({ commentId: "IC_1", body: "Reworded." });
+    }),
+  );
+
+  it.effect("refuses a comment that belongs to a different pull request", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                repository: { pullRequest: { id: "PR_thisOne" } },
+                node: { id: "IC_99", pullRequest: { id: "PR_someOtherOne" } },
+              },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.updateComment({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          commentId: "IC_99",
+          kind: "issue-comment",
+          body: "Reworded.",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitHubSubjectScopeError");
+      expect(error.message).toContain("updateComment");
+      // Refused before any mutation was sent.
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
     }),
   );
 

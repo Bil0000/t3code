@@ -64,6 +64,9 @@ import {
   REVIEW_THREADS_GRAPHQL_QUERY,
   reviewThreadConversation,
   UNRESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION,
+  UPDATE_ISSUE_COMMENT_GRAPHQL_MUTATION,
+  UPDATE_PULL_REQUEST_GRAPHQL_MUTATION,
+  UPDATE_REVIEW_COMMENT_GRAPHQL_MUTATION,
   VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   decodeViewerPermissionsJson,
   type GitHubBaseComparison,
@@ -217,20 +220,21 @@ export class GitHubRepositorySelectorError extends Schema.TaggedErrorClass<GitHu
   }
 }
 
-/** Not a decode failure: the reader named a reaction subject this pull request never handed out. */
-export class GitHubReactionSubjectError extends Schema.TaggedErrorClass<GitHubReactionSubjectError>()(
-  "GitHubReactionSubjectError",
+/** Not a decode failure: the reader named a subject this pull request never handed out. */
+export class GitHubSubjectScopeError extends Schema.TaggedErrorClass<GitHubSubjectScopeError>()(
+  "GitHubSubjectScopeError",
   {
     command: Schema.Literal("gh"),
     cwd: Schema.String,
+    operation: Schema.String,
   },
 ) {
   get detail(): string {
-    return "The reaction subject did not belong to the named pull request.";
+    return "The named subject did not belong to the named pull request.";
   }
 
   override get message(): string {
-    return `GitHub CLI failed in setReaction: ${this.detail}`;
+    return `GitHub CLI failed in ${this.operation}: ${this.detail}`;
   }
 }
 
@@ -242,7 +246,7 @@ export type GitHubPullRequestCliError =
   | GitHubDiffRevisionsUnavailableError
   | GitHubDiffFileContentsUnavailableError
   | GitHubRepositorySelectorError
-  | GitHubReactionSubjectError
+  | GitHubSubjectScopeError
   | GitHubViewerLoginUnavailableError;
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
@@ -525,6 +529,31 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly content: PullRequestReactionContent;
       readonly reacted: boolean;
     }) => Effect.Effect<void, GitHubPullRequestCliError>;
+
+    /** Rewrites the pull request's own words, leaving whichever of the two was not given. */
+    readonly updatePullRequest: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly title?: string | undefined;
+      readonly body?: string | undefined;
+    }) => Effect.Effect<void, GitHubPullRequestCliError>;
+
+    /**
+     * Rewrites a remark. `commentId` is trusted to be whatever node it names, so it is confirmed
+     * to belong to this pull request before the mutation runs, the way a reaction subject is.
+     * Whether the remark is the reader's to rewrite is GitHub's own answer, not one asked here.
+     */
+    readonly updateComment: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly commentId: string;
+      readonly kind: "issue-comment" | "review-comment";
+      readonly body: string;
+    }) => Effect.Effect<void, GitHubPullRequestCliError>;
   }
 >()("t3/pullRequest/GitHubPullRequestCli") {}
 
@@ -796,18 +825,22 @@ function actionArgs(
 export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
 
-  /** The pull request's own node id, for a reaction written against its description. */
+  /**
+   * The pull request's own node id, which is what a mutation against the pull request itself is
+   * addressed by: a reaction on its description, or a rewrite of its words.
+   */
   const pullRequestNodeId = (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly host: string;
     readonly number: number;
+    readonly operation: string;
   }) => {
     const { owner, name } = parseRepositorySelector(input.repository);
     return graphqlRead({
       cwd: input.cwd,
       host: input.host,
-      operation: "setReaction",
+      operation: input.operation,
       variables: [
         ["-f", `owner=${owner}`],
         ["-f", `name=${name}`],
@@ -819,23 +852,24 @@ export const make = Effect.gen(function* () {
   };
 
   /**
-   * Whether a client-given reaction subject actually belongs to the pull request the request
-   * names. A subject id is trusted to be whatever node it names, and that node can hang off any
-   * pull request on the host — so the mutation itself would react wherever the id actually
-   * belongs, not wherever the request says it does, unless this confirms the two agree first.
+   * Whether a client-given subject actually belongs to the pull request the request names. A
+   * subject id is trusted to be whatever node it names, and that node can hang off any pull
+   * request on the host — so the mutation itself would write wherever the id actually belongs,
+   * not wherever the request says it does, unless this confirms the two agree first.
    */
-  const reactionSubjectBelongsToPullRequest = (input: {
+  const subjectBelongsToPullRequest = (input: {
     readonly cwd: string;
     readonly repository: string;
     readonly host: string;
     readonly number: number;
     readonly subjectId: string;
+    readonly operation: string;
   }) => {
     const { owner, name } = parseRepositorySelector(input.repository);
     return graphqlRead({
       cwd: input.cwd,
       host: input.host,
-      operation: "setReaction",
+      operation: input.operation,
       variables: [
         ["-f", `owner=${owner}`],
         ["-f", `name=${name}`],
@@ -1748,12 +1782,22 @@ export const make = Effect.gen(function* () {
       const givenSubjectId = input.subjectId;
       const subjectId =
         givenSubjectId === undefined
-          ? pullRequestNodeId(input)
-          : reactionSubjectBelongsToPullRequest({ ...input, subjectId: givenSubjectId }).pipe(
+          ? pullRequestNodeId({ ...input, operation: "setReaction" })
+          : subjectBelongsToPullRequest({
+              ...input,
+              subjectId: givenSubjectId,
+              operation: "setReaction",
+            }).pipe(
               Effect.flatMap((belongs) =>
                 belongs
                   ? Effect.succeed(givenSubjectId)
-                  : Effect.fail(new GitHubReactionSubjectError({ command: "gh", cwd: input.cwd })),
+                  : Effect.fail(
+                      new GitHubSubjectScopeError({
+                        command: "gh",
+                        cwd: input.cwd,
+                        operation: "setReaction",
+                      }),
+                    ),
               ),
             );
       return subjectId.pipe(
@@ -1767,6 +1811,57 @@ export const make = Effect.gen(function* () {
         ),
       );
     },
+
+    updatePullRequest: (input) =>
+      pullRequestNodeId({ ...input, operation: "updatePullRequest" }).pipe(
+        Effect.flatMap((pullRequestId) =>
+          graphql({
+            cwd: input.cwd,
+            host: input.host,
+            query: UPDATE_PULL_REQUEST_GRAPHQL_MUTATION,
+            // A field the caller did not name is left out of the request entirely, so GitHub
+            // keeps the words that are there rather than being asked for an empty one.
+            variables: {
+              pullRequestId,
+              ...(input.title === undefined ? {} : { title: input.title }),
+              ...(input.body === undefined ? {} : { body: input.body }),
+            },
+          }),
+        ),
+      ),
+
+    updateComment: (input) =>
+      subjectBelongsToPullRequest({
+        cwd: input.cwd,
+        repository: input.repository,
+        host: input.host,
+        number: input.number,
+        subjectId: input.commentId,
+        operation: "updateComment",
+      }).pipe(
+        Effect.flatMap((belongs) =>
+          belongs
+            ? Effect.succeed(input.commentId)
+            : Effect.fail(
+                new GitHubSubjectScopeError({
+                  command: "gh",
+                  cwd: input.cwd,
+                  operation: "updateComment",
+                }),
+              ),
+        ),
+        Effect.flatMap((commentId) =>
+          graphql({
+            cwd: input.cwd,
+            host: input.host,
+            query:
+              input.kind === "issue-comment"
+                ? UPDATE_ISSUE_COMMENT_GRAPHQL_MUTATION
+                : UPDATE_REVIEW_COMMENT_GRAPHQL_MUTATION,
+            variables: { commentId, body: input.body },
+          }),
+        ),
+      ),
   });
 });
 

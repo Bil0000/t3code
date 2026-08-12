@@ -374,6 +374,60 @@ describe("getChangeRequestActivity dismissed reviews", () => {
   );
 });
 
+describe("editing", () => {
+  const rewrites: Array<unknown> = [];
+
+  it.effect("hands a rewrite to the CLI as the request named it", () =>
+    Effect.gen(function* () {
+      const provider = yield* make;
+
+      expect(provider.capabilities.edit).toEqual({ changeRequest: true, comment: true });
+      yield* provider.updateChangeRequest!({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        title: "A better title",
+      });
+      yield* provider.updateComment!({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        commentId: "IC_1",
+        kind: "review-comment",
+        body: "Reworded.",
+      });
+
+      expect(rewrites).toEqual([
+        {
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          title: "A better title",
+        },
+        {
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          commentId: "IC_1",
+          kind: "review-comment",
+          body: "Reworded.",
+        },
+      ]);
+    }).pipe(
+      Effect.provide(
+        Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+          updatePullRequest: (input) => Effect.sync(() => void rewrites.push(input)),
+          updateComment: (input) => Effect.sync(() => void rewrites.push(input)),
+        }),
+      ),
+    ),
+  );
+});
+
 describe("loginAvatarUrl", () => {
   it("serves a user's picture from the host they belong to", () => {
     expect(loginAvatarUrl("octocat", "github.com")).toBe("https://github.com/octocat.png?size=80");

@@ -854,6 +854,31 @@ export const UNRESOLVE_REVIEW_THREAD_GRAPHQL_MUTATION = `mutation($threadId: ID!
 }`;
 
 /**
+ * Rewrites the pull request's own words. Both are nullable so that one document serves a change
+ * to the title, to the description, or to the two together: a variable the request does not send
+ * puts no entry in the input at all, which leaves that field as it was rather than clearing it.
+ */
+export const UPDATE_PULL_REQUEST_GRAPHQL_MUTATION = `mutation($pullRequestId: ID!, $title: String, $body: String) {
+  updatePullRequest(input: { pullRequestId: $pullRequestId, title: $title, body: $body }) {
+    pullRequest { id }
+  }
+}`;
+
+/**
+ * The two comment mutations name their comment differently. The variable is spelled the same in
+ * both, so a rewrite sends one set of variables whichever kind of remark it is.
+ */
+export const UPDATE_ISSUE_COMMENT_GRAPHQL_MUTATION = `mutation($commentId: ID!, $body: String!) {
+  updateIssueComment(input: { id: $commentId, body: $body }) { issueComment { id } }
+}`;
+
+export const UPDATE_REVIEW_COMMENT_GRAPHQL_MUTATION = `mutation($commentId: ID!, $body: String!) {
+  updatePullRequestReviewComment(input: { pullRequestReviewCommentId: $commentId, body: $body }) {
+    pullRequestReviewComment { id }
+  }
+}`;
+
+/**
  * A GraphQL request as `gh api graphql --input -` takes it. Variables travel in the document
  * rather than as `-f name=value` flags, so a reader's own words never reach argv.
  */
