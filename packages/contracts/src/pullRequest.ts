@@ -315,6 +315,20 @@ export const PullRequestReviewCapabilities = Schema.Struct({
 export type PullRequestReviewCapabilities = typeof PullRequestReviewCapabilities.Type;
 
 /**
+ * What a host lets be rewritten after it has been posted. The two are separate because a host can
+ * take one without the other: Azure DevOps takes a new title and description through the same
+ * command that closes a pull request, and has no way to post a remark here at all — so nothing it
+ * shows in a conversation can be rewritten either.
+ */
+export const PullRequestEditCapabilities = Schema.Struct({
+  /** The change request's own title and description can be rewritten. */
+  changeRequest: Schema.Boolean,
+  /** A remark can be rewritten by whoever wrote it. */
+  comment: Schema.Boolean,
+});
+export type PullRequestEditCapabilities = typeof PullRequestEditCapabilities.Type;
+
+/**
  * What a host can do about who reviews. The two are independent: a host can take a request without
  * publishing who may receive one, which is Azure DevOps.
  */
@@ -366,6 +380,12 @@ export const PullRequestCapabilities = Schema.Struct({
   reactions: Schema.Boolean,
   review: PullRequestReviewCapabilities,
   reviewers: PullRequestReviewerCapabilities,
+  /**
+   * What can be rewritten after the fact. Optional so a page and a server of different ages still
+   * speak to each other: a server that says nothing about rewriting is one that cannot, which is
+   * what every server before this one was.
+   */
+  edit: Schema.optional(PullRequestEditCapabilities),
 });
 export type PullRequestCapabilities = typeof PullRequestCapabilities.Type;
 
@@ -644,6 +664,13 @@ export const PullRequestDetail = Schema.Struct({
   checks: Schema.Array(PullRequestCheck),
   mergeCapabilities: PullRequestMergeCapabilities,
   /**
+   * Who the host says the reader is, which is the one thing a conversation cannot be read without
+   * to tell the reader's own remarks from everybody else's — and rewriting a remark is offered
+   * only where the two names agree. Absent where the host could not say, which offers nothing
+   * rather than everything.
+   */
+  viewer: Schema.optional(TrimmedNonEmptyString),
+  /**
    * Where the branch stands against its base. Optional so a host that cannot compare says
    * nothing rather than claiming the branch is current — the page shows a banner only where the
    * answer is "behind", and silence is not that answer.
@@ -792,6 +819,40 @@ export const PullRequestCommentInput = Schema.Struct({
   body: CommentBody,
 });
 export type PullRequestCommentInput = typeof PullRequestCommentInput.Type;
+
+/**
+ * A change request's own words rewritten: its title, its description, or both. Each is optional
+ * because the page rewrites them apart — a title corrected on its own must not carry a description
+ * nobody opened — and the service refuses a request that carries neither.
+ *
+ * The title is bounded far past what any host takes, GitHub refusing one past 256 characters, so
+ * an oversized one is turned away before it reaches a subprocess. The body is not trimmed for the
+ * same reason a comment is not: it is markdown, where leading spaces open a code block. An empty
+ * one is allowed, which is how a description is cleared.
+ */
+export const PullRequestUpdateInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  title: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(1024))),
+  body: Schema.optional(Schema.String.check(Schema.isMaxLength(65_536))),
+});
+export type PullRequestUpdateInput = typeof PullRequestUpdateInput.Type;
+
+/**
+ * A remark already posted, rewritten by whoever wrote it. The kind travels beside the id because
+ * an id alone does not say which endpoint addresses it: GitHub rewrites a comment on the
+ * conversation and a comment on a line through two different mutations.
+ *
+ * A review's own summary is not among them. The hosts disagree about what one even is — the entry
+ * Bitbucket shows is a vote this page renders as a remark, with no words behind it to rewrite —
+ * and a control that worked on one host and failed on another is worse than one that is not there.
+ */
+export const PullRequestCommentUpdateInput = Schema.Struct({
+  ...PullRequestRef.fields,
+  commentId: TrimmedNonEmptyString,
+  kind: Schema.Literals(["issue-comment", "review-comment"]),
+  body: CommentBody,
+});
+export type PullRequestCommentUpdateInput = typeof PullRequestCommentUpdateInput.Type;
 
 /** One remark in a review that has not been sent yet, anchored to a line of the diff. */
 export const PullRequestReviewCommentDraft = Schema.Struct({

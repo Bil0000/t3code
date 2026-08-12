@@ -71,6 +71,7 @@ import {
   PullRequestActionInput,
   PullRequestActivity,
   PullRequestCommentInput,
+  PullRequestCommentUpdateInput,
   PullRequestDetail,
   PullRequestDiffFileContentsInput,
   PullRequestDiffFileContentsResult,
@@ -88,6 +89,7 @@ import {
   PullRequestThreadReplyInput,
   PullRequestThreadResolutionInput,
   PullRequestUnavailableError,
+  PullRequestUpdateInput,
 } from "./pullRequest.ts";
 import {
   RelayClientInstallFailedError,
@@ -280,7 +282,9 @@ export const WS_METHODS = {
   pullRequestsActivity: "pullRequests.activity",
   pullRequestsDiffFileContents: "pullRequests.diffFileContents",
   pullRequestsRunAction: "pullRequests.runAction",
+  pullRequestsUpdate: "pullRequests.update",
   pullRequestsComment: "pullRequests.comment",
+  pullRequestsUpdateComment: "pullRequests.updateComment",
   pullRequestsSubmitReview: "pullRequests.submitReview",
   pullRequestsReplyToThread: "pullRequests.replyToThread",
   pullRequestsSetThreadResolution: "pullRequests.setThreadResolution",
@@ -509,8 +513,20 @@ export const WsPullRequestsRunActionRpc = Rpc.make(WS_METHODS.pullRequestsRunAct
   error: PullRequestRpcError,
 });
 
+export const WsPullRequestsUpdateRpc = Rpc.make(WS_METHODS.pullRequestsUpdate, {
+  payload: PullRequestUpdateInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
 export const WsPullRequestsCommentRpc = Rpc.make(WS_METHODS.pullRequestsComment, {
   payload: PullRequestCommentInput,
+  success: Schema.Void,
+  error: PullRequestRpcError,
+});
+
+export const WsPullRequestsUpdateCommentRpc = Rpc.make(WS_METHODS.pullRequestsUpdateComment, {
+  payload: PullRequestCommentUpdateInput,
   success: Schema.Void,
   error: PullRequestRpcError,
 });
@@ -984,7 +1000,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsPullRequestsActivityRpc,
   WsPullRequestsDiffFileContentsRpc,
   WsPullRequestsRunActionRpc,
+  WsPullRequestsUpdateRpc,
   WsPullRequestsCommentRpc,
+  WsPullRequestsUpdateCommentRpc,
   WsPullRequestsSubmitReviewRpc,
   WsPullRequestsReplyToThreadRpc,
   WsPullRequestsSetThreadResolutionRpc,
