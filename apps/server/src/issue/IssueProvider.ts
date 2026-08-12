@@ -65,11 +65,6 @@ export interface ProviderIssuePage {
   /** True when the host has more rows than the page size asked for. */
   readonly truncated: boolean;
   /**
-   * Optional count-based cursor advance. Most hosts advance by the rows delivered after local
-   * de-duplication; an offset-paged host may need to count malformed raw rows it consumed too.
-   */
-  readonly cursorAdvance?: number;
-  /**
    * This page can be carried on from, so the service may hand the caller a cursor for it. False
    * where the host answered in an order a cursor means nothing in, which leaves a larger `limit`
    * as the only way to the rest.
@@ -89,8 +84,6 @@ export interface ProviderListCursor {
    * slice ended before. The service drops the ones it has already sent.
    */
   readonly updatedBefore: string;
-  /** How many provider rows this repository has consumed, for a host that pages by counting. */
-  readonly delivered: number;
 }
 
 /** One repository's row inside an answer that spans several of them. */

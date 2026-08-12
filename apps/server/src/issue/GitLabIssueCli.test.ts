@@ -295,7 +295,7 @@ layer("GitLabIssueCli.layer", (it) => {
         involvement: "all",
         viewer: "bilal",
         limit: 10,
-        cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 150 },
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z" },
       });
 
       // The boundary bounds the row set, so an issue touched between the two reads cannot shift

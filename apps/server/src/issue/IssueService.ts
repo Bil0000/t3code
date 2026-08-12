@@ -196,13 +196,19 @@ interface ListCursor extends ProviderListCursor {
 const LIST_CURSOR_PATTERN =
   /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,9})?(?:Z|[+-]\d{2}:\d{2}))\|(\d{1,9})\|(\d{1,9}(?:,\d{1,9})*)?$/;
 
+/**
+ * The middle field, which used to be the count of rows a repository had handed over: no host here
+ * pages by counting any more, so nothing reads it. Written as a constant and ignored on the way in
+ * rather than dropped, so a cursor still travels between a client and a server of either age.
+ */
+const RETIRED_DELIVERED_COUNT = "0";
+
 function parseListCursor(raw: string): ListCursor | null {
   const match = LIST_CURSOR_PATTERN.exec(raw);
   if (match === null) return null;
   const seenAt = match[3];
   return {
     updatedBefore: match[1]!,
-    delivered: Number(match[2]),
     seenAt: seenAt === undefined ? [] : seenAt.split(",").map(Number),
   };
 }
@@ -228,10 +234,6 @@ function nextListCursor(
   previous: ListCursor | undefined,
   /** What the host handed over, before the rows already sent were dropped from it. */
   fetched: ReadonlyArray<ProviderIssue>,
-  /** What is being sent on, which is what the count of delivered rows is about. */
-  delivered: ReadonlyArray<ProviderIssue>,
-  /** A provider may consume malformed offset-paged rows that never appear in `delivered`. */
-  cursorAdvance = delivered.length,
 ): string | null {
   // The host had nothing at all, so there is no row to carry on from — and repeating the cursor
   // that produced the empty slice would ask the same question forever.
@@ -241,7 +243,7 @@ function nextListCursor(
   // afternoon — and reading "nothing new" as "nothing left" would end the walk on the instant it
   // was stuck on, with everything older unreachable for good.
   const oldest = fetched.reduce((left, right) => (right.updatedAt < left.updatedAt ? right : left));
-  return listCursorAt(previous, oldest.updatedAt, fetched, cursorAdvance);
+  return listCursorAt(previous, oldest.updatedAt, fetched);
 }
 
 /**
@@ -256,7 +258,6 @@ function listCursorAt(
   boundary: string,
   /** This repository's own rows in the slice, before the ones already sent were dropped. */
   fetched: ReadonlyArray<ProviderIssue>,
-  deliveredCount: number,
 ): string {
   // De-duplicated because the boundary instant is asked for inclusively: the rows already named
   // here come back with the next slice and would otherwise be named a second time, growing the
@@ -267,7 +268,7 @@ function listCursorAt(
       ...fetched.filter((item) => item.updatedAt === boundary).map((item) => item.number),
     ]),
   ];
-  return `${boundary}|${(previous?.delivered ?? 0) + deliveredCount}|${seenAt.join(",")}`;
+  return `${boundary}|${RETIRED_DELIVERED_COUNT}|${seenAt.join(",")}`;
 }
 
 /**
@@ -735,11 +736,9 @@ export const make = Effect.gen(function* () {
             // Each host matches this its own way, and one that cannot match text at all answers
             // unnarrowed rather than failing.
             query: input.query,
-            // Only the two fields a host can act on: which rows have already been sent at the
-            // boundary instant is this service's business, not a provider's.
-            ...(cursor === undefined
-              ? {}
-              : { cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered } }),
+            // Only the field a host can act on: which rows have already been sent at the boundary
+            // instant is this service's business, not a provider's.
+            ...(cursor === undefined ? {} : { cursor: { updatedBefore: cursor.updatedBefore } }),
           })
           .pipe(
             Effect.map((page): RepositoryBatch => {
@@ -760,9 +759,7 @@ export const make = Effect.gen(function* () {
                 errors: [],
                 truncated: page.truncated,
                 nextCursor:
-                  page.continues && page.truncated
-                    ? nextListCursor(cursor, page.items, items, page.cursorAdvance)
-                    : null,
+                  page.continues && page.truncated ? nextListCursor(cursor, page.items) : null,
               };
             }),
             // One unreadable repository must not blank the page — including the one whose tracker
@@ -808,9 +805,7 @@ export const make = Effect.gen(function* () {
           viewer,
           limit,
           query: input.query,
-          ...(cursor === undefined
-            ? {}
-            : { cursor: { updatedBefore: cursor.updatedBefore, delivered: cursor.delivered } }),
+          ...(cursor === undefined ? {} : { cursor: { updatedBefore: cursor.updatedBefore } }),
         }).pipe(
           Effect.flatMap((page) => {
             const rows = new Map<string, Array<ProviderIssue>>();
@@ -856,7 +851,7 @@ export const make = Effect.gen(function* () {
                   truncated: page.truncated,
                   nextCursor:
                     page.truncated && boundary !== null
-                      ? listCursorAt(cursorHere, boundary, fetched, items.length)
+                      ? listCursorAt(cursorHere, boundary, fetched)
                       : null,
                 });
               },

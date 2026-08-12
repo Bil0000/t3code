@@ -341,7 +341,7 @@ layer("GitHubIssueCli.layer", (it) => {
         involvement: "all",
         viewer: "bilal",
         limit: 10,
-        cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 10 },
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z" },
       });
 
       // Inclusive, because rows sharing one instant are ordinary: the caller drops the ones it
@@ -390,7 +390,7 @@ layer("GitHubIssueCli.layer", (it) => {
           involvement: "all",
           viewer: "bilal",
           limit: 10,
-          cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 10 },
+          cursor: { updatedBefore: "2026-07-02T00:00:00Z" },
         });
         const searched = yield* cli.listIssues({
           ...repository,
@@ -557,7 +557,7 @@ layer("GitHubIssueCli.layer", (it) => {
         viewer: "bilal",
         limit: 10,
         query: "never loads",
-        cursor: { updatedBefore: "2026-07-02T00:00:00Z", delivered: 10 },
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z" },
       });
 
       // One request for both repositories, carrying everything the per-repository read expresses

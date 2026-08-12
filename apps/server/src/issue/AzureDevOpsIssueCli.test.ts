@@ -259,7 +259,7 @@ layer((it) => {
         state: "all",
         involvement: "all",
         limit: 30,
-        cursor: { updatedBefore: "2026-07-02T00:00:00Z' OR [System.Id] > 0 --", delivered: 1 },
+        cursor: { updatedBefore: "2026-07-02T00:00:00Z' OR [System.Id] > 0 --" },
       });
 
       expect(wiqlOf()).toContain(

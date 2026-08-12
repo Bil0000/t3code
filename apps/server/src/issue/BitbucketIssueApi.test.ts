@@ -193,7 +193,7 @@ layer("BitbucketIssueApi.layer", (it) => {
         repository: "acme/web",
         state: "open",
         limit: 50,
-        cursor: { updatedBefore: "2026-07-02T00:00:00.123456+00:00", delivered: 50 },
+        cursor: { updatedBefore: "2026-07-02T00:00:00.123456+00:00" },
       });
 
       expect(filterOfCall(0)).toContain("updated_on <= 2026-07-02T00:00:00.123456+00:00");

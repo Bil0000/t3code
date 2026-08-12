@@ -283,8 +283,10 @@ it.effect("keeps a row already sent at the boundary instant from arriving twice"
       result.entries.map((entry) => entry.number),
       [8, 9],
     );
+    // The cursor sent in still carries the row count no host pages by any more, and is taken as it
+    // stands; the one handed back writes that field out as zero.
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-01T00:00:00Z|3|9",
+      "github.com acme/web": "2026-07-01T00:00:00Z|0|9",
     });
   }),
 );
@@ -317,7 +319,7 @@ it.effect("keeps the earlier exclusions when a slice ends on the instant it bega
       [7, 8],
     );
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-02T00:00:00Z|3|6,7,8",
+      "github.com acme/web": "2026-07-02T00:00:00Z|0|6,7,8",
     });
   }),
 );
@@ -347,7 +349,7 @@ it.effect("carries on from a slice that was nothing but rows it had already sent
     // older row for good.
     assert.deepStrictEqual(result.entries, []);
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-02T00:00:00Z|1|7",
+      "github.com acme/web": "2026-07-02T00:00:00Z|0|7",
     });
   }),
 );
@@ -1488,8 +1490,8 @@ it.effect("carries every repository of a slice on from the oldest row in it", ()
     // The repository that contributed nothing has been read to the same instant: its rows are
     // simply all older, and carrying it on from its own oldest row would say nothing about them.
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-03T00:00:00Z|3|2",
-      "github.com acme/api": "2026-07-03T00:00:00Z|1|",
+      "github.com acme/web": "2026-07-03T00:00:00Z|0|2",
+      "github.com acme/api": "2026-07-03T00:00:00Z|0|",
     });
   }),
 );
