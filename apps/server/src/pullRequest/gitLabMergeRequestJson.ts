@@ -3,6 +3,7 @@ import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type {
+  IssueLink,
   PullRequestActor,
   PullRequestCheck,
   PullRequestCheckStatus,
@@ -553,6 +554,56 @@ export function decodeDiffRefsJson(
   return Result.succeed(
     refs ? { baseSha: refs.base_sha, headSha: refs.head_sha, startSha: refs.start_sha } : null,
   );
+}
+
+const RawClosesIssueSchema = Schema.Struct({
+  iid: Schema.Int,
+  title: Schema.optional(Schema.NullOr(Schema.String)),
+  web_url: Schema.optional(Schema.NullOr(Schema.String)),
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+  references: Schema.optional(
+    Schema.NullOr(Schema.Struct({ full: Schema.optional(Schema.NullOr(Schema.String)) })),
+  ),
+});
+
+const decodeClosesIssueEntry = Schema.decodeUnknownExit(RawClosesIssueSchema);
+
+/**
+ * The issues merging this merge request closes, which is the whole of what GitLab reports as a
+ * link. The ones it only mentions have no endpoint of their own — they would be a walk over every
+ * note the merge request carries, a page at a time, for links nobody declared — so this half is
+ * left to GitLab and the section shows the declared ones alone.
+ *
+ * A row is skipped where it cannot name its own project, which is the one field of the link that
+ * cannot be filled in from anywhere else.
+ */
+export function decodeClosesIssuesJson(
+  raw: string,
+): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
+  const decoded = decodeUnknownList(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const links: IssueLink[] = [];
+  for (const entry of decoded.success) {
+    const issue = decodeClosesIssueEntry(entry);
+    if (Exit.isFailure(issue)) continue;
+    const value = issue.value;
+    const repository = trimmed(value.references?.full?.split("#")[0]);
+    const title = trimmed(value.title);
+    const url = trimmed(value.web_url);
+    if (repository === null || title === null || url === null || value.iid <= 0) continue;
+    links.push({
+      repository,
+      number: value.iid,
+      title,
+      url,
+      // GitLab spells an open issue `opened`, and `locked` is an open one whose discussion is.
+      state: value.state?.trim().toLowerCase() === "closed" ? "closed" : "open",
+      closesIssue: true,
+    });
+  }
+  return Result.succeed(links);
 }
 
 export function decodeNotesJson(

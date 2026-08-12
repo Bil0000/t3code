@@ -98,6 +98,7 @@ describe("gitHubViewerPermissions", () => {
             }),
           getViewerAccess: () =>
             Effect.succeed({ canWrite: false, canUpdate: true, didAuthor: false }),
+          listLinkedIssues: () => Effect.succeed([]),
         }),
       ),
     ),

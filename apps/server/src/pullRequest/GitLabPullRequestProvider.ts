@@ -1,5 +1,9 @@
 import * as Effect from "effect/Effect";
-import type { PullRequestCapabilities, PullRequestViewerPermissions } from "@t3tools/contracts";
+import type {
+  IssueLink,
+  PullRequestCapabilities,
+  PullRequestViewerPermissions,
+} from "@t3tools/contracts";
 
 import * as GitLabPullRequestCli from "./GitLabPullRequestCli.ts";
 import {
@@ -105,15 +109,21 @@ export const make = Effect.gen(function* () {
         [
           cli.getMergeRequestDetail(input),
           cli.getProjectMergeCapabilities({ cwd: input.cwd, repository: input.repository }),
+          // A section of links is worth less than the merge request it hangs off, so a project
+          // whose issues this account cannot read leaves it empty rather than failing the detail.
+          cli
+            .listLinkedIssues(input)
+            .pipe(Effect.orElseSucceed((): ReadonlyArray<IssueLink> => [])),
         ],
-        { concurrency: 2 },
+        { concurrency: 3 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
         Effect.map(
-          ([mergeRequest, mergeCapabilities]): ProviderChangeRequestDetail => ({
+          ([mergeRequest, mergeCapabilities, linkedIssues]): ProviderChangeRequestDetail => ({
             ...mergeRequest,
             mergeCapabilities,
             viewerPermissions: gitLabViewerPermissions(mergeRequest),
+            linkedIssues,
           }),
         ),
       ),

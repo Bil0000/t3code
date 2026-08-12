@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type {
+  IssueLink,
   PullRequestAction,
   PullRequestActor,
   PullRequestInvolvement,
@@ -22,6 +23,7 @@ import {
   buildReviewSubmissionJson,
   buildReviewerRequestJson,
   decodeActorAvatarsJson,
+  decodeLinkedIssuesJson,
   decodePullRequestActivityJson,
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
@@ -34,6 +36,8 @@ import {
   decodeReviewThreadsJson,
   buildPullRequestStatsGraphQlQuery,
   encodeGraphQlRequestJson,
+  LINKED_ISSUES_GRAPHQL_QUERY,
+  LINKED_ISSUES_MAX_ROWS,
   pullRequestSearchGraphQlQuery,
   PULL_REQUEST_SEARCH_MAX_ROWS,
   PULL_REQUEST_ACTIVITY_JSON_FIELDS,
@@ -381,6 +385,14 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
     }) => Effect.Effect<GitHubRepositoryAccess, GitHubPullRequestCliError>;
+
+    /** The issues this pull request closes or cites, which no `gh pr view --json` field carries. */
+    readonly listLinkedIssues: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+    }) => Effect.Effect<ReadonlyArray<IssueLink>, GitHubPullRequestCliError>;
 
     /** The viewer's standing on its own, for deciding a write without reading the whole detail. */
     readonly getViewerAccess: (input: {
@@ -1338,6 +1350,23 @@ export const make = Effect.gen(function* () {
                 );
           }),
         ),
+
+    listLinkedIssues: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "listLinkedIssues",
+        variables: [
+          ["-f", `owner=${owner}`],
+          ["-f", `name=${name}`],
+          ["-F", `number=${input.number}`],
+          ["-F", `first=${LINKED_ISSUES_MAX_ROWS}`],
+        ],
+        query: LINKED_ISSUES_GRAPHQL_QUERY,
+        decode: decodeLinkedIssuesJson,
+      });
+    },
 
     getViewerAccess: (input) => {
       const { owner, name } = parseRepositorySelector(input.repository);

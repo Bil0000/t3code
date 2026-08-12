@@ -1,4 +1,9 @@
-import type { EnvironmentId, PullRequestDetailView, PullRequestRef } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  IssueLink,
+  PullRequestDetailView,
+  PullRequestRef,
+} from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
   ChevronRightIcon,
@@ -26,6 +31,7 @@ import {
   PullRequestMetaLine,
   pullRequestCheckStatusLabel,
 } from "./pullRequestPresentation";
+import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import {
@@ -175,6 +181,7 @@ export function PullRequestSummaryTab({
   activityError,
   pendingFinding,
   onFixFinding,
+  onOpenLinkedIssue,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
@@ -185,6 +192,12 @@ export function PullRequestSummaryTab({
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
   onFixFinding?: (finding: PullRequestFinding) => void;
+  /**
+   * Opens one of the issues this pull request references. Supplied by whoever mounted the panel,
+   * because only they know which thread's panel a peer tab belongs beside; without one the row
+   * opens the issue on its host instead, which is never a dead control.
+   */
+  onOpenLinkedIssue?: (link: IssueLink) => void;
   onRefresh: () => void;
 }) {
   // Keyed by the pull request, so opening another one starts at the end of its conversation
@@ -279,6 +292,44 @@ export function PullRequestSummaryTab({
           cwd={detail.workspaceRoot}
         />
       </Section>
+
+      {/* Absent under a host that never answers this question, rather than empty: an empty
+          section would say this change closes nothing, which such a host cannot know. */}
+      {detail.linkedIssues === undefined ? null : (
+        <Section title="Linked issues" count={detail.linkedIssues.length}>
+          {detail.linkedIssues.length === 0 ? (
+            <p className="text-xs text-muted-foreground">This change mentions no issue.</p>
+          ) : (
+            <div className="space-y-0.5">
+              {detail.linkedIssues.map((link) => (
+                <button
+                  key={`${link.repository}#${link.number}`}
+                  type="button"
+                  // Beside the change rather than instead of it: reading what a change is for is
+                  // reading the two together.
+                  onClick={() =>
+                    onOpenLinkedIssue === undefined
+                      ? void readLocalApi()?.shell.openExternal(link.url)
+                      : onOpenLinkedIssue(link)
+                  }
+                  className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60"
+                >
+                  <IssueStateGlyph state={link.state} stateReason={null} className="size-3.5" />
+                  <span className="min-w-0 flex-1 truncate">{link.title}</span>
+                  {link.closesIssue ? (
+                    <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px] text-muted-foreground">
+                      closed by this
+                    </span>
+                  ) : null}
+                  <span className="shrink-0 text-muted-foreground tabular-nums">
+                    #{link.number}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </Section>
+      )}
 
       <Section title="Checks" count={detail.checks.length}>
         {detail.checks.length === 0 ? (

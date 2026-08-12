@@ -2,6 +2,7 @@ import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type {
   EnvironmentId,
+  IssueLink,
   PullRequestAction,
   PullRequestMergeMethod,
   PullRequestRef,
@@ -168,6 +169,7 @@ export function PullRequestDetailPanel({
   onActed,
   onClose,
   onStateChange,
+  onOpenLinkedIssue,
   context = "page",
   chromeVariant = "full",
 }: {
@@ -194,6 +196,11 @@ export function PullRequestDetailPanel({
     state: PullRequestState;
     isDraft: boolean;
   }) => void;
+  /**
+   * Opens one of the issues this pull request references, as a peer tab beside it. Supplied by
+   * whoever mounted the panel, because only they know which panel the tab belongs in.
+   */
+  onOpenLinkedIssue?: (link: IssueLink) => void;
   /**
    * Beside a thread, the checkout affordance disappears: the panel is showing that thread's
    * own pull request, so the branch is already under the reader's feet — and checking it out
@@ -1330,6 +1337,7 @@ export function PullRequestDetailPanel({
                   activityError={activityError}
                   pendingFinding={handoff}
                   onFixFinding={startFixFinding}
+                  {...(onOpenLinkedIssue ? { onOpenLinkedIssue } : {})}
                   onRefresh={refreshDetail}
                 />
               </div>

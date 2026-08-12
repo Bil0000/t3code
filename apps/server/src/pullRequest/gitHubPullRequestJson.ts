@@ -3,6 +3,7 @@ import * as Exit from "effect/Exit";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type {
+  IssueLink,
   PullRequestActor,
   PullRequestCheck,
   PullRequestCheckStatus,
@@ -1531,6 +1532,148 @@ export function decodeViewerPermissionsJson(
     canWrite: toCanWrite(repository.viewerPermission),
     ...toPullRequestViewerFields(repository.pullRequest),
   });
+}
+
+/**
+ * How many links each half of the read asks for. A pull request that names more issues than this
+ * is a listing of its own, and the section it feeds is a summary rather than one.
+ */
+export const LINKED_ISSUES_MAX_ROWS = 25;
+
+/**
+ * The issues a pull request points at. GitHub keeps the two kinds of link apart and only reports
+ * the closing ones as a field of their own; a mention that closes nothing is a cross-reference on
+ * the timeline, which is the only place it is recorded at all.
+ *
+ * Both ends of a cross-reference are read because the pull request may be either of them — the
+ * event is filed against whichever side was referenced — and a fragment on `Issue` spread over
+ * the pull request end simply decodes as nothing.
+ */
+export const LINKED_ISSUES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $first: Int!) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      closingIssuesReferences(first: $first) { nodes { ...LinkedIssue } }
+      timelineItems(first: $first, itemTypes: [CROSS_REFERENCED_EVENT]) {
+        nodes {
+          ... on CrossReferencedEvent {
+            source { ...LinkedIssue }
+            target { ...LinkedIssue }
+          }
+        }
+      }
+    }
+  }
+}
+
+fragment LinkedIssue on Issue {
+  number
+  title
+  url
+  state
+  repository { nameWithOwner }
+}`;
+
+const RawLinkedIssueSchema = Schema.Struct({
+  number: Schema.optional(Schema.NullOr(Schema.Int)),
+  title: Schema.optional(Schema.NullOr(Schema.String)),
+  url: Schema.optional(Schema.NullOr(Schema.String)),
+  state: Schema.optional(Schema.NullOr(Schema.String)),
+  repository: Schema.optional(
+    Schema.NullOr(Schema.Struct({ nameWithOwner: Schema.optional(Schema.NullOr(Schema.String)) })),
+  ),
+});
+
+type RawLinkedIssue = Schema.Schema.Type<typeof RawLinkedIssueSchema>;
+
+const RawCrossReferenceSchema = Schema.Struct({
+  source: Schema.optional(Schema.NullOr(RawLinkedIssueSchema)),
+  target: Schema.optional(Schema.NullOr(RawLinkedIssueSchema)),
+});
+
+const RawLinkedIssuesSchema = Schema.Struct({
+  data: Schema.Struct({
+    // Null for a repository this account cannot see, and for a number that names no pull request.
+    repository: Schema.NullOr(
+      Schema.Struct({
+        pullRequest: Schema.NullOr(
+          Schema.Struct({
+            // Row by row, so one node GitHub changes the shape of costs its own link rather than
+            // every link the pull request has.
+            closingIssuesReferences: Schema.optional(
+              Schema.NullOr(
+                Schema.Struct({
+                  nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+                }),
+              ),
+            ),
+            timelineItems: Schema.optional(
+              Schema.NullOr(
+                Schema.Struct({
+                  nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+                }),
+              ),
+            ),
+          }),
+        ),
+      }),
+    ),
+  }),
+});
+
+const decodeLinkedIssues = decodeJsonResult(RawLinkedIssuesSchema);
+const decodeLinkedIssueEntry = Schema.decodeUnknownExit(RawLinkedIssueSchema);
+const decodeCrossReferenceEntry = Schema.decodeUnknownExit(RawCrossReferenceSchema);
+
+function toLinkedIssue(raw: RawLinkedIssue, closesIssue: boolean): IssueLink | null {
+  const repository = trimmed(raw.repository?.nameWithOwner);
+  const title = trimmed(raw.title);
+  const url = trimmed(raw.url);
+  const number = raw.number ?? 0;
+  if (repository === null || title === null || url === null || number <= 0) return null;
+  return {
+    repository,
+    number,
+    title,
+    url,
+    state: raw.state?.trim().toUpperCase() === "CLOSED" ? "closed" : "open",
+    closesIssue,
+  };
+}
+
+/**
+ * Every issue this pull request points at, closing links first: GitHub reports the same issue in
+ * both halves whenever a closing keyword also left a cross-reference behind, and de-duplication
+ * keeps the stronger claim because "merging closes this" is what a reader acts on.
+ *
+ * A row that cannot name the four things a link is opened by is skipped rather than failing the
+ * read, the same way a malformed listing row is.
+ */
+export function decodeLinkedIssuesJson(
+  raw: string,
+): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
+  const decoded = decodeLinkedIssues(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const pullRequest = decoded.success.data.repository?.pullRequest;
+  const links = new Map<string, IssueLink>();
+  const add = (issue: RawLinkedIssue | null | undefined, closesIssue: boolean) => {
+    const link = issue === null || issue === undefined ? null : toLinkedIssue(issue, closesIssue);
+    if (link === null) return;
+    const key = `${link.repository}#${link.number}`;
+    if (!links.has(key)) links.set(key, link);
+  };
+  for (const node of pullRequest?.closingIssuesReferences?.nodes ?? []) {
+    const entry = decodeLinkedIssueEntry(node);
+    if (Exit.isSuccess(entry)) add(entry.value, true);
+  }
+  for (const node of pullRequest?.timelineItems?.nodes ?? []) {
+    const event = decodeCrossReferenceEntry(node);
+    if (!Exit.isSuccess(event)) continue;
+    add(event.value.source, false);
+    add(event.value.target, false);
+  }
+  return Result.succeed([...links.values()]);
 }
 
 export interface GitHubPullRequestFilesPatch {
