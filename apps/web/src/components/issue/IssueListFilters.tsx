@@ -3,152 +3,20 @@ import type {
   IssueInvolvement,
   IssueListState,
   ProjectId,
-  SourceControlProviderKind,
 } from "@t3tools/contracts";
-import {
-  FolderGit2Icon,
-  LayersIcon,
-  ListFilterIcon,
-  LoaderIcon,
-  SearchIcon,
-  TagIcon,
-  TagsIcon,
-} from "lucide-react";
-import type { ElementType } from "react";
-
-import { cn } from "~/lib/utils";
-import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
-import { ProjectFavicon } from "../ProjectFavicon";
+import { TagIcon, TagsIcon } from "lucide-react";
 
 import {
-  Menu,
-  MenuGroupLabel,
-  MenuPopup,
-  MenuRadioGroup,
-  MenuRadioItem,
-  MenuSeparator,
-  MenuTrigger,
-} from "../ui/menu";
+  ALL_HOSTS_VALUE,
+  ListFilterMenu,
+  ListFilterRadioGroup,
+  ListProjectFilterGroup,
+  type ListFilterOption,
+} from "../sourceControl/ListFilterMenu";
+import { MenuSeparator } from "../ui/menu";
 
-export interface IssueFilterOption<Value extends string> {
-  readonly value: Value;
-  readonly label: string;
-  /**
-   * Carries the option's own tone, so an icon reads the same here as it does on a row. Left
-   * uncoloured, which lets the item's selected state stay the thing the eye follows.
-   */
-  readonly Icon: ElementType<{ className?: string }>;
-  /** Why it cannot be chosen, carried onto the item as its title. */
-  readonly unavailable?: string | undefined;
-}
-
-export interface IssueExpectedHost {
-  readonly host: string;
-  readonly kind: SourceControlProviderKind;
-}
-
-/**
- * What to call a host in the row. The provider's own name reads best — "GitHub" over
- * "github.com" — but it stops naming anything once a workspace has two hosts of one kind, so
- * those wear the host itself instead. Only the ambiguous ones: a lone GitLab beside two GitHub
- * installs is still "GitLab".
- */
-export function issueHostLabel(
-  entries: ReadonlyArray<{ readonly host: string; readonly kind: SourceControlProviderKind }>,
-  entry: { readonly host: string; readonly kind: SourceControlProviderKind },
-): string {
-  const sharing = entries.filter((candidate) => candidate.kind === entry.kind);
-  return sharing.length > 1
-    ? entry.host
-    : getSourceControlPresentationForKind(entry.kind).providerName;
-}
-
-export function IssueSearchInput({
-  value,
-  busy,
-  onChange,
-}: {
-  value: string;
-  /** A search is on its way to the hosts, said where the typing is rather than over the list. */
-  busy?: boolean;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <div className="relative min-w-0 flex-1">
-      {busy ? (
-        <LoaderIcon
-          aria-hidden
-          className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 animate-spin text-muted-foreground"
-        />
-      ) : (
-        <SearchIcon
-          aria-hidden
-          className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-        />
-      )}
-      <input
-        type="text"
-        value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
-        placeholder="Search issues"
-        aria-label="Search issues"
-        // Tracks the shared input's height at both widths, so it stays level with the icon
-        // button beside it rather than towering over it on wide screens.
-        className="h-9 w-full rounded-lg border border-input bg-background pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 sm:h-8"
-      />
-    </div>
-  );
-}
-
-/**
- * Every list filter lives behind the one filter icon so the control row stays two controls
- * wide: the search and this. The trigger carries a dot whenever any filter is off its
- * default, so a narrowed list is never a mystery. Same menu chrome as the detail panel's
- * actions, which also owns its own spacing.
- */
-const ALL_PROJECTS_VALUE = "all";
-/** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
-const ALL_HOSTS_VALUE = "";
-/** A label name is never empty either, so the same trick names "every label". */
+/** A label name is never empty, so the same trick the hosts use names "every label". */
 const ALL_LABELS_VALUE = "";
-
-function IssueFilterRadioGroup<Value extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: Value;
-  options: ReadonlyArray<IssueFilterOption<Value>>;
-  onChange: (value: Value) => void;
-}) {
-  return (
-    <MenuRadioGroup
-      value={value}
-      onValueChange={(next) => {
-        if (next !== value) onChange(next as Value);
-      }}
-    >
-      <MenuGroupLabel>{label}</MenuGroupLabel>
-      {options.map((option) => (
-        <MenuRadioItem
-          key={option.value}
-          value={option.value}
-          // A host the server has already said it cannot read is not a choice here: offering
-          // it would answer the press by replacing a working list with that failure.
-          disabled={option.unavailable !== undefined}
-          title={option.unavailable}
-        >
-          <span className="flex min-w-0 items-center gap-2">
-            <option.Icon aria-hidden className="size-3.5" />
-            {option.label}
-          </span>
-        </MenuRadioItem>
-      ))}
-    </MenuRadioGroup>
-  );
-}
 
 export function IssueFiltersMenu({
   state,
@@ -164,10 +32,10 @@ export function IssueFiltersMenu({
   onLabel,
 }: {
   state: IssueListState;
-  stateOptions: ReadonlyArray<IssueFilterOption<IssueListState>>;
+  stateOptions: ReadonlyArray<ListFilterOption<IssueListState>>;
   onState: (state: IssueListState) => void;
   involvement: IssueInvolvement;
-  involvementOptions: ReadonlyArray<IssueFilterOption<IssueInvolvement>>;
+  involvementOptions: ReadonlyArray<ListFilterOption<IssueInvolvement>>;
   onInvolvement: (involvement: IssueInvolvement) => void;
   /**
    * Absent where the caller already knows the host, which is a surface listing one repository:
@@ -179,12 +47,11 @@ export function IssueFiltersMenu({
      * Includes the "all hosts" entry, whose value is the empty string. With fewer than two real
      * hosts there is nothing to switch between, so the whole group stays out of the menu.
      */
-    readonly hostOptions: ReadonlyArray<IssueFilterOption<string>>;
+    readonly hostOptions: ReadonlyArray<ListFilterOption<string>>;
     readonly onHost: (host: string | undefined) => void;
   };
   /** Absent for the same reason `hostFilter` is: one project is not a choice. */
   projectFilter?: {
-    /** Where the projects' own favicons are read from; null before the environment is known. */
     readonly environmentId: EnvironmentId | null;
     readonly projects: ReadonlyArray<{
       readonly id: ProjectId;
@@ -192,11 +59,6 @@ export function IssueFiltersMenu({
       readonly workspaceRoot: string;
     }>;
     readonly projectId: ProjectId | undefined;
-    /**
-     * Projects whose repository could not be read this time round. They are named here, where
-     * the reader is already choosing between projects, rather than as a count above the list
-     * that says something is missing without saying which.
-     */
     readonly unavailable: ReadonlyMap<ProjectId, string>;
     readonly onProject: (projectId: ProjectId | undefined) => void;
   };
@@ -216,124 +78,54 @@ export function IssueFiltersMenu({
     projectFilter?.projectId !== undefined ||
     label !== undefined;
   return (
-    <Menu>
-      <MenuTrigger
-        className={cn(
-          // The icon-button size that pairs with a full-height input, so the two read as one strip.
-          "relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground sm:size-8",
-          filtered && "text-foreground",
-        )}
-        aria-label="Filter issues"
-      >
-        <ListFilterIcon className="size-4" />
-        {filtered ? (
-          <span
-            aria-hidden
-            className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"
+    <ListFilterMenu label="Filter issues" filtered={filtered}>
+      <ListFilterRadioGroup label="State" value={state} options={stateOptions} onChange={onState} />
+      <MenuSeparator />
+      <ListFilterRadioGroup
+        label="Involvement"
+        value={involvement}
+        options={involvementOptions}
+        onChange={onInvolvement}
+      />
+      {hostFilter !== undefined && hostFilter.hostOptions.length > 2 ? (
+        <>
+          <MenuSeparator />
+          <ListFilterRadioGroup
+            label="Host"
+            value={hostFilter.host ?? ALL_HOSTS_VALUE}
+            options={hostFilter.hostOptions}
+            onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
           />
-        ) : null}
-      </MenuTrigger>
-      <MenuPopup align="end" side="bottom" className="min-w-56">
-        <IssueFilterRadioGroup
-          label="State"
-          value={state}
-          options={stateOptions}
-          onChange={onState}
-        />
-        <MenuSeparator />
-        <IssueFilterRadioGroup
-          label="Involvement"
-          value={involvement}
-          options={involvementOptions}
-          onChange={onInvolvement}
-        />
-        {hostFilter !== undefined && hostFilter.hostOptions.length > 2 ? (
-          <>
-            <MenuSeparator />
-            <IssueFilterRadioGroup
-              label="Host"
-              value={hostFilter.host ?? ALL_HOSTS_VALUE}
-              options={hostFilter.hostOptions}
-              onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
-            />
-          </>
-        ) : null}
-        {projectFilter === undefined ? null : (
-          <>
-            <MenuSeparator />
-            <MenuRadioGroup
-              value={projectFilter.projectId ?? ALL_PROJECTS_VALUE}
-              onValueChange={(next) => {
-                const nextProjectId = next === ALL_PROJECTS_VALUE ? undefined : (next as ProjectId);
-                if (nextProjectId !== projectFilter.projectId)
-                  projectFilter.onProject(nextProjectId);
-              }}
-            >
-              <MenuGroupLabel>Project</MenuGroupLabel>
-              <MenuRadioItem value={ALL_PROJECTS_VALUE}>
-                <span className="flex min-w-0 items-center gap-2">
-                  <LayersIcon aria-hidden className="size-3.5" />
-                  All projects
-                </span>
-              </MenuRadioItem>
-              {/* The ones that can be chosen first: a list that opens with three disabled rows reads
-              as a broken menu rather than as a workspace with three unreadable repositories. */}
-              {projectFilter.projects
-                .toSorted(
-                  (left, right) =>
-                    Number(projectFilter.unavailable.has(left.id)) -
-                    Number(projectFilter.unavailable.has(right.id)),
-                )
-                .map((project) => {
-                  const reason = projectFilter.unavailable.get(project.id);
-                  return (
-                    <MenuRadioItem
-                      key={project.id}
-                      value={project.id}
-                      disabled={reason !== undefined}
-                      title={reason}
-                    >
-                      <span className="flex min-w-0 flex-1 items-center gap-2">
-                        {projectFilter.environmentId === null ? (
-                          <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
-                        ) : (
-                          <ProjectFavicon
-                            environmentId={projectFilter.environmentId}
-                            cwd={project.workspaceRoot}
-                            fallbackIcon={FolderGit2Icon}
-                            className="size-3.5 shrink-0"
-                          />
-                        )}
-                        <span className="min-w-0 flex-1 truncate">{project.title}</span>
-                        {reason === undefined ? null : (
-                          <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
-                            Unavailable
-                          </span>
-                        )}
-                      </span>
-                    </MenuRadioItem>
-                  );
-                })}
-            </MenuRadioGroup>
-          </>
-        )}
-        {/* Nothing loaded wears a label: there is no choice to offer, and a lone "All labels"
-            row would only say so in the least useful place. */}
-        {labels.length > 0 ? (
-          <>
-            <MenuSeparator />
-            <IssueFilterRadioGroup
-              label="Label"
-              value={label ?? ALL_LABELS_VALUE}
-              options={[
-                { value: ALL_LABELS_VALUE, label: "All labels", Icon: TagsIcon },
-                ...labels.map((name) => ({ value: name, label: name, Icon: TagIcon })),
-              ]}
-              onChange={(next) => onLabel(next === ALL_LABELS_VALUE ? undefined : next)}
-            />
-          </>
-        ) : null}
-      </MenuPopup>
-    </Menu>
+        </>
+      ) : null}
+      {projectFilter === undefined ? null : (
+        <>
+          <MenuSeparator />
+          <ListProjectFilterGroup
+            environmentId={projectFilter.environmentId}
+            projects={projectFilter.projects}
+            projectId={projectFilter.projectId}
+            unavailable={projectFilter.unavailable}
+            onProject={projectFilter.onProject}
+          />
+        </>
+      )}
+      {/* Nothing loaded wears a label: there is no choice to offer, and a lone "All labels"
+          row would only say so in the least useful place. */}
+      {labels.length > 0 ? (
+        <>
+          <MenuSeparator />
+          <ListFilterRadioGroup
+            label="Label"
+            value={label ?? ALL_LABELS_VALUE}
+            options={[
+              { value: ALL_LABELS_VALUE, label: "All labels", Icon: TagsIcon },
+              ...labels.map((name) => ({ value: name, label: name, Icon: TagIcon })),
+            ]}
+            onChange={(next) => onLabel(next === ALL_LABELS_VALUE ? undefined : next)}
+          />
+        </>
+      ) : null}
+    </ListFilterMenu>
   );
 }

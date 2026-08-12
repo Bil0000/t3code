@@ -29,7 +29,8 @@ import { ScrollArea } from "../ui/scroll-area";
 import { IssueDetailPanel, type IssueHandoffTarget } from "./IssueDetailPanel";
 import { ListGhost } from "../sourceControl/ListGhosts";
 import { filterIssuesByInvolvement, issueEntryKey } from "./issueList.logic";
-import { IssueFiltersMenu, type IssueFilterOption } from "./IssueListFilters";
+import { IssueFiltersMenu } from "./IssueListFilters";
+import { type ListFilterOption } from "../sourceControl/ListFilterMenu";
 import { IssueRow } from "./IssueRow";
 
 // The same vocabulary the issues page filters by, minus the two questions a panel already knows
@@ -38,14 +39,14 @@ const STATE_OPTIONS = [
   { value: "all", label: "All", Icon: LayersIcon },
   { value: "open", label: "Open", Icon: CircleDotIcon },
   { value: "closed", label: "Closed", Icon: CircleCheckIcon },
-] as const satisfies ReadonlyArray<IssueFilterOption<IssueListState>>;
+] as const satisfies ReadonlyArray<ListFilterOption<IssueListState>>;
 
 const INVOLVEMENT_OPTIONS = [
   { value: "all", label: "All", Icon: LayersIcon },
   { value: "assigned", label: "Assigned", Icon: UserCheckIcon },
   { value: "authored", label: "Authored", Icon: PenLineIcon },
   { value: "mentioned", label: "Mentioned", Icon: AtSignIcon },
-] as const satisfies ReadonlyArray<IssueFilterOption<IssueInvolvement>>;
+] as const satisfies ReadonlyArray<ListFilterOption<IssueInvolvement>>;
 
 /** What the panel narrows by, held above the list so reading an issue does not throw it away. */
 interface PanelFilters {

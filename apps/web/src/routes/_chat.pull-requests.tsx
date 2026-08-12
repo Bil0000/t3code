@@ -43,13 +43,13 @@ import {
   type PullRequestPartitionsSnapshot,
 } from "../components/pullRequest/pullRequestList.logic";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
+import { PullRequestFiltersMenu } from "../components/pullRequest/PullRequestListFilters";
 import {
-  PullRequestFiltersMenu,
-  PullRequestSearchInput,
-  pullRequestHostLabel,
-  type PullRequestExpectedHost,
-  type PullRequestFilterOption,
-} from "../components/pullRequest/PullRequestListFilters";
+  ListSearchInput,
+  listFilterHostLabel,
+  type ListFilterHost,
+  type ListFilterOption,
+} from "../components/sourceControl/ListFilterMenu";
 import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
@@ -109,14 +109,14 @@ const INVOLVEMENT_TABS = [
   { value: "all", label: "All", Icon: LayersIcon },
   { value: "reviewing", label: "Reviewing", Icon: EyeIcon },
   { value: "authored", label: "Authored", Icon: PenLineIcon },
-] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestInvolvement>>;
+] as const satisfies ReadonlyArray<ListFilterOption<PullRequestInvolvement>>;
 
 const STATE_TABS = [
   { value: "all", label: "All", Icon: LayersIcon },
   { value: "open", label: "Open", Icon: GitPullRequestIcon },
   { value: "closed", label: "Closed", Icon: GitPullRequestClosedIcon },
   { value: "merged", label: "Merged", Icon: GitMergeIcon },
-] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
+] as const satisfies ReadonlyArray<ListFilterOption<PullRequestListState>>;
 
 /** Long enough that a keystroke does not become a request, short enough to feel answered. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -889,7 +889,7 @@ function PullRequestsRouteView() {
   // The workspace's own projects already name their hosts, so the row's shape is known before
   // the list is. Only its shape: which hosts can actually be read still comes from the server.
   const expectedHosts = useMemo(() => {
-    const byHost = new Map<string, PullRequestExpectedHost>();
+    const byHost = new Map<string, ListFilterHost>();
     for (const project of projects) {
       const kind = project.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
       if (kind === undefined) continue;
@@ -920,7 +920,8 @@ function PullRequestsRouteView() {
   );
 
   const searchInput = (
-    <PullRequestSearchInput
+    <ListSearchInput
+      label="Search pull requests"
       value={search.q ?? ""}
       busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
       onChange={(query) => updateSearch({ q: query || undefined })}
@@ -1044,7 +1045,7 @@ function PullRequestsRouteView() {
   // one control: "GitHub" with its mark, never the bare hostname — unless two installs of one
   // kind force the hostname to tell them apart.
   const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
-  const hostMenuOptions: ReadonlyArray<PullRequestFilterOption<string>> = [
+  const hostMenuOptions: ReadonlyArray<ListFilterOption<string>> = [
     { value: "", label: "All hosts", Icon: LayersIcon },
     ...hostEntries.map((entry) => {
       // `expectedHosts` stands in before the server has answered, and nothing is known to be
@@ -1052,7 +1053,7 @@ function PullRequestsRouteView() {
       const summary = hosts.find((host) => host.host === entry.host);
       return {
         value: entry.host,
-        label: pullRequestHostLabel(hostEntries, entry),
+        label: listFilterHostLabel(hostEntries, entry),
         Icon: getSourceControlPresentationForKind(entry.kind).Icon,
         ...(summary === undefined || summary.configured
           ? {}
@@ -1265,7 +1266,7 @@ function CompactFilterMenu<Value extends string>({
 }: {
   label: string;
   value: Value;
-  options: ReadonlyArray<PullRequestFilterOption<Value>>;
+  options: ReadonlyArray<ListFilterOption<Value>>;
   onChange: (value: Value) => void;
 }) {
   const current = options.find((option) => option.value === value) ?? options[0]!;
@@ -1399,7 +1400,7 @@ function PullRequestsColumn({
   involvement: PullRequestInvolvement;
   state: PullRequestListState;
   host: string | undefined;
-  hostMenuOptions: ReadonlyArray<PullRequestFilterOption<string>>;
+  hostMenuOptions: ReadonlyArray<ListFilterOption<string>>;
   onInvolvement: (involvement: PullRequestInvolvement) => void;
   onState: (state: PullRequestListState) => void;
   onHost: (host: string | undefined) => void;

@@ -41,13 +41,13 @@ import { IssueCreateDialog } from "../components/issue/IssueCreateDialog";
 import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
 import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
+import { IssueFiltersMenu } from "../components/issue/IssueListFilters";
 import {
-  IssueFiltersMenu,
-  IssueSearchInput,
-  issueHostLabel,
-  type IssueExpectedHost,
-  type IssueFilterOption,
-} from "../components/issue/IssueListFilters";
+  ListSearchInput,
+  listFilterHostLabel,
+  type ListFilterHost,
+  type ListFilterOption,
+} from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
@@ -114,13 +114,13 @@ const INVOLVEMENT_TABS = [
   { value: "assigned", label: "Assigned", Icon: UserCheckIcon },
   { value: "authored", label: "Authored", Icon: PenLineIcon },
   { value: "mentioned", label: "Mentioned", Icon: AtSignIcon },
-] as const satisfies ReadonlyArray<IssueFilterOption<IssueInvolvement>>;
+] as const satisfies ReadonlyArray<ListFilterOption<IssueInvolvement>>;
 
 const STATE_TABS = [
   { value: "all", label: "All", Icon: LayersIcon },
   { value: "open", label: "Open", Icon: CircleDotIcon },
   { value: "closed", label: "Closed", Icon: CircleCheckIcon },
-] as const satisfies ReadonlyArray<IssueFilterOption<IssueListState>>;
+] as const satisfies ReadonlyArray<ListFilterOption<IssueListState>>;
 
 /** Long enough that a keystroke does not become a request, short enough to feel answered. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -868,7 +868,7 @@ function IssuesRouteView() {
   // The workspace's own projects already name their hosts, so the row's shape is known before
   // the list is. Only its shape: which hosts can actually be read still comes from the server.
   const expectedHosts = useMemo(() => {
-    const byHost = new Map<string, IssueExpectedHost>();
+    const byHost = new Map<string, ListFilterHost>();
     for (const project of projects) {
       const kind = project.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
       if (kind === undefined) continue;
@@ -900,7 +900,8 @@ function IssuesRouteView() {
 
   const [creating, setCreating] = useState(false);
   const searchInput = (
-    <IssueSearchInput
+    <ListSearchInput
+      label="Search issues"
       value={search.q ?? ""}
       busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
       onChange={(query) => updateSearch({ q: query || undefined })}
@@ -1015,7 +1016,7 @@ function IssuesRouteView() {
   // one control: "GitHub" with its mark, never the bare hostname — unless two installs of one
   // kind force the hostname to tell them apart.
   const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
-  const hostMenuOptions: ReadonlyArray<IssueFilterOption<string>> = [
+  const hostMenuOptions: ReadonlyArray<ListFilterOption<string>> = [
     { value: "", label: "All hosts", Icon: LayersIcon },
     ...hostEntries.map((entry) => {
       // `expectedHosts` stands in before the server has answered, and nothing is known to be
@@ -1023,7 +1024,7 @@ function IssuesRouteView() {
       const summary = hosts.find((host) => host.host === entry.host);
       return {
         value: entry.host,
-        label: issueHostLabel(hostEntries, entry),
+        label: listFilterHostLabel(hostEntries, entry),
         Icon: getSourceControlPresentationForKind(entry.kind).Icon,
         ...(summary === undefined || summary.configured
           ? {}
@@ -1276,7 +1277,7 @@ function CompactFilterMenu<Value extends string>({
 }: {
   label: string;
   value: Value;
-  options: ReadonlyArray<IssueFilterOption<Value>>;
+  options: ReadonlyArray<ListFilterOption<Value>>;
   onChange: (value: Value) => void;
 }) {
   const current = options.find((option) => option.value === value) ?? options[0]!;
@@ -1410,7 +1411,7 @@ function IssuesColumn({
   involvement: IssueInvolvement;
   state: IssueListState;
   host: string | undefined;
-  hostMenuOptions: ReadonlyArray<IssueFilterOption<string>>;
+  hostMenuOptions: ReadonlyArray<ListFilterOption<string>>;
   onInvolvement: (involvement: IssueInvolvement) => void;
   onState: (state: IssueListState) => void;
   onHost: (host: string | undefined) => void;
