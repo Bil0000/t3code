@@ -7,7 +7,7 @@
  */
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, IssueAssigneeCandidate, IssueRef } from "@t3tools/contracts";
-import { CheckIcon, UserPlusIcon } from "lucide-react";
+import { UserPlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { issueEnvironment } from "~/state/issues";
@@ -15,11 +15,10 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { SourceControlActorLabel } from "../sourceControl/actorPresentation";
+import { EntityPicker, EntityPickerOption } from "../sourceControl/EntityPicker";
 import { readableFailure } from "../sourceControl/handoff";
-import { Button } from "../ui/button";
-import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
+import { PeopleGhost } from "../sourceControl/ListGhosts";
 import { toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /** Long lists are common — an organisation repository lists everyone — so what arrived can be
  * narrowed here. It narrows only what arrived: the host is asked once, when the menu opens. */
@@ -97,82 +96,46 @@ export function IssueAssigneePicker({
     candidatesQuery.refresh();
   };
 
-  if (!allowed) {
-    return (
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button size="icon-xs" variant="ghost" disabled aria-label="Change who is assigned">
-              <UserPlusIcon className="size-3.5" />
-            </Button>
-          }
-        />
-        <TooltipPopup side="bottom">
-          Assigning an issue needs write access on this repository
-        </TooltipPopup>
-      </Tooltip>
-    );
-  }
-
   return (
-    <Menu open={open} onOpenChange={onOpenChange}>
-      <MenuTrigger
-        render={
-          <Button size="icon-xs" variant="ghost" aria-label="Change who is assigned">
-            <UserPlusIcon className="size-3.5" />
-          </Button>
-        }
-      />
-      <MenuPopup align="start" side="bottom" className="w-72 p-0">
-        <div className="border-b border-border/60 p-2">
-          <input
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search people with access"
-            aria-label="Search people with access"
-            className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring"
-          />
-        </div>
-        <div className="max-h-72 overflow-y-auto p-1">
-          {candidatesQuery.isPending ? (
-            <p className="p-2 text-xs text-muted-foreground">Reading who has access…</p>
-          ) : candidatesQuery.error !== null ? (
-            <p className="p-2 text-xs text-muted-foreground">
-              The people with access could not be read. {candidatesQuery.error}
-            </p>
-          ) : candidates.length === 0 ? (
-            <p className="p-2 text-xs text-muted-foreground">
-              {query.length > 0
-                ? "Nobody with access matches that."
-                : "Nobody else has access to this repository."}
-            </p>
-          ) : (
-            candidates.map((candidate) => (
-              <button
-                key={candidate.id}
-                type="button"
-                disabled={pending !== null}
-                onClick={() => void toggle(candidate)}
-                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60 disabled:opacity-60"
-              >
-                <SourceControlActorLabel actor={candidate} className="min-w-0 flex-1 truncate" />
-                {candidate.isAssigned ? (
-                  <CheckIcon aria-label="Already assigned" className="size-3.5 shrink-0" />
-                ) : null}
-              </button>
-            ))
-          )}
-          {candidatesQuery.data?.truncated ? (
-            // Typing filters what arrived; it does not ask the host again, so this says what the
-            // list is rather than offering a search that would find nothing further.
-            <p className="px-2 py-1.5 text-xs text-muted-foreground">
-              This repository has more people with access than are listed here. Assign the rest on
-              the host.
-            </p>
-          ) : null}
-        </div>
-      </MenuPopup>
-    </Menu>
+    <EntityPicker
+      icon={<UserPlusIcon className="size-3.5" />}
+      label="Change who is assigned"
+      allowed={allowed}
+      disallowedReason="Assigning an issue needs write access on this repository"
+      open={open}
+      onOpenChange={onOpenChange}
+      searchLabel="Search people with access"
+      query={query}
+      onQueryChange={setQuery}
+      loading={candidatesQuery.isPending ? <PeopleGhost rows={4} /> : null}
+      message={
+        candidatesQuery.error !== null
+          ? `The people with access could not be read. ${candidatesQuery.error}`
+          : candidates.length === 0
+            ? query.length > 0
+              ? "Nobody with access matches that."
+              : "Nobody else has access to this repository."
+            : null
+      }
+      note={
+        // Typing filters what arrived; it does not ask the host again, so this says what the list
+        // is rather than offering a search that would find nothing further.
+        candidatesQuery.data?.truncated === true
+          ? "This repository has more people with access than are listed here. Assign the rest on the host."
+          : null
+      }
+    >
+      {candidates.map((candidate) => (
+        <EntityPickerOption
+          key={candidate.id}
+          checked={candidate.isAssigned}
+          checkedLabel="Already assigned"
+          disabled={pending !== null}
+          onSelect={() => void toggle(candidate)}
+        >
+          <SourceControlActorLabel actor={candidate} className="min-w-0 flex-1 truncate" />
+        </EntityPickerOption>
+      ))}
+    </EntityPicker>
   );
 }

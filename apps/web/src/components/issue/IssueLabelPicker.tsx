@@ -7,18 +7,16 @@
  */
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId, IssueLabelCandidate, IssueRef } from "@t3tools/contracts";
-import { CheckIcon, TagIcon } from "lucide-react";
+import { TagIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { issueEnvironment } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
+import { EntityPicker, EntityPickerOption } from "../sourceControl/EntityPicker";
 import { readableFailure } from "../sourceControl/handoff";
-import { Button } from "../ui/button";
-import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /** A repository with dozens of labels is common, so what arrived can be narrowed here. It
  * narrows only what arrived: the host is asked once, when the menu opens. */
@@ -98,88 +96,54 @@ export function IssueLabelPicker({
     candidatesQuery.refresh();
   };
 
-  if (!allowed) {
-    return (
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button size="icon-xs" variant="ghost" disabled aria-label="Change the labels">
-              <TagIcon className="size-3.5" />
-            </Button>
-          }
-        />
-        <TooltipPopup side="bottom">
-          Changing labels needs write access on this repository
-        </TooltipPopup>
-      </Tooltip>
-    );
-  }
-
   return (
-    <Menu open={open} onOpenChange={onOpenChange}>
-      <MenuTrigger
-        render={
-          <Button size="icon-xs" variant="ghost" aria-label="Change the labels">
-            <TagIcon className="size-3.5" />
-          </Button>
-        }
-      />
-      <MenuPopup align="start" side="bottom" className="w-72 p-0">
-        <div className="border-b border-border/60 p-2">
-          <input
-            autoFocus
-            value={query}
-            onChange={(event) => setQuery(event.currentTarget.value)}
-            placeholder="Search labels"
-            aria-label="Search labels"
-            className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring"
-          />
-        </div>
-        <div className="max-h-72 overflow-y-auto p-1">
-          {candidatesQuery.isPending ? (
-            <p className="p-2 text-xs text-muted-foreground">Reading this repository's labels…</p>
-          ) : candidatesQuery.error !== null ? (
-            <p className="p-2 text-xs text-muted-foreground">
-              The labels could not be read. {candidatesQuery.error}
-            </p>
-          ) : candidates.length === 0 ? (
-            <p className="p-2 text-xs text-muted-foreground">
-              {query.length > 0
+    <EntityPicker
+      icon={<TagIcon className="size-3.5" />}
+      label="Change the labels"
+      allowed={allowed}
+      disallowedReason="Changing labels needs write access on this repository"
+      open={open}
+      onOpenChange={onOpenChange}
+      searchLabel="Search labels"
+      query={query}
+      onQueryChange={setQuery}
+      message={
+        candidatesQuery.isPending
+          ? "Reading this repository's labels…"
+          : candidatesQuery.error !== null
+            ? `The labels could not be read. ${candidatesQuery.error}`
+            : candidates.length === 0
+              ? query.length > 0
                 ? "No label matches that."
-                : "This repository has no labels to put on."}
-            </p>
-          ) : (
-            candidates.map((candidate) => (
-              <button
-                key={candidate.name}
-                type="button"
-                disabled={pending !== null}
-                onClick={() => void toggle(candidate)}
-                className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60 disabled:opacity-60"
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium">{candidate.name}</span>
-                  {candidate.description ? (
-                    <span className="block truncate text-[11px] text-muted-foreground">
-                      {candidate.description}
-                    </span>
-                  ) : null}
-                </span>
-                {appliedNames.has(candidate.name) ? (
-                  <CheckIcon aria-label="Already on" className="mt-0.5 size-3.5 shrink-0" />
-                ) : null}
-              </button>
-            ))
-          )}
-          {candidatesQuery.data?.truncated ? (
-            // Typing filters what arrived; it does not ask the host again, so this says what the
-            // list is rather than offering a search that would find nothing further.
-            <p className="px-2 py-1.5 text-xs text-muted-foreground">
-              This repository has more labels than are listed here. Put the rest on from the host.
-            </p>
-          ) : null}
-        </div>
-      </MenuPopup>
-    </Menu>
+                : "This repository has no labels to put on."
+              : null
+      }
+      note={
+        // Typing filters what arrived; it does not ask the host again, so this says what the list
+        // is rather than offering a search that would find nothing further.
+        candidatesQuery.data?.truncated === true
+          ? "This repository has more labels than are listed here. Put the rest on from the host."
+          : null
+      }
+    >
+      {candidates.map((candidate) => (
+        <EntityPickerOption
+          key={candidate.name}
+          checked={appliedNames.has(candidate.name)}
+          checkedLabel="Already on"
+          disabled={pending !== null}
+          onSelect={() => void toggle(candidate)}
+        >
+          <span className="min-w-0 flex-1">
+            <span className="block truncate font-medium">{candidate.name}</span>
+            {candidate.description ? (
+              <span className="block truncate text-[11px] text-muted-foreground">
+                {candidate.description}
+              </span>
+            ) : null}
+          </span>
+        </EntityPickerOption>
+      ))}
+    </EntityPicker>
   );
 }
