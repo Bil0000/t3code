@@ -6,7 +6,7 @@
 import { isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it } from "vite-plus/test";
 
-import { IssueListEmptyState } from "./IssueListEmptyState";
+import { ListEmptyState } from "./ListEmptyState";
 
 function textOf(node: ReactNode): string {
   if (typeof node === "string" || typeof node === "number") return String(node);
@@ -16,6 +16,13 @@ function textOf(node: ReactNode): string {
 }
 
 const baseProps = {
+  mark: null,
+  loadingLabel: "Loading issues",
+  noProjectsDescription: "Add a project, and the issues from its repository appear here.",
+  notFoundHint: "The hosts were searched for it.",
+  emptyTitle: "No issues",
+  emptyDescription: "Issues from every project in this workspace appear here.",
+  loadMoreLabel: "Load more issues",
   query: "",
   filtered: false,
   searching: false,
@@ -29,10 +36,10 @@ const baseProps = {
 };
 
 function render(props: Partial<typeof baseProps>): string {
-  return textOf(IssueListEmptyState({ ...baseProps, ...props }));
+  return textOf(ListEmptyState({ ...baseProps, ...props }));
 }
 
-describe("IssueListEmptyState", () => {
+describe("ListEmptyState", () => {
   it("asks for a project ahead of anything a search or a filter could say", () => {
     const text = render({ hasProjects: false, searching: true, query: "crash", filtered: true });
     expect(text).toContain("No projects in this workspace");
