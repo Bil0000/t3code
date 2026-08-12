@@ -136,19 +136,26 @@ export function issueEntryKey(entry: IssueListEntry): string {
  * move it above rows already read. Here the partitions come whole from their own server-filtered
  * reads, the feed fills "Others" in its own order, and a continuation can only append — a row it
  * carries that a partition already holds is dropped rather than moved.
+ *
+ * The partitions answer their own question of the hosts, so whatever narrowed the feed afterwards
+ * never touched them. `keep` is that narrowing, said again here: without it a label filter takes
+ * rows out of "Others" and leaves the very same rows sitting under "Assigned to you".
  */
 export function partitionIssuesWithPriority(
   entries: ReadonlyArray<IssueListEntry>,
   authored: ReadonlyArray<IssueListEntry>,
   assigned: ReadonlyArray<IssueListEntry>,
+  keep: (entry: IssueListEntry) => boolean,
 ): ReadonlyArray<IssueGroup> {
-  const assignedByKey = new Map(assigned.map((entry) => [issueEntryKey(entry), entry]));
+  const assignedByKey = new Map(
+    assigned.filter(keep).map((entry) => [issueEntryKey(entry), entry]),
+  );
   // An issue can be both filed and taken on by the same person; assigned wins, as the local
   // grouping has it, because what is on somebody's plate matters more than who put it there.
   const authoredByKey = new Map(
     authored.flatMap((entry) => {
       const key = issueEntryKey(entry);
-      return assignedByKey.has(key) ? [] : [[key, entry] as const];
+      return assignedByKey.has(key) || !keep(entry) ? [] : [[key, entry] as const];
     }),
   );
   const others: IssueListEntry[] = [];

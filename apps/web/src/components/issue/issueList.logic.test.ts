@@ -281,15 +281,20 @@ describe("issue row keys", () => {
 });
 
 describe("partitioning with the hosts' own priority reads", () => {
+  const KEEP_ALL = () => true;
   const assignedRow = (number: number, updatedAt: string) =>
     entry({ number, updatedAt, assignees: [actor("Bilal")] });
+  const labelled = (row: IssueListEntry, name: string) => ({
+    ...row,
+    labels: [{ name, color: null }],
+  });
 
   it("keeps Others in feed order when a continuation lands a row already partitioned", () => {
     const older = entry({ number: 1, updatedAt: "2026-07-05T00:00:00Z" });
     const newer = entry({ number: 2, updatedAt: "2026-07-06T00:00:00Z" });
     const mine = assignedRow(3, "2026-07-04T00:00:00Z");
     // The assigned partition already holds the row the continuation carries.
-    const groups = partitionIssuesWithPriority([newer, older, mine], [], [mine]);
+    const groups = partitionIssuesWithPriority([newer, older, mine], [], [mine], KEEP_ALL);
     expect(groups.map((group) => group.key)).toEqual(["assigned", "others"]);
     expect(groups[0]!.entries.map((item) => item.number)).toEqual([3]);
     expect(groups[1]!.entries.map((item) => item.number)).toEqual([2, 1]);
@@ -298,7 +303,7 @@ describe("partitioning with the hosts' own priority reads", () => {
   it("appends a row the partition page missed to Others rather than moving it up", () => {
     const shown = entry({ number: 1, updatedAt: "2026-07-06T00:00:00Z" });
     const olderMine = assignedRow(9, "2026-01-01T00:00:00Z");
-    const groups = partitionIssuesWithPriority([shown, olderMine], [], []);
+    const groups = partitionIssuesWithPriority([shown, olderMine], [], [], KEEP_ALL);
     expect(groups).toHaveLength(1);
     expect(groups[0]!.entries.map((item) => item.number)).toEqual([1, 9]);
   });
@@ -307,7 +312,7 @@ describe("partitioning with the hosts' own priority reads", () => {
     const both = assignedRow(1, "2026-07-01T00:00:00Z");
     const filed = entry({ number: 2, updatedAt: "2026-07-02T00:00:00Z" });
     const filedOlder = entry({ number: 3, updatedAt: "2026-06-02T00:00:00Z" });
-    const groups = partitionIssuesWithPriority([], [both, filedOlder, filed], [both]);
+    const groups = partitionIssuesWithPriority([], [both, filedOlder, filed], [both], KEEP_ALL);
     expect(groups.map((group) => group.key)).toEqual(["assigned", "authored"]);
     expect(groups[0]!.entries.map((item) => item.number)).toEqual([1]);
     expect(groups[1]!.entries.map((item) => item.number)).toEqual([2, 3]);
@@ -316,8 +321,20 @@ describe("partitioning with the hosts' own priority reads", () => {
   it("lets the feed's copy of a partitioned row replace the partition's", () => {
     const stale = assignedRow(1, "2026-07-01T00:00:00Z");
     const fresh = { ...stale, title: "Retitled" };
-    const groups = partitionIssuesWithPriority([fresh], [], [stale]);
+    const groups = partitionIssuesWithPriority([fresh], [], [stale], KEEP_ALL);
     expect(groups[0]!.entries[0]!.title).toBe("Retitled");
+  });
+
+  it("narrows the partitions by whatever narrowed the feed", () => {
+    // The label filter runs on the page, after the partitions answered their own question.
+    const wanted = labelled(assignedRow(1, "2026-07-03T00:00:00Z"), "bug");
+    const unwanted = labelled(assignedRow(2, "2026-07-04T00:00:00Z"), "docs");
+    const filed = labelled(entry({ number: 3, updatedAt: "2026-07-05T00:00:00Z" }), "docs");
+    const groups = partitionIssuesWithPriority([wanted], [filed], [wanted, unwanted], (row) =>
+      row.labels.some((label) => label.name === "bug"),
+    );
+    expect(groups.map((group) => group.key)).toEqual(["assigned"]);
+    expect(groups[0]!.entries.map((item) => item.number)).toEqual([1]);
   });
 });
 

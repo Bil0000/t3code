@@ -759,7 +759,15 @@ function IssuesRouteView() {
     if (authored === undefined || assigned === undefined) {
       return groupIssuesByInvolvement(entries, viewers);
     }
-    return partitionIssuesWithPriority(entries, authored, assigned);
+    // The label is narrowed here rather than on the hosts, so the partitions arrived without it.
+    return partitionIssuesWithPriority(
+      entries,
+      authored,
+      assigned,
+      (entry) =>
+        search.label === undefined ||
+        entry.labels.some((entryLabel) => entryLabel.name === search.label),
+    );
   }, [
     assignedQuery.data?.entries,
     authoredQuery.data?.entries,
@@ -769,6 +777,7 @@ function IssuesRouteView() {
     partitionsWanted,
     scopeKey,
     search.involvement,
+    search.label,
     viewers,
   ]);
 
