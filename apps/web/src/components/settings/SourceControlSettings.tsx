@@ -4,6 +4,7 @@ import * as Option from "effect/Option";
 import { useState, type ReactNode } from "react";
 import type {
   BackgroundActivitySettings,
+  ChangeRequestLinkTarget,
   SourceControlProviderKind,
   SourceControlDiscoveryResult,
   SourceControlProviderAuth,
@@ -47,6 +48,7 @@ import {
   NumberFieldIncrement,
   NumberFieldInput,
 } from "../ui/number-field";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -437,34 +439,60 @@ function GitFetchIntervalSettings() {
   );
 }
 
+const CHANGE_REQUEST_LINK_TARGET_OPTIONS: Record<
+  ChangeRequestLinkTarget,
+  { readonly label: string; readonly description: string }
+> = {
+  app: {
+    label: "T3 Code",
+    description:
+      "Pull and merge request links to a repository in this workspace open on the Pull Requests page, or beside the thread they were written in.",
+  },
+  browser: {
+    label: "Browser",
+    description:
+      "Pull and merge request links open in your browser, like every other link in the app.",
+  },
+};
+
 function ChangeRequestLinkSettings() {
-  const opensInApp = useClientSettings((settings) => settings.openChangeRequestLinksInApp);
+  const target = useClientSettings((settings) => settings.changeRequestLinkTarget);
   const updateClientSettings = useUpdateClientSettings();
-  const defaultOpensInApp = DEFAULT_CLIENT_SETTINGS.openChangeRequestLinksInApp;
+  const defaultTarget = DEFAULT_CLIENT_SETTINGS.changeRequestLinkTarget;
 
   return (
     <SettingsSection title="Links">
       <SettingsRow
         {...searchableSetting("change-request-links")}
-        description="Open pull and merge request links to a repository in this workspace on the Pull Requests page, or beside the thread they were written in. Turn this off to open every one of them in your browser instead."
+        description={CHANGE_REQUEST_LINK_TARGET_OPTIONS[target].description}
         resetAction={
-          opensInApp !== defaultOpensInApp ? (
+          target !== defaultTarget ? (
             <SettingResetButton
               label="change request links"
-              onClick={() =>
-                updateClientSettings({ openChangeRequestLinksInApp: defaultOpensInApp })
-              }
+              onClick={() => updateClientSettings({ changeRequestLinkTarget: defaultTarget })}
             />
           ) : null
         }
         control={
-          <Switch
-            checked={opensInApp}
-            onCheckedChange={(checked) =>
-              updateClientSettings({ openChangeRequestLinksInApp: Boolean(checked) })
+          <Select
+            value={target}
+            onValueChange={(value) =>
+              updateClientSettings({ changeRequestLinkTarget: value as ChangeRequestLinkTarget })
             }
-            aria-label="Open change request links in T3 Code"
-          />
+          >
+            <SelectTrigger className="w-full sm:w-40" aria-label="Open change request links in">
+              <SelectValue>{CHANGE_REQUEST_LINK_TARGET_OPTIONS[target].label}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup align="end" alignItemWithTrigger={false}>
+              {(Object.keys(CHANGE_REQUEST_LINK_TARGET_OPTIONS) as ChangeRequestLinkTarget[]).map(
+                (option) => (
+                  <SelectItem key={option} hideIndicator value={option}>
+                    {CHANGE_REQUEST_LINK_TARGET_OPTIONS[option].label}
+                  </SelectItem>
+                ),
+              )}
+            </SelectPopup>
+          </Select>
         }
       />
     </SettingsSection>

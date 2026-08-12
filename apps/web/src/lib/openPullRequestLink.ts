@@ -55,7 +55,7 @@ export async function openPullRequestLink(
  * the thread's own change request — so the choice holds everywhere it is made for them.
  */
 export function useOpenChangeRequestLinksInApp(): boolean {
-  return useClientSettings((settings) => settings.openChangeRequestLinksInApp);
+  return useClientSettings((settings) => settings.changeRequestLinkTarget === "app");
 }
 
 /**
@@ -183,8 +183,8 @@ export function findProjectForChangeRequest(
  * should still be reading it afterwards. Any change request opens there, not only the thread's
  * own, since the panel is told which one to show.
  *
- * Readers who would rather stay in their browser turn `openChangeRequestLinksInApp` off, and every
- * such link is left alone here — the caller then treats it as the ordinary link it was.
+ * Readers who would rather stay in their browser set `changeRequestLinkTarget` to `browser`, and
+ * every such link is left alone here — the caller then treats it as the ordinary link it was.
  */
 export function useOpenChangeRequestLink(
   threadRef?: ScopedThreadRef,

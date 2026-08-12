@@ -100,6 +100,18 @@ export const TerminalFontSize = Schema.Int.check(
 export type TerminalFontSize = typeof TerminalFontSize.Type;
 export const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;
 
+/**
+ * Where a link to a change request on a connected host opens — a GitHub or
+ * Bitbucket pull request, a GitLab merge request, an Azure DevOps pull request,
+ * self-hosted installs included. `app` opens it beside the thread it was
+ * written in, or on the pull requests page; `browser` leaves it the ordinary
+ * link it was. Only links to a repository this workspace has checked out are
+ * ever claimed, so `browser` is the difference for those and nothing else.
+ */
+export const ChangeRequestLinkTarget = Schema.Literals(["app", "browser"]);
+export type ChangeRequestLinkTarget = typeof ChangeRequestLinkTarget.Type;
+export const DEFAULT_CHANGE_REQUEST_LINK_TARGET: ChangeRequestLinkTarget = "app";
+
 export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
 export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
@@ -112,6 +124,9 @@ export const FontFamilyPreference = Schema.String.check(Schema.isMaxLength(200))
 export type FontFamilyPreference = typeof FontFamilyPreference.Type;
 
 export const ClientSettingsSchema = Schema.Struct({
+  changeRequestLinkTarget: ChangeRequestLinkTarget.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_CHANGE_REQUEST_LINK_TARGET)),
+  ),
   confirmThreadArchive: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   dismissedProviderUpdateNotificationKeys: Schema.Array(TrimmedNonEmptyString).pipe(
@@ -168,15 +183,6 @@ export const ClientSettingsSchema = Schema.Struct({
       modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
-  // Whether a link to a change request on a connected host (a GitHub or
-  // Bitbucket pull request, a GitLab merge request, an Azure DevOps pull
-  // request) opens inside the app — beside the thread, or on the pull requests
-  // page — instead of in the system browser. Only links to a repository this
-  // workspace has checked out are ever claimed, so turning this off is the
-  // difference between opening them here and opening them in the browser.
-  openChangeRequestLinksInApp: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(true)),
-  ),
   // Legacy plan mode. The composer's Build/Plan toggle was removed from the
   // default UI; this beta flag restores it (plus the /plan and /default slash
   // commands) for users who still rely on the old workflow.
@@ -764,6 +770,7 @@ export const ServerSettingsPatch = Schema.Struct({
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 
 export const ClientSettingsPatch = Schema.Struct({
+  changeRequestLinkTarget: Schema.optionalKey(ChangeRequestLinkTarget),
   confirmThreadArchive: Schema.optionalKey(Schema.Boolean),
   confirmThreadDelete: Schema.optionalKey(Schema.Boolean),
   diffIgnoreWhitespace: Schema.optionalKey(Schema.Boolean),
@@ -799,7 +806,6 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
-  openChangeRequestLinksInApp: Schema.optionalKey(Schema.Boolean),
   planModeEnabled: Schema.optionalKey(Schema.Boolean),
   legacySidebarEnabled: Schema.optionalKey(Schema.Boolean),
   sidebarAutoSettleAfterDays: Schema.optionalKey(Schema.NullOr(SidebarAutoSettleAfterDays)),

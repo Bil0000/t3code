@@ -51,18 +51,23 @@ describe("ClientSettings glass opacity", () => {
 
 describe("ClientSettings change request links", () => {
   it("defaults to opening change request links in the app", () => {
-    expect(decodeClientSettings({}).openChangeRequestLinksInApp).toBe(true);
+    expect(decodeClientSettings({}).changeRequestLinkTarget).toBe("app");
   });
 
-  it("keeps a stored preference for the browser", () => {
-    expect(decodeClientSettings({ openChangeRequestLinksInApp: false })).toHaveProperty(
-      "openChangeRequestLinksInApp",
-      false,
-    );
-    expect(decodeClientSettingsPatch({ openChangeRequestLinksInApp: false })).toHaveProperty(
-      "openChangeRequestLinksInApp",
-      false,
-    );
+  it("accepts each target", () => {
+    for (const target of ["app", "browser"] as const) {
+      expect(
+        decodeClientSettings({ changeRequestLinkTarget: target }).changeRequestLinkTarget,
+      ).toBe(target);
+      expect(
+        decodeClientSettingsPatch({ changeRequestLinkTarget: target }).changeRequestLinkTarget,
+      ).toBe(target);
+    }
+  });
+
+  it("rejects a target it cannot open", () => {
+    expect(() => decodeClientSettings({ changeRequestLinkTarget: "editor" })).toThrow();
+    expect(() => decodeClientSettingsPatch({ changeRequestLinkTarget: "editor" })).toThrow();
   });
 });
 
