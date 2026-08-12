@@ -57,6 +57,19 @@ export function IssueLabelPicker({
 }) {
   const [query, setQuery] = useState("");
   const [pending, setPending] = useState<string | null>(null);
+  /**
+   * What the last successful write left on the host, against the prop it was built from.
+   *
+   * A write resolves before `onChanged()` can bring the detail back, so for that window the prop
+   * still says what the issue wore beforehand; a second toggle built on it would send the first
+   * one straight back off. What was written stands in until the prop reads as anything else — at
+   * which point the host has spoken more recently than this and takes over again, so a label put
+   * on elsewhere is not quietly taken off by the next toggle either.
+   */
+  const [written, setWritten] = useState<{
+    readonly base: string;
+    readonly labels: ReadonlyArray<string>;
+  } | null>(null);
 
   // Mounted with the menu closed, so nothing is asked of the host until it opens.
   const candidatesQuery = useEnvironmentQuery(
@@ -68,14 +81,17 @@ export function IssueLabelPicker({
     () => (candidatesQuery.data?.candidates ?? []).filter((entry) => matches(entry, query)),
     [candidatesQuery.data, query],
   );
-  const appliedNames = useMemo(() => new Set(applied), [applied]);
+  // Order is the host's, so the set is compared by content rather than by the array it arrived in.
+  const appliedKey = useMemo(() => applied.toSorted().join("\n"), [applied]);
+  const current = written !== null && written.base === appliedKey ? written.labels : applied;
+  const appliedNames = useMemo(() => new Set(current), [current]);
 
   const toggle = async (candidate: IssueLabelCandidate) => {
     if (pending !== null) return;
     const isApplied = appliedNames.has(candidate.name);
     const next = isApplied
-      ? applied.filter((name) => name !== candidate.name)
-      : [...applied, candidate.name];
+      ? current.filter((name) => name !== candidate.name)
+      : [...current, candidate.name];
     setPending(candidate.name);
     const result = await setLabels({ environmentId, input: { ...reference, labels: next } });
     setPending(null);
@@ -92,6 +108,7 @@ export function IssueLabelPicker({
       });
       return;
     }
+    setWritten({ base: appliedKey, labels: next });
     onChanged();
     candidatesQuery.refresh();
   };
