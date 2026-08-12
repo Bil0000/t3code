@@ -60,9 +60,18 @@ export function IssueAssigneePicker({
 
   const all = useMemo(() => candidatesQuery.data?.candidates ?? [], [candidatesQuery.data]);
   const candidates = useMemo(() => all.filter((entry) => matches(entry, query)), [all, query]);
+  /**
+   * A list the host cut short cannot be written from, so nothing here may be chosen while it is.
+   *
+   * The set is replaced whole and can only be spelled from this list, so anybody assigned past
+   * the end of it is not here to be kept and would come off the issue on the next write —
+   * silently, and to somebody the reader was never shown. Assigning stays with the host until the
+   * whole list is in hand.
+   */
+  const truncated = candidatesQuery.data?.truncated === true;
 
   const toggle = async (candidate: IssueAssigneeCandidate) => {
-    if (pending !== null) return;
+    if (pending !== null || truncated) return;
     // Every host writes assignees by replacing the whole set, and addresses a person by an
     // identifier the issue itself does not carry — GitLab assigns by numeric user id. So the set
     // is rebuilt from this list rather than from the issue's own assignees, which is also why
@@ -119,9 +128,10 @@ export function IssueAssigneePicker({
       }
       note={
         // Typing filters what arrived; it does not ask the host again, so this says what the list
-        // is rather than offering a search that would find nothing further.
-        candidatesQuery.data?.truncated === true
-          ? "This repository has more people with access than are listed here. Assign the rest on the host."
+        // is rather than offering a search that would find nothing further — and why the rows
+        // below it cannot be chosen.
+        truncated
+          ? "This repository has more people with access than are listed here, so choosing from here would take the issue off anybody past the end of the list. Change who is assigned on the host."
           : null
       }
     >
@@ -130,7 +140,7 @@ export function IssueAssigneePicker({
           key={candidate.id}
           checked={candidate.isAssigned}
           checkedLabel="Already assigned"
-          disabled={pending !== null}
+          disabled={pending !== null || truncated}
           onSelect={() => void toggle(candidate)}
         >
           <SourceControlActorLabel actor={candidate} className="min-w-0 flex-1 truncate" />
