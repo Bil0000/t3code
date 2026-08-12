@@ -424,4 +424,31 @@ layer((it) => {
       ]);
     }),
   );
+
+  it.effect("names the state Azure refused, which a bare command failure does not", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation(
+        () =>
+          Effect.fail(
+            new AzureDevOpsCli.AzureDevOpsCommandFailedError({
+              operation: "execute",
+              command: "az",
+              cwd: "/w",
+              argumentCount: 10,
+              cause: new Error("TF401320: Rule Error for field State."),
+            }),
+          ) as ReturnType<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>,
+      );
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+
+      const error = yield* Effect.flip(
+        cli.runWorkItemAction({ cwd: "/w", number: 7, action: "close" }),
+      );
+
+      // A project on the Basic or Scrum template has no `Closed` state, and nothing in az boards
+      // says so: the name that was written is the only clue the reader gets.
+      assert.strictEqual(error._tag, "AzureDevOpsWorkItemStateRefusedError");
+      expect(error.message).toContain('refused the state "Closed" for work item 7');
+    }),
+  );
 });

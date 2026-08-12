@@ -70,11 +70,36 @@ export class AzureDevOpsProjectUnknownError extends Schema.TaggedErrorClass<Azur
   }
 }
 
+/**
+ * A state Azure refused to write. Nothing in `az boards` reads a project's workflow, so the name
+ * that was attempted travels with the refusal: a process template without that state is the one
+ * explanation a bare command failure cannot give.
+ */
+export class AzureDevOpsWorkItemStateRefusedError extends Schema.TaggedErrorClass<AzureDevOpsWorkItemStateRefusedError>()(
+  "AzureDevOpsWorkItemStateRefusedError",
+  {
+    command: Schema.Literal("az"),
+    cwd: Schema.String,
+    number: Schema.Int,
+    state: Schema.String,
+    cause: Schema.Defect(),
+  },
+) {
+  get detail(): string {
+    return `Azure DevOps refused the state "${this.state}" for work item ${this.number}. Only the Agile and CMMI process templates have that state, and az reads no project's own workflow.`;
+  }
+
+  override get message(): string {
+    return `Azure CLI failed in runWorkItemAction: ${this.detail}`;
+  }
+}
+
 export type AzureDevOpsIssueCliError =
   | AzureDevOpsCli.AzureDevOpsCliError
   | AzureDevOpsIssueReadError
   | AzureDevOpsProjectUnknownError
-  | AzureDevOpsWorkItemIncompleteError;
+  | AzureDevOpsWorkItemIncompleteError
+  | AzureDevOpsWorkItemStateRefusedError;
 
 /**
  * Involvement as Azure can answer it. `mentioned` is left out rather than answered unnarrowed:
@@ -113,10 +138,11 @@ export class AzureDevOpsIssueCli extends Context.Service<
 >()("t3/issue/AzureDevOpsIssueCli") {}
 
 /**
- * The state a work item is moved into. Azure has no close or reopen verb — a state is written
- * like any other field — and the two names below are the ones every out-of-the-box process
- * template shares. A project that renamed its columns is refused by Azure itself, which names
- * the states it does have.
+ * The state a work item is moved into. Azure has no close or reopen verb — a state is written like
+ * any other field — and the two names below are the Agile and CMMI ones. A Basic project
+ * (`To Do`/`Doing`/`Done`) or a Scrum one (`New`/`Committed`/`Done`) has neither, and `az boards`
+ * has no command that reads a project's workflow: the write is attempted, and Azure's refusal is
+ * reported against the name it was refused for rather than as a bare command failure.
  */
 const ACTION_STATES: Record<IssueAction, string> = { close: "Closed", reopen: "Active" };
 
@@ -315,19 +341,29 @@ export const make = Effect.gen(function* () {
         ),
       ),
 
-    runWorkItemAction: (input) =>
-      executeJson({
+    runWorkItemAction: (input) => {
+      const state = ACTION_STATES[input.action];
+      return executeJson({
         cwd: input.cwd,
-        args: [
-          "boards",
-          "work-item",
-          "update",
-          "--id",
-          String(input.number),
-          "--state",
-          ACTION_STATES[input.action],
-        ],
-      }).pipe(Effect.asVoid),
+        args: ["boards", "work-item", "update", "--id", String(input.number), "--state", state],
+      }).pipe(
+        Effect.asVoid,
+        // Only the failure az reports for a rule it broke. An unusable tool or an unauthenticated
+        // one arrives under its own tag and keeps its own explanation.
+        Effect.catchTags({
+          AzureDevOpsCommandFailedError: (error) =>
+            Effect.fail(
+              new AzureDevOpsWorkItemStateRefusedError({
+                command: "az",
+                cwd: input.cwd,
+                number: input.number,
+                state,
+                cause: error,
+              }),
+            ),
+        }),
+      );
+    },
   });
 });
 
