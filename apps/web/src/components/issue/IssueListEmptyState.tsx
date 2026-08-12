@@ -14,7 +14,7 @@ import { PlusIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 
 import { openCommandPalette } from "../../commandPaletteBus";
 import { Button } from "../ui/button";
-import { IssueListGhost } from "./IssueGhosts";
+import { ListGhost } from "../sourceControl/ListGhosts";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyTitle } from "../ui/empty";
 
 /**
@@ -105,7 +105,8 @@ export function IssueListEmptyState({
     // The same ghost the first load wears, so a search on its way and a list on its way are
     // one state to the eye — with the question named where the group headers usually speak.
     return (
-      <IssueListGhost
+      <ListGhost
+        label="Loading issues"
         rows={5}
         caption={`Searching every host for “${query.length > 48 ? `${query.slice(0, 48)}…` : query}”`}
       />

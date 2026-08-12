@@ -42,7 +42,7 @@ import {
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
-import { PullRequestConversationGhost } from "./PullRequestGhosts";
+import { ConversationGhost } from "../sourceControl/ListGhosts";
 
 function MetaRow({
   icon,
@@ -431,7 +431,7 @@ export function PullRequestSummaryTab({
         }
       >
         {activityPending ? (
-          <PullRequestConversationGhost />
+          <ConversationGhost label="Loading pull request conversation" />
         ) : activityError ? (
           <PullRequestActivityUnavailableState compact error={activityError} onRetry={onRefresh} />
         ) : (

@@ -27,7 +27,7 @@ import { Button } from "../ui/button";
 import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { IssueDetailPanel, type IssueHandoffTarget } from "./IssueDetailPanel";
-import { IssueListGhost } from "./IssueGhosts";
+import { ListGhost } from "../sourceControl/ListGhosts";
 import { filterIssuesByInvolvement, issueEntryKey } from "./issueList.logic";
 import { IssueFiltersMenu, type IssueFilterOption } from "./IssueListFilters";
 import { IssueRow } from "./IssueRow";
@@ -365,7 +365,7 @@ function IssueBrowserList({
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-0.5 px-1 pb-2">
           {entries.length === 0 && listQuery.isPending ? (
-            <IssueListGhost rows={7} />
+            <ListGhost rows={7} label="Loading issues" />
           ) : listQuery.error !== null && listQuery.data === null ? (
             <p className="px-2 text-sm text-muted-foreground">{listQuery.error}</p>
           ) : entries.length === 0 ? (

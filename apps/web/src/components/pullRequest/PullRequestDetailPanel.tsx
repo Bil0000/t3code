@@ -77,7 +77,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { toastManager } from "../ui/toast";
-import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
+import { DetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
@@ -1349,11 +1349,11 @@ export function PullRequestDetailPanel({
           // The ghost wears the shape of the tab being waited on, so switching tabs mid-load
           // does not flash a summary outline under a timeline heading.
           tab === "timeline" ? (
-            <PullRequestTimelineGhost />
+            <TimelineGhost />
           ) : tab === "code" ? (
             <DiffPanelLoadingState label="Loading pull request diff..." />
           ) : (
-            <PullRequestDetailGhost />
+            <DetailGhost label="Loading pull request" />
           )
         ) : detailQuery.error && !detail ? (
           <PullRequestsUnavailableState error={detailQuery.error} onRetry={refreshDetail} />
@@ -1378,7 +1378,7 @@ export function PullRequestDetailPanel({
             {mountedTabs.has("timeline") ? (
               <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
                 {activityPending ? (
-                  <PullRequestTimelineGhost />
+                  <TimelineGhost />
                 ) : activityError ? (
                   <PullRequestActivityUnavailableState
                     error={activityError}

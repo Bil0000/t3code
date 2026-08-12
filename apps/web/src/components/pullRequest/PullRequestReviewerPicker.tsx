@@ -22,7 +22,7 @@ import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { toastManager } from "../ui/toast";
-import { PullRequestPeopleGhost } from "./PullRequestGhosts";
+import { PeopleGhost } from "../sourceControl/ListGhosts";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { readableFailure } from "./pullRequestDetail.logic";
 
@@ -142,7 +142,7 @@ export function PullRequestReviewerPicker({
         </div>
         <div className="max-h-72 overflow-y-auto p-1">
           {candidatesQuery.isPending ? (
-            <PullRequestPeopleGhost rows={4} />
+            <PeopleGhost rows={4} />
           ) : candidatesQuery.error !== null ? (
             <p className="p-2 text-xs text-muted-foreground">
               The people with access could not be read. {candidatesQuery.error}

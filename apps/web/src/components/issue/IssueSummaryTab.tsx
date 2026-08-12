@@ -33,7 +33,7 @@ import { toastManager } from "../ui/toast";
 import { IssueActivityUnavailableState } from "./IssueActivityUnavailableState";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
 import { LINK_PULL_REQUESTS_HANDOFF_KIND } from "./issueDetail.logic";
-import { IssueConversationGhost } from "./IssueGhosts";
+import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueLabelChips } from "./issuePresentation";
 
@@ -457,7 +457,7 @@ export function IssueSummaryTab({
         {...(activityPending || activityError ? {} : { count: detail.commentCount })}
       >
         {activityPending ? (
-          <IssueConversationGhost />
+          <ConversationGhost label="Loading issue conversation" />
         ) : activityError ? (
           <IssueActivityUnavailableState compact error={activityError} onRetry={onRefresh} />
         ) : (

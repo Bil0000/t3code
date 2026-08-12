@@ -39,7 +39,7 @@ import {
 } from "../components/issue/issueList.logic";
 import { IssueCreateDialog } from "../components/issue/IssueCreateDialog";
 import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
-import { IssueListGhost } from "../components/issue/IssueGhosts";
+import { ListGhost } from "../components/sourceControl/ListGhosts";
 import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
 import {
   IssueFiltersMenu,
@@ -935,18 +935,18 @@ function IssuesRouteView() {
   const listBody = (
     <>
       {!capabilityKnown ? (
-        <IssueListGhost rows={7} />
+        <ListGhost rows={7} label="Loading issues" />
       ) : !issuesSupported ? (
         <IssuesUnavailableState
           title="Issues unavailable"
           error="Update this environment's T3 Code server to browse issues."
         />
       ) : firstLoad ? (
-        <IssueListGhost rows={7} />
+        <ListGhost rows={7} label="Loading issues" />
       ) : listQuery.error && listData === null ? (
         <IssuesUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
       ) : carriedToNothing ? (
-        <IssueListGhost rows={7} />
+        <ListGhost rows={7} label="Loading issues" />
       ) : entries.length === 0 ? (
         <IssueListEmptyState
           hasProjects={!projectsKnown || projects.length > 0}

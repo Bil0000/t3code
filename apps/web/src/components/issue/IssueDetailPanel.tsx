@@ -66,7 +66,7 @@ import {
   type IssueHandoff,
   type IssueHandoffSource,
 } from "./issueDetail.logic";
-import { IssueDetailGhost, IssueTimelineGhost } from "./IssueGhosts";
+import { DetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
 import { IssueSummaryTab } from "./IssueSummaryTab";
 import { IssuesUnavailableState } from "./IssuesUnavailableState";
 import { IssueTimelineTab } from "./IssueTimelineTab";
@@ -890,9 +890,9 @@ export function IssueDetailPanel({
           // The ghost wears the shape of the tab being waited on, so switching tabs mid-load
           // does not flash a summary outline under a timeline heading.
           tab === "timeline" ? (
-            <IssueTimelineGhost />
+            <TimelineGhost />
           ) : (
-            <IssueDetailGhost />
+            <DetailGhost label="Loading issue" />
           )
         ) : detailQuery.error && !detail ? (
           <IssuesUnavailableState error={detailQuery.error} onRetry={refreshDetail} />
@@ -926,7 +926,7 @@ export function IssueDetailPanel({
             {mountedTabs.has("timeline") ? (
               <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
                 {activityPending ? (
-                  <IssueTimelineGhost />
+                  <TimelineGhost />
                 ) : activityError ? (
                   <IssueActivityUnavailableState
                     error={activityError}
