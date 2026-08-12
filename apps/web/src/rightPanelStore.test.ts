@@ -464,6 +464,71 @@ describe("rightPanelStore", () => {
     expect(state.activeSurfaceId).toBe(issueSurfaceId(first));
   });
 
+  it("keeps the issue browser one tab while the issue it shows changes", () => {
+    const target = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4909 };
+    useRightPanelStore.getState().openIssues(refA);
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "issues",
+      surfaces: [{ id: "issues", kind: "issues", selected: null }],
+    });
+
+    useRightPanelStore.getState().selectIssueInPanel(refA, target);
+    // Reopening from the chooser must not throw away what the reader is reading.
+    useRightPanelStore.getState().openIssues(refA);
+    expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      isOpen: true,
+      activeSurfaceId: "issues",
+      surfaces: [{ id: "issues", kind: "issues", selected: target }],
+    });
+
+    useRightPanelStore.getState().selectIssueInPanel(refA, null);
+    expect(selectActiveRightPanelSurface(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
+      id: "issues",
+      kind: "issues",
+      selected: null,
+    });
+  });
+
+  it("leaves per-issue surfaces alone when the browser's issue changes", () => {
+    const opened = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4909 };
+    const browsed = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4910 };
+    useRightPanelStore.getState().openIssue(refA, opened);
+    useRightPanelStore.getState().openIssues(refA);
+    useRightPanelStore.getState().selectIssueInPanel(refA, browsed);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces).toEqual([
+      { id: issueSurfaceId(opened), kind: "issue", ...opened },
+      { id: "issues", kind: "issues", selected: browsed },
+    ]);
+    expect(state.activeSurfaceId).toBe("issues");
+  });
+
+  it("forgets a persisted browser selection that no longer names an issue", () => {
+    expect(
+      migratePersistedRightPanelState({
+        byThreadKey: {
+          "env-1:thread-A": {
+            isOpen: true,
+            activeSurfaceId: "issues",
+            surfaces: [
+              { id: "issues", kind: "issues", selected: { repository: "pingdotgg/t3code" } },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "issues",
+          surfaces: [{ id: "issues", kind: "issues", selected: null }],
+        },
+      },
+    });
+  });
+
   it("tracks one surface per terminal session", () => {
     useRightPanelStore.getState().openTerminal(refA, "term-1");
     useRightPanelStore.getState().openTerminal(refA, "term-2");

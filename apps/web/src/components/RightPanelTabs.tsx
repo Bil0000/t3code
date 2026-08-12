@@ -29,7 +29,7 @@ import {
 } from "react";
 
 import { isElectron } from "~/env";
-import type { RightPanelSurface } from "~/rightPanelStore";
+import { issueSurfaceId, type RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
@@ -140,7 +140,6 @@ const SURFACE_UNAVAILABLE_HINTS = {
 type TabContextMenuAction = "copy-path" | "close" | "close-others" | "close-to-right" | "close-all";
 
 /** Stands in for a surface this panel does not offer, which is never reachable to press. */
-const noSurface = () => undefined;
 
 function DisabledReasonTooltip(props: { reason: string; trigger: ReactElement }) {
   return (
@@ -250,7 +249,7 @@ function RightPanelEmptyState(props: {
     },
     {
       label: "Issue",
-      description: "Pick an issue from this project.",
+      description: "Browse this project's issues.",
       icon: CircleDot,
       shortcut: "I",
       available: props.issueAvailable,
@@ -461,6 +460,9 @@ function surfaceTitle(
     case "pull-request":
     case "issue":
       return `#${surface.number}`;
+    // The strip says what the tab is showing, which for the browser is either of two things.
+    case "issues":
+      return surface.selected ? `#${surface.selected.number}` : "Issues";
     case "agents":
       return "Agents";
     case "preview": {
@@ -540,10 +542,18 @@ function SurfaceIcon({
                 : "text-muted-foreground";
       return <GitPullRequest className={cn("size-3 shrink-0", toneClassName)} />;
     }
-    case "issue": {
+    case "issue":
+    case "issues": {
       // Until the panel has read the issue, the tab wears the neutral glyph rather than
-      // claiming a state it has not been told.
-      const state = issueStatuses?.[surface.id] ?? null;
+      // claiming a state it has not been told. The browser wears the state of whichever issue
+      // it is showing, and the plain glyph while it is listing.
+      const statusKey =
+        surface.kind === "issue"
+          ? surface.id
+          : surface.selected
+            ? issueSurfaceId(surface.selected)
+            : null;
+      const state = (statusKey === null ? null : issueStatuses?.[statusKey]) ?? null;
       const presentation = state === null ? null : resolveIssueState(state);
       const Icon = presentation?.Icon ?? CircleDot;
       return (

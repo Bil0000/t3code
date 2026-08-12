@@ -146,7 +146,7 @@ import {
   usePreviewMiniPlayerStore,
 } from "../previewMiniPlayerStore";
 import { IssueDetailPanel } from "./issue/IssueDetailPanel";
-import { IssuePickerDialog } from "./issue/IssuePickerDialog";
+import { IssuesPanel } from "./issue/IssuesPanel";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
@@ -3310,9 +3310,9 @@ function ChatViewContent(props: ChatViewProps) {
     [activeProject, activeThreadRef, supportsPullRequests, threadRepository],
   );
   /**
-   * An issue opened as a tab in this thread's panel — picked from the surface chooser, or
-   * referenced by a pull request already open beside it. Only this view knows which thread's
-   * panel that is, which is why the panel is told rather than asking.
+   * An issue opened as its own tab in this thread's panel, referenced by a pull request already
+   * open beside it. Only this view knows which thread's panel that is, which is why the panel is
+   * told rather than asking.
    */
   const openLinkedIssue = useCallback(
     (link: { repository: string; number: number }) => {
@@ -4137,9 +4137,19 @@ function ChatViewContent(props: ChatViewProps) {
   }, [activeThreadPr, openThreadPullRequest]);
   const pullRequestSurfaceAvailable =
     supportsPullRequests && activeThreadPr !== null && threadRepository !== null;
-  // Which issue is not something this panel can know, so the chooser asks before it opens one.
-  const [issuePickerOpen, setIssuePickerOpen] = useState(false);
-  const addIssueSurface = useCallback(() => setIssuePickerOpen(true), []);
+  // Which issue is not something the chooser can know, so it opens the browser and the reader
+  // picks inside it — in the same tab, rather than as one more of them.
+  const addIssueSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().openIssues(activeThreadRef);
+  }, [activeThreadRef]);
+  const selectIssueInPanel = useCallback(
+    (target: { projectId: string; repository: string; number: number } | null) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().selectIssueInPanel(activeThreadRef, target);
+    },
+    [activeThreadRef],
+  );
   const issueSurfaceAvailable =
     supportsIssues && activeProject !== null && threadRepository !== null;
   const supportsSettlement = serverConfig?.environment.capabilities.threadSettlement === true;
@@ -6147,6 +6157,19 @@ function ChatViewContent(props: ChatViewProps) {
         onStateChange={handleIssueTabStatusChange}
         onOpenLinkedPullRequest={(link) => openThreadPullRequest(link.number)}
       />
+    ) : activeRightPanelSurface?.kind === "issues" && activeProject && activeProjectRef ? (
+      <IssuesPanel
+        environmentId={activeThread.environmentId}
+        projectId={activeProject.id}
+        selected={activeRightPanelSurface.selected}
+        onSelect={selectIssueInPanel}
+        handoffTarget={{
+          kind: "existing-thread",
+          projectRef: activeProjectRef,
+          draftId: composerDraftTarget,
+        }}
+        onStateChange={handleIssueTabStatusChange}
+      />
     ) : activeRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel
         model={agentPanelModel}
@@ -6648,18 +6671,6 @@ function ChatViewContent(props: ChatViewProps) {
             {rightPanelContent}
           </RightPanelTabs>
         </RightPanelSheet>
-      ) : null}
-
-      {/* Mounted once for the thread rather than with the chooser, so opening it is a state
-          change and not a fresh subscription; it reads nothing while it is closed. */}
-      {activeThread && activeProject && issueSurfaceAvailable ? (
-        <IssuePickerDialog
-          open={issuePickerOpen}
-          onOpenChange={setIssuePickerOpen}
-          environmentId={activeThread.environmentId}
-          projectId={activeProject.id}
-          onSelect={openLinkedIssue}
-        />
       ) : null}
 
       {expandedImage && (

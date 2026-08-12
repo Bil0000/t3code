@@ -22,6 +22,7 @@ export const RIGHT_PANEL_KINDS = [
   "terminal",
   "pull-request",
   "issue",
+  "issues",
   "agents",
 ] as const;
 export type RightPanelKind = (typeof RIGHT_PANEL_KINDS)[number];
@@ -68,6 +69,15 @@ export type RightPanelSurface =
       repository: string;
       number: number;
     }
+  | {
+      /**
+       * The issue browser: one per thread, like the agents surface. It shows the project's issues,
+       * or the one issue picked out of them — picking changes this tab rather than adding one.
+       */
+      id: "issues";
+      kind: "issues";
+      selected: { projectId: string; repository: string; number: number } | null;
+    }
   | { id: "agents"; kind: "agents" };
 
 const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
@@ -75,7 +85,8 @@ const RIGHT_PANEL_STORAGE_KEY = "t3code:right-panel-state:v2";
 // v10 keys pull-request surfaces by reference instead of a singleton tab.
 // v11 stops persisting the pull-request list's shared panel, so a restart opens the page fresh.
 // v12 adds the "issue" surface kind and stops persisting the issues list's shared panel.
-const RIGHT_PANEL_STORAGE_VERSION = 12;
+// v13 adds the "issues" browser surface, which carries the issue it is showing.
+const RIGHT_PANEL_STORAGE_VERSION = 13;
 
 /**
  * The pull-request list's shared panel (see PULL_REQUESTS_PANEL_ID in the route) is session
@@ -96,7 +107,7 @@ interface RightPanelStoreState {
   byThreadKey: Record<string, ThreadRightPanelState>;
   open: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "issue">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "issue" | "issues">,
   ) => void;
   openBrowser: (ref: ScopedThreadRef, tabId: string | null) => void;
   openFile: (ref: ScopedThreadRef, relativePath: string, line?: number) => void;
@@ -107,6 +118,12 @@ interface RightPanelStoreState {
   openIssue: (
     ref: ScopedThreadRef,
     target: { projectId: string; repository: string; number: number },
+  ) => void;
+  openIssues: (ref: ScopedThreadRef) => void;
+  /** What the issue browser is showing: an issue, or null for the list it was picked from. */
+  selectIssueInPanel: (
+    ref: ScopedThreadRef,
+    target: { projectId: string; repository: string; number: number } | null,
   ) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
@@ -129,7 +146,7 @@ interface RightPanelStoreState {
   toggleVisibility: (ref: ScopedThreadRef) => void;
   toggle: (
     ref: ScopedThreadRef,
-    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "issue">,
+    kind: Exclude<RightPanelKind, "file" | "terminal" | "pull-request" | "issue" | "issues">,
   ) => void;
   removeThread: (ref: ScopedThreadRef) => void;
 }
@@ -141,7 +158,10 @@ const EMPTY_THREAD_STATE: ThreadRightPanelState = {
 };
 
 const singletonSurface = (
-  kind: Exclude<RightPanelKind, "file" | "preview" | "terminal" | "pull-request" | "issue">,
+  kind: Exclude<
+    RightPanelKind,
+    "file" | "preview" | "terminal" | "pull-request" | "issue" | "issues"
+  >,
 ): RightPanelSurface => {
   switch (kind) {
     case "diff":
@@ -224,6 +244,24 @@ export function issueSurface(target: {
     repository: target.repository,
     number: target.number,
   };
+}
+
+export type IssuesSurface = Extract<RightPanelSurface, { kind: "issues" }>;
+
+/** A persisted selection is only usable if it still names an issue, so a broken one reads as none. */
+function normalizeIssueSelection(value: unknown): IssuesSurface["selected"] {
+  if (!value || typeof value !== "object") return null;
+  const { projectId, repository, number } = value as Record<string, unknown>;
+  if (
+    typeof projectId !== "string" ||
+    typeof repository !== "string" ||
+    typeof number !== "number" ||
+    !Number.isSafeInteger(number) ||
+    number < 1
+  ) {
+    return null;
+  }
+  return { projectId, repository, number };
 }
 
 const upsertSurface = (
@@ -319,6 +357,15 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                         return [];
                       }
                       return [issueSurface(surface)];
+                    }
+                    if (surface.kind === "issues") {
+                      return [
+                        {
+                          id: "issues",
+                          kind: "issues",
+                          selected: normalizeIssueSelection(surface.selected),
+                        },
+                      ];
                     }
                     if (surface.kind !== "terminal") return [surface];
                     if (
@@ -416,6 +463,23 @@ export const useRightPanelStore = create<RightPanelStoreState>()(
           byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => {
             return upsertSurface(current, issueSurface(target));
           }),
+        })),
+      openIssues: (ref) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) =>
+            // Reopening keeps whatever the surface was showing: `upsertSurface` leaves an existing
+            // tab alone, so this only ever activates the one that is already there.
+            upsertSurface(current, { id: "issues", kind: "issues", selected: null }),
+          ),
+        })),
+      selectIssueInPanel: (ref, target) =>
+        set((state) => ({
+          byThreadKey: updateThread(state.byThreadKey, scopedThreadKey(ref), (current) => ({
+            ...current,
+            surfaces: current.surfaces.map((surface) =>
+              surface.kind === "issues" ? { ...surface, selected: target } : surface,
+            ),
+          })),
         })),
       openFile: (ref, relativePath, line) =>
         set((state) => ({
