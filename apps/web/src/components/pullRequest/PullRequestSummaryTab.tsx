@@ -16,7 +16,7 @@ import {
   TagIcon,
   UsersIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { useAtomCommand } from "~/state/use-atom-command";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -50,6 +50,7 @@ import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
+import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
 
 /** A host colour only when it is one, so a malformed value falls back to the neutral dot. */
 function labelDotColor(color: string | null): string | null {
@@ -221,12 +222,39 @@ function Section({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const headingRef = useRef<HTMLDivElement>(null);
+  const setOpenWithScrollAnchor = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      const heading = headingRef.current;
+      const section = heading?.closest<HTMLElement>("[data-pull-request-summary-section]");
+      const scroller = heading?.closest<HTMLElement>("[data-pull-request-summary-scroll]");
+      if (heading && section && scroller) {
+        const target = sectionCollapseAnchorScrollTop({
+          scrollTop: scroller.scrollTop,
+          viewportTop: scroller.getBoundingClientRect().top,
+          sectionTop: section.getBoundingClientRect().top,
+          headingTop: heading.getBoundingClientRect().top,
+        });
+        // Synchronous with the press: React commits the collapsed height before the browser
+        // paints, so the reader sees the heading they pressed stay put rather than a jump first.
+        if (target !== null) scroller.scrollTop = target;
+      }
+    }
+    setOpen(nextOpen);
+  };
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
+    <Collapsible
+      open={open}
+      onOpenChange={setOpenWithScrollAnchor}
+      data-pull-request-summary-section
+    >
       {/* The heading rides the top of the scroll box the way a diff's file header does, so a
           section can be collapsed from wherever its body has been read to rather than only from
           where it started. Opaque, because the rows it covers scroll beneath it. */}
-      <div className="sticky top-0 z-10 flex w-full items-center border-t border-border/60 bg-background pr-4">
+      <div
+        ref={headingRef}
+        className="sticky top-0 z-10 flex w-full items-center border-t border-border/60 bg-background pr-4"
+      >
         {/* Title first, chevron riding to its right, count last: the row reads as a heading
             with an affordance rather than a tree node. */}
         <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
@@ -326,6 +354,8 @@ export function PullRequestSummaryTab({
   activityPending,
   activityError,
   pendingFinding,
+  fixFindingLabel = "Fix in a thread",
+  fixCheckLabel = "Fix",
   onFixFinding,
   onRefresh,
 }: {
@@ -336,6 +366,8 @@ export function PullRequestSummaryTab({
   activityError: string | null;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
+  fixFindingLabel?: string;
+  fixCheckLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
   onRefresh: () => void;
 }) {
@@ -422,7 +454,7 @@ export function PullRequestSummaryTab({
   };
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto" data-pull-request-summary-scroll>
       <section className="px-4 py-3">
         <div>
           <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
@@ -591,7 +623,9 @@ export function PullRequestSummaryTab({
                       onClick={() => onFixFinding(finding)}
                     >
                       <HammerIcon className="size-3" />
-                      {pendingFinding === pullRequestFindingKey(finding) ? "Preparing..." : "Fix"}
+                      {pendingFinding === pullRequestFindingKey(finding)
+                        ? "Preparing..."
+                        : fixCheckLabel}
                     </Button>
                   ) : null}
                 </div>
@@ -715,7 +749,7 @@ export function PullRequestSummaryTab({
                             <HammerIcon className="size-3" />
                             {pendingFinding === pullRequestFindingKey(finding)
                               ? "Preparing..."
-                              : "Fix in a thread"}
+                              : fixFindingLabel}
                           </Button>
                         ) : null}
                       </div>

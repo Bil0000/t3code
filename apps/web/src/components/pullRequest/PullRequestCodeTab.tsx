@@ -170,6 +170,7 @@ export function PullRequestCodeTab({
   selectedCommitOid,
   onSelectedCommitChange,
   pendingFinding,
+  fixFindingLabel = "Fix in a thread",
   onFixFinding,
   onAskAboutSelection,
   onRefresh,
@@ -183,6 +184,7 @@ export function PullRequestCodeTab({
   onSelectedCommitChange: (oid: string | null) => void;
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
+  fixFindingLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
   /** Absent where a selection has no agent to go to, which takes the Ask button off the box. */
   onAskAboutSelection?: (input: PullRequestAskSelectionInput) => void;
@@ -776,6 +778,7 @@ export function PullRequestCodeTab({
         reference={reference}
         pending={threadPending}
         fixPending={pendingFinding === pullRequestFindingKey({ kind: "thread", thread })}
+        fixLabel={fixFindingLabel}
         {...(onFixFinding ? { onFix: () => onFixFinding({ kind: "thread", thread }) } : {})}
         onReply={(body) =>
           runThreadCommand("Reply could not be posted", () =>
@@ -811,6 +814,7 @@ export function PullRequestCodeTab({
     [
       detail,
       environmentId,
+      fixFindingLabel,
       onRefresh,
       onFixFinding,
       pendingFinding,

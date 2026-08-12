@@ -104,6 +104,7 @@ import {
   handoffReviewComments,
   pullRequestActionNeedsHostRefresh,
   pullRequestFindingKey,
+  pullRequestHandoffLabels,
   readableFailure,
   resolveBaseFreshness,
   type PullRequestFinding,
@@ -659,6 +660,7 @@ export function PullRequestDetailPanel({
   // the branch is already checked out under it, so opening a second thread would only scatter
   // the work.
   const attachTarget = context === "thread" ? (composerDraftTarget ?? null) : null;
+  const handoffLabels = pullRequestHandoffLabels(attachTarget !== null);
 
   const writeTaskToComposer = (target: ScopedThreadRef | DraftId, task: ThreadTask) => {
     const store = useComposerDraftStore.getState();
@@ -1133,7 +1135,9 @@ export function PullRequestDetailPanel({
                     <span className="flex min-w-0 flex-col">
                       <span>{handoff === "ask" ? "Opening..." : "Ask a question"}</span>
                       <span className="text-xs text-muted-foreground">
-                        Opens a thread that knows which pull request you mean.
+                        {attachTarget !== null
+                          ? "Adds the pull request to this thread's composer."
+                          : "Opens a thread that knows which pull request you mean."}
                       </span>
                     </span>
                   </MenuItem>
@@ -1148,7 +1152,7 @@ export function PullRequestDetailPanel({
                   </MenuItem>
                   <MenuItem disabled={handoff !== null} onClick={startFixFindings}>
                     <HammerIcon className="size-3.5" />
-                    {handoff === "findings" ? "Preparing..." : "Fix findings in a thread"}
+                    {handoff === "findings" ? "Preparing..." : handoffLabels.fixFindings}
                   </MenuItem>
                   {pickableEnvironments.length > 0 ? (
                     <ActOnEnvironmentPicker
@@ -1249,7 +1253,7 @@ export function PullRequestDetailPanel({
                   {conflicting && primaryAction !== "resolve" ? (
                     <MenuItem disabled={handoff !== null} onClick={startResolveConflicts}>
                       <GitMergeIcon className="size-3.5" />
-                      {handoff === "conflicts" ? "Preparing..." : "Resolve conflicts in a thread"}
+                      {handoff === "conflicts" ? "Preparing..." : handoffLabels.resolveConflicts}
                     </MenuItem>
                   ) : null}
                   {detail.state === "open" && can("close") ? (
@@ -1613,7 +1617,7 @@ export function PullRequestDetailPanel({
                   disabled={handoff !== null}
                   onClick={startResolveConflicts}
                 >
-                  {handoff === "conflicts" ? "Preparing..." : "Resolve in a new thread"}
+                  {handoff === "conflicts" ? "Preparing..." : handoffLabels.resolve}
                   <ArrowUpRightIcon className="size-3.5 text-destructive" />
                 </Button>
               </div>
@@ -1777,6 +1781,8 @@ export function PullRequestDetailPanel({
                   activityPending={activityPending}
                   activityError={activityError}
                   pendingFinding={handoff}
+                  fixFindingLabel={handoffLabels.fixFinding}
+                  fixCheckLabel={handoffLabels.fixCheck}
                   onFixFinding={startFixFinding}
                   onRefresh={refreshDetail}
                 />
@@ -1814,6 +1820,7 @@ export function PullRequestDetailPanel({
                     selectedCommitOid={selectedCodeCommitOid}
                     onSelectedCommitChange={selectCodeCommit}
                     pendingFinding={handoff}
+                    fixFindingLabel={handoffLabels.fixFinding}
                     onFixFinding={startFixFinding}
                     onRefresh={refreshDetail}
                     refreshToken={refreshToken}

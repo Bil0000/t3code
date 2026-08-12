@@ -95,6 +95,7 @@ export function ReviewThreadCard({
   reference,
   pending,
   fixPending,
+  fixLabel = "Fix in a thread",
   onFix,
   onReply,
   canEditComment,
@@ -112,6 +113,7 @@ export function ReviewThreadCard({
   pending: boolean;
   /** True while this thread's own hand-off is preparing, so only its button says so. */
   fixPending?: boolean;
+  fixLabel?: string;
   /** Absent where a thread is shown outside the pull request page's reach. */
   onFix?: () => void;
   /** Resolves to whether the host took it, so a reply that failed keeps the words it was given. */
@@ -186,7 +188,7 @@ export function ReviewThreadCard({
             onClick={onFix}
           >
             <HammerIcon className="size-3" />
-            {fixPending ? "Preparing..." : "Fix in a thread"}
+            {fixPending ? "Preparing..." : fixLabel}
           </Button>
         ) : null}
         {canResolve ? (

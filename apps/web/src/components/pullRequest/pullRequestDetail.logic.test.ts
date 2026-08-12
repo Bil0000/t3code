@@ -20,6 +20,7 @@ import {
   orderPullRequestComments,
   pullRequestActionNeedsHostRefresh,
   pullRequestFindingKey,
+  pullRequestHandoffLabels,
   readableFailure,
   resolveBaseFreshness,
   buildPullRequestTimeline,
@@ -58,6 +59,28 @@ describe("pull request state description", () => {
     expect(describePullRequestState("open", false)).toBe("Ready for review");
     expect(describePullRequestState("merged", true)).toBe("Merged");
     expect(describePullRequestState("closed", false)).toBe("Closed");
+  });
+});
+
+describe("pull request handoff labels", () => {
+  it("names the open thread when actions write to its composer", () => {
+    expect(pullRequestHandoffLabels(true)).toEqual({
+      fixFinding: "Fix in this thread",
+      fixCheck: "Fix in this thread",
+      fixFindings: "Fix findings in this thread",
+      resolve: "Resolve in this thread",
+      resolveConflicts: "Resolve conflicts in this thread",
+    });
+  });
+
+  it("keeps the standalone pull request page labels", () => {
+    expect(pullRequestHandoffLabels(false)).toEqual({
+      fixFinding: "Fix in a thread",
+      fixCheck: "Fix",
+      fixFindings: "Fix findings in a thread",
+      resolve: "Resolve in a new thread",
+      resolveConflicts: "Resolve conflicts in a thread",
+    });
   });
 });
 
