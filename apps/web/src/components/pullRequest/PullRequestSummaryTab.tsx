@@ -6,14 +6,13 @@ import type {
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
-  ChevronRightIcon,
   HammerIcon,
   LinkIcon,
   MessageSquareIcon,
   SendIcon,
   UsersIcon,
 } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 
 import { useAtomCommand } from "~/state/use-atom-command";
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -22,7 +21,6 @@ import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Button } from "../ui/button";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -35,6 +33,7 @@ import {
 import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
+import { SummaryMetaRow, SummarySection } from "../sourceControl/SummaryMetaRow";
 import {
   LINK_ISSUES_HANDOFF_KIND,
   orderPullRequestComments,
@@ -43,69 +42,6 @@ import {
 } from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { ConversationGhost } from "../sourceControl/ListGhosts";
-
-function MetaRow({
-  icon,
-  label,
-  children,
-}: {
-  icon: ReactNode;
-  label: string;
-  children: ReactNode;
-}) {
-  return (
-    <div className="flex items-center gap-2 py-1.5 text-xs">
-      <span className="flex w-24 shrink-0 items-center gap-1.5 text-muted-foreground">
-        {icon}
-        {label}
-      </span>
-      <span className="min-w-0 flex-1 text-foreground">{children}</span>
-    </div>
-  );
-}
-
-function Section({
-  title,
-  count,
-  defaultOpen = true,
-  actions,
-  children,
-}: {
-  title: string;
-  count?: number;
-  defaultOpen?: boolean;
-  /** Controls riding on the heading row itself. A sibling of the trigger, not a child of it —
-      a button cannot hold a button — and only while open, since they act on what is shown. */
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="flex w-full items-center border-t border-border/60 pr-4">
-        {/* Title first, chevron riding to its right, count last: the row reads as a heading
-            with an affordance rather than a tree node. */}
-        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
-          <span>{title}</span>
-          <ChevronRightIcon
-            aria-hidden
-            className={cn(
-              "size-3.5 text-muted-foreground transition-transform",
-              open && "rotate-90",
-            )}
-          />
-          {count === undefined ? null : (
-            <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
-          )}
-        </CollapsibleTrigger>
-        {open ? actions : null}
-      </div>
-      <CollapsiblePanel>
-        <div className="px-4 pb-4">{children}</div>
-      </CollapsiblePanel>
-    </Collapsible>
-  );
-}
 
 function CommentComposer({
   environmentId,
@@ -237,7 +173,7 @@ export function PullRequestSummaryTab({
     <div className="h-full overflow-y-auto">
       <section className="px-4 py-3">
         <div>
-          <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
+          <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               {detail.reviewers.length === 0 ? (
                 <span className="text-muted-foreground">None</span>
@@ -282,8 +218,8 @@ export function PullRequestSummaryTab({
                 />
               ) : null}
             </span>
-          </MetaRow>
-          <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
+          </SummaryMetaRow>
+          <SummaryMetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
             {activityPending
               ? "Loading conversation…"
               : activityError
@@ -291,21 +227,21 @@ export function PullRequestSummaryTab({
                 : detail.commentCount === 1
                   ? "1 comment"
                   : `${detail.commentCount} comments`}
-          </MetaRow>
+          </SummaryMetaRow>
         </div>
       </section>
 
-      <Section title="Description">
+      <SummarySection title="Description">
         <PullRequestMarkdown
           text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
           cwd={detail.workspaceRoot}
         />
-      </Section>
+      </SummarySection>
 
       {/* Absent under a host that never answers this question, rather than empty: an empty
           section would say this change closes nothing, which such a host cannot know. */}
       {detail.linkedIssues === undefined ? null : (
-        <Section
+        <SummarySection
           title="Linked issues"
           count={detail.linkedIssues.length}
           // Offered whether or not anything is listed: a change that already closes one issue can
@@ -356,10 +292,10 @@ export function PullRequestSummaryTab({
               ))}
             </div>
           )}
-        </Section>
+        </SummarySection>
       )}
 
-      <Section title="Checks" count={detail.checks.length}>
+      <SummarySection title="Checks" count={detail.checks.length}>
         {detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
@@ -406,9 +342,9 @@ export function PullRequestSummaryTab({
             })}
           </div>
         )}
-      </Section>
+      </SummarySection>
 
-      <Section
+      <SummarySection
         title="Comments"
         {...(activityPending || activityError ? {} : { count: detail.commentCount })}
         actions={
@@ -541,7 +477,7 @@ export function PullRequestSummaryTab({
             onCommented={onRefresh}
           />
         ) : null}
-      </Section>
+      </SummarySection>
     </div>
   );
 }
