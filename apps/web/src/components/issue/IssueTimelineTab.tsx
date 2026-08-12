@@ -1,95 +1,17 @@
 import type { IssueDetailView } from "@t3tools/contracts";
-import { ChevronDownIcon, CircleDotIcon, MessageSquareIcon } from "lucide-react";
-import { useState } from "react";
+import { CircleDotIcon } from "lucide-react";
 
-import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { ConversationGroup } from "../sourceControl/ConversationGroup";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
-import { TimelineComment } from "../sourceControl/TimelineComment";
-import {
-  ActorName,
-  ActorTimelineMarker,
-  IconMarker,
-  uniqueConversationActors,
-} from "../sourceControl/TimelineRail";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { ActorName, IconMarker } from "../sourceControl/TimelineRail";
 import {
   buildIssueTimeline,
   groupIssueTimelineConversations,
   type IssueTimelineEntry,
 } from "./issueDetail.logic";
-
-function ConversationGroup({
-  entries,
-  cwd,
-  onOpen,
-}: {
-  entries: ReadonlyArray<IssueTimelineEntry>;
-  cwd: string;
-  onOpen: (url: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const actors = uniqueConversationActors(entries);
-  const first = entries[0];
-  if (first === undefined) return null;
-
-  return (
-    <div className="relative mb-5 pl-12 [contain-intrinsic-block-size:48px] [content-visibility:auto]">
-      <ActorTimelineMarker
-        actors={actors}
-        className="top-6"
-        fallback={<MessageSquareIcon className="size-3.5" />}
-        muted={!open}
-      />
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <div>
-          <CollapsibleTrigger
-            className={cn(
-              "flex w-full min-w-0 items-center gap-3 py-2 text-left transition-opacity hover:opacity-100",
-              open ? "text-foreground opacity-100" : "text-muted-foreground opacity-55",
-            )}
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block text-xs font-semibold">
-                {entries.length.toLocaleString()} {entries.length === 1 ? "comment" : "comments"}
-              </span>
-              <span className="block truncate text-[10px] text-muted-foreground">
-                {actors.length.toLocaleString()} {actors.length === 1 ? "author" : "authors"} ·{" "}
-                {formatRelativeTimeLabel(first.at)}
-              </span>
-            </span>
-            <ChevronDownIcon
-              aria-hidden
-              className={cn(
-                "size-3.5 shrink-0 text-muted-foreground transition-transform",
-                open && "rotate-180",
-              )}
-            />
-          </CollapsibleTrigger>
-          <CollapsiblePanel>
-            {open ? (
-              <div className="mt-1 space-y-1">
-                {entries.map((entry) => (
-                  <TimelineComment
-                    key={entry.id}
-                    actor={entry.actor}
-                    title={entry.title}
-                    at={entry.at}
-                    url={entry.url}
-                    onOpen={onOpen}
-                    body={entry.body === null ? null : <HostMarkdown text={entry.body} cwd={cwd} />}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </CollapsiblePanel>
-        </div>
-      </Collapsible>
-    </div>
-  );
-}
 
 /**
  * An event wears the issue glyph rather than whoever caused it. A face here is a filled disc on
@@ -138,8 +60,12 @@ export function IssueTimelineTab({
               <ConversationGroup
                 key={`comments:${row.entries[0]?.id ?? "empty"}`}
                 entries={row.entries}
-                cwd={detail.workspaceRoot}
                 onOpen={openOnHost}
+                renderBody={(entry) =>
+                  entry.body === null ? null : (
+                    <HostMarkdown text={entry.body} cwd={detail.workspaceRoot} />
+                  )
+                }
               />
             ) : (
               <TimelineEvent key={row.entry.id} entry={row.entry} />

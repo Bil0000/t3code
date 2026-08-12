@@ -1,27 +1,17 @@
 import type { PullRequestDetailView } from "@t3tools/contracts";
 import {
-  ChevronDownIcon,
   FileCode2Icon,
   GitCommitHorizontalIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
   GitPullRequestIcon,
-  MessageSquareIcon,
 } from "lucide-react";
-import { useState } from "react";
 
-import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import { TimelineComment } from "../sourceControl/TimelineComment";
-import {
-  ActorName,
-  ActorTimelineMarker,
-  IconMarker,
-  uniqueConversationActors,
-} from "../sourceControl/TimelineRail";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { ConversationGroup } from "../sourceControl/ConversationGroup";
+import { ActorName, ActorTimelineMarker, IconMarker } from "../sourceControl/TimelineRail";
 import {
   buildPullRequestTimeline,
   groupPullRequestTimelineConversations,
@@ -48,91 +38,6 @@ function ReviewStateBadge({ state }: { state: string }) {
     <span className="text-[10px] font-medium text-muted-foreground">
       {friendlyReviewState(state)}
     </span>
-  );
-}
-
-function ConversationGroup({
-  events,
-  cwd,
-  onOpen,
-}: {
-  events: ReadonlyArray<PullRequestTimelineEvent>;
-  cwd: string;
-  onOpen: (url: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const actors = uniqueConversationActors(events);
-  const first = events[0];
-  if (first === undefined) return null;
-
-  return (
-    <div className="relative mb-5 pl-12 [contain-intrinsic-block-size:48px] [content-visibility:auto]">
-      <ActorTimelineMarker
-        actors={actors}
-        className="top-6"
-        fallback={<MessageSquareIcon className="size-3.5" />}
-        muted={!open}
-      />
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <div>
-          <CollapsibleTrigger
-            className={cn(
-              "flex w-full min-w-0 items-center gap-3 py-2 text-left transition-opacity hover:opacity-100",
-              open ? "text-foreground opacity-100" : "text-muted-foreground opacity-55",
-            )}
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block text-xs font-semibold">
-                {events.length.toLocaleString()} {events.length === 1 ? "comment" : "comments"}
-              </span>
-              <span className="block truncate text-[10px] text-muted-foreground">
-                {actors.length.toLocaleString()} {actors.length === 1 ? "author" : "authors"} ·{" "}
-                {formatRelativeTimeLabel(first.at)}
-              </span>
-            </span>
-            <ChevronDownIcon
-              aria-hidden
-              className={cn(
-                "size-3.5 shrink-0 text-muted-foreground transition-transform",
-                open && "rotate-180",
-              )}
-            />
-          </CollapsibleTrigger>
-          <CollapsiblePanel>
-            {open ? (
-              <div className="mt-1 space-y-1">
-                {events.map((event) => (
-                  <TimelineComment
-                    key={event.id}
-                    actor={event.actor}
-                    title={event.title}
-                    at={event.at}
-                    url={event.url}
-                    onOpen={onOpen}
-                    badge={
-                      event.reviewState ? <ReviewStateBadge state={event.reviewState} /> : null
-                    }
-                    meta={
-                      event.path ? (
-                        <span className="inline-flex min-w-0 items-center gap-1">
-                          <FileCode2Icon aria-hidden className="size-3 shrink-0" />
-                          <span className="truncate">{event.path}</span>
-                        </span>
-                      ) : null
-                    }
-                    body={
-                      event.body ? (
-                        <TimelineBody body={event.body} markdown={event.markdown} cwd={cwd} />
-                      ) : null
-                    }
-                  />
-                ))}
-              </div>
-            ) : null}
-          </CollapsiblePanel>
-        </div>
-      </Collapsible>
-    </div>
   );
 }
 
@@ -235,9 +140,28 @@ export function PullRequestTimelineTab({
               return (
                 <ConversationGroup
                   key={`comments:${row.events[0]?.id ?? "empty"}`}
-                  events={row.events}
-                  cwd={detail.workspaceRoot}
+                  entries={row.events}
                   onOpen={openOnHost}
+                  renderBadge={(event) =>
+                    event.reviewState ? <ReviewStateBadge state={event.reviewState} /> : null
+                  }
+                  renderMeta={(event) =>
+                    event.path ? (
+                      <span className="inline-flex min-w-0 items-center gap-1">
+                        <FileCode2Icon aria-hidden className="size-3 shrink-0" />
+                        <span className="truncate">{event.path}</span>
+                      </span>
+                    ) : null
+                  }
+                  renderBody={(event) =>
+                    event.body ? (
+                      <TimelineBody
+                        body={event.body}
+                        markdown={event.markdown}
+                        cwd={detail.workspaceRoot}
+                      />
+                    ) : null
+                  }
                 />
               );
             }
