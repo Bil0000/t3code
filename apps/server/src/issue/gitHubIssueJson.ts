@@ -15,6 +15,7 @@ import type {
   IssueLinkedPullRequest,
   IssueState,
   IssueTemplate,
+  IssueTemplateField,
   IssueTemplateList,
   SourceControlActor,
   SourceControlLabel,
@@ -307,6 +308,86 @@ const RawIssueTemplatesSchema = Schema.Struct({
   }),
 });
 
+/** One file of `.github/ISSUE_TEMPLATE/`, with its text where the entry is a file at all. */
+const RawTreeEntrySchema = Schema.Struct({
+  name: Schema.String,
+  object: Schema.optional(
+    Schema.NullOr(Schema.Struct({ text: Schema.optional(Schema.NullOr(Schema.String)) })),
+  ),
+});
+
+/** Present for a path this repository has, null for one it does not — which is the whole test. */
+const RawObjectPresenceSchema = Schema.optional(
+  Schema.NullOr(Schema.Struct({ __typename: Schema.optional(Schema.NullOr(Schema.String)) })),
+);
+
+const RawIssueTemplateFormsSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      url: Schema.optional(Schema.NullOr(Schema.String)),
+      /** Null for a repository that keeps no template directory, which is most of them. */
+      forms: Schema.optional(
+        Schema.NullOr(
+          Schema.Struct({
+            entries: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+          }),
+        ),
+      ),
+      rootGuidelines: RawObjectPresenceSchema,
+      dotGitHubGuidelines: RawObjectPresenceSchema,
+      docsGuidelines: RawObjectPresenceSchema,
+    }),
+  }),
+});
+
+/**
+ * One question of an issue form, as `.github/ISSUE_TEMPLATE/*.yml` writes it. Every attribute is
+ * optional because they differ per `type`, and `type` is what decides which ones were meant —
+ * the same reason the timeline's union above is one flat shape.
+ */
+const RawFormFieldSchema = Schema.Struct({
+  type: Schema.String,
+  id: Schema.optional(Schema.NullOr(Schema.String)),
+  attributes: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        label: Schema.optional(Schema.NullOr(Schema.String)),
+        description: Schema.optional(Schema.NullOr(Schema.String)),
+        placeholder: Schema.optional(Schema.NullOr(Schema.String)),
+        /** The prose for a `markdown` field, and the prefilled answer for the two that take text. */
+        value: Schema.optional(Schema.NullOr(Schema.String)),
+        render: Schema.optional(Schema.NullOr(Schema.String)),
+        multiple: Schema.optional(Schema.NullOr(Schema.Boolean)),
+        /** Plain words for a dropdown, labelled boxes for checkboxes; read per kind below. */
+        options: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+      }),
+    ),
+  ),
+  validations: Schema.optional(
+    Schema.NullOr(Schema.Struct({ required: Schema.optional(Schema.NullOr(Schema.Boolean)) })),
+  ),
+});
+
+const RawCheckboxOptionSchema = Schema.Struct({
+  label: Schema.String,
+  required: Schema.optional(Schema.NullOr(Schema.Boolean)),
+});
+
+/**
+ * A whole issue form. `name` and `body` are the two GitHub's own schema insists on, so a file
+ * missing either is not a form and is left to the markdown read — which is where a `.md`
+ * template's front matter belongs anyway.
+ */
+const RawIssueFormSchema = Schema.Struct({
+  name: Schema.String,
+  description: Schema.optional(Schema.NullOr(Schema.String)),
+  title: Schema.optional(Schema.NullOr(Schema.String)),
+  /** Written as a list or as one comma-separated line, so neither shape is read as a schema. */
+  labels: Schema.optional(Schema.Unknown),
+  assignees: Schema.optional(Schema.Unknown),
+  body: Schema.Array(Schema.Unknown),
+});
+
 /**
  * `.github/ISSUE_TEMPLATE/config.yml`, whose two settings are the rest of what GitHub's own chooser
  * shows. Everything is optional because the file itself is: a repository with templates and no
@@ -543,6 +624,31 @@ export const ISSUE_TEMPLATES_GRAPHQL_QUERY = `query($owner: String!, $name: Stri
       assignees(first: ${TEMPLATE_ASSIGNEES}) { nodes { login } }
       labels(first: ${TEMPLATE_LABELS}) { nodes { name } }
     }
+  }
+}`;
+
+/**
+ * The template directory with every file's text in it, and the paths GitHub itself looks for
+ * contributing guidelines at.
+ *
+ * The forms are read as the files they are because `repository.issueTemplates` above names a form
+ * and its labels but says nothing about the questions it asks — a form read through that alone
+ * arrives as an empty body, which is a composer that asks none of them. One tree read rather than a
+ * request per file, and from `HEAD`, so this stays the same one request against the same branch the
+ * markdown templates came from.
+ *
+ * The three guideline paths are the ones GitHub honours, asked for by presence alone: a link is
+ * only worth showing where the file behind it is really there.
+ */
+export const ISSUE_TEMPLATE_FORMS_GRAPHQL_QUERY = `query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    url
+    forms: object(expression: "HEAD:.github/ISSUE_TEMPLATE") {
+      ... on Tree { entries { name object { ... on Blob { text } } } }
+    }
+    rootGuidelines: object(expression: "HEAD:CONTRIBUTING.md") { __typename }
+    dotGitHubGuidelines: object(expression: "HEAD:.github/CONTRIBUTING.md") { __typename }
+    docsGuidelines: object(expression: "HEAD:docs/CONTRIBUTING.md") { __typename }
   }
 }`;
 
@@ -857,6 +963,11 @@ const decodeLabelEntry = Schema.decodeUnknownExit(RawLabelSchema);
 const decodeCreatedIssue = decodeJsonResult(RawCreatedIssueSchema);
 const decodeIssueTemplates = decodeJsonResult(RawIssueTemplatesSchema);
 const decodeIssueTemplateEntry = Schema.decodeUnknownExit(RawIssueTemplateSchema);
+const decodeIssueTemplateForms = decodeJsonResult(RawIssueTemplateFormsSchema);
+const decodeTreeEntry = Schema.decodeUnknownExit(RawTreeEntrySchema);
+const decodeIssueForm = Schema.decodeUnknownExit(RawIssueFormSchema);
+const decodeFormField = Schema.decodeUnknownExit(RawFormFieldSchema);
+const decodeCheckboxOption = Schema.decodeUnknownExit(RawCheckboxOptionSchema);
 const decodeIssueTemplateConfig = Schema.decodeUnknownExit(RawIssueTemplateConfigSchema);
 const decodeContactLinkEntry = Schema.decodeUnknownExit(RawContactLinkSchema);
 
@@ -1197,6 +1308,189 @@ export function decodeIssueTemplatesJson(
     });
   }
   return Result.succeed(templates);
+}
+
+/**
+ * The names a form wrote, however it wrote them: GitHub's schema takes a YAML list and a single
+ * comma-separated line, and a form using the second is not a broken one. Anything that is not a
+ * word is dropped, so one stray entry cannot cost a form its labels.
+ */
+function toNameList(value: unknown): ReadonlyArray<string> {
+  const written: unknown = typeof value === "string" ? value.split(",") : value;
+  if (!Array.isArray(written)) return [];
+  const entries: ReadonlyArray<unknown> = written;
+  return entries.flatMap((entry) => {
+    const name = typeof entry === "string" ? trimmed(entry) : null;
+    return name === null ? [] : [name];
+  });
+}
+
+/**
+ * One question of a form, or null for one this composer has no control for. An unknown kind is
+ * dropped rather than guessed at: a question rendered as the wrong thing files the wrong answer,
+ * and the rest of the form is still worth asking.
+ */
+function toTemplateField(
+  raw: Schema.Schema.Type<typeof RawFormFieldSchema>,
+  index: number,
+): IssueTemplateField | null {
+  const attributes = raw.attributes;
+  const label = attributes?.label ?? "";
+  const description = attributes?.description ?? "";
+  const required = raw.validations?.required === true;
+  // A form need not name a question. Where it does not, the place it is asked in files the answer.
+  const id = trimmed(raw.id) ?? `field-${index}`;
+  // Every kind but `markdown` is a heading in the filed body, so one with nothing to head is not a
+  // question anybody could answer.
+  if (raw.type !== "markdown" && trimmed(label) === null) return null;
+  switch (raw.type) {
+    case "markdown": {
+      const value = attributes?.value ?? "";
+      return value.length === 0 ? null : { kind: "markdown", value };
+    }
+    case "input":
+      return {
+        kind: "input",
+        id,
+        label,
+        description,
+        placeholder: attributes?.placeholder ?? "",
+        value: attributes?.value ?? "",
+        required,
+      };
+    case "textarea":
+      return {
+        kind: "textarea",
+        id,
+        label,
+        description,
+        placeholder: attributes?.placeholder ?? "",
+        value: attributes?.value ?? "",
+        render: trimmed(attributes?.render),
+        required,
+      };
+    case "dropdown": {
+      const options = toNameList(attributes?.options);
+      return options.length === 0
+        ? null
+        : {
+            kind: "dropdown",
+            id,
+            label,
+            description,
+            options,
+            multiple: attributes?.multiple === true,
+            required,
+          };
+    }
+    case "checkboxes": {
+      const options = (attributes?.options ?? []).flatMap((entry) => {
+        const option = decodeCheckboxOption(entry);
+        if (Exit.isFailure(option)) return [];
+        const optionLabel = trimmed(option.value.label);
+        return optionLabel === null
+          ? []
+          : [{ label: optionLabel, required: option.value.required === true }];
+      });
+      return options.length === 0 ? null : { kind: "checkboxes", id, label, description, options };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * One `.github/ISSUE_TEMPLATE/*.yml` as the template it describes, or null for a file that is not a
+ * form at all — a config, half-written YAML, something else that landed in the directory. Null
+ * rather than a failure, because a repository's other templates and the blank issue filing falls
+ * back to must survive one file nobody can read.
+ */
+export function decodeIssueFormYaml(filename: string, raw: string): IssueTemplate | null {
+  let parsed: unknown;
+  try {
+    parsed = parseYamlDocument(raw);
+  } catch {
+    return null;
+  }
+  const form = decodeIssueForm(parsed);
+  if (Exit.isFailure(form)) return null;
+  const key = trimmed(filename);
+  const name = trimmed(form.value.name);
+  if (key === null || name === null) return null;
+  return {
+    key,
+    name,
+    about: form.value.description ?? "",
+    title: form.value.title ?? "",
+    // A form has no draft to write over: its body is built from the answers instead.
+    body: "",
+    fields: form.value.body.flatMap((entry, index) => {
+      const field = decodeFormField(entry);
+      if (Exit.isFailure(field)) return [];
+      const mapped = toTemplateField(field.value, index);
+      return mapped === null ? [] : [mapped];
+    }),
+    labels: toNameList(form.value.labels).slice(0, TEMPLATE_LABELS),
+    assignees: toNameList(form.value.assignees).slice(0, TEMPLATE_ASSIGNEES),
+  };
+}
+
+/** `config.yml` is the chooser's own settings rather than one of the things it offers, and a
+ *  markdown template is read through GitHub's own `issueTemplates` instead. */
+function isFormFilename(name: string): boolean {
+  const lowered = name.toLowerCase();
+  if (lowered === "config.yml" || lowered === "config.yaml") return false;
+  return lowered.endsWith(".yml") || lowered.endsWith(".yaml");
+}
+
+function contributingPath(repository: {
+  readonly rootGuidelines?: unknown;
+  readonly dotGitHubGuidelines?: unknown;
+  readonly docsGuidelines?: unknown;
+}): string | null {
+  if (repository.rootGuidelines != null) return "CONTRIBUTING.md";
+  if (repository.dotGitHubGuidelines != null) return ".github/CONTRIBUTING.md";
+  if (repository.docsGuidelines != null) return "docs/CONTRIBUTING.md";
+  return null;
+}
+
+export interface GitHubIssueForms {
+  /** The forms as templates, keyed by filename the way GitHub's own template list keys them. */
+  readonly forms: ReadonlyArray<IssueTemplate>;
+  readonly contributingGuidelinesUrl: string | undefined;
+}
+
+/**
+ * Every issue form the repository keeps, and where it wrote down how to contribute. A file that
+ * cannot be read is skipped and the rest still arrive, the same way one malformed template does not
+ * take the others with it.
+ */
+export function decodeIssueTemplateFormsJson(
+  raw: string,
+): Result.Result<GitHubIssueForms, DecodeFailure> {
+  const decoded = decodeIssueTemplateForms(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const repository = decoded.success.data.repository;
+  const forms: Array<IssueTemplate> = [];
+  for (const entry of repository.forms?.entries ?? []) {
+    const file = decodeTreeEntry(entry);
+    if (Exit.isFailure(file)) continue;
+    const text = file.value.object?.text;
+    if (text == null || !isFormFilename(file.value.name)) continue;
+    const form = decodeIssueFormYaml(file.value.name, text);
+    if (form !== null) forms.push(form);
+  }
+  const repositoryUrl = trimmed(repository.url);
+  const guidelines = contributingPath(repository);
+  return Result.succeed({
+    forms,
+    contributingGuidelinesUrl:
+      repositoryUrl === null || guidelines === null
+        ? undefined
+        : `${repositoryUrl}/blob/HEAD/${guidelines}`,
+  });
 }
 
 /** What a repository that configured nothing offers, which is what GitHub itself defaults to. */

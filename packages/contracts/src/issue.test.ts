@@ -2,18 +2,23 @@ import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  buildIssueTemplateBody,
   IssueCreateInput,
   IssueDetail,
   IssueListInput,
   IssueListResult,
   IssueTemplateList,
+  issueTemplateAnswersComplete,
   IssueUpdateInput,
+  type IssueTemplateField,
 } from "./issue.ts";
 
 const decodeListResult = Schema.decodeUnknownSync(IssueListResult);
 const decodeListInput = Schema.decodeUnknownSync(IssueListInput);
 const decodeCreate = Schema.decodeUnknownSync(IssueCreateInput);
 const decodeUpdate = Schema.decodeUnknownSync(IssueUpdateInput);
+const decodeDetail = Schema.decodeUnknownSync(IssueDetail);
+const decodeTemplates = Schema.decodeUnknownSync(IssueTemplateList);
 
 const LIST_RESULT: IssueListResult = {
   viewers: { "github.com": "bilal", "gitlab.com": "bilal.hassan" },
@@ -156,7 +161,7 @@ describe("IssueUpdateInput", () => {
 
 describe("IssueDetail", () => {
   it("carries the change requests that reference it, marking the ones that close it", () => {
-    const detail = Schema.decodeUnknownSync(IssueDetail)({
+    const detail = decodeDetail({
       provider: "github",
       capabilities: {
         comment: true,
@@ -238,6 +243,54 @@ describe("IssueTemplateList", () => {
         labels: [],
         assignees: [],
       },
+      // A GitHub issue form, which asks questions instead of supplying a draft.
+      {
+        key: "feature.yml",
+        name: "Feature request",
+        about: "Ask for something new",
+        title: "[Feature]: ",
+        body: "",
+        fields: [
+          { kind: "markdown", value: "Thanks for taking the time." },
+          {
+            kind: "input",
+            id: "contact",
+            label: "Contact",
+            description: "How can we reach you",
+            placeholder: "you@example.com",
+            value: "",
+            required: false,
+          },
+          {
+            kind: "textarea",
+            id: "logs",
+            label: "Relevant log output",
+            description: "",
+            placeholder: "",
+            value: "",
+            render: "shell",
+            required: false,
+          },
+          {
+            kind: "dropdown",
+            id: "area",
+            label: "Area",
+            description: "",
+            options: ["Web", "Mobile"],
+            multiple: true,
+            required: true,
+          },
+          {
+            kind: "checkboxes",
+            id: "terms",
+            label: "Before submitting",
+            description: "",
+            options: [{ label: "I searched the existing issues", required: true }],
+          },
+        ],
+        labels: ["enhancement"],
+        assignees: [],
+      },
     ],
     contactLinks: [
       {
@@ -247,6 +300,7 @@ describe("IssueTemplateList", () => {
       },
     ],
     blankIssuesEnabled: false,
+    contributingGuidelinesUrl: "https://github.com/pingdotgg/t3code/blob/HEAD/CONTRIBUTING.md",
   };
 
   it("round-trips through the JSON codec the RPC serializes with", () => {
@@ -260,7 +314,7 @@ describe("IssueTemplateList", () => {
   // Not trimmed: a template body is markdown a repository wrote deliberately, headings, blank
   // lines and all, and the form it opens has to show exactly what the repository asks for.
   it("leaves a template body exactly as the repository wrote it", () => {
-    const decoded = Schema.decodeUnknownSync(IssueTemplateList)({
+    const decoded = decodeTemplates({
       ...TEMPLATES,
       templates: [{ ...TEMPLATES.templates[0], body: "  indented\n\n" }],
     });
@@ -269,7 +323,7 @@ describe("IssueTemplateList", () => {
   });
 
   it("takes a repository that offers nothing, which is where the blank form comes from", () => {
-    const decoded = Schema.decodeUnknownSync(IssueTemplateList)({
+    const decoded = decodeTemplates({
       templates: [],
       contactLinks: [],
       blankIssuesEnabled: true,
@@ -277,5 +331,208 @@ describe("IssueTemplateList", () => {
 
     expect(decoded.templates).toEqual([]);
     expect(decoded.blankIssuesEnabled).toBe(true);
+  });
+
+  // A markdown template supplies no questions, which is how the composer tells the two apart.
+  it("takes a template with a body and no fields at all", () => {
+    const decoded = decodeTemplates({
+      ...TEMPLATES,
+      templates: [TEMPLATES.templates[1]],
+    });
+
+    expect(decoded.templates[0]?.fields).toBeUndefined();
+  });
+});
+
+describe("buildIssueTemplateBody", () => {
+  const FIELDS: ReadonlyArray<IssueTemplateField> = [
+    { kind: "markdown", value: "Thanks for taking the time to fill this out." },
+    {
+      kind: "input",
+      id: "version",
+      label: "Version",
+      description: "",
+      placeholder: "1.2.3",
+      value: "",
+      required: true,
+    },
+    {
+      kind: "input",
+      id: "contact",
+      label: "Contact details",
+      description: "",
+      placeholder: "",
+      value: "",
+      required: false,
+    },
+    {
+      kind: "textarea",
+      id: "what-happened",
+      label: "What happened?",
+      description: "",
+      placeholder: "",
+      value: "",
+      render: null,
+      required: true,
+    },
+    {
+      kind: "textarea",
+      id: "logs",
+      label: "Relevant log output",
+      description: "",
+      placeholder: "",
+      value: "",
+      render: "shell",
+      required: false,
+    },
+    {
+      kind: "dropdown",
+      id: "browsers",
+      label: "Browsers",
+      description: "",
+      options: ["Firefox", "Chrome", "Safari"],
+      multiple: true,
+      required: false,
+    },
+    {
+      kind: "checkboxes",
+      id: "terms",
+      label: "Before submitting",
+      description: "",
+      options: [
+        { label: "I searched the existing issues", required: true },
+        { label: "I can reproduce this on the latest release", required: false },
+      ],
+    },
+  ];
+
+  // The whole thing at once, because what matters is that an issue filed from here is byte for
+  // byte what the same answers filed on the host would have produced.
+  it("writes the markdown GitHub itself writes for a filled-in form", () => {
+    const body = buildIssueTemplateBody(FIELDS, {
+      version: "1.2.3",
+      "what-happened": "The page never loads",
+      logs: "Error: boom",
+      browsers: ["Safari", "Firefox"],
+      terms: ["I searched the existing issues"],
+    });
+
+    expect(body).toBe(
+      [
+        "### Version",
+        "",
+        "1.2.3",
+        "",
+        "### Contact details",
+        "",
+        "_No response_",
+        "",
+        "### What happened?",
+        "",
+        "The page never loads",
+        "",
+        "### Relevant log output",
+        "",
+        "```shell",
+        "Error: boom",
+        "```",
+        "",
+        "### Browsers",
+        "",
+        "Firefox, Safari",
+        "",
+        "### Before submitting",
+        "",
+        "- [x] I searched the existing issues",
+        "- [ ] I can reproduce this on the latest release",
+      ].join("\n"),
+    );
+  });
+
+  // Prose the form shows is not a question, so it heads nothing and files nothing.
+  it("leaves the prose out of the body entirely", () => {
+    expect(buildIssueTemplateBody([FIELDS[0]!], {})).toBe("");
+  });
+
+  // An unanswered optional question has to stay visible: a maintainer reading the issue has to be
+  // able to tell one that was skipped from one that was never asked.
+  it("says so where every optional question was left alone", () => {
+    const body = buildIssueTemplateBody(FIELDS, {});
+
+    expect(body.split("_No response_").length - 1).toBe(5);
+  });
+
+  // A fence around nothing is worse than the sentence: it reads as an answer that was empty.
+  it("leaves the fence off a rendered answer nobody wrote", () => {
+    expect(buildIssueTemplateBody([FIELDS[4]!], { logs: "   " })).toBe(
+      "### Relevant log output\n\n_No response_",
+    );
+  });
+
+  it("files the options a dropdown offers in its own order, not the order they were taken", () => {
+    expect(buildIssueTemplateBody([FIELDS[5]!], { browsers: ["Safari", "Chrome"] })).toBe(
+      "### Browsers\n\nChrome, Safari",
+    );
+  });
+
+  // One option taken is still an array to the assembler, and a single dropdown answers with one.
+  it("takes a lone option written as a word rather than as a list", () => {
+    expect(buildIssueTemplateBody([FIELDS[5]!], { browsers: "Chrome" })).toBe(
+      "### Browsers\n\nChrome",
+    );
+  });
+});
+
+describe("issueTemplateAnswersComplete", () => {
+  const REQUIRED: ReadonlyArray<IssueTemplateField> = [
+    {
+      kind: "input",
+      id: "version",
+      label: "Version",
+      description: "",
+      placeholder: "",
+      value: "",
+      required: true,
+    },
+    {
+      kind: "dropdown",
+      id: "area",
+      label: "Area",
+      description: "",
+      options: ["Web", "Mobile"],
+      multiple: false,
+      required: true,
+    },
+    {
+      kind: "checkboxes",
+      id: "terms",
+      label: "Before submitting",
+      description: "",
+      options: [
+        { label: "I searched the existing issues", required: true },
+        { label: "I am willing to submit a fix", required: false },
+      ],
+    },
+  ];
+
+  it("holds filing back until every question the form insists on is answered", () => {
+    expect(issueTemplateAnswersComplete(REQUIRED, {})).toBe(false);
+    expect(
+      issueTemplateAnswersComplete(REQUIRED, { version: "  ", area: ["Web"], terms: [] }),
+    ).toBe(false);
+    expect(
+      issueTemplateAnswersComplete(REQUIRED, {
+        version: "1.2.3",
+        area: ["Web"],
+        terms: ["I searched the existing issues"],
+      }),
+    ).toBe(true);
+  });
+
+  // A box the form left free is not a question filing waits on, ticked or not.
+  it("lets an optional box through unticked", () => {
+    expect(
+      issueTemplateAnswersComplete([REQUIRED[2]!], { terms: ["I searched the existing issues"] }),
+    ).toBe(true);
   });
 });

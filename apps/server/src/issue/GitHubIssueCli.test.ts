@@ -1066,9 +1066,9 @@ layer("GitHubIssueCli.layer", (it) => {
                 }),
               ),
             )
-          // Most repositories keep no config file, which GitHub answers with a refusal — not a
-          // reason to fail a read whose templates arrived.
-          : Effect.fail(refused),
+          : // Most repositories keep no config file, which GitHub answers with a refusal — not a
+            // reason to fail a read whose templates arrived.
+            Effect.fail(refused),
       );
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
 

@@ -15,6 +15,8 @@ const CAPABILITIES: IssueCapabilities = {
   // GitLab records nothing about why an issue was closed, so a close never asks for a reason.
   closeReasons: [],
   create: true,
+  // Markdown files under `.gitlab/issue_templates/` and nothing else: GitLab has no typed form, so
+  // its templates carry a body for the reader to write over and never a list of questions.
   issueTemplates: true,
   edit: true,
   labels: true,

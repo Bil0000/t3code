@@ -365,6 +365,87 @@ export const IssueCreateResult = Schema.Struct({
 });
 export type IssueCreateResult = typeof IssueCreateResult.Type;
 
+/** Everything a question carries whatever it asks for. Prose carries none of it: it asks nothing. */
+const IssueTemplateFieldBase = {
+  /** How the form addresses this question, which is what an answer to it is filed under. */
+  id: TrimmedNonEmptyString,
+  /** The heading the answer is filed under, which is also what the control is labelled with. */
+  label: Schema.String,
+  /** Shown under the label. Empty where the form wrote none. */
+  description: Schema.String,
+} as const;
+
+/** Prose the form shows and never submits — an introduction, a warning, a link to read first. */
+export const IssueTemplateMarkdownField = Schema.Struct({
+  kind: Schema.Literal("markdown"),
+  value: Schema.String,
+});
+export type IssueTemplateMarkdownField = typeof IssueTemplateMarkdownField.Type;
+
+export const IssueTemplateInputField = Schema.Struct({
+  ...IssueTemplateFieldBase,
+  kind: Schema.Literal("input"),
+  placeholder: Schema.String,
+  /** What the control starts filled with, which the reader is free to replace. */
+  value: Schema.String,
+  required: Schema.Boolean,
+});
+export type IssueTemplateInputField = typeof IssueTemplateInputField.Type;
+
+export const IssueTemplateTextareaField = Schema.Struct({
+  ...IssueTemplateFieldBase,
+  kind: Schema.Literal("textarea"),
+  placeholder: Schema.String,
+  value: Schema.String,
+  /**
+   * The language an answer is fenced with, so log output and stack traces travel as a code block
+   * rather than as markdown that eats them. Null for an answer submitted as written.
+   */
+  render: Schema.NullOr(TrimmedNonEmptyString),
+  required: Schema.Boolean,
+});
+export type IssueTemplateTextareaField = typeof IssueTemplateTextareaField.Type;
+
+export const IssueTemplateDropdownField = Schema.Struct({
+  ...IssueTemplateFieldBase,
+  kind: Schema.Literal("dropdown"),
+  options: Schema.Array(TrimmedNonEmptyString),
+  multiple: Schema.Boolean,
+  required: Schema.Boolean,
+});
+export type IssueTemplateDropdownField = typeof IssueTemplateDropdownField.Type;
+
+/** Each box answers for itself, so a form can demand one agreement and leave the rest free. */
+export const IssueTemplateCheckboxOption = Schema.Struct({
+  label: Schema.String,
+  required: Schema.Boolean,
+});
+export type IssueTemplateCheckboxOption = typeof IssueTemplateCheckboxOption.Type;
+
+export const IssueTemplateCheckboxesField = Schema.Struct({
+  ...IssueTemplateFieldBase,
+  kind: Schema.Literal("checkboxes"),
+  options: Schema.Array(IssueTemplateCheckboxOption),
+});
+export type IssueTemplateCheckboxesField = typeof IssueTemplateCheckboxesField.Type;
+
+/**
+ * One thing an issue form puts in front of somebody filing an issue. Only GitHub has these: its
+ * issue forms are a typed list of questions rather than a body to overwrite, and a composer that
+ * showed them as one text box would file something the repository never asked for.
+ */
+export const IssueTemplateField = Schema.Union([
+  IssueTemplateMarkdownField,
+  IssueTemplateInputField,
+  IssueTemplateTextareaField,
+  IssueTemplateDropdownField,
+  IssueTemplateCheckboxesField,
+]);
+export type IssueTemplateField = typeof IssueTemplateField.Type;
+
+/** Everything a form asks an answer for, which is every kind but the prose one. */
+export type IssueTemplateQuestion = Exclude<IssueTemplateField, IssueTemplateMarkdownField>;
+
 /**
  * One of the starting points a repository offers for a new issue: a bug report with its own
  * headings, a feature request with the questions it wants answered. Hosts carry different amounts
@@ -378,11 +459,110 @@ export const IssueTemplate = Schema.Struct({
   /** What it is for, shown under the name so the chooser is more than a list of words. */
   about: Schema.String,
   title: Schema.String,
+  /** The whole draft a markdown template supplies, for the reader to write over. */
   body: Schema.String,
+  /**
+   * The questions a form asks, in the order it asks them. A template supplies either these or
+   * `body`, never both: a form has no draft to write over, and a markdown template asks nothing.
+   * Absent on every host but GitHub, which is the only one with forms.
+   */
+  fields: Schema.optional(Schema.Array(IssueTemplateField)),
   labels: Schema.Array(TrimmedNonEmptyString),
   assignees: Schema.Array(TrimmedNonEmptyString),
 });
 export type IssueTemplate = typeof IssueTemplate.Type;
+
+/**
+ * What a reader answered one question with: text for the two kinds that take words, the options
+ * taken for the two that pick from a list.
+ */
+export type IssueTemplateFieldAnswer = string | ReadonlyArray<string>;
+
+/** Answers by field id, which is how a form's controls and its questions find each other. */
+export type IssueTemplateAnswers = Readonly<Record<string, IssueTemplateFieldAnswer>>;
+
+export function issueTemplateAnswerText(answer: IssueTemplateFieldAnswer | undefined): string {
+  return typeof answer === "string" ? answer : "";
+}
+
+/** A lone string counts as one option taken, so an answer written either way reads the same. */
+export function issueTemplateAnswerOptions(
+  answer: IssueTemplateFieldAnswer | undefined,
+): ReadonlyArray<string> {
+  if (answer === undefined) return [];
+  return typeof answer === "string" ? (answer.length === 0 ? [] : [answer]) : answer;
+}
+
+/** What GitHub writes where an optional question was left alone, rather than nothing at all. */
+const NO_RESPONSE = "_No response_";
+
+function answerBlock(field: IssueTemplateQuestion, answer: IssueTemplateFieldAnswer | undefined) {
+  switch (field.kind) {
+    case "input": {
+      const text = issueTemplateAnswerText(answer).trim();
+      return text.length === 0 ? NO_RESPONSE : text;
+    }
+    case "textarea": {
+      const text = issueTemplateAnswerText(answer).trim();
+      if (text.length === 0) return NO_RESPONSE;
+      return field.render === null ? text : `\`\`\`${field.render}\n${text}\n\`\`\``;
+    }
+    case "dropdown": {
+      const taken = new Set(issueTemplateAnswerOptions(answer));
+      // In the form's own order rather than the order they were taken in, which is what the host
+      // files — and which drops an option the form no longer offers along the way.
+      const chosen = field.options.filter((option) => taken.has(option));
+      return chosen.length === 0 ? NO_RESPONSE : chosen.join(", ");
+    }
+    case "checkboxes": {
+      // Every box, ticked or not: which ones were left alone is half of what the answer says.
+      const ticked = new Set(issueTemplateAnswerOptions(answer));
+      return field.options
+        .map((option) => `- [${ticked.has(option.label) ? "x" : " "}] ${option.label}`)
+        .join("\n");
+    }
+  }
+}
+
+/**
+ * A filled-in form as the markdown it is filed as, built exactly the way GitHub builds it for a
+ * form filled in on the host: an issue filed from here has to read like one filed there, because
+ * the same maintainers, searches and automations read both.
+ */
+export function buildIssueTemplateBody(
+  fields: ReadonlyArray<IssueTemplateField>,
+  answers: IssueTemplateAnswers,
+): string {
+  return fields
+    .flatMap((field) =>
+      field.kind === "markdown"
+        ? []
+        : [`### ${field.label}\n\n${answerBlock(field, answers[field.id])}`],
+    )
+    .join("\n\n");
+}
+
+/** Whether every question the form insists on has been answered, which is what filing waits for. */
+export function issueTemplateAnswersComplete(
+  fields: ReadonlyArray<IssueTemplateField>,
+  answers: IssueTemplateAnswers,
+): boolean {
+  return fields.every((field) => {
+    switch (field.kind) {
+      case "markdown":
+        return true;
+      case "input":
+      case "textarea":
+        return !field.required || issueTemplateAnswerText(answers[field.id]).trim().length > 0;
+      case "dropdown":
+        return !field.required || issueTemplateAnswerOptions(answers[field.id]).length > 0;
+      case "checkboxes": {
+        const ticked = new Set(issueTemplateAnswerOptions(answers[field.id]));
+        return field.options.every((option) => !option.required || ticked.has(option.label));
+      }
+    }
+  });
+}
 
 /**
  * Somewhere the repository would rather a question went than into its tracker — a forum, a
@@ -399,6 +579,12 @@ export type IssueContactLink = typeof IssueContactLink.Type;
 export const IssueTemplateList = Schema.Struct({
   templates: Schema.Array(IssueTemplate),
   contactLinks: Schema.Array(IssueContactLink),
+  /**
+   * Where this repository writes down how it wants to be contributed to, pointed at beside the
+   * form the way the host points at it. Absent where the repository keeps none: a link composed
+   * from a path nobody checked is a 404 with a book icon next to it.
+   */
+  contributingGuidelinesUrl: Schema.optional(TrimmedNonEmptyString),
   /**
    * Whether an issue may be filed without taking a template. False only where the repository
    * asked for that; one that said nothing allows it, which is every host's own default.

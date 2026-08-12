@@ -8,10 +8,12 @@ import {
   decodeIssueActivityJson,
   decodeIssueCommentsJson,
   decodeIssueDetailJson,
+  decodeIssueFormYaml,
   decodeIssueListJson,
   decodeIssueSearchJson,
   decodeIssueSupplementJson,
   decodeIssueTemplateConfigYaml,
+  decodeIssueTemplateFormsJson,
   decodeIssueTemplatesJson,
   decodeIssueViewerPermissionsJson,
   decodeRepositoryLabelsJson,
@@ -137,6 +139,27 @@ function templateEntry(entry: Record<string, unknown> = {}): Record<string, unkn
 
 function issueTemplatesJson(issueTemplates: unknown): string {
   return JSON.stringify({ data: { repository: { issueTemplates } } });
+}
+
+/** One `.github/ISSUE_TEMPLATE/` tree read, with a file's text where the entry is a file at all. */
+function issueTemplateFormsJson(input: {
+  readonly url?: string | null;
+  readonly entries?: ReadonlyArray<unknown> | null;
+  readonly rootGuidelines?: unknown;
+  readonly dotGitHubGuidelines?: unknown;
+  readonly docsGuidelines?: unknown;
+}): string {
+  return JSON.stringify({
+    data: {
+      repository: {
+        url: input.url === undefined ? "https://github.com/acme/web" : input.url,
+        forms: input.entries === null ? null : { entries: input.entries ?? [] },
+        rootGuidelines: input.rootGuidelines ?? null,
+        dotGitHubGuidelines: input.dotGitHubGuidelines ?? null,
+        docsGuidelines: input.docsGuidelines ?? null,
+      },
+    },
+  });
 }
 
 function expectSuccess<A>(result: Result.Result<A, unknown>): A {
@@ -707,7 +730,9 @@ describe("assignee candidate decoding", () => {
 
 describe("issue template decoding", () => {
   it("reads a template's own words, and the filename it is addressed by", () => {
-    const templates = expectSuccess(decodeIssueTemplatesJson(issueTemplatesJson([templateEntry()])));
+    const templates = expectSuccess(
+      decodeIssueTemplatesJson(issueTemplatesJson([templateEntry()])),
+    );
 
     expect(templates).toEqual([
       {
@@ -788,7 +813,11 @@ contact_links:
     expect(config).toEqual({
       blankIssuesEnabled: false,
       contactLinks: [
-        { name: "Community support", url: "https://example.com/discuss", about: "Ask the community" },
+        {
+          name: "Community support",
+          url: "https://example.com/discuss",
+          about: "Ask the community",
+        },
       ],
     });
   });
@@ -821,6 +850,253 @@ contact_links:
     expect(config.contactLinks).toEqual([
       { name: "Community support", url: "https://example.com/discuss", about: "" },
     ]);
+  });
+});
+
+describe("issue form decoding", () => {
+  it("reads every kind of question a form can ask, in the order it asks them", () => {
+    const form = decodeIssueFormYaml(
+      "bug_report.yml",
+      `name: Bug report
+description: File a bug
+title: "Bug: "
+labels:
+  - bug
+  - triage
+assignees:
+  - julius
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting!
+  - type: input
+    id: repro-url
+    attributes:
+      label: Reproduction URL
+      description: Where can we see this happen?
+      placeholder: https://example.com
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      description: Paste any relevant log output
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: browsers
+    attributes:
+      label: Which browsers?
+      multiple: true
+      options:
+        - Chrome
+        - Firefox
+        - Safari
+  - type: checkboxes
+    id: terms
+    attributes:
+      label: Code of Conduct
+      options:
+        - label: I agree
+          required: true
+        - label: Newsletter opt-in
+`,
+    );
+
+    expect(form).toEqual({
+      key: "bug_report.yml",
+      name: "Bug report",
+      about: "File a bug",
+      title: "Bug: ",
+      // A form has no draft to write over: its body is built from the answers instead.
+      body: "",
+      labels: ["bug", "triage"],
+      assignees: ["julius"],
+      fields: [
+        { kind: "markdown", value: "Thanks for reporting!" },
+        {
+          kind: "input",
+          id: "repro-url",
+          label: "Reproduction URL",
+          description: "Where can we see this happen?",
+          placeholder: "https://example.com",
+          value: "",
+          required: false,
+        },
+        {
+          kind: "textarea",
+          id: "logs",
+          label: "Relevant log output",
+          description: "Paste any relevant log output",
+          placeholder: "",
+          value: "",
+          render: "shell",
+          required: true,
+        },
+        {
+          kind: "dropdown",
+          id: "browsers",
+          label: "Which browsers?",
+          description: "",
+          options: ["Chrome", "Firefox", "Safari"],
+          multiple: true,
+          required: false,
+        },
+        {
+          kind: "checkboxes",
+          id: "terms",
+          label: "Code of Conduct",
+          description: "",
+          options: [
+            { label: "I agree", required: true },
+            { label: "Newsletter opt-in", required: false },
+          ],
+        },
+      ],
+    });
+  });
+
+  it("drops a question of a kind this composer has no control for, and keeps the ones around it", () => {
+    const form = decodeIssueFormYaml(
+      "colors.yml",
+      `name: Colors
+body:
+  - type: input
+    id: before
+    attributes:
+      label: Before
+  - type: colorpicker
+    id: color
+    attributes:
+      label: Pick a color
+  - type: input
+    id: after
+    attributes:
+      label: After
+`,
+    );
+
+    expect(form?.fields?.map((field) => (field.kind === "input" ? field.id : field.kind))).toEqual([
+      "before",
+      "after",
+    ]);
+  });
+
+  it("addresses an unnamed question by its place in the whole body, not just among questions", () => {
+    const form = decodeIssueFormYaml(
+      "no_id.yml",
+      `name: No id
+body:
+  - type: markdown
+    attributes:
+      value: intro
+  - type: input
+    attributes:
+      label: Your answer
+`,
+    );
+
+    const input = form?.fields?.[1];
+    expect(input?.kind === "input" ? input.id : null).toBe("field-1");
+  });
+
+  it("answers null for a file that will not parse as YAML at all", () => {
+    expect(decodeIssueFormYaml("broken.yml", 'name: "Bug report')).toBeNull();
+  });
+
+  it("answers null for a file that parses but names no form", () => {
+    expect(decodeIssueFormYaml("about.yml", '{"about":"x"}')).toBeNull();
+  });
+
+  it("reads labels written as one comma-separated line the same as a list of them", () => {
+    const form = decodeIssueFormYaml("labels.yml", "name: Simple\nlabels: bug, triage\nbody: []\n");
+
+    expect(form?.labels).toEqual(["bug", "triage"]);
+  });
+});
+
+describe("issue template forms decoding", () => {
+  const bugReportYaml = `name: Bug report
+body:
+  - type: input
+    id: repro
+    attributes:
+      label: Reproduction
+`;
+  const featureRequestYaml = `name: Feature request
+body:
+  - type: input
+    id: motivation
+    attributes:
+      label: Motivation
+`;
+
+  it("reads every form in the directory, and skips everything that is not one", () => {
+    const forms = expectSuccess(
+      decodeIssueTemplateFormsJson(
+        issueTemplateFormsJson({
+          entries: [
+            { name: "bug_report.yml", object: { text: bugReportYaml } },
+            { name: "feature_request.yaml", object: { text: featureRequestYaml } },
+            // The chooser's own settings, not one of the things it offers.
+            { name: "config.yml", object: { text: "blank_issues_enabled: true" } },
+            // A markdown template, read through `issueTemplates` instead.
+            { name: "compliment.md", object: { text: "### Nice work" } },
+            // One bad file must not cost the directory the forms around it.
+            { name: "broken.yml", object: { text: 'name: "Unbalanced' } },
+            // A directory entry: no `... on Blob` fragment, so no text comes back for it.
+            { name: "assets", object: {} },
+          ],
+        }),
+      ),
+    );
+
+    expect(forms.forms.map((form) => form.name)).toEqual(["Bug report", "Feature request"]);
+  });
+
+  it("points the contributing guidelines at the root file first, then .github, then docs", () => {
+    const root = expectSuccess(
+      decodeIssueTemplateFormsJson(
+        issueTemplateFormsJson({
+          rootGuidelines: { __typename: "Blob" },
+          dotGitHubGuidelines: { __typename: "Blob" },
+          docsGuidelines: { __typename: "Blob" },
+        }),
+      ),
+    );
+    const dotGitHub = expectSuccess(
+      decodeIssueTemplateFormsJson(
+        issueTemplateFormsJson({
+          dotGitHubGuidelines: { __typename: "Blob" },
+          docsGuidelines: { __typename: "Blob" },
+        }),
+      ),
+    );
+    const docs = expectSuccess(
+      decodeIssueTemplateFormsJson(
+        issueTemplateFormsJson({ docsGuidelines: { __typename: "Blob" } }),
+      ),
+    );
+    const none = expectSuccess(decodeIssueTemplateFormsJson(issueTemplateFormsJson({})));
+
+    expect(root.contributingGuidelinesUrl).toBe(
+      "https://github.com/acme/web/blob/HEAD/CONTRIBUTING.md",
+    );
+    expect(dotGitHub.contributingGuidelinesUrl).toBe(
+      "https://github.com/acme/web/blob/HEAD/.github/CONTRIBUTING.md",
+    );
+    expect(docs.contributingGuidelinesUrl).toBe(
+      "https://github.com/acme/web/blob/HEAD/docs/CONTRIBUTING.md",
+    );
+    expect(none.contributingGuidelinesUrl).toBeUndefined();
+  });
+
+  it("answers with no forms for a repository that keeps no template directory", () => {
+    const forms = expectSuccess(
+      decodeIssueTemplateFormsJson(issueTemplateFormsJson({ entries: null })),
+    );
+
+    expect(forms.forms).toEqual([]);
   });
 });
 

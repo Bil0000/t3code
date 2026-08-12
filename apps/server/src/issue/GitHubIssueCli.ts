@@ -13,6 +13,7 @@ import type {
   IssueLabelCandidate,
   IssueLabelCandidateList,
   IssueListState,
+  IssueTemplate,
   IssueTemplateList,
   SourceControlActor,
 } from "@t3tools/contracts";
@@ -31,6 +32,7 @@ import {
   decodeIssueSupplementJson,
   DEFAULT_ISSUE_TEMPLATE_CONFIG,
   decodeIssueTemplateConfigYaml,
+  decodeIssueTemplateFormsJson,
   decodeIssueTemplatesJson,
   decodeIssueViewerPermissionsJson,
   decodeRepositoryLabelsJson,
@@ -43,6 +45,7 @@ import {
   ISSUE_SEARCH_MAX_ROWS,
   ISSUE_SUPPLEMENT_GRAPHQL_QUERY,
   ISSUE_TEMPLATES_GRAPHQL_QUERY,
+  ISSUE_TEMPLATE_FORMS_GRAPHQL_QUERY,
   ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   type GitHubIssue,
   type GitHubIssueDetail,
@@ -988,6 +991,24 @@ export const make = Effect.gen(function* () {
             query: ISSUE_TEMPLATES_GRAPHQL_QUERY,
             decode: decodeIssueTemplatesJson,
           }),
+          graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "listIssueTemplateForms",
+            variables: [
+              ["-f", `owner=${owner}`],
+              ["-f", `name=${name}`],
+            ],
+            query: ISSUE_TEMPLATE_FORMS_GRAPHQL_QUERY,
+            decode: decodeIssueTemplateFormsJson,
+          }).pipe(
+            // A repository whose tree this account may not walk still has templates worth showing,
+            // so the questions are lost rather than the chooser.
+            Effect.orElseSucceed(() => ({
+              forms: [] as ReadonlyArray<IssueTemplate>,
+              contributingGuidelinesUrl: undefined,
+            })),
+          ),
           github
             .execute({
               cwd: input.cwd,
@@ -1010,8 +1031,26 @@ export const make = Effect.gen(function* () {
               Effect.orElseSucceed(() => DEFAULT_ISSUE_TEMPLATE_CONFIG),
             ),
         ],
-        { concurrency: 2 },
-      ).pipe(Effect.map(([templates, config]) => ({ templates, ...config })));
+        { concurrency: 3 },
+      ).pipe(
+        Effect.map(([templates, forms, config]) => {
+          // GitHub lists a form among its templates but reports an empty body for it, so wherever
+          // the file behind a template was read as a form, the form is what the composer opens.
+          const byKey = new Map(forms.forms.map((form) => [form.key, form]));
+          const listed = new Set(templates.map((template) => template.key));
+          return {
+            templates: [
+              ...templates.map((template) => byKey.get(template.key) ?? template),
+              // A form GitHub did not list at all still belongs in the chooser.
+              ...forms.forms.filter((form) => !listed.has(form.key)),
+            ],
+            ...config,
+            ...(forms.contributingGuidelinesUrl === undefined
+              ? {}
+              : { contributingGuidelinesUrl: forms.contributingGuidelinesUrl }),
+          };
+        }),
+      );
     },
   });
 });
