@@ -396,13 +396,23 @@ function IssueBrowserList({
           ) : listQuery.error !== null && listQuery.data === null ? (
             <p className="px-2 text-sm text-muted-foreground">{listQuery.error}</p>
           ) : entries.length === 0 ? (
-            <p className="px-2 text-sm text-muted-foreground">
-              {typed.length > 0
-                ? "No issue here matches that."
-                : narrowed
-                  ? "No issue here matches these filters."
-                  : "This repository has no issues to open."}
-            </p>
+            <div className="space-y-2 px-2">
+              <p className="text-sm text-muted-foreground">
+                {typed.length > 0
+                  ? "No issue here matches that."
+                  : narrowed
+                    ? "No issue here matches these filters."
+                    : "This repository has no issues to open."}
+              </p>
+              {/* The filters narrow the rows that arrived, so a page they empty says nothing about
+                  the pages after it. Asked for by hand rather than by the sentinel: with no rows
+                  to scroll past, scrolling would read the whole repository on its own. */}
+              {truncated && (canContinue || pageSize < MAX_LIMIT) ? (
+                <Button variant="outline" size="xs" onClick={loadMore}>
+                  Load more
+                </Button>
+              ) : null}
+            </div>
           ) : (
             <>
               {entries.map((entry) => (
