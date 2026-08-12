@@ -38,6 +38,15 @@ export function PullRequestMarkdownEditor({
 }) {
   const [draft, setDraft] = useState(value);
   const [preview, setPreview] = useState(false);
+  // The words this draft started from. React keeps a component instance wherever the same
+  // position and key come round again, so an editor opened on one remark can be handed another's
+  // words without being rebuilt — and saving would then write the first remark's text onto the
+  // second. Different words mean a different subject, and the draft starts again from them.
+  const [seed, setSeed] = useState(value);
+  if (seed !== value) {
+    setSeed(value);
+    setDraft(value);
+  }
   const empty = draft.trim().length === 0;
 
   return (

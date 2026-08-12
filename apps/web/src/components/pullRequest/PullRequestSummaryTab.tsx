@@ -371,8 +371,16 @@ export function PullRequestSummaryTab({
   // reappears over the next pull request's description.
   const [bodyScope, setBodyScope] = useState<string | null>(null);
   const [bodySaving, setBodySaving] = useState(false);
-  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  // The remark being rewritten, named with the pull request it belongs to: a comment id is the
+  // host's own, and two hosts — or two pull requests on Azure DevOps, which numbers a remark
+  // inside its thread — hand out the same one. Without the pull request beside it, opening a
+  // different one would leave its like-numbered remark sitting open in an editor.
+  const [commentScope, setCommentScope] = useState<{
+    readonly pullRequest: string;
+    readonly commentId: string;
+  } | null>(null);
   const [commentSaving, setCommentSaving] = useState(false);
+  const editingCommentId = commentScope?.pullRequest === detail.url ? commentScope.commentId : null;
 
   const saveBody = async (body: string) => {
     if (bodySaving) return;
@@ -392,7 +400,8 @@ export function PullRequestSummaryTab({
     canEdit: (comment) => canEditPullRequestComment(detail, comment),
     editingId: editingCommentId,
     saving: commentSaving,
-    onEdit: (comment) => setEditingCommentId(comment?.id ?? null),
+    onEdit: (comment) =>
+      setCommentScope(comment === null ? null : { pullRequest: detail.url, commentId: comment.id }),
     onSave: async (comment, body) => {
       // A review's own summary is not a kind any host rewrites, which is why no pencil is ever
       // offered on one; the check is here because the comment's own type still allows it.
@@ -407,7 +416,7 @@ export function PullRequestSummaryTab({
         toastManager.add({ type: "error", title: "Could not save the comment" });
         return;
       }
-      setEditingCommentId(null);
+      setCommentScope(null);
       onRefresh();
     },
   };
@@ -533,7 +542,7 @@ export function PullRequestSummaryTab({
           <PullRequestReactionBar
             className="mt-2"
             reactions={detail.reactions ?? []}
-            canReact={detail.capabilities.reactions}
+            canReact={detail.capabilities.reactions === true}
             environmentId={environmentId}
             reference={reference}
             onRefresh={onRefresh}
@@ -660,7 +669,7 @@ export function PullRequestSummaryTab({
                           <PullRequestReactionBar
                             className="mt-2"
                             reactions={comment.reactions ?? []}
-                            canReact={detail.capabilities.reactions}
+                            canReact={detail.capabilities.reactions === true}
                             subjectId={comment.id}
                             environmentId={environmentId}
                             reference={reference}
@@ -722,7 +731,7 @@ export function PullRequestSummaryTab({
                       <PullRequestReactionBar
                         className="mt-2"
                         reactions={comment.reactions ?? []}
-                        canReact={detail.capabilities.reactions}
+                        canReact={detail.capabilities.reactions === true}
                         subjectId={comment.id}
                         environmentId={environmentId}
                         reference={reference}

@@ -763,12 +763,15 @@ export function PullRequestCodeTab({
   const renderThreadCard = useCallback(
     (thread: PullRequestReviewThread) => (
       <ReviewThreadCard
-        key={thread.id}
+        // Named with the pull request too: a thread's id is the host's own, and two pull requests
+        // can hand out the same one — which would leave one card's open editor standing over the
+        // other's conversation.
+        key={`${reference.projectId}#${reference.number}:${thread.id}`}
         thread={thread}
         workspaceRoot={detail.workspaceRoot}
         canReply={review.reply}
         canResolve={review.resolve}
-        canReact={detail.capabilities.reactions}
+        canReact={detail.capabilities.reactions === true}
         environmentId={environmentId}
         reference={reference}
         pending={threadPending}

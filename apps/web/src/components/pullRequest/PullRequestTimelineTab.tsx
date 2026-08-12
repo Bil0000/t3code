@@ -318,7 +318,10 @@ function ConversationGroup({
               <div className="mt-1 space-y-1">
                 {events.map((event) => (
                   <ConversationCard
-                    key={event.id}
+                    // Named with the pull request too: a remark's id is the host's own, and two
+                    // pull requests can hand out the same one — which would leave one card's open
+                    // editor standing over the other's remark.
+                    key={`${reactions.reference.projectId}#${reactions.reference.number}:${event.id}`}
                     event={event}
                     editable={editable.get(event.id) ?? null}
                     cwd={cwd}
@@ -425,7 +428,7 @@ export function PullRequestTimelineTab({
 }) {
   const events = buildPullRequestTimeline(detail);
   const reactions: ReactionSurface = {
-    canReact: detail.capabilities.reactions,
+    canReact: detail.capabilities.reactions === true,
     environmentId,
     reference,
     onRefresh,
