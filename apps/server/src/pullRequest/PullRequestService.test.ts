@@ -117,6 +117,7 @@ function fakeProvider(
       reactions: true,
       review: FULL_REVIEW,
       reviewers: FULL_REVIEWERS,
+      edit: { changeRequest: true, comment: true },
     },
     getViewer: () => Effect.succeed("bilal"),
     // A viewer who may do everything the host can, so a test only narrows what it is about.
@@ -133,7 +134,9 @@ function fakeProvider(
     getChangeRequestActivity: () => Effect.die("unused"),
     getDiff: () => Effect.die("unused"),
     runAction: () => Effect.void,
+    updateChangeRequest: () => Effect.void,
     comment: () => Effect.void,
+    updateComment: () => Effect.void,
     submitReview: () => Effect.void,
     replyToThread: () => Effect.void,
     setThreadResolution: () => Effect.void,
@@ -3023,5 +3026,233 @@ it.effect("judges the review filter only on a host that summarises its reviews",
 
     const approved = yield* service.list({ state: "open", filters: { review: "approved" } });
     assert.deepStrictEqual(approved.entries.map((entry) => entry.number).toSorted(), [2, 3]);
+  }),
+);
+
+it.effect("sends only the words a rewrite carries", () =>
+  Effect.gen(function* () {
+    const received: Array<{ title?: string | undefined; body?: string | undefined }> = [];
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          updateChangeRequest: (input) => {
+            received.push({ title: input.title, body: input.body });
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    yield* service.update({ ...reference, title: "A better title" });
+    yield* service.update({ ...reference, body: "" });
+    yield* service.update({ ...reference, title: "Both", body: "at once" });
+
+    assert.deepStrictEqual(received, [
+      { title: "A better title", body: undefined },
+      { title: undefined, body: "" },
+      { title: "Both", body: "at once" },
+    ]);
+  }),
+);
+
+it.effect("refuses a rewrite that changes nothing, before any call is made", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", { updateChangeRequest: () => Effect.die("must not be called") }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.update({ projectId: "p1" as ProjectId, repository: "acme/web", number: 1 }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+    assert.include(error.message, "Nothing was changed.");
+  }),
+);
+
+it.effect("refuses to rewrite anything on a host that never claimed it", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+            search: true,
+            reactions: true,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          updateChangeRequest: () => Effect.die("must not be called"),
+          updateComment: () => Effect.die("must not be called"),
+        }),
+      ],
+    });
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+
+    const rewriteRefused = yield* Effect.flip(service.update({ ...reference, title: "New" }));
+    const commentRefused = yield* Effect.flip(
+      service.updateComment({
+        ...reference,
+        commentId: "IC_1",
+        kind: "issue-comment",
+        body: "New",
+      }),
+    );
+
+    assert.include(rewriteRefused.message, "cannot rewrite a change request.");
+    assert.include(commentRefused.message, "cannot rewrite a comment.");
+  }),
+);
+
+it.effect("passes a rewritten remark through with the id and kind it arrived under", () =>
+  Effect.gen(function* () {
+    let received: { id: string; kind: string; body: string } | null = null;
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          updateComment: (input) => {
+            received = { id: input.commentId, kind: input.kind, body: input.body };
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    yield* service.updateComment({
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+      commentId: "PRRC_1",
+      kind: "review-comment",
+      body: "Second thoughts",
+    });
+
+    assert.deepStrictEqual(received, {
+      id: "PRRC_1",
+      kind: "review-comment",
+      body: "Second thoughts",
+    });
+  }),
+);
+
+it.effect("refuses a remark rewritten into nothing but whitespace", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", { updateComment: () => Effect.die("must not be called") }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.updateComment({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        commentId: "IC_1",
+        kind: "issue-comment",
+        body: "   \n  ",
+      }),
+    );
+
+    assert.include(error.message, "A comment cannot be empty.");
+  }),
+);
+
+it.effect("forgets the cached detail after a rewrite, like the other mutations", () =>
+  Effect.gen(function* () {
+    let coreCalls = 0;
+    const reference = { projectId: "p1" as ProjectId, repository: "acme/web", number: 1 };
+    const service = yield* makeService({
+      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      providers: [
+        fakeProvider("github", {
+          getChangeRequest: () => {
+            coreCalls += 1;
+            return Effect.succeed({
+              ...changeRequest(1, "2026-07-02T00:00:00Z"),
+              body: "",
+              changedFiles: 0,
+              mergedAt: null,
+              closedAt: null,
+              reviewers: [],
+              checks: [],
+              mergeCapabilities: { merge: true, squash: true, rebase: true },
+              viewerPermissions: {
+                actions: ["merge"],
+                comment: true,
+                resolve: true,
+                verdicts: ["comment", "approve", "request-changes"],
+                requestReviewers: true,
+              },
+            });
+          },
+        }),
+      ],
+    });
+
+    yield* service.detail(reference);
+    yield* service.update({ ...reference, title: "Renamed" });
+    yield* service.detail(reference);
+
+    assert.strictEqual(coreCalls, 2);
+  }),
+);
+
+it.effect("names the signed-in account in the detail, and says nothing where the host cannot", () =>
+  Effect.gen(function* () {
+    const detailFrom = (provider: PullRequestProviderApi) =>
+      Effect.gen(function* () {
+        const service = yield* makeService({
+          projects: [
+            project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
+          ],
+          providers: [provider],
+        });
+        return yield* service.detail({
+          projectId: "p1" as ProjectId,
+          repository: "acme/web",
+          number: 1,
+        });
+      });
+    const readable = fakeProvider("github", {
+      getChangeRequest: () =>
+        Effect.succeed({
+          ...changeRequest(1, "2026-07-02T00:00:00Z"),
+          body: "",
+          changedFiles: 0,
+          mergedAt: null,
+          closedAt: null,
+          reviewers: [],
+          checks: [],
+          mergeCapabilities: { merge: true, squash: true, rebase: true },
+          viewerPermissions: {
+            actions: ["merge"],
+            comment: true,
+            resolve: true,
+            verdicts: ["comment", "approve", "request-changes"],
+            requestReviewers: true,
+          },
+        }),
+    });
+
+    const named = yield* detailFrom(readable);
+    const unnamed = yield* detailFrom({
+      ...readable,
+      getViewer: () => Effect.fail(unusable("github", "unauthenticated")),
+    });
+
+    assert.strictEqual(named.viewer, "bilal");
+    assert.strictEqual(unnamed.viewer, undefined);
   }),
 );
