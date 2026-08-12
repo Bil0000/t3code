@@ -107,13 +107,54 @@ describe("reaction tooltip", () => {
     ).toBe("Bil0000 and octocat reacted with heart emoji");
   });
 
-  it("caps the sentence at count for a host that still leaves the viewer's login in actors", () => {
-    // `count` says two, but a non-compliant host left the viewer's own login in `actors` too.
+  it("names actors as given, and leaves off You, for a host with no room for the viewer", () => {
+    // `count` says two and `actors` already lists two logins, one of them the viewer's own —
+    // there is no slot left for "You" that wouldn't invent or hide a real reactor.
     expect(
       pullRequestReactionTooltip(
         reaction({ count: 2, actors: ["Bil0000", "octocat"], viewerHasReacted: true }),
       ),
-    ).toBe("You and Bil0000 reacted with heart emoji");
+    ).toBe("Bil0000 and octocat reacted with heart emoji");
+    // Same shape past the naming cap: the display limit still leaves an honest remainder.
+    expect(
+      pullRequestReactionTooltip(
+        reaction({
+          count: 4,
+          actors: ["Bil0000", "octocat", "hubot", "zzz"],
+          viewerHasReacted: true,
+        }),
+      ),
+    ).toBe("Bil0000, octocat, hubot, and 1 other reacted with heart emoji");
+  });
+
+  it("keeps naming the viewer You when the host does leave them room", () => {
+    // `actors` has fewer logins than `count`, so the viewer fits without being counted twice.
+    expect(
+      pullRequestReactionTooltip(
+        reaction({ count: 2, actors: ["octocat"], viewerHasReacted: true }),
+      ),
+    ).toBe("You and octocat reacted with heart emoji");
+  });
+});
+
+describe("reaction tooltip, with a reaction in flight", () => {
+  it("still says You after an optimistic react, even at full capacity", () => {
+    // The host's last snapshot had every reactor named and nobody left over; the optimistic
+    // bump grows `count` without touching `actors`, so there is now room for "You" and the
+    // sentence should use it rather than reading as a non-compliant host.
+    const applied = applyPendingPullRequestReactions(
+      [reaction({ count: 2, actors: ["a", "b"], viewerHasReacted: false })],
+      new Map([["heart", true] as const]),
+    );
+    expect(pullRequestReactionTooltip(applied[0]!)).toBe("You, a, and b reacted with heart emoji");
+  });
+
+  it("drops You after an optimistic un-react, without treating the host as non-compliant", () => {
+    const applied = applyPendingPullRequestReactions(
+      [reaction({ count: 2, actors: ["octocat"], viewerHasReacted: true })],
+      new Map([["heart", false] as const]),
+    );
+    expect(pullRequestReactionTooltip(applied[0]!)).toBe("octocat reacted with heart emoji");
   });
 });
 

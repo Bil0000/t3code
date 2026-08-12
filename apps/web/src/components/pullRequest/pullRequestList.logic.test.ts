@@ -21,6 +21,7 @@ import {
   withDiffStat,
   resolveProjectScope,
   resolveQueryEnvironmentIds,
+  resolveSelectedEnvironmentId,
   type EnvironmentPullRequestEntry,
 } from "./pullRequestList.logic";
 
@@ -877,6 +878,31 @@ describe("which environments a listing should ask", () => {
   it("keeps the single-environment case unchanged", () => {
     const projects = [{ id: "project-1", environmentId: ENV_1 }];
     expect(resolveQueryEnvironmentIds([ENV_1], projects, undefined, "project-1")).toEqual([ENV_1]);
+  });
+});
+
+describe("the server a saved selection names", () => {
+  const known = new Set([ENV_1, ENV_2]);
+
+  it("resolves to nothing yet for a server that is known but not ready, rather than falling back", () => {
+    // ENV_2 is in the catalog (still connecting, say) but not the fallback; a caller that then
+    // looks a project up under ENV_2 finds none rather than one belonging to the fallback server.
+    expect(resolveSelectedEnvironmentId(ENV_2, known, ENV_1)).toBe(ENV_2);
+  });
+
+  it("falls back for a server the workspace genuinely no longer has", () => {
+    const goneServer = "env-gone" as EnvironmentId;
+    expect(resolveSelectedEnvironmentId(goneServer, known, ENV_1)).toBe(ENV_1);
+  });
+
+  it("falls back to nothing when no server names a fallback either", () => {
+    const goneServer = "env-gone" as EnvironmentId;
+    expect(resolveSelectedEnvironmentId(goneServer, known, null)).toBeNull();
+  });
+
+  it("uses the fallback outright when nothing was named", () => {
+    expect(resolveSelectedEnvironmentId(undefined, known, ENV_1)).toBe(ENV_1);
+    expect(resolveSelectedEnvironmentId(undefined, known, null)).toBeNull();
   });
 });
 

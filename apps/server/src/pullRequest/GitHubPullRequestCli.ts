@@ -613,8 +613,12 @@ function filterQualifiers(
 }
 
 /**
- * The same narrowings over a row that has already arrived, for the search-free fallback. Checks
- * are not here: no listed row carries its check state, so that one filter is the host's alone.
+ * The same narrowings over a row that has already arrived, for the search-free fallback. Every
+ * listed row now carries its own `checksState`, so `checks` is judged the way `review` is: by
+ * equality against the row's field. Unlike `review`, `checks` has no `"none"` value to catch an
+ * absent state on purpose — a row with no checks configured, or whose checks are still `pending`,
+ * equals neither `"passing"` nor `"failing"` and so fails both, the same as a row search would
+ * not have surfaced for `status:success` or `status:failure`.
  */
 function matchesFilters(
   item: GitHubPullRequestListItem,
@@ -630,6 +634,7 @@ function matchesFilters(
       (filters.review === "none"
         ? item.reviewDecision === null
         : item.reviewDecision === filters.review)) &&
+    (filters.checks === undefined || item.checksState === filters.checks) &&
     (filters.labels === undefined || filters.labels.every((group) => group.some(holds))) &&
     (filters.excludedLabels === undefined || !filters.excludedLabels.some(holds)) &&
     (filters.author === undefined ||
@@ -1183,19 +1188,15 @@ export const make = Effect.gen(function* () {
       // repository's whole list, which is every row the reader did not search for. The fallback
       // is for a repository the index does not cover, and a listing with no text to match is the
       // only place an empty answer can mean that.
-      // Most filters are qualifiers `matchesFilters` can judge over the fallback's own rows just
+      // Every filter is a qualifier `matchesFilters` can judge over the fallback's own rows just
       // as well as search judges them over its own, so carrying them into the fallback answers
-      // the same read rather than a wider one. `checks` is the one filter neither can judge
-      // locally — no listed row carries its check state — so it rules the fallback out the same
-      // way free text does: an empty answer under either is already the answer.
+      // the same read rather than a wider one. Free text is the one thing the fallback cannot
+      // judge locally — it lists rows, it does not search their text — so a query still rules
+      // the fallback out: an empty answer under one is already the answer.
       const hasQuery = (input.query?.trim().length ?? 0) > 0;
-      const hasUnjudgeableFilter = input.filters?.checks !== undefined;
       return read(true).pipe(
         Effect.flatMap((batch) =>
-          batch.items.length === 0 &&
-          input.cursor === undefined &&
-          !hasQuery &&
-          !hasUnjudgeableFilter
+          batch.items.length === 0 && input.cursor === undefined && !hasQuery
             ? read(false)
             : Effect.succeed(batch),
         ),

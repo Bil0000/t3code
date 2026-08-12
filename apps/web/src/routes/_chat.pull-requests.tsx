@@ -45,6 +45,7 @@ import {
   readPullRequestListSnapshot,
   resolveProjectScope,
   resolveQueryEnvironmentIds,
+  resolveSelectedEnvironmentId,
   withDiffStat,
   writePullRequestListSnapshot,
   scorePullRequestMatch,
@@ -228,6 +229,12 @@ function PullRequestsRouteView() {
   const scopedEnvironmentId =
     capableEnvironments.find((environment) => environment.environmentId === search.environmentId)
       ?.environmentId ?? null;
+  // Every server this workspace has ever heard of, connecting or not — wider than
+  // `capableEnvironments`, which only holds the ones ready to answer.
+  const knownEnvironmentIds = useMemo(
+    () => new Set(environments.map((environment) => environment.environmentId)),
+    [environments],
+  );
   const environmentIds = useMemo(
     () =>
       capableEnvironments
@@ -328,13 +335,17 @@ function PullRequestsRouteView() {
   const selectedProjectId = linkedProjectId ?? projectIdForRepository ?? scopedProjectId;
   // Which server the selection belongs to. Named by the URL where a link had one to give;
   // otherwise the project id decides, and only where exactly one server has that project.
-  // Kept only while that server is one this workspace still has, the same way the scope above
-  // treats a stale name: a saved link naming a server that has since gone would otherwise open
-  // nothing, even where the project id it also carries names exactly one remaining server.
-  const selectedEnvironmentId =
-    capableEnvironments.find(
-      (environment) => environment.environmentId === search.selectedEnvironmentId,
-    )?.environmentId ?? scopedEnvironmentId;
+  // A named server still connecting is kept named rather than falling back: falling back while
+  // it is merely not ready yet would resolve the project against whatever other server has
+  // answered, which can be the wrong one where two servers share a project id. Only a name this
+  // workspace has never heard of falls back to the scope above, the same way that scope treats a
+  // stale name — a saved link naming a server that has since gone would otherwise open nothing,
+  // even where the project id it also carries names exactly one remaining server.
+  const selectedEnvironmentId = resolveSelectedEnvironmentId(
+    search.selectedEnvironmentId,
+    knownEnvironmentIds,
+    scopedEnvironmentId,
+  );
   const selectedProject = useMemo(
     () => findScopedProject(projects, selectedEnvironmentId, selectedProjectId),
     [projects, selectedEnvironmentId, selectedProjectId],
@@ -1424,8 +1435,14 @@ function PullRequestsRouteView() {
       onServer={(server) => updateListScope({ environmentId: server, projectId: undefined })}
       projects={scopedProjects}
       projectId={scopedProjectId}
+      projectEnvironmentId={scopedProject?.environmentId}
       unavailable={unavailableProjects}
-      onProject={(projectId) => updateListScope({ projectId })}
+      // The environment comes along with the project it belongs to, so a duplicate id on
+      // another server never gets narrowed to by mistake; picking "All projects" leaves the
+      // server scope as it was rather than clearing it.
+      onProject={(projectId, environmentId) =>
+        updateListScope(environmentId === undefined ? { projectId } : { projectId, environmentId })
+      }
     />
   );
   const columnProps = {

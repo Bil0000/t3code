@@ -92,7 +92,6 @@ import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLi
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import {
-  autoMergeWouldMergeNow,
   buildAskAboutLinesHandoff,
   buildAskAboutPullRequestHandoff,
   buildExplainPullRequestHandoff,
@@ -983,11 +982,6 @@ export function PullRequestDetailPanel({
     : null;
   const checksSummary = detail ? summarizePullRequestChecks(detail.checks) : null;
   const checksState = detail ? pullRequestChecksState(detail.checks) : null;
-  // What arming auto-merge is about to do: `--auto` merges the instant nothing is left to wait
-  // on, so a pull request that is already mergeable with green (or no) checks merges right away
-  // rather than later. The confirmation reads this to say which one is about to happen.
-  const autoMergeWillMergeNow =
-    detail !== null && autoMergeWouldMergeNow(detail.mergeability, checksState);
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -1750,10 +1744,10 @@ export function PullRequestDetailPanel({
               {confirmAction === "merge"
                 ? `This merges #${reference.number} using ${selectedMergeMethod}.`
                 : confirmAction === "enable-auto-merge"
-                  ? autoMergeWillMergeNow
-                    ? // Nothing left to wait on, so `--auto` merges it the moment it is armed.
-                      `#${reference.number} is already mergeable, so this merges it using ${selectedMergeMethod} right away.`
-                    : `This merges #${reference.number} using ${selectedMergeMethod} as soon as it is ready.`
+                  ? // The host merges this as soon as it considers the pull request ready, which
+                    // may be immediately — there is no telling from here whether anything is
+                    // still outstanding.
+                    `This merges #${reference.number} using ${selectedMergeMethod} as soon as the host considers it ready, which may be immediately.`
                   : `This closes #${reference.number} without merging it.`}
             </AlertDialogDescription>
           </AlertDialogHeader>

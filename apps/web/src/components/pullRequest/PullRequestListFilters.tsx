@@ -118,6 +118,14 @@ const ALL_HOSTS_VALUE = "";
 const ALL_SERVERS_VALUE = "";
 /** The unset value of each narrowing group, which no filter of theirs is named after. */
 const UNFILTERED_VALUE = "all";
+/**
+ * A project's own radio value, carrying the server along with the id: the id alone is only
+ * unique within its own server, so two rows sharing one would otherwise both read as checked.
+ */
+const projectMenuValue = (project: {
+  readonly id: ProjectId;
+  readonly environmentId: EnvironmentId;
+}) => `${project.environmentId} ${project.id}`;
 
 const DRAFT_OPTIONS = [
   { value: UNFILTERED_VALUE, label: "All", Icon: LayersIcon },
@@ -194,6 +202,7 @@ export function PullRequestFiltersMenu({
   onServer,
   projects,
   projectId,
+  projectEnvironmentId,
   unavailable,
   onProject,
 }: {
@@ -229,12 +238,18 @@ export function PullRequestFiltersMenu({
   }>;
   projectId: ProjectId | undefined;
   /**
+   * The server the selected project belongs to. A project id is only unique within its own
+   * server, so without this two rows sharing an id would both read as checked here.
+   */
+  projectEnvironmentId: EnvironmentId | undefined;
+  /**
    * Projects whose repository could not be read this time round. They are named here, where
    * the reader is already choosing between projects, rather than as a count above the list
    * that says something is missing without saying which.
    */
   unavailable: ReadonlyMap<ProjectId, string>;
-  onProject: (projectId: ProjectId | undefined) => void;
+  /** The environment comes with the project id, since picking a row picks a specific server's copy of it. */
+  onProject: (projectId: ProjectId | undefined, environmentId: EnvironmentId | undefined) => void;
 }) {
   const filtered =
     state !== "open" ||
@@ -332,10 +347,25 @@ export function PullRequestFiltersMenu({
         ) : null}
         <MenuSeparator />
         <MenuRadioGroup
-          value={projectId ?? ALL_PROJECTS_VALUE}
+          value={
+            projectId === undefined || projectEnvironmentId === undefined
+              ? ALL_PROJECTS_VALUE
+              : projectMenuValue({ id: projectId, environmentId: projectEnvironmentId })
+          }
           onValueChange={(next) => {
-            const nextProjectId = next === ALL_PROJECTS_VALUE ? undefined : (next as ProjectId);
-            if (nextProjectId !== projectId) onProject(nextProjectId);
+            if (next === ALL_PROJECTS_VALUE) {
+              if (projectId !== undefined) onProject(undefined, undefined);
+              return;
+            }
+            // The value carries both halves, since the id alone cannot tell two servers' rows
+            // apart once they share one.
+            const project = projects.find((candidate) => projectMenuValue(candidate) === next);
+            if (
+              project !== undefined &&
+              (project.id !== projectId || project.environmentId !== projectEnvironmentId)
+            ) {
+              onProject(project.id, project.environmentId);
+            }
           }}
         >
           <MenuGroupLabel>Project</MenuGroupLabel>
@@ -355,8 +385,8 @@ export function PullRequestFiltersMenu({
               const reason = unavailable.get(project.id);
               return (
                 <MenuRadioItem
-                  key={project.id}
-                  value={project.id}
+                  key={projectMenuValue(project)}
+                  value={projectMenuValue(project)}
                   disabled={reason !== undefined}
                   title={reason}
                 >

@@ -3,7 +3,6 @@ import type {
   PullRequestActor,
   PullRequestBaseComparison,
   PullRequestCheck,
-  PullRequestChecksState,
   PullRequestComment,
   PullRequestDetailView,
   PullRequestMergeability,
@@ -721,18 +720,6 @@ export function resolveBaseFreshness(detail: {
     behindBy: detail.behindBy ?? null,
     methods: offered.filter((method) => allowed.includes(method)),
   };
-}
-
-/**
- * What arming auto-merge is about to do: `--auto` merges the instant nothing is left to wait on,
- * so a pull request that is already mergeable with green (or no) checks merges right away rather
- * than later. The confirmation reads this to say which one is about to happen.
- */
-export function autoMergeWouldMergeNow(
-  mergeability: PullRequestMergeability,
-  checksState: PullRequestChecksState | null,
-): boolean {
-  return mergeability === "mergeable" && (checksState === "passing" || checksState === null);
 }
 
 /**

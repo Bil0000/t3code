@@ -702,6 +702,23 @@ export function resolveQueryEnvironmentIds<Id extends string>(
 }
 
 /**
+ * The server a saved selection names, before its project is looked up against it. Still
+ * connecting is not the same as gone: a server the workspace already knows about is kept named
+ * here even while it has nothing to answer with yet, so the lookup that follows finds nothing
+ * under it rather than falling through to a different server's project of the same id. Only a
+ * name outside the workspace's whole catalog falls back to the page's own scope, which is what
+ * lets a link to a server since removed still resolve by project id alone.
+ */
+export function resolveSelectedEnvironmentId<Id extends string>(
+  namedEnvironmentId: Id | undefined,
+  knownEnvironmentIds: ReadonlySet<Id>,
+  fallbackEnvironmentId: Id | null,
+): Id | null {
+  if (namedEnvironmentId === undefined) return fallbackEnvironmentId;
+  return knownEnvironmentIds.has(namedEnvironmentId) ? namedEnvironmentId : fallbackEnvironmentId;
+}
+
+/**
  * How well a row answers the text that was searched for, as a number to order by.
  *
  * Every host searches more than a row shows — GitHub reads bodies and commit messages, GitLab

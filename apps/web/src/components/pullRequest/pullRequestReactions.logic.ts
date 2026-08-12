@@ -60,14 +60,20 @@ function countRemainder(count: number, named: boolean): string {
 
 /**
  * Who reacted, in GitHub's sentence. The viewer reads as "You" and comes first, because that is
- * the name they are looking for; the host already leaves the viewer's own login out of `actors`
- * when they have reacted, so nothing here has to match it back out. The cap still guards a host
- * that does not follow that rule: the sentence never names more people than `count` claims, and
- * the remainder is counted rather than named — a host reports fewer logins than it counts, so
- * `count` is the only trustworthy total.
+ * the name they are looking for; a compliant host already leaves the viewer's own login out of
+ * `actors` when they have reacted, leaving room for "You" without ever exceeding `count`. This
+ * function has no viewer login to match against `actors`, so it cannot tell a non-compliant host
+ * apart by name — but such a host gives itself away by leaving no room: `actors` alone already
+ * accounts for everyone `count` claims. Then the viewer is already in `actors` under their own
+ * login, and naming them "You" too would either invent a person or hide a real one, so `actors`
+ * is named as given instead. The cap still guards further: the sentence never names more people
+ * than `count` claims, and the remainder is counted rather than named — a host reports fewer
+ * logins than it counts, so `count` is the only trustworthy total.
  */
 export function pullRequestReactionTooltip(reaction: PullRequestReaction): string {
-  const names = reaction.viewerHasReacted ? ["You", ...reaction.actors] : [...reaction.actors];
+  const viewerHasRoom = reaction.actors.length < reaction.count;
+  const names =
+    reaction.viewerHasReacted && viewerHasRoom ? ["You", ...reaction.actors] : [...reaction.actors];
   const shown = names.slice(0, Math.min(NAMED_ACTOR_LIMIT, reaction.count));
   const others = Math.max(0, reaction.count - shown.length);
   const parts = [...shown, ...(others > 0 ? [countRemainder(others, shown.length > 0)] : [])];

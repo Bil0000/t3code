@@ -626,9 +626,60 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("takes an empty filtered answer as an answer rather than falling back", () =>
+  it.effect(
+    "falls back for a repository the index does not cover under a checks filter, keeping only the matching rows",
+    () =>
+      Effect.gen(function* () {
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+        mockedExecute.mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              pullRequests(2, 1, (number) => ({
+                statusCheckRollup:
+                  number === 1
+                    ? [{ name: "lint", status: "COMPLETED", conclusion: "SUCCESS" }]
+                    : [{ name: "test", status: "COMPLETED", conclusion: "FAILURE" }],
+              })),
+            ),
+          ),
+        );
+        const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+        const batch = yield* cli.listPullRequests({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          state: "open",
+          involvement: "all",
+          viewer: "bilal",
+          limit: 10,
+          filters: { checks: "passing" },
+        });
+
+        // The fallback's rows carry `checksState` exactly as a search's rows do, so `checks` is
+        // now a filter the fallback judges itself, the same as `draft`: an empty search answer
+        // under it is still ambiguous, and the row picked out afterwards is the one whose own
+        // `checksState` reads "passing".
+        expect(searchOfCall(1)).toBeUndefined();
+        assert.deepStrictEqual(
+          batch.items.map((item) => item.number),
+          [1],
+        );
+      }),
+  );
+
+  it.effect("fails a checks filter for a row whose checks are still pending", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("[]")));
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            pullRequests(1, 1, () => ({
+              statusCheckRollup: [{ name: "build", status: "IN_PROGRESS" }],
+            })),
+          ),
+        ),
+      );
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
       const batch = yield* cli.listPullRequests({
@@ -639,13 +690,11 @@ layer("GitHubPullRequestCli.layer", (it) => {
         involvement: "all",
         viewer: "bilal",
         limit: 10,
-        filters: { draft: "hide", checks: "passing", excludedLabels: ["wip"], author: "OctoCat" },
+        filters: { checks: "passing" },
       });
 
-      // The filters were qualifiers on that very search, so nothing matching them exists. The
-      // search-free fallback is for a repository the index does not cover, and it could not
-      // judge `checks` at all — no listed row says anything about them.
-      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      // Pending equals neither "passing" nor "failing", so it satisfies neither filter value —
+      // the same row would also be dropped by `checks: "failing"`.
       assert.deepStrictEqual(batch.items, []);
     }),
   );

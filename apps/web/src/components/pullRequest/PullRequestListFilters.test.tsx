@@ -63,6 +63,7 @@ function menu(overrides: Partial<Parameters<typeof PullRequestFiltersMenu>[0]>) 
     onServer: () => undefined,
     projects: [],
     projectId: undefined,
+    projectEnvironmentId: undefined,
     unavailable: new Map(),
     onProject: () => undefined,
     ...overrides,
@@ -110,26 +111,55 @@ describe("pull request filters menu", () => {
 
   it("does not emit a change when the selected project is chosen again", () => {
     const projectId = "project-1" as ProjectId;
+    const environmentId = "env-1" as EnvironmentId;
+    const onProject = vi.fn();
+    const view = menu({
+      projects: [
+        {
+          id: projectId,
+          environmentId,
+          title: "T3 Code",
+          workspaceRoot: "/work/t3code",
+        },
+      ],
+      projectId,
+      projectEnvironmentId: environmentId,
+      onProject,
+    });
+    const radioGroup = findValueChange(view);
+    expect(radioGroup).toBeDefined();
+
+    radioGroup?.props.onValueChange(`${environmentId} ${projectId}`);
+    expect(onProject).not.toHaveBeenCalled();
+
+    radioGroup?.props.onValueChange("all");
+    expect(onProject).toHaveBeenCalledWith(undefined, undefined);
+  });
+
+  it("passes the environment along so a duplicate project id on another server is told apart", () => {
+    const projectId = "project-1" as ProjectId;
     const onProject = vi.fn();
     const view = menu({
       projects: [
         {
           id: projectId,
           environmentId: "env-1" as EnvironmentId,
-          title: "T3 Code",
-          workspaceRoot: "/work/t3code",
+          title: "T3 Code · one",
+          workspaceRoot: "/work/t3code-1",
+        },
+        {
+          id: projectId,
+          environmentId: "env-2" as EnvironmentId,
+          title: "T3 Code · two",
+          workspaceRoot: "/work/t3code-2",
         },
       ],
-      projectId,
       onProject,
     });
     const radioGroup = findValueChange(view);
     expect(radioGroup).toBeDefined();
 
-    radioGroup?.props.onValueChange(projectId);
-    expect(onProject).not.toHaveBeenCalled();
-
-    radioGroup?.props.onValueChange("all");
-    expect(onProject).toHaveBeenCalledWith(undefined);
+    radioGroup?.props.onValueChange(`env-2 ${projectId}`);
+    expect(onProject).toHaveBeenCalledWith(projectId, "env-2");
   });
 });
