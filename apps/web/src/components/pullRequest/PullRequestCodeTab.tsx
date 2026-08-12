@@ -29,6 +29,7 @@ import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
+import { canEditPullRequestComment } from "./pullRequestEditing.logic";
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
@@ -313,6 +314,9 @@ export function PullRequestCodeTab({
     reportFailure: false,
   });
   const setThreadResolution = useAtomCommand(pullRequestEnvironment.setThreadResolution, {
+    reportFailure: false,
+  });
+  const updateComment = useAtomCommand(pullRequestEnvironment.updateComment, {
     reportFailure: false,
   });
   const getDiffFileContents = useAtomCommand(pullRequestEnvironment.diffFileContents);
@@ -778,6 +782,18 @@ export function PullRequestCodeTab({
             }),
           )
         }
+        // A conversation on a line is made of review comments, whatever the host filed them as.
+        canEditComment={(comment) =>
+          canEditPullRequestComment(detail, { author: comment.author, kind: "review-comment" })
+        }
+        onEditComment={(commentId, body) =>
+          runThreadCommand("The comment could not be saved", () =>
+            updateComment({
+              environmentId,
+              input: { ...reference, commentId, kind: "review-comment", body },
+            }),
+          )
+        }
         onToggleResolved={() =>
           void runThreadCommand("The conversation could not be updated", () =>
             setThreadResolution({
@@ -790,8 +806,7 @@ export function PullRequestCodeTab({
       />
     ),
     [
-      detail.capabilities.reactions,
-      detail.workspaceRoot,
+      detail,
       environmentId,
       onRefresh,
       onFixFinding,
@@ -803,6 +818,7 @@ export function PullRequestCodeTab({
       runThreadCommand,
       setThreadResolution,
       threadPending,
+      updateComment,
     ],
   );
 

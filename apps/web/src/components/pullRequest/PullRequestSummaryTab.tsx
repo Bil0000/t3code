@@ -11,6 +11,7 @@ import {
   ChevronRightIcon,
   HammerIcon,
   MessageSquareIcon,
+  PencilIcon,
   SendIcon,
   TagIcon,
   UsersIcon,
@@ -41,7 +42,12 @@ import {
   pullRequestFindingKey,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
+import {
+  canEditPullRequestChangeRequest,
+  canEditPullRequestComment,
+} from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { PullRequestConversationGhost } from "./PullRequestGhosts";
 
@@ -72,15 +78,69 @@ function reviewStateLabel(state: string): string {
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
+/** What every remark in the conversation needs to be rewritten where it sits. */
+interface CommentEditing {
+  readonly cwd: string;
+  readonly canEdit: (comment: PullRequestComment) => boolean;
+  readonly editingId: string | null;
+  readonly saving: boolean;
+  readonly onEdit: (comment: PullRequestComment | null) => void;
+  readonly onSave: (comment: PullRequestComment, body: string) => void;
+}
+
+/**
+ * A remark's words, and the pencil that swaps them for the editor. The pencil is revealed by
+ * hovering the remark, like the reaction bar's own, so the parent must carry `group`.
+ */
+function CommentBody({
+  comment,
+  editing,
+  className,
+}: {
+  comment: PullRequestComment;
+  editing: CommentEditing;
+  className?: string | undefined;
+}) {
+  if (editing.editingId === comment.id) {
+    return (
+      <PullRequestMarkdownEditor
+        className={className}
+        value={comment.body}
+        cwd={editing.cwd}
+        label="Edit comment"
+        saving={editing.saving}
+        onSave={(body) => editing.onSave(comment, body)}
+        onCancel={() => editing.onEdit(null)}
+      />
+    );
+  }
+  return (
+    <div className={cn("flex items-start gap-1", className)}>
+      <PullRequestMarkdown className="min-w-0 flex-1" text={comment.body} cwd={editing.cwd} />
+      {editing.canEdit(comment) ? (
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+          aria-label="Edit comment"
+          onClick={() => editing.onEdit(comment)}
+        >
+          <PencilIcon className="size-3" />
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
 /** Finished work — a resolved conversation or a dismissed approval — opens collapsed. */
 function CollapsedComment({
   comment,
-  cwd,
+  editing,
   label,
   reactionBar,
 }: {
   comment: PullRequestComment;
-  cwd: string;
+  editing: CommentEditing;
   label: string;
   reactionBar: ReactNode;
 }) {
@@ -115,7 +175,7 @@ function CollapsedComment({
                   {comment.path}
                 </p>
               ) : null}
-              <PullRequestMarkdown className="mt-2" text={comment.body} cwd={cwd} />
+              <CommentBody className="mt-2" comment={comment} editing={editing} />
               {reactionBar}
             </div>
           ) : null}
@@ -303,6 +363,55 @@ export function PullRequestSummaryTab({
     void readLocalApi()?.shell.openExternal(url);
   };
 
+  const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
+  const updateComment = useAtomCommand(pullRequestEnvironment.updateComment, {
+    reportFailure: false,
+  });
+  // Keyed by the pull request, like the comment window above it, so an editor left open never
+  // reappears over the next pull request's description.
+  const [bodyScope, setBodyScope] = useState<string | null>(null);
+  const [bodySaving, setBodySaving] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [commentSaving, setCommentSaving] = useState(false);
+
+  const saveBody = async (body: string) => {
+    if (bodySaving) return;
+    setBodySaving(true);
+    const result = await update({ environmentId, input: { ...reference, body } });
+    setBodySaving(false);
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not save the description" });
+      return;
+    }
+    setBodyScope(null);
+    onRefresh();
+  };
+
+  const commentEditing: CommentEditing = {
+    cwd: detail.workspaceRoot,
+    canEdit: (comment) => canEditPullRequestComment(detail, comment),
+    editingId: editingCommentId,
+    saving: commentSaving,
+    onEdit: (comment) => setEditingCommentId(comment?.id ?? null),
+    onSave: async (comment, body) => {
+      // A review's own summary is not a kind any host rewrites, which is why no pencil is ever
+      // offered on one; the check is here because the comment's own type still allows it.
+      if (commentSaving || comment.kind === "review") return;
+      setCommentSaving(true);
+      const result = await updateComment({
+        environmentId,
+        input: { ...reference, commentId: comment.id, kind: comment.kind, body },
+      });
+      setCommentSaving(false);
+      if (result._tag === "Failure") {
+        toastManager.add({ type: "error", title: "Could not save the comment" });
+        return;
+      }
+      setEditingCommentId(null);
+      onRefresh();
+    },
+  };
+
   return (
     <div className="h-full overflow-y-auto">
       <section className="px-4 py-3">
@@ -389,10 +498,38 @@ export function PullRequestSummaryTab({
 
       <Section title="Description">
         <div className="group">
-          <PullRequestMarkdown
-            text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
-            cwd={detail.workspaceRoot}
-          />
+          {bodyScope === detail.url ? (
+            <PullRequestMarkdownEditor
+              // Empty is a real answer here: saving nothing is how a description is cleared.
+              allowEmpty
+              value={detail.body}
+              cwd={detail.workspaceRoot}
+              label="Pull request description"
+              placeholder="Describe this pull request"
+              saving={bodySaving}
+              onSave={(body) => void saveBody(body)}
+              onCancel={() => setBodyScope(null)}
+            />
+          ) : (
+            <div className="flex items-start gap-1">
+              <PullRequestMarkdown
+                className="min-w-0 flex-1"
+                text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
+                cwd={detail.workspaceRoot}
+              />
+              {canEditPullRequestChangeRequest(detail) ? (
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                  aria-label="Edit description"
+                  onClick={() => setBodyScope(detail.url)}
+                >
+                  <PencilIcon className="size-3" />
+                </Button>
+              ) : null}
+            </div>
+          )}
           <PullRequestReactionBar
             className="mt-2"
             reactions={detail.reactions ?? []}
@@ -517,7 +654,7 @@ export function PullRequestSummaryTab({
                       <CollapsedComment
                         key={comment.id}
                         comment={comment}
-                        cwd={detail.workspaceRoot}
+                        editing={commentEditing}
                         label={thread?.isResolved ? "Resolved" : "Approval dismissed"}
                         reactionBar={
                           <PullRequestReactionBar
@@ -581,11 +718,7 @@ export function PullRequestSummaryTab({
                           {comment.path}
                         </p>
                       ) : null}
-                      <PullRequestMarkdown
-                        className="mt-2"
-                        text={comment.body}
-                        cwd={detail.workspaceRoot}
-                      />
+                      <CommentBody className="mt-2" comment={comment} editing={commentEditing} />
                       <PullRequestReactionBar
                         className="mt-2"
                         reactions={comment.reactions ?? []}

@@ -30,6 +30,7 @@ import {
   LinkIcon,
   MoreHorizontalIcon,
   PanelRightIcon,
+  PencilIcon,
   RefreshCwIcon,
   ServerIcon,
   TriangleAlertIcon,
@@ -72,6 +73,7 @@ import {
 } from "../ui/alert-dialog";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import {
   Menu,
   MenuItem,
@@ -106,6 +108,7 @@ import {
   resolveBaseFreshness,
   type PullRequestFinding,
 } from "./pullRequestDetail.logic";
+import { canEditPullRequestChangeRequest } from "./pullRequestEditing.logic";
 import {
   resolvePickableEnvironments,
   type PickableEnvironment,
@@ -533,6 +536,15 @@ export function PullRequestDetailPanel({
   }, [forcedRefreshToken, refreshFromHost]);
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
   const [actionPending, setActionPending] = useState(false);
+  const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
+  // Scoped to the pull request it was typed against, since this one panel shows a different one
+  // every time it is opened and a half-written title must not follow it there.
+  const [titleScope, setTitleScope] = useState<{
+    readonly pullRequestKey: string;
+    readonly text: string;
+  } | null>(null);
+  const titleDraft = titleScope?.pullRequestKey === pullRequestKey ? titleScope.text : null;
+  const [titleSaving, setTitleSaving] = useState(false);
   const newThread = useNewThreadHandler();
   const { environments } = useEnvironments();
   const projects = useProjects();
@@ -609,6 +621,33 @@ export function PullRequestDetailPanel({
       refreshDetail();
     }
     onActed?.();
+  };
+
+  const saveTitle = async (next: string) => {
+    const title = next.trim();
+    if (detail === null || titleSaving) return;
+    if (title.length === 0 || title === detail.title) {
+      setTitleScope(null);
+      return;
+    }
+    setTitleSaving(true);
+    const result = await update({ environmentId, input: { ...reference, title } });
+    setTitleSaving(false);
+    if (result._tag === "Failure") {
+      // The draft stays open with the words still in it: retyping a title somebody has just
+      // rewritten is the one thing a failed save must not cost them.
+      toastManager.add({
+        type: "error",
+        title: "The title could not be saved",
+        description: readableFailure(
+          squashAtomCommandFailure(result),
+          "The host refused the new title.",
+        ),
+      });
+      return;
+    }
+    setTitleScope(null);
+    refreshDetail();
   };
 
   type ThreadTask = {
@@ -1435,7 +1474,66 @@ export function PullRequestDetailPanel({
           >
             {detail ? (
               <div className="col-span-2 mt-3 min-w-0 px-4 pb-4">
-                <h1 className="text-base font-semibold leading-snug">{detail.title}</h1>
+                {titleDraft === null ? (
+                  <div className="group flex min-w-0 items-start gap-1">
+                    <h1 className="min-w-0 flex-1 text-base font-semibold leading-snug">
+                      {detail.title}
+                    </h1>
+                    {canEditPullRequestChangeRequest(detail) ? (
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                        aria-label="Edit title"
+                        onClick={() => setTitleScope({ pullRequestKey, text: detail.title })}
+                      >
+                        <PencilIcon className="size-3" />
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : (
+                  // A title is one line of text, not markdown, so it takes an input rather than
+                  // the editor the description and the remarks share.
+                  <div className="space-y-2">
+                    <Input
+                      autoFocus
+                      size="sm"
+                      disabled={titleSaving}
+                      value={titleDraft}
+                      aria-label="Pull request title"
+                      onChange={(event) =>
+                        setTitleScope({ pullRequestKey, text: event.target.value })
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          void saveTitle(titleDraft);
+                        } else if (event.key === "Escape") {
+                          event.preventDefault();
+                          setTitleScope(null);
+                        }
+                      }}
+                    />
+                    <div className="flex justify-end gap-2">
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        disabled={titleSaving}
+                        onClick={() => setTitleScope(null)}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        size="xs"
+                        variant="outline"
+                        disabled={titleSaving || titleDraft.trim().length === 0}
+                        onClick={() => void saveTitle(titleDraft)}
+                      >
+                        {titleSaving ? "Saving..." : "Save"}
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 <PullRequestMetaLine className="mt-2 text-xs text-muted-foreground">
                   <PullRequestActorLabel actor={detail.author} className="font-medium" />
                   <span>updated {formatRelativeTimeLabel(detail.updatedAt)}</span>

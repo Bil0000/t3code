@@ -2,12 +2,18 @@
  * Pull-request-specific annotations: conversations already on the host and comments queued for
  * the review being written. New comment composition uses the shared diff annotation.
  */
-import type { EnvironmentId, PullRequestRef, PullRequestReviewThread } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  PullRequestRef,
+  PullRequestReviewThread,
+  PullRequestThreadComment,
+} from "@t3tools/contracts";
 import {
   CheckCircle2Icon,
   CircleIcon,
   HammerIcon,
   MessageSquareIcon,
+  PencilIcon,
   Trash2Icon,
 } from "lucide-react";
 import { useRef, useState } from "react";
@@ -20,6 +26,7 @@ import { Textarea } from "../ui/textarea";
 import { isCommentSubmitShortcut } from "../diffs/commentSubmitShortcut";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
+import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import type { PendingReviewComment } from "./pullRequestReviewStore";
 
@@ -90,6 +97,8 @@ export function ReviewThreadCard({
   fixPending,
   onFix,
   onReply,
+  canEditComment,
+  onEditComment,
   onToggleResolved,
   onReacted,
 }: {
@@ -107,6 +116,10 @@ export function ReviewThreadCard({
   onFix?: () => void;
   /** Resolves to whether the host took it, so a reply that failed keeps the words it was given. */
   onReply: (body: string) => Promise<boolean>;
+  /** Whether this reader wrote this remark, which is what rewriting one takes. */
+  canEditComment: (comment: PullRequestThreadComment) => boolean;
+  /** Resolves to whether the host took it, like `onReply`. */
+  onEditComment: (commentId: string, body: string) => Promise<boolean>;
   onToggleResolved: () => void;
   onReacted: () => void;
 }) {
@@ -114,7 +127,17 @@ export function ReviewThreadCard({
   const [expanded, setExpanded] = useState(!thread.isResolved);
   const [replying, setReplying] = useState(false);
   const [reply, setReply] = useState("");
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [savingEdit, setSavingEdit] = useState(false);
   const sendingRef = useRef(false);
+
+  const saveEdit = async (commentId: string, body: string) => {
+    if (savingEdit) return;
+    setSavingEdit(true);
+    const saved = await onEditComment(commentId, body);
+    setSavingEdit(false);
+    if (saved) setEditingId(null);
+  };
 
   const send = async () => {
     const trimmed = reply.trim();
@@ -188,11 +211,36 @@ export function ReviewThreadCard({
                   <PullRequestActorLabel actor={comment.author} className="text-foreground" />
                   <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
                 </div>
-                <PullRequestMarkdown
-                  className="mt-1 text-sm"
-                  text={comment.body}
-                  cwd={workspaceRoot}
-                />
+                {editingId === comment.id ? (
+                  <PullRequestMarkdownEditor
+                    className="mt-1"
+                    value={comment.body}
+                    cwd={workspaceRoot}
+                    label="Edit comment"
+                    saving={savingEdit}
+                    onSave={(body) => void saveEdit(comment.id, body)}
+                    onCancel={() => setEditingId(null)}
+                  />
+                ) : (
+                  <div className="mt-1 flex items-start gap-1">
+                    <PullRequestMarkdown
+                      className="min-w-0 flex-1 text-sm"
+                      text={comment.body}
+                      cwd={workspaceRoot}
+                    />
+                    {canEditComment(comment) ? (
+                      <Button
+                        size="icon-xs"
+                        variant="ghost"
+                        className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                        aria-label="Edit comment"
+                        onClick={() => setEditingId(comment.id)}
+                      >
+                        <PencilIcon className="size-3" />
+                      </Button>
+                    ) : null}
+                  </div>
+                )}
                 <PullRequestReactionBar
                   className="mt-1.5"
                   reactions={comment.reactions ?? []}
