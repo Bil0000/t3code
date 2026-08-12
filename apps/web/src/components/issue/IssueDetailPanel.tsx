@@ -626,7 +626,26 @@ export function IssueDetailPanel({
                     <ArrowUpRightIcon className="size-3.5" />
                     {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
                   </MenuItem>
-                  <MenuItem onClick={() => void writeTextToClipboard(detail.url)}>
+                  {/* A clipboard that is switched off or refuses says nothing on its own, and a
+                      reader who has been handed nothing goes and pastes whatever was there
+                      before. The refusal is the host's own sentence, because it is the only
+                      thing that says which of the two happened. */}
+                  <MenuItem
+                    onClick={() =>
+                      void writeTextToClipboard(detail.url, "issue link").catch(
+                        (error: unknown) => {
+                          toastManager.add({
+                            type: "error",
+                            title: "Could not copy the link",
+                            description:
+                              error instanceof Error
+                                ? error.message
+                                : "The clipboard refused it. Open the issue on the host instead.",
+                          });
+                        },
+                      )
+                    }
+                  >
                     <LinkIcon className="size-3.5" />
                     Copy link
                   </MenuItem>
