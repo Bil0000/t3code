@@ -174,71 +174,63 @@ describe("getChangeRequest linked issues", () => {
     const listCitedIssues = vi.fn<
       GitHubPullRequestCli.GitHubPullRequestCli["Service"]["listCitedIssues"]
     >(() => Effect.succeed([issue(34, false)]));
-    return read
-      .pipe(
-        Effect.map((detail) => {
-          expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
-            [12, true],
-            [34, false],
-          ]);
-          // The one GitHub already reported is not asked about again.
-          expect(listCitedIssues.mock.calls[0]?.[0].references).toEqual([
-            { repository: "acme/web", number: 34 },
-          ]);
+    return read.pipe(
+      Effect.map((detail) => {
+        expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
+          [12, true],
+          [34, false],
+        ]);
+        // The one GitHub already reported is not asked about again.
+        expect(listCitedIssues.mock.calls[0]?.[0].references).toEqual([
+          { repository: "acme/web", number: 34 },
+        ]);
+      }),
+      Effect.provide(
+        layerWith({
+          body: "Closes #12. Part of #34.",
+          linked: [issue(12, true)],
+          listCitedIssues,
         }),
-      )
-      .pipe(
-        Effect.provide(
-          layerWith({
-            body: "Closes #12. Part of #34.",
-            linked: [issue(12, true)],
-            listCitedIssues,
-          }),
-        ),
-      );
+      ),
+    );
   });
 
   it.effect("asks nothing when the words name only what the host already reported", () => {
     const listCitedIssues = vi.fn<
       GitHubPullRequestCli.GitHubPullRequestCli["Service"]["listCitedIssues"]
     >(() => Effect.succeed([]));
-    return read
-      .pipe(
-        Effect.map((detail) => {
-          expect(listCitedIssues).not.toHaveBeenCalled();
-          // The host's own claim survives: only it can say what merging closes.
-          expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
-            [12, true],
-          ]);
-        }),
-      )
-      .pipe(
-        Effect.provide(
-          layerWith({ body: "Closes #12.", linked: [issue(12, true)], listCitedIssues }),
-        ),
-      );
+    return read.pipe(
+      Effect.map((detail) => {
+        expect(listCitedIssues).not.toHaveBeenCalled();
+        // The host's own claim survives: only it can say what merging closes.
+        expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
+          [12, true],
+        ]);
+      }),
+      Effect.provide(
+        layerWith({ body: "Closes #12.", linked: [issue(12, true)], listCitedIssues }),
+      ),
+    );
   });
 
   it.effect("drops a reference GitHub answered nothing for", () =>
-    read
-      .pipe(
-        // `#404` is a number in a body and no more than that: a dead row here is worse than
-        // an absent one.
-        Effect.map((detail) => expect(detail.linkedIssues).toEqual([])),
-      )
-      .pipe(
-        Effect.provide(
-          layerWith({
-            body: "Part of #404.",
-            linked: [],
-            listCitedIssues: () => Effect.succeed([]),
-          }),
-        ),
+    read.pipe(
+      // `#404` is a number in a body and no more than that: a dead row here is worse than
+      // an absent one.
+      Effect.map((detail) => expect(detail.linkedIssues).toEqual([])),
+      Effect.provide(
+        layerWith({
+          body: "Part of #404.",
+          linked: [],
+          listCitedIssues: () => Effect.succeed([]),
+        }),
       ),
+    ),
   );
 
   it.effect("keeps the host's own links when the lookup fails", () =>
-    read.pipe(Effect.map((detail) => expect(detail.linkedIssues).toEqual([issue(12, true)]))).pipe(
+    read.pipe(
+      Effect.map((detail) => expect(detail.linkedIssues).toEqual([issue(12, true)])),
       Effect.provide(
         layerWith({
           body: "Part of #34.",

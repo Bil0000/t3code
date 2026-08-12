@@ -106,30 +106,28 @@ describe("getChangeRequest linked issues", () => {
     const listCitedIssues = vi.fn<
       GitLabPullRequestCli.GitLabPullRequestCli["Service"]["listCitedIssues"]
     >(() => Effect.succeed([issue(34, false)]));
-    return read
-      .pipe(
-        Effect.map((detail) => {
-          expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
-            [12, true],
-            [34, false],
-          ]);
-          // GitLab's issues endpoint is per project, and one read is the whole budget here.
-          expect(listCitedIssues.mock.calls[0]?.[0].numbers).toEqual([34]);
+    return read.pipe(
+      Effect.map((detail) => {
+        expect(detail.linkedIssues.map((link) => [link.number, link.closesIssue])).toEqual([
+          [12, true],
+          [34, false],
+        ]);
+        // GitLab's issues endpoint is per project, and one read is the whole budget here.
+        expect(listCitedIssues.mock.calls[0]?.[0].numbers).toEqual([34]);
+      }),
+      Effect.provide(
+        layerWith({
+          body: "Closes #12. Part of #34 and of acme/tools#9.",
+          linked: [issue(12, true)],
+          listCitedIssues,
         }),
-      )
-      .pipe(
-        Effect.provide(
-          layerWith({
-            body: "Closes #12. Part of #34 and of acme/tools#9.",
-            linked: [issue(12, true)],
-            listCitedIssues,
-          }),
-        ),
-      );
+      ),
+    );
   });
 
   it.effect("drops a reference GitLab answered nothing for", () =>
-    read.pipe(Effect.map((detail) => expect(detail.linkedIssues).toEqual([]))).pipe(
+    read.pipe(
+      Effect.map((detail) => expect(detail.linkedIssues).toEqual([])),
       Effect.provide(
         layerWith({
           body: "Part of #404.",
@@ -141,7 +139,8 @@ describe("getChangeRequest linked issues", () => {
   );
 
   it.effect("keeps the host's own links when the lookup fails", () =>
-    read.pipe(Effect.map((detail) => expect(detail.linkedIssues).toEqual([issue(12, true)]))).pipe(
+    read.pipe(
+      Effect.map((detail) => expect(detail.linkedIssues).toEqual([issue(12, true)])),
       Effect.provide(
         layerWith({
           body: "Part of #34.",
