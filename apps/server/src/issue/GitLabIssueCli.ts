@@ -613,7 +613,6 @@ export const make = Effect.gen(function* () {
       method: "PUT",
       // A JSON body rather than a `--raw-field`: glab coerces a field that reads as a literal
       // `true` or a number, and a title or a description is text either way.
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       stdin: JSON.stringify(input.body),
     }).pipe(Effect.asVoid);
 
@@ -686,7 +685,6 @@ export const make = Effect.gen(function* () {
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/issues`,
         method: "POST",
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         stdin: JSON.stringify({
           title: input.title,
           description: input.body,
@@ -724,7 +722,6 @@ export const make = Effect.gen(function* () {
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes`,
         method: "POST",
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         stdin: JSON.stringify({ body: input.body }),
       }).pipe(Effect.asVoid),
 

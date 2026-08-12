@@ -26,7 +26,6 @@ function issueJson(entry: Record<string, unknown>): string {
 }
 
 function listJson(entries: ReadonlyArray<Record<string, unknown>>): string {
-  // @effect-diagnostics-next-line preferSchemaOverJson:off
   return `[${entries.map((entry) => issueJson(entry)).join(",")}]`;
 }
 
@@ -98,7 +97,6 @@ describe("decodeIssueListJson", () => {
 
   it("skips a malformed row but still counts it, so paging does not stop early", () => {
     const batch = expectSuccess(
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       decodeIssueListJson(`[{"iid":"not a number"},${listJson([{ iid: 7 }]).slice(1)}`),
     );
 
@@ -135,12 +133,10 @@ describe("decodeCreatedIssueJson", () => {
 
 describe("decodeViewerJson", () => {
   it("reads the signed-in username", () => {
-    // @effect-diagnostics-next-line preferSchemaOverJson:off
     expect(expectSuccess(decodeViewerJson(JSON.stringify({ username: "bilal" })))).toBe("bilal");
   });
 
   it("returns nothing when the account has no username", () => {
-    // @effect-diagnostics-next-line preferSchemaOverJson:off
     expect(expectSuccess(decodeViewerJson(JSON.stringify({ username: "  " })))).toBeNull();
   });
 });
@@ -149,7 +145,6 @@ describe("decodeIssueNotesJson", () => {
   it("splits what people wrote from what GitLab recorded", () => {
     const notes = expectSuccess(
       decodeIssueNotesJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify([
           { id: 1, body: "closed", system: true, created_at: "2026-07-01T00:00:00Z" },
           {
@@ -189,7 +184,6 @@ describe("decodeIssueNotesJson", () => {
   it("reads the system notes whose wording has been stable", () => {
     const notes = expectSuccess(
       decodeIssueNotesJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify(
           [
             "reopened",
@@ -225,7 +219,6 @@ describe("decodeIssueNotesJson", () => {
   it("drops a system note it cannot read rather than guessing what happened", () => {
     const notes = expectSuccess(
       decodeIssueNotesJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify([
           // A labelling names its label by id here, which is why they are read elsewhere.
           { id: 1, body: "added ~7 label", system: true, created_at: "2026-07-01T00:00:00Z" },
@@ -243,7 +236,6 @@ describe("decodeLabelEventsJson", () => {
   it("reads a labelling and an unlabelling", () => {
     const events = expectSuccess(
       decodeLabelEventsJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify([
           {
             id: 1,
@@ -267,7 +259,6 @@ describe("decodeLabelEventsJson", () => {
   it("keeps a labelling whose label has since been deleted, with nothing to name", () => {
     const events = expectSuccess(
       decodeLabelEventsJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify([{ id: 1, action: "add", created_at: "2026-07-01T00:00:00Z", label: null }]),
       ),
     );
@@ -278,7 +269,6 @@ describe("decodeLabelEventsJson", () => {
   it("skips an action it has no kind for, and a malformed row, but counts both", () => {
     const events = expectSuccess(
       decodeLabelEventsJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify([
           { id: 1, action: "reordered", created_at: "2026-07-01T00:00:00Z" },
           { action: "add", created_at: "2026-07-01T00:00:00Z" },
@@ -294,7 +284,6 @@ describe("decodeLabelEventsJson", () => {
 describe("decodeLinkedMergeRequestsJson", () => {
   it("marks the merge requests that close the issue as closing it", () => {
     const links = expectSuccess(
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
       decodeLinkedMergeRequestsJson(`[${mergeRequestJson({ state: "merged" })}]`, true),
     );
 
@@ -315,7 +304,6 @@ describe("decodeLinkedMergeRequestsJson", () => {
     const states = ["opened", "locked", "closed", "merged", undefined];
     const links = expectSuccess(
       decodeLinkedMergeRequestsJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         `[${states.map((state) => mergeRequestJson({ state })).join(",")}]`,
         false,
       ),
@@ -329,7 +317,6 @@ describe("decodeLinkedMergeRequestsJson", () => {
   it("reads the draft flag under either of the names GitLab has used", () => {
     const links = expectSuccess(
       decodeLinkedMergeRequestsJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         `[${mergeRequestJson({ draft: true })},${mergeRequestJson({ work_in_progress: true })}]`,
         false,
       ),
@@ -341,7 +328,6 @@ describe("decodeLinkedMergeRequestsJson", () => {
   it("skips a merge request that never names its own project", () => {
     const links = expectSuccess(
       decodeLinkedMergeRequestsJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         `[${mergeRequestJson({ references: null })},${mergeRequestJson({})}]`,
         false,
       ),
@@ -356,7 +342,6 @@ describe("decodeProjectLabelsJson", () => {
   it("reads the labels a project offers", () => {
     const labels = expectSuccess(
       decodeProjectLabelsJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify([
           { name: "backend", color: "#ff0000", description: "Server work" },
           { name: "  " },
@@ -377,7 +362,6 @@ describe("decodeProjectMembersJson", () => {
   it("carries the numeric id an assignment is written with", () => {
     const members = expectSuccess(
       decodeProjectMembersJson(
-        // @effect-diagnostics-next-line preferSchemaOverJson:off
         JSON.stringify([
           { id: 5, username: "julius", name: "Julius" },
           // No id, so there is nothing GitLab would take for this person.

@@ -308,7 +308,6 @@ export const make = Effect.gen(function* () {
         .request({
           method: "PUT",
           url: `${path}/issues/${input.number}`,
-          // @effect-diagnostics-next-line preferSchemaOverJson:off
           body: JSON.stringify(input.body),
         })
         .pipe(Effect.asVoid),
@@ -388,7 +387,6 @@ export const make = Effect.gen(function* () {
           .request({
             method: "POST",
             url: `${path}/issues`,
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             body: JSON.stringify({
               title: input.title,
               content: { raw: input.body },
@@ -435,7 +433,6 @@ export const make = Effect.gen(function* () {
           .request({
             method: "POST",
             url: `${path}/issues/${input.number}/comments`,
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
             body: JSON.stringify({ content: { raw: input.body } }),
           })
           .pipe(Effect.asVoid),

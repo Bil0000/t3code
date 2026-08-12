@@ -827,10 +827,7 @@ layer("GitLabIssueCli.layer", (it) => {
         const path = input.args[1];
         if (path === "projects/acme%2Fweb/templates/issues") {
           return Effect.succeed(
-            output(
-              // @effect-diagnostics-next-line preferSchemaOverJson:off
-              JSON.stringify([{ name: "No key" }, { key: "bug.md", name: "Bug" }]),
-            ),
+            output(JSON.stringify([{ name: "No key" }, { key: "bug.md", name: "Bug" }])),
           );
         }
         if (path === "projects/acme%2Fweb/templates/issues/bug.md") {
