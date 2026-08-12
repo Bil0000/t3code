@@ -6,7 +6,10 @@ import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import { SourceControlActorAvatar } from "../sourceControl/actorPresentation";
+import {
+  SourceControlActorAvatar,
+  SourceControlMetaLine,
+} from "../sourceControl/actorPresentation";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
@@ -39,6 +42,16 @@ function TimelineMarker({
   );
 }
 
+function IconMarker({ icon, className }: { icon: ReactNode; className?: string | undefined }) {
+  return (
+    <TimelineMarker className={className}>
+      <span className="flex size-7 items-center justify-center bg-background text-muted-foreground">
+        {icon}
+      </span>
+    </TimelineMarker>
+  );
+}
+
 function ActorTimelineMarker({
   actors,
   className,
@@ -52,11 +65,7 @@ function ActorTimelineMarker({
 }) {
   const actor = actors[0];
   return actor === undefined ? (
-    <TimelineMarker className={className}>
-      <span className="flex size-7 items-center justify-center bg-background text-muted-foreground">
-        {fallback}
-      </span>
-    </TimelineMarker>
+    <IconMarker className={className} icon={fallback} />
   ) : (
     <TimelineMarker className={className}>
       <SourceControlActorAvatar
@@ -88,9 +97,9 @@ function ConversationCard({
             <ActorName actor={entry.actor} />
             <span className="text-muted-foreground">{entry.title}</span>
           </div>
-          <p className="mt-1 text-[11px] text-muted-foreground">
-            {formatRelativeTimeLabel(entry.at)}
-          </p>
+          <SourceControlMetaLine className="mt-1 flex-wrap text-[11px] text-muted-foreground">
+            <span>{formatRelativeTimeLabel(entry.at)}</span>
+          </SourceControlMetaLine>
         </div>
         {url === null ? null : (
           <Button
@@ -184,13 +193,16 @@ function ConversationGroup({
   );
 }
 
+/**
+ * An event wears the issue glyph rather than whoever caused it. A face here is a filled disc on
+ * every row of the rail, which reads as a column of blobs the line runs between; the glyph keeps
+ * the rail the continuous thing and leaves the avatars to say what they say on a pull request —
+ * that a run of comments has people in it.
+ */
 function TimelineEvent({ entry }: { entry: IssueTimelineEntry }) {
   return (
     <div className="relative mb-5 pl-12 [contain-intrinsic-block-size:48px] [content-visibility:auto]">
-      <ActorTimelineMarker
-        actors={entry.actor === null ? [] : [entry.actor]}
-        fallback={<CircleDotIcon className="size-3.5" />}
-      />
+      <IconMarker icon={<CircleDotIcon className="size-3.5" />} />
       <div className="py-1.5 text-xs">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           <ActorName actor={entry.actor} />
