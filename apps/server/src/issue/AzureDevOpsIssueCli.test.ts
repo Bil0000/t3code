@@ -49,6 +49,46 @@ function listing(items: ReadonlyArray<unknown>, project = "web") {
   );
 }
 
+/** The same, with one answer per query it makes — the last one for every query after those. */
+function listings(pages: ReadonlyArray<ReadonlyArray<unknown>>, project = "web") {
+  let asked = 0;
+  mockedExecute.mockImplementation((input) => {
+    if (input.args[0] === "repos") {
+      return Effect.succeed(output(`${project}\n`)) as ReturnType<
+        AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]
+      >;
+    }
+    const page = pages[Math.min(asked, pages.length - 1)] ?? [];
+    asked += 1;
+    return Effect.succeed(output(JSON.stringify(page))) as ReturnType<
+      AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]
+    >;
+  });
+}
+
+/** A row Azure counted and this cannot place: no link, no title, no dates. */
+const unreadable = (id: number) => ({ id, url: null, fields: null });
+
+/** A project of nothing but those, always as many rows as the query asked for. */
+function unreadableListing(project = "web") {
+  mockedExecute.mockImplementation((input) => {
+    if (input.args[0] === "repos") {
+      return Effect.succeed(output(`${project}\n`)) as ReturnType<
+        AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]
+      >;
+    }
+    const top = Number(input.args[input.args.indexOf("--top") + 1]);
+    return Effect.succeed(
+      output(JSON.stringify(Array.from({ length: top }, (_, index) => unreadable(index + 1)))),
+    ) as ReturnType<AzureDevOpsCli.AzureDevOpsCli["Service"]["execute"]>;
+  });
+}
+
+const topsOf = () =>
+  mockedExecute.mock.calls
+    .filter(([input]) => input.args[0] === "boards")
+    .map(([input]) => input.args[input.args.indexOf("--top") + 1]);
+
 const wiqlOf = () => {
   const call = mockedExecute.mock.calls.find(([input]) => input.args[0] === "boards");
   assert.isDefined(call);
@@ -264,6 +304,62 @@ layer((it) => {
         page.items.map((item) => item.number),
         [1, 3],
       );
+    }),
+  );
+
+  it.effect("widens the window rather than paging on rows it cannot read", () =>
+    Effect.gen(function* () {
+      listings([
+        [workItem(1), unreadable(2), unreadable(3)],
+        [workItem(1), unreadable(2), unreadable(3), workItem(4), workItem(5), workItem(6)],
+      ]);
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+
+      const page = yield* cli.listWorkItems({
+        cwd: "/w",
+        state: "all",
+        involvement: "all",
+        limit: 2,
+      });
+
+      // `--top` counts rows Azure has, not rows this can read, so the unreadable tail would bound
+      // every following page at the same place: the cursor carries on from work item 4 instead.
+      assert.deepStrictEqual(topsOf(), ["3", "6"]);
+      assert.deepStrictEqual(
+        page.items.map((item) => item.number),
+        [1, 4],
+      );
+      assert.isTrue(page.truncated);
+    }),
+  );
+
+  it.effect("stops rather than reporting more with no row to carry on from", () =>
+    Effect.gen(function* () {
+      unreadableListing();
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+
+      const page = yield* cli.listWorkItems({
+        cwd: "/w",
+        state: "all",
+        involvement: "all",
+        limit: 2,
+      });
+
+      assert.deepStrictEqual(page.items, []);
+      // Reported as truncated, this page would be asked for again from the same instant forever.
+      assert.isFalse(page.truncated);
+      assert.deepStrictEqual(topsOf(), ["3", "6", "12", "24"]);
+    }),
+  );
+
+  it.effect("asks once where Azure answered with rows it could read", () =>
+    Effect.gen(function* () {
+      listings([[workItem(1), workItem(2), workItem(3)]]);
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+
+      yield* cli.listWorkItems({ cwd: "/w", state: "all", involvement: "all", limit: 2 });
+
+      assert.deepStrictEqual(topsOf(), ["3"]);
     }),
   );
 

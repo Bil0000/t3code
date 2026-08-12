@@ -1338,7 +1338,8 @@ function toTemplateField(
   const label = attributes?.label ?? "";
   const description = attributes?.description ?? "";
   const required = raw.validations?.required === true;
-  // A form need not name a question. Where it does not, the place it is asked in files the answer.
+  // A form need not name a question. Where it does not, the place it is asked in files the answer —
+  // a stand-in the caller moves aside if the form names it somewhere else.
   const id = trimmed(raw.id) ?? `field-${index}`;
   // Every kind but `markdown` is a heading in the filed body, so one with nothing to head is not a
   // question anybody could answer.
@@ -1417,6 +1418,29 @@ export function decodeIssueFormYaml(filename: string, raw: string): IssueTemplat
   const key = trimmed(filename);
   const name = trimmed(form.value.name);
   if (key === null || name === null) return null;
+  const decoded = form.value.body.map((entry) => {
+    const field = decodeFormField(entry);
+    return Exit.isFailure(field) ? null : field.value;
+  });
+  // Every id the form names, read before any question is handed one, so a stand-in can be kept off
+  // a name a question further down the form answers to.
+  const named = new Set(
+    decoded.flatMap((raw) => {
+      const id = raw === null ? null : trimmed(raw.id);
+      return id === null ? [] : [id];
+    }),
+  );
+  const taken = new Set<string>();
+  const fields = decoded.flatMap((raw, index) => {
+    if (raw === null) return [];
+    const mapped = toTemplateField(raw, index);
+    if (mapped === null) return [];
+    if (mapped.kind === "markdown") return [mapped];
+    const own = trimmed(raw.id);
+    const id = own !== null && !taken.has(own) ? own : freeFieldId(mapped.id, named, taken);
+    taken.add(id);
+    return [{ ...mapped, id }];
+  });
   return {
     key,
     name,
@@ -1424,12 +1448,7 @@ export function decodeIssueFormYaml(filename: string, raw: string): IssueTemplat
     title: form.value.title ?? "",
     // A form has no draft to write over: its body is built from the answers instead.
     body: "",
-    fields: form.value.body.flatMap((entry, index) => {
-      const field = decodeFormField(entry);
-      if (Exit.isFailure(field)) return [];
-      const mapped = toTemplateField(field.value, index);
-      return mapped === null ? [] : [mapped];
-    }),
+    fields,
     labels: toNameList(form.value.labels).slice(0, TEMPLATE_LABELS),
     assignees: toNameList(form.value.assignees).slice(0, TEMPLATE_ASSIGNEES),
   };

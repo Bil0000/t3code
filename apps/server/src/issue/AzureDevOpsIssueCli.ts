@@ -120,6 +120,13 @@ export class AzureDevOpsIssueCli extends Context.Service<
  */
 const ACTION_STATES: Record<IssueAction, string> = { close: "Closed", reopen: "Active" };
 
+/**
+ * How often a listing doubles the window it asks Azure for when rows come back unreadable. Three
+ * is where it stops: past a block of eight pages of rows this cannot place, the listing hands over
+ * what it has and reports no more — a short list rather than a walk that never ends.
+ */
+const MAX_LIST_WIDENINGS = 3;
+
 /** WIQL has one quote to escape, and a title filter never reaches it — but a cursor does. */
 const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`;
 
@@ -228,37 +235,62 @@ export const make = Effect.gen(function* () {
     listWorkItems: (input) => {
       // Asked for one row beyond the page, which is how every provider here probes for a next
       // slice without a second request.
-      const top = input.limit + 1;
+      const wanted = input.limit + 1;
       const cursorClause =
         input.cursor === undefined
           ? ""
           : ` AND [System.ChangedDate] <= ${quoted(input.cursor.updatedBefore)}`;
+      const query = (project: string, top: number) =>
+        read({
+          cwd: input.cwd,
+          operation: "listWorkItems",
+          // The query travels as one argv value rather than through a shell, and carries no
+          // text the reader typed: Azure filters by no free text, so a search never reaches it.
+          args: [
+            "boards",
+            "query",
+            ...detectArgs,
+            "--wiql",
+            `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = ${quoted(project)}` +
+              stateClause(input.state) +
+              involvementClause(input.involvement) +
+              cursorClause +
+              " ORDER BY [System.ChangedDate] DESC",
+            "--top",
+            String(top),
+          ],
+          decode: decodeWorkItemsJson,
+        });
+
+      /**
+       * A window wide enough to fill the page with rows this can read. `--top` bounds the window
+       * in rows Azure counted, not in rows this decoded, and the cursor can only carry on from a
+       * row it decoded — so a window whose tail is rows this cannot place would be asked for
+       * again, unchanged, on every following page. Widening steps over them instead.
+       */
+      const fill = (
+        project: string,
+        top: number,
+        widenings: number,
+      ): Effect.Effect<
+        { readonly items: ReadonlyArray<AzureDevOpsWorkItem>; readonly rawCount: number },
+        AzureDevOpsIssueCliError
+      > =>
+        query(project, top).pipe(
+          Effect.flatMap((page) =>
+            page.items.length >= wanted || page.rawCount < top || widenings === MAX_LIST_WIDENINGS
+              ? Effect.succeed(page)
+              : fill(project, top * 2, widenings + 1),
+          ),
+        );
+
       return projectName(input.cwd).pipe(
-        Effect.flatMap((project) =>
-          read({
-            cwd: input.cwd,
-            operation: "listWorkItems",
-            // The query travels as one argv value rather than through a shell, and carries no
-            // text the reader typed: Azure filters by no free text, so a search never reaches it.
-            args: [
-              "boards",
-              "query",
-              ...detectArgs,
-              "--wiql",
-              `SELECT [System.Id] FROM WorkItems WHERE [System.TeamProject] = ${quoted(project)}` +
-                stateClause(input.state) +
-                involvementClause(input.involvement) +
-                cursorClause +
-                " ORDER BY [System.ChangedDate] DESC",
-              "--top",
-              String(top),
-            ],
-            decode: decodeWorkItemsJson,
-          }),
-        ),
+        Effect.flatMap((project) => fill(project, wanted, 0)),
         Effect.map((page) => ({
           items: page.items.slice(0, input.limit),
-          truncated: page.rawCount > input.limit,
+          // Counted in rows this could read. A page that reports more without leaving a readable
+          // row to carry on from is one the reader asks for again from the same place, forever.
+          truncated: page.items.length > input.limit,
         })),
       );
     },
