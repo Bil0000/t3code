@@ -137,8 +137,10 @@ function claim(host: string, match: RegExpExecArray | null): IssueUrlLink | null
  * github.com and an Enterprise install stay apart.
  *
  * An Azure DevOps work item names only its team project, not a repository below it, so its link
- * also matches a repository identity that merely starts with that project's path: the work item
- * is the same one whichever repository under the project opens it.
+ * alone also matches a repository identity that merely starts with that project's path: the work
+ * item is the same one whichever repository under the project opens it. Every other host writes
+ * the whole repository path into the link, so there the match is exact — a nested GitLab project
+ * is a different repository from the group above it, not the same one seen from further down.
  */
 export function findProjectForIssue(
   projects: ReadonlyArray<EnvironmentProject>,
@@ -157,7 +159,10 @@ export function findProjectForIssue(
     }
     const lowerRepository = repository.toLowerCase();
     const linkRepository = link.repository.toLowerCase();
-    return lowerRepository === linkRepository || lowerRepository.startsWith(`${linkRepository}/`);
+    return (
+      lowerRepository === linkRepository ||
+      (kind === "azure-devops" && lowerRepository.startsWith(`${linkRepository}/`))
+    );
   });
 }
 

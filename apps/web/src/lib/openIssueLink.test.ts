@@ -217,6 +217,27 @@ describe("findProjectForIssue", () => {
     ).toBe(projects[0]);
   });
 
+  it("does not let a nested GitLab project claim an issue filed on the group above it", () => {
+    // Only an Azure DevOps work item names a path above the repository. A GitLab link names the
+    // whole project path, so `group/repo` is a different repository from `group/repo/subrepo`.
+    const projects = [
+      project({
+        canonicalKey: "gitlab.com/group/repo/subrepo",
+        provider: "gitlab",
+        displayName: "group/repo/subrepo",
+        owner: "group/repo",
+        name: "subrepo",
+      }),
+    ];
+    expect(
+      findProjectForIssue(projects, {
+        host: "gitlab.com",
+        repository: "group/repo",
+        number: 7,
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not let one team project's prefix match another with a similar name", () => {
     const projects = [
       project({
