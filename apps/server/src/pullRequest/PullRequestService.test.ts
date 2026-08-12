@@ -1660,6 +1660,42 @@ it.effect("refuses to react on a host with no reactions", () =>
   }),
 );
 
+it.effect("refuses to react on a host whose capabilities omit reactions entirely", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "t3code", workspaceRoot: "/a", repository: "pingdotgg/t3code" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          capabilities: {
+            diff: true,
+            comment: true,
+            actions: ["merge"],
+            mergeMethods: ["merge"],
+            search: true,
+            review: FULL_REVIEW,
+            reviewers: FULL_REVIEWERS,
+          },
+          setReaction: () => Effect.die("must not be called"),
+        }),
+      ],
+    });
+
+    const error = yield* Effect.flip(
+      service.setReaction({
+        projectId: "p1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 1,
+        content: "heart",
+        reacted: true,
+      }),
+    );
+
+    assert.strictEqual(error._tag, "PullRequestOperationError");
+  }),
+);
+
 it.effect("passes a reaction through with its subject id on a host that has them", () =>
   Effect.gen(function* () {
     let received: {

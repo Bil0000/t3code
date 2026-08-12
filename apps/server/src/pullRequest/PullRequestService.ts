@@ -1502,7 +1502,7 @@ export const make = Effect.gen(function* () {
   const setReaction: PullRequestService["Service"]["setReaction"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<void, PullRequestError> => {
-        if (!project.api.capabilities.reactions) {
+        if (project.api.capabilities.reactions !== true) {
           return Effect.fail(
             new PullRequestOperationError({
               operation: "setReaction",

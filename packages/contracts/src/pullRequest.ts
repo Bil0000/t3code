@@ -375,9 +375,11 @@ export const PullRequestCapabilities = Schema.Struct({
   /**
    * Reactions can be read from a remark, and added to one or taken back. One flag for both:
    * neither host here reports reactions it will not also take, and a surface that could show a
-   * pill it may never press is a surface offering nothing.
+   * pill it may never press is a surface offering nothing. Optional for the same reason as
+   * `updateMethods` and `edit`: a server that says nothing about reactions has none, which is
+   * what every server before this field was.
    */
-  reactions: Schema.Boolean,
+  reactions: Schema.optional(Schema.Boolean),
   review: PullRequestReviewCapabilities,
   reviewers: PullRequestReviewerCapabilities,
   /**

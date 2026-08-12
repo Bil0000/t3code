@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   PullRequestActionInput,
+  PullRequestCapabilities,
   PullRequestListInput,
   PullRequestListResult,
   PullRequestReviewerRequestInput,
@@ -192,6 +193,23 @@ describe("leaving a merge for the host to make once it is ready", () => {
 
   it("takes the arming back without a strategy, because there is nothing to choose", () => {
     expect(decodeAction({ ...ref, action: "disable-auto-merge" }).mergeMethod).toBeUndefined();
+  });
+});
+
+describe("PullRequestCapabilities", () => {
+  const decodeCapabilities = Schema.decodeUnknownSync(PullRequestCapabilities);
+  const base = {
+    diff: true,
+    comment: true,
+    actions: [],
+    mergeMethods: [],
+    search: true,
+    review: { inlineComment: true, reply: true, resolve: true, verdicts: [] },
+    reviewers: { request: true, listCandidates: true },
+  };
+
+  it("decodes a server that says nothing about reactions as a server with none", () => {
+    expect(decodeCapabilities(base).reactions).toBeUndefined();
   });
 });
 
