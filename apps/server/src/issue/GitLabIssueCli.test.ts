@@ -840,6 +840,47 @@ layer("GitLabIssueCli.layer", (it) => {
     }),
   );
 
+  it.effect("offers an assignee the member page never reached, by an id GitLab takes", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(output(issueJson({ assignees: [{ id: 42, username: "faraway" }] }))),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              // A full page of somebody else: GitLab caps it at a hundred, and this project has
+              // more members than that, so the assignee is nowhere in what came back.
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify(
+                Array.from({ length: 100 }, (_, index) => ({
+                  id: index + 1,
+                  username: `member${index}`,
+                })),
+              ),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+      const target = { cwd: "/w", repository: "acme/web", number: 7 };
+
+      const list = yield* cli.listAssigneeCandidates(target);
+
+      const assignee = list.candidates.find((candidate) => candidate.login === "faraway");
+      assert.isDefined(assignee);
+      assert.isTrue(assignee.isAssigned);
+      assert.isTrue(list.truncated);
+
+      // The whole point of carrying them: the set is written from this list, so the id has to be
+      // one the write keeps rather than one it drops on the floor.
+      yield* cli.setAssignees({ ...target, assignees: [assignee.id] });
+
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(2).stdin ?? "")).toEqual({ assignee_ids: [42] });
+    }),
+  );
+
   it.effect("reads a project's templates in two steps, names then bodies", () =>
     Effect.gen(function* () {
       mockedExecute.mockImplementation((input) => {

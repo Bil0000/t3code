@@ -120,6 +120,13 @@ export interface GitLabIssue {
 
 export interface GitLabIssueDetail extends GitLabIssue {
   readonly body: string;
+  /**
+   * The assignees a second time, carrying the numeric id GitLab writes an assignment by. An actor
+   * has no room for it and the handle is not something GitLab would take, so without this whoever
+   * already has the issue can only be named by the member listing — and the assignee standing past
+   * the end of that listing would come off the issue the next time the set is written.
+   */
+  readonly assigneeCandidates: ReadonlyArray<Omit<IssueAssigneeCandidate, "isAssigned">>;
 }
 
 function trimmed(value: string | null | undefined): string | null {
@@ -132,6 +139,18 @@ function toActor(raw: Schema.Schema.Type<typeof RawUserSchema> | null | undefine
   return login === null
     ? null
     : { login, name: trimmed(raw?.name), avatarUrl: trimmed(raw?.avatar_url) };
+}
+
+/**
+ * The same person as somebody an assignment can be written to. GitLab addresses them by numeric
+ * id there and by nothing else, so one it named no id for is dropped rather than offered under a
+ * handle the write would discard.
+ */
+function toCandidate(
+  raw: Schema.Schema.Type<typeof RawUserSchema> | null | undefined,
+): Omit<IssueAssigneeCandidate, "isAssigned"> | null {
+  const actor = toActor(raw);
+  return actor === null || raw?.id === undefined ? null : { ...actor, id: String(raw.id) };
 }
 
 function toActors(
@@ -220,7 +239,14 @@ export function decodeIssueDetailJson(
 ): Result.Result<GitLabIssueDetail, DecodeFailure> {
   const decoded = decodeIssue(raw);
   return Result.isSuccess(decoded)
-    ? Result.succeed({ ...toIssue(decoded.success), body: decoded.success.description ?? "" })
+    ? Result.succeed({
+        ...toIssue(decoded.success),
+        body: decoded.success.description ?? "",
+        assigneeCandidates: (decoded.success.assignees ?? []).flatMap((user) => {
+          const candidate = toCandidate(user);
+          return candidate === null ? [] : [candidate];
+        }),
+      })
     : Result.fail(decoded.failure);
 }
 
@@ -472,10 +498,9 @@ export function decodeProjectMembersJson(
   const members: Array<Omit<IssueAssigneeCandidate, "isAssigned">> = [];
   for (const entry of decoded.success) {
     const user = decodeUserEntry(entry);
-    if (Exit.isFailure(user) || user.value.id === undefined) continue;
-    const actor = toActor(user.value);
-    if (actor === null) continue;
-    members.push({ ...actor, id: String(user.value.id) });
+    if (Exit.isFailure(user)) continue;
+    const member = toCandidate(user.value);
+    if (member !== null) members.push(member);
   }
   return Result.succeed({ members, rawCount: decoded.success.length });
 }

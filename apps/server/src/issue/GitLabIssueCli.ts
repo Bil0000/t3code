@@ -5,6 +5,7 @@ import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
 import type {
   IssueAction,
+  IssueAssigneeCandidate,
   IssueAssigneeCandidateList,
   IssueComment,
   IssueEvent,
@@ -795,14 +796,20 @@ export const make = Effect.gen(function* () {
     listAssigneeCandidates: (input) =>
       Effect.all([issueDetail(input), projectMembers(input)], { concurrency: 2 }).pipe(
         Effect.map(([issue, members]) => {
-          // Matched by handle: the issue names its assignees, and only the member list carries
-          // the numeric id an assignment is written with.
-          const assigned = new Set(issue.assignees.map((assignee) => assignee.login));
+          // Whoever already has the issue leads the list, ahead of the member page and whatever
+          // that page left out. The set is written whole and can only be spelled from here, so an
+          // assignee the members walk never reached would come off the issue on the next write —
+          // silently, and off somebody the reader was never shown.
+          const candidates = new Map<string, IssueAssigneeCandidate>();
+          for (const assignee of issue.assigneeCandidates) {
+            candidates.set(assignee.login, { ...assignee, isAssigned: true });
+          }
+          for (const member of members.members) {
+            if (candidates.has(member.login)) continue;
+            candidates.set(member.login, { ...member, isAssigned: false });
+          }
           return {
-            candidates: members.members.map((member) => ({
-              ...member,
-              isAssigned: assigned.has(member.login),
-            })),
+            candidates: [...candidates.values()],
             truncated: members.rawCount >= MAX_PAGE_SIZE,
           };
         }),
