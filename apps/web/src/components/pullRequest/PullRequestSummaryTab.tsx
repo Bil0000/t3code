@@ -4,25 +4,15 @@ import type {
   PullRequestDetailView,
   PullRequestRef,
 } from "@t3tools/contracts";
-import {
-  ArrowDownUpIcon,
-  HammerIcon,
-  LinkIcon,
-  MessageSquareIcon,
-  SendIcon,
-  UsersIcon,
-} from "lucide-react";
+import { ArrowDownUpIcon, HammerIcon, LinkIcon, MessageSquareIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
 
-import { useAtomCommand } from "~/state/use-atom-command";
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Button } from "../ui/button";
-import { Textarea } from "../ui/textarea";
-import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   PullRequestActorLabel,
@@ -33,6 +23,7 @@ import {
 import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
+import { CommentComposer } from "../sourceControl/CommentComposer";
 import { SummaryMetaRow, SummarySection } from "../sourceControl/SummaryMetaRow";
 import {
   LINK_ISSUES_HANDOFF_KIND,
@@ -42,68 +33,6 @@ import {
 } from "./pullRequestDetail.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { ConversationGhost } from "../sourceControl/ListGhosts";
-
-function CommentComposer({
-  environmentId,
-  detail,
-  onCommented,
-}: {
-  environmentId: EnvironmentId;
-  detail: PullRequestDetailView;
-  onCommented: () => void;
-}) {
-  const [body, setBody] = useState("");
-  const [posting, setPosting] = useState(false);
-  const postComment = useAtomCommand(pullRequestEnvironment.comment, { reportFailure: false });
-
-  const submit = async () => {
-    const trimmed = body.trim();
-    if (trimmed.length === 0 || posting) return;
-    setPosting(true);
-    const result = await postComment({
-      environmentId,
-      input: {
-        projectId: detail.projectId,
-        repository: detail.repository,
-        number: detail.number,
-        body: trimmed,
-      },
-    });
-    setPosting(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Could not post the comment" });
-      return;
-    }
-    setBody("");
-    onCommented();
-  };
-
-  return (
-    <div className="mt-3 space-y-2">
-      <Textarea
-        // Locked while posting: the body is cleared on success, which would otherwise throw
-        // away a new draft typed while the request was still in flight.
-        disabled={posting}
-        value={body}
-        rows={3}
-        placeholder="Leave a comment"
-        aria-label="Comment on this pull request"
-        onChange={(event) => setBody(event.target.value)}
-      />
-      <div className="flex justify-end">
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={body.trim().length === 0 || posting}
-          onClick={() => void submit()}
-        >
-          <SendIcon className="size-3.5" />
-          {posting ? "Posting..." : "Comment"}
-        </Button>
-      </div>
-    </div>
-  );
-}
 
 /**
  * What a first render of the conversation carries. A pull request with two hundred comments is
@@ -474,6 +403,8 @@ export function PullRequestSummaryTab({
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
             environmentId={environmentId}
             detail={detail}
+            label="Comment on this pull request"
+            command={pullRequestEnvironment.comment}
             onCommented={onRefresh}
           />
         ) : null}

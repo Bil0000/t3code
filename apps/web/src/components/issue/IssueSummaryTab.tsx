@@ -5,14 +5,7 @@ import type {
   IssueLinkedPullRequest,
   IssueRef,
 } from "@t3tools/contracts";
-import {
-  LinkIcon,
-  MessageSquareIcon,
-  MilestoneIcon,
-  SendIcon,
-  TagIcon,
-  UsersIcon,
-} from "lucide-react";
+import { LinkIcon, MessageSquareIcon, MilestoneIcon, TagIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -21,6 +14,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { SourceControlActorLabel, SourceControlMetaLine } from "../sourceControl/actorPresentation";
+import { CommentComposer } from "../sourceControl/CommentComposer";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
 import { SummaryMetaRow, SummarySection } from "../sourceControl/SummaryMetaRow";
 import { readableFailure } from "../sourceControl/handoff";
@@ -122,68 +116,6 @@ function IssueEditor({
           onClick={() => void save()}
         >
           {saving ? "Saving..." : "Save"}
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-function CommentComposer({
-  environmentId,
-  detail,
-  onCommented,
-}: {
-  environmentId: EnvironmentId;
-  detail: IssueDetailView;
-  onCommented: () => void;
-}) {
-  const [body, setBody] = useState("");
-  const [posting, setPosting] = useState(false);
-  const postComment = useAtomCommand(issueEnvironment.comment, { reportFailure: false });
-
-  const submit = async () => {
-    const trimmed = body.trim();
-    if (trimmed.length === 0 || posting) return;
-    setPosting(true);
-    const result = await postComment({
-      environmentId,
-      input: {
-        projectId: detail.projectId,
-        repository: detail.repository,
-        number: detail.number,
-        body: trimmed,
-      },
-    });
-    setPosting(false);
-    if (result._tag === "Failure") {
-      toastManager.add({ type: "error", title: "Could not post the comment" });
-      return;
-    }
-    setBody("");
-    onCommented();
-  };
-
-  return (
-    <div className="mt-3 space-y-2">
-      <Textarea
-        // Locked while posting: the body is cleared on success, which would otherwise throw
-        // away a new draft typed while the request was still in flight.
-        disabled={posting}
-        value={body}
-        rows={3}
-        placeholder="Leave a comment"
-        aria-label="Comment on this issue"
-        onChange={(event) => setBody(event.target.value)}
-      />
-      <div className="flex justify-end">
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={body.trim().length === 0 || posting}
-          onClick={() => void submit()}
-        >
-          <SendIcon className="size-3.5" />
-          {posting ? "Posting..." : "Comment"}
         </Button>
       </div>
     </div>
@@ -457,6 +389,8 @@ export function IssueSummaryTab({
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
             environmentId={environmentId}
             detail={detail}
+            label="Comment on this issue"
+            command={issueEnvironment.comment}
             onCommented={onRefresh}
           />
         ) : null}
