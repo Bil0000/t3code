@@ -1401,6 +1401,29 @@ function toTemplateField(
 }
 
 /**
+ * An id no other question of this form answers to.
+ *
+ * Answers are held by id, so two questions sharing one share an answer: the second control writes
+ * over the first, and the issue is filed with one answer twice and the other not at all. A question
+ * the form names keeps its name; only a stand-in — or the second of two questions the form named
+ * the same thing — is moved out of the way, and it is moved past every name the form uses rather
+ * than past the ones read so far, so a question further down still gets its own.
+ */
+function freeFieldId(
+  candidate: string,
+  named: ReadonlySet<string>,
+  taken: ReadonlySet<string>,
+): string {
+  let id = candidate;
+  let attempt = 2;
+  while (named.has(id) || taken.has(id)) {
+    id = `${candidate}-${attempt}`;
+    attempt += 1;
+  }
+  return id;
+}
+
+/**
  * One `.github/ISSUE_TEMPLATE/*.yml` as the template it describes, or null for a file that is not a
  * form at all — a config, half-written YAML, something else that landed in the directory. Null
  * rather than a failure, because a repository's other templates and the blank issue filing falls
@@ -1431,7 +1454,7 @@ export function decodeIssueFormYaml(filename: string, raw: string): IssueTemplat
     }),
   );
   const taken = new Set<string>();
-  const fields = decoded.flatMap((raw, index) => {
+  const fields = decoded.flatMap((raw, index): ReadonlyArray<IssueTemplateField> => {
     if (raw === null) return [];
     const mapped = toTemplateField(raw, index);
     if (mapped === null) return [];

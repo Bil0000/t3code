@@ -1000,6 +1000,53 @@ body:
     expect(input?.kind === "input" ? input.id : null).toBe("field-1");
   });
 
+  // The stand-in is built from a place in the body, which is a name a form is free to have given
+  // another question. Sharing it would mean sharing an answer: one control writes over the other,
+  // and the issue is filed with one answer twice and the other not at all.
+  it("keeps an unnamed question off an id the form gives another one", () => {
+    const form = decodeIssueFormYaml(
+      "clash.yml",
+      `name: Clash
+body:
+  - type: markdown
+    attributes:
+      value: intro
+  - type: input
+    attributes:
+      label: Unnamed
+  - type: input
+    id: field-1
+    attributes:
+      label: Named
+`,
+    );
+
+    expect(
+      form?.fields?.map((field) => (field.kind === "markdown" ? field.kind : field.id)),
+    ).toEqual(["markdown", "field-1-2", "field-1"]);
+  });
+
+  it("gives the second of two questions the form named the same thing an answer of its own", () => {
+    const form = decodeIssueFormYaml(
+      "twice.yml",
+      `name: Twice
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Version
+  - type: textarea
+    id: version
+    attributes:
+      label: Version details
+`,
+    );
+
+    expect(
+      form?.fields?.map((field) => (field.kind === "markdown" ? field.kind : field.id)),
+    ).toEqual(["version", "version-2"]);
+  });
+
   it("answers null for a file that will not parse as YAML at all", () => {
     expect(decodeIssueFormYaml("broken.yml", 'name: "Bug report')).toBeNull();
   });
