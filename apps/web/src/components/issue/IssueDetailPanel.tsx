@@ -54,7 +54,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
-import { IssueActivityUnavailableState } from "./IssueActivityUnavailableState";
+import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import {
   buildAskAboutIssueHandoff,
   buildAttachIssueContext,
@@ -928,7 +928,8 @@ export function IssueDetailPanel({
                 {activityPending ? (
                   <TimelineGhost />
                 ) : activityError ? (
-                  <IssueActivityUnavailableState
+                  <ActivityUnavailableState
+                    title="Could not load issue activity"
                     error={activityError}
                     onRetry={activityQuery.refresh}
                   />

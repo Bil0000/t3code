@@ -78,7 +78,7 @@ import {
 } from "../ui/menu";
 import { toastManager } from "../ui/toast";
 import { DetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
-import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
+import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAskSelectionInput } from "./PullRequestCodeTab";
@@ -1380,7 +1380,8 @@ export function PullRequestDetailPanel({
                 {activityPending ? (
                   <TimelineGhost />
                 ) : activityError ? (
-                  <PullRequestActivityUnavailableState
+                  <ActivityUnavailableState
+                    title="Could not load pull request activity"
                     error={activityError}
                     onRetry={activityQuery.refresh}
                   />

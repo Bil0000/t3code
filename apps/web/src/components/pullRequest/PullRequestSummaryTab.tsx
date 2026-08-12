@@ -34,7 +34,7 @@ import {
 } from "./pullRequestPresentation";
 import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
-import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
+import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import {
   LINK_ISSUES_HANDOFF_KIND,
   orderPullRequestComments,
@@ -433,7 +433,12 @@ export function PullRequestSummaryTab({
         {activityPending ? (
           <ConversationGhost label="Loading pull request conversation" />
         ) : activityError ? (
-          <PullRequestActivityUnavailableState compact error={activityError} onRetry={onRefresh} />
+          <ActivityUnavailableState
+            compact
+            title="Could not load pull request activity"
+            error={activityError}
+            onRetry={onRefresh}
+          />
         ) : (
           <>
             {detail.commentsTruncated ? (

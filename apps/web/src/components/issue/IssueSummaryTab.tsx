@@ -30,7 +30,7 @@ import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collaps
 import { Input } from "../ui/input";
 import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
-import { IssueActivityUnavailableState } from "./IssueActivityUnavailableState";
+import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
 import { LINK_PULL_REQUESTS_HANDOFF_KIND } from "./issueDetail.logic";
 import { ConversationGhost } from "../sourceControl/ListGhosts";
@@ -459,7 +459,12 @@ export function IssueSummaryTab({
         {activityPending ? (
           <ConversationGhost label="Loading issue conversation" />
         ) : activityError ? (
-          <IssueActivityUnavailableState compact error={activityError} onRetry={onRefresh} />
+          <ActivityUnavailableState
+            compact
+            title="Could not load issue activity"
+            error={activityError}
+            onRetry={onRefresh}
+          />
         ) : (
           <>
             {detail.commentsTruncated ? (
