@@ -6,6 +6,7 @@ import {
   IssueDetail,
   IssueListInput,
   IssueListResult,
+  IssueTemplateList,
   IssueUpdateInput,
 } from "./issue.ts";
 
@@ -162,6 +163,7 @@ describe("IssueDetail", () => {
         actions: ["close", "reopen"],
         closeReasons: ["completed", "not-planned"],
         create: true,
+        issueTemplates: true,
         edit: true,
         labels: true,
         assignees: true,
@@ -211,5 +213,69 @@ describe("IssueDetail", () => {
     });
 
     expect(detail.linkedPullRequests.map((entry) => entry.closesIssue)).toEqual([true]);
+  });
+});
+
+describe("IssueTemplateList", () => {
+  const TEMPLATES: IssueTemplateList = {
+    templates: [
+      {
+        key: "bug_report.md",
+        name: "Bug report",
+        about: "Something is broken",
+        title: "[Bug]: ",
+        body: "### What happened\n\n",
+        labels: ["bug"],
+        assignees: ["octocat"],
+      },
+      // A GitLab template, which carries a body and nothing else.
+      {
+        key: "Default",
+        name: "Default",
+        about: "",
+        title: "",
+        body: "## Summary\n",
+        labels: [],
+        assignees: [],
+      },
+    ],
+    contactLinks: [
+      {
+        name: "Ask a question",
+        about: "Anything that is not a defect",
+        url: "https://github.com/pingdotgg/t3code/discussions",
+      },
+    ],
+    blankIssuesEnabled: false,
+  };
+
+  it("round-trips through the JSON codec the RPC serializes with", () => {
+    const codec = Schema.toCodecJson(IssueTemplateList);
+
+    const decoded = Schema.decodeUnknownSync(codec)(Schema.encodeUnknownSync(codec)(TEMPLATES));
+
+    expect(decoded).toStrictEqual(TEMPLATES);
+  });
+
+  // Not trimmed: a template body is markdown a repository wrote deliberately, headings, blank
+  // lines and all, and the form it opens has to show exactly what the repository asks for.
+  it("leaves a template body exactly as the repository wrote it", () => {
+    const decoded = Schema.decodeUnknownSync(IssueTemplateList)({
+      ...TEMPLATES,
+      templates: [{ ...TEMPLATES.templates[0], body: "  indented\n\n" }],
+    });
+
+    expect(decoded.templates[0]?.body).toBe("  indented\n\n");
+  });
+
+  it("takes a repository that offers nothing, which is where the blank form comes from", () => {
+    const decoded = Schema.decodeUnknownSync(IssueTemplateList)({
+      templates: [],
+      contactLinks: [],
+      blankIssuesEnabled: true,
+    });
+
+    expect(decoded.templates).toEqual([]);
+    expect(decoded.blankIssuesEnabled).toBe(true);
   });
 });

@@ -56,6 +56,15 @@ export function createIssueEnvironmentAtoms<R, E>(
       tag: WS_METHODS.issuesAssigneeCandidates,
       staleTimeMs: 60_000,
     }),
+    /**
+     * The same reasoning again, held longer still: what a repository offers a new issue is a file
+     * in that repository, so it changes with a commit rather than with anything anyone does here.
+     */
+    templates: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:issues:templates",
+      tag: WS_METHODS.issuesTemplates,
+      staleTimeMs: 300_000,
+    }),
     runAction: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:run-action",
       tag: WS_METHODS.issuesRunAction,

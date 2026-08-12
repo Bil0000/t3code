@@ -27,6 +27,9 @@ const CAPABILITIES: IssueCapabilities = {
   // Filing a work item needs its type, and which types a project has is its own process
   // template's business — a guess would file the wrong kind of thing.
   create: false,
+  // A work item's starting point is its process template's, which lives in the project's process
+  // definition rather than in the repository, and `az boards` reads none of it.
+  issueTemplates: false,
   edit: false,
   // Azure has tags rather than labels, on a different field with different semantics.
   labels: false,

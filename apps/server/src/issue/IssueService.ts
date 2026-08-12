@@ -28,6 +28,8 @@ import {
   type IssueListResult,
   type IssueProviderSummary,
   type IssueRef,
+  type IssueRepositoryRef,
+  type IssueTemplateList,
   type IssueUpdateInput,
   type OrchestrationProjectShell,
   type SourceControlProviderInfo,
@@ -86,6 +88,13 @@ const DETAIL_STALE_WINDOW = Duration.minutes(5);
 const VIEWER_CACHE_TTL = Duration.minutes(10);
 const LIST_CACHE_CAPACITY = 64;
 const DETAIL_CACHE_CAPACITY = 128;
+/**
+ * What a repository offers a new issue is a file in the repository rather than a record on the
+ * host, so it changes with a commit rather than with an issue — held far longer than a listing for
+ * that reason, and forgotten only when somebody asks for the whole page to be re-read.
+ */
+const TEMPLATE_CACHE_TTL = Duration.minutes(10);
+const TEMPLATE_CACHE_CAPACITY = 64;
 
 export type IssueError = IssueUnavailableError | IssueOperationError;
 
@@ -107,6 +116,7 @@ export class IssueService extends Context.Service<
     readonly assigneeCandidates: (
       input: IssueRef,
     ) => Effect.Effect<IssueAssigneeCandidateList, IssueError>;
+    readonly templates: (input: IssueRepositoryRef) => Effect.Effect<IssueTemplateList, IssueError>;
     readonly invalidate: (input: IssueInvalidateInput) => Effect.Effect<void>;
   }
 >()("t3/issue/IssueService") {}
@@ -1275,6 +1285,33 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * What a repository offers a new issue. Nothing about the viewer gates it, unlike the candidate
+   * lists above: this is the repository describing what it wants filed, and anybody who can see
+   * the repository is being told the same thing.
+   */
+  const templatesUncached = (
+    input: IssueRepositoryRef,
+  ): Effect.Effect<IssueTemplateList, IssueError> =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<IssueTemplateList, IssueError> => {
+        const read = project.api.listIssueTemplates;
+        if (!project.api.capabilities.issueTemplates || read === undefined) {
+          return Effect.fail(
+            new IssueOperationError({
+              operation: "templates",
+              detail: "This host cannot say what a repository offers a new issue.",
+            }),
+          );
+        }
+        return read({
+          cwd: project.project.workspaceRoot,
+          repository: project.repository,
+          host: project.host,
+        }).pipe(Effect.mapError(toIssueError("templates")));
+      }),
+    );
+
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
 
@@ -1320,6 +1357,10 @@ export const make = Effect.gen(function* () {
   // `refEpochs` after eviction can never mint a key an old entry still has.
   let epochCounter = 0;
   let listingsEpoch = 0;
+  // Its own epoch rather than the listings': what a repository offers a new issue is changed by a
+  // commit to that repository, so every close, comment and label would otherwise throw away an
+  // answer nothing had invalidated.
+  let templatesEpoch = 0;
   const refEpochs = new Map<string, number>();
   const REF_EPOCH_CAPACITY = 2_048;
   const refScope = (ref: IssueRef) => `${ref.projectId} ${ref.repository} ${ref.number}`;
@@ -1420,10 +1461,24 @@ export const make = Effect.gen(function* () {
     return staleActivity(key, Cache.get(activityCache, key));
   };
 
+  const templateCache = yield* Cache.makeWith(
+    (key: string) => {
+      const [, projectId, repository] = JSON.parse(key) as [number, string, string];
+      return templatesUncached({ projectId, repository } as IssueRepositoryRef);
+    },
+    {
+      capacity: TEMPLATE_CACHE_CAPACITY,
+      timeToLive: (exit) => (Exit.isSuccess(exit) ? TEMPLATE_CACHE_TTL : Duration.zero),
+    },
+  );
+  const templates: IssueService["Service"]["templates"] = (input) =>
+    Cache.get(templateCache, JSON.stringify([templatesEpoch, input.projectId, input.repository]));
+
   const invalidate: IssueService["Service"]["invalidate"] = (input) =>
     Effect.sync(() => {
       if (input.reference === undefined) {
         listingsEpoch = ++epochCounter;
+        templatesEpoch = ++epochCounter;
         // A whole-workspace refresh is the reader asking to be re-answered from the hosts, and
         // that includes who the hosts say they are.
         viewersByHost.clear();
@@ -1465,6 +1520,7 @@ export const make = Effect.gen(function* () {
     // The candidate lists are deliberately read fresh per menu-open, so they stay uncached.
     labelCandidates,
     assigneeCandidates,
+    templates,
     invalidate,
   });
 });

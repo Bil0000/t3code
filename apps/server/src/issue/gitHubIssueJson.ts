@@ -8,15 +8,19 @@ import type {
   IssueAssigneeCandidateList,
   IssueCloseReason,
   IssueComment,
+  IssueContactLink,
   IssueEvent,
   IssueEventKind,
   IssueLabelCandidate,
   IssueLinkedPullRequest,
   IssueState,
+  IssueTemplate,
+  IssueTemplateList,
   SourceControlActor,
   SourceControlLabel,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
+import { parse as parseYamlDocument } from "yaml";
 
 /**
  * Enum-ish GitHub fields are decoded as plain strings and normalized here: a `gh` release or a
@@ -268,6 +272,57 @@ const RawAssigneeCandidatesSchema = Schema.Struct({
   }),
 });
 
+/**
+ * One of the forms `.github/ISSUE_TEMPLATE/` holds, as GitHub's GraphQL reports it. Every field
+ * but the filename is optional there: a template with only a body is a legitimate one.
+ */
+const RawIssueTemplateSchema = Schema.Struct({
+  filename: Schema.String,
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+  about: Schema.optional(Schema.NullOr(Schema.String)),
+  title: Schema.optional(Schema.NullOr(Schema.String)),
+  body: Schema.optional(Schema.NullOr(Schema.String)),
+  assignees: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawActorSchema)))),
+      }),
+    ),
+  ),
+  labels: Schema.optional(
+    Schema.NullOr(
+      Schema.Struct({
+        nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.NullOr(RawLabelSchema)))),
+      }),
+    ),
+  ),
+});
+
+const RawIssueTemplatesSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({
+      /** Null for a repository whose templates GitHub will not report, rather than an empty list. */
+      issueTemplates: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+    }),
+  }),
+});
+
+/**
+ * `.github/ISSUE_TEMPLATE/config.yml`, whose two settings are the rest of what GitHub's own chooser
+ * shows. Everything is optional because the file itself is: a repository with templates and no
+ * config is the ordinary case.
+ */
+const RawIssueTemplateConfigSchema = Schema.Struct({
+  blank_issues_enabled: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  contact_links: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
+});
+
+const RawContactLinkSchema = Schema.Struct({
+  name: Schema.String,
+  url: Schema.String,
+  about: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 /** What `POST /repos/{owner}/{repo}/issues` answers with, which is all a new issue owes back. */
 const RawCreatedIssueSchema = Schema.Struct({
   number: Schema.Int,
@@ -462,6 +517,32 @@ export const ASSIGNEE_CANDIDATES_GRAPHQL_QUERY = `query($owner: String!, $name: 
       nodes { login name avatarUrl }
     }
     issue(number: $number) { assignees(first: ${GRAPHQL_PAGE_SIZE}) { nodes { login } } }
+  }
+}`;
+
+/**
+ * As much of a template as a new issue can carry, which is what the create contract accepts:
+ * asking for more would read names nothing could then be filed with.
+ */
+const TEMPLATE_LABELS = 50;
+const TEMPLATE_ASSIGNEES = 25;
+
+/**
+ * The forms this repository puts in front of somebody filing an issue. Read from the host rather
+ * than from the checkout: a working tree sits on whatever branch its reader left it on, and the
+ * templates a repository offers are the ones on its default branch.
+ */
+export const ISSUE_TEMPLATES_GRAPHQL_QUERY = `query($owner: String!, $name: String!) {
+  repository(owner: $owner, name: $name) {
+    issueTemplates {
+      filename
+      name
+      about
+      title
+      body
+      assignees(first: ${TEMPLATE_ASSIGNEES}) { nodes { login } }
+      labels(first: ${TEMPLATE_LABELS}) { nodes { name } }
+    }
   }
 }`;
 
@@ -774,6 +855,10 @@ const decodeCommentPage = decodeJsonResult(RawCommentPageSchema);
 const decodeAssigneeCandidates = decodeJsonResult(RawAssigneeCandidatesSchema);
 const decodeLabelEntry = Schema.decodeUnknownExit(RawLabelSchema);
 const decodeCreatedIssue = decodeJsonResult(RawCreatedIssueSchema);
+const decodeIssueTemplates = decodeJsonResult(RawIssueTemplatesSchema);
+const decodeIssueTemplateEntry = Schema.decodeUnknownExit(RawIssueTemplateSchema);
+const decodeIssueTemplateConfig = Schema.decodeUnknownExit(RawIssueTemplateConfigSchema);
+const decodeContactLinkEntry = Schema.decodeUnknownExit(RawContactLinkSchema);
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
 
@@ -1074,4 +1159,78 @@ export function decodeAssigneeCandidatesJson(
     candidates: [...candidates.values()],
     truncated: repository.assignableUsers.pageInfo?.hasNextPage === true,
   });
+}
+
+/**
+ * The templates this repository offers, in the order it lists them. A template that cannot be read
+ * is skipped rather than failing the read: one malformed form must not take away the others, nor
+ * the blank issue that filing falls back to.
+ */
+export function decodeIssueTemplatesJson(
+  raw: string,
+): Result.Result<ReadonlyArray<IssueTemplate>, DecodeFailure> {
+  const decoded = decodeIssueTemplates(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const templates: Array<IssueTemplate> = [];
+  for (const entry of decoded.success.data.repository.issueTemplates ?? []) {
+    const template = decodeIssueTemplateEntry(entry);
+    if (Exit.isFailure(template)) continue;
+    const key = trimmed(template.value.filename);
+    if (key === null) continue;
+    templates.push({
+      key,
+      // A template with no `name:` is offered under its filename, which is what GitHub shows too.
+      name: trimmed(template.value.name) ?? key,
+      about: template.value.about ?? "",
+      title: template.value.title ?? "",
+      body: template.value.body ?? "",
+      labels: (template.value.labels?.nodes ?? []).flatMap((node) => {
+        const name = trimmed(node?.name);
+        return name === null ? [] : [name];
+      }),
+      assignees: (template.value.assignees?.nodes ?? []).flatMap((node) => {
+        const login = trimmed(node?.login);
+        return login === null ? [] : [login];
+      }),
+    });
+  }
+  return Result.succeed(templates);
+}
+
+/** What a repository that configured nothing offers, which is what GitHub itself defaults to. */
+export const DEFAULT_ISSUE_TEMPLATE_CONFIG = {
+  contactLinks: [],
+  blankIssuesEnabled: true,
+} satisfies Pick<IssueTemplateList, "contactLinks" | "blankIssuesEnabled">;
+
+/**
+ * `.github/ISSUE_TEMPLATE/config.yml`, which is hand-written and allowed to be absent. Neither an
+ * unreadable file nor a missing one is a failure: both mean the repository configured nothing, and
+ * refusing to open the composer over a stray tab in a YAML file would help nobody.
+ */
+export function decodeIssueTemplateConfigYaml(
+  raw: string,
+): Pick<IssueTemplateList, "contactLinks" | "blankIssuesEnabled"> {
+  let parsed: unknown;
+  try {
+    parsed = parseYamlDocument(raw);
+  } catch {
+    return DEFAULT_ISSUE_TEMPLATE_CONFIG;
+  }
+  const config = decodeIssueTemplateConfig(parsed);
+  if (Exit.isFailure(config)) return DEFAULT_ISSUE_TEMPLATE_CONFIG;
+  const contactLinks: Array<IssueContactLink> = [];
+  for (const entry of config.value.contact_links ?? []) {
+    const link = decodeContactLinkEntry(entry);
+    if (Exit.isFailure(link)) continue;
+    const name = trimmed(link.value.name);
+    const url = trimmed(link.value.url);
+    if (name === null || url === null) continue;
+    contactLinks.push({ name, url, about: link.value.about ?? "" });
+  }
+  // Only an explicit `false` takes the blank issue away; anything else, including a value that is
+  // not a boolean at all, leaves it where GitHub puts it.
+  return { contactLinks, blankIssuesEnabled: config.value.blank_issues_enabled !== false };
 }

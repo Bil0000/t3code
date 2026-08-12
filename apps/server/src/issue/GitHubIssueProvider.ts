@@ -18,6 +18,7 @@ const CAPABILITIES: IssueCapabilities = {
   actions: ["close", "reopen"],
   closeReasons: ["completed", "not-planned"],
   create: true,
+  issueTemplates: true,
   edit: true,
   labels: true,
   assignees: true,
@@ -196,6 +197,9 @@ export const make = Effect.gen(function* () {
 
     listAssigneeCandidates: (input) =>
       cli.listAssigneeCandidates(input).pipe(Effect.mapError(fail("listAssigneeCandidates"))),
+
+    listIssueTemplates: (input) =>
+      cli.listIssueTemplates(input).pipe(Effect.mapError(fail("listIssueTemplates"))),
   };
 
   return provider;

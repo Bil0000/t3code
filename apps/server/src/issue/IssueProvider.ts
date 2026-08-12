@@ -12,6 +12,7 @@ import type {
   IssueLinkedPullRequest,
   IssueListState,
   IssueState,
+  IssueTemplateList,
   IssueViewerPermissions,
   SourceControlActor,
   SourceControlLabel,
@@ -267,4 +268,13 @@ export interface IssueProviderApi {
   readonly listAssigneeCandidates: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<IssueAssigneeCandidateList, IssueProviderError>;
+
+  /**
+   * What this repository offers as a starting point for a new issue. Optional and only called
+   * when `capabilities.issueTemplates` is true, because a host with no such notion has nothing to
+   * implement here rather than an empty list to return.
+   */
+  readonly listIssueTemplates?: (
+    input: ProviderRepositoryRef,
+  ) => Effect.Effect<IssueTemplateList, IssueProviderError>;
 }

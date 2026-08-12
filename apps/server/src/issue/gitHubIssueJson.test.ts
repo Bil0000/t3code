@@ -11,8 +11,11 @@ import {
   decodeIssueListJson,
   decodeIssueSearchJson,
   decodeIssueSupplementJson,
+  decodeIssueTemplateConfigYaml,
+  decodeIssueTemplatesJson,
   decodeIssueViewerPermissionsJson,
   decodeRepositoryLabelsJson,
+  DEFAULT_ISSUE_TEMPLATE_CONFIG,
   encodeGraphQlRequestJson,
   issueSearchGraphQlQuery,
   ISSUE_DETAIL_JSON_FIELDS,
@@ -116,6 +119,24 @@ function timelineEvent(typename: string, entry: Record<string, unknown> = {}): u
     actor: { login: "julius", avatarUrl: "https://avatars/julius" },
     ...entry,
   };
+}
+
+/** One form as GitHub's GraphQL reports it, name and all. */
+function templateEntry(entry: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    filename: "bug_report.md",
+    name: "Bug report",
+    about: "File a bug",
+    title: "Bug: ",
+    body: "### Steps",
+    assignees: { nodes: [{ login: "julius" }] },
+    labels: { nodes: [{ name: "bug" }] },
+    ...entry,
+  };
+}
+
+function issueTemplatesJson(issueTemplates: unknown): string {
+  return JSON.stringify({ data: { repository: { issueTemplates } } });
 }
 
 function expectSuccess<A>(result: Result.Result<A, unknown>): A {
@@ -681,6 +702,125 @@ describe("assignee candidate decoding", () => {
 
     expect(list.truncated).toBe(true);
     expect(list.candidates.map((candidate) => candidate.isAssigned)).toEqual([false]);
+  });
+});
+
+describe("issue template decoding", () => {
+  it("reads a template's own words, and the filename it is addressed by", () => {
+    const templates = expectSuccess(decodeIssueTemplatesJson(issueTemplatesJson([templateEntry()])));
+
+    expect(templates).toEqual([
+      {
+        key: "bug_report.md",
+        name: "Bug report",
+        about: "File a bug",
+        title: "Bug: ",
+        body: "### Steps",
+        labels: ["bug"],
+        assignees: ["julius"],
+      },
+    ]);
+  });
+
+  it("offers a template under its filename when it names itself nothing else", () => {
+    const templates = expectSuccess(
+      decodeIssueTemplatesJson(
+        issueTemplatesJson([
+          templateEntry({
+            name: null,
+            about: null,
+            title: null,
+            body: null,
+            assignees: null,
+            labels: null,
+          }),
+        ]),
+      ),
+    );
+
+    expect(templates).toEqual([
+      {
+        key: "bug_report.md",
+        name: "bug_report.md",
+        about: "",
+        title: "",
+        body: "",
+        labels: [],
+        assignees: [],
+      },
+    ]);
+  });
+
+  it("skips a template GitHub answered nothing readable for, and keeps the rest", () => {
+    const templates = expectSuccess(
+      decodeIssueTemplatesJson(
+        issueTemplatesJson([
+          // No filename to address it by, so there is nothing to key it under.
+          { name: "No filename" },
+          templateEntry({ filename: "feature_request.md" }),
+        ]),
+      ),
+    );
+
+    expect(templates.map((template) => template.key)).toEqual(["feature_request.md"]);
+  });
+
+  it("answers with no templates for a repository GitHub reports none for", () => {
+    expect(expectSuccess(decodeIssueTemplatesJson(issueTemplatesJson(null)))).toEqual([]);
+  });
+
+  it("fails when GitHub answered something that is not a repository", () => {
+    expect(Result.isFailure(decodeIssueTemplatesJson('{"message":"Not Found"}'))).toBe(true);
+  });
+});
+
+describe("issue template config decoding", () => {
+  it("reads a config file's own settings for the chooser", () => {
+    const config = decodeIssueTemplateConfigYaml(
+      `blank_issues_enabled: false
+contact_links:
+  - name: Community support
+    url: https://example.com/discuss
+    about: Ask the community
+`,
+    );
+
+    expect(config).toEqual({
+      blankIssuesEnabled: false,
+      contactLinks: [
+        { name: "Community support", url: "https://example.com/discuss", about: "Ask the community" },
+      ],
+    });
+  });
+
+  it("answers with GitHub's own defaults for a config file that will not parse", () => {
+    expect(decodeIssueTemplateConfigYaml("blank_issues_enabled: [not: closed")).toEqual(
+      DEFAULT_ISSUE_TEMPLATE_CONFIG,
+    );
+  });
+
+  it("answers with GitHub's own defaults for a file with nothing to configure", () => {
+    // Absent, and parsed to a scalar or a list rather than to the mapping the file is meant to be.
+    expect(decodeIssueTemplateConfigYaml("")).toEqual(DEFAULT_ISSUE_TEMPLATE_CONFIG);
+    expect(decodeIssueTemplateConfigYaml("just some text")).toEqual(DEFAULT_ISSUE_TEMPLATE_CONFIG);
+    expect(decodeIssueTemplateConfigYaml("- one\n- two\n")).toEqual(DEFAULT_ISSUE_TEMPLATE_CONFIG);
+  });
+
+  it("skips a contact link GitHub cannot open, and keeps the others", () => {
+    const config = decodeIssueTemplateConfigYaml(
+      `contact_links:
+  - name: No URL
+    about: Missing what it points to
+  - name: Blank URL
+    url: "   "
+  - name: Community support
+    url: https://example.com/discuss
+`,
+    );
+
+    expect(config.contactLinks).toEqual([
+      { name: "Community support", url: "https://example.com/discuss", about: "" },
+    ]);
   });
 });
 

@@ -1744,6 +1744,10 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.issuesAssigneeCandidates, issues.assigneeCandidates(input), {
             "rpc.aggregate": "issues",
           }),
+        [WS_METHODS.issuesTemplates]: (input) =>
+          observeRpcEffect(WS_METHODS.issuesTemplates, issues.templates(input), {
+            "rpc.aggregate": "issues",
+          }),
         [WS_METHODS.issuesInvalidate]: (input) =>
           observeRpcEffect(WS_METHODS.issuesInvalidate, issues.invalidate(input), {
             "rpc.aggregate": "issues",

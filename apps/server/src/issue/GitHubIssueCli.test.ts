@@ -993,4 +993,90 @@ layer("GitHubIssueCli.layer", (it) => {
       assert.strictEqual(error._tag, "GitHubIssueViewerLoginUnavailableError");
     }),
   );
+
+  it.effect("combines a repository's templates with its config file into one offering", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) =>
+        Effect.succeed(
+          output(
+            input.args[1] === "graphql"
+              ? JSON.stringify({
+                  data: {
+                    repository: {
+                      issueTemplates: [
+                        {
+                          filename: "bug_report.md",
+                          name: "Bug report",
+                          about: "File a bug",
+                          title: "Bug: ",
+                          body: "### Steps",
+                          assignees: { nodes: [{ login: "julius" }] },
+                          labels: { nodes: [{ name: "bug" }] },
+                        },
+                      ],
+                    },
+                  },
+                })
+              : "blank_issues_enabled: false\ncontact_links:\n  - name: Chat\n    url: https://example.com/chat\n",
+          ),
+        ),
+      );
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+
+      const list = yield* cli.listIssueTemplates(repository);
+
+      expect(list.templates).toEqual([
+        {
+          key: "bug_report.md",
+          name: "Bug report",
+          about: "File a bug",
+          title: "Bug: ",
+          body: "### Steps",
+          labels: ["bug"],
+          assignees: ["julius"],
+        },
+      ]);
+      expect(list.blankIssuesEnabled).toBe(false);
+      expect(list.contactLinks).toEqual([
+        { name: "Chat", url: "https://example.com/chat", about: "" },
+      ]);
+      const graphqlCall = mockedExecute.mock.calls.find((call) => call[0].args[1] === "graphql");
+      assert.isDefined(graphqlCall);
+      expect(graphqlCall[0].args).toContain("owner=acme");
+      const configCall = mockedExecute.mock.calls.find((call) => call[0].args[1] === "--hostname");
+      assert.isDefined(configCall);
+      expect(configCall[0].args).toContain(
+        "repos/acme/web/contents/.github/ISSUE_TEMPLATE/config.yml",
+      );
+    }),
+  );
+
+  it.effect("offers GitHub's own defaults when the config file cannot be read", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) =>
+        input.args[1] === "graphql"
+          ? Effect.succeed(
+              output(
+                JSON.stringify({
+                  data: {
+                    repository: {
+                      issueTemplates: [{ filename: "bug_report.md" }],
+                    },
+                  },
+                }),
+              ),
+            )
+          // Most repositories keep no config file, which GitHub answers with a refusal — not a
+          // reason to fail a read whose templates arrived.
+          : Effect.fail(refused),
+      );
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+
+      const list = yield* cli.listIssueTemplates(repository);
+
+      expect(list.templates.map((template) => template.key)).toEqual(["bug_report.md"]);
+      expect(list.blankIssuesEnabled).toBe(true);
+      expect(list.contactLinks).toEqual([]);
+    }),
+  );
 });

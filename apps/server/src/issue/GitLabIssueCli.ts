@@ -12,6 +12,8 @@ import type {
   IssueLabelCandidateList,
   IssueLinkedPullRequest,
   IssueListState,
+  IssueTemplate,
+  IssueTemplateList,
 } from "@t3tools/contracts";
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
@@ -20,6 +22,8 @@ import {
   decodeIssueDetailJson,
   decodeIssueListJson,
   decodeIssueNotesJson,
+  decodeIssueTemplateEntriesJson,
+  decodeIssueTemplateJson,
   decodeLabelEventsJson,
   decodeLinkedMergeRequestsJson,
   decodeProjectLabelsJson,
@@ -27,6 +31,7 @@ import {
   decodeViewerJson,
   type GitLabIssue,
   type GitLabIssueDetail,
+  type GitLabIssueTemplateEntry,
 } from "./gitLabIssueJson.ts";
 import type { ProviderListCursor } from "./IssueProvider.ts";
 
@@ -82,6 +87,14 @@ const MAX_PAGE_SIZE = 100;
  * walk that ends whatever the host has.
  */
 const CONVERSATION_PAGES = 10;
+
+/**
+ * Templates whose body is fetched, and how many of those reads run at once. Each one is a request
+ * of its own, so a project that keeps dozens is cut short rather than spending a round trip apiece
+ * on forms nobody scrolls to.
+ */
+const TEMPLATE_LIMIT = 25;
+const TEMPLATE_CONCURRENCY = 4;
 
 export interface GitLabIssueListBatch {
   readonly items: ReadonlyArray<GitLabIssue>;
@@ -196,6 +209,15 @@ export class GitLabIssueCli extends Context.Service<
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<IssueAssigneeCandidateList, GitLabIssueCliError>;
+
+    /**
+     * The description templates this project offers, read in two steps because that is how GitLab
+     * serves them: one endpoint names them, another carries each one's markdown.
+     */
+    readonly listIssueTemplates: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+    }) => Effect.Effect<IssueTemplateList, GitLabIssueCliError>;
   }
 >()("t3/issue/GitLabIssueCli") {}
 
@@ -544,6 +566,40 @@ export const make = Effect.gen(function* () {
       }),
     );
 
+  /**
+   * One template's own body, as its own request. A template whose body cannot be read is dropped
+   * rather than offered empty: choosing it would open a form with nothing of the template in it.
+   */
+  const templateContent = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly entry: GitLabIssueTemplateEntry;
+  }): Effect.Effect<ReadonlyArray<IssueTemplate>, never> =>
+    api({
+      cwd: input.cwd,
+      path: `projects/${projectPath(input.repository)}/templates/issues/${encodeURIComponent(input.entry.key)}`,
+    }).pipe(
+      Effect.map((result) => {
+        const content = decodeIssueTemplateJson(result.stdout.trim());
+        return Result.isSuccess(content)
+          ? [
+              {
+                key: input.entry.key,
+                name: input.entry.name,
+                // A GitLab template is a description and nothing else: no summary of its own, no
+                // title, no labels and no assignees to carry.
+                about: "",
+                title: "",
+                body: content.success,
+                labels: [],
+                assignees: [],
+              } satisfies IssueTemplate,
+            ]
+          : [];
+      }),
+      Effect.orElseSucceed((): ReadonlyArray<IssueTemplate> => []),
+    );
+
   /** Every write to an issue is the same PUT, so its body is the only thing that differs. */
   const updateIssue = (input: {
     readonly cwd: string;
@@ -713,6 +769,30 @@ export const make = Effect.gen(function* () {
             truncated: members.rawCount >= MAX_PAGE_SIZE,
           };
         }),
+      ),
+
+    listIssueTemplates: (input) =>
+      api({
+        cwd: input.cwd,
+        path: `projects/${projectPath(input.repository)}/templates/issues`,
+      }).pipe(
+        Effect.flatMap(
+          (result): Effect.Effect<ReadonlyArray<IssueTemplate>, GitLabIssueCliError> => {
+            const decoded = decodeIssueTemplateEntriesJson(result.stdout.trim());
+            if (!Result.isSuccess(decoded)) {
+              return Effect.fail(
+                readError({ cwd: input.cwd, operation: "listIssueTemplates" })(decoded.failure),
+              );
+            }
+            return Effect.forEach(
+              decoded.success.slice(0, TEMPLATE_LIMIT),
+              (entry) => templateContent({ cwd: input.cwd, repository: input.repository, entry }),
+              { concurrency: TEMPLATE_CONCURRENCY },
+            ).pipe(Effect.map((templates) => templates.flat()));
+          },
+        ),
+        // GitLab keeps no contact links, and never asks that an issue be filed from a template.
+        Effect.map((templates) => ({ templates, contactLinks: [], blankIssuesEnabled: true })),
       ),
   });
 });

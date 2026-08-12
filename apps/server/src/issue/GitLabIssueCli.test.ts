@@ -68,6 +68,18 @@ function notes(count: number, firstId: number): string {
   );
 }
 
+/** A row of `templates/issues`, which names a template but carries none of it. */
+function templateEntries(
+  entries: ReadonlyArray<{ readonly key: string; readonly name: string }>,
+): string {
+  return JSON.stringify(entries);
+}
+
+/** One template's own answer, which is the markdown its body starts out as. */
+function templateContent(content: string): string {
+  return JSON.stringify({ content });
+}
+
 /** The argv of the nth glab invocation. */
 function argsOfCall(index: number): ReadonlyArray<string> {
   return callAt(index).args;
@@ -83,6 +95,11 @@ function callAt(index: number) {
 /** The path every read and write is addressed to, which is argv's second word. */
 function pathOfCall(index: number): string {
   return argsOfCall(index)[1] ?? "";
+}
+
+/** Every path glab was asked for, in whatever order the concurrent reads issued them. */
+function calledPaths(): ReadonlyArray<string> {
+  return mockedExecute.mock.calls.map((call) => call[0].args[1] ?? "");
 }
 
 afterEach(() => {
@@ -703,6 +720,144 @@ layer("GitLabIssueCli.layer", (it) => {
         ["9", false],
       ]);
       assert.isFalse(list.truncated);
+    }),
+  );
+
+  it.effect("reads a project's templates in two steps, names then bodies", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) => {
+        const path = input.args[1];
+        if (path === "projects/acme%2Fweb/templates/issues") {
+          return Effect.succeed(
+            output(
+              templateEntries([
+                { key: "bug_report.md", name: "Bug report" },
+                { key: "feature request.md", name: "Feature request" },
+              ]),
+            ),
+          );
+        }
+        if (path === "projects/acme%2Fweb/templates/issues/bug_report.md") {
+          return Effect.succeed(output(templateContent("## Steps to reproduce")));
+        }
+        if (path === "projects/acme%2Fweb/templates/issues/feature%20request.md") {
+          return Effect.succeed(output(templateContent("## What problem")));
+        }
+        throw new Error(`unexpected path: ${path}`);
+      });
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const list = yield* cli.listIssueTemplates({ cwd: "/w", repository: "acme/web" });
+
+      // A space in the key still has to reach GitLab URL-encoded, like any other path segment.
+      const paths = calledPaths();
+      expect(paths).toContain("projects/acme%2Fweb/templates/issues");
+      expect(paths).toContain("projects/acme%2Fweb/templates/issues/bug_report.md");
+      expect(paths).toContain("projects/acme%2Fweb/templates/issues/feature%20request.md");
+      assert.strictEqual(paths.length, 3);
+      assert.deepStrictEqual(list, {
+        templates: [
+          {
+            key: "bug_report.md",
+            name: "Bug report",
+            about: "",
+            title: "",
+            body: "## Steps to reproduce",
+            labels: [],
+            assignees: [],
+          },
+          {
+            key: "feature request.md",
+            name: "Feature request",
+            about: "",
+            title: "",
+            body: "## What problem",
+            labels: [],
+            assignees: [],
+          },
+        ],
+        contactLinks: [],
+        blankIssuesEnabled: true,
+      });
+    }),
+  );
+
+  it.effect("drops a template whose body request fails, and keeps the rest", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) => {
+        const path = input.args[1];
+        if (path === "projects/acme%2Fweb/templates/issues") {
+          return Effect.succeed(
+            output(
+              templateEntries([
+                { key: "bug.md", name: "Bug" },
+                { key: "broken.md", name: "Broken" },
+              ]),
+            ),
+          );
+        }
+        if (path === "projects/acme%2Fweb/templates/issues/bug.md") {
+          return Effect.succeed(output(templateContent("## Steps")));
+        }
+        if (path === "projects/acme%2Fweb/templates/issues/broken.md") {
+          return Effect.fail(
+            new GitLabCli.GitLabCliCommandError({
+              operation: "execute",
+              command: "glab",
+              cwd: "/w",
+              cause: new Error("boom"),
+            }),
+          );
+        }
+        throw new Error(`unexpected path: ${path}`);
+      });
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const list = yield* cli.listIssueTemplates({ cwd: "/w", repository: "acme/web" });
+
+      // A failed body read never fails the whole list: it just leaves that form out.
+      expect(list.templates.map((template) => template.key)).toEqual(["bug.md"]);
+      assert.strictEqual(list.blankIssuesEnabled, true);
+    }),
+  );
+
+  it.effect("skips a listing row that cannot be decoded, and reads the rest", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) => {
+        const path = input.args[1];
+        if (path === "projects/acme%2Fweb/templates/issues") {
+          return Effect.succeed(
+            output(
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify([{ name: "No key" }, { key: "bug.md", name: "Bug" }]),
+            ),
+          );
+        }
+        if (path === "projects/acme%2Fweb/templates/issues/bug.md") {
+          return Effect.succeed(output(templateContent("## Steps")));
+        }
+        throw new Error(`unexpected path: ${path}`);
+      });
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const list = yield* cli.listIssueTemplates({ cwd: "/w", repository: "acme/web" });
+
+      // The keyless row never reaches a body request: only the decodable one does.
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      expect(list.templates.map((template) => template.key)).toEqual(["bug.md"]);
+    }),
+  );
+
+  it.effect("offers an empty template list, still open to filing blank", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(templateEntries([]))));
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      const list = yield* cli.listIssueTemplates({ cwd: "/w", repository: "acme/web" });
+
+      assert.deepStrictEqual(list, { templates: [], contactLinks: [], blankIssuesEnabled: true });
+      // No entries means no body request follows the listing.
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
     }),
   );
 });

@@ -15,6 +15,7 @@ const CAPABILITIES: IssueCapabilities = {
   // GitLab records nothing about why an issue was closed, so a close never asks for a reason.
   closeReasons: [],
   create: true,
+  issueTemplates: true,
   edit: true,
   labels: true,
   assignees: true,
@@ -200,6 +201,11 @@ export const make = Effect.gen(function* () {
           number: input.number,
         })
         .pipe(Effect.mapError(fail("listAssigneeCandidates"))),
+
+    listIssueTemplates: (input) =>
+      cli
+        .listIssueTemplates({ cwd: input.cwd, repository: input.repository })
+        .pipe(Effect.mapError(fail("listIssueTemplates"))),
   };
 
   return provider;

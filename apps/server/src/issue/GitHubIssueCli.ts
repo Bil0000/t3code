@@ -13,6 +13,7 @@ import type {
   IssueLabelCandidate,
   IssueLabelCandidateList,
   IssueListState,
+  IssueTemplateList,
   SourceControlActor,
 } from "@t3tools/contracts";
 
@@ -28,6 +29,9 @@ import {
   decodeIssueListJson,
   decodeIssueSearchJson,
   decodeIssueSupplementJson,
+  DEFAULT_ISSUE_TEMPLATE_CONFIG,
+  decodeIssueTemplateConfigYaml,
+  decodeIssueTemplatesJson,
   decodeIssueViewerPermissionsJson,
   decodeRepositoryLabelsJson,
   encodeGraphQlRequestJson,
@@ -38,6 +42,7 @@ import {
   ISSUE_LIST_JSON_FIELDS,
   ISSUE_SEARCH_MAX_ROWS,
   ISSUE_SUPPLEMENT_GRAPHQL_QUERY,
+  ISSUE_TEMPLATES_GRAPHQL_QUERY,
   ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
   type GitHubIssue,
   type GitHubIssueDetail,
@@ -145,6 +150,9 @@ export type GitHubIssueCliError =
  * holds, and short of walking a machine-written thread forever.
  */
 const COMMENT_PAGES = 10;
+
+/** Where a repository configures the rest of its issue chooser, as GitHub itself spells the path. */
+const TEMPLATE_CONFIG_PATH = ".github/ISSUE_TEMPLATE/config.yml";
 
 /** What the labels API serves at most in one response, and pages of them before it is truncated:
  *  five hundred labels is already more than any repository offers a picker for. */
@@ -309,6 +317,16 @@ export class GitHubIssueCli extends Context.Service<
       readonly host: string;
       readonly number: number;
     }) => Effect.Effect<IssueAssigneeCandidateList, GitHubIssueCliError>;
+
+    /**
+     * What this repository offers somebody filing a new issue: its templates, and the config file
+     * beside them that says where else a question could go and whether a blank issue is allowed.
+     */
+    readonly listIssueTemplates: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+    }) => Effect.Effect<IssueTemplateList, GitHubIssueCliError>;
   }
 >()("t3/issue/GitHubIssueCli") {}
 
@@ -953,6 +971,47 @@ export const make = Effect.gen(function* () {
         query: ASSIGNEE_CANDIDATES_GRAPHQL_QUERY,
         decode: decodeAssigneeCandidatesJson,
       });
+    },
+
+    listIssueTemplates: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return Effect.all(
+        [
+          graphqlRead({
+            cwd: input.cwd,
+            host: input.host,
+            operation: "listIssueTemplates",
+            variables: [
+              ["-f", `owner=${owner}`],
+              ["-f", `name=${name}`],
+            ],
+            query: ISSUE_TEMPLATES_GRAPHQL_QUERY,
+            decode: decodeIssueTemplatesJson,
+          }),
+          github
+            .execute({
+              cwd: input.cwd,
+              args: [
+                "api",
+                "--hostname",
+                input.host,
+                // The file itself rather than the contents API's envelope, which would wrap a few
+                // lines of YAML in base64 for no reason.
+                "--header",
+                "Accept: application/vnd.github.raw",
+                `repos/${owner}/${name}/contents/${TEMPLATE_CONFIG_PATH}`,
+              ],
+            })
+            .pipe(
+              Effect.map((result) => decodeIssueTemplateConfigYaml(result.stdout)),
+              // Most repositories keep no config file, which GitHub answers with a 404 — the same
+              // answer as a file that configures nothing, and neither is a reason to fail a read
+              // whose templates arrived.
+              Effect.orElseSucceed(() => DEFAULT_ISSUE_TEMPLATE_CONFIG),
+            ),
+        ],
+        { concurrency: 2 },
+      ).pipe(Effect.map(([templates, config]) => ({ templates, ...config })));
     },
   });
 });

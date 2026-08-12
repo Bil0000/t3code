@@ -13,6 +13,9 @@ const CAPABILITIES: IssueCapabilities = {
   // Bitbucket records no reason for closing an issue.
   closeReasons: [],
   create: true,
+  // Bitbucket has no issue templates of any kind: its tracker takes a title and a description and
+  // offers nothing to start either from.
+  issueTemplates: false,
   edit: true,
   // Bitbucket has no labels on an issue — `kind` and `priority` are enumerations of their own,
   // not a label set, so nothing here is offered in their place.

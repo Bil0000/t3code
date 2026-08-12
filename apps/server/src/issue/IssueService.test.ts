@@ -3,6 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import type {
   IssueCapabilities,
+  IssueTemplateList,
   IssueViewerPermissions,
   OrchestrationProjectShell,
   ProjectId,
@@ -110,6 +111,7 @@ const FULL_CAPABILITIES: IssueCapabilities = {
   actions: ["close", "reopen"],
   closeReasons: ["completed", "not-planned"],
   create: true,
+  issueTemplates: true,
   edit: true,
   labels: true,
   assignees: true,
@@ -1100,6 +1102,107 @@ it.effect("hands the host's own candidate lists back, asked for with the issue",
       ["bug"],
     );
     assert.isTrue(assignees.truncated);
+  }),
+);
+
+const REPOSITORY = { projectId: REFERENCE.projectId, repository: REFERENCE.repository };
+
+const TEMPLATES: IssueTemplateList = {
+  templates: [
+    {
+      key: "bug_report.md",
+      name: "Bug report",
+      about: "Something is broken",
+      title: "[Bug]: ",
+      body: "### What happened\n",
+      labels: ["bug"],
+      assignees: [],
+    },
+  ],
+  contactLinks: [],
+  blankIssuesEnabled: false,
+};
+
+it.effect("keeps the chooser from a host that has no templates to report", () =>
+  Effect.gen(function* () {
+    const hostCannot = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          capabilities: { ...FULL_CAPABILITIES, issueTemplates: false },
+          listIssueTemplates: () => Effect.die("must not be called"),
+        }),
+      ],
+    });
+    const refusedHost = yield* Effect.flip(hostCannot.templates(REPOSITORY));
+    assert.include(
+      refusedHost.message,
+      "This host cannot say what a repository offers a new issue.",
+    );
+
+    // A host that claims the capability and implements nothing is the same refusal rather than a
+    // crash: the declaration is what the page believes, and it is the thing that was wrong.
+    const undeclared = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [fakeProvider("github")],
+    });
+    assert.include(
+      (yield* Effect.flip(undeclared.templates(REPOSITORY))).message,
+      "This host cannot say what a repository offers a new issue.",
+    );
+  }),
+);
+
+/**
+ * Nothing about the viewer is asked, unlike the candidate lists: this is the repository saying
+ * what it wants filed, and everyone who can see the repository is told the same thing.
+ */
+it.effect("hands a repository's templates back without asking who is reading them", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getViewerPermissions: () => Effect.die("must not be asked"),
+          listIssueTemplates: () => Effect.succeed(TEMPLATES),
+        }),
+      ],
+    });
+
+    assert.deepStrictEqual(yield* service.templates(REPOSITORY), TEMPLATES);
+  }),
+);
+
+it.effect("asks the host for a repository's templates once, and again once told to forget", () =>
+  Effect.gen(function* () {
+    let hostCalls = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          listIssueTemplates: () => {
+            hostCalls += 1;
+            return Effect.succeed(TEMPLATES);
+          },
+        }),
+      ],
+    });
+
+    yield* Effect.all([service.templates(REPOSITORY), service.templates(REPOSITORY)], {
+      concurrency: "unbounded",
+    });
+    yield* service.templates(REPOSITORY);
+    assert.strictEqual(hostCalls, 1);
+
+    // What a repository offers is changed by a commit to it, so one issue's own refresh leaves it
+    // alone; only a reader asking for the whole page again spends the request.
+    yield* service.invalidate({ reference: REFERENCE });
+    yield* service.templates(REPOSITORY);
+    assert.strictEqual(hostCalls, 1);
+
+    yield* service.invalidate({});
+    yield* service.templates(REPOSITORY);
+    assert.strictEqual(hostCalls, 2);
   }),
 );
 

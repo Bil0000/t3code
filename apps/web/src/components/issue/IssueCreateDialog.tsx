@@ -1,10 +1,11 @@
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
-import { PlusIcon } from "lucide-react";
+import type { EnvironmentId, IssueTemplate, ProjectId } from "@t3tools/contracts";
+import { ExternalLinkIcon, FileTextIcon, PlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { useProjects } from "~/state/entities";
 import { issueEnvironment } from "~/state/issues";
+import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { readableFailure } from "../sourceControl/handoff";
@@ -49,6 +50,12 @@ function repositoryOf(identity: {
   return identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
 }
 
+/**
+ * Which of the repository's starting points this issue is being written from. Null until one has
+ * been taken, which is the chooser step; `blank` is the empty form the chooser offers last.
+ */
+type Choice = { readonly kind: "blank" } | { readonly kind: "template"; readonly key: string };
+
 export function IssueCreateDialog({
   open,
   onOpenChange,
@@ -77,6 +84,7 @@ export function IssueCreateDialog({
   }) => void;
 }) {
   const [selectedId, setSelectedId] = useState<ProjectId | null>(null);
+  const [chosen, setChosen] = useState<Choice | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
   const [labels, setLabels] = useState("");
@@ -109,6 +117,50 @@ export function IssueCreateDialog({
     candidates.find((project) => project.id === projectId) ??
     candidates[0];
   const trimmedTitle = title.trim();
+
+  // What this repository asks a new issue to start from, read once the dialog is open and only for
+  // the project it would be filed against.
+  const templatesQuery = useEnvironmentQuery(
+    open && selected !== undefined
+      ? issueEnvironment.templates({
+          environmentId,
+          input: { projectId: selected.id, repository: selected.repository },
+        })
+      : null,
+  );
+  // A host with no templates to report, and a read that failed, both leave the blank form — which
+  // is what a repository with no templates offers anyway. Filing must never wait on the chooser.
+  const offer = templatesQuery.data ?? {
+    templates: [],
+    contactLinks: [],
+    blankIssuesEnabled: true,
+  };
+  // Nothing to choose between is not a choice: a repository with no templates and nowhere else to
+  // send a question opens straight onto the form, exactly as the host itself does.
+  const hasChoice = offer.templates.length > 0 || offer.contactLinks.length > 0;
+  const choice: Choice | null = chosen ?? (hasChoice ? null : { kind: "blank" });
+
+  /** Taking a starting point writes the whole draft, so going back and taking another replaces it
+   *  rather than leaving half of the last one behind. */
+  const choose = (next: Choice) => {
+    const template: IssueTemplate | undefined =
+      next.kind === "template"
+        ? offer.templates.find((entry) => entry.key === next.key)
+        : undefined;
+    setChosen(next);
+    setTitle(template?.title ?? "");
+    setBody(template?.body ?? "");
+    // Into the same fields a reader types into, so what the template asks for is theirs to edit.
+    setLabels((template?.labels ?? []).join(", "));
+    setAssignees((template?.assignees ?? []).join(", "));
+  };
+
+  // Closing puts the chooser back: the form is a step inside this dialog, and reopening it should
+  // start where the host's own composer starts.
+  const setOpen = (next: boolean) => {
+    if (!next) setChosen(null);
+    onOpenChange(next);
+  };
 
   const submit = async () => {
     if (selected === undefined || trimmedTitle.length === 0 || filing) return;
@@ -144,7 +196,7 @@ export function IssueCreateDialog({
     setBody("");
     setLabels("");
     setAssignees("");
-    onOpenChange(false);
+    setOpen(false);
     onCreated({
       projectId: selected.id,
       repository: selected.repository,
@@ -154,7 +206,7 @@ export function IssueCreateDialog({
   };
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogPopup className="max-w-xl">
         <DialogHeader>
           <DialogTitle>New issue</DialogTitle>
@@ -179,7 +231,11 @@ export function IssueCreateDialog({
                 </label>
                 <Select
                   value={selected.id}
-                  onValueChange={(value) => setSelectedId(value as ProjectId)}
+                  onValueChange={(value) => {
+                    setSelectedId(value as ProjectId);
+                    // Another repository asks for other things, so its own chooser comes back.
+                    setChosen(null);
+                  }}
                 >
                   <SelectTrigger id="issue-project" className="w-full" aria-label="Project">
                     <SelectValue>{selected.title}</SelectValue>
@@ -199,83 +255,170 @@ export function IssueCreateDialog({
                 </p>
               </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground" htmlFor="issue-title">
-                  Title
-                </label>
-                <Input
-                  id="issue-title"
-                  autoFocus
-                  disabled={filing}
-                  value={title}
-                  placeholder="What is happening, in one line"
-                  onChange={(event) => setTitle(event.target.value)}
-                />
-              </div>
+              {templatesQuery.isPending ? (
+                <p className="text-sm text-muted-foreground">
+                  Reading what this repository asks a new issue to start from…
+                </p>
+              ) : choice === null ? (
+                <div className="space-y-2">
+                  {offer.templates.map((template) => (
+                    <button
+                      key={template.key}
+                      type="button"
+                      onClick={() => choose({ kind: "template", key: template.key })}
+                      className="flex w-full items-start gap-3 rounded-lg border border-border/60 px-3 py-2.5 text-left hover:bg-accent/60"
+                    >
+                      <FileTextIcon
+                        aria-hidden
+                        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{template.name}</span>
+                        {template.about ? (
+                          <span className="block text-xs text-muted-foreground">
+                            {template.about}
+                          </span>
+                        ) : null}
+                      </span>
+                    </button>
+                  ))}
+                  {/* Where the repository would rather this went, opened on the host: the
+                      conversation these point at is not one this page can hold. */}
+                  {offer.contactLinks.map((link) => (
+                    <a
+                      key={link.url}
+                      href={link.url}
+                      rel="noreferrer noopener"
+                      target="_blank"
+                      className="flex w-full items-start gap-3 rounded-lg border border-border/60 px-3 py-2.5 text-left hover:bg-accent/60"
+                    >
+                      <ExternalLinkIcon
+                        aria-hidden
+                        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm font-medium">{link.name}</span>
+                        {link.about ? (
+                          <span className="block text-xs text-muted-foreground">{link.about}</span>
+                        ) : null}
+                      </span>
+                    </a>
+                  ))}
+                  {offer.blankIssuesEnabled ? (
+                    <button
+                      type="button"
+                      onClick={() => choose({ kind: "blank" })}
+                      className="flex w-full items-start gap-3 rounded-lg border border-border/60 px-3 py-2.5 text-left hover:bg-accent/60"
+                    >
+                      <PlusIcon
+                        aria-hidden
+                        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-medium">Open a blank issue</span>
+                        <span className="block text-xs text-muted-foreground">
+                          Start from an empty title and description.
+                        </span>
+                      </span>
+                    </button>
+                  ) : null}
+                </div>
+              ) : (
+                <>
+                  <div className="space-y-1.5">
+                    <label
+                      className="text-xs font-medium text-muted-foreground"
+                      htmlFor="issue-title"
+                    >
+                      Title
+                    </label>
+                    <Input
+                      id="issue-title"
+                      autoFocus
+                      disabled={filing}
+                      value={title}
+                      placeholder="What is happening, in one line"
+                      onChange={(event) => setTitle(event.target.value)}
+                    />
+                  </div>
 
-              <div className="space-y-1.5">
-                <label className="text-xs font-medium text-muted-foreground" htmlFor="issue-body">
-                  Description
-                </label>
-                <Textarea
-                  id="issue-body"
-                  disabled={filing}
-                  value={body}
-                  rows={8}
-                  placeholder="Markdown. What you did, what happened, what you expected."
-                  onChange={(event) => setBody(event.target.value)}
-                />
-              </div>
+                  <div className="space-y-1.5">
+                    <label
+                      className="text-xs font-medium text-muted-foreground"
+                      htmlFor="issue-body"
+                    >
+                      Description
+                    </label>
+                    <Textarea
+                      id="issue-body"
+                      disabled={filing}
+                      value={body}
+                      rows={8}
+                      placeholder="Markdown. What you did, what happened, what you expected."
+                      onChange={(event) => setBody(event.target.value)}
+                    />
+                  </div>
 
-              {/* Typed rather than picked: a repository's labels and the people who may be
+                  {/* Typed rather than picked: a repository's labels and the people who may be
                   assigned are read against an issue, and this one does not exist yet. Both are
                   optional, and anything the host does not recognise it refuses by name. */}
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <label
-                    className="text-xs font-medium text-muted-foreground"
-                    htmlFor="issue-labels"
-                  >
-                    Labels
-                  </label>
-                  <Input
-                    id="issue-labels"
-                    disabled={filing}
-                    value={labels}
-                    placeholder="bug, good first issue"
-                    onChange={(event) => setLabels(event.target.value)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label
-                    className="text-xs font-medium text-muted-foreground"
-                    htmlFor="issue-assignees"
-                  >
-                    Assignees
-                  </label>
-                  <Input
-                    id="issue-assignees"
-                    disabled={filing}
-                    value={assignees}
-                    placeholder="octocat, hubot"
-                    onChange={(event) => setAssignees(event.target.value)}
-                  />
-                </div>
-              </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label
+                        className="text-xs font-medium text-muted-foreground"
+                        htmlFor="issue-labels"
+                      >
+                        Labels
+                      </label>
+                      <Input
+                        id="issue-labels"
+                        disabled={filing}
+                        value={labels}
+                        placeholder="bug, good first issue"
+                        onChange={(event) => setLabels(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <label
+                        className="text-xs font-medium text-muted-foreground"
+                        htmlFor="issue-assignees"
+                      >
+                        Assignees
+                      </label>
+                      <Input
+                        id="issue-assignees"
+                        disabled={filing}
+                        value={assignees}
+                        placeholder="octocat, hubot"
+                        onChange={(event) => setAssignees(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
             </>
           )}
         </DialogPanel>
         <DialogFooter>
-          <Button variant="ghost" disabled={filing} onClick={() => onOpenChange(false)}>
+          {choice !== null && hasChoice ? (
+            <Button variant="ghost" disabled={filing} onClick={() => setChosen(null)}>
+              Back
+            </Button>
+          ) : null}
+          <Button variant="ghost" disabled={filing} onClick={() => setOpen(false)}>
             Cancel
           </Button>
-          <Button
-            disabled={selected === undefined || trimmedTitle.length === 0 || filing}
-            onClick={() => void submit()}
-          >
-            <PlusIcon />
-            {filing ? "Filing..." : "File issue"}
-          </Button>
+          {/* Absent on the chooser rather than disabled: nothing has been started yet, so there is
+              nothing this would file. */}
+          {choice === null ? null : (
+            <Button
+              disabled={selected === undefined || trimmedTitle.length === 0 || filing}
+              onClick={() => void submit()}
+            >
+              <PlusIcon />
+              {filing ? "Filing..." : "File issue"}
+            </Button>
+          )}
         </DialogFooter>
       </DialogPopup>
     </Dialog>

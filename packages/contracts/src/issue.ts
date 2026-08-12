@@ -122,6 +122,11 @@ export const IssueCapabilities = Schema.Struct({
   closeReasons: Schema.Array(IssueCloseReason),
   /** A new issue can be filed. */
   create: Schema.Boolean,
+  /**
+   * The starting points this repository offers for a new issue can be read, so filing begins from
+   * what the repository asks for rather than from an empty box.
+   */
+  issueTemplates: Schema.Boolean,
   /** The title and body of an existing issue can be rewritten. */
   edit: Schema.Boolean,
   labels: Schema.Boolean,
@@ -337,9 +342,15 @@ export type IssueCommentInput = typeof IssueCommentInput.Type;
 
 const IssueTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(1024));
 
-export const IssueCreateInput = Schema.Struct({
+/** A repository with no issue in it, which is what a read about the repository itself takes. */
+export const IssueRepositoryRef = Schema.Struct({
   projectId: ProjectId,
   repository: TrimmedNonEmptyString,
+});
+export type IssueRepositoryRef = typeof IssueRepositoryRef.Type;
+
+export const IssueCreateInput = Schema.Struct({
+  ...IssueRepositoryRef.fields,
   title: IssueTitle,
   /** May be empty: an issue with a title and nothing else is a legitimate one. */
   body: Schema.String.check(Schema.isMaxLength(65_536)),
@@ -353,6 +364,48 @@ export const IssueCreateResult = Schema.Struct({
   url: TrimmedNonEmptyString,
 });
 export type IssueCreateResult = typeof IssueCreateResult.Type;
+
+/**
+ * One of the starting points a repository offers for a new issue: a bug report with its own
+ * headings, a feature request with the questions it wants answered. Hosts carry different amounts
+ * of it — a GitLab template is a body and nothing else — so a field the host has nothing for comes
+ * back empty rather than absent, and a chooser can show every host's templates the same way.
+ */
+export const IssueTemplate = Schema.Struct({
+  /** How the host addresses this template, which is what the chooser sends back. */
+  key: TrimmedNonEmptyString,
+  name: TrimmedNonEmptyString,
+  /** What it is for, shown under the name so the chooser is more than a list of words. */
+  about: Schema.String,
+  title: Schema.String,
+  body: Schema.String,
+  labels: Schema.Array(TrimmedNonEmptyString),
+  assignees: Schema.Array(TrimmedNonEmptyString),
+});
+export type IssueTemplate = typeof IssueTemplate.Type;
+
+/**
+ * Somewhere the repository would rather a question went than into its tracker — a forum, a
+ * security address, a chat room. Offered beside the templates and opened on the host, because
+ * that is where the conversation it points at happens.
+ */
+export const IssueContactLink = Schema.Struct({
+  name: TrimmedNonEmptyString,
+  about: Schema.String,
+  url: TrimmedNonEmptyString,
+});
+export type IssueContactLink = typeof IssueContactLink.Type;
+
+export const IssueTemplateList = Schema.Struct({
+  templates: Schema.Array(IssueTemplate),
+  contactLinks: Schema.Array(IssueContactLink),
+  /**
+   * Whether an issue may be filed without taking a template. False only where the repository
+   * asked for that; one that said nothing allows it, which is every host's own default.
+   */
+  blankIssuesEnabled: Schema.Boolean,
+});
+export type IssueTemplateList = typeof IssueTemplateList.Type;
 
 /** Both fields are optional so a rename does not have to resend a body nobody edited. */
 export const IssueUpdateInput = Schema.Struct({

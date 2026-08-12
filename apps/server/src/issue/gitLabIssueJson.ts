@@ -90,6 +90,17 @@ const RawViewerSchema = Schema.Struct({
   username: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
+/** A row of `GET /projects/:id/templates/issues`, which names a template but carries none of it. */
+const RawIssueTemplateEntrySchema = Schema.Struct({
+  key: Schema.String,
+  name: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
+/** One template's own answer, which is the markdown the description starts out as. */
+const RawIssueTemplateSchema = Schema.Struct({
+  content: Schema.optional(Schema.NullOr(Schema.String)),
+});
+
 export interface GitLabIssue {
   readonly number: number;
   readonly title: string;
@@ -170,6 +181,8 @@ const decodeLinkedMergeRequestEntry = Schema.decodeUnknownExit(RawLinkedMergeReq
 const decodeProjectLabelEntry = Schema.decodeUnknownExit(RawProjectLabelSchema);
 const decodeUserEntry = Schema.decodeUnknownExit(RawUserSchema);
 const decodeViewer = decodeJsonResult(RawViewerSchema);
+const decodeIssueTemplateEntry = Schema.decodeUnknownExit(RawIssueTemplateEntrySchema);
+const decodeIssueTemplate = decodeJsonResult(RawIssueTemplateSchema);
 
 type DecodeFailure = Cause.Cause<Schema.SchemaError>;
 
@@ -459,4 +472,40 @@ export function decodeProjectMembersJson(
     members.push({ ...actor, id: String(user.value.id) });
   }
   return Result.succeed({ members, rawCount: decoded.success.length });
+}
+
+export interface GitLabIssueTemplateEntry {
+  /** How GitLab addresses the template when its content is asked for. */
+  readonly key: string;
+  readonly name: string;
+}
+
+/**
+ * The templates a project offers, named but empty: GitLab lists them and serves each one's body
+ * from an endpoint of its own. A row that cannot be read is skipped rather than failing the list.
+ */
+export function decodeIssueTemplateEntriesJson(
+  raw: string,
+): Result.Result<ReadonlyArray<GitLabIssueTemplateEntry>, DecodeFailure> {
+  const decoded = decodeUnknownList(raw);
+  if (!Result.isSuccess(decoded)) {
+    return Result.fail(decoded.failure);
+  }
+  const entries: Array<GitLabIssueTemplateEntry> = [];
+  for (const row of decoded.success) {
+    const entry = decodeIssueTemplateEntry(row);
+    if (Exit.isFailure(entry)) continue;
+    const key = trimmed(entry.value.key);
+    if (key === null) continue;
+    entries.push({ key, name: trimmed(entry.value.name) ?? key });
+  }
+  return Result.succeed(entries);
+}
+
+/** One template's body. Empty for a template GitLab holds nothing under, which is not a failure. */
+export function decodeIssueTemplateJson(raw: string): Result.Result<string, DecodeFailure> {
+  const decoded = decodeIssueTemplate(raw);
+  return Result.isSuccess(decoded)
+    ? Result.succeed(decoded.success.content ?? "")
+    : Result.fail(decoded.failure);
 }
