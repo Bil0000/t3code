@@ -291,10 +291,10 @@ function RightPanelEmptyState(props: {
       const target = event.target;
       if (target instanceof HTMLElement) {
         if (target.closest("input, textarea, select")) return;
-        // An empty contenteditable (the chat composer at rest) does not
-        // count as typing; letters only become text once a draft exists.
-        const editable = target.isContentEditable ? target : target.closest("[contenteditable]");
-        if (editable && (editable.textContent ?? "").trim().length > 0) return;
+        // A contenteditable is a text field like any other: an empty one is
+        // exactly where the next letter is about to be typed, so its emptiness
+        // cannot earn the shortcuts back.
+        if (target.isContentEditable || target.closest("[contenteditable]")) return;
       }
       const action = shortcutActionsRef.current.find(
         (candidate) => candidate.shortcut.toLowerCase() === event.key.toLowerCase(),
