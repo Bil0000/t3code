@@ -61,17 +61,15 @@ export function IssueAssigneePicker({
   const all = useMemo(() => candidatesQuery.data?.candidates ?? [], [candidatesQuery.data]);
   const candidates = useMemo(() => all.filter((entry) => matches(entry, query)), [all, query]);
   /**
-   * A list the host cut short cannot be written from, so nothing here may be chosen while it is.
-   *
-   * The set is replaced whole and can only be spelled from this list, so anybody assigned past
-   * the end of it is not here to be kept and would come off the issue on the next write —
-   * silently, and to somebody the reader was never shown. Assigning stays with the host until the
-   * whole list is in hand.
+   * The host has more people with access than it listed — a common thing on an organisation
+   * repository, and no reason not to assign: every host puts whoever already has the issue in this
+   * list whatever else it left out, so the set stays spellable. It is only the reader who is not
+   * being shown everybody.
    */
   const truncated = candidatesQuery.data?.truncated === true;
 
   const toggle = async (candidate: IssueAssigneeCandidate) => {
-    if (pending !== null || truncated) return;
+    if (pending !== null) return;
     // Every host writes assignees by replacing the whole set, and addresses a person by an
     // identifier the issue itself does not carry — GitLab assigns by numeric user id. So the set
     // is rebuilt from this list rather than from the issue's own assignees, which is also why
@@ -128,10 +126,9 @@ export function IssueAssigneePicker({
       }
       note={
         // Typing filters what arrived; it does not ask the host again, so this says what the list
-        // is rather than offering a search that would find nothing further — and why the rows
-        // below it cannot be chosen.
+        // is rather than offering a search that would find nothing further.
         truncated
-          ? "This repository has more people with access than are listed here, so choosing from here would take the issue off anybody past the end of the list. Change who is assigned on the host."
+          ? "This repository has more people with access than are listed here. Everybody already assigned is, so choosing from here keeps them — somebody else who is missing has to be assigned on the host."
           : null
       }
     >
