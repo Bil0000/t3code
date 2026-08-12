@@ -222,9 +222,23 @@ export class BitbucketPullRequestApi extends Context.Service<
       readonly mergeMethod?: PullRequestMergeMethod;
     }) => Effect.Effect<void, BitbucketPullRequestApiError>;
 
+    readonly updateChangeRequest: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly title?: string | undefined;
+      readonly body?: string | undefined;
+    }) => Effect.Effect<void, BitbucketPullRequestApiError>;
+
     readonly comment: (input: {
       readonly repository: string;
       readonly number: number;
+      readonly body: string;
+    }) => Effect.Effect<void, BitbucketPullRequestApiError>;
+
+    readonly updateComment: (input: {
+      readonly repository: string;
+      readonly number: number;
+      readonly commentId: string;
       readonly body: string;
     }) => Effect.Effect<void, BitbucketPullRequestApiError>;
 
@@ -701,6 +715,34 @@ export const make = Effect.gen(function* () {
           .pipe(Effect.asVoid);
       }),
 
+    updateChangeRequest: (input) =>
+      withRepository(input.repository, (path) => {
+        const pullRequest = `${path}/pullrequests/${input.number}`;
+        return readPage({
+          operation: "getPullRequest",
+          url: pullRequest,
+          decode: decodePullRequestJson,
+        }).pipe(
+          Effect.flatMap((current) =>
+            // Only the words this call rewrites, so a title corrected while somebody else is
+            // rewriting the description does not put the description back. The reviewers are the
+            // exception: Bitbucket writes that collection whole, and a body without it takes
+            // everybody off the pull request — so the set that is there is read first and sent
+            // back as it stands.
+            bitbucket.request({
+              method: "PUT",
+              url: pullRequest,
+              body: JSON.stringify({
+                ...(input.title === undefined ? {} : { title: input.title }),
+                ...(input.body === undefined ? {} : { description: input.body }),
+                reviewers: current.reviewerIds.map((uuid) => ({ uuid })),
+              }),
+            }),
+          ),
+          Effect.asVoid,
+        );
+      }),
+
     comment: (input) =>
       withRepository(input.repository, (path) =>
         bitbucket
@@ -708,6 +750,21 @@ export const make = Effect.gen(function* () {
             method: "POST",
             url: `${path}/pullrequests/${input.number}/comments`,
             // A JSON document rather than a form field, so the body stays text whatever it says.
+            body: JSON.stringify({ content: { raw: input.body } }),
+          })
+          .pipe(Effect.asVoid),
+      ),
+
+    updateComment: (input) =>
+      withRepository(input.repository, (path) =>
+        bitbucket
+          .request({
+            // Bitbucket keeps a pull request's remarks and its line comments in the one
+            // collection, so this endpoint rewrites either kind.
+            method: "PUT",
+            url: `${path}/pullrequests/${input.number}/comments/${encodeURIComponent(
+              input.commentId,
+            )}`,
             body: JSON.stringify({ content: { raw: input.body } }),
           })
           .pipe(Effect.asVoid),

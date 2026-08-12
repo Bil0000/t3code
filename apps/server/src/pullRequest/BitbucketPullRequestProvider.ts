@@ -29,6 +29,7 @@ const CAPABILITIES: PullRequestCapabilities = {
     verdicts: ["comment", "approve", "request-changes"],
   },
   reviewers: { request: true, listCandidates: true },
+  edit: { changeRequest: true, comment: true },
 };
 
 /**
@@ -252,10 +253,30 @@ export const make = Effect.gen(function* () {
         })
         .pipe(Effect.mapError(fail("runAction"))),
 
+    updateChangeRequest: (input) =>
+      api
+        .updateChangeRequest({
+          repository: input.repository,
+          number: input.number,
+          title: input.title,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("updateChangeRequest"))),
+
     comment: (input) =>
       api
         .comment({ repository: input.repository, number: input.number, body: input.body })
         .pipe(Effect.mapError(fail("comment"))),
+
+    updateComment: (input) =>
+      api
+        .updateComment({
+          repository: input.repository,
+          number: input.number,
+          commentId: input.commentId,
+          body: input.body,
+        })
+        .pipe(Effect.mapError(fail("updateComment"))),
 
     submitReview: (input) =>
       api
