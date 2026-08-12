@@ -120,8 +120,31 @@ layer((it) => {
 
       yield* cli.listWorkItems({ cwd: "/w", state: "open", involvement: "assigned", limit: 30 });
 
-      expect(wiqlOf()).toContain("[System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved')");
+      expect(wiqlOf()).toContain(
+        "[System.State] NOT IN ('Closed', 'Completed', 'Done', 'Removed', 'Resolved')",
+      );
       expect(wiqlOf()).toContain("[System.AssignedTo] = @Me");
+    }),
+  );
+
+  it.effect("asks for the same closed states the decoder reads back as closed", () =>
+    Effect.gen(function* () {
+      listing([workItem(1, { "System.State": "Completed" })]);
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+
+      const page = yield* cli.listWorkItems({
+        cwd: "/w",
+        state: "closed",
+        involvement: "all",
+        limit: 30,
+      });
+
+      expect(wiqlOf()).toContain(
+        "[System.State] IN ('Closed', 'Completed', 'Done', 'Removed', 'Resolved')",
+      );
+      // A state the query calls open and the decoder calls closed lands in the open list and is
+      // then shown as closed there.
+      assert.strictEqual(page.items[0]?.state, "closed");
     }),
   );
 

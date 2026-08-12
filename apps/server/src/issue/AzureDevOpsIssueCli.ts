@@ -111,12 +111,17 @@ function involvementClause(involvement: IssueInvolvement): string {
   }
 }
 
+/**
+ * The names the decoder reads as closed, spelled the way Azure stores them. The two lists are one
+ * decision: a state named here and not there — or the other way round — puts a work item in the
+ * open list and then shows it as closed.
+ */
 function stateClause(state: IssueListState): string {
   switch (state) {
     case "open":
-      return " AND [System.State] NOT IN ('Closed', 'Done', 'Removed', 'Resolved')";
+      return " AND [System.State] NOT IN ('Closed', 'Completed', 'Done', 'Removed', 'Resolved')";
     case "closed":
-      return " AND [System.State] IN ('Closed', 'Done', 'Removed', 'Resolved')";
+      return " AND [System.State] IN ('Closed', 'Completed', 'Done', 'Removed', 'Resolved')";
     case "all":
       return "";
   }
