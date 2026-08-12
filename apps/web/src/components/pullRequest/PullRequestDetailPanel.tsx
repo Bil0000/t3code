@@ -79,6 +79,8 @@ import {
 import { toastManager } from "../ui/toast";
 import { DetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
+import { CondensedDetailTabStrip, DetailTabStrip } from "../sourceControl/DetailTabStrip";
+import { useMountedTabs } from "../sourceControl/useMountedTabs";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAskSelectionInput } from "./PullRequestCodeTab";
@@ -232,19 +234,7 @@ export function PullRequestDetailPanel({
     selectCodeCommit(oid);
     setTab("code");
   };
-  // Every tab the reader has opened stays mounted behind the active one. The diff viewer
-  // always needed this (it virtualizes against its own scroll position); the trace showed the
-  // summary needs it too — a large description re-parses its whole markdown on every return
-  // to the tab. `visibility` keeps boxes, sizes and scroll offsets, and takes hidden content
-  // out of the tab order and the accessibility tree.
-  const [mountedTabs, setMountedTabs] = useState<ReadonlySet<DetailTab>>(
-    () => new Set<DetailTab>(["summary"]),
-  );
-  useEffect(() => {
-    setMountedTabs((previous) =>
-      previous.has(tab) ? previous : new Set<DetailTab>(previous).add(tab),
-    );
-  }, [tab]);
+  const mountedTabs = useMountedTabs(tab);
   const [chromeCondensed, setChromeCondensed] = useState(false);
   // Each tab remembers whether its chrome was condensed. Only the active tab can emit scroll
   // events, so the capture handler always writes the active tab's entry — and a tab switch
@@ -1067,25 +1057,13 @@ export function PullRequestDetailPanel({
           >
             {detail ? (
               <div className="flex min-w-0 items-center gap-1 px-4 pb-2">
-                <nav aria-label="Pull request tabs" className="flex shrink-0 items-center gap-0.5">
-                  {visibleTabs.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      tabIndex={condensed ? 0 : -1}
-                      aria-pressed={tab === item.value}
-                      onClick={() => setTab(item.value)}
-                      className={cn(
-                        "rounded-md px-2 py-1 text-[11px] transition-colors",
-                        tab === item.value
-                          ? "bg-accent text-foreground"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </nav>
+                <CondensedDetailTabStrip
+                  label="Pull request tabs"
+                  tabs={visibleTabs}
+                  active={tab}
+                  onSelect={setTab}
+                  focusable={condensed}
+                />
                 <span
                   className="ml-auto inline-flex min-w-0 shrink items-center gap-1 font-mono text-[11px] text-muted-foreground"
                   title={`${detail.baseBranch} ← ${detail.headBranch}`}
@@ -1216,26 +1194,12 @@ export function PullRequestDetailPanel({
             ) : null}
 
             {detail ? (
-              <nav
-                className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-border/60 px-4 py-2"
-                aria-label="Pull request tabs"
+              <DetailTabStrip
+                label="Pull request tabs"
+                tabs={visibleTabs}
+                active={tab}
+                onSelect={setTab}
               >
-                {visibleTabs.map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    aria-pressed={tab === item.value}
-                    onClick={() => setTab(item.value)}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors",
-                      tab === item.value
-                        ? "bg-accent text-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {item.label}
-                  </button>
-                ))}
                 {tab === "summary" ? (
                   <span
                     className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
@@ -1305,7 +1269,7 @@ export function PullRequestDetailPanel({
                     </Button>
                   </div>
                 ) : null}
-              </nav>
+              </DetailTabStrip>
             ) : null}
           </div>
         </div>

@@ -40,7 +40,9 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { SourceControlActorLabel, SourceControlMetaLine } from "../sourceControl/actorPresentation";
+import { CondensedDetailTabStrip, DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { handoffPrompt, readableFailure } from "../sourceControl/handoff";
+import { useMountedTabs } from "../sourceControl/useMountedTabs";
 import {
   AlertDialog,
   AlertDialogClose,
@@ -198,18 +200,7 @@ export function IssueDetailPanel({
   // in this header and the summary is a tab away when it is pressed.
   const [editing, setEditing] = useState(false);
   const [openPicker, setOpenPicker] = useState<"labels" | "assignees" | null>(null);
-  // Every tab the reader has opened stays mounted behind the active one: a long description and a
-  // long conversation both re-parse their whole markdown on every return to the tab.
-  // `visibility` keeps boxes, sizes and scroll offsets, and takes hidden content out of the tab
-  // order and the accessibility tree.
-  const [mountedTabs, setMountedTabs] = useState<ReadonlySet<DetailTab>>(
-    () => new Set<DetailTab>(["summary"]),
-  );
-  useEffect(() => {
-    setMountedTabs((previous) =>
-      previous.has(tab) ? previous : new Set<DetailTab>(previous).add(tab),
-    );
-  }, [tab]);
+  const mountedTabs = useMountedTabs(tab);
   const [chromeCondensed, setChromeCondensed] = useState(false);
   // Each tab remembers whether its chrome was condensed. Only the active tab can emit scroll
   // events, so the capture handler always writes the active tab's entry — and a tab switch
@@ -716,25 +707,13 @@ export function IssueDetailPanel({
           >
             {detail && statePresentation ? (
               <div className="flex min-w-0 items-center gap-1 px-4 pb-2">
-                <nav aria-label="Issue tabs" className="flex shrink-0 items-center gap-0.5">
-                  {TABS.map((item) => (
-                    <button
-                      key={item.value}
-                      type="button"
-                      tabIndex={condensed ? 0 : -1}
-                      aria-pressed={tab === item.value}
-                      onClick={() => setTab(item.value)}
-                      className={cn(
-                        "rounded-md px-2 py-1 text-[11px] transition-colors",
-                        tab === item.value
-                          ? "bg-accent text-foreground"
-                          : "text-muted-foreground hover:text-foreground",
-                      )}
-                    >
-                      {item.label}
-                    </button>
-                  ))}
-                </nav>
+                <CondensedDetailTabStrip
+                  label="Issue tabs"
+                  tabs={TABS}
+                  active={tab}
+                  onSelect={setTab}
+                  focusable={condensed}
+                />
                 <span className="ml-auto shrink-0 truncate text-[11px] text-muted-foreground">
                   {statePresentation.label} · updated {formatRelativeTimeLabel(detail.updatedAt)}
                 </span>
@@ -786,26 +765,7 @@ export function IssueDetailPanel({
             ) : null}
 
             {detail ? (
-              <nav
-                className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-border/60 px-4 py-2"
-                aria-label="Issue tabs"
-              >
-                {TABS.map((item) => (
-                  <button
-                    key={item.value}
-                    type="button"
-                    aria-pressed={tab === item.value}
-                    onClick={() => setTab(item.value)}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors",
-                      tab === item.value
-                        ? "bg-accent text-foreground"
-                        : "text-muted-foreground hover:text-foreground",
-                    )}
-                  >
-                    {item.label}
-                  </button>
-                ))}
+              <DetailTabStrip label="Issue tabs" tabs={TABS} active={tab} onSelect={setTab}>
                 {tab === "timeline" ? (
                   <div className="ml-auto flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
                     <span
@@ -846,7 +806,7 @@ export function IssueDetailPanel({
                     </Button>
                   </div>
                 ) : null}
-              </nav>
+              </DetailTabStrip>
             ) : null}
           </div>
         </div>
