@@ -7,6 +7,7 @@ import type {
 } from "@t3tools/contracts";
 import {
   ChevronRightIcon,
+  LinkIcon,
   MessageSquareIcon,
   MilestoneIcon,
   SendIcon,
@@ -31,6 +32,7 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { IssueActivityUnavailableState } from "./IssueActivityUnavailableState";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
+import { LINK_PULL_REQUESTS_HANDOFF_KIND } from "./issueDetail.logic";
 import { IssueConversationGhost } from "./IssueGhosts";
 import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueLabelChips } from "./issuePresentation";
@@ -268,6 +270,8 @@ export function IssueSummaryTab({
   onEditingChange,
   openPicker,
   onOpenPickerChange,
+  pendingHandoff,
+  onLinkPullRequests,
   onOpenLinkedPullRequest,
   onRefresh,
 }: {
@@ -285,6 +289,14 @@ export function IssueSummaryTab({
    */
   openPicker: "labels" | "assignees" | null;
   onOpenPickerChange: (picker: "labels" | "assignees" | null) => void;
+  /** The hand-off currently preparing, if any, so only the control that started it says so. */
+  pendingHandoff?: string | null;
+  /**
+   * Hands the question of which change requests address this issue to an agent. Supplied by
+   * whoever mounted the panel, because only they can open a thread for it; without one the
+   * section offers nothing, which is never a dead control.
+   */
+  onLinkPullRequests?: () => void;
   onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
   onRefresh: () => void;
 }) {
@@ -378,7 +390,28 @@ export function IssueSummaryTab({
       {/* Only where the host reports links at all: an empty section under a host that never
           answers this question says the issue has no work on it, which it cannot know. */}
       {detail.capabilities.linkedPullRequests ? (
-        <Section title="Related pull requests" count={detail.linkedPullRequests.length}>
+        <Section
+          title="Related pull requests"
+          count={detail.linkedPullRequests.length}
+          // Offered whether or not anything is listed: an issue one change already mentions can
+          // still be worked on by another that never named it.
+          actions={
+            onLinkPullRequests ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
+                disabled={pendingHandoff !== null && pendingHandoff !== undefined}
+                onClick={onLinkPullRequests}
+              >
+                <LinkIcon aria-hidden className="size-3" />
+                {pendingHandoff === LINK_PULL_REQUESTS_HANDOFF_KIND
+                  ? "Preparing..."
+                  : "Link with agent"}
+              </Button>
+            ) : null
+          }
+        >
           {detail.linkedPullRequests.length === 0 ? (
             <p className="text-xs text-muted-foreground">No pull request mentions this issue.</p>
           ) : (

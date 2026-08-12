@@ -59,8 +59,10 @@ import {
   buildAskAboutIssueHandoff,
   buildAttachIssueContext,
   buildExplainIssueHandoff,
+  buildLinkPullRequestsHandoff,
   buildSolveIssueHandoff,
   issueHandoffReviewComments,
+  LINK_PULL_REQUESTS_HANDOFF_KIND,
   type IssueHandoff,
   type IssueHandoffSource,
 } from "./issueDetail.logic";
@@ -929,6 +931,10 @@ export function IssueDetailPanel({
                   onEditingChange={setEditing}
                   openPicker={openPicker}
                   onOpenPickerChange={setOpenPicker}
+                  pendingHandoff={handoff}
+                  onLinkPullRequests={() =>
+                    void startHandoff(LINK_PULL_REQUESTS_HANDOFF_KIND, buildLinkPullRequestsHandoff)
+                  }
                   onOpenLinkedPullRequest={(link) =>
                     onOpenLinkedPullRequest === undefined
                       ? openOnHost(link.url)

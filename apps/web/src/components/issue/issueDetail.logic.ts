@@ -290,6 +290,30 @@ export function buildExplainIssueHandoff(input: IssueHandoffSource): IssueHandof
   };
 }
 
+/** Names the hand-off, so the section's own button and the panel running it agree on which. */
+export const LINK_PULL_REQUESTS_HANDOFF_KIND = "link-pull-requests";
+
+/**
+ * Which change requests are working on this issue, worked out by an agent and written where the
+ * host reads them from. There is no call to make for a link: the host derives one from a closing
+ * keyword in a change request's description, so those descriptions are what get edited — and
+ * saying so is what keeps the agent from going looking for an API that does not exist.
+ */
+export function buildLinkPullRequestsHandoff(input: IssueHandoffSource): IssueHandoff {
+  return {
+    prompt: [
+      `Link issue #${input.number} on \`${boundedField(input.repository)}\` to the change requests that address it.`,
+      `Read the issue, then read the repository's open pull requests, and decide which of them actually address it — read the change each one makes, not only its title. Record each link the way this host records one — in that pull request's own description: \`Closes #${input.number}\` where the change closes this issue, and a plain \`#${input.number}\` mention where it only relates to it.`,
+      "Edit those descriptions and nothing else: keep every word they already have and add only the line carrying the link. Link nothing you are not confident about, and if no open change request addresses this issue, change nothing and say so — an empty answer is a valid one.",
+    ].join("\n"),
+    reviewComments: [
+      issueContextComment(input, "deciding which change requests address it", [
+        "Do not change any code: the only edit is to the description of each change request that addresses this issue.",
+      ]),
+    ],
+  };
+}
+
 /**
  * The issue on its own, for a reader who wants to write their own message with it to hand. No
  * prompt at all: the composer is theirs, and this only puts the issue within the agent's reach.

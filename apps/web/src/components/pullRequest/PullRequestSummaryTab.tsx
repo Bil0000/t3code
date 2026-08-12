@@ -8,6 +8,7 @@ import {
   ArrowDownUpIcon,
   ChevronRightIcon,
   HammerIcon,
+  LinkIcon,
   MessageSquareIcon,
   SendIcon,
   UsersIcon,
@@ -35,6 +36,7 @@ import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import {
+  LINK_ISSUES_HANDOFF_KIND,
   orderPullRequestComments,
   pullRequestFindingKey,
   type PullRequestFinding,
@@ -181,6 +183,7 @@ export function PullRequestSummaryTab({
   activityError,
   pendingFinding,
   onFixFinding,
+  onLinkIssues,
   onOpenLinkedIssue,
   onRefresh,
 }: {
@@ -192,6 +195,12 @@ export function PullRequestSummaryTab({
   /** The hand-off currently preparing, if any, so only the finding it belongs to says so. */
   pendingFinding?: string | null;
   onFixFinding?: (finding: PullRequestFinding) => void;
+  /**
+   * Hands the question of which issues this change is about to an agent. Supplied by whoever
+   * mounted the panel, because only they can open a thread for it; without one the section
+   * offers nothing, which is never a dead control.
+   */
+  onLinkIssues?: () => void;
   /**
    * Opens one of the issues this pull request references. Supplied by whoever mounted the panel,
    * because only they know which thread's panel a peer tab belongs beside; without one the row
@@ -296,7 +305,26 @@ export function PullRequestSummaryTab({
       {/* Absent under a host that never answers this question, rather than empty: an empty
           section would say this change closes nothing, which such a host cannot know. */}
       {detail.linkedIssues === undefined ? null : (
-        <Section title="Linked issues" count={detail.linkedIssues.length}>
+        <Section
+          title="Linked issues"
+          count={detail.linkedIssues.length}
+          // Offered whether or not anything is listed: a change that already closes one issue can
+          // still be about another nobody thought to mention.
+          actions={
+            onLinkIssues ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
+                disabled={pendingFinding !== null && pendingFinding !== undefined}
+                onClick={onLinkIssues}
+              >
+                <LinkIcon aria-hidden className="size-3" />
+                {pendingFinding === LINK_ISSUES_HANDOFF_KIND ? "Preparing..." : "Link with agent"}
+              </Button>
+            ) : null
+          }
+        >
           {detail.linkedIssues.length === 0 ? (
             <p className="text-xs text-muted-foreground">This change mentions no issue.</p>
           ) : (

@@ -6,6 +6,7 @@ import {
   buildAttachIssueContext,
   buildExplainIssueHandoff,
   buildIssueTimeline,
+  buildLinkPullRequestsHandoff,
   buildSolveIssueHandoff,
   describeIssueEvent,
   groupIssueTimelineConversations,
@@ -164,6 +165,7 @@ describe("issue handoffs", () => {
     ["ask", buildAskAboutIssueHandoff],
     ["explain", buildExplainIssueHandoff],
     ["attach", buildAttachIssueContext],
+    ["link", buildLinkPullRequestsHandoff],
   ] as const;
 
   for (const [name, build] of builders) {
@@ -220,6 +222,29 @@ describe("issue handoffs", () => {
     for (const line of (context?.text ?? "").split("\n")) {
       expect(line.length).toBeLessThanOrEqual(1_200);
     }
+  });
+
+  it("asks for the links by the host's closing keyword, not by an API of its own", () => {
+    const prompt = buildLinkPullRequestsHandoff(source).prompt;
+    expect(prompt).toContain("Closes #812");
+    expect(prompt).toContain("a plain `#812` mention");
+    expect(prompt).toContain("open pull requests");
+    // Nothing to call: a link is a line in a description, and pointing at an endpoint that does
+    // not exist is how an agent spends a thread finding that out.
+    expect(prompt).not.toMatch(/\bAPI\b/u);
+    expect(prompt).toContain("an empty answer is a valid one");
+  });
+
+  it("bounds the issue text the link hand-off quotes", () => {
+    const long = "x".repeat(4_000);
+    const [context] = buildLinkPullRequestsHandoff({
+      ...source,
+      title: long,
+      body: long,
+    }).reviewComments;
+    expect(context?.rangeLabel).toHaveLength(1_000);
+    expect(context?.text).toContain(`${"x".repeat(997)}...`);
+    expect(context?.text).not.toContain("x".repeat(1_001));
   });
 
   it("skips a description the host has only a bot marker for", () => {
