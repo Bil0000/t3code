@@ -14,7 +14,7 @@ import {
   PenLineIcon,
   UserCheckIcon,
 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { IssuesSurface } from "~/rightPanelStore";
 import { issueEnvironment } from "~/state/issues";
@@ -51,6 +51,17 @@ interface PanelFilters {
   readonly state: IssueListState;
   readonly involvement: IssueInvolvement;
   readonly label: string | undefined;
+}
+
+/**
+ * Where the next slice carries on from, per repository, as the server handed it back — the same
+ * bargain the issues page makes. Sending it is what makes a second page cost a second page rather
+ * than the whole list again. Held above the list for the reason the filters are.
+ */
+interface PanelPage {
+  readonly key: string;
+  readonly size: number;
+  readonly cursors: Record<string, string> | null;
 }
 
 const SEARCH_DEBOUNCE_MS = 250;
@@ -93,7 +104,7 @@ export function IssuesPanel({
   // Held here rather than in the list, so reading an issue and coming back does not throw away
   // the search that found it — the list is unmounted while the issue is open.
   const [query, setQuery] = useState("");
-  const [limit, setLimit] = useState(PAGE_SIZE);
+  const [page, setPage] = useState<PanelPage>({ key: "", size: PAGE_SIZE, cursors: null });
   const [filters, setFilters] = useState<{
     readonly state: IssueListState;
     readonly involvement: IssueInvolvement;
@@ -139,8 +150,8 @@ export function IssuesPanel({
       onSelect={onSelect}
       query={query}
       onQuery={setQuery}
-      limit={limit}
-      onLimit={setLimit}
+      page={page}
+      onPage={setPage}
       filters={filters}
       onFilters={setFilters}
     />
@@ -153,8 +164,8 @@ function IssueBrowserList({
   onSelect,
   query,
   onQuery,
-  limit,
-  onLimit,
+  page,
+  onPage,
   filters,
   onFilters,
 }: {
@@ -163,8 +174,8 @@ function IssueBrowserList({
   onSelect: (target: NonNullable<IssuesSurface["selected"]>) => void;
   query: string;
   onQuery: (query: string) => void;
-  limit: number;
-  onLimit: (limit: number) => void;
+  page: PanelPage;
+  onPage: (page: PanelPage) => void;
   filters: PanelFilters;
   onFilters: (filters: PanelFilters) => void;
 }) {
@@ -173,6 +184,20 @@ function IssueBrowserList({
   // is sent — the same bargain the issues page makes.
   const sent = useDebouncedValue(typed, SEARCH_DEBOUNCE_MS);
 
+  // The label is narrowed on the rows rather than on the host, so it is no part of the question
+  // and no reason to start the list again.
+  const filterKey = `${filters.state}:${filters.involvement}:${sent}`;
+  const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
+  const sentCursors = page.key === filterKey ? page.cursors : null;
+
+  // Typing a search, or changing a filter, starts the list again at its first page: the paging
+  // state from before belongs to a question nobody is asking any more.
+  useEffect(() => {
+    onPage({ key: filterKey, size: PAGE_SIZE, cursors: null });
+    // Only the question itself starts the list over; `onPage` is the setter and never changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filterKey]);
+
   const listQuery = useEnvironmentQuery(
     issueEnvironment.list({
       environmentId,
@@ -180,29 +205,105 @@ function IssueBrowserList({
         state: filters.state,
         involvement: filters.involvement,
         projectId,
-        limit,
+        limit: pageSize,
         ...(sent ? { query: sent } : {}),
+        ...(sentCursors === null ? {} : { cursors: sentCursors }),
       },
     }),
   );
+  const answered = listQuery.data;
+
+  /**
+   * What the list holds, across the slices it has asked for. A continuation carries only the rows
+   * that come after the ones already held, so everything on screen stays and the slice — ordered
+   * among itself, since one repository's next rows can be newer than another's last — lands under
+   * it. A whole-page answer replaces the order outright.
+   */
+  const [ordered, setOrdered] = useState<{
+    key: string;
+    entries: ReadonlyArray<IssueListEntry>;
+  } | null>(null);
+  useEffect(() => {
+    if (answered === null) return;
+    setOrdered((previous) => {
+      if (previous === null || previous.key !== filterKey || sentCursors === null) {
+        return { key: filterKey, entries: openFirst(answered.entries) };
+      }
+      const held = new Set(previous.entries.map(issueEntryKey));
+      const arrived = answered.entries.filter((entry) => !held.has(issueEntryKey(entry)));
+      return {
+        key: filterKey,
+        entries: [
+          ...previous.entries,
+          ...arrived.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+        ],
+      };
+    });
+  }, [answered, filterKey, sentCursors]);
+
   // Involvement and the label are narrowed here as well as asked for: a host that cannot express
   // "mentioned" answers unnarrowed, and no host is asked about a label at all.
   const entries = useMemo(() => {
-    const answered = listQuery.data;
-    if (answered === null) return [];
+    const held = ordered?.key === filterKey ? ordered.entries : (answered?.entries ?? []);
     const byInvolvement = filterIssuesByInvolvement(
-      answered.entries,
-      answered.viewers,
+      held,
+      answered?.viewers ?? {},
       filters.involvement,
     );
-    const byLabel =
-      filters.label === undefined
-        ? byInvolvement
-        : byInvolvement.filter((entry) =>
-            entry.labels.some((label) => label.name === filters.label),
-          );
-    return openFirst(byLabel);
-  }, [filters.involvement, filters.label, listQuery.data]);
+    return filters.label === undefined
+      ? byInvolvement
+      : byInvolvement.filter((entry) => entry.labels.some((label) => label.name === filters.label));
+  }, [answered, filterKey, filters.involvement, filters.label, ordered]);
+
+  const nextCursors = answered?.nextCursors ?? {};
+  const canContinue = Object.keys(nextCursors).length > 0;
+  const loadMore = () => {
+    onPage(
+      canContinue
+        ? { key: filterKey, size: pageSize, cursors: nextCursors }
+        : { key: filterKey, size: Math.min(pageSize + PAGE_SIZE, MAX_LIMIT), cursors: null },
+    );
+  };
+
+  const sentinelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const sentinel = sentinelRef.current;
+    // Rows on screen are what makes reaching the sentinel mean anything: with none it sits under
+    // the empty state and is always in view, so a search that matches nothing would page through
+    // the whole repository on its own. A failed page stops the observer for the same reason —
+    // the rows stay, so re-arming would ask again forever.
+    if (
+      !sentinel ||
+      entries.length === 0 ||
+      answered?.truncated !== true ||
+      listQuery.isPending ||
+      listQuery.error !== null ||
+      // Asking past the ceiling is refused, and a continuation does not grow the page at all,
+      // so the ceiling only stops the growth path.
+      (!canContinue && pageSize >= MAX_LIMIT)
+    ) {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (observed) => {
+        if (observed.some((entry) => entry.isIntersecting)) loadMore();
+      },
+      // Start the next slice slightly before the sentinel is on screen.
+      { rootMargin: "240px" },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+    // `loadMore` is rebuilt every render and reads only what is listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    answered?.truncated,
+    canContinue,
+    entries.length,
+    filterKey,
+    listQuery.error,
+    listQuery.isPending,
+    pageSize,
+  ]);
 
   // Said apart from "there are none": a filter hiding every row is a different answer from a
   // repository with nothing in it, and only one of them is worth widening a filter over.
@@ -212,11 +313,13 @@ function IssueBrowserList({
   /** Offered from what arrived: a label nothing here wears would narrow the list to nothing. */
   const labelOptions = useMemo(() => {
     const names = new Set(
-      (listQuery.data?.entries ?? []).flatMap((entry) => entry.labels.map((label) => label.name)),
+      (ordered?.key === filterKey ? ordered.entries : (answered?.entries ?? [])).flatMap((entry) =>
+        entry.labels.map((label) => label.name),
+      ),
     );
     if (filters.label !== undefined) names.add(filters.label);
     return [...names].sort((left, right) => left.localeCompare(right));
-  }, [filters.label, listQuery.data]);
+  }, [answered, filterKey, filters.label, ordered]);
 
   // Stable, because the rows are memoized on it.
   const select = useCallback(
@@ -272,18 +375,14 @@ function IssueBrowserList({
                   onSelect={select}
                 />
               ))}
-              {/* Only while there is more to ask for: at the ceiling this could add nothing. */}
-              {listQuery.data?.truncated === true && limit < MAX_LIMIT ? (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full"
-                  disabled={listQuery.isPending}
-                  onClick={() => onLimit(Math.min(limit + PAGE_SIZE, MAX_LIMIT))}
-                >
-                  {listQuery.isPending ? "Loading..." : "Load more"}
-                </Button>
-              ) : null}
+              {/* Scrolling to here asks for the next slice; it says so only while one is on the
+                  way, so a list that has run out ends on its last row rather than on a label. */}
+              <div
+                ref={sentinelRef}
+                className="flex justify-center py-2 text-xs text-muted-foreground"
+              >
+                {answered?.truncated === true && listQuery.isPending ? "Loading..." : null}
+              </div>
             </>
           )}
         </div>
