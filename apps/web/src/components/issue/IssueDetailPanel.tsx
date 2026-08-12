@@ -861,6 +861,12 @@ export function IssueDetailPanel({
         onScrollCapture={(event) => {
           if (chromeVariant !== "collapse") return;
           const scroller = event.target as HTMLElement;
+          // Only the tab's own scrollport folds the chrome. A scrollable inside it — a code block
+          // running wide, the description open in an editor — is the reader moving something on
+          // the page rather than the page, and its `scrollTop` is not the one the compensation
+          // belongs to. The tab renders its scroller as the marked wrapper's only child, so that
+          // is what the mark asks about.
+          if (scroller.parentElement?.hasAttribute("data-tab-scroller") !== true) return;
           scrollerRef.current = scroller;
           const top = scroller.scrollTop;
           setChromeCondensed((previous) => {
@@ -900,7 +906,10 @@ export function IssueDetailPanel({
         ) : detail ? (
           <>
             {mountedTabs.has("summary") ? (
-              <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
+              <div
+                data-tab-scroller
+                className={cn("absolute inset-0", tab !== "summary" && "invisible")}
+              >
                 <IssueSummaryTab
                   environmentId={environmentId}
                   reference={reference}
@@ -927,7 +936,10 @@ export function IssueDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("timeline") ? (
-              <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
+              <div
+                data-tab-scroller
+                className={cn("absolute inset-0", tab !== "timeline" && "invisible")}
+              >
                 {activityPending ? (
                   <TimelineGhost />
                 ) : activityError ? (
