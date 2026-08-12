@@ -161,10 +161,10 @@ const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
   close: "The host refused it. Check that you have write access, or that you opened it.",
   reopen:
     "The host refused it. Check that you have write access, and that the branch still exists.",
-  // A rebase is the one that fails on its own merits: GitHub replays the commits and stops at
-  // the first that does not apply, which is a conflict the reader has to resolve themselves.
+  // Said for the merge commit, which is what an update is unless a rebase was asked for. The
+  // rebase has its own reasons to fail and its own sentence below.
   "update-branch":
-    "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.",
+    "The host refused it. Check that you have write access to the branch — one from a fork also needs its author to allow edits from maintainers — and that it does not conflict with the base.",
   // The one refusal that is usually a repository setting rather than anything about this branch:
   // GitHub will not arm an auto-merge at all unless the repository has the feature switched on.
   "enable-auto-merge":
@@ -172,6 +172,14 @@ const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
   "disable-auto-merge":
     "The host refused it. Check that you have write access, and that the merge has not already happened.",
 };
+
+/**
+ * Said instead of the update hint when the reader asked for a rebase: it is the one that fails on
+ * its own merits, because GitHub replays the commits and stops at the first that does not apply.
+ * Offering the merge commit only makes sense to somebody who did not already choose it.
+ */
+const UPDATE_BRANCH_REBASE_FAILURE_HINT =
+  "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.";
 
 const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
@@ -536,7 +544,10 @@ export function PullRequestDetailPanel({
     void refreshFromHost();
   }, [forcedRefreshToken, refreshFromHost]);
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
-  const [actionPending, setActionPending] = useState(false);
+  // Which action is in flight, not merely that one is: every control here is disabled while any
+  // of them runs, but only the button that was pressed may say what it is doing.
+  const [pendingAction, setPendingAction] = useState<PullRequestAction | null>(null);
+  const actionPending = pendingAction !== null;
   const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
   // Scoped to the pull request it was typed against, since this one panel shows a different one
   // every time it is opened and a half-written title must not follow it there.
@@ -585,8 +596,8 @@ export function PullRequestDetailPanel({
     method?: PullRequestMergeMethod,
     updateMethod?: PullRequestUpdateMethod,
   ) => {
-    if (actionPending) return;
-    setActionPending(true);
+    if (pendingAction !== null) return;
+    setPendingAction(action);
     const result = await runAction({
       environmentId,
       input: {
@@ -596,17 +607,23 @@ export function PullRequestDetailPanel({
         ...(updateMethod ? { updateMethod } : {}),
       },
     });
-    setActionPending(false);
+    setPendingAction(null);
     if (result._tag === "Failure") {
       // The host's own sentence, because it is the only thing that says why. A merge strategy a
       // branch policy forbids is refused at completion and nowhere earlier — Azure DevOps
       // publishes no per-strategy availability to hide the control with — so "action failed"
       // would leave the reader pressing the same button again.
       const failure = squashAtomCommandFailure(result);
+      // The hint stands for what was actually asked for: a reader who pressed Update branch is
+      // told to check their access, not offered the merge commit they already chose.
+      const hint =
+        updateMethod === "rebase"
+          ? UPDATE_BRANCH_REBASE_FAILURE_HINT
+          : ACTION_FAILURE_HINTS[action];
       toastManager.add({
         type: "error",
         title: ACTION_FAILURE_LABELS[action],
-        description: readableFailure(failure, ACTION_FAILURE_HINTS[action]),
+        description: readableFailure(failure, hint),
       });
       return;
     }
@@ -1354,7 +1371,7 @@ export function PullRequestDetailPanel({
                   disabled={actionPending}
                   onClick={() => setConfirmAction("merge")}
                 >
-                  {actionPending ? "Merging..." : "Merge"}
+                  {pendingAction === "merge" ? "Merging..." : "Merge"}
                 </Button>
               ) : null}
             </>
