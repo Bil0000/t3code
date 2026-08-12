@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
 import {
   filterPullRequestsByInvolvement,
   groupPullRequestsByInvolvement,
@@ -53,7 +54,11 @@ import { PullRequestListEmptyState } from "../components/pullRequest/PullRequest
 import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhosts";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
-import { RightPanelTabs, type PullRequestTabStatus } from "../components/RightPanelTabs";
+import {
+  RightPanelTabs,
+  type IssueTabStatus,
+  type PullRequestTabStatus,
+} from "../components/RightPanelTabs";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -65,12 +70,13 @@ import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../
 import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import {
+  issueSurfaceId,
   pullRequestSurfaceId,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
   useRightPanelStore,
-  type PullRequestSurface,
+  type RightPanelSurface,
 } from "../rightPanelStore";
 import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
@@ -204,9 +210,15 @@ function PullRequestsRouteView() {
   const selectedRightPanelSurface = useRightPanelStore((state) =>
     selectSelectedRightPanelSurface(state.byThreadKey, rightPanelRef),
   );
-  const selectedPullRequestSurface =
-    selectedRightPanelSurface?.kind === "pull-request" ? selectedRightPanelSurface : null;
-  const activePullRequestSurface = rightPanelState.isOpen ? selectedPullRequestSurface : null;
+  // An issue opened from a change request reads beside it as a peer tab, so this panel holds
+  // both kinds; only the change request tabs answer for the row highlighted in the list behind it.
+  const activeSurface =
+    rightPanelState.isOpen &&
+    (selectedRightPanelSurface?.kind === "pull-request" ||
+      selectedRightPanelSurface?.kind === "issue")
+      ? selectedRightPanelSurface
+      : null;
+  const activePullRequestSurface = activeSurface?.kind === "pull-request" ? activeSurface : null;
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});
@@ -214,6 +226,15 @@ function PullRequestsRouteView() {
     const id = pullRequestSurfaceId(status);
     setPullRequestTabStatuses((current) =>
       current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
+        ? current
+        : { ...current, [id]: status },
+    );
+  }, []);
+  const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
+  const handleIssueTabStatusChange = useCallback((status: IssueTabStatus) => {
+    const id = issueSurfaceId(status);
+    setIssueTabStatuses((current) =>
+      current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
         ? current
         : { ...current, [id]: status },
     );
@@ -825,15 +846,17 @@ function PullRequestsRouteView() {
         }
       : null;
 
-  const selectSurfaceInUrl = (surface: PullRequestSurface | null) =>
+  // The URL's selection is a change request and is read back as one, so an issue tab leaves it
+  // empty rather than naming a number this page would reopen as the pull request of that number.
+  const selectSurfaceInUrl = (surface: RightPanelSurface | null) =>
     updateSearch(
-      surface === null
-        ? clearedSelection
-        : {
+      surface?.kind === "pull-request"
+        ? {
             repository: surface.repository,
             number: surface.number,
             selectedProjectId: surface.projectId as ProjectId,
-          },
+          }
+        : clearedSelection,
     );
 
   const toggleRightPanel = () => {
@@ -843,9 +866,9 @@ function PullRequestsRouteView() {
       updateSearch(clearedSelection);
       return;
     }
-    if (selectedPullRequestSurface === null) return;
+    if (selectedRightPanelSurface === null) return;
     useRightPanelStore.getState().show(rightPanelRef);
-    selectSurfaceInUrl(selectedPullRequestSurface);
+    selectSurfaceInUrl(selectedRightPanelSurface);
   };
 
   // The provider list is the workspace's hosts, not the filtered ones, so switching to a host
@@ -1074,33 +1097,33 @@ function PullRequestsRouteView() {
     listBody,
   };
 
-  const activateSurface = (surface: PullRequestSurface) => {
+  const activateSurface = (surface: RightPanelSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().activateSurface(rightPanelRef, surface.id);
     selectSurfaceInUrl(surface);
   };
-  const closeSurface = (surface: PullRequestSurface) => {
+  const closeSurface = (surface: RightPanelSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().closeSurface(rightPanelRef, surface.id);
     const next = selectActiveRightPanelSurface(
       useRightPanelStore.getState().byThreadKey,
       rightPanelRef,
     );
-    selectSurfaceInUrl(next?.kind === "pull-request" ? next : null);
+    selectSurfaceInUrl(next);
   };
-  const closeOtherSurfaces = (surface: PullRequestSurface) => {
+  const closeOtherSurfaces = (surface: RightPanelSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().closeOtherSurfaces(rightPanelRef, surface.id);
     selectSurfaceInUrl(surface);
   };
-  const closeSurfacesToRight = (surface: PullRequestSurface) => {
+  const closeSurfacesToRight = (surface: RightPanelSurface) => {
     if (rightPanelRef === null) return;
     useRightPanelStore.getState().closeSurfacesToRight(rightPanelRef, surface.id);
     const next = selectActiveRightPanelSurface(
       useRightPanelStore.getState().byThreadKey,
       rightPanelRef,
     );
-    selectSurfaceInUrl(next?.kind === "pull-request" ? next : null);
+    selectSurfaceInUrl(next);
   };
   const closeAllSurfaces = () => {
     if (rightPanelRef === null) return;
@@ -1114,7 +1137,7 @@ function PullRequestsRouteView() {
         {pullRequestsSupported && rightPanelState.isOpen ? openPanelControls : null}
         <PullRequestsColumn {...columnProps} />
 
-        {rightPanelState.isOpen && activePullRequestSurface && pullRequestEnvironmentId !== null ? (
+        {rightPanelState.isOpen && activeSurface && pullRequestEnvironmentId !== null ? (
           <RightPanelTabs
             mode="inline"
             widthStorageKey="t3code:pull-request-panel-width"
@@ -1123,22 +1146,14 @@ function PullRequestsRouteView() {
             // it. SSR has no window, so fall back to a reasonable width.
             defaultWidth={typeof window === "undefined" ? 640 : Math.floor(window.innerWidth / 2)}
             surfaces={rightPanelState.surfaces}
-            activeSurfaceId={activePullRequestSurface.id}
+            activeSurfaceId={activeSurface.id}
             pendingSurfaceIds={EMPTY_PENDING_SURFACES}
             previewSessions={EMPTY_PREVIEW_SESSIONS}
             terminalLabelsById={EMPTY_TERMINAL_LABELS}
-            onActivate={(surface) => {
-              if (surface.kind === "pull-request") activateSurface(surface);
-            }}
-            onCloseSurface={(surface) => {
-              if (surface.kind === "pull-request") closeSurface(surface);
-            }}
-            onCloseOtherSurfaces={(surface) => {
-              if (surface.kind === "pull-request") closeOtherSurfaces(surface);
-            }}
-            onCloseSurfacesToRight={(surface) => {
-              if (surface.kind === "pull-request") closeSurfacesToRight(surface);
-            }}
+            onActivate={activateSurface}
+            onCloseSurface={closeSurface}
+            onCloseOtherSurfaces={closeOtherSurfaces}
+            onCloseSurfacesToRight={closeSurfacesToRight}
             onCloseAllSurfaces={closeAllSurfaces}
             onCopyFilePath={() => undefined}
             onAddBrowser={() => undefined}
@@ -1155,41 +1170,80 @@ function PullRequestsRouteView() {
             agentsAvailable={false}
             liveAgentCount={0}
             pullRequestStatuses={pullRequestTabStatuses}
+            issueStatuses={issueTabStatuses}
           >
-            <PullRequestDetailPanel
-              key={activePullRequestSurface.id}
-              environmentId={pullRequestEnvironmentId}
-              reference={{
-                projectId: activePullRequestSurface.projectId as ProjectId,
-                repository: activePullRequestSurface.repository,
-                number: activePullRequestSurface.number,
-              }}
-              refreshToken={detailRefreshToken}
-              // Merging, closing or reopening changes the row this panel was opened from, so
-              // the list behind it is out of date the moment the host takes the action.
-              onActed={() => {
-                refreshList();
-                baselineQuery.refresh();
-                authoredQuery.refresh();
-                reviewingQuery.refresh();
-              }}
-              onStateChange={handlePullRequestTabStatusChange}
-              // This panel only holds pull requests, so a linked issue opens on the issues page
-              // rather than as a peer tab here — still inside T3 Code, which is the point.
-              onOpenLinkedIssue={(link) => {
-                void navigate({
-                  to: "/issues",
-                  search: {
-                    involvement: "all",
-                    state: "all",
+            {activeSurface.kind === "issue" ? (
+              <IssueDetailPanel
+                key={activeSurface.id}
+                environmentId={pullRequestEnvironmentId}
+                reference={{
+                  projectId: activeSurface.projectId as ProjectId,
+                  repository: activeSurface.repository,
+                  number: activeSurface.number,
+                }}
+                refreshToken={detailRefreshToken}
+                // There is no thread behind this panel, so handing an issue to an agent starts
+                // one rather than continuing whatever the reader last had open.
+                handoffTarget={{ kind: "new-thread" }}
+                // Closing or reopening the issue can close the change request that answers it,
+                // so the list behind this panel is out of date the moment the host acts.
+                onActed={() => {
+                  refreshList();
+                  baselineQuery.refresh();
+                  authoredQuery.refresh();
+                  reviewingQuery.refresh();
+                }}
+                onStateChange={handleIssueTabStatusChange}
+                onOpenLinkedPullRequest={(link) => {
+                  if (rightPanelRef === null) return;
+                  const target = {
+                    projectId: activeSurface.projectId,
                     repository: link.repository,
                     number: link.number,
-                    selectedProjectId: activePullRequestSurface.projectId as ProjectId,
-                  },
-                });
-              }}
-              chromeVariant="collapse"
-            />
+                  };
+                  useRightPanelStore.getState().openPullRequest(rightPanelRef, target);
+                  updateSearch({
+                    repository: target.repository,
+                    number: target.number,
+                    selectedProjectId: target.projectId as ProjectId,
+                  });
+                }}
+                chromeVariant="collapse"
+              />
+            ) : (
+              <PullRequestDetailPanel
+                key={activeSurface.id}
+                environmentId={pullRequestEnvironmentId}
+                reference={{
+                  projectId: activeSurface.projectId as ProjectId,
+                  repository: activeSurface.repository,
+                  number: activeSurface.number,
+                }}
+                refreshToken={detailRefreshToken}
+                // Merging, closing or reopening changes the row this panel was opened from, so
+                // the list behind it is out of date the moment the host takes the action.
+                onActed={() => {
+                  refreshList();
+                  baselineQuery.refresh();
+                  authoredQuery.refresh();
+                  reviewingQuery.refresh();
+                }}
+                onStateChange={handlePullRequestTabStatusChange}
+                // The issue a change request closes is read beside it, as a peer tab in this
+                // page's own panel: leaving for the issues page would take the change request
+                // it answers off the screen.
+                onOpenLinkedIssue={(link) => {
+                  if (rightPanelRef === null) return;
+                  useRightPanelStore.getState().openIssue(rightPanelRef, {
+                    projectId: activeSurface.projectId,
+                    repository: link.repository,
+                    number: link.number,
+                  });
+                  selectSurfaceInUrl(null);
+                }}
+                chromeVariant="collapse"
+              />
+            )}
           </RightPanelTabs>
         ) : null}
       </div>
