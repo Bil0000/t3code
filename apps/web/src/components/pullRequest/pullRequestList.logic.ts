@@ -3,6 +3,8 @@ import * as Schema from "effect/Schema";
 import { PullRequestListEntry, PullRequestListResult } from "@t3tools/contracts";
 import type { PullRequestInvolvement, PullRequestListState } from "@t3tools/contracts";
 
+import { isAuthoredByViewer } from "../sourceControl/listHelpers";
+
 export type PullRequestGroupKey = "reviewRequested" | "authored" | "others";
 
 export interface PullRequestGroup {
@@ -19,21 +21,6 @@ const GROUP_LABELS: Record<PullRequestGroupKey, string> = {
   authored: "Authored",
   others: "Others",
 };
-
-function normalize(value: string | null | undefined): string | null {
-  const trimmed = value?.trim().toLowerCase() ?? "";
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-/**
- * Authorship is per host, not per provider kind: the same list can hold change requests from
- * GitHub, GitLab and a GitHub Enterprise install, and the account that owns one says nothing
- * about the others.
- */
-function isAuthoredByViewer(entry: PullRequestListEntry, viewers: PullRequestViewers): boolean {
-  const viewer = normalize(viewers[entry.host]);
-  return viewer !== null && normalize(entry.author?.login) === viewer;
-}
 
 /** Free-text filter over the fields a row actually shows, plus `#123` / `123`. */
 export function matchesPullRequestQuery(entry: PullRequestListEntry, query: string): boolean {

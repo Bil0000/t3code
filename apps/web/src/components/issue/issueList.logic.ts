@@ -3,6 +3,8 @@ import * as Schema from "effect/Schema";
 import { IssueListEntry, IssueListResult } from "@t3tools/contracts";
 import type { IssueInvolvement, IssueListState } from "@t3tools/contracts";
 
+import { isAuthoredByViewer, normalizeLogin } from "../sourceControl/listHelpers";
+
 export type IssueGroupKey = "assigned" | "authored" | "others";
 
 export interface IssueGroup {
@@ -20,25 +22,10 @@ const GROUP_LABELS: Record<IssueGroupKey, string> = {
   others: "Others",
 };
 
-function normalize(value: string | null | undefined): string | null {
-  const trimmed = value?.trim().toLowerCase() ?? "";
-  return trimmed.length > 0 ? trimmed : null;
-}
-
-/**
- * Involvement is per host, not per provider kind: the same list can hold issues from GitHub,
- * GitLab and a GitHub Enterprise install, and the account that owns one says nothing about the
- * others.
- */
-function isAuthoredByViewer(entry: IssueListEntry, viewers: IssueViewers): boolean {
-  const viewer = normalize(viewers[entry.host]);
-  return viewer !== null && normalize(entry.author?.login) === viewer;
-}
-
 function isAssignedToViewer(entry: IssueListEntry, viewers: IssueViewers): boolean {
-  const viewer = normalize(viewers[entry.host]);
+  const viewer = normalizeLogin(viewers[entry.host]);
   return (
-    viewer !== null && entry.assignees.some((assignee) => normalize(assignee.login) === viewer)
+    viewer !== null && entry.assignees.some((assignee) => normalizeLogin(assignee.login) === viewer)
   );
 }
 
