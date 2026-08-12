@@ -845,12 +845,18 @@ describe("which environments a listing should ask", () => {
   it("asks only the owning server once the project is unambiguous", () => {
     const projects = [{ id: "project-1", environmentId: ENV_2 }];
     expect(
-      resolveQueryEnvironmentIds(environmentIds, projects, { environmentId: ENV_2 }, "project-1"),
+      resolveQueryEnvironmentIds(
+        environmentIds,
+        projects,
+        { environmentId: ENV_2 },
+        "project-1",
+        true,
+      ),
     ).toEqual([ENV_2]);
   });
 
   it("asks every environment when there is no project narrowing at all", () => {
-    expect(resolveQueryEnvironmentIds(environmentIds, [], undefined, undefined)).toEqual(
+    expect(resolveQueryEnvironmentIds(environmentIds, [], undefined, undefined, true)).toEqual(
       environmentIds,
     );
   });
@@ -862,22 +868,32 @@ describe("which environments a listing should ask", () => {
     ];
     // Two servers can genuinely hold the same project id string; the third holds no such project
     // and asking it would return an unrelated project's rows rather than an honest empty answer.
-    expect(resolveQueryEnvironmentIds(environmentIds, projects, undefined, "project-1")).toEqual([
-      ENV_1,
-      ENV_2,
-    ]);
+    expect(
+      resolveQueryEnvironmentIds(environmentIds, projects, undefined, "project-1", true),
+    ).toEqual([ENV_1, ENV_2]);
   });
 
   it("asks nothing for a bare id no environment holds", () => {
     const projects = [{ id: "project-1", environmentId: ENV_1 }];
-    expect(resolveQueryEnvironmentIds(environmentIds, projects, undefined, "project-9")).toEqual(
-      [],
+    expect(
+      resolveQueryEnvironmentIds(environmentIds, projects, undefined, "project-9", true),
+    ).toEqual([]);
+  });
+
+  it("asks every environment while the servers have not said what they hold yet", () => {
+    // Nothing matches the id because nothing has been read yet, which is not the same answer as
+    // no server holding it: reading none of them would show an empty page for a project that is
+    // there.
+    expect(resolveQueryEnvironmentIds(environmentIds, [], undefined, "project-1", false)).toEqual(
+      environmentIds,
     );
   });
 
   it("keeps the single-environment case unchanged", () => {
     const projects = [{ id: "project-1", environmentId: ENV_1 }];
-    expect(resolveQueryEnvironmentIds([ENV_1], projects, undefined, "project-1")).toEqual([ENV_1]);
+    expect(resolveQueryEnvironmentIds([ENV_1], projects, undefined, "project-1", true)).toEqual([
+      ENV_1,
+    ]);
   });
 });
 

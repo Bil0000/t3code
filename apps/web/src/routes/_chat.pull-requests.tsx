@@ -164,6 +164,13 @@ const MAX_PAGE_SIZE = 500;
 const EMPTY_VIEWERS: PullRequestListResult["viewers"] = {};
 /** The list owns one environment-scoped right panel rather than borrowing a real thread's. */
 const PULL_REQUESTS_PANEL_ID = ThreadId.make("pull-requests-panel");
+/**
+ * A fixed sentinel, not a real server: the panel is one workspace-level surface list (each
+ * surface already carries the server it was read from), so its store key must not move when a
+ * capable server disconnects or reconnects. Real environment ids are server-generated UUIDs, so
+ * this string can never collide with one.
+ */
+const PULL_REQUESTS_PANEL_ENVIRONMENT_ID = "pull-requests-panel" as EnvironmentId;
 /** Stable so a read that is not wanted right now does not re-key on every render. */
 const NO_LIST_TARGETS: ReadonlyArray<EnvironmentQueryTarget<PullRequestListInput>> = [];
 const EMPTY_PREVIEW_SESSIONS = {};
@@ -351,15 +358,15 @@ function PullRequestsRouteView() {
     [projects, selectedEnvironmentId, selectedProjectId],
   );
   // One panel for the page rather than one per server: the surfaces carry the server they were
-  // read from, so tabs from two of them sit side by side instead of replacing each other. Its
-  // ref is fixed to the first environment so that the tab strip survives changing the scope.
-  const panelHomeEnvironmentId = capableEnvironments[0]?.environmentId ?? null;
+  // read from, so tabs from two of them sit side by side instead of replacing each other. Its ref
+  // uses a fixed sentinel environment, not whichever server happens to sort first, so the tab
+  // strip survives a capable server disconnecting or losing the pull-requests capability.
   const rightPanelRef = useMemo(
     () =>
-      panelHomeEnvironmentId === null
+      capableEnvironments.length === 0
         ? null
-        : scopeThreadRef(panelHomeEnvironmentId, PULL_REQUESTS_PANEL_ID),
-    [panelHomeEnvironmentId],
+        : scopeThreadRef(PULL_REQUESTS_PANEL_ENVIRONMENT_ID, PULL_REQUESTS_PANEL_ID),
+    [capableEnvironments.length],
   );
   const rightPanelState = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, rightPanelRef),
@@ -483,8 +490,15 @@ function PullRequestsRouteView() {
   // asked: a server without it may still hold an unrelated project of its own under the same
   // string, and asking it would return that project's rows rather than an honest empty answer.
   const queryEnvironmentIds = useMemo(
-    () => resolveQueryEnvironmentIds(environmentIds, projects, scopedProject, scopedProjectId),
-    [environmentIds, projects, scopedProject, scopedProjectId],
+    () =>
+      resolveQueryEnvironmentIds(
+        environmentIds,
+        projects,
+        scopedProject,
+        scopedProjectId,
+        projectsKnown,
+      ),
+    [environmentIds, projects, projectsKnown, scopedProject, scopedProjectId],
   );
   /**
    * Which projects each server is asked about. Two servers holding the same repository would both

@@ -796,9 +796,6 @@ function actionArgs(
 export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
 
-  // `gh` resolves a bare `owner/repo` against whichever host it defaults to, which is
-  // github.com. Naming the host makes a GitHub Enterprise repository resolve to its own
-  // install rather than to a same-named repository on github.com.
   /** The pull request's own node id, for a reaction written against its description. */
   const pullRequestNodeId = (input: {
     readonly cwd: string;
@@ -850,6 +847,9 @@ export const make = Effect.gen(function* () {
     });
   };
 
+  // `gh` resolves a bare `owner/repo` against whichever host it defaults to, which is
+  // github.com. Naming the host makes a GitHub Enterprise repository resolve to its own
+  // install rather than to a same-named repository on github.com.
   const repositoryArgs = (input: { readonly host: string; readonly repository: string }) => [
     "--repo",
     `${input.host}/${input.repository}`,

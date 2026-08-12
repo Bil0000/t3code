@@ -688,11 +688,14 @@ export function resolveQueryEnvironmentIds<Id extends string>(
   projects: ReadonlyArray<{ readonly id: string; readonly environmentId: Id }>,
   scopedProject: { readonly environmentId: Id } | undefined,
   scopedProjectId: string | undefined,
+  projectsKnown: boolean,
 ): ReadonlyArray<Id> {
   if (scopedProject !== undefined) {
     return environmentIds.filter((environmentId) => environmentId === scopedProject.environmentId);
   }
-  if (scopedProjectId === undefined) return environmentIds;
+  // Before the servers have said what they hold, an id nothing matches is an id nothing has been
+  // asked about yet — reading none of them would show an empty page for a project that is there.
+  if (scopedProjectId === undefined || !projectsKnown) return environmentIds;
   const holders = new Set(
     projects
       .filter((project) => project.id === scopedProjectId)
