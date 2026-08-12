@@ -86,19 +86,7 @@ function openFirst(entries: ReadonlyArray<IssueListEntry>): ReadonlyArray<IssueL
   );
 }
 
-/**
- * The thread's own issues, beside the conversation. Deliberately not the issues page in a tab: one
- * project, one page, no filters and no URL to keep — everything this needs is the list and the one
- * issue being read, and both live in the same tab.
- */
-export function IssuesPanel({
-  environmentId,
-  projectId,
-  selected,
-  onSelect,
-  handoffTarget,
-  onStateChange,
-}: {
+interface IssuesPanelProps {
   environmentId: EnvironmentId;
   /** The thread's project, which is the only repository this panel lists. */
   projectId: ProjectId;
@@ -107,7 +95,29 @@ export function IssuesPanel({
   onSelect: (target: NonNullable<IssuesSurface["selected"]> | null) => void;
   handoffTarget: IssueHandoffTarget;
   onStateChange: (status: IssueTabStatus) => void;
-}) {
+}
+
+/**
+ * The thread's own issues, beside the conversation. Deliberately not the issues page in a tab: one
+ * project, one page, no filters and no URL to keep — everything this needs is the list and the one
+ * issue being read, and both live in the same tab.
+ *
+ * Keyed by the repository it lists, because the panel outlives the thread it was opened beside:
+ * a search typed for one project, and how far its list was paged, are no question to ask of the
+ * next one.
+ */
+export function IssuesPanel(props: IssuesPanelProps) {
+  return <ProjectIssues key={`${props.environmentId}:${props.projectId}`} {...props} />;
+}
+
+function ProjectIssues({
+  environmentId,
+  projectId,
+  selected,
+  onSelect,
+  handoffTarget,
+  onStateChange,
+}: IssuesPanelProps) {
   // Held here rather than in the list, so reading an issue and coming back does not throw away
   // the search that found it — the list is unmounted while the issue is open.
   const [query, setQuery] = useState("");
