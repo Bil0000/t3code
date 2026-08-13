@@ -676,13 +676,12 @@ function IssuesRouteView() {
   };
 
   // The list goes stale the same way the detail does: somebody files an issue, comments on one,
-  // closes another. So it reads again on the way back to the window, and once a minute while
+  // closes another. So it reads again on the way back to the window, and every five minutes while
   // somebody is reading it. Those reads go through the server's cache and stop when the reader
   // stops, which is what keeps a page left open from spending a night of the host's rate limit.
   useLiveRefresh(
     () => {
       refreshList();
-      baselineQuery.refresh();
       authoredQuery.refresh();
       assignedQuery.refresh();
     },

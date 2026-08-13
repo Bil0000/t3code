@@ -65,6 +65,7 @@ import {
   buildSolveIssueHandoff,
   issueHandoffReviewComments,
   LINK_PULL_REQUESTS_HANDOFF_KIND,
+  shouldRefreshIssueActivity,
   type IssueHandoff,
   type IssueHandoffSource,
 } from "./issueDetail.logic";
@@ -195,6 +196,7 @@ export function IssueDetailPanel({
    */
   chromeVariant?: "full" | "collapse";
 }) {
+  const issueKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
   const [tab, setTab] = useState<DetailTab>("summary");
   // Oldest first, unlike a change request: an issue is an argument written from its opening
   // towards whatever was settled, and reading it backwards is reading the conclusion first.
@@ -278,6 +280,17 @@ export function IssueDetailPanel({
     detailQuery.refresh();
     activityQuery.refresh();
   }, [activityQuery.refresh, detailQuery.refresh]);
+  const activityRevision = useRef<{ readonly key: string; readonly updatedAt: string } | null>(
+    null,
+  );
+  useEffect(() => {
+    if (!coreDetail) return;
+    const next = { key: issueKey, updatedAt: coreDetail.updatedAt };
+    if (shouldRefreshIssueActivity(activityRevision.current, next)) {
+      activityQuery.refresh();
+    }
+    activityRevision.current = next;
+  }, [activityQuery.refresh, coreDetail, issueKey]);
   useEffect(() => {
     if (!detail) return;
     onStateChange?.({
@@ -288,12 +301,10 @@ export function IssueDetailPanel({
       stateReason: detail.stateReason,
     });
   }, [detail, onStateChange]);
-  // An issue changes while it is open in front of somebody — a comment lands, someone closes it —
-  // so the panel reads it again on the way back to the window and while a reader sits on it.
-  // Keyed by the issue rather than by the panel, because this one panel shows a different issue
-  // every time it is opened.
-  useLiveRefresh(refreshDetail, {
-    key: `issue:${reference.projectId}:${reference.repository}#${reference.number}`,
+  // Core detail is cheap enough to re-read while this stays open. Activity is heavier, so the
+  // revision effect above reads it only after this same issue reports a change.
+  useLiveRefresh(detailQuery.refresh, {
+    key: `issue:${issueKey}`,
   });
   // The button, on the other hand, goes around the server's cache rather than through it: it is
   // the answer for a reader who can see that what they are looking at is behind. The

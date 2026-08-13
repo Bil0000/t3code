@@ -22,6 +22,7 @@ import type {
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
+import { githubGraphQlBudget } from "../sourceControl/githubGraphQlBudget.ts";
 import {
   ADD_REACTION_GRAPHQL_MUTATION,
   REMOVE_REACTION_GRAPHQL_MUTATION,
@@ -611,8 +612,18 @@ export const make = Effect.gen(function* () {
     readonly privateVariables?: Readonly<Record<string, string>>;
     readonly query: string;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
-  }): Effect.Effect<A, GitHubIssueCliError> =>
-    github
+  }): Effect.Effect<A, GitHubIssueCliError> => {
+    const decision = githubGraphQlBudget.query(input.host, input.query);
+    if (decision._tag === "Paused") {
+      return Effect.fail(
+        new GitHubCli.GitHubCliRateLimitError({
+          command: "gh",
+          cwd: input.cwd,
+          cause: new Error(`GraphQL reads paused until ${decision.resetAt}`),
+        }),
+      );
+    }
+    return github
       .execute(
         input.privateVariables === undefined
           ? {
@@ -624,26 +635,28 @@ export const make = Effect.gen(function* () {
                 input.host,
                 ...(input.variables ?? []).flat(),
                 "-f",
-                `query=${input.query}`,
+                `query=${decision.query}`,
               ],
             }
           : {
               cwd: input.cwd,
               args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
               stdin: encodeGraphQlRequestJson({
-                query: input.query,
+                query: decision.query,
                 variables: input.privateVariables,
               }),
             },
       )
       .pipe(
         Effect.flatMap((result) => {
+          githubGraphQlBudget.observe(input.host, result.stdout);
           const decoded = input.decode(result.stdout.trim());
           return Result.isSuccess(decoded)
             ? Effect.succeed(decoded.success)
             : Effect.fail(readError(input)(decoded.failure));
         }),
       );
+  };
 
   const graphql = (input: {
     readonly cwd: string;

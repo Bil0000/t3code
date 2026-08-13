@@ -8,6 +8,13 @@ import type {
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
 import { handoffReviewComments } from "../sourceControl/handoff";
+/** Activity changes only when the same host resource reports a newer revision. */
+export function shouldRefreshIssueActivity(
+  previous: { readonly key: string; readonly updatedAt: string } | null,
+  next: { readonly key: string; readonly updatedAt: string },
+): boolean {
+  return previous !== null && previous.key === next.key && previous.updatedAt !== next.updatedAt;
+}
 
 export interface IssueTimelineEntry {
   readonly id: string;

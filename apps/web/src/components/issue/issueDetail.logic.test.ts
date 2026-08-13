@@ -13,6 +13,7 @@ import {
   groupIssueTimelineConversations,
   issueHandoffReviewComments,
   issueCommentEditId,
+  shouldRefreshIssueActivity,
   type IssueHandoffSource,
 } from "./issueDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
@@ -47,6 +48,32 @@ const TIMELINE_SOURCE: Pick<IssueDetailView, "createdAt" | "author" | "comments"
   comments: [comment()],
   events: [event()],
 };
+describe("issue activity refresh", () => {
+  const first = {
+    key: "project:acme/web#7",
+    updatedAt: "2026-08-13T13:00:00Z",
+  };
+
+  it("refreshes activity only after the same issue changes", () => {
+    expect(
+      shouldRefreshIssueActivity(first, {
+        ...first,
+        updatedAt: "2026-08-13T13:01:00Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not duplicate the first activity read or carry a revision across issues", () => {
+    expect(shouldRefreshIssueActivity(null, first)).toBe(false);
+    expect(shouldRefreshIssueActivity(first, first)).toBe(false);
+    expect(
+      shouldRefreshIssueActivity(first, {
+        key: "project:acme/web#8",
+        updatedAt: "2026-08-13T13:01:00Z",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("issue comment editing", () => {
   it("closes an editor when another issue reuses the comment id", () => {
