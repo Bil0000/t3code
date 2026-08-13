@@ -110,7 +110,10 @@ function threadCommentsPage(
   totalCount: number,
 ): string {
   return JSON.stringify({
-    data: { node: { comments: threadComments(ids, endCursor, totalCount) } },
+    data: {
+      repository: { pullRequest: { id: "PR_7" } },
+      node: { pullRequest: { id: "PR_7" }, comments: threadComments(ids, endCursor, totalCount) },
+    },
   });
 }
 
@@ -2186,7 +2189,9 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       const page = yield* cli.getReviewThreadComments({
         cwd: "/w",
+        repository: "acme/web",
         host: "github.com",
+        number: 7,
         threadId: "PRRT_1",
         cursor: "Y3Vyc29yOjI",
       });
@@ -2195,6 +2200,43 @@ layer("GitHubPullRequestCli.layer", (it) => {
       expect(callAt(0).args).toContain("cursor=Y3Vyc29yOjI");
       expect(page.comments.map((comment) => comment.id)).toEqual(["c2", "c3"]);
       expect(page.nextCursor).toBeNull();
+    }),
+  );
+
+  it.effect("refuses a review thread that belongs to a different pull request", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                repository: { pullRequest: { id: "PR_7" } },
+                node: {
+                  pullRequest: { id: "PR_99" },
+                  comments: threadComments(["private-comment"], null),
+                },
+              },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const request = {
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        threadId: "PRRT_99",
+        cursor: "Y3Vyc29yOjI",
+      } as const;
+
+      const error = yield* Effect.flip(cli.getReviewThreadComments(request));
+
+      assert.strictEqual(error._tag, "GitHubSubjectScopeError");
+      expect(callAt(0).args).toEqual(
+        expect.arrayContaining(["owner=acme", "name=web", "number=7", "threadId=PRRT_99"]),
+      );
     }),
   );
 
