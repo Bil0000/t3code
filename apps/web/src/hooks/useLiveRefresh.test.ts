@@ -85,6 +85,10 @@ describe("shouldRefreshOnInterval", () => {
     expect(tick(LIVE_REFRESH_INTERVAL_MS, LIVE_REFRESH_INTERVAL_MS - 1_000)).toBe(true);
   });
 
+  it("reads on the first interval after an untouched mount", () => {
+    expect(tick(LIVE_REFRESH_INTERVAL_MS + 1_000, 0)).toBe(true);
+  });
+
   it("stops reading for a window left showing on a desk nobody is at", () => {
     expect(tick(LIVE_REFRESH_IDLE_AFTER_MS + 60_000, 0)).toBe(false);
   });
