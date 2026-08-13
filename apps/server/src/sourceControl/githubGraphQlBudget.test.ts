@@ -30,6 +30,32 @@ describe("GitHub GraphQL budget", () => {
     expect(decision.query).toContain('repository(owner: "acme", name: "web") { name }');
   });
 
+  it("adds rate metadata to the operation before trailing fragments", () => {
+    const budget = createGitHubGraphQlBudget();
+    const document = `query {
+  repository(owner: "acme", name: "web") { ...RepositoryName }
+}
+
+fragment RepositoryName on Repository {
+  name
+}`;
+
+    const decision = budget.query("github.com", document, BEFORE_RESET);
+
+    expect(decision).toEqual({
+      _tag: "Allowed",
+      query: `query {
+  repository(owner: "acme", name: "web") { ...RepositoryName }
+
+  rateLimit { cost limit remaining resetAt }
+}
+
+fragment RepositoryName on Repository {
+  name
+}`,
+    });
+  });
+
   it("protects the last ten percent until reset", () => {
     const budget = createGitHubGraphQlBudget();
     budget.observe("github.com", rateLimit(500));
