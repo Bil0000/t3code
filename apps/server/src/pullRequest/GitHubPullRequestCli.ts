@@ -428,7 +428,9 @@ export class GitHubPullRequestCli extends Context.Service<
 
     readonly getReviewThreadComments: (input: {
       readonly cwd: string;
+      readonly repository: string;
       readonly host: string;
+      readonly number: number;
       readonly threadId: string;
       readonly cursor: string;
     }) => Effect.Effect<PullRequestThreadCommentsResult, GitHubPullRequestCliError>;
@@ -1449,15 +1451,35 @@ export const make = Effect.gen(function* () {
 
     getPullRequestDiffFileContents,
 
-    getReviewThreadComments: (input) =>
-      graphqlRead({
+    getReviewThreadComments: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return graphqlRead({
         cwd: input.cwd,
         host: input.host,
         operation: "getReviewThreadComments",
-        variables: [["-f", `threadId=${input.threadId}`], cursorVariable(input.cursor)],
+        variables: [
+          ["-f", `owner=${owner}`],
+          ["-f", `name=${name}`],
+          ["-F", `number=${input.number}`],
+          ["-f", `threadId=${input.threadId}`],
+          cursorVariable(input.cursor),
+        ],
         query: REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY,
         decode: decodeReviewThreadCommentsJson,
-      }),
+      }).pipe(
+        Effect.flatMap(({ belongsToPullRequest, comments, nextCursor }) =>
+          belongsToPullRequest
+            ? Effect.succeed({ comments, nextCursor })
+            : Effect.fail(
+                new GitHubSubjectScopeError({
+                  command: "gh",
+                  cwd: input.cwd,
+                  operation: "getReviewThreadComments",
+                }),
+              ),
+        ),
+      );
+    },
 
     listReviewThreadComments: (input) =>
       Effect.gen(function* () {

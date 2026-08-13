@@ -108,9 +108,16 @@ function threadCommentsPage(
   ids: ReadonlyArray<string>,
   endCursor: string | null,
   totalCount: number,
+  pullRequestId = "PR_7",
 ): string {
   return JSON.stringify({
-    data: { node: { comments: threadComments(ids, endCursor, totalCount) } },
+    data: {
+      repository: { pullRequest: { id: "PR_7" } },
+      node: {
+        pullRequest: { id: pullRequestId },
+        comments: threadComments(ids, endCursor, totalCount),
+      },
+    },
   });
 }
 
@@ -2186,15 +2193,43 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       const page = yield* cli.getReviewThreadComments({
         cwd: "/w",
+        repository: "acme/web",
         host: "github.com",
+        number: 7,
         threadId: "PRRT_1",
         cursor: "Y3Vyc29yOjI",
       });
 
+      expect(callAt(0).args).toContain("owner=acme");
+      expect(callAt(0).args).toContain("name=web");
+      expect(callAt(0).args).toContain("number=7");
       expect(callAt(0).args).toContain("threadId=PRRT_1");
       expect(callAt(0).args).toContain("cursor=Y3Vyc29yOjI");
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
       expect(page.comments.map((comment) => comment.id)).toEqual(["c2", "c3"]);
       expect(page.nextCursor).toBeNull();
+    }),
+  );
+
+  it.effect("refuses a review thread from another pull request", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output(threadCommentsPage(["foreign"], null, 1, "PR_8"))),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const error = yield* Effect.flip(
+        cli.getReviewThreadComments({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          threadId: "PRRT_FOREIGN",
+          cursor: "Y3Vyc29yOjI",
+        }),
+      );
+
+      assert.strictEqual(error._tag, "GitHubSubjectScopeError");
     }),
   );
 
