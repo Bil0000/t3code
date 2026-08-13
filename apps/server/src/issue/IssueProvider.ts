@@ -10,6 +10,8 @@ import type {
   IssueInvolvement,
   IssueLabelCandidateList,
   IssueLinkedPullRequest,
+  IssueReaction,
+  IssueReactionContent,
   IssueListState,
   IssueState,
   IssueTemplateList,
@@ -120,6 +122,7 @@ export interface ProviderIssueActivity {
   readonly commentCount: number;
   readonly commentsTruncated: boolean;
   readonly events: ReadonlyArray<IssueEvent>;
+  readonly reactions?: ReadonlyArray<IssueReaction>;
 }
 
 export interface ProviderCreatedIssue {
@@ -223,6 +226,15 @@ export interface IssueProviderApi {
       readonly number: number;
       readonly commentId: string;
       readonly body: string;
+    },
+  ) => Effect.Effect<void, IssueProviderError>;
+
+  readonly setReaction?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly subjectId?: string | undefined;
+      readonly content: IssueReactionContent;
+      readonly reacted: boolean;
     },
   ) => Effect.Effect<void, IssueProviderError>;
 

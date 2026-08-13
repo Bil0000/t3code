@@ -29,6 +29,15 @@ function output(stdout: string) {
   };
 }
 
+function awardPage(): string {
+  return JSON.stringify({
+    data: {
+      currentUser: { username: "bilal" },
+      project: { issue: { awardEmoji: { nodes: [] }, notes: { pageInfo: {}, nodes: [] } } },
+    },
+  });
+}
+
 function issues(count: number, firstNumber: number): string {
   return JSON.stringify(
     Array.from({ length: count }, (_, index) => ({
@@ -552,6 +561,7 @@ layer("GitLabIssueCli.layer", (it) => {
             ),
           ),
         );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(awardPage())));
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
 
       const activity = yield* cli.listActivity({
@@ -572,7 +582,9 @@ layer("GitLabIssueCli.layer", (it) => {
   it.effect("stops the conversation walk at its bound and says it was cut short", () =>
     Effect.gen(function* () {
       // GitLab that never answers short: the walk has to end itself.
-      mockedExecute.mockReturnValue(Effect.succeed(output(notes(100, 1))));
+      mockedExecute.mockImplementation((input) =>
+        Effect.succeed(output(input.args[1] === "graphql" ? awardPage() : notes(100, 1))),
+      );
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
 
       const activity = yield* cli.listActivity({
@@ -582,7 +594,7 @@ layer("GitLabIssueCli.layer", (it) => {
       });
 
       // Ten pages of notes and ten of labellings, both bounded by the same limit.
-      assert.strictEqual(mockedExecute.mock.calls.length, 20);
+      assert.strictEqual(mockedExecute.mock.calls.length, 21);
       assert.strictEqual(activity.comments.length, 1000);
       assert.isTrue(activity.truncated);
     }),
@@ -593,7 +605,15 @@ layer("GitLabIssueCli.layer", (it) => {
       mockedExecute.mockImplementation((input) => {
         const path = input.args[1] ?? "";
         // A quiet issue that has been relabelled all day: the conversation ends on its first page.
-        return Effect.succeed(output(path.includes("/notes?") ? notes(1, 1) : labelEvents(100, 1)));
+        return Effect.succeed(
+          output(
+            path === "graphql"
+              ? awardPage()
+              : path.includes("/notes?")
+                ? notes(1, 1)
+                : labelEvents(100, 1),
+          ),
+        );
       });
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
 
@@ -742,6 +762,28 @@ layer("GitLabIssueCli.layer", (it) => {
         "Content-Type: application/json",
       ]);
       expect(callAt(0).stdin).toBe('{"body":"Second thoughts"}');
+    }),
+  );
+
+  it.effect("adds and removes an issue reaction", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(output("{}")))
+        .mockReturnValueOnce(Effect.succeed(output(JSON.stringify({ username: "bilal" }))))
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(JSON.stringify([{ id: 5, name: "heart", user: { username: "bilal" } }])),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+      const target = { cwd: "/w", repository: "acme/web", number: 7 };
+
+      yield* cli.setReaction({ ...target, content: "heart", reacted: true });
+      yield* cli.setReaction({ ...target, subjectId: "42", content: "heart", reacted: false });
+
+      expect(pathOfCall(0)).toBe("projects/acme%2Fweb/issues/7/award_emoji?name=heart");
+      expect(pathOfCall(3)).toBe("projects/acme%2Fweb/issues/7/notes/42/award_emoji/5");
     }),
   );
 

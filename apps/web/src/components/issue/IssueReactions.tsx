@@ -1,11 +1,11 @@
-import type { EnvironmentId, PullRequestReaction, PullRequestRef } from "@t3tools/contracts";
+import type { EnvironmentId, IssueReaction, IssueRef } from "@t3tools/contracts";
 
-import { pullRequestEnvironment } from "~/state/pullRequests";
+import { issueEnvironment } from "~/state/issues";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { SourceControlReactionBar } from "../sourceControl/SourceControlReactions";
 
-export function PullRequestReactionBar({
+export function IssueReactionBar({
   reactions,
   canReact,
   subjectId,
@@ -14,15 +14,15 @@ export function PullRequestReactionBar({
   onRefresh,
   className,
 }: {
-  readonly reactions: ReadonlyArray<PullRequestReaction>;
+  readonly reactions: ReadonlyArray<IssueReaction>;
   readonly canReact: boolean;
   readonly subjectId?: string | undefined;
   readonly environmentId: EnvironmentId;
-  readonly reference: PullRequestRef;
+  readonly reference: IssueRef;
   readonly onRefresh: () => void;
   readonly className?: string | undefined;
 }) {
-  const setReaction = useAtomCommand(pullRequestEnvironment.setReaction, { reportFailure: false });
+  const setReaction = useAtomCommand(issueEnvironment.setReaction, { reportFailure: false });
   return (
     <SourceControlReactionBar
       reactions={reactions}

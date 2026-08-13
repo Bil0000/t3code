@@ -13,12 +13,18 @@ import type {
   IssueLabelCandidate,
   IssueLabelCandidateList,
   IssueListState,
+  IssueReactionContent,
   IssueTemplate,
   IssueTemplateList,
   SourceControlActor,
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
+import {
+  ADD_REACTION_GRAPHQL_MUTATION,
+  REMOVE_REACTION_GRAPHQL_MUTATION,
+  gitHubReactionContent,
+} from "../sourceControl/gitHubReactionJson.ts";
 import {
   ASSIGNEE_CANDIDATES_GRAPHQL_QUERY,
   buildIssueWriteJson,
@@ -29,6 +35,7 @@ import {
   decodeIssueCommentScopeJson,
   decodeIssueDetailJson,
   decodeIssueListJson,
+  decodeIssueNodeIdJson,
   decodeIssueSearchJson,
   decodeIssueSupplementJson,
   DEFAULT_ISSUE_TEMPLATE_CONFIG,
@@ -44,6 +51,7 @@ import {
   ISSUE_COMMENTS_GRAPHQL_QUERY,
   ISSUE_DETAIL_JSON_FIELDS,
   ISSUE_LIST_JSON_FIELDS,
+  ISSUE_NODE_ID_GRAPHQL_QUERY,
   ISSUE_SEARCH_MAX_RESULTS,
   ISSUE_SEARCH_MAX_ROWS,
   ISSUE_SUPPLEMENT_GRAPHQL_QUERY,
@@ -316,6 +324,16 @@ export class GitHubIssueCli extends Context.Service<
       readonly number: number;
       readonly commentId: string;
       readonly body: string;
+    }) => Effect.Effect<void, GitHubIssueCliError>;
+
+    readonly setReaction: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly subjectId?: string | undefined;
+      readonly content: IssueReactionContent;
+      readonly reacted: boolean;
     }) => Effect.Effect<void, GitHubIssueCliError>;
 
     readonly setLabels: (input: {
@@ -628,6 +646,27 @@ export const make = Effect.gen(function* () {
       ],
       query: ISSUE_COMMENT_SCOPE_GRAPHQL_QUERY,
       decode: decodeIssueCommentScopeJson,
+    });
+  };
+
+  const issueNodeId = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly host: string;
+    readonly number: number;
+  }): Effect.Effect<string, GitHubIssueCliError> => {
+    const { owner, name } = parseRepositorySelector(input.repository);
+    return graphqlRead({
+      cwd: input.cwd,
+      host: input.host,
+      operation: "setReaction",
+      variables: [
+        ["-f", `owner=${owner}`],
+        ["-f", `name=${name}`],
+        ["-F", `number=${input.number}`],
+      ],
+      query: ISSUE_NODE_ID_GRAPHQL_QUERY,
+      decode: decodeIssueNodeIdJson,
     });
   };
 
@@ -1008,6 +1047,7 @@ export const make = Effect.gen(function* () {
           commentCount: Math.max(first.commentCount, comments.length),
           commentsTruncated: cursor !== null,
           events: first.events,
+          reactions: first.reactions,
         };
       }),
 
@@ -1118,6 +1158,29 @@ export const make = Effect.gen(function* () {
           variables: { commentId: input.commentId, body: input.body },
         });
       }),
+
+    setReaction: (input): Effect.Effect<void, GitHubIssueCliError> => {
+      const subjectId =
+        input.subjectId === undefined
+          ? issueNodeId(input)
+          : commentBelongsToIssue({ ...input, commentId: input.subjectId }).pipe(
+              Effect.flatMap((belongs) =>
+                belongs
+                  ? Effect.succeed(input.subjectId as string)
+                  : new GitHubIssueCommentScopeError({ command: "gh", cwd: input.cwd }),
+              ),
+            );
+      return subjectId.pipe(
+        Effect.flatMap((id) =>
+          graphql({
+            cwd: input.cwd,
+            host: input.host,
+            query: input.reacted ? ADD_REACTION_GRAPHQL_MUTATION : REMOVE_REACTION_GRAPHQL_MUTATION,
+            variables: { subjectId: id, content: gitHubReactionContent(input.content) },
+          }),
+        ),
+      );
+    },
 
     setLabels: (input) => writeIssue({ ...input, body: { labels: input.labels } }),
 

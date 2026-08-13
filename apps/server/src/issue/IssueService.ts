@@ -28,6 +28,7 @@ import {
   type IssueListProjectError,
   type IssueListResult,
   type IssueProviderSummary,
+  type IssueReactionInput,
   type IssueRef,
   type IssueRepositoryRef,
   type IssueTemplateList,
@@ -108,6 +109,7 @@ export class IssueService extends Context.Service<
     readonly runAction: (input: IssueActionInput) => Effect.Effect<void, IssueError>;
     readonly comment: (input: IssueCommentInput) => Effect.Effect<void, IssueError>;
     readonly updateComment: (input: IssueCommentUpdateInput) => Effect.Effect<void, IssueError>;
+    readonly setReaction: (input: IssueReactionInput) => Effect.Effect<void, IssueError>;
     readonly create: (input: IssueCreateInput) => Effect.Effect<IssueCreateResult, IssueError>;
     readonly update: (input: IssueUpdateInput) => Effect.Effect<void, IssueError>;
     readonly setLabels: (input: IssueLabelsInput) => Effect.Effect<void, IssueError>;
@@ -977,6 +979,7 @@ export const make = Effect.gen(function* () {
                 commentCount: activity.commentCount,
                 commentsTruncated: activity.commentsTruncated,
                 events: activity.events,
+                ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
               }),
             ),
           ),
@@ -1107,6 +1110,30 @@ export const make = Effect.gen(function* () {
           commentId: input.commentId,
           body: input.body,
         }).pipe(Effect.mapError(toIssueError("updateComment")));
+      }),
+    );
+
+  const setReaction: IssueService["Service"]["setReaction"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<void, IssueError> => {
+        const react = project.api.setReaction;
+        if (project.api.capabilities.reactions !== true || react === undefined) {
+          return Effect.fail(
+            new IssueOperationError({
+              operation: "setReaction",
+              detail: "This host has no reactions.",
+            }),
+          );
+        }
+        return react({
+          cwd: project.project.workspaceRoot,
+          repository: project.repository,
+          host: project.host,
+          number: input.number,
+          ...(input.subjectId === undefined ? {} : { subjectId: input.subjectId }),
+          content: input.content,
+          reacted: input.reacted,
+        }).pipe(Effect.mapError(toIssueError("setReaction")));
       }),
     );
 
@@ -1556,6 +1583,7 @@ export const make = Effect.gen(function* () {
     runAction: invalidatedByMutation(runAction),
     comment: invalidatedByMutation(comment),
     updateComment: invalidatedByMutation(updateComment),
+    setReaction: invalidatedByMutation(setReaction),
     // A new issue belongs on every listing that would hold it, and there is no issue of its own
     // to forget yet.
     create: (input) =>

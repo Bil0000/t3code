@@ -21,6 +21,7 @@ const CAPABILITIES: IssueCapabilities = {
   issueTemplates: true,
   edit: true,
   editComment: true,
+  reactions: true,
   labels: true,
   assignees: true,
   listLabelCandidates: true,
@@ -176,6 +177,8 @@ export const make = Effect.gen(function* () {
     comment: (input) => cli.commentOnIssue(input).pipe(Effect.mapError(fail("comment"))),
 
     updateComment: (input) => cli.updateComment(input).pipe(Effect.mapError(fail("updateComment"))),
+
+    setReaction: (input) => cli.setReaction(input).pipe(Effect.mapError(fail("setReaction"))),
 
     create: (input) => cli.createIssue(input).pipe(Effect.mapError(fail("create"))),
 

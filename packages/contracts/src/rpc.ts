@@ -82,6 +82,7 @@ import {
   IssueListInput,
   IssueListResult,
   IssueOperationError,
+  IssueReactionInput,
   IssueRef,
   IssueRepositoryRef,
   IssueTemplateList,
@@ -322,6 +323,7 @@ export const WS_METHODS = {
   issuesRunAction: "issues.runAction",
   issuesComment: "issues.comment",
   issuesUpdateComment: "issues.updateComment",
+  issuesSetReaction: "issues.setReaction",
   issuesCreate: "issues.create",
   issuesUpdate: "issues.update",
   issuesSetLabels: "issues.setLabels",
@@ -660,6 +662,12 @@ export const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
 
 export const WsIssuesUpdateCommentRpc = Rpc.make(WS_METHODS.issuesUpdateComment, {
   payload: IssueCommentUpdateInput,
+  success: Schema.Void,
+  error: IssueRpcError,
+});
+
+export const WsIssuesSetReactionRpc = Rpc.make(WS_METHODS.issuesSetReaction, {
+  payload: IssueReactionInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
@@ -1154,6 +1162,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssuesRunActionRpc,
   WsIssuesCommentRpc,
   WsIssuesUpdateCommentRpc,
+  WsIssuesSetReactionRpc,
   WsIssuesCreateRpc,
   WsIssuesUpdateRpc,
   WsIssuesSetLabelsRpc,

@@ -13,16 +13,23 @@ import type {
   IssueLabelCandidateList,
   IssueLinkedPullRequest,
   IssueListState,
+  IssueReaction,
+  IssueReactionContent,
   IssueTemplate,
   IssueTemplateList,
 } from "@t3tools/contracts";
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import {
+  decodeOwnGitLabAwardIdJson,
+  gitLabAwardName,
+} from "../sourceControl/gitLabReactionJson.ts";
+import {
   decodeCreatedIssueJson,
   decodeIssueDetailJson,
   decodeIssueListJson,
   decodeIssueNotesJson,
+  decodeIssueAwardEmojiJson,
   decodeIssueTemplateEntriesJson,
   decodeIssueTemplateJson,
   decodeLabelEventsJson,
@@ -30,6 +37,7 @@ import {
   decodeProjectLabelsJson,
   decodeProjectMembersJson,
   decodeViewerJson,
+  ISSUE_AWARD_EMOJI_GRAPHQL_QUERY,
   type GitLabIssue,
   type GitLabIssueDetail,
   type GitLabIssueTemplateEntry,
@@ -114,6 +122,7 @@ export interface GitLabIssueActivity {
   readonly comments: ReadonlyArray<IssueComment>;
   readonly events: ReadonlyArray<IssueEvent>;
   readonly truncated: boolean;
+  readonly reactions: ReadonlyArray<IssueReaction>;
 }
 
 export class GitLabIssueCli extends Context.Service<
@@ -196,6 +205,15 @@ export class GitLabIssueCli extends Context.Service<
       readonly number: number;
       readonly commentId: string;
       readonly body: string;
+    }) => Effect.Effect<void, GitLabIssueCliError>;
+
+    readonly setReaction: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly subjectId?: string | undefined;
+      readonly content: IssueReactionContent;
+      readonly reacted: boolean;
     }) => Effect.Effect<void, GitLabIssueCliError>;
 
     readonly setLabels: (input: {
@@ -462,7 +480,14 @@ export const make = Effect.gen(function* () {
     readonly page: number;
     readonly comments: ReadonlyArray<IssueComment>;
     readonly events: ReadonlyArray<IssueEvent>;
-  }): Effect.Effect<GitLabIssueActivity, GitLabIssueCliError> =>
+  }): Effect.Effect<
+    {
+      readonly comments: ReadonlyArray<IssueComment>;
+      readonly events: ReadonlyArray<IssueEvent>;
+      readonly truncated: boolean;
+    },
+    GitLabIssueCliError
+  > =>
     api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes?${query([
@@ -657,23 +682,80 @@ export const make = Effect.gen(function* () {
       stdin: JSON.stringify(input.body),
     }).pipe(Effect.asVoid);
 
+  const viewerUsername = (input: { readonly cwd: string }) =>
+    api({ cwd: input.cwd, path: "user" }).pipe(
+      Effect.flatMap((result): Effect.Effect<string, GitLabIssueCliError> => {
+        const decoded = decodeViewerJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            readError({ cwd: input.cwd, operation: "getViewerUsername" })(decoded.failure),
+          );
+        }
+        return decoded.success === null
+          ? Effect.fail(new GitLabIssueViewerUnavailableError({ command: "glab", cwd: input.cwd }))
+          : Effect.succeed(decoded.success);
+      }),
+    );
+
+  const awardSubjectPath = (input: {
+    readonly repository: string;
+    readonly number: number;
+    readonly subjectId?: string | undefined;
+  }) => {
+    const issue = `projects/${projectPath(input.repository)}/issues/${input.number}`;
+    return input.subjectId === undefined
+      ? `${issue}/award_emoji`
+      : `${issue}/notes/${encodeURIComponent(input.subjectId)}/award_emoji`;
+  };
+
+  const awardsPage = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly number: number;
+    readonly cursor: string | null;
+    readonly page: number;
+    readonly collected: Map<string, ReadonlyArray<IssueReaction>>;
+  }): Effect.Effect<
+    {
+      readonly reactions: ReadonlyArray<IssueReaction>;
+      readonly reactionsByNoteId: ReadonlyMap<string, ReadonlyArray<IssueReaction>>;
+    },
+    GitLabIssueCliError
+  > =>
+    api({
+      cwd: input.cwd,
+      path: "graphql",
+      method: "POST",
+      stdin: JSON.stringify({
+        query: ISSUE_AWARD_EMOJI_GRAPHQL_QUERY,
+        variables: { fullPath: input.repository, iid: String(input.number), cursor: input.cursor },
+      }),
+    }).pipe(
+      Effect.flatMap((result) => {
+        const decoded = decodeIssueAwardEmojiJson(result.stdout.trim());
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            readError({ cwd: input.cwd, operation: "listActivity" })(decoded.failure),
+          );
+        }
+        for (const [id, reactions] of decoded.success.reactionsByNoteId) {
+          input.collected.set(id, reactions);
+        }
+        return decoded.success.nextCursor === null || input.page >= CONVERSATION_PAGES
+          ? Effect.succeed({
+              reactions: decoded.success.reactions,
+              reactionsByNoteId: input.collected,
+            })
+          : awardsPage({
+              ...input,
+              cursor: decoded.success.nextCursor,
+              page: input.page + 1,
+            });
+      }),
+    );
+
   return GitLabIssueCli.of({
-    getViewerUsername: (input) =>
-      api({ cwd: input.cwd, path: "user" }).pipe(
-        Effect.flatMap((result): Effect.Effect<string, GitLabIssueCliError> => {
-          const decoded = decodeViewerJson(result.stdout.trim());
-          if (!Result.isSuccess(decoded)) {
-            return Effect.fail(
-              readError({ cwd: input.cwd, operation: "getViewerUsername" })(decoded.failure),
-            );
-          }
-          return decoded.success === null
-            ? Effect.fail(
-                new GitLabIssueViewerUnavailableError({ command: "glab", cwd: input.cwd }),
-              )
-            : Effect.succeed(decoded.success);
-        }),
-      ),
+    getViewerUsername: viewerUsername,
 
     // Every read starts at the first page: a continuation is the boundary instant, not an offset
     // into a list that moves under it.
@@ -713,11 +795,15 @@ export const make = Effect.gen(function* () {
         [
           notesPage({ ...input, page: 1, comments: [], events: [] }),
           labelEventsPage({ ...input, page: 1, collected: [] }),
+          awardsPage({ ...input, cursor: null, page: 1, collected: new Map() }),
         ],
         { concurrency: 2 },
       ).pipe(
-        Effect.map(([notes, labelEvents]) => ({
-          comments: notes.comments,
+        Effect.map(([notes, labelEvents, awards]) => ({
+          comments: notes.comments.map((comment) => ({
+            ...comment,
+            reactions: awards.reactionsByNoteId.get(comment.id) ?? [],
+          })),
           // Two reads, so the merged history is ordered here rather than left interleaved by
           // whichever of them answered first.
           events: [...notes.events, ...labelEvents.events].sort((left, right) =>
@@ -726,6 +812,7 @@ export const make = Effect.gen(function* () {
           // Either walk hitting its bound leaves the timeline short, and a history missing its
           // labellings is no more complete than one missing its remarks.
           truncated: notes.truncated || labelEvents.truncated,
+          reactions: awards.reactions,
         })),
       ),
 
@@ -781,6 +868,35 @@ export const make = Effect.gen(function* () {
         method: "PUT",
         stdin: JSON.stringify({ body: input.body }),
       }).pipe(Effect.asVoid),
+
+    setReaction: (input) =>
+      Effect.gen(function* () {
+        const subject = awardSubjectPath(input);
+        if (input.reacted) {
+          yield* api({
+            cwd: input.cwd,
+            path: `${subject}?${query([["name", gitLabAwardName(input.content)]])}`,
+            method: "POST",
+          });
+          return;
+        }
+        const viewer = yield* viewerUsername({ cwd: input.cwd });
+        const listed = yield* api({ cwd: input.cwd, path: subject });
+        const own = decodeOwnGitLabAwardIdJson(listed.stdout.trim(), {
+          content: input.content,
+          viewer,
+        });
+        if (!Result.isSuccess(own)) {
+          return yield* new GitLabIssueReadError({
+            command: "glab",
+            cwd: input.cwd,
+            operation: "setReaction",
+            cause: own.failure,
+          });
+        }
+        if (own.success === null) return;
+        yield* api({ cwd: input.cwd, path: `${subject}/${own.success}`, method: "DELETE" });
+      }),
 
     setLabels: (input) =>
       updateIssue({

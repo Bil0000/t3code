@@ -1075,6 +1075,28 @@ layer("GitHubIssueCli.layer", (it) => {
     }),
   );
 
+  it.effect("reacts to the issue body through its node id", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify({ data: { repository: { issue: { id: "I_7" } } } }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+
+      yield* cli.setReaction({ ...target, content: "heart", reacted: true });
+
+      expect(stdinOfCall(1)).toMatchObject({
+        variables: { subjectId: "I_7", content: "HEART" },
+      });
+    }),
+  );
+
   it.effect("writes the whole label and assignee set, and the empty set to clear it", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));

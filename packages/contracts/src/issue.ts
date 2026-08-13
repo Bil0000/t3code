@@ -38,12 +38,33 @@ export type IssueCloseReason = typeof IssueCloseReason.Type;
 export const IssueAction = Schema.Literals(["close", "reopen"]);
 export type IssueAction = typeof IssueAction.Type;
 
+export const IssueReactionContent = Schema.Literals([
+  "thumbs-up",
+  "thumbs-down",
+  "laugh",
+  "hooray",
+  "confused",
+  "heart",
+  "rocket",
+  "eyes",
+]);
+export type IssueReactionContent = typeof IssueReactionContent.Type;
+
+export const IssueReaction = Schema.Struct({
+  content: IssueReactionContent,
+  count: PositiveInt,
+  actors: Schema.Array(TrimmedNonEmptyString),
+  viewerHasReacted: Schema.Boolean,
+});
+export type IssueReaction = typeof IssueReaction.Type;
+
 export const IssueComment = Schema.Struct({
   id: TrimmedNonEmptyString,
   author: Schema.NullOr(SourceControlActor),
   body: Schema.String,
   createdAt: IsoDateTime,
   url: Schema.NullOr(Schema.String),
+  reactions: Schema.optional(Schema.Array(IssueReaction)),
 });
 export type IssueComment = typeof IssueComment.Type;
 
@@ -131,6 +152,8 @@ export const IssueCapabilities = Schema.Struct({
   edit: Schema.Boolean,
   /** A posted comment can be rewritten by its author. */
   editComment: Schema.optional(Schema.Boolean),
+  /** Reactions can be read, added, and removed on the issue and its comments. */
+  reactions: Schema.optional(Schema.Boolean),
   labels: Schema.Boolean,
   assignees: Schema.Boolean,
   /** The labels a repository has can be listed, so a picker offers them instead of taking text. */
@@ -316,6 +339,8 @@ export const IssueActivity = Schema.Struct({
   /** The read stopped at a bound of its own before the host ran out. */
   commentsTruncated: Schema.Boolean,
   events: Schema.Array(IssueEvent),
+  /** Reactions on the issue description itself. */
+  reactions: Schema.optional(Schema.Array(IssueReaction)),
 });
 export type IssueActivity = typeof IssueActivity.Type;
 
@@ -353,6 +378,15 @@ export const IssueCommentUpdateInput = Schema.Struct({
   body: CommentBody,
 });
 export type IssueCommentUpdateInput = typeof IssueCommentUpdateInput.Type;
+
+export const IssueReactionInput = Schema.Struct({
+  ...IssueRef.fields,
+  /** Absent reacts to the issue body; present names a comment. */
+  subjectId: Schema.optional(TrimmedNonEmptyString),
+  content: IssueReactionContent,
+  reacted: Schema.Boolean,
+});
+export type IssueReactionInput = typeof IssueReactionInput.Type;
 
 const IssueTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(1024));
 

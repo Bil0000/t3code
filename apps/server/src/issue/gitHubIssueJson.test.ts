@@ -110,12 +110,16 @@ function activityJson(input: {
   readonly author?: Record<string, unknown> | null;
   readonly comments?: Record<string, unknown> | null;
   readonly timeline?: ReadonlyArray<unknown>;
+  readonly viewer?: string;
+  readonly reactions?: ReadonlyArray<unknown>;
 }): string {
   return JSON.stringify({
     data: {
+      viewer: input.viewer === undefined ? null : { login: input.viewer },
       repository: {
         issue: {
           author: input.author ?? null,
+          reactionGroups: input.reactions ?? [],
           comments: input.comments ?? { totalCount: 0, nodes: [] },
           timelineItems: { nodes: input.timeline ?? [] },
         },
@@ -519,12 +523,27 @@ describe("issue activity decoding", () => {
       decodeIssueActivityJson(
         activityJson({
           author: { login: "bilal", avatarUrl: "https://avatars/bilal" },
+          viewer: "bilal",
+          reactions: [
+            {
+              content: "ROCKET",
+              viewerHasReacted: false,
+              reactors: { totalCount: 1, nodes: [{ login: "julius" }] },
+            },
+          ],
           comments: {
             totalCount: 250,
             pageInfo: { hasNextPage: true, endCursor: "Y3Vyc29y" },
             nodes: [
               {
                 id: "IC_1",
+                reactionGroups: [
+                  {
+                    content: "HEART",
+                    viewerHasReacted: true,
+                    reactors: { totalCount: 2, nodes: [{ login: "bilal" }, { login: "julius" }] },
+                  },
+                ],
                 author: { login: "julius", avatarUrl: "https://avatars/julius" },
                 body: "Reproduced.",
                 createdAt: "2026-07-02T00:00:00Z",
@@ -550,6 +569,12 @@ describe("issue activity decoding", () => {
     // GitHub's own count, which this bounded read fell well short of.
     expect(activity.commentCount).toBe(250);
     expect(activity.nextCursor).toBe("Y3Vyc29y");
+    expect(activity.reactions).toEqual([
+      { content: "rocket", count: 1, actors: ["julius"], viewerHasReacted: false },
+    ]);
+    expect(activity.comments[0]?.reactions).toEqual([
+      { content: "heart", count: 2, actors: ["julius"], viewerHasReacted: true },
+    ]);
   });
 
   it("carries on from nowhere once GitHub says the conversation is whole", () => {

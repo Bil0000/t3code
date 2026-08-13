@@ -16,6 +16,8 @@ import type {
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
+import { GitLabAwardNodesSchema, toGitLabReactions } from "../sourceControl/gitLabReactionJson.ts";
+
 /**
  * GitLab's REST enums are decoded as plain strings and normalized here: a GitLab release that
  * adds an issue state or a label event action must not fail the whole payload.
@@ -539,4 +541,75 @@ export function decodeIssueTemplateJson(raw: string): Result.Result<string, Deco
   return Result.isSuccess(decoded)
     ? Result.succeed(decoded.success.content ?? "")
     : Result.fail(decoded.failure);
+}
+
+export const ISSUE_AWARD_EMOJI_GRAPHQL_QUERY = `query($fullPath: ID!, $iid: String!, $cursor: String) {
+  currentUser { username }
+  project(fullPath: $fullPath) {
+    issue(iid: $iid) {
+      awardEmoji { nodes { name user { username } } }
+      notes(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes { id awardEmoji { nodes { name user { username } } } }
+      }
+    }
+  }
+}`;
+
+const RawIssueAwardPageSchema = Schema.Struct({
+  data: Schema.Struct({
+    currentUser: Schema.optional(
+      Schema.NullOr(Schema.Struct({ username: Schema.optional(Schema.NullOr(Schema.String)) })),
+    ),
+    project: Schema.NullOr(
+      Schema.Struct({
+        issue: Schema.NullOr(
+          Schema.Struct({
+            awardEmoji: GitLabAwardNodesSchema,
+            notes: Schema.optional(
+              Schema.NullOr(
+                Schema.Struct({
+                  pageInfo: Schema.optional(
+                    Schema.Struct({
+                      hasNextPage: Schema.optional(Schema.Boolean),
+                      endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+                    }),
+                  ),
+                  nodes: Schema.Array(
+                    Schema.NullOr(
+                      Schema.Struct({
+                        id: Schema.optional(Schema.NullOr(Schema.String)),
+                        awardEmoji: GitLabAwardNodesSchema,
+                      }),
+                    ),
+                  ),
+                }),
+              ),
+            ),
+          }),
+        ),
+      }),
+    ),
+  }),
+});
+const decodeIssueAwardPage = decodeJsonResult(RawIssueAwardPageSchema);
+
+export function decodeIssueAwardEmojiJson(raw: string) {
+  const decoded = decodeIssueAwardPage(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const viewer = trimmed(decoded.success.data.currentUser?.username);
+  const issue = decoded.success.data.project?.issue;
+  const byNoteId = new Map<string, ReturnType<typeof toGitLabReactions>>();
+  for (const note of issue?.notes?.nodes ?? []) {
+    const id = trimmed(note?.id)?.split("/").at(-1) ?? null;
+    if (id === null || !/^\d+$/.test(id)) continue;
+    const reactions = toGitLabReactions(note?.awardEmoji, viewer);
+    if (reactions.length > 0) byNoteId.set(id, reactions);
+  }
+  const pageInfo = issue?.notes?.pageInfo;
+  return Result.succeed({
+    reactions: toGitLabReactions(issue?.awardEmoji, viewer),
+    reactionsByNoteId: byNoteId,
+    nextCursor: pageInfo?.hasNextPage === true ? (trimmed(pageInfo.endCursor) ?? null) : null,
+  });
 }

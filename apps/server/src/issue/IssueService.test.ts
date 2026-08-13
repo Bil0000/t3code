@@ -114,6 +114,7 @@ const FULL_CAPABILITIES: IssueCapabilities = {
   issueTemplates: true,
   edit: true,
   editComment: true,
+  reactions: true,
   labels: true,
   assignees: true,
   listLabelCandidates: true,
@@ -1532,6 +1533,40 @@ it.effect("carries every repository of a slice on from the oldest row in it", ()
     assert.deepStrictEqual(result.nextCursors, {
       "github.com acme/web": "2026-07-03T00:00:00Z|0|2",
       "github.com acme/api": "2026-07-03T00:00:00Z|0|",
+    });
+  }),
+);
+
+it.effect("passes a reaction through with its subject id", () =>
+  Effect.gen(function* () {
+    let received: Parameters<NonNullable<IssueProviderApi["setReaction"]>>[0] | null = null;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          setReaction: (input) => {
+            received = input;
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    yield* service.setReaction({
+      ...REFERENCE,
+      subjectId: "IC_1",
+      content: "heart",
+      reacted: true,
+    });
+
+    assert.deepStrictEqual(received, {
+      cwd: "/a",
+      repository: "acme/web",
+      host: "github.com",
+      number: 7,
+      subjectId: "IC_1",
+      content: "heart",
+      reacted: true,
     });
   }),
 );

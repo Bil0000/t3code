@@ -23,6 +23,12 @@ import type {
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { parse as parseYamlDocument } from "yaml";
 
+import {
+  GITHUB_REACTION_GROUPS_FIELDS,
+  GitHubReactionGroupsSchema,
+  toGitHubReactions,
+} from "../sourceControl/gitHubReactionJson.ts";
+
 /**
  * Enum-ish GitHub fields are decoded as plain strings and normalized here: a `gh` release or a
  * GraphQL schema addition that brings a new state reason or timeline event must not fail the whole
@@ -167,6 +173,7 @@ const RawCommentSchema = Schema.Struct({
   body: Schema.optional(Schema.NullOr(Schema.String)),
   createdAt: Schema.String,
   url: Schema.optional(Schema.NullOr(Schema.String)),
+  reactionGroups: GitHubReactionGroupsSchema,
 });
 
 const RawCommentsSchema = Schema.Struct({
@@ -225,10 +232,12 @@ const RawViewerPermissionsSchema = Schema.Struct({
 
 const RawActivitySchema = Schema.Struct({
   data: Schema.Struct({
+    viewer: Schema.optional(Schema.NullOr(Schema.Struct({ login: Schema.String }))),
     repository: Schema.Struct({
       issue: Schema.NullOr(
         Schema.Struct({
           author: Schema.optional(Schema.NullOr(RawActorSchema)),
+          reactionGroups: GitHubReactionGroupsSchema,
           comments: Schema.optional(Schema.NullOr(RawCommentsSchema)),
           timelineItems: Schema.optional(
             Schema.NullOr(
@@ -245,6 +254,7 @@ const RawActivitySchema = Schema.Struct({
 
 const RawCommentPageSchema = Schema.Struct({
   data: Schema.Struct({
+    viewer: Schema.optional(Schema.NullOr(Schema.Struct({ login: Schema.String }))),
     repository: Schema.Struct({
       issue: Schema.NullOr(Schema.Struct({ comments: Schema.optional(RawCommentsSchema) })),
     }),
@@ -548,13 +558,15 @@ export const ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY = `query($owner: String!, $n
  * start instead, which is the order a conversation is read in.
  */
 export const ISSUE_ACTIVITY_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
       author { login avatarUrl }
+      ${GITHUB_REACTION_GROUPS_FIELDS}
       comments(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
         totalCount
         pageInfo { hasNextPage endCursor }
-        nodes { id author { login avatarUrl } body createdAt url }
+        nodes { id author { login avatarUrl } body createdAt url ${GITHUB_REACTION_GROUPS_FIELDS} }
       }
       timelineItems(last: ${TIMELINE_ITEMS}, itemTypes: [CLOSED_EVENT, REOPENED_EVENT, LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, RENAMED_TITLE_EVENT, CROSS_REFERENCED_EVENT, MILESTONED_EVENT, LOCKED_EVENT, UNLOCKED_EVENT]) {
         nodes {
@@ -583,12 +595,13 @@ export const ISSUE_ACTIVITY_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
 
 /** The rest of a long conversation, without the history the first page already delivered. */
 export const ISSUE_COMMENTS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
+  viewer { login }
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
       comments(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
         totalCount
         pageInfo { hasNextPage endCursor }
-        nodes { id author { login avatarUrl } body createdAt url }
+        nodes { id author { login avatarUrl } body createdAt url ${GITHUB_REACTION_GROUPS_FIELDS} }
       }
     }
   }
@@ -598,6 +611,24 @@ export const ISSUE_COMMENT_SCOPE_GRAPHQL_QUERY = `query($owner: String!, $name: 
   repository(owner: $owner, name: $name) { issue(number: $number) { id } }
   node(id: $commentId) { ... on IssueComment { issue { id } } }
 }`;
+
+export const ISSUE_NODE_ID_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) { issue(number: $number) { id } }
+}`;
+
+const RawIssueNodeIdSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.Struct({ issue: Schema.Struct({ id: Schema.String }) }),
+  }),
+});
+
+const decodeIssueNodeId = decodeJsonResult(RawIssueNodeIdSchema);
+
+export function decodeIssueNodeIdJson(raw: string): Result.Result<string, DecodeFailure> {
+  const decoded = decodeIssueNodeId(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  return Result.succeed(decoded.success.data.repository.issue.id);
+}
 
 const RawIssueCommentScopeSchema = Schema.Struct({
   data: Schema.Struct({
@@ -1184,10 +1215,12 @@ export interface GitHubIssueActivityPage {
   /** Where the rest of the conversation carries on from, or null once it is whole. */
   readonly nextCursor: string | null;
   readonly events: ReadonlyArray<IssueEvent>;
+  readonly reactions: ReturnType<typeof toGitHubReactions>;
 }
 
 function toComments(
   raw: Schema.Schema.Type<typeof RawCommentsSchema> | null | undefined,
+  viewer: string | null,
 ): ReadonlyArray<IssueComment> {
   return (raw?.nodes ?? []).flatMap((comment) => {
     const id = trimmed(comment?.id);
@@ -1199,6 +1232,7 @@ function toComments(
         body: comment.body ?? "",
         createdAt: comment.createdAt,
         url: trimmed(comment.url),
+        reactions: toGitHubReactions(comment.reactionGroups, viewer),
       },
     ];
   });
@@ -1213,6 +1247,7 @@ export function decodeIssueActivityJson(
     return Result.fail(decoded.failure);
   }
   const issue = decoded.success.data.repository.issue;
+  const viewer = trimmed(decoded.success.data.viewer?.login);
   const events: IssueEvent[] = [];
   for (const entry of issue?.timelineItems?.nodes ?? []) {
     const decodedItem = decodeTimelineItem(entry);
@@ -1232,10 +1267,11 @@ export function decodeIssueActivityJson(
   }
   return Result.succeed({
     author: toActor(issue?.author),
-    comments: toComments(issue?.comments),
+    comments: toComments(issue?.comments, viewer),
     commentCount: Math.max(0, issue?.comments?.totalCount ?? 0),
     nextCursor: nextCursorOf(issue?.comments?.pageInfo),
     events,
+    reactions: toGitHubReactions(issue?.reactionGroups, viewer),
   });
 }
 
@@ -1252,8 +1288,9 @@ export function decodeIssueCommentsJson(raw: string): Result.Result<
     return Result.fail(decoded.failure);
   }
   const comments = decoded.success.data.repository.issue?.comments;
+  const viewer = trimmed(decoded.success.data.viewer?.login);
   return Result.succeed({
-    comments: toComments(comments),
+    comments: toComments(comments, viewer),
     nextCursor: nextCursorOf(comments?.pageInfo),
   });
 }

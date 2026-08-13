@@ -83,6 +83,12 @@ export function createIssueEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),
+    setReaction: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:set-reaction",
+      tag: WS_METHODS.issuesSetReaction,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     create: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:issues:create",
       tag: WS_METHODS.issuesCreate,

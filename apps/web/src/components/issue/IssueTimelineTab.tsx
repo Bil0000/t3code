@@ -13,6 +13,7 @@ import { ActorName, IconMarker } from "../sourceControl/TimelineRail";
 import { SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+import { IssueReactionBar } from "./IssueReactions";
 import {
   buildIssueTimeline,
   canEditIssueComment,
@@ -124,7 +125,18 @@ export function IssueTimelineTab({
                       onCancel={() => setEditingId(null)}
                     />
                   ) : entry.body === null ? null : (
-                    <HostMarkdown text={entry.body} cwd={detail.workspaceRoot} />
+                    <div className="group">
+                      <HostMarkdown text={entry.body} cwd={detail.workspaceRoot} />
+                      <IssueReactionBar
+                        className="mt-2"
+                        reactions={comments.get(entry.id)?.reactions ?? []}
+                        canReact={detail.capabilities.reactions === true}
+                        subjectId={entry.id}
+                        environmentId={environmentId}
+                        reference={reference}
+                        onRefresh={onRefresh}
+                      />
+                    </div>
                   );
                 }}
               />

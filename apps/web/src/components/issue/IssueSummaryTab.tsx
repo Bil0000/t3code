@@ -37,6 +37,7 @@ import { canEditIssueComment, LINK_PULL_REQUESTS_HANDOFF_KIND } from "./issueDet
 import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueLabelChips } from "./issuePresentation";
+import { IssueReactionBar } from "./IssueReactions";
 
 /**
  * Rewriting the issue where it is read, rather than in a dialog over the top of it: what the
@@ -268,19 +269,29 @@ export function IssueSummaryTab({
       </section>
 
       <SummarySection title="Description">
-        {editing ? (
-          <IssueEditor
+        <div className="group">
+          {editing ? (
+            <IssueEditor
+              environmentId={environmentId}
+              detail={detail}
+              onDone={() => onEditingChange(false)}
+              onSaved={onRefresh}
+            />
+          ) : (
+            <HostMarkdown
+              text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
+              cwd={detail.workspaceRoot}
+            />
+          )}
+          <IssueReactionBar
+            className="mt-2"
+            reactions={detail.reactions ?? []}
+            canReact={detail.capabilities.reactions === true}
             environmentId={environmentId}
-            detail={detail}
-            onDone={() => onEditingChange(false)}
-            onSaved={onRefresh}
+            reference={reference}
+            onRefresh={onRefresh}
           />
-        ) : (
-          <HostMarkdown
-            text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
-            cwd={detail.workspaceRoot}
-          />
-        )}
+        </div>
       </SummarySection>
 
       {/* Only where the host reports links at all: an empty section under a host that never
@@ -434,6 +445,15 @@ export function IssueSummaryTab({
                         ) : null}
                       </div>
                     )}
+                    <IssueReactionBar
+                      className="mt-2"
+                      reactions={comment.reactions ?? []}
+                      canReact={detail.capabilities.reactions === true}
+                      subjectId={comment.id}
+                      environmentId={environmentId}
+                      reference={reference}
+                      onRefresh={onRefresh}
+                    />
                   </article>
                 ))}
               </div>
