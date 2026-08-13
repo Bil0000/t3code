@@ -15,6 +15,26 @@ export const RECENT_THREAD_LIMIT = 12;
 export const ITEM_ICON_CLASS = "size-4 text-icon-muted";
 export const ADDON_ICON_CLASS = "size-4";
 
+export function resolveCurrentStackContext<
+  TProject extends Pick<Project, "environmentId" | "id" | "workspaceRoot">,
+>(input: {
+  readonly projects: ReadonlyArray<TProject>;
+  readonly environmentId: Project["environmentId"] | null;
+  readonly projectId: Project["id"] | null;
+  readonly threadWorktreePath: string | null;
+  readonly draftWorktreePath: string | null;
+}): { readonly project: TProject | null; readonly cwd: string | null } {
+  const project =
+    input.projects.find(
+      (candidate) =>
+        candidate.environmentId === input.environmentId && candidate.id === input.projectId,
+    ) ?? null;
+  return {
+    project,
+    cwd: input.threadWorktreePath ?? input.draftWorktreePath ?? project?.workspaceRoot ?? null,
+  };
+}
+
 /**
  * The global search overlay hosts three mutually exclusive surfaces: the
  * command palette (⌘K), the project file picker (⌘P), and project content

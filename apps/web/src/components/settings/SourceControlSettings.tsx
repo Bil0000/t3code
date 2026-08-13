@@ -556,7 +556,10 @@ export function SourceControlSettingsPanel() {
     stackSupportMessage = "This T3 server does not support stacked pull requests.";
   } else if (localStack.data?.availability === "extension_missing") {
     stackSupportMessage = "Install GitHub Stack: gh extension install github/gh-stack";
-  } else if (remoteStacks.data?.availability === "unsupported") {
+  } else if (
+    localStack.data?.availability === "unsupported" ||
+    remoteStacks.data?.availability === "unsupported"
+  ) {
     stackSupportMessage = `${githubProject.title} does not support GitHub stacks.`;
   } else if (
     localStack.data?.availability === "available" &&

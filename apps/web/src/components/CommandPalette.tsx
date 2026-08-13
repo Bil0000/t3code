@@ -120,6 +120,7 @@ import {
   ITEM_ICON_CLASS,
   RECENT_THREAD_LIMIT,
   reduceCommandPaletteUiState,
+  resolveCurrentStackContext,
   type SearchOverlayMode,
 } from "./CommandPalette.logic";
 import { orderItemsByPreferredIds, sortLogicalProjectsForSidebar } from "./Sidebar.logic";
@@ -859,13 +860,13 @@ function OpenCommandPaletteDialog(props: {
   const currentProjectCwd = currentProjectId
     ? (projectCwdById.get(currentProjectId) ?? null)
     : null;
-  const currentProject =
-    projects.find(
-      (project) =>
-        project.environmentId === currentProjectEnvironmentId && project.id === currentProjectId,
-    ) ?? null;
-  const currentStackCwd =
-    activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? currentProjectCwd;
+  const { project: currentProject, cwd: currentStackCwd } = resolveCurrentStackContext({
+    projects,
+    environmentId: currentProjectEnvironmentId,
+    projectId: currentProjectId,
+    threadWorktreePath: activeThread?.worktreePath ?? null,
+    draftWorktreePath: activeDraftThread?.worktreePath ?? null,
+  });
   const currentServerConfig = useAtomValue(
     serverEnvironment.configValueAtom(currentProjectEnvironmentId),
   );

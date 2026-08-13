@@ -36,6 +36,26 @@ export interface GitQuickAction {
   hint?: string;
 }
 
+export function areGitControlsBusy(input: {
+  readonly gitActionRunning: boolean;
+  readonly stackActionPending: boolean;
+  readonly stackQueryPending: boolean;
+}): boolean {
+  return input.gitActionRunning || input.stackActionPending || input.stackQueryPending;
+}
+
+export async function runWithPendingState<T>(
+  setPending: (pending: boolean) => void,
+  operation: () => Promise<T>,
+): Promise<T> {
+  setPending(true);
+  try {
+    return await operation();
+  } finally {
+    setPending(false);
+  }
+}
+
 export function adaptMenuItemsForStack(
   items: ReadonlyArray<GitActionMenuItem>,
 ): GitActionMenuItem[] {

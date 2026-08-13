@@ -3,6 +3,7 @@ import { assert, describe, it } from "vite-plus/test";
 import {
   adaptMenuItemsForStack,
   adaptQuickActionForStack,
+  areGitControlsBusy,
   buildGitActionProgressStages,
   buildMenuItems,
   prepareGitActionForStackSubmit,
@@ -13,10 +14,39 @@ import {
   resolveQuickAction,
   resolveThreadBranchUpdate,
   resolveThreadBranchMetadataPatch,
+  runWithPendingState,
   shouldSubmitStackAfterGitAction,
 } from "./GitActionsControl.logic";
 
 describe("stack-aware Git actions", () => {
+  it("keeps Git actions disabled while stack membership loads", () => {
+    assert.isTrue(
+      areGitControlsBusy({
+        gitActionRunning: false,
+        stackActionPending: false,
+        stackQueryPending: true,
+      }),
+    );
+  });
+
+  it("keeps automatic stack submission pending until it settles", async () => {
+    const pendingStates: boolean[] = [];
+    let finishSubmit!: () => void;
+    const submit = new Promise<void>((resolve) => {
+      finishSubmit = resolve;
+    });
+
+    const pendingSubmit = runWithPendingState(
+      (pending) => pendingStates.push(pending),
+      () => submit,
+    );
+
+    assert.deepEqual(pendingStates, [true]);
+    finishSubmit();
+    await pendingSubmit;
+    assert.deepEqual(pendingStates, [true, false]);
+  });
+
   it("keeps one submit action in the stack menu", () => {
     const items = buildMenuItems(status({ aheadCount: 1 }), false);
 

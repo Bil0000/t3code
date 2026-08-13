@@ -13,6 +13,7 @@ import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-
 import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
 import { useSelectedThreadWorktree } from "../../../state/use-selected-thread-worktree";
 import { vcsEnvironment } from "../../../state/vcs";
+import { shouldCloseGitBranchesSheetAfterCreate } from "./git-branches-navigation";
 import { SheetActionButton } from "./gitSheetComponents";
 
 type GitBranchesSheetProps = StaticScreenProps<{
@@ -94,7 +95,15 @@ export function GitBranchesSheet(props: GitBranchesSheetProps) {
               const create = addsStackStep
                 ? gitActions.onRunSelectedThreadStackAction("add_step", branch)
                 : gitActions.onCreateSelectedThreadBranch(branch);
-              void create.then(() => {
+              void create.then((result) => {
+                if (
+                  !shouldCloseGitBranchesSheetAfterCreate(
+                    addsStackStep ? "stack-step" : "branch",
+                    result,
+                  )
+                ) {
+                  return;
+                }
                 setNewBranchName("");
                 navigation.goBack();
               });

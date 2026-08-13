@@ -42,6 +42,7 @@ import { RadioGroup } from "~/components/ui/radio-group";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
 import {
+  areGitControlsBusy,
   buildGitActionProgressStages,
   buildMenuItems,
   adaptMenuItemsForStack,
@@ -57,6 +58,7 @@ import {
   resolveThreadBranchMetadataPatch,
   resolveQuickAction,
   resolveThreadBranchUpdate,
+  runWithPendingState,
   shouldSubmitStackAfterGitAction,
 } from "./GitActionsControl.logic";
 import { AnimatedHeight } from "./AnimatedHeight";
@@ -1171,7 +1173,11 @@ export default function GitActionsControl({
     sourceControlScope,
     RUNNING_SOURCE_CONTROL_ACTIONS,
   );
-  const gitControlsBusy = isGitActionRunning || stackActionPending;
+  const gitControlsBusy = areGitControlsBusy({
+    gitActionRunning: isGitActionRunning,
+    stackActionPending,
+    stackQueryPending: stackQuery.isPending,
+  });
   const isSelectingWorktreeBase =
     !activeServerThread &&
     activeDraftThread?.envMode === "worktree" &&
@@ -1310,15 +1316,15 @@ export default function GitActionsControl({
 
   const performStackAction = async (action: PullRequestStackAction, branch?: string) => {
     if (stackActionPending) return;
-    setStackActionPending(true);
     const toastId = toastManager.add({
       type: "loading",
       title: action === "sync" ? "Syncing stack..." : "Updating stack...",
       timeout: 0,
       data: threadToastData,
     });
-    const result = await executeStackAction(action, branch);
-    setStackActionPending(false);
+    const result = await runWithPendingState(setStackActionPending, () =>
+      executeStackAction(action, branch),
+    );
     if (result === null || result._tag === "Failure") {
       const error = result === null ? null : squashAtomCommandFailure(result);
       toastManager.update(toastId, {
@@ -1560,7 +1566,9 @@ export default function GitActionsControl({
           timeout: 0,
           data: scopedToastData,
         });
-        const stackResult = await executeStackAction("submit");
+        const stackResult = await runWithPendingState(setStackActionPending, () =>
+          executeStackAction("submit"),
+        );
         if (stackResult === null || stackResult._tag === "Failure") {
           const error = stackResult === null ? null : squashAtomCommandFailure(stackResult);
           toastManager.update(resolvedProgressToastId, {
@@ -1962,7 +1970,8 @@ export default function GitActionsControl({
                   </p>
                 </>
               ) : gitStatusForActions?.sourceControlProvider?.kind === "github" &&
-                serverConfig?.environment.capabilities.pullRequestStacks === true ? (
+                serverConfig?.environment.capabilities.pullRequestStacks === true &&
+                stackQuery.data?.availability !== "unsupported" ? (
                 <>
                   <MenuSeparator />
                   {currentStack === null ? (
