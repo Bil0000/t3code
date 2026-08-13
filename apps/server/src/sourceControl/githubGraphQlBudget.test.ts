@@ -5,14 +5,15 @@ import * as TestClock from "effect/testing/TestClock";
 import * as GitHubGraphQlBudget from "./githubGraphQlBudget.ts";
 
 const RESET_AT = "2026-08-13T14:00:00.000Z";
+const NEXT_RESET_AT = "2026-08-13T15:00:00.000Z";
 const BEFORE_RESET = Date.parse("2026-08-13T13:30:00.000Z");
 const AFTER_RESET = Date.parse("2026-08-13T14:00:01.000Z");
 
-function rateLimit(remaining: number, limit = 5_000): string {
+function rateLimit(remaining: number, limit = 5_000, resetAt = RESET_AT): string {
   return JSON.stringify({
     data: {
       viewer: { login: "bilal" },
-      rateLimit: { cost: 14, limit, remaining, resetAt: RESET_AT },
+      rateLimit: { cost: 14, limit, remaining, resetAt },
     },
   });
 }
@@ -66,6 +67,51 @@ describe("GitHub GraphQL budget", () => {
       expect(yield* budget.query("github.example.com", "query { viewer { login } }")).toContain(
         "rateLimit",
       );
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("keeps the lower remaining value from out-of-order responses", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(400));
+      yield* budget.observe("github.com", rateLimit(600));
+
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+      expect(error).toMatchObject({
+        _tag: "GitHubGraphQlBudgetPausedError",
+        resetAt: RESET_AT,
+      });
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("ignores a response from an older reset window", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(400, 5_000, NEXT_RESET_AT));
+      yield* budget.observe("github.com", rateLimit(1_000, 5_000, RESET_AT));
+
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+      expect(error).toMatchObject({
+        _tag: "GitHubGraphQlBudgetPausedError",
+        resetAt: NEXT_RESET_AT,
+      });
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("accepts a response from a later reset window", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(1_000));
+      yield* budget.observe("github.com", rateLimit(400, 5_000, NEXT_RESET_AT));
+
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+      expect(error).toMatchObject({
+        _tag: "GitHubGraphQlBudgetPausedError",
+        resetAt: NEXT_RESET_AT,
+      });
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
 

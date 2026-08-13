@@ -116,8 +116,19 @@ export const make = Effect.gen(function* () {
     const snapshot = snapshotFrom(raw);
     if (snapshot === null) return;
     yield* Ref.update(snapshots, (current) => {
+      const key = hostKey(host);
+      const previous = current.get(key);
+      // Concurrent reads can finish out of order. Quota only falls within one reset window, and
+      // an answer from an older window must not replace the current one.
+      if (
+        previous !== undefined &&
+        (snapshot.resetAtMs < previous.resetAtMs ||
+          (snapshot.resetAtMs === previous.resetAtMs && snapshot.remaining >= previous.remaining))
+      ) {
+        return current;
+      }
       const next = new Map(current);
-      next.set(hostKey(host), snapshot);
+      next.set(key, snapshot);
       return next;
     });
   });
