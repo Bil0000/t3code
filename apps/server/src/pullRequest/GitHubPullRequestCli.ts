@@ -280,7 +280,7 @@ const REVIEW_THREAD_PAGES = 10;
  * And pages of one thread's own comments, for the rare thread longer than a single page. A
  * thousand replies under one line is already a conversation nobody finishes reading.
  */
-const REVIEW_THREAD_COMMENT_PAGES = 10;
+const REVIEW_THREAD_COMMENT_PAGES = 11;
 
 /** How many over-long threads are finished at once, so a wide conversation is not read serially. */
 const REVIEW_THREAD_CONCURRENCY = 4;

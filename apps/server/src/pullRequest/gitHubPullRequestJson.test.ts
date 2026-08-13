@@ -1011,6 +1011,16 @@ describe("decodePullRequestNodeIdJson", () => {
 });
 
 describe("REVIEW_THREADS_GRAPHQL_QUERY", () => {
+  it("caps the initial query after the 104-point rate-limit regression", () => {
+    const match = REVIEW_THREADS_GRAPHQL_QUERY.match(
+      /reviewThreads\(first: (\d+)[\s\S]*?comments\(first: (\d+)\)/u,
+    );
+
+    expect(match).not.toBeNull();
+    if (match === null) throw new Error("expected review-thread connections");
+    expect(Number(match[1]) * Number(match[2])).toBeLessThanOrEqual(1_000);
+  });
+
   it("asks for reactionGroups on the pull request itself, its comments, its reviews and each thread's comments", () => {
     expect(REVIEW_THREADS_GRAPHQL_QUERY.match(/reactionGroups/g)).toHaveLength(4);
     // The reviews connection is new: only reactions were ever wanted off it.
