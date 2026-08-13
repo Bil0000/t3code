@@ -13,6 +13,7 @@ import { useState } from "react";
 import { cn } from "~/lib/utils";
 
 import { Badge } from "../ui/badge";
+import { Button } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 
 function StepIcon({ step }: { step: PullRequestStackStep }) {
@@ -51,6 +52,9 @@ export function PullRequestStackPicker({
   const [open, setOpen] = useState(false);
   const current = stack.steps.find((step) => step.pullRequestNumber === pullRequestNumber);
   if (current === undefined) return null;
+  const previous = stack.steps.find((step) => step.position === current.position - 1);
+  const next = stack.steps.find((step) => step.position === current.position + 1);
+  const openCount = stack.steps.filter((step) => step.state === "open").length;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -70,7 +74,7 @@ export function PullRequestStackPicker({
           <div className="min-w-0 flex-1">
             <p className="text-sm font-medium">Pull request stack</p>
             <p className="truncate text-xs text-muted-foreground">
-              {stack.steps.length} steps into {stack.baseBranch}
+              {openCount} open · {stack.steps.length} steps into {stack.baseBranch}
             </p>
           </div>
           <Badge variant="outline" className="text-[10px]">
@@ -111,7 +115,33 @@ export function PullRequestStackPicker({
         </ol>
         <div className="mt-2 flex items-center gap-2 border-t border-border/60 pt-2 text-xs text-muted-foreground">
           <span className="size-2 rounded-full border border-border bg-background" />
-          {stack.baseBranch}
+          <span className="min-w-0 flex-1 truncate">{stack.baseBranch}</span>
+          {onSelect ? (
+            <div className="flex gap-1">
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={!previous}
+                onClick={() => {
+                  setOpen(false);
+                  if (previous) onSelect(previous.pullRequestNumber);
+                }}
+              >
+                Previous
+              </Button>
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={!next}
+                onClick={() => {
+                  setOpen(false);
+                  if (next) onSelect(next.pullRequestNumber);
+                }}
+              >
+                Next
+              </Button>
+            </div>
+          ) : null}
         </div>
       </PopoverPopup>
     </Popover>

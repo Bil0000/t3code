@@ -87,7 +87,6 @@ export const PullRequestStackAction = Schema.Literals([
 export type PullRequestStackAction = typeof PullRequestStackAction.Type;
 
 export const PullRequestStackActionInput = Schema.Struct({
-  actionId: TrimmedNonEmptyString,
   cwd: TrimmedNonEmptyString,
   action: PullRequestStackAction,
   branch: Schema.optional(TrimmedNonEmptyString),

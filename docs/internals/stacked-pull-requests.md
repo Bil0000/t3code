@@ -1,6 +1,4 @@
-# Stacked Pull Requests Design
-
-**Status:** Approved
+# Stacked Pull Requests
 
 ## Goal
 
@@ -20,7 +18,7 @@ A stack wraps the current pull request experience. It does not replace it.
 The Pull Requests page and right panel continue to show one selected pull request. A small stack bar above the existing detail panel shows:
 
 - Current position, such as `Step 3 of 5`.
-- Stack health, such as `4 ready` or `2 later steps need refresh`.
+- Stack state, such as `4 open` or `2 later steps need refresh`.
 - A popover with every step in order and the base branch at the bottom.
 - A merge action whose label states its exact scope, such as `Merge through step 3`.
 
@@ -31,13 +29,14 @@ Selecting another step changes the selected pull request. Existing detail action
 - Draft, ready, close, and reopen.
 - Ask, explain, fix findings, resolve conflicts, and checkout.
 
-Closing or changing an earlier step must explain that later steps can become blocked. A stack mutation never silently changes another pull request.
+Closing, updating, or merging only an earlier step explains that later steps may need refresh.
+Actions that update the full stack say so before they run.
 
 ## Main flows
 
 ### Start a stack
 
-`Start stack` adopts the current non-default branch or creates a named first step from the default branch. The existing commit control remains the only commit UI.
+`Start stack` adopts the current non-default branch. The existing commit control remains the only commit UI.
 
 ### Add a step
 
@@ -49,15 +48,17 @@ Closing or changing an earlier step must explain that later steps can become blo
 
 ### Refresh a stack
 
-`Refresh stack` synchronizes the stack with its base. A conflict names the stopped step and offers its existing PR-to-thread handoff. T3 must not report success when GitHub reports a diverged stack without changing it.
+`Refresh stack` synchronizes the stack with its base. The CLI error stays visible when a
+conflict needs manual work. Existing pull request agent actions remain available. T3 does not
+report success when GitHub reports a diverged stack without changing it.
 
 ### Review a stack
 
-The current pull request remains the review unit. The stack bar provides previous and next navigation. After a review is submitted, `Review next step` selects the next unreviewed pull request.
+The current pull request remains the review unit. The stack bar provides previous and next navigation. After a review is submitted, `Review next step` selects the next open pull request.
 
 ### Merge a stack
 
-The normal single-PR merge button becomes `Merge through this step` for a stacked pull request. Confirmation lists every included pull request. GitHub performs the merge. T3 reports direct merge, queued, or failed state without promising atomic queue landing.
+The normal single-PR merge button becomes `Merge through step N` for a stacked pull request. Confirmation lists every included pull request. GitHub performs the merge. T3 reports direct merge, queued, or failed state without promising atomic queue landing.
 
 ### Unstack
 
@@ -67,7 +68,8 @@ The normal single-PR merge button becomes `Merge through this step` for a stacke
 
 GitHub's official `gh stack` extension owns local stack metadata and Git history operations. GitHub's Stacks REST API owns remote stack membership. T3 owns typed contracts, access control, progress state, presentation, and agent handoff.
 
-The first implementation is GitHub-only. Other source-control providers return unsupported. No provider registry is added until a second provider has a real stack implementation.
+The first implementation is GitHub-only. Clients hide stack actions for other source-control
+providers. No provider registry is added until a second provider has a real stack implementation.
 
 ### Contracts
 
@@ -77,7 +79,7 @@ A new `pullRequestStack.ts` module defines:
 - Current local stack and ordered local steps.
 - Availability and not-in-stack states.
 - Inputs and results for start, add, submit, sync, merge, and unstack.
-- A typed stack error with operation, working directory, and safe detail.
+- A typed stack error with operation, working directory, and command detail.
 
 Existing `GitStackedAction` remains unchanged because it represents one commit/push/create-PR workflow, not stacked pull requests.
 
@@ -85,23 +87,25 @@ Existing `GitStackedAction` remains unchanged because it represents one commit/p
 
 One concrete GitHub stack service uses existing process and GitHub CLI runners.
 
-- `gh api repos/{owner}/{repo}/stacks` reads remote stacks once per project.
+- `gh api repos/{owner}/{repo}/stacks --hostname <host>` reads remote stacks once per project,
+  including GitHub Enterprise hosts.
 - `gh stack view --json` reads the current local stack.
 - `gh stack init`, `add`, `submit --auto`, `sync`, `merge --yes`, and `unstack` perform mutations.
 - Exit code `2` from `view --json` means the branch is not in a stack. Other non-zero exits remain errors.
-- Every mutation refreshes stack data before returning.
+- Local mutations refresh current stack data before returning. Merge returns the CLI status, then
+  the client refreshes pull request details.
 
 RPC authorization follows existing rules: reads need project read access; mutations need operate access.
 
 ### Shared client state
 
-Client-runtime owns per-project remote stack state and per-working-directory local stack state. Web and mobile use the same action state. Actions are serialized per repository so two devices cannot mutate one stack at the same time.
+Client-runtime owns per-project remote stack state and per-working-directory local stack state. Web and mobile use the same action state.
 
 ### Web
 
 - Git actions add start, next, share, refresh, and unstack without changing normal commit/push actions.
 - Branch toolbar shows `Step x of y` only for a current stack.
-- Pull request rows show stack number and position. Members remain ordinary selectable rows.
+- Pull request rows show stack position. Members remain ordinary selectable rows.
 - Pull request detail adds the stack bar and popover above existing content.
 - Existing detail tabs and actions remain unchanged and scoped to the selected step.
 - Command palette exposes view stack, next step, share, and refresh when valid.
@@ -124,9 +128,9 @@ One step maps to one existing PR thread/worktree handoff. Agent actions always n
 - Missing `gh stack`: show install command; keep normal PR flow usable.
 - GitHub stacks unavailable: explain repository support; do not fall back to fake stacks.
 - Not in a stack: return normal empty state, not an error toast.
-- Rebase conflict: name the branch and offer agent handoff plus continue or abort.
-- Diverged local and remote stacks: stop and ask user which source is correct.
-- Partial push: show affected branch and keep retry available.
+- Sync conflict: show the CLI detail and keep existing pull request agent actions available.
+- Diverged local and remote stacks: stop and explain that no changes were made.
+- Partial submit: show the CLI detail and keep the submit action available for retry.
 - Merge failure: show GitHub's safe message; no pull request is reported merged without fresh state.
 
 ## Performance and accessibility
@@ -137,7 +141,3 @@ One step maps to one existing PR thread/worktree handoff. Agent actions always n
 - Status always includes text or an icon label, never color alone.
 - Keyboard focus, screen-reader names, and current-step state are required.
 - Mobile controls keep a 44-by-44-pixel minimum target.
-
-## Delivery
-
-Work starts from current upstream `main` on `feat/stacked-pull-requests`. Changes ship as small thematic commits. A draft pull request targets `main` after focused tests, lint, typechecks, and a clean-code review pass.

@@ -28,7 +28,8 @@ import {
   buildPullRequestTimeline,
   describePullRequestState,
   findPullRequestStack,
-  countPullRequestsMergedThrough,
+  nextOpenPullRequestStackStep,
+  pullRequestsMergedThrough,
 } from "./pullRequestDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
@@ -85,10 +86,20 @@ describe("pull request stack selection", () => {
     expect(findPullRequestStack([stack], 99)).toBeNull();
   });
 
-  it("counts only open pull requests at or below the selected step", () => {
-    expect(countPullRequestsMergedThrough(stack, 12)).toBe(2);
-    expect(countPullRequestsMergedThrough(stack, 11)).toBe(1);
-    expect(countPullRequestsMergedThrough(stack, 10)).toBe(0);
+  it("returns each open pull request merged through the selected step", () => {
+    expect(pullRequestsMergedThrough(stack, 12).map((step) => step.pullRequestNumber)).toEqual([
+      11, 12,
+    ]);
+    expect(pullRequestsMergedThrough(stack, 11).map((step) => step.pullRequestNumber)).toEqual([
+      11,
+    ]);
+    expect(pullRequestsMergedThrough(stack, 10)).toEqual([]);
+  });
+
+  it("finds the next open step", () => {
+    expect(nextOpenPullRequestStackStep(stack, 10)?.pullRequestNumber).toBe(11);
+    expect(nextOpenPullRequestStackStep(stack, 11)?.pullRequestNumber).toBe(12);
+    expect(nextOpenPullRequestStackStep(stack, 12)).toBeNull();
   });
 
   it("gives agents the current step and its nearest neighbors", () => {

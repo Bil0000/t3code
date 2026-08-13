@@ -12,7 +12,7 @@ import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 const GitHubRemoteStackPullRequest = Schema.Struct({
   number: PositiveInt,
-  state: Schema.String,
+  state: Schema.Literals(["open", "closed"]),
   draft: Schema.Boolean,
   merged_at: Schema.optional(Schema.NullOr(Schema.String)),
   head: Schema.Struct({
@@ -33,7 +33,7 @@ const GitHubRemoteStack = Schema.Struct({
 const GitHubLocalStackPullRequest = Schema.Struct({
   number: PositiveInt,
   url: Schema.String,
-  state: Schema.String,
+  state: Schema.Literals(["OPEN", "MERGED", "QUEUED"]),
 });
 
 const GitHubLocalStack = Schema.Struct({
@@ -57,21 +57,21 @@ const decodeRemoteStacks = decodeJsonResult(Schema.Array(GitHubRemoteStack));
 const decodeLocalStack = decodeJsonResult(GitHubLocalStack);
 
 function remoteStepState(
-  state: string,
+  state: Schema.Schema.Type<typeof GitHubRemoteStackPullRequest>["state"],
   mergedAt: string | null | undefined,
 ): PullRequestStackStepState {
   if (mergedAt?.trim()) return "merged";
-  return state.trim().toLowerCase() === "closed" ? "closed" : "open";
+  return state === "closed" ? "closed" : "open";
 }
 
 function localStepState(input: {
-  readonly state: string;
+  readonly state: Schema.Schema.Type<typeof GitHubLocalStackPullRequest>["state"];
   readonly isMerged: boolean;
   readonly isQueued: boolean;
 }): PullRequestStackStepState {
-  if (input.isMerged || input.state.trim().toUpperCase() === "MERGED") return "merged";
-  if (input.isQueued || input.state.trim().toUpperCase() === "QUEUED") return "queued";
-  return input.state.trim().toUpperCase() === "CLOSED" ? "closed" : "open";
+  if (input.isMerged || input.state === "MERGED") return "merged";
+  if (input.isQueued || input.state === "QUEUED") return "queued";
+  return "open";
 }
 
 function normalizeRemoteStack(

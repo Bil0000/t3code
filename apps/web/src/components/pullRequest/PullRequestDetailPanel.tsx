@@ -102,10 +102,11 @@ import {
   buildFixFindingsHandoff,
   buildPullRequestStackHandoffContext,
   buildResolveConflictsPrompt,
-  countPullRequestsMergedThrough,
   findPullRequestStack,
   handoffPrompt,
   handoffReviewComments,
+  nextOpenPullRequestStackStep,
+  pullRequestsMergedThrough,
   pullRequestActionNeedsHostRefresh,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
@@ -508,6 +509,9 @@ export function PullRequestDetailPanel({
     () => findPullRequestStack(stackQuery.data?.stacks ?? [], reference.number),
     [reference.number, stackQuery.data?.stacks],
   );
+  const currentStackStep = stack?.steps.find((step) => step.pullRequestNumber === reference.number);
+  const stackMergeSteps = stack ? pullRequestsMergedThrough(stack, reference.number) : [];
+  const nextReviewStep = stack ? nextOpenPullRequestStackStep(stack, reference.number) : null;
   const detail = useMemo(
     () =>
       coreDetail === null
@@ -652,7 +656,16 @@ export function PullRequestDetailPanel({
       });
       return;
     }
-    toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
+    toastManager.add({
+      type: "success",
+      title: ACTION_SUCCESS_LABELS[action],
+      ...(action === "update-branch" &&
+      currentStackStep &&
+      stack &&
+      currentStackStep.position < stack.steps.length
+        ? { description: "Later stack steps may need refresh." }
+        : {}),
+    });
     // A branch update moves the head commit, which leaves the diff atom pointed at a comparison
     // that no longer exists — the same staleness the manual refresh button fixes, so it goes
     // through that path rather than a second one. Every other action here only changes metadata;
@@ -1449,11 +1462,11 @@ export function PullRequestDetailPanel({
                   onClick={() => setConfirmAction(stack ? "merge-stack" : "merge")}
                 >
                   {stackMergePending
-                    ? "Merging stack..."
+                    ? `Merging through step ${currentStackStep?.position ?? ""}...`
                     : pendingAction === "merge"
                       ? "Merging..."
-                      : stack
-                        ? "Merge stack"
+                      : currentStackStep
+                        ? `Merge through step ${currentStackStep.position}`
                         : "Merge"}
                 </Button>
               ) : null}
@@ -1923,6 +1936,12 @@ export function PullRequestDetailPanel({
                     fixFindingLabel={handoffLabels.fixFinding}
                     onFixFinding={startFixFinding}
                     onRefresh={refreshDetail}
+                    {...(nextReviewStep && onNavigatePullRequest
+                      ? {
+                          onReviewNextStep: () =>
+                            onNavigatePullRequest(nextReviewStep.pullRequestNumber),
+                        }
+                      : {})}
                     refreshToken={refreshToken}
                   />
                 </Suspense>
@@ -1940,7 +1959,7 @@ export function PullRequestDetailPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>
               {confirmAction === "merge-stack"
-                ? "Merge pull request stack?"
+                ? `Merge through step ${currentStackStep?.position ?? ""}?`
                 : confirmAction === "merge"
                   ? "Merge pull request?"
                   : confirmAction === "enable-auto-merge"
@@ -1949,15 +1968,15 @@ export function PullRequestDetailPanel({
             </AlertDialogTitle>
             <AlertDialogDescription>
               {confirmAction === "merge-stack" && stack
-                ? `This merges ${countPullRequestsMergedThrough(stack, reference.number)} open pull requests, through #${reference.number}, from the bottom up.`
+                ? `This merges ${stackMergeSteps.map((step) => `#${step.pullRequestNumber} ${step.branch}`).join(", ")}, from the bottom up.`
                 : confirmAction === "merge"
-                  ? `This merges #${reference.number} using ${selectedMergeMethod}.`
+                  ? `This merges #${reference.number} using ${selectedMergeMethod}.${currentStackStep && stack && currentStackStep.position < stack.steps.length ? " Later steps may need refresh." : ""}`
                   : confirmAction === "enable-auto-merge"
                     ? // The host merges this as soon as it considers the pull request ready, which
                       // may be immediately — there is no telling from here whether anything is
                       // still outstanding.
                       `This merges #${reference.number} using ${selectedMergeMethod} as soon as the host considers it ready, which may be immediately.`
-                    : `This closes #${reference.number} without merging it.`}
+                    : `This closes #${reference.number} without merging it.${currentStackStep && stack && currentStackStep.position < stack.steps.length ? " Later steps may need refresh." : ""}`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -1979,7 +1998,7 @@ export function PullRequestDetailPanel({
               }}
             >
               {confirmAction === "merge-stack"
-                ? "Merge stack"
+                ? `Merge through step ${currentStackStep?.position ?? ""}`
                 : confirmAction === "merge"
                   ? "Merge"
                   : confirmAction === "enable-auto-merge"

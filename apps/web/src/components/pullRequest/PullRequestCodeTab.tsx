@@ -174,6 +174,7 @@ export function PullRequestCodeTab({
   onFixFinding,
   onAskAboutSelection,
   onRefresh,
+  onReviewNextStep,
   refreshToken = 0,
 }: {
   environmentId: EnvironmentId;
@@ -189,6 +190,7 @@ export function PullRequestCodeTab({
   /** Absent where a selection has no agent to go to, which takes the Ask button off the box. */
   onAskAboutSelection?: (input: PullRequestAskSelectionInput) => void;
   onRefresh: () => void;
+  onReviewNextStep?: () => void;
   /** Bumped by the panel's refresh button: drop the accumulated pages and re-read the diff. */
   refreshToken?: number;
 }) {
@@ -914,6 +916,7 @@ export function PullRequestCodeTab({
               environmentId={environmentId}
               reference={reference}
               verdicts={review.verdicts}
+              {...(onReviewNextStep ? { onReviewNextStep } : {})}
               onSubmitted={() => {
                 onRefresh();
                 setReviewOpen(false);

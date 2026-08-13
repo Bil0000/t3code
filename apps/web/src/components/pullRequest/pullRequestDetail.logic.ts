@@ -9,6 +9,7 @@ import type {
   PullRequestReaction,
   PullRequestReviewThread,
   PullRequestState,
+  PullRequestStackStep,
   PullRequestStackSummary,
   PullRequestUpdateMethod,
 } from "@t3tools/contracts";
@@ -26,14 +27,24 @@ export function findPullRequestStack(
   );
 }
 
-export function countPullRequestsMergedThrough(
+export function pullRequestsMergedThrough(
   stack: PullRequestStackSummary,
   pullRequestNumber: number,
-): number {
+): ReadonlyArray<PullRequestStackStep> {
   const selected = stack.steps.find((step) => step.pullRequestNumber === pullRequestNumber);
-  if (selected === undefined) return 0;
-  return stack.steps.filter((step) => step.position <= selected.position && step.state === "open")
-    .length;
+  if (selected === undefined) return [];
+  return stack.steps.filter((step) => step.position <= selected.position && step.state === "open");
+}
+
+export function nextOpenPullRequestStackStep(
+  stack: PullRequestStackSummary,
+  pullRequestNumber: number,
+): PullRequestStackStep | null {
+  const selected = stack.steps.find((step) => step.pullRequestNumber === pullRequestNumber);
+  if (selected === undefined) return null;
+  return (
+    stack.steps.find((step) => step.position > selected.position && step.state === "open") ?? null
+  );
 }
 
 export function buildPullRequestStackHandoffContext(

@@ -5,6 +5,7 @@ import { EnvironmentProject, EnvironmentThreadShell } from "@t3tools/client-runt
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import {
   type GitActionRequestInput,
+  prepareGitActionForStackSubmit,
   shouldSubmitStackAfterGitAction,
   type VcsActionOperation,
   type VcsRef,
@@ -56,6 +57,7 @@ export function useSelectedThreadGitActions() {
   const pullRequestStack = useEnvironmentQuery(
     selectedThread !== null &&
       selectedThreadCwd !== null &&
+      selectedThreadProject?.repositoryIdentity?.provider === "github" &&
       serverConfig?.environment.capabilities.pullRequestStacks === true
       ? pullRequestEnvironment.stackCurrent({
           environmentId: selectedThread.environmentId,
@@ -63,7 +65,12 @@ export function useSelectedThreadGitActions() {
         })
       : null,
   );
-  const currentStack = pullRequestStack.data?.stack ?? null;
+  const queriedStack = pullRequestStack.data?.stack ?? null;
+  const selectedBranch = selectedThread?.branch ?? null;
+  const currentStack =
+    queriedStack && (selectedBranch === null || queriedStack.currentBranch === selectedBranch)
+      ? queriedStack
+      : null;
   const runPullRequestStackAction = useAtomCommand(pullRequestEnvironment.runStackAction, {
     reportFailure: false,
   });
@@ -217,10 +224,11 @@ export function useSelectedThreadGitActions() {
         }
       }
       branchState.refresh();
+      pullRequestStack.refresh();
       await refreshSelectedThreadGitStatus({ quiet: true, cwd: input.cwd });
       return AsyncResult.success(undefined);
     },
-    [branchState, refreshSelectedThreadGitStatus, updateThreadGitContext],
+    [branchState, pullRequestStack.refresh, refreshSelectedThreadGitStatus, updateThreadGitContext],
   );
 
   const onCheckoutSelectedThreadBranch = useCallback(
@@ -354,9 +362,13 @@ export function useSelectedThreadGitActions() {
         "run_change_request",
         "Running source control action",
         async ({ thread, cwd }) => {
+          const submittedStack =
+            currentStack !== null &&
+            !input.featureBranch &&
+            shouldSubmitStackAfterGitAction(input.action);
           const result = await runStackedAction({
             actionId,
-            action: input.action,
+            action: submittedStack ? prepareGitActionForStackSubmit(input.action) : input.action,
             ...(input.commitMessage ? { commitMessage: input.commitMessage } : {}),
             ...(input.featureBranch ? { featureBranch: input.featureBranch } : {}),
             ...(input.filePaths?.length ? { filePaths: [...input.filePaths] } : {}),
@@ -365,16 +377,11 @@ export function useSelectedThreadGitActions() {
             return result;
           }
 
-          const submittedStack =
-            currentStack !== null &&
-            !input.featureBranch &&
-            shouldSubmitStackAfterGitAction(input.action);
           let stackSubmitError: string | null = null;
           if (submittedStack) {
             const stackResult = await runPullRequestStackAction({
               environmentId: thread.environmentId,
               input: {
-                actionId: uuidv4(),
                 cwd,
                 action: "submit",
               },
@@ -402,7 +409,7 @@ export function useSelectedThreadGitActions() {
                     ? "Branches pushed. Pull requests updated."
                     : result.value.toast.description,
                   prUrl:
-                    result.value.toast.cta.kind === "open_pr"
+                    !submittedStack && result.value.toast.cta.kind === "open_pr"
                       ? result.value.toast.cta.url
                       : undefined,
                 },
@@ -449,7 +456,6 @@ export function useSelectedThreadGitActions() {
           const result = await runPullRequestStackAction({
             environmentId: thread.environmentId,
             input: {
-              actionId: uuidv4(),
               cwd,
               action,
               ...(branch === undefined ? {} : { branch }),

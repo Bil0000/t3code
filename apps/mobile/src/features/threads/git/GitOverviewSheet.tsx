@@ -4,7 +4,7 @@ import {
   getGitActionDisabledReason,
   requiresDefaultBranchConfirmation,
 } from "@t3tools/client-runtime/state/vcs";
-import { EnvironmentId, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId, type PullRequestLocalStackStep } from "@t3tools/contracts";
 import {
   CommonActions,
   StackActions,
@@ -33,6 +33,15 @@ import { resolveGitOverviewReviewNavigationAction } from "./git-overview-navigat
 import { MetaCard, SheetListRow, menuItemIconName, statusSummary } from "./gitSheetComponents";
 
 const HEADER_SCROLL_EDGE_EFFECTS = nativeHeaderScrollEdgeEffects(Platform.OS, Platform.Version);
+
+function stackStepSubtitle(step: PullRequestLocalStackStep, total: number): string {
+  return [
+    `Step ${step.position} of ${total}`,
+    step.isCurrent ? "Current" : "Switch to this step",
+    ...(step.needsRebase ? ["Needs refresh"] : []),
+    ...(step.pullRequest ? [`PR #${step.pullRequest.number}`] : []),
+  ].join(" · ");
+}
 
 type GitOverviewSheetProps = StaticScreenProps<{
   readonly environmentId: string;
@@ -76,7 +85,12 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
   const hasPrimaryRemote = gitStatus.data?.hasPrimaryRemote ?? false;
   const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
   const isGitHub = gitStatus.data?.sourceControlProvider?.kind === "github";
-  const currentStack = gitState.pullRequestStack.data?.stack ?? null;
+  const queriedStack = gitState.pullRequestStack.data?.stack ?? null;
+  const currentBranch = gitStatus.data?.refName ?? selectedThread?.branch ?? null;
+  const currentStack =
+    queriedStack && (currentBranch === null || queriedStack.currentBranch === currentBranch)
+      ? queriedStack
+      : null;
   const currentStackStep = currentStack?.steps.find((step) => step.isCurrent);
   const headerStatus = currentStackStep
     ? `${currentStatusSummary} · Stack ${currentStackStep.position}/${currentStack?.steps.length}`
@@ -115,6 +129,23 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
       Alert.alert("Unable to open PR", "The pull request could not be opened.");
     }
   }, [gitStatus.data]);
+
+  const openStackStep = useCallback(
+    async (step: PullRequestLocalStackStep) => {
+      if (!step.isCurrent) {
+        await gitActions.onCheckoutSelectedThreadBranch(step.branch);
+        return;
+      }
+      if (!step.pullRequest) {
+        Alert.alert("No pull request", "Share this stack to create or update its pull requests.");
+        return;
+      }
+      if (!(await tryOpenExternalUrl(step.pullRequest.url, "pull-request"))) {
+        Alert.alert("Unable to open PR", "The pull request could not be opened.");
+      }
+    },
+    [gitActions],
+  );
 
   const runActionWithPrompt = useCallback(
     async (input: GitActionRequestInput) => {
@@ -321,6 +352,19 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
         >
           {currentStack ? (
             <>
+              {currentStack.steps.toReversed().map((step, index) => (
+                <View key={step.branch}>
+                  {index > 0 ? <View className="ml-12 h-px bg-border" /> : null}
+                  <SheetListRow
+                    icon="arrow.branch"
+                    title={step.branch}
+                    subtitle={stackStepSubtitle(step, currentStack.steps.length)}
+                    disabled={busy}
+                    onPress={() => void openStackStep(step)}
+                  />
+                </View>
+              ))}
+              <View className="ml-12 h-px bg-border" />
               <SheetListRow
                 icon="arrow.up.circle"
                 title="Submit stack"

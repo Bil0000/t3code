@@ -24,6 +24,7 @@ const COMMAND_DETAIL_MAX_LENGTH = 1_000;
 
 interface StackWorkingDirectoryInput {
   readonly cwd: string;
+  readonly host?: string;
 }
 
 interface StackMergeInput extends StackWorkingDirectoryInput {
@@ -169,7 +170,11 @@ export const make = Effect.gen(function* () {
     const output = yield* run(
       operation,
       input.cwd,
-      ["api", "repos/{owner}/{repo}/stacks"],
+      [
+        "api",
+        "repos/{owner}/{repo}/stacks",
+        ...(input.host === undefined ? [] : ["--hostname", input.host]),
+      ],
       READ_TIMEOUT_MS,
     );
     if (output.exitCode !== 0) {

@@ -1,4 +1,5 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { useAtomValue } from "@effect/atom-react";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
@@ -7,12 +8,17 @@ import {
   FolderGitIcon,
   FolderIcon,
   HistoryIcon,
+  LayersIcon,
   MonitorIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 
 import { useComposerDraftStore, type DraftId } from "../composerDraftStore";
 import { useProject, useThread, useThreadShellsForProjectRefs } from "../state/entities";
+import { pullRequestEnvironment } from "../state/pullRequests";
+import { useEnvironmentQuery } from "../state/query";
+import { serverEnvironment } from "../state/server";
 import { useIsMobile } from "../hooks/useMediaQuery";
 import {
   type EnvMode,
@@ -407,6 +413,26 @@ export const BranchToolbar = memo(function BranchToolbar({
   const activeProject = useProject(activeProjectRef);
   const hasActiveThread = serverThread !== null || draftThread !== null;
   const activeWorktreePath = serverThread?.worktreePath ?? draftThread?.worktreePath ?? null;
+  const serverConfig = useAtomValue(serverEnvironment.configValueAtom(environmentId));
+  const stackQuery = useEnvironmentQuery(
+    showGitControls &&
+      activeProject?.repositoryIdentity?.provider === "github" &&
+      serverConfig?.environment.capabilities.pullRequestStacks === true
+      ? pullRequestEnvironment.stackCurrent({
+          environmentId,
+          input: { cwd: activeWorktreePath ?? activeProject.workspaceRoot },
+        })
+      : null,
+  );
+  const activeBranch =
+    activeThreadBranchOverride ?? serverThread?.branch ?? draftThread?.branch ?? null;
+  const queriedStack = stackQuery.data?.stack ?? null;
+  const currentStack =
+    queriedStack && (activeBranch === null || queriedStack.currentBranch === activeBranch)
+      ? queriedStack
+      : null;
+  const currentStackStep = currentStack?.steps.find((step) => step.isCurrent);
+  const staleStackSteps = currentStack?.steps.filter((step) => step.needsRebase).length ?? 0;
   const effectiveEnvMode =
     effectiveEnvModeOverride ??
     resolveEffectiveEnvMode({
@@ -517,6 +543,24 @@ export const BranchToolbar = memo(function BranchToolbar({
           ) : null}
         </div>
       )}
+
+      {showGitControls ? (
+        currentStack && currentStackStep ? (
+          <span
+            className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-border/70 bg-muted/35 px-2 text-xs font-medium text-muted-foreground"
+            aria-label={`Stack step ${currentStackStep.position} of ${currentStack.steps.length}${staleStackSteps > 0 ? `. ${staleStackSteps} steps need refresh` : ""}`}
+            title={`Stack step ${currentStackStep.position} of ${currentStack.steps.length}${staleStackSteps > 0 ? ` · ${staleStackSteps} need refresh` : ""}`}
+          >
+            <LayersIcon aria-hidden className="size-3.5 text-emerald-500" />
+            <span className="tabular-nums">
+              {currentStackStep.position}/{currentStack.steps.length}
+            </span>
+            {staleStackSteps > 0 ? (
+              <TriangleAlertIcon aria-hidden className="size-3.5 text-warning" />
+            ) : null}
+          </span>
+        ) : null
+      ) : null}
 
       {showGitControls ? (
         <BranchToolbarBranchSelector

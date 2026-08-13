@@ -10,7 +10,10 @@ import {
   type ChangeRequestTerminology,
 } from "../sourceControlPresentation";
 
-export { shouldSubmitStackAfterGitAction } from "@t3tools/client-runtime/state/vcs";
+export {
+  prepareGitActionForStackSubmit,
+  shouldSubmitStackAfterGitAction,
+} from "@t3tools/client-runtime/state/vcs";
 
 export type GitActionIconName = "commit" | "push" | "pr";
 
@@ -34,7 +37,9 @@ export interface GitQuickAction {
 }
 
 export function adaptQuickActionForStack(action: GitQuickAction): GitQuickAction {
-  if (action.kind !== "run_action" || action.action === undefined) return action;
+  if (action.kind !== "run_action" || action.action === undefined || action.action === "commit") {
+    return action;
+  }
   return {
     ...action,
     label:

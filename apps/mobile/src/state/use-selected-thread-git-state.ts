@@ -38,6 +38,7 @@ export function useSelectedThreadGitState() {
   const pullRequestStack = useEnvironmentQuery(
     selectedThread !== null &&
       selectedThreadCwd !== null &&
+      selectedThreadProject?.repositoryIdentity?.provider === "github" &&
       serverConfig?.environment.capabilities.pullRequestStacks === true
       ? pullRequestEnvironment.stackCurrent({
           environmentId: selectedThread.environmentId,

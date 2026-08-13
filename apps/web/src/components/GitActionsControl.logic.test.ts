@@ -4,6 +4,7 @@ import {
   buildGitActionProgressStages,
   buildMenuItems,
   adaptQuickActionForStack,
+  prepareGitActionForStackSubmit,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
@@ -24,7 +25,25 @@ describe("stack-aware Git actions", () => {
     );
   });
 
+  it("leaves pull request creation to GitHub Stack", () => {
+    assert.deepEqual(
+      (["commit", "push", "create_pr", "commit_push", "commit_push_pr"] as const).map(
+        prepareGitActionForStackSubmit,
+      ),
+      ["commit", "push", "push", "commit_push", "commit_push"],
+    );
+  });
+
   it("uses one plain-language submit label for stacked branches", () => {
+    assert.deepInclude(
+      adaptQuickActionForStack({
+        label: "Commit",
+        disabled: false,
+        kind: "run_action",
+        action: "commit",
+      }),
+      { label: "Commit" },
+    );
     assert.deepInclude(
       adaptQuickActionForStack({
         label: "Commit & push",

@@ -90,7 +90,7 @@ describe("GitHubPullRequestStackService", () => {
       );
 
       const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
-      const response = yield* stacks.list({ cwd });
+      const response = yield* stacks.list({ cwd, host: "github.example.com" });
 
       assert.strictEqual(response.availability, "available");
       assert.strictEqual(response.stacks[0]?.steps[0]?.pullRequestNumber, 10);
@@ -98,7 +98,7 @@ describe("GitHubPullRequestStackService", () => {
       expect(run).toHaveBeenCalledWith({
         operation: "GitHubPullRequestStackService.list",
         command: "gh",
-        args: ["api", "repos/{owner}/{repo}/stacks"],
+        args: ["api", "repos/{owner}/{repo}/stacks", "--hostname", "github.example.com"],
         cwd,
         allowNonZeroExit: true,
         timeoutMs: 30_000,
@@ -114,7 +114,6 @@ describe("GitHubPullRequestStackService", () => {
 
       const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
       const response = yield* stacks.runAction({
-        actionId: "stack-action-1",
         cwd,
         action: "submit",
       });
@@ -132,7 +131,7 @@ describe("GitHubPullRequestStackService", () => {
     }).pipe(Effect.provide(layer)),
   );
 
-  it.effect("does not call a diverged sync successful", () =>
+  it.effect("does not treat a diverged sync as successful", () =>
     Effect.gen(function* () {
       run.mockReturnValueOnce(
         Effect.succeed(
@@ -144,9 +143,7 @@ describe("GitHubPullRequestStackService", () => {
       );
 
       const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
-      const error = yield* stacks
-        .runAction({ actionId: "stack-action-1", cwd, action: "sync" })
-        .pipe(Effect.flip);
+      const error = yield* stacks.runAction({ cwd, action: "sync" }).pipe(Effect.flip);
 
       assert.strictEqual(error._tag, "PullRequestStackError");
       assert.match(error.detail, /diverged/i);

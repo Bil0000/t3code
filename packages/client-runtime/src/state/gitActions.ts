@@ -48,6 +48,12 @@ export function shouldSubmitStackAfterGitAction(action: GitStackedAction): boole
   return action !== "commit";
 }
 
+export function prepareGitActionForStackSubmit(action: GitStackedAction): GitStackedAction {
+  if (action === "create_pr") return "push";
+  if (action === "commit_push_pr") return "commit_push";
+  return action;
+}
+
 export function buildGitActionProgressStages(input: {
   action: GitStackedAction;
   hasCustomCommitMessage: boolean;

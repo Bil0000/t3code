@@ -1035,7 +1035,7 @@ const makeWsRpcLayer = (
           .refreshStatus(cwd)
           .pipe(Effect.ignoreCause({ log: true }), Effect.forkDetach, Effect.asVoid);
 
-      const resolveStackProjectCwd = (projectId: ProjectId) =>
+      const resolveStackProject = (projectId: ProjectId) =>
         projectionSnapshotQuery.getProjectShellById(projectId).pipe(
           Effect.mapError(
             (cause) =>
@@ -1056,7 +1056,13 @@ const makeWsRpcLayer = (
                     detail: "Project was not found.",
                   }),
                 ),
-              onSome: (project) => Effect.succeed(project.workspaceRoot),
+              onSome: (project) => {
+                const host = project.repositoryIdentity?.canonicalKey.split("/")[0];
+                return Effect.succeed({
+                  cwd: project.workspaceRoot,
+                  ...(host === undefined ? {} : { host }),
+                });
+              },
             }),
           ),
         );
@@ -1746,8 +1752,8 @@ const makeWsRpcLayer = (
         [WS_METHODS.pullRequestStacksList]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestStacksList,
-            resolveStackProjectCwd(input.projectId).pipe(
-              Effect.flatMap((cwd) => pullRequestStacks.list({ cwd })),
+            resolveStackProject(input.projectId).pipe(
+              Effect.flatMap((project) => pullRequestStacks.list(project)),
             ),
             { "rpc.aggregate": "pull-request-stacks" },
           ),
@@ -1764,8 +1770,8 @@ const makeWsRpcLayer = (
         [WS_METHODS.pullRequestStacksMerge]: (input) =>
           observeRpcEffect(
             WS_METHODS.pullRequestStacksMerge,
-            resolveStackProjectCwd(input.projectId).pipe(
-              Effect.flatMap((cwd) => pullRequestStacks.merge({ ...input, cwd })),
+            resolveStackProject(input.projectId).pipe(
+              Effect.flatMap((project) => pullRequestStacks.merge({ ...input, cwd: project.cwd })),
             ),
             { "rpc.aggregate": "pull-request-stacks" },
           ),

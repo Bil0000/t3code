@@ -8,6 +8,10 @@ import {
   PullRequestStackSummary,
 } from "./pullRequestStack.ts";
 
+const decodeStackSummary = Schema.decodeUnknownSync(PullRequestStackSummary);
+const decodeLocalStack = Schema.decodeUnknownSync(PullRequestLocalStack);
+const decodeStackActionInput = Schema.decodeUnknownSync(PullRequestStackActionInput);
+
 const STACK = {
   id: 41,
   number: 7,
@@ -34,7 +38,7 @@ const STACK = {
 
 describe("PullRequestStackSummary", () => {
   it("keeps remote stack steps in bottom-to-top order", () => {
-    const decoded = Schema.decodeUnknownSync(PullRequestStackSummary)(STACK);
+    const decoded = decodeStackSummary(STACK);
 
     expect(decoded.steps.map((step) => step.pullRequestNumber)).toEqual([10, 11]);
   });
@@ -54,7 +58,7 @@ describe("PullRequestStackSummary", () => {
 
 describe("PullRequestLocalStack", () => {
   it("keeps local branch health and the current step", () => {
-    const decoded = Schema.decodeUnknownSync(PullRequestLocalStack)({
+    const decoded = decodeLocalStack({
       trunk: "main",
       currentBranch: "api",
       steps: [
@@ -95,8 +99,7 @@ describe("PullRequestLocalStack", () => {
 describe("PullRequestStackActionInput", () => {
   it("rejects a blank branch name", () => {
     expect(() =>
-      Schema.decodeUnknownSync(PullRequestStackActionInput)({
-        actionId: "stack-action-1",
+      decodeStackActionInput({
         cwd: "/workspace/app",
         action: "add_step",
         branch: "   ",

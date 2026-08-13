@@ -34,6 +34,7 @@ import {
   LayersIcon,
   PlusIcon,
   RefreshCwIcon,
+  TriangleAlertIcon,
   UnlinkIcon,
 } from "lucide-react";
 import { Radio as RadioPrimitive } from "@base-ui/react/radio";
@@ -52,6 +53,7 @@ import {
   requiresDefaultBranchConfirmation,
   resolveDefaultBranchActionDialogCopy,
   resolveLiveThreadBranchUpdate,
+  prepareGitActionForStackSubmit,
   resolveThreadBranchMetadataPatch,
   resolveQuickAction,
   resolveThreadBranchUpdate,
@@ -99,6 +101,7 @@ import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { readLocalApi } from "~/localApi";
 import { getSourceControlPresentation } from "~/sourceControlPresentation";
 import { openPullRequestLink } from "~/lib/openPullRequestLink";
+import { onAddStackStep } from "~/gitStackActionBus";
 
 interface GitActionsControlProps {
   gitCwd: string | null;
@@ -1127,8 +1130,20 @@ export default function GitActionsControl({
         })
       : null,
   );
-  const currentStack = stackQuery.data?.stack ?? null;
+  const queriedStack = stackQuery.data?.stack ?? null;
+  const currentStack = queriedStack?.currentBranch === gitStatus?.refName ? queriedStack : null;
   const currentStackStep = currentStack?.steps.find((step) => step.isCurrent) ?? null;
+  const staleStackSteps = currentStack?.steps.filter((step) => step.needsRebase).length ?? 0;
+  useEffect(
+    () =>
+      onAddStackStep((target) => {
+        if (currentStack && target.environmentId === activeEnvironmentId && target.cwd === gitCwd) {
+          setStackBranch("");
+          setStackDialog("add");
+        }
+      }),
+    [activeEnvironmentId, currentStack, gitCwd],
+  );
   const sourceControlPresentation = useMemo(
     () => getSourceControlPresentation(gitStatus?.sourceControlProvider),
     [gitStatus?.sourceControlProvider],
@@ -1160,6 +1175,10 @@ export default function GitActionsControl({
     !activeServerThread &&
     activeDraftThread?.envMode === "worktree" &&
     activeDraftThread.worktreePath === null;
+
+  useEffect(() => {
+    stackQuery.refresh();
+  }, [gitStatus?.refName, stackQuery.refresh]);
 
   useEffect(() => {
     if (isGitActionRunning || isSelectingWorktreeBase || activeServerThread) {
@@ -1278,7 +1297,6 @@ export default function GitActionsControl({
       const result = await runStackAction({
         environmentId: activeEnvironmentId,
         input: {
-          actionId: randomUUID(),
           cwd: gitCwd,
           action,
           ...(branch === undefined ? {} : { branch }),
@@ -1413,8 +1431,11 @@ export default function GitActionsControl({
       }
       onConfirmed?.();
 
+      const shouldSubmitStack =
+        currentStack !== null && !featureBranch && shouldSubmitStackAfterGitAction(action);
+      const gitAction = shouldSubmitStack ? prepareGitActionForStackSubmit(action) : action;
       const progressStages = buildGitActionProgressStages({
-        action,
+        action: gitAction,
         hasCustomCommitMessage: !!commitMessage?.trim(),
         hasWorkingTreeChanges: !!actionStatus?.hasWorkingTreeChanges,
         featureBranch,
@@ -1515,7 +1536,7 @@ export default function GitActionsControl({
 
       const result = await runImmediateGitAction.run({
         actionId,
-        action,
+        action: gitAction,
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
@@ -1543,8 +1564,6 @@ export default function GitActionsControl({
       }
 
       const actionResult = result.value;
-      const shouldSubmitStack =
-        currentStack !== null && !featureBranch && shouldSubmitStackAfterGitAction(action);
       if (shouldSubmitStack) {
         toastManager.update(resolvedProgressToastId, {
           type: "loading",
@@ -1558,7 +1577,7 @@ export default function GitActionsControl({
           const error = stackResult === null ? null : squashAtomCommandFailure(stackResult);
           toastManager.update(resolvedProgressToastId, {
             type: "error",
-            title: "Commit saved, but stack submit failed",
+            title: "Changes saved, but stack submit failed",
             description:
               error instanceof Error ? error.message : "GitHub could not submit this stack.",
             timeout: 0,
@@ -1577,7 +1596,7 @@ export default function GitActionsControl({
         children: string;
         onClick: () => void;
       } | null = null;
-      if (toastCta.kind === "run_action") {
+      if (!shouldSubmitStack && toastCta.kind === "run_action") {
         toastActionProps = {
           children: toastCta.label,
           onClick: () => {
@@ -1587,7 +1606,7 @@ export default function GitActionsControl({
             });
           },
         };
-      } else if (toastCta.kind === "open_pr") {
+      } else if (!shouldSubmitStack && toastCta.kind === "open_pr") {
         toastActionProps = {
           children: toastCta.label,
           onClick: () => {
@@ -1842,12 +1861,15 @@ export default function GitActionsControl({
           {currentStack && currentStackStep ? (
             <span
               className="inline-flex h-7 items-center gap-1 border border-input bg-muted/35 px-2 text-xs font-medium text-foreground"
-              aria-label={`Stack step ${currentStackStep.position} of ${currentStack.steps.length}`}
+              aria-label={`Stack step ${currentStackStep.position} of ${currentStack.steps.length}${staleStackSteps > 0 ? `. ${staleStackSteps} steps need refresh` : ""}`}
             >
               <LayersIcon aria-hidden className="size-3.5 text-emerald-500" />
               <span className="tabular-nums">
                 {currentStackStep.position}/{currentStack.steps.length}
               </span>
+              {staleStackSteps > 0 ? (
+                <TriangleAlertIcon aria-hidden className="size-3.5 text-warning" />
+              ) : null}
             </span>
           ) : null}
           {quickActionDisabledReason ? (

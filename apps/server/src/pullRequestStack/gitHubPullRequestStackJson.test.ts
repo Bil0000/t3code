@@ -142,4 +142,27 @@ describe("GitHub local stack JSON", () => {
   it("fails closed on malformed command output", () => {
     expect(Result.isFailure(decodeGitHubLocalStackJson("{not-json"))).toBe(true);
   });
+
+  it("fails closed on an unknown pull request state", () => {
+    expect(
+      Result.isFailure(
+        decodeGitHubLocalStackJson(
+          JSON.stringify({
+            trunk: "main",
+            currentBranch: "auth",
+            branches: [
+              {
+                name: "auth",
+                isCurrent: true,
+                isMerged: false,
+                isQueued: false,
+                needsRebase: false,
+                pr: { number: 10, url: "https://github.com/acme/app/pull/10", state: "UNKNOWN" },
+              },
+            ],
+          }),
+        ),
+      ),
+    ).toBe(true);
+  });
 });
