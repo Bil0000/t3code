@@ -36,6 +36,15 @@ export function pullRequestsMergedThrough(
   return stack.steps.filter((step) => step.position <= selected.position && step.state === "open");
 }
 
+export function pullRequestStackMergeCopy(pullRequestCount: number) {
+  const target = pullRequestCount === 1 ? "this PR" : `${pullRequestCount} PRs`;
+  return {
+    action: `Merge ${target}`,
+    pending: `Merging ${target}...`,
+    confirmation: `Merge ${target}?`,
+  };
+}
+
 export function nextOpenPullRequestStackStep(
   stack: PullRequestStackSummary,
   pullRequestNumber: number,

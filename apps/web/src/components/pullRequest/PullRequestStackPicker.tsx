@@ -1,149 +1,208 @@
-import type { PullRequestStackStep, PullRequestStackSummary } from "@t3tools/contracts";
+import type {
+  PullRequestLocalStack,
+  PullRequestStackStepState,
+  PullRequestStackSummary,
+} from "@t3tools/contracts";
 import {
   CheckCircle2Icon,
   ChevronDownIcon,
   CircleDotIcon,
   Clock3Icon,
   GitPullRequestClosedIcon,
-  GitPullRequestDraftIcon,
   LayersIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
-import { useState } from "react";
 
 import { cn } from "~/lib/utils";
 
-import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
-import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
+import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 
-function StepIcon({ step }: { step: PullRequestStackStep }) {
-  const className = "size-3.5 shrink-0";
-  if (step.state === "merged") {
-    return <CheckCircle2Icon aria-label="Merged" className={cn(className, "text-emerald-500")} />;
-  }
-  if (step.state === "queued") {
-    return <Clock3Icon aria-label="Queued" className={cn(className, "text-blue-500")} />;
-  }
-  if (step.state === "closed") {
-    return (
-      <GitPullRequestClosedIcon aria-label="Closed" className={cn(className, "text-red-500")} />
-    );
-  }
-  if (step.draft) {
-    return (
-      <GitPullRequestDraftIcon
-        aria-label="Draft"
-        className={cn(className, "text-muted-foreground")}
-      />
-    );
-  }
-  return <CircleDotIcon aria-label="Open" className={cn(className, "text-emerald-500")} />;
+type PullRequestStackPickerInput =
+  | {
+      readonly kind: "local";
+      readonly repository: string;
+      readonly stack: PullRequestLocalStack;
+    }
+  | {
+      readonly kind: "remote";
+      readonly repository: string;
+      readonly stack: PullRequestStackSummary;
+      readonly pullRequestNumber: number;
+    };
+
+type PickerStepState = PullRequestStackStepState | "unsubmitted";
+
+interface PickerStep {
+  readonly position: number;
+  readonly branch: string;
+  readonly pullRequestNumber: number | null;
+  readonly state: PickerStepState;
+  readonly current: boolean;
+  readonly needsRebase: boolean;
+  readonly detail: string;
 }
 
-export function PullRequestStackPicker({
-  stack,
-  pullRequestNumber,
-  onSelect,
-}: {
-  stack: PullRequestStackSummary;
-  pullRequestNumber: number;
-  onSelect?: (pullRequestNumber: number) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const current = stack.steps.find((step) => step.pullRequestNumber === pullRequestNumber);
-  if (current === undefined) return null;
-  const previous = stack.steps.find((step) => step.position === current.position - 1);
-  const next = stack.steps.find((step) => step.position === current.position + 1);
-  const openCount = stack.steps.filter((step) => step.state === "open").length;
+const STATE_LABELS: Record<PickerStepState, string> = {
+  open: "Open",
+  closed: "Closed",
+  merged: "Merged",
+  queued: "Queued",
+  unsubmitted: "Not submitted",
+};
+
+function stackStepDetail(
+  pullRequestNumber: number | null,
+  state: PickerStepState,
+  repository: string,
+  needsRebase: boolean,
+) {
+  const pullRequest =
+    pullRequestNumber === null
+      ? STATE_LABELS[state]
+      : `#${pullRequestNumber} · ${STATE_LABELS[state]}`;
+  return `${pullRequest} · ${repository}${needsRebase ? " · Needs refresh" : ""}`;
+}
+
+function buildLocalPickerModel(stack: PullRequestLocalStack, repository: string) {
+  const currentPosition = stack.steps.find((step) => step.isCurrent)?.position ?? null;
+  const steps = stack.steps.map((step): PickerStep => {
+    const pullRequestNumber = step.pullRequest?.number ?? null;
+    const state = step.pullRequest?.state ?? "unsubmitted";
+    return {
+      position: step.position,
+      branch: step.branch,
+      pullRequestNumber,
+      state,
+      current: step.isCurrent,
+      needsRebase: step.needsRebase,
+      detail: stackStepDetail(pullRequestNumber, state, repository, step.needsRebase),
+    };
+  });
+  return { baseBranch: stack.trunk, currentPosition, steps };
+}
+
+function buildRemotePickerModel(
+  stack: PullRequestStackSummary,
+  pullRequestNumber: number,
+  repository: string,
+) {
+  const currentPosition =
+    stack.steps.find((step) => step.pullRequestNumber === pullRequestNumber)?.position ?? null;
+  const steps = stack.steps.map(
+    (step): PickerStep => ({
+      position: step.position,
+      branch: step.branch,
+      pullRequestNumber: step.pullRequestNumber,
+      state: step.state,
+      current: step.pullRequestNumber === pullRequestNumber,
+      needsRebase: false,
+      detail: stackStepDetail(step.pullRequestNumber, step.state, repository, false),
+    }),
+  );
+  return { baseBranch: stack.baseBranch, currentPosition, steps };
+}
+
+export function buildPullRequestStackPickerModel(input: PullRequestStackPickerInput) {
+  return input.kind === "local"
+    ? buildLocalPickerModel(input.stack, input.repository)
+    : buildRemotePickerModel(input.stack, input.pullRequestNumber, input.repository);
+}
+
+function StepIcon({ step }: { step: PickerStep }) {
+  const className = "size-3.5 shrink-0";
+  if (step.needsRebase) {
+    return <TriangleAlertIcon aria-hidden className={cn(className, "text-amber-500")} />;
+  }
+  if (step.state === "merged") {
+    return <CheckCircle2Icon aria-hidden className={cn(className, "text-emerald-500")} />;
+  }
+  if (step.state === "queued") {
+    return <Clock3Icon aria-hidden className={cn(className, "text-blue-500")} />;
+  }
+  if (step.state === "closed") {
+    return <GitPullRequestClosedIcon aria-hidden className={cn(className, "text-red-500")} />;
+  }
+  if (step.state === "open") {
+    return <CircleDotIcon aria-hidden className={cn(className, "text-emerald-500")} />;
+  }
+  return <span aria-hidden className={cn(className, "rounded-full border border-border")} />;
+}
+
+type PullRequestStackPickerProps = PullRequestStackPickerInput & {
+  readonly onSelect?: (pullRequestNumber: number) => void;
+};
+
+export function PullRequestStackPicker(props: PullRequestStackPickerProps) {
+  const model = buildPullRequestStackPickerModel(props);
+  if (model.currentPosition === null) return null;
+  const staleCount = model.steps.filter((step) => step.needsRebase).length;
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger
-        className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-border/70 bg-muted/40 px-2 text-xs font-medium text-foreground outline-none transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
-        aria-label={`Open pull request stack. Step ${current.position} of ${stack.steps.length}.`}
+    <Menu>
+      <MenuTrigger
+        render={
+          <Button
+            aria-label={`Open pull request stack. Step ${model.currentPosition} of ${model.steps.length}.`}
+            className="gap-1 px-2"
+            size="xs"
+            variant="outline"
+          />
+        }
       >
         <LayersIcon aria-hidden className="size-3.5 text-emerald-500" />
         <span className="tabular-nums">
-          {current.position}/{stack.steps.length}
+          {model.currentPosition}/{model.steps.length}
         </span>
+        {staleCount > 0 ? (
+          <TriangleAlertIcon aria-hidden className="size-3 text-amber-500" />
+        ) : null}
         <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground" />
-      </PopoverTrigger>
-      <PopoverPopup align="end" side="bottom" className="w-96 max-w-[calc(100vw-1rem)]">
-        <div className="mb-3 flex items-center gap-2">
+      </MenuTrigger>
+      <MenuPopup align="end" className="w-80 max-w-[calc(100vw-1rem)]" side="bottom">
+        <div className="flex items-center gap-2 px-2 py-1.5">
           <LayersIcon aria-hidden className="size-4 text-emerald-500" />
-          <div className="min-w-0 flex-1">
+          <div className="min-w-0">
             <p className="text-sm font-medium">Pull request stack</p>
             <p className="truncate text-xs text-muted-foreground">
-              {openCount} open · {stack.steps.length} steps into {stack.baseBranch}
+              {model.steps.length} steps into {model.baseBranch}
             </p>
           </div>
-          <Badge variant="outline" className="text-[10px]">
-            Stack #{stack.number}
-          </Badge>
         </div>
+        <MenuSeparator />
         <ol className="relative space-y-1 before:absolute before:bottom-4 before:left-[15px] before:top-4 before:w-px before:bg-border">
-          {stack.steps.toReversed().map((step) => {
-            const selected = step.pullRequestNumber === pullRequestNumber;
-            return (
-              <li key={step.pullRequestNumber} className="relative">
-                <button
-                  type="button"
-                  aria-current={selected ? "step" : undefined}
-                  onClick={() => {
-                    setOpen(false);
-                    onSelect?.(step.pullRequestNumber);
-                  }}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                    selected ? "bg-accent" : "hover:bg-accent/60",
-                  )}
-                >
-                  <span className="relative z-10 grid size-4 shrink-0 place-items-center bg-popover">
-                    <StepIcon step={step} />
+          {model.steps.toReversed().map((step) => (
+            <li key={step.position} className="relative">
+              <MenuItem
+                aria-current={step.current ? "step" : undefined}
+                disabled={step.pullRequestNumber === null || props.onSelect === undefined}
+                onClick={() => {
+                  if (step.pullRequestNumber !== null) props.onSelect?.(step.pullRequestNumber);
+                }}
+                className={cn(
+                  "relative flex items-center gap-2 py-2",
+                  step.current && "bg-accent/60",
+                )}
+              >
+                <span className="relative z-10 grid size-4 shrink-0 place-items-center bg-popover">
+                  <StepIcon step={step} />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium">{step.branch}</span>
+                  <span className="block truncate text-xs text-muted-foreground">
+                    {step.detail}
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">{step.branch}</span>
-                  {step.draft ? (
-                    <span className="text-[10px] text-muted-foreground">Draft</span>
-                  ) : null}
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    #{step.pullRequestNumber}
-                  </span>
-                </button>
-              </li>
-            );
-          })}
+                </span>
+              </MenuItem>
+            </li>
+          ))}
         </ol>
-        <div className="mt-2 flex items-center gap-2 border-t border-border/60 pt-2 text-xs text-muted-foreground">
+        <MenuSeparator />
+        <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
           <span className="size-2 rounded-full border border-border bg-background" />
-          <span className="min-w-0 flex-1 truncate">{stack.baseBranch}</span>
-          {onSelect ? (
-            <div className="flex gap-1">
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={!previous}
-                onClick={() => {
-                  setOpen(false);
-                  if (previous) onSelect(previous.pullRequestNumber);
-                }}
-              >
-                Previous
-              </Button>
-              <Button
-                size="xs"
-                variant="ghost"
-                disabled={!next}
-                onClick={() => {
-                  setOpen(false);
-                  if (next) onSelect(next.pullRequestNumber);
-                }}
-              >
-                Next
-              </Button>
-            </div>
-          ) : null}
+          <span className="min-w-0 flex-1 truncate">{model.baseBranch}</span>
         </div>
-      </PopoverPopup>
-    </Popover>
+      </MenuPopup>
+    </Menu>
   );
 }

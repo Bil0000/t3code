@@ -6182,6 +6182,7 @@ function ChatViewContent(props: ChatViewProps) {
             isServerThread={isServerThread}
             changeRequestState={activeThreadPr?.state ?? null}
             activeProjectName={activeProject?.title}
+            activeProjectRepository={threadRepository ?? undefined}
             activeProjectCwd={activeProject?.workspaceRoot ?? null}
             activeProjectFaviconPath={activeProject?.faviconPath ?? null}
             openInCwd={gitCwd}

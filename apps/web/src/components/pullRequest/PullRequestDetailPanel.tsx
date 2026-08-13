@@ -108,6 +108,7 @@ import {
   nextOpenPullRequestStackStep,
   pullRequestsMergedThrough,
   pullRequestActionNeedsHostRefresh,
+  pullRequestStackMergeCopy,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   readableFailure,
@@ -511,6 +512,7 @@ export function PullRequestDetailPanel({
   );
   const currentStackStep = stack?.steps.find((step) => step.pullRequestNumber === reference.number);
   const stackMergeSteps = stack ? pullRequestsMergedThrough(stack, reference.number) : [];
+  const stackMergeCopy = pullRequestStackMergeCopy(stackMergeSteps.length);
   const nextReviewStep = stack ? nextOpenPullRequestStackStep(stack, reference.number) : null;
   const detail = useMemo(
     () =>
@@ -1212,6 +1214,8 @@ export function PullRequestDetailPanel({
             <>
               {stack ? (
                 <PullRequestStackPicker
+                  kind="remote"
+                  repository={reference.repository}
                   stack={stack}
                   pullRequestNumber={reference.number}
                   {...(onNavigatePullRequest === undefined
@@ -1462,11 +1466,11 @@ export function PullRequestDetailPanel({
                   onClick={() => setConfirmAction(stack ? "merge-stack" : "merge")}
                 >
                   {stackMergePending
-                    ? `Merging through step ${currentStackStep?.position ?? ""}...`
+                    ? stackMergeCopy.pending
                     : pendingAction === "merge"
                       ? "Merging..."
-                      : currentStackStep
-                        ? `Merge through step ${currentStackStep.position}`
+                      : stack
+                        ? stackMergeCopy.action
                         : "Merge"}
                 </Button>
               ) : null}
@@ -1959,7 +1963,7 @@ export function PullRequestDetailPanel({
           <AlertDialogHeader>
             <AlertDialogTitle>
               {confirmAction === "merge-stack"
-                ? `Merge through step ${currentStackStep?.position ?? ""}?`
+                ? stackMergeCopy.confirmation
                 : confirmAction === "merge"
                   ? "Merge pull request?"
                   : confirmAction === "enable-auto-merge"
@@ -1998,7 +2002,7 @@ export function PullRequestDetailPanel({
               }}
             >
               {confirmAction === "merge-stack"
-                ? `Merge through step ${currentStackStep?.position ?? ""}`
+                ? stackMergeCopy.action
                 : confirmAction === "merge"
                   ? "Merge"
                   : confirmAction === "enable-auto-merge"

@@ -30,6 +30,7 @@ import {
   findPullRequestStack,
   nextOpenPullRequestStackStep,
   pullRequestsMergedThrough,
+  pullRequestStackMergeCopy,
 } from "./pullRequestDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
@@ -94,6 +95,21 @@ describe("pull request stack selection", () => {
       11,
     ]);
     expect(pullRequestsMergedThrough(stack, 10)).toEqual([]);
+  });
+
+  it("uses PR counts instead of stack step jargon for merge actions", () => {
+    expect([pullRequestStackMergeCopy(1), pullRequestStackMergeCopy(2)]).toEqual([
+      {
+        action: "Merge this PR",
+        pending: "Merging this PR...",
+        confirmation: "Merge this PR?",
+      },
+      {
+        action: "Merge 2 PRs",
+        pending: "Merging 2 PRs...",
+        confirmation: "Merge 2 PRs?",
+      },
+    ]);
   });
 
   it("finds the next open step", () => {
