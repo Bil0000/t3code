@@ -21,7 +21,7 @@ import type {
 
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import {
-  decodeOwnGitLabAwardIdJson,
+  decodeOwnGitLabAwardPageJson,
   gitLabAwardName,
 } from "../sourceControl/gitLabReactionJson.ts";
 import {
@@ -708,6 +708,36 @@ export const make = Effect.gen(function* () {
       : `${issue}/notes/${encodeURIComponent(input.subjectId)}/award_emoji`;
   };
 
+  const ownAwardId = (input: {
+    readonly cwd: string;
+    readonly subject: string;
+    readonly content: IssueReactionContent;
+    readonly viewer: string;
+    readonly page: number;
+  }): Effect.Effect<number | null, GitLabIssueCliError> =>
+    api({
+      cwd: input.cwd,
+      path:
+        input.subject +
+        "?" +
+        query([
+          ["per_page", String(MAX_PAGE_SIZE)],
+          ["page", String(input.page)],
+        ]),
+    }).pipe(
+      Effect.flatMap((listed) => {
+        const decoded = decodeOwnGitLabAwardPageJson(listed.stdout.trim(), input);
+        if (!Result.isSuccess(decoded)) {
+          return Effect.fail(
+            readError({ cwd: input.cwd, operation: "setReaction" })(decoded.failure),
+          );
+        }
+        return decoded.success.id !== null || decoded.success.rawCount < MAX_PAGE_SIZE
+          ? Effect.succeed(decoded.success.id)
+          : ownAwardId({ ...input, page: input.page + 1 });
+      }),
+    );
+
   const awardsPage = (input: {
     readonly cwd: string;
     readonly repository: string;
@@ -881,21 +911,15 @@ export const make = Effect.gen(function* () {
           return;
         }
         const viewer = yield* viewerUsername({ cwd: input.cwd });
-        const listed = yield* api({ cwd: input.cwd, path: subject });
-        const own = decodeOwnGitLabAwardIdJson(listed.stdout.trim(), {
+        const own = yield* ownAwardId({
+          cwd: input.cwd,
+          subject,
           content: input.content,
           viewer,
+          page: 1,
         });
-        if (!Result.isSuccess(own)) {
-          return yield* new GitLabIssueReadError({
-            command: "glab",
-            cwd: input.cwd,
-            operation: "setReaction",
-            cause: own.failure,
-          });
-        }
-        if (own.success === null) return;
-        yield* api({ cwd: input.cwd, path: `${subject}/${own.success}`, method: "DELETE" });
+        if (own === null) return;
+        yield* api({ cwd: input.cwd, path: subject + "/" + own, method: "DELETE" });
       }),
 
     setLabels: (input) =>

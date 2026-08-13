@@ -38,6 +38,16 @@ function awardPage(): string {
   });
 }
 
+function awards(count: number, firstId: number, viewer: string): string {
+  return JSON.stringify(
+    Array.from({ length: count }, (_, index) => ({
+      id: firstId + index,
+      name: "heart",
+      user: { username: viewer },
+    })),
+  );
+}
+
 function issues(count: number, firstNumber: number): string {
   return JSON.stringify(
     Array.from({ length: count }, (_, index) => ({
@@ -765,14 +775,13 @@ layer("GitLabIssueCli.layer", (it) => {
     }),
   );
 
-  it.effect("adds and removes an issue reaction", () =>
+  it.effect("adds and removes an issue reaction after paging its awards", () =>
     Effect.gen(function* () {
       mockedExecute
         .mockReturnValueOnce(Effect.succeed(output("{}")))
         .mockReturnValueOnce(Effect.succeed(output('{"username":"bilal"}')))
-        .mockReturnValueOnce(
-          Effect.succeed(output('[{"id":5,"name":"heart","user":{"username":"bilal"}}]')),
-        )
+        .mockReturnValueOnce(Effect.succeed(output(awards(100, 1, "theo"))))
+        .mockReturnValueOnce(Effect.succeed(output(awards(1, 101, "bilal"))))
         .mockReturnValueOnce(Effect.succeed(output("{}")));
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
       const target = { cwd: "/w", repository: "acme/web", number: 7 };
@@ -781,7 +790,13 @@ layer("GitLabIssueCli.layer", (it) => {
       yield* cli.setReaction({ ...target, subjectId: "42", content: "heart", reacted: false });
 
       expect(pathOfCall(0)).toBe("projects/acme%2Fweb/issues/7/award_emoji?name=heart");
-      expect(pathOfCall(3)).toBe("projects/acme%2Fweb/issues/7/notes/42/award_emoji/5");
+      expect(pathOfCall(2)).toBe(
+        "projects/acme%2Fweb/issues/7/notes/42/award_emoji?per_page=100&page=1",
+      );
+      expect(pathOfCall(3)).toBe(
+        "projects/acme%2Fweb/issues/7/notes/42/award_emoji?per_page=100&page=2",
+      );
+      expect(pathOfCall(4)).toBe("projects/acme%2Fweb/issues/7/notes/42/award_emoji/101");
     }),
   );
 

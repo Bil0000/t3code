@@ -91,10 +91,10 @@ const RawAwardSchema = Schema.Struct({
 const decodeAwardList = decodeJsonResult(Schema.Array(Schema.Unknown));
 const decodeAward = Schema.decodeUnknownExit(RawAwardSchema);
 
-export function decodeOwnGitLabAwardIdJson(
+export function decodeOwnGitLabAwardPageJson(
   raw: string,
   input: { readonly content: IssueReactionContent; readonly viewer: string },
-): Result.Result<number | null, unknown> {
+): Result.Result<{ readonly id: number | null; readonly rawCount: number }, unknown> {
   const decoded = decodeAwardList(raw);
   if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
   const name = gitLabAwardName(input.content);
@@ -103,7 +103,7 @@ export function decodeOwnGitLabAwardIdJson(
     if (!Exit.isSuccess(award)) continue;
     if (trimmed(award.value.name)?.toLowerCase() !== name) continue;
     if (trimmed(award.value.user?.username) !== input.viewer) continue;
-    return Result.succeed(award.value.id);
+    return Result.succeed({ id: award.value.id, rawCount: decoded.success.length });
   }
-  return Result.succeed(null);
+  return Result.succeed({ id: null, rawCount: decoded.success.length });
 }

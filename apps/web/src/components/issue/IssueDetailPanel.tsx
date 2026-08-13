@@ -268,6 +268,7 @@ export function IssueDetailPanel({
             commentCount: activity?.commentCount ?? coreDetail.commentCount,
             commentsTruncated: activity?.commentsTruncated ?? false,
             events: activity?.events ?? [],
+            ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
           },
     [activity, coreDetail],
   );
