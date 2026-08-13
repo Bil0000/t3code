@@ -19,7 +19,7 @@ import {
   type PullRequestReviewVerdict,
   type PullRequestReviewerCandidateList,
   type PullRequestReviewerKind,
-  type PullRequestThreadComment,
+  type PullRequestThreadCommentsResult,
   type PullRequestUpdateMethod,
 } from "@t3tools/contracts";
 
@@ -276,15 +276,6 @@ const DIFF_FILES_PAGE_SIZE = 100;
  */
 const REVIEW_THREAD_PAGES = 10;
 
-/**
- * And pages of one thread's own comments, for the rare thread longer than a single page. A
- * thousand replies under one line is already a conversation nobody finishes reading.
- */
-const REVIEW_THREAD_COMMENT_PAGES = 11;
-
-/** How many over-long threads are finished at once, so a wide conversation is not read serially. */
-const REVIEW_THREAD_CONCURRENCY = 4;
-
 export interface GitHubPullRequestListBatch {
   readonly items: ReadonlyArray<GitHubPullRequestListItem>;
   readonly truncated: boolean;
@@ -441,6 +432,13 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly host: string;
       readonly ids: ReadonlyArray<string>;
     }) => Effect.Effect<ReadonlyMap<string, string>, GitHubPullRequestCliError>;
+
+    readonly getReviewThreadComments: (input: {
+      readonly cwd: string;
+      readonly host: string;
+      readonly threadId: string;
+      readonly cursor: string;
+    }) => Effect.Effect<PullRequestThreadCommentsResult, GitHubPullRequestCliError>;
 
     /** One `gh repo view`, which answers what the repository allows and where the viewer stands. */
     readonly getRepositoryAccess: (input: {
@@ -1476,6 +1474,16 @@ export const make = Effect.gen(function* () {
 
     getPullRequestDiffFileContents,
 
+    getReviewThreadComments: (input) =>
+      graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "getReviewThreadComments",
+        variables: [["-f", `threadId=${input.threadId}`], cursorVariable(input.cursor)],
+        query: REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY,
+        decode: decodeReviewThreadCommentsJson,
+      }),
+
     listReviewThreadComments: (input) =>
       Effect.gen(function* () {
         const { owner, name } = parseRepositorySelector(input.repository);
@@ -1495,25 +1503,6 @@ export const make = Effect.gen(function* () {
             query: REVIEW_THREADS_GRAPHQL_QUERY,
             decode: decodeReviewThreadsJson,
           });
-        const commentPage = (
-          threadId: string,
-          cursor: string,
-        ): Effect.Effect<
-          {
-            readonly comments: ReadonlyArray<PullRequestThreadComment>;
-            readonly nextCursor: string | null;
-          },
-          GitHubPullRequestCliError
-        > =>
-          graphqlRead({
-            cwd: input.cwd,
-            host: input.host,
-            operation: "listReviewThreadComments",
-            variables: [["-f", `threadId=${threadId}`], cursorVariable(cursor)],
-            query: REVIEW_THREAD_COMMENTS_GRAPHQL_QUERY,
-            decode: decodeReviewThreadCommentsJson,
-          });
-
         const entries: GitHubReviewThreadEntry[] = [];
         const avatarsByLogin = new Map<string, string>();
         const commitStats = new Map<
@@ -1578,39 +1567,21 @@ export const make = Effect.gen(function* () {
           dismissalPage += 1;
         }
 
-        // Only the threads GitHub said were unfinished cost a request; the rest arrived whole
-        // with the page they were listed on.
-        const finished = yield* Effect.forEach(
-          entries,
-          (entry) =>
-            Effect.gen(function* () {
-              const comments = [...entry.thread.comments];
-              let commentCursor = entry.nextCommentCursor;
-              let commentPageCount = 0;
-              while (commentCursor !== null && commentPageCount < REVIEW_THREAD_COMMENT_PAGES) {
-                const read = yield* commentPage(entry.thread.id, commentCursor);
-                comments.push(...read.comments);
-                commentCursor = read.nextCursor;
-                commentPageCount += 1;
-              }
-              return {
-                thread: { ...entry.thread, comments },
-                commentCount: entry.commentCount,
-                truncated: commentCursor !== null,
-              };
-            }),
-          { concurrency: REVIEW_THREAD_CONCURRENCY },
-        );
-
-        const reviewThreads = finished.map((entry) => entry.thread);
+        const reviewThreads = entries.map((entry) => ({
+          ...entry.thread,
+          commentCount: entry.commentCount,
+          ...(entry.nextCommentCursor === null
+            ? {}
+            : { nextCommentsCursor: entry.nextCommentCursor }),
+        }));
         return {
           comments: reviewThreadConversation(reviewThreads),
           dismissalsByReviewId,
           reviewThreads,
           // GitHub's own count of each thread, so the number the page shows is the host's even
           // where a bound kept some of the words on GitHub.
-          commentCount: finished.reduce((total, entry) => total + entry.commentCount, 0),
-          truncated: cursor !== null || finished.some((entry) => entry.truncated),
+          commentCount: entries.reduce((total, entry) => total + entry.commentCount, 0),
+          truncated: cursor !== null || entries.some((entry) => entry.nextCommentCursor !== null),
           reactions,
           reactionsById,
           reviewers,

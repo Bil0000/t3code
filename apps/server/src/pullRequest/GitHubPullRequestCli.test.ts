@@ -2146,7 +2146,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
-  it.effect("finishes a thread longer than one page from the thread's own node", () =>
+  it.effect("leaves a long thread paged until the reader asks for more", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(
@@ -2158,55 +2158,43 @@ layer("GitHubPullRequestCli.layer", (it) => {
           ),
         ),
       );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const conversation = yield* cli.listReviewThreadComments({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      expect(conversation.comments.map((comment) => comment.id)).toEqual(["c1"]);
+      expect(conversation.reviewThreads[0]).toMatchObject({
+        commentCount: 3,
+        nextCommentsCursor: "Y3Vyc29yOjI",
+      });
+      assert.isTrue(conversation.truncated);
+    }),
+  );
+
+  it.effect("reads one requested page from a review thread cursor", () =>
+    Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(threadCommentsPage(["c2", "c3"], null, 3))),
       );
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
 
-      const conversation = yield* cli.listReviewThreadComments({
+      const page = yield* cli.getReviewThreadComments({
         cwd: "/w",
-        repository: "acme/web",
         host: "github.com",
-        number: 7,
+        threadId: "PRRT_1",
+        cursor: "Y3Vyc29yOjI",
       });
 
-      expect(callAt(1).args).toContain("threadId=PRRT_1");
-      expect(conversation.comments.map((comment) => comment.id)).toEqual(["c1", "c2", "c3"]);
-      // GitHub's own count, which is what the page shows however much of it was read.
-      assert.strictEqual(conversation.commentCount, 3);
-    }),
-  );
-
-  it.effect("preserves the previous long-thread comment ceiling", () =>
-    Effect.gen(function* () {
-      let page = 0;
-      mockedExecute.mockImplementation(() => {
-        page += 1;
-        const raw =
-          page === 1
-            ? reviewThreadsPage(
-                [
-                  {
-                    ...thread("PRRT_1", "c1"),
-                    comments: threadComments(["c1"], "next", 1_100),
-                  },
-                ],
-                null,
-              )
-            : threadCommentsPage([`c${page}`], page === 12 ? null : "next", 1_100);
-        return Effect.succeed(output(raw));
-      });
-      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
-
-      const conversation = yield* cli.listReviewThreadComments({
-        cwd: "/w",
-        repository: "acme/web",
-        host: "github.com",
-        number: 7,
-      });
-
-      assert.isFalse(conversation.truncated);
-      expect(conversation.comments).toHaveLength(12);
+      expect(callAt(0).args).toContain("threadId=PRRT_1");
+      expect(callAt(0).args).toContain("cursor=Y3Vyc29yOjI");
+      expect(page.comments.map((comment) => comment.id)).toEqual(["c2", "c3"]);
+      expect(page.nextCursor).toBeNull();
     }),
   );
 
