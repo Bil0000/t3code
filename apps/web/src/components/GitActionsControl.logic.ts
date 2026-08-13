@@ -36,6 +36,16 @@ export interface GitQuickAction {
   hint?: string;
 }
 
+export function adaptMenuItemsForStack(
+  items: ReadonlyArray<GitActionMenuItem>,
+): GitActionMenuItem[] {
+  return items.flatMap((item) => {
+    if (item.kind === "open_pr") return [item];
+    if (item.id === "pr") return [];
+    return [item.id === "push" ? { ...item, label: "Push & submit stack" } : item];
+  });
+}
+
 export function adaptQuickActionForStack(action: GitQuickAction): GitQuickAction {
   if (action.kind !== "run_action" || action.action === undefined || action.action === "commit") {
     return action;

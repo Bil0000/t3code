@@ -45,6 +45,7 @@ import { cn } from "~/lib/utils";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
+  adaptMenuItemsForStack,
   adaptQuickActionForStack,
   type GitActionIconName,
   type GitActionMenuItem,
@@ -1133,6 +1134,7 @@ export default function GitActionsControl({
   const queriedStack = stackQuery.data?.stack ?? null;
   const currentStack = queriedStack?.currentBranch === gitStatus?.refName ? queriedStack : null;
   const currentStackStep = currentStack?.steps.find((step) => step.isCurrent) ?? null;
+  const currentStackPullRequestNumber = currentStackStep?.pullRequest?.number ?? null;
   const staleStackSteps = currentStack?.steps.filter((step) => step.needsRebase).length ?? 0;
   useEffect(
     () =>
@@ -1207,23 +1209,10 @@ export default function GitActionsControl({
     return gitStatusForActions?.isDefaultRef ?? false;
   }, [gitStatusForActions?.isDefaultRef]);
 
-  const gitActionMenuItems = useMemo(
-    () =>
-      buildMenuItems(gitStatusForActions, gitControlsBusy, hasPrimaryRemote).map((item) =>
-        currentStack === null || item.kind === "open_pr"
-          ? item
-          : {
-              ...item,
-              label:
-                item.id === "push"
-                  ? "Push & submit stack"
-                  : item.id === "pr"
-                    ? "Submit stack"
-                    : item.label,
-            },
-      ),
-    [currentStack, gitControlsBusy, gitStatusForActions, hasPrimaryRemote],
-  );
+  const gitActionMenuItems = useMemo(() => {
+    const items = buildMenuItems(gitStatusForActions, gitControlsBusy, hasPrimaryRemote);
+    return currentStack === null ? items : adaptMenuItemsForStack(items);
+  }, [currentStack, gitControlsBusy, gitStatusForActions, hasPrimaryRemote]);
   const quickAction = useMemo(() => {
     const action = resolveQuickAction(
       gitStatusForActions,
@@ -1859,9 +1848,18 @@ export default function GitActionsControl({
       ) : (
         <Group aria-label="Git actions" className="shrink-0">
           {currentStack && currentStackStep ? (
-            <span
-              className="inline-flex h-7 items-center gap-1 border border-input bg-muted/35 px-2 text-xs font-medium text-foreground"
-              aria-label={`Stack step ${currentStackStep.position} of ${currentStack.steps.length}${staleStackSteps > 0 ? `. ${staleStackSteps} steps need refresh` : ""}`}
+            <Button
+              aria-label={`View stack, step ${currentStackStep.position} of ${currentStack.steps.length}${staleStackSteps > 0 ? `. ${staleStackSteps} steps need refresh` : ""}`}
+              className="gap-1 px-2"
+              disabled={currentStackPullRequestNumber === null || onOpenPullRequest === undefined}
+              size="xs"
+              title={`View stack · Step ${currentStackStep.position} of ${currentStack.steps.length}`}
+              variant="outline"
+              onClick={
+                currentStackPullRequestNumber !== null && onOpenPullRequest
+                  ? () => onOpenPullRequest(currentStackPullRequestNumber)
+                  : undefined
+              }
             >
               <LayersIcon aria-hidden className="size-3.5 text-emerald-500" />
               <span className="tabular-nums">
@@ -1870,7 +1868,7 @@ export default function GitActionsControl({
               {staleStackSteps > 0 ? (
                 <TriangleAlertIcon aria-hidden className="size-3.5 text-warning" />
               ) : null}
-            </span>
+            </Button>
           ) : null}
           {quickActionDisabledReason ? (
             <Popover>

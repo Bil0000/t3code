@@ -1,9 +1,10 @@
 import type { VcsStatusResult } from "@t3tools/contracts";
 import { assert, describe, it } from "vite-plus/test";
 import {
+  adaptMenuItemsForStack,
+  adaptQuickActionForStack,
   buildGitActionProgressStages,
   buildMenuItems,
-  adaptQuickActionForStack,
   prepareGitActionForStackSubmit,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
@@ -16,6 +17,41 @@ import {
 } from "./GitActionsControl.logic";
 
 describe("stack-aware Git actions", () => {
+  it("keeps one submit action in the stack menu", () => {
+    const items = buildMenuItems(status({ aheadCount: 1 }), false);
+
+    assert.deepEqual(
+      adaptMenuItemsForStack(items).map(({ id, label }) => [id, label]),
+      [
+        ["commit", "Commit"],
+        ["push", "Push & submit stack"],
+      ],
+    );
+  });
+
+  it("keeps the existing pull request action in the stack menu", () => {
+    assert.deepEqual(
+      adaptMenuItemsForStack([
+        {
+          id: "pr",
+          label: "View PR",
+          disabled: false,
+          icon: "pr",
+          kind: "open_pr",
+        },
+      ]),
+      [
+        {
+          id: "pr",
+          label: "View PR",
+          disabled: false,
+          icon: "pr",
+          kind: "open_pr",
+        },
+      ],
+    );
+  });
+
   it("submits the stack after every action that pushes", () => {
     assert.deepEqual(
       (["commit", "push", "create_pr", "commit_push", "commit_push_pr"] as const).map(
