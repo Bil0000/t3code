@@ -578,10 +578,9 @@ function IssuesRouteView() {
   // A grown page is read by the list and nothing else: the baseline always asks for one page, so
   // a host with no cursor to continue from — where "more" means asking for a longer page — would
   // have its extra rows thrown away for the ninety-nine the baseline keeps answering with.
+  const baselineVisible = sentQuery.length === 0 && sentCursors === null && pageSize === PAGE_SIZE;
   const answered =
-    (sentQuery.length === 0 && sentCursors === null && pageSize === PAGE_SIZE
-      ? baselineQuery.data
-      : listQuery.data) ??
+    (baselineVisible ? baselineQuery.data : listQuery.data) ??
     (loaded?.scope === scopeKey && loaded.query === sentQuery ? loaded.data : null);
   // Clearing a search returns to a list that has already been read, so it comes back at once
   // rather than after another round trip: the search was the temporary state, not the list.
@@ -661,7 +660,7 @@ function IssuesRouteView() {
   // merge above bring every row up to date in place.
   const refreshList = () => {
     if (sentCursors === null) {
-      listQuery.refresh();
+      (baselineVisible ? baselineQuery : listQuery).refresh();
       return;
     }
     const loadedCount = ordered?.key === filterKey ? ordered.entries.length : pageSize;
