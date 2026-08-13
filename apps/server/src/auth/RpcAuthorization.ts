@@ -77,6 +77,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.issuesActivity]: AuthOrchestrationReadScope,
   [WS_METHODS.issuesRunAction]: AuthOrchestrationOperateScope,
   [WS_METHODS.issuesComment]: AuthOrchestrationOperateScope,
+  [WS_METHODS.issuesUpdateComment]: AuthOrchestrationOperateScope,
   [WS_METHODS.issuesCreate]: AuthOrchestrationOperateScope,
   [WS_METHODS.issuesUpdate]: AuthOrchestrationOperateScope,
   [WS_METHODS.issuesSetLabels]: AuthOrchestrationOperateScope,

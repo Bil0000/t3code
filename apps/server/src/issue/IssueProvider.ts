@@ -218,6 +218,14 @@ export interface IssueProviderApi {
     input: ProviderRepositoryRef & { readonly number: number; readonly body: string },
   ) => Effect.Effect<void, IssueProviderError>;
 
+  readonly updateComment?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly commentId: string;
+      readonly body: string;
+    },
+  ) => Effect.Effect<void, IssueProviderError>;
+
   /** Only called when `capabilities.create` is true. */
   readonly create: (
     input: ProviderRepositoryRef & {

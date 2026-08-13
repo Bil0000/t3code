@@ -6,6 +6,7 @@ import {
   buildAttachIssueContext,
   buildExplainIssueHandoff,
   buildIssueTimeline,
+  canEditIssueComment,
   buildLinkPullRequestsHandoff,
   buildSolveIssueHandoff,
   describeIssueEvent,
@@ -45,6 +46,31 @@ const TIMELINE_SOURCE: Pick<IssueDetailView, "createdAt" | "author" | "comments"
   comments: [comment()],
   events: [event()],
 };
+
+describe("issue comment editing", () => {
+  const detail = {
+    capabilities: { editComment: true },
+    viewer: "bilal",
+  } as Pick<IssueDetailView, "capabilities" | "viewer">;
+
+  it("allows only the signed-in author on a host that supports comment edits", () => {
+    expect(canEditIssueComment(detail, comment())).toBe(true);
+    expect(
+      canEditIssueComment(detail, comment({ author: { ...AUTHOR, login: "someone-else" } })),
+    ).toBe(false);
+  });
+
+  it("matches host logins without case and refuses missing identity or capability", () => {
+    expect(canEditIssueComment({ ...detail, viewer: "BiLaL" }, comment())).toBe(true);
+    expect(canEditIssueComment({ ...detail, viewer: undefined }, comment())).toBe(false);
+    expect(
+      canEditIssueComment(
+        { ...detail, capabilities: { ...detail.capabilities, editComment: false } },
+        comment(),
+      ),
+    ).toBe(false);
+  });
+});
 
 describe("issue events", () => {
   it("reads as a sentence whether or not the host named a subject", () => {

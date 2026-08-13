@@ -31,6 +31,7 @@ const CAPABILITIES: IssueCapabilities = {
   // definition rather than in the repository, and `az boards` reads none of it.
   issueTemplates: false,
   edit: false,
+  editComment: false,
   // Azure has tags rather than labels, on a different field with different semantics.
   labels: false,
   // One assignee, written as an identity `az boards` resolves but never lists.

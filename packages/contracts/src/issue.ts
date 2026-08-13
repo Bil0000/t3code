@@ -129,6 +129,8 @@ export const IssueCapabilities = Schema.Struct({
   issueTemplates: Schema.Boolean,
   /** The title and body of an existing issue can be rewritten. */
   edit: Schema.Boolean,
+  /** A posted comment can be rewritten by its author. */
+  editComment: Schema.optional(Schema.Boolean),
   labels: Schema.Boolean,
   assignees: Schema.Boolean,
   /** The labels a repository has can be listed, so a picker offers them instead of taking text. */
@@ -288,6 +290,11 @@ export const IssueDetail = Schema.Struct({
   assignees: Schema.Array(SourceControlActor),
   labels: Schema.Array(SourceControlLabel),
   milestone: Schema.NullOr(TrimmedNonEmptyString),
+  /**
+   * Signed-in host account. A comment edit is shown only when this matches its author. Absent
+   * when the host cannot identify the viewer, which offers nothing rather than everything.
+   */
+  viewer: Schema.optional(TrimmedNonEmptyString),
   commentCount: NonNegativeInt,
   linkedPullRequests: Schema.Array(IssueLinkedPullRequest),
 });
@@ -339,6 +346,13 @@ export const IssueCommentInput = Schema.Struct({
   body: CommentBody,
 });
 export type IssueCommentInput = typeof IssueCommentInput.Type;
+
+export const IssueCommentUpdateInput = Schema.Struct({
+  ...IssueRef.fields,
+  commentId: TrimmedNonEmptyString,
+  body: CommentBody,
+});
+export type IssueCommentUpdateInput = typeof IssueCommentUpdateInput.Type;
 
 const IssueTitle = TrimmedNonEmptyString.check(Schema.isMaxLength(1024));
 

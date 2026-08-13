@@ -1,14 +1,21 @@
-import type { IssueDetailView } from "@t3tools/contracts";
-import { CircleDotIcon } from "lucide-react";
+import type { EnvironmentId, IssueComment, IssueDetailView, IssueRef } from "@t3tools/contracts";
+import { CircleDotIcon, PencilIcon } from "lucide-react";
+import { useState } from "react";
 
 import { readLocalApi } from "~/localApi";
+import { issueEnvironment } from "~/state/issues";
+import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { ConversationGroup } from "../sourceControl/ConversationGroup";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
 import { ActorName, IconMarker } from "../sourceControl/TimelineRail";
+import { SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
+import { Button } from "../ui/button";
+import { toastManager } from "../ui/toast";
 import {
   buildIssueTimeline,
+  canEditIssueComment,
   groupIssueTimelineConversations,
   type IssueTimelineEntry,
 } from "./issueDetail.logic";
@@ -37,17 +44,47 @@ function TimelineEvent({ entry }: { entry: IssueTimelineEntry }) {
 }
 
 export function IssueTimelineTab({
+  environmentId,
+  reference,
   detail,
   order,
+  onRefresh,
 }: {
+  environmentId: EnvironmentId;
+  reference: IssueRef;
   detail: IssueDetailView;
   /** The rail is built oldest first, which is how an issue was written and how it reads. */
   order: "newest" | "oldest";
+  onRefresh: () => void;
 }) {
   const entries = buildIssueTimeline(detail);
   const rows = groupIssueTimelineConversations(order === "oldest" ? entries : entries.toReversed());
   const openOnHost = (url: string) => {
     void readLocalApi()?.shell.openExternal(url);
+  };
+  const comments = new Map(detail.comments.map((comment) => [comment.id, comment]));
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const updateComment = useAtomCommand(issueEnvironment.updateComment, { reportFailure: false });
+
+  const editableComment = (entry: IssueTimelineEntry): IssueComment | null => {
+    const comment = comments.get(entry.id);
+    return comment !== undefined && canEditIssueComment(detail, comment) ? comment : null;
+  };
+  const saveComment = async (comment: IssueComment, body: string) => {
+    if (saving) return;
+    setSaving(true);
+    const result = await updateComment({
+      environmentId,
+      input: { ...reference, commentId: comment.id, body },
+    });
+    setSaving(false);
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not save the comment" });
+      return;
+    }
+    setEditingId(null);
+    onRefresh();
   };
 
   return (
@@ -61,11 +98,35 @@ export function IssueTimelineTab({
                 key={`comments:${row.entries[0]?.id ?? "empty"}`}
                 entries={row.entries}
                 onOpen={openOnHost}
-                renderBody={(entry) =>
-                  entry.body === null ? null : (
+                renderActions={(entry) => {
+                  const comment = editableComment(entry);
+                  return comment === null || editingId === entry.id ? null : (
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      className="-mt-1 shrink-0 text-muted-foreground"
+                      aria-label="Edit comment"
+                      onClick={() => setEditingId(entry.id)}
+                    >
+                      <PencilIcon className="size-3" />
+                    </Button>
+                  );
+                }}
+                renderBody={(entry) => {
+                  const comment = editableComment(entry);
+                  return editingId === entry.id && comment !== null ? (
+                    <SourceControlMarkdownEditor
+                      value={comment.body}
+                      cwd={detail.workspaceRoot}
+                      label="Edit comment"
+                      saving={saving}
+                      onSave={(body) => void saveComment(comment, body)}
+                      onCancel={() => setEditingId(null)}
+                    />
+                  ) : entry.body === null ? null : (
                     <HostMarkdown text={entry.body} cwd={detail.workspaceRoot} />
-                  )
-                }
+                  );
+                }}
               />
             ) : (
               <TimelineEvent key={row.entry.id} entry={row.entry} />

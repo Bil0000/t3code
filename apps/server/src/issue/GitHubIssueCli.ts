@@ -26,6 +26,7 @@ import {
   decodeCreatedIssueJson,
   decodeIssueActivityJson,
   decodeIssueCommentsJson,
+  decodeIssueCommentScopeJson,
   decodeIssueDetailJson,
   decodeIssueListJson,
   decodeIssueSearchJson,
@@ -39,6 +40,7 @@ import {
   encodeGraphQlRequestJson,
   issueSearchGraphQlQuery,
   ISSUE_ACTIVITY_GRAPHQL_QUERY,
+  ISSUE_COMMENT_SCOPE_GRAPHQL_QUERY,
   ISSUE_COMMENTS_GRAPHQL_QUERY,
   ISSUE_DETAIL_JSON_FIELDS,
   ISSUE_LIST_JSON_FIELDS,
@@ -48,6 +50,7 @@ import {
   ISSUE_TEMPLATES_GRAPHQL_QUERY,
   ISSUE_TEMPLATE_FORMS_GRAPHQL_QUERY,
   ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY,
+  UPDATE_ISSUE_COMMENT_GRAPHQL_MUTATION,
   type GitHubIssue,
   type GitHubIssueDetail,
   type GitHubIssueSearchBatch as GitHubSearchPage,
@@ -142,11 +145,25 @@ export class GitHubIssueRepositorySelectorError extends Schema.TaggedErrorClass<
   }
 }
 
+export class GitHubIssueCommentScopeError extends Schema.TaggedErrorClass<GitHubIssueCommentScopeError>()(
+  "GitHubIssueCommentScopeError",
+  { command: Schema.Literal("gh"), cwd: Schema.String },
+) {
+  get detail(): string {
+    return "The comment does not belong to the selected issue.";
+  }
+
+  override get message(): string {
+    return `GitHub CLI failed in updateComment: ${this.detail}`;
+  }
+}
+
 export type GitHubIssueCliError =
   | GitHubCli.GitHubCliError
   | GitHubIssueReadError
   | GitHubIssueViewerLoginUnavailableError
   | GitHubIssuesDisabledError
+  | GitHubIssueCommentScopeError
   | GitHubIssueRepositorySelectorError;
 
 /**
@@ -290,6 +307,15 @@ export class GitHubIssueCli extends Context.Service<
       readonly number: number;
       readonly title?: string | undefined;
       readonly body?: string | undefined;
+    }) => Effect.Effect<void, GitHubIssueCliError>;
+
+    readonly updateComment: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly commentId: string;
+      readonly body: string;
     }) => Effect.Effect<void, GitHubIssueCliError>;
 
     readonly setLabels: (input: {
@@ -567,6 +593,43 @@ export const make = Effect.gen(function* () {
             : Effect.fail(readError(input)(decoded.failure));
         }),
       );
+
+  const graphql = (input: {
+    readonly cwd: string;
+    readonly host: string;
+    readonly query: string;
+    readonly variables: Readonly<Record<string, string>>;
+  }) =>
+    github
+      .execute({
+        cwd: input.cwd,
+        args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
+        stdin: encodeGraphQlRequestJson({ query: input.query, variables: input.variables }),
+      })
+      .pipe(Effect.asVoid);
+
+  const commentBelongsToIssue = (input: {
+    readonly cwd: string;
+    readonly repository: string;
+    readonly host: string;
+    readonly number: number;
+    readonly commentId: string;
+  }) => {
+    const { owner, name } = parseRepositorySelector(input.repository);
+    return graphqlRead({
+      cwd: input.cwd,
+      host: input.host,
+      operation: "updateComment",
+      variables: [
+        ["-f", `owner=${owner}`],
+        ["-f", `name=${name}`],
+        ["-F", `number=${input.number}`],
+        ["-f", `commentId=${input.commentId}`],
+      ],
+      query: ISSUE_COMMENT_SCOPE_GRAPHQL_QUERY,
+      decode: decodeIssueCommentScopeJson,
+    });
+  };
 
   /**
    * Every write to an issue is the same REST call, so its body is the only thing that differs.
@@ -1040,6 +1103,20 @@ export const make = Effect.gen(function* () {
           ...(input.title === undefined ? {} : { title: input.title }),
           ...(input.body === undefined ? {} : { body: input.body }),
         },
+      }),
+
+    updateComment: (input): Effect.Effect<void, GitHubIssueCliError> =>
+      Effect.gen(function* () {
+        const belongs = yield* commentBelongsToIssue(input);
+        if (!belongs) {
+          return yield* new GitHubIssueCommentScopeError({ command: "gh", cwd: input.cwd });
+        }
+        yield* graphql({
+          cwd: input.cwd,
+          host: input.host,
+          query: UPDATE_ISSUE_COMMENT_GRAPHQL_MUTATION,
+          variables: { commentId: input.commentId, body: input.body },
+        });
       }),
 
     setLabels: (input) => writeIssue({ ...input, body: { labels: input.labels } }),

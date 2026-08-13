@@ -288,6 +288,27 @@ layer("BitbucketIssueApi.layer", (it) => {
     }),
   );
 
+  it.effect("rewrites an issue comment by its id", () =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response("{}")));
+      const api = yield* BitbucketIssueApi.BitbucketIssueApi;
+
+      yield* api.updateComment({
+        repository: "acme/web",
+        number: 7,
+        commentId: "42",
+        body: "Second thoughts",
+      });
+
+      expect(callAt(0)).toMatchObject({
+        method: "PUT",
+        url: "/repositories/acme/web/issues/7/comments/42",
+      });
+      // @effect-diagnostics-next-line preferSchemaOverJson:off
+      expect(JSON.parse(callAt(0).body ?? "")).toEqual({ content: { raw: "Second thoughts" } });
+    }),
+  );
+
   it.effect("closes an issue by writing its state", () =>
     Effect.gen(function* () {
       mockedRequest.mockReturnValue(Effect.succeed(response("{}")));

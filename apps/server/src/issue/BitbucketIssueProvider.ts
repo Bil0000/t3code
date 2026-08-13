@@ -17,6 +17,7 @@ const CAPABILITIES: IssueCapabilities = {
   // offers nothing to start either from.
   issueTemplates: false,
   edit: true,
+  editComment: true,
   // Bitbucket has no labels on an issue — `kind` and `priority` are enumerations of their own,
   // not a label set, so nothing here is offered in their place.
   labels: false,
@@ -182,6 +183,8 @@ export const make = Effect.gen(function* () {
       api
         .comment({ repository: input.repository, number: input.number, body: input.body })
         .pipe(Effect.mapError(fail("comment"))),
+
+    updateComment: (input) => api.updateComment(input).pipe(Effect.mapError(fail("updateComment"))),
 
     create: (input) =>
       api

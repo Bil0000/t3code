@@ -16,6 +16,7 @@ import {
   type IssueAssigneeCandidateList,
   type IssueAssigneesInput,
   type IssueCommentInput,
+  type IssueCommentUpdateInput,
   type IssueCreateInput,
   type IssueCreateResult,
   type IssueDetail,
@@ -106,6 +107,7 @@ export class IssueService extends Context.Service<
     readonly activity: (input: IssueRef) => Effect.Effect<IssueActivity, IssueError>;
     readonly runAction: (input: IssueActionInput) => Effect.Effect<void, IssueError>;
     readonly comment: (input: IssueCommentInput) => Effect.Effect<void, IssueError>;
+    readonly updateComment: (input: IssueCommentUpdateInput) => Effect.Effect<void, IssueError>;
     readonly create: (input: IssueCreateInput) => Effect.Effect<IssueCreateResult, IssueError>;
     readonly update: (input: IssueUpdateInput) => Effect.Effect<void, IssueError>;
     readonly setLabels: (input: IssueLabelsInput) => Effect.Effect<void, IssueError>;
@@ -907,42 +909,52 @@ export const make = Effect.gen(function* () {
   const detailUncached: IssueService["Service"]["detail"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
-        project.api
-          .getIssue({
-            cwd: project.project.workspaceRoot,
-            repository: project.repository,
-            host: project.host,
-            number: input.number,
-          })
-          .pipe(
-            Effect.mapError(toIssueError("detail")),
-            Effect.map(
-              (issue): IssueDetail => ({
-                provider: project.api.kind,
-                capabilities: project.api.capabilities,
-                viewerPermissions: issue.viewerPermissions,
-                projectId: project.project.id,
-                projectTitle: project.project.title,
-                workspaceRoot: project.project.workspaceRoot,
-                repository: project.repository,
-                number: issue.number,
-                title: issue.title,
-                body: issue.body,
-                url: issue.url,
-                author: issue.author,
-                state: issue.state,
-                stateReason: issue.stateReason,
-                createdAt: issue.createdAt,
-                updatedAt: issue.updatedAt,
-                closedAt: issue.closedAt,
-                assignees: issue.assignees,
-                labels: issue.labels,
-                milestone: issue.milestone,
-                commentCount: issue.commentCount,
-                linkedPullRequests: issue.linkedPullRequests,
-              }),
-            ),
+        Effect.all(
+          [
+            project.api.getIssue({
+              cwd: project.project.workspaceRoot,
+              repository: project.repository,
+              host: project.host,
+              number: input.number,
+            }),
+            project.api.capabilities.editComment === true
+              ? project.api.getViewer({ cwd: project.project.workspaceRoot }).pipe(
+                  Effect.map((viewer): string | undefined => viewer),
+                  Effect.orElseSucceed(() => undefined),
+                )
+              : Effect.void,
+          ],
+          { concurrency: 2 },
+        ).pipe(
+          Effect.mapError(toIssueError("detail")),
+          Effect.map(
+            ([issue, viewer]): IssueDetail => ({
+              provider: project.api.kind,
+              capabilities: project.api.capabilities,
+              viewerPermissions: issue.viewerPermissions,
+              projectId: project.project.id,
+              projectTitle: project.project.title,
+              workspaceRoot: project.project.workspaceRoot,
+              repository: project.repository,
+              number: issue.number,
+              title: issue.title,
+              body: issue.body,
+              url: issue.url,
+              author: issue.author,
+              state: issue.state,
+              stateReason: issue.stateReason,
+              createdAt: issue.createdAt,
+              updatedAt: issue.updatedAt,
+              closedAt: issue.closedAt,
+              assignees: issue.assignees,
+              labels: issue.labels,
+              milestone: issue.milestone,
+              ...(viewer === undefined ? {} : { viewer }),
+              commentCount: issue.commentCount,
+              linkedPullRequests: issue.linkedPullRequests,
+            }),
           ),
+        ),
       ),
     );
 
@@ -1064,6 +1076,37 @@ export const make = Effect.gen(function* () {
               .pipe(Effect.mapError(toIssueError("comment")));
           }),
         );
+      }),
+    );
+
+  const updateComment: IssueService["Service"]["updateComment"] = (input) =>
+    (input.body.trim().length === 0
+      ? Effect.fail(
+          new IssueOperationError({
+            operation: "updateComment",
+            detail: "A comment cannot be empty.",
+          }),
+        )
+      : requireProject(input)
+    ).pipe(
+      Effect.flatMap((project): Effect.Effect<void, IssueError> => {
+        const rewrite = project.api.updateComment;
+        if (project.api.capabilities.editComment !== true || rewrite === undefined) {
+          return Effect.fail(
+            new IssueOperationError({
+              operation: "updateComment",
+              detail: "This host cannot rewrite an issue comment.",
+            }),
+          );
+        }
+        return rewrite({
+          cwd: project.project.workspaceRoot,
+          repository: project.repository,
+          host: project.host,
+          number: input.number,
+          commentId: input.commentId,
+          body: input.body,
+        }).pipe(Effect.mapError(toIssueError("updateComment")));
       }),
     );
 
@@ -1512,6 +1555,7 @@ export const make = Effect.gen(function* () {
     activity,
     runAction: invalidatedByMutation(runAction),
     comment: invalidatedByMutation(comment),
+    updateComment: invalidatedByMutation(updateComment),
     // A new issue belongs on every listing that would hold it, and there is no issue of its own
     // to forget yet.
     create: (input) =>

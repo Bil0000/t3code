@@ -190,6 +190,14 @@ export class GitLabIssueCli extends Context.Service<
       readonly body: string;
     }) => Effect.Effect<void, GitLabIssueCliError>;
 
+    readonly updateComment: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly number: number;
+      readonly commentId: string;
+      readonly body: string;
+    }) => Effect.Effect<void, GitLabIssueCliError>;
+
     readonly setLabels: (input: {
       readonly cwd: string;
       readonly repository: string;
@@ -763,6 +771,14 @@ export const make = Effect.gen(function* () {
         cwd: input.cwd,
         path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes`,
         method: "POST",
+        stdin: JSON.stringify({ body: input.body }),
+      }).pipe(Effect.asVoid),
+
+    updateComment: (input) =>
+      api({
+        cwd: input.cwd,
+        path: `projects/${projectPath(input.repository)}/issues/${input.number}/notes/${encodeURIComponent(input.commentId)}`,
+        method: "PUT",
         stdin: JSON.stringify({ body: input.body }),
       }).pipe(Effect.asVoid),
 

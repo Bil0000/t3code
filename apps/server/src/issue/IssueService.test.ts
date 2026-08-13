@@ -113,6 +113,7 @@ const FULL_CAPABILITIES: IssueCapabilities = {
   create: true,
   issueTemplates: true,
   edit: true,
+  editComment: true,
   labels: true,
   assignees: true,
   listLabelCandidates: true,
@@ -684,6 +685,24 @@ it.effect("carries the change requests a host links to an issue through to the d
   }),
 );
 
+it.effect("carries the signed-in account through to issue detail", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getViewer: () => Effect.succeed("bilal"),
+          getIssue: () => Effect.succeed(issueDetail(7)),
+        }),
+      ],
+    });
+
+    const result = yield* service.detail(REFERENCE);
+
+    assert.strictEqual(result.viewer, "bilal");
+  }),
+);
+
 it.effect("refuses an action the host never claimed it could run", () =>
   Effect.gen(function* () {
     const service = yield* makeService({
@@ -810,6 +829,27 @@ it.effect("refuses a comment written out of spaces before it reaches the host", 
 
     assert.strictEqual(error._tag, "IssueOperationError");
     assert.include(error.message, "A comment cannot be empty.");
+  }),
+);
+
+it.effect("passes a rewritten issue comment through with its id and body", () =>
+  Effect.gen(function* () {
+    let received: { id: string; body: string } | null = null;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          updateComment: (input) => {
+            received = { id: input.commentId, body: input.body };
+            return Effect.void;
+          },
+        }),
+      ],
+    });
+
+    yield* service.updateComment({ ...REFERENCE, commentId: "IC_1", body: "Second thoughts" });
+
+    assert.deepStrictEqual(received, { id: "IC_1", body: "Second thoughts" });
   }),
 );
 

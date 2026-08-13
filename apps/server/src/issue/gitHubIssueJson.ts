@@ -594,6 +594,37 @@ export const ISSUE_COMMENTS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
   }
 }`;
 
+export const ISSUE_COMMENT_SCOPE_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $commentId: ID!) {
+  repository(owner: $owner, name: $name) { issue(number: $number) { id } }
+  node(id: $commentId) { ... on IssueComment { issue { id } } }
+}`;
+
+const RawIssueCommentScopeSchema = Schema.Struct({
+  data: Schema.Struct({
+    repository: Schema.NullOr(
+      Schema.Struct({ issue: Schema.NullOr(Schema.Struct({ id: Schema.String })) }),
+    ),
+    node: Schema.NullOr(
+      Schema.Struct({ issue: Schema.optional(Schema.Struct({ id: Schema.String })) }),
+    ),
+  }),
+});
+
+const decodeIssueCommentScope = decodeJsonResult(RawIssueCommentScopeSchema);
+
+/** A comment id is global, so confirm it hangs off the issue named by the request. */
+export function decodeIssueCommentScopeJson(raw: string): Result.Result<boolean, DecodeFailure> {
+  const decoded = decodeIssueCommentScope(raw);
+  if (!Result.isSuccess(decoded)) return Result.fail(decoded.failure);
+  const expected = decoded.success.data.repository?.issue?.id ?? null;
+  const actual = decoded.success.data.node?.issue?.id ?? null;
+  return Result.succeed(expected !== null && expected === actual);
+}
+
+export const UPDATE_ISSUE_COMMENT_GRAPHQL_MUTATION = `mutation($commentId: ID!, $body: String!) {
+  updateIssueComment(input: { id: $commentId, body: $body }) { issueComment { id } }
+}`;
+
 /**
  * Who this issue may be assigned to, and who it is already assigned to, in one read.
  *

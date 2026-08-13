@@ -20,6 +20,7 @@ const CAPABILITIES: IssueCapabilities = {
   create: true,
   issueTemplates: true,
   edit: true,
+  editComment: true,
   labels: true,
   assignees: true,
   listLabelCandidates: true,
@@ -173,6 +174,8 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(fail("runAction"))),
 
     comment: (input) => cli.commentOnIssue(input).pipe(Effect.mapError(fail("comment"))),
+
+    updateComment: (input) => cli.updateComment(input).pipe(Effect.mapError(fail("updateComment"))),
 
     create: (input) => cli.createIssue(input).pipe(Effect.mapError(fail("create"))),
 

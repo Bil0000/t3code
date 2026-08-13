@@ -5,7 +5,14 @@ import type {
   IssueLinkedPullRequest,
   IssueRef,
 } from "@t3tools/contracts";
-import { LinkIcon, MessageSquareIcon, MilestoneIcon, TagIcon, UsersIcon } from "lucide-react";
+import {
+  LinkIcon,
+  MessageSquareIcon,
+  MilestoneIcon,
+  PencilIcon,
+  TagIcon,
+  UsersIcon,
+} from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -13,6 +20,7 @@ import { issueEnvironment } from "~/state/issues";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
 import { SourceControlActorLabel, SourceControlMetaLine } from "../sourceControl/actorPresentation";
 import { CommentComposer } from "../sourceControl/CommentComposer";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
@@ -25,7 +33,7 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
-import { LINK_PULL_REQUESTS_HANDOFF_KIND } from "./issueDetail.logic";
+import { canEditIssueComment, LINK_PULL_REQUESTS_HANDOFF_KIND } from "./issueDetail.logic";
 import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueLabelChips } from "./issuePresentation";
@@ -175,6 +183,26 @@ export function IssueSummaryTab({
   // An issue reads in the order it was written, so the window reaches backwards from the end.
   const recentComments = detail.comments.slice(Math.max(0, detail.comments.length - shownComments));
   const hiddenCommentCount = detail.comments.length - recentComments.length;
+  const [commentScope, setCommentScope] = useState<{ issue: string; id: string } | null>(null);
+  const [commentSaving, setCommentSaving] = useState(false);
+  const updateComment = useAtomCommand(issueEnvironment.updateComment, { reportFailure: false });
+  const editingCommentId = commentScope?.issue === detail.url ? commentScope.id : null;
+
+  const saveComment = async (commentId: string, body: string) => {
+    if (commentSaving) return;
+    setCommentSaving(true);
+    const result = await updateComment({
+      environmentId,
+      input: { ...reference, commentId, body },
+    });
+    setCommentSaving(false);
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not save the comment" });
+      return;
+    }
+    setCommentScope(null);
+    onRefresh();
+  };
 
   return (
     <div className="h-full overflow-y-auto">
@@ -367,7 +395,7 @@ export function IssueSummaryTab({
                     // Offscreen comments skip style, layout and paint. Bot comments carry pages
                     // of highlighted code, and the conversation is below the description either
                     // way.
-                    className="rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
+                    className="group rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
                   >
                     <SourceControlMetaLine className="min-w-0 text-xs text-muted-foreground">
                       <SourceControlActorLabel
@@ -376,7 +404,36 @@ export function IssueSummaryTab({
                       />
                       <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
                     </SourceControlMetaLine>
-                    <HostMarkdown className="mt-2" text={comment.body} cwd={detail.workspaceRoot} />
+                    {editingCommentId === comment.id ? (
+                      <SourceControlMarkdownEditor
+                        className="mt-2"
+                        value={comment.body}
+                        cwd={detail.workspaceRoot}
+                        label="Edit comment"
+                        saving={commentSaving}
+                        onSave={(body) => void saveComment(comment.id, body)}
+                        onCancel={() => setCommentScope(null)}
+                      />
+                    ) : (
+                      <div className="mt-2 flex items-start gap-1">
+                        <HostMarkdown
+                          className="min-w-0 flex-1"
+                          text={comment.body}
+                          cwd={detail.workspaceRoot}
+                        />
+                        {canEditIssueComment(detail, comment) ? (
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                            aria-label="Edit comment"
+                            onClick={() => setCommentScope({ issue: detail.url, id: comment.id })}
+                          >
+                            <PencilIcon className="size-3" />
+                          </Button>
+                        ) : null}
+                      </div>
+                    )}
                   </article>
                 ))}
               </div>

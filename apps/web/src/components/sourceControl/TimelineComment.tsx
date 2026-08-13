@@ -19,6 +19,7 @@ export function TimelineComment({
   url,
   badge,
   meta,
+  actions,
   body,
   onOpen,
 }: {
@@ -31,6 +32,8 @@ export function TimelineComment({
   badge?: ReactNode;
   /** Further segments for the meta line, after the time. */
   meta?: ReactNode;
+  /** Compact controls beside the host link, such as editing a comment. */
+  actions?: ReactNode;
   body: ReactNode;
   onOpen: (url: string) => void;
 }) {
@@ -50,6 +53,7 @@ export function TimelineComment({
               {meta}
             </SourceControlMetaLine>
           </div>
+          {actions}
           {url === null ? null : (
             <Button
               size="icon-xs"

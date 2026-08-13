@@ -31,6 +31,7 @@ export function ConversationGroup<Entry extends ConversationEntry>({
   onOpen,
   renderBadge,
   renderMeta,
+  renderActions,
   renderBody,
 }: {
   entries: ReadonlyArray<Entry>;
@@ -39,6 +40,7 @@ export function ConversationGroup<Entry extends ConversationEntry>({
   renderBadge?: (entry: Entry) => ReactNode;
   /** Further segments for a comment's meta line — the file a review comment hangs on. */
   renderMeta?: (entry: Entry) => ReactNode;
+  renderActions?: (entry: Entry) => ReactNode;
   renderBody: (entry: Entry) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -92,6 +94,7 @@ export function ConversationGroup<Entry extends ConversationEntry>({
                     onOpen={onOpen}
                     badge={renderBadge?.(entry)}
                     meta={renderMeta?.(entry)}
+                    actions={renderActions?.(entry)}
                     body={renderBody(entry)}
                   />
                 ))}

@@ -1046,6 +1046,35 @@ layer("GitHubIssueCli.layer", (it) => {
     }),
   );
 
+  it.effect("rewrites a comment only after GitHub confirms it belongs to the issue", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify({
+                data: {
+                  repository: { issue: { id: "I_7" } },
+                  node: { issue: { id: "I_7" } },
+                },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+
+      yield* cli.updateComment({ ...target, commentId: "IC_1", body: "Second thoughts" });
+
+      expect(argsOfCall(0)).toContain("graphql");
+      expect(argsOfCall(1)).toContain("graphql");
+      expect(stdinOfCall(1)).toMatchObject({
+        variables: { commentId: "IC_1", body: "Second thoughts" },
+      });
+    }),
+  );
+
   it.effect("writes the whole label and assignee set, and the empty set to clear it", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));

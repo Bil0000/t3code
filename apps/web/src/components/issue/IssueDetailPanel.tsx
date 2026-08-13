@@ -949,7 +949,13 @@ export function IssueDetailPanel({
                     onRetry={activityQuery.refresh}
                   />
                 ) : (
-                  <IssueTimelineTab detail={detail} order={timelineOrder} />
+                  <IssueTimelineTab
+                    environmentId={environmentId}
+                    reference={reference}
+                    detail={detail}
+                    order={timelineOrder}
+                    onRefresh={refreshDetail}
+                  />
                 )}
               </div>
             ) : null}

@@ -19,6 +19,7 @@ const CAPABILITIES: IssueCapabilities = {
   // its templates carry a body for the reader to write over and never a list of questions.
   issueTemplates: true,
   edit: true,
+  editComment: true,
   labels: true,
   assignees: true,
   listLabelCandidates: true,
@@ -142,6 +143,8 @@ export const make = Effect.gen(function* () {
         .pipe(Effect.mapError(fail("runAction"))),
 
     comment: (input) => cli.commentOnIssue(input).pipe(Effect.mapError(fail("comment"))),
+
+    updateComment: (input) => cli.updateComment(input).pipe(Effect.mapError(fail("updateComment"))),
 
     create: (input) =>
       cli

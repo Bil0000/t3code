@@ -22,6 +22,16 @@ export interface IssueTimelineEntry {
   readonly actor: SourceControlActor | null;
 }
 
+export function canEditIssueComment(
+  detail: Pick<IssueDetailView, "capabilities" | "viewer">,
+  comment: Pick<IssueComment, "author">,
+): boolean {
+  if (detail.capabilities.editComment !== true) return false;
+  const viewer = detail.viewer?.trim().toLowerCase();
+  const author = comment.author?.login.trim().toLowerCase();
+  return viewer !== undefined && author !== undefined && viewer === author;
+}
+
 /**
  * Bots keep their bookkeeping in HTML comments, which the markdown renderer drops. A body that is
  * nothing but a marker therefore renders as an empty block, so it is treated as no body at all.

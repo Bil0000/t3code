@@ -718,6 +718,33 @@ layer("GitLabIssueCli.layer", (it) => {
     }),
   );
 
+  it.effect("rewrites an issue comment by its note id", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output("{}")));
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+
+      yield* cli.updateComment({
+        cwd: "/w",
+        repository: "acme/web",
+        number: 7,
+        commentId: "42",
+        body: "Second thoughts",
+      });
+
+      expect(argsOfCall(0)).toEqual([
+        "api",
+        "projects/acme%2Fweb/issues/7/notes/42",
+        "--method",
+        "PUT",
+        "--input",
+        "-",
+        "--header",
+        "Content-Type: application/json",
+      ]);
+      expect(callAt(0).stdin).toBe('{"body":"Second thoughts"}');
+    }),
+  );
+
   it.effect("writes the whole label set, and the empty string to clear it", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("{}")));
