@@ -33,7 +33,12 @@ import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
-import { canEditIssueComment, LINK_PULL_REQUESTS_HANDOFF_KIND } from "./issueDetail.logic";
+import {
+  canEditIssueComment,
+  issueCommentEditId,
+  type IssueCommentEditScope,
+  LINK_PULL_REQUESTS_HANDOFF_KIND,
+} from "./issueDetail.logic";
 import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueLabelChips } from "./issuePresentation";
@@ -184,10 +189,10 @@ export function IssueSummaryTab({
   // An issue reads in the order it was written, so the window reaches backwards from the end.
   const recentComments = detail.comments.slice(Math.max(0, detail.comments.length - shownComments));
   const hiddenCommentCount = detail.comments.length - recentComments.length;
-  const [commentScope, setCommentScope] = useState<{ issue: string; id: string } | null>(null);
+  const [commentScope, setCommentScope] = useState<IssueCommentEditScope | null>(null);
   const [commentSaving, setCommentSaving] = useState(false);
   const updateComment = useAtomCommand(issueEnvironment.updateComment, { reportFailure: false });
-  const editingCommentId = commentScope?.issue === detail.url ? commentScope.id : null;
+  const editingCommentId = issueCommentEditId(commentScope, detail.url);
 
   const saveComment = async (commentId: string, body: string) => {
     if (commentSaving) return;
@@ -272,6 +277,7 @@ export function IssueSummaryTab({
         <div className="group">
           {editing ? (
             <IssueEditor
+              key={detail.url}
               environmentId={environmentId}
               detail={detail}
               onDone={() => onEditingChange(false)}

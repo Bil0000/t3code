@@ -22,6 +22,18 @@ export interface IssueTimelineEntry {
   readonly actor: SourceControlActor | null;
 }
 
+export interface IssueCommentEditScope {
+  readonly issue: string;
+  readonly id: string;
+}
+
+export function issueCommentEditId(
+  scope: IssueCommentEditScope | null,
+  issue: string,
+): string | null {
+  return scope?.issue === issue ? scope.id : null;
+}
+
 export function canEditIssueComment(
   detail: Pick<IssueDetailView, "capabilities" | "viewer">,
   comment: Pick<IssueComment, "author">,

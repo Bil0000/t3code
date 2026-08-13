@@ -17,6 +17,8 @@ import { IssueReactionBar } from "./IssueReactions";
 import {
   buildIssueTimeline,
   canEditIssueComment,
+  issueCommentEditId,
+  type IssueCommentEditScope,
   groupIssueTimelineConversations,
   type IssueTimelineEntry,
 } from "./issueDetail.logic";
@@ -64,7 +66,8 @@ export function IssueTimelineTab({
     void readLocalApi()?.shell.openExternal(url);
   };
   const comments = new Map(detail.comments.map((comment) => [comment.id, comment]));
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingScope, setEditingScope] = useState<IssueCommentEditScope | null>(null);
+  const editingId = issueCommentEditId(editingScope, detail.url);
   const [saving, setSaving] = useState(false);
   const updateComment = useAtomCommand(issueEnvironment.updateComment, { reportFailure: false });
 
@@ -84,7 +87,7 @@ export function IssueTimelineTab({
       toastManager.add({ type: "error", title: "Could not save the comment" });
       return;
     }
-    setEditingId(null);
+    setEditingScope(null);
     onRefresh();
   };
 
@@ -107,7 +110,7 @@ export function IssueTimelineTab({
                       variant="ghost"
                       className="-mt-1 shrink-0 text-muted-foreground"
                       aria-label="Edit comment"
-                      onClick={() => setEditingId(entry.id)}
+                      onClick={() => setEditingScope({ issue: detail.url, id: entry.id })}
                     >
                       <PencilIcon className="size-3" />
                     </Button>
@@ -122,7 +125,7 @@ export function IssueTimelineTab({
                       label="Edit comment"
                       saving={saving}
                       onSave={(body) => void saveComment(comment, body)}
-                      onCancel={() => setEditingId(null)}
+                      onCancel={() => setEditingScope(null)}
                     />
                   ) : entry.body === null ? null : (
                     <div className="group">

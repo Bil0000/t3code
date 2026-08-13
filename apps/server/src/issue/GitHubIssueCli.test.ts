@@ -807,15 +807,16 @@ layer("GitHubIssueCli.layer", (it) => {
   it.effect("stops at GitHub's ceiling rather than offering a slice it cannot answer", () =>
     Effect.gen(function* () {
       const tied = "2026-07-02T00:30:00Z";
-      mockedExecute.mockReturnValue(
-        Effect.succeed(
+      mockedExecute.mockImplementation((input) => {
+        const first = Number(/type: ISSUE, first: (\d+)/.exec(input.stdin ?? "")?.[1]);
+        return Effect.succeed(
           searchPage(
-            Array.from({ length: 100 }, (_, index) => searchItem(index + 1, "acme/web", tied)),
+            Array.from({ length: first }, (_, index) => searchItem(index + 1, "acme/web", tied)),
             true,
             "MORE",
           ),
-        ),
-      );
+        ) as ReturnType<GitHubCli.GitHubCli["Service"]["execute"]>;
+      });
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
 
       const batch = yield* cli.searchIssues({
@@ -830,7 +831,8 @@ layer("GitHubIssueCli.layer", (it) => {
 
       // GitHub answers no search past its thousandth result, so those rows are everything this
       // query has: a continuation could only be answered with them again.
-      assert.strictEqual(mockedExecute.mock.calls.length, 10);
+      assert.strictEqual(mockedExecute.mock.calls.length, 11);
+      expect(callAt(10).stdin).toContain("first: 97");
       assert.isFalse(batch.truncated);
     }),
   );

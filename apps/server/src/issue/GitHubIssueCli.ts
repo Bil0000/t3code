@@ -1005,7 +1005,7 @@ export const make = Effect.gen(function* () {
           // as wide as GitHub allows rather than as narrow as the page.
           const batch: GitHubSearchPage = yield* searchPage(
             cursor,
-            read === 0 ? rows : ISSUE_SEARCH_MAX_ROWS,
+            read === 0 ? rows : Math.min(ISSUE_SEARCH_MAX_RESULTS - read, ISSUE_SEARCH_MAX_ROWS),
           );
           items.push(...batch.items);
           read += batch.rawCount;

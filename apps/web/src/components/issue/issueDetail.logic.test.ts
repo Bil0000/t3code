@@ -12,6 +12,7 @@ import {
   describeIssueEvent,
   groupIssueTimelineConversations,
   issueHandoffReviewComments,
+  issueCommentEditId,
   type IssueHandoffSource,
 } from "./issueDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
@@ -48,6 +49,13 @@ const TIMELINE_SOURCE: Pick<IssueDetailView, "createdAt" | "author" | "comments"
 };
 
 describe("issue comment editing", () => {
+  it("closes an editor when another issue reuses the comment id", () => {
+    const scope = { issue: "https://example.test/issues/7", id: "42" };
+
+    expect(issueCommentEditId(scope, "https://example.test/issues/7")).toBe("42");
+    expect(issueCommentEditId(scope, "https://example.test/issues/8")).toBeNull();
+  });
+
   const detail = {
     capabilities: { editComment: true },
     viewer: "bilal",
