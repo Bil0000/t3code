@@ -59,6 +59,7 @@ import { assignProjectsToEnvironments } from "../components/pullRequest/pullRequ
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
   PullRequestFiltersMenu,
+  pullRequestProjectKey,
   type PullRequestFilterOption,
 } from "../components/pullRequest/PullRequestListFilters";
 import {
@@ -1277,7 +1278,16 @@ function PullRequestsRouteView() {
 
   /** Reported per project rather than as a count, so the reader can see which one it was. */
   const unavailableProjects = useMemo(
-    () => new Map(listErrors.map((error) => [error.projectId, error.message] as const)),
+    () =>
+      new Map(
+        listErrors.map(
+          (error) =>
+            [
+              pullRequestProjectKey({ id: error.projectId, environmentId: error.environmentId }),
+              error.message,
+            ] as const,
+        ),
+      ),
     [listErrors],
   );
 
