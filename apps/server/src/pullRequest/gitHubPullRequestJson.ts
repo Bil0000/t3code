@@ -660,6 +660,10 @@ export function pullRequestSearchGraphQlQuery(rows: number): string {
  * null for the first page and the last page's `endCursor` after that, so a pull request with
  * more threads than one page holds is walked rather than cut off at the first fifty.
  *
+ * Only ten comments ride with each thread. A hundred threads times a hundred comments made
+ * GitHub reserve 10,000 nested rows and charge 104 points; unfinished threads are paged from
+ * their own cursor below.
+ *
  * Reviewers come from here rather than from `gh pr view --json reviewRequests` for two reasons:
  * that field holds only requests still outstanding, so anyone who has already reviewed drops off
  * it, and neither it nor any other `gh` JSON field carries an avatar. A reviewer can be a person
@@ -688,7 +692,7 @@ export const REVIEW_THREADS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
           path
           line
           diffSide
-          comments(first: ${GRAPHQL_PAGE_SIZE}) {
+          comments(first: 10) {
             totalCount
             pageInfo { hasNextPage endCursor }
             nodes { id author { login avatarUrl } body createdAt url ${REACTION_GROUPS_FIELDS} }

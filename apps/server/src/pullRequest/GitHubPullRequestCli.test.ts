@@ -2175,6 +2175,39 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("preserves the previous long-thread comment ceiling", () =>
+    Effect.gen(function* () {
+      let page = 0;
+      mockedExecute.mockImplementation(() => {
+        page += 1;
+        const raw =
+          page === 1
+            ? reviewThreadsPage(
+                [
+                  {
+                    ...thread("PRRT_1", "c1"),
+                    comments: threadComments(["c1"], "next", 1_100),
+                  },
+                ],
+                null,
+              )
+            : threadCommentsPage([`c${page}`], page === 12 ? null : "next", 1_100);
+        return Effect.succeed(output(raw));
+      });
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const conversation = yield* cli.listReviewThreadComments({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+      });
+
+      assert.isFalse(conversation.truncated);
+      expect(conversation.comments).toHaveLength(12);
+    }),
+  );
+
   it.effect(
     "asks for the reader's standing on the repository and on the pull request at once",
     () =>
