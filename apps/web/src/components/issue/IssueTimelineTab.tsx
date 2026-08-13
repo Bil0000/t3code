@@ -99,7 +99,7 @@ export function IssueTimelineTab({
           {rows.map((row) =>
             row.kind === "comments" ? (
               <ConversationGroup
-                key={`comments:${row.entries[0]?.id ?? "empty"}`}
+                key={`comments:${row.key}`}
                 entries={row.entries}
                 onOpen={openOnHost}
                 renderActions={(entry) => {

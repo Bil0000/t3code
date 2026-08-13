@@ -129,7 +129,11 @@ export function buildIssueTimeline(
 
 export type IssueTimelineRow =
   | { readonly kind: "event"; readonly entry: IssueTimelineEntry }
-  | { readonly kind: "comments"; readonly entries: ReadonlyArray<IssueTimelineEntry> };
+  | {
+      readonly kind: "comments";
+      readonly key: string;
+      readonly entries: ReadonlyArray<IssueTimelineEntry>;
+    };
 
 /**
  * Consecutive comments are one conversation section. Labellings, assignments and the close split
@@ -147,9 +151,13 @@ export function groupIssueTimelineConversations(
     }
     const last = rows.at(-1);
     if (last?.kind === "comments") {
-      rows[rows.length - 1] = { kind: "comments", entries: [...last.entries, entry] };
+      rows[rows.length - 1] = {
+        kind: "comments",
+        key: entry.id < last.key ? entry.id : last.key,
+        entries: [...last.entries, entry],
+      };
     } else {
-      rows.push({ kind: "comments", entries: [entry] });
+      rows.push({ kind: "comments", key: entry.id, entries: [entry] });
     }
   }
   return rows;

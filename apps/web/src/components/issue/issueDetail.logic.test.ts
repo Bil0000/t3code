@@ -182,6 +182,24 @@ describe("issue timeline", () => {
       ["event", "closed"],
     ]);
   });
+
+  it("keeps a conversation identity when its display order reverses", () => {
+    const entries = buildIssueTimeline({
+      ...TIMELINE_SOURCE,
+      comments: [
+        comment({ id: "early", createdAt: "2026-07-03T00:00:00Z" }),
+        comment({ id: "late", createdAt: "2026-07-04T00:00:00Z" }),
+      ],
+      events: [],
+    }).filter((entry) => entry.kind === "comment");
+
+    expect(groupIssueTimelineConversations(entries)).toMatchObject([
+      { kind: "comments", key: "early" },
+    ]);
+    expect(groupIssueTimelineConversations(entries.toReversed())).toMatchObject([
+      { kind: "comments", key: "early" },
+    ]);
+  });
 });
 
 describe("issue handoffs", () => {
