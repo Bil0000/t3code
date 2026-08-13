@@ -27,6 +27,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
+import { issueListOrderLabels } from "./issueList.logic";
 
 /** A label name is never empty, so the same trick the hosts use names "every label". */
 const ALL_LABELS_VALUE = "";
@@ -57,6 +58,7 @@ export function IssueSortMenu({
   const chooseSort = (value: string) => {
     if (value !== sort) onSort(value as IssueListSort);
   };
+  const [ascendingLabel, descendingLabel] = issueListOrderLabels(sort);
   return (
     <Menu>
       <MenuTrigger
@@ -103,8 +105,8 @@ export function IssueSortMenu({
           }}
         >
           <MenuGroupLabel>Order</MenuGroupLabel>
-          <MenuRadioItem value="asc">Oldest</MenuRadioItem>
-          <MenuRadioItem value="desc">Newest</MenuRadioItem>
+          <MenuRadioItem value="asc">{ascendingLabel}</MenuRadioItem>
+          <MenuRadioItem value="desc">{descendingLabel}</MenuRadioItem>
         </MenuRadioGroup>
       </MenuPopup>
     </Menu>

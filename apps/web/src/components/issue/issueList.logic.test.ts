@@ -5,6 +5,7 @@ import {
   filterIssuesByInvolvement,
   groupIssuesByInvolvement,
   issueEntryKey,
+  issueListOrderLabels,
   matchesIssueQuery,
   narrowIssuesToFilters,
   partitionIssuesWithPriority,
@@ -42,6 +43,19 @@ function entry(overrides: Partial<IssueListEntry> & Pick<IssueListEntry, "number
     ...overrides,
   } as IssueListEntry;
 }
+
+describe("issue sort order labels", () => {
+  it.each([
+    ["created", "Oldest", "Newest"],
+    ["updated", "Oldest", "Newest"],
+    ["best-match", "Oldest", "Newest"],
+    ["comments", "Ascending", "Descending"],
+    ["reactions", "Ascending", "Descending"],
+    ["reactions-heart", "Ascending", "Descending"],
+  ] as const)("labels %s order as %s then %s", (sort, ascending, descending) => {
+    expect(issueListOrderLabels(sort)).toEqual([ascending, descending]);
+  });
+});
 
 describe("issue involvement filtering", () => {
   const entries = [

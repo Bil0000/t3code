@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 
 import { IssueListEntry, IssueListResult } from "@t3tools/contracts";
-import type { IssueInvolvement, IssueListState } from "@t3tools/contracts";
+import type { IssueInvolvement, IssueListSort, IssueListState } from "@t3tools/contracts";
 
 import { isAuthoredByViewer, normalizeLogin } from "../sourceControl/listHelpers";
 import {
@@ -16,6 +16,14 @@ export interface IssueGroup {
   readonly key: IssueGroupKey;
   readonly label: string;
   readonly entries: ReadonlyArray<IssueListEntry>;
+}
+
+export function issueListOrderLabels(
+  sort: IssueListSort,
+): readonly [ascending: string, descending: string] {
+  return sort === "comments" || sort.startsWith("reactions")
+    ? ["Ascending", "Descending"]
+    : ["Oldest", "Newest"];
 }
 
 /** The signed-in account per host, as the listing reports it. */
