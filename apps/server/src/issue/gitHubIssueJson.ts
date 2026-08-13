@@ -114,6 +114,8 @@ const RawSearchItemSchema = Schema.Struct({
 const RawPageInfoSchema = Schema.Struct({
   hasNextPage: Schema.optional(Schema.Boolean),
   endCursor: Schema.optional(Schema.NullOr(Schema.String)),
+  hasPreviousPage: Schema.optional(Schema.Boolean),
+  startCursor: Schema.optional(Schema.NullOr(Schema.String)),
 });
 
 const RawSearchSchema = Schema.Struct({
@@ -558,8 +560,8 @@ export const ISSUE_VIEWER_PERMISSIONS_GRAPHQL_QUERY = `query($owner: String!, $n
  * timeline at all.
  *
  * The events are the newest hundred: an issue with more state changes than that has been machine
- * driven, and the recent end is the part a reader is looking at. The comments are paged from the
- * start instead, which is the order a conversation is read in.
+ * driven, and the recent end is the part a reader is looking at. Comments start there too; older
+ * pages are read only when the reader asks for them.
  */
 export const ISSUE_ACTIVITY_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $cursor: String) {
   viewer { login }
@@ -567,9 +569,9 @@ export const ISSUE_ACTIVITY_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
     issue(number: $number) {
       author { login avatarUrl }
       ${GITHUB_REACTION_GROUPS_FIELDS}
-      comments(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
+      comments(last: ${GRAPHQL_PAGE_SIZE}, before: $cursor) {
         totalCount
-        pageInfo { hasNextPage endCursor }
+        pageInfo { hasPreviousPage startCursor }
         nodes { id author { login avatarUrl } body createdAt url ${GITHUB_REACTION_GROUPS_FIELDS} }
       }
       timelineItems(last: ${TIMELINE_ITEMS}, itemTypes: [CLOSED_EVENT, REOPENED_EVENT, LABELED_EVENT, UNLABELED_EVENT, ASSIGNED_EVENT, UNASSIGNED_EVENT, RENAMED_TITLE_EVENT, CROSS_REFERENCED_EVENT, MILESTONED_EVENT, LOCKED_EVENT, UNLOCKED_EVENT]) {
@@ -602,9 +604,9 @@ export const ISSUE_COMMENTS_GRAPHQL_QUERY = `query($owner: String!, $name: Strin
   viewer { login }
   repository(owner: $owner, name: $name) {
     issue(number: $number) {
-      comments(first: ${GRAPHQL_PAGE_SIZE}, after: $cursor) {
+      comments(last: ${GRAPHQL_PAGE_SIZE}, before: $cursor) {
         totalCount
-        pageInfo { hasNextPage endCursor }
+        pageInfo { hasPreviousPage startCursor }
         nodes { id author { login avatarUrl } body createdAt url ${GITHUB_REACTION_GROUPS_FIELDS} }
       }
     }
@@ -842,6 +844,13 @@ function nextCursorOf(
   pageInfo: Schema.Schema.Type<typeof RawPageInfoSchema> | null | undefined,
 ): string | null {
   return pageInfo?.hasNextPage === true ? trimmed(pageInfo.endCursor) : null;
+}
+
+/** Where a newest-first connection carries on into older rows. */
+function previousCursorOf(
+  pageInfo: Schema.Schema.Type<typeof RawPageInfoSchema> | null | undefined,
+): string | null {
+  return pageInfo?.hasPreviousPage === true ? trimmed(pageInfo.startCursor) : null;
 }
 
 function toActor(
@@ -1275,7 +1284,7 @@ export function decodeIssueActivityJson(
     author: toActor(issue?.author),
     comments: toComments(issue?.comments, viewer),
     commentCount: Math.max(0, issue?.comments?.totalCount ?? 0),
-    nextCursor: nextCursorOf(issue?.comments?.pageInfo),
+    nextCursor: previousCursorOf(issue?.comments?.pageInfo),
     events,
     reactions: toGitHubReactions(issue?.reactionGroups, viewer),
   });
@@ -1297,7 +1306,7 @@ export function decodeIssueCommentsJson(raw: string): Result.Result<
   const viewer = trimmed(decoded.success.data.viewer?.login);
   return Result.succeed({
     comments: toComments(comments, viewer),
-    nextCursor: nextCursorOf(comments?.pageInfo),
+    nextCursor: previousCursorOf(comments?.pageInfo),
   });
 }
 

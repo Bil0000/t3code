@@ -13,6 +13,7 @@ import {
   groupIssueTimelineConversations,
   issueHandoffReviewComments,
   issueCommentEditId,
+  mergeEarlierIssueComments,
   shouldRefreshIssueActivity,
   type IssueHandoffSource,
 } from "./issueDetail.logic";
@@ -72,6 +73,21 @@ describe("issue activity refresh", () => {
         updatedAt: "2026-08-13T13:01:00Z",
       }),
     ).toBe(false);
+  });
+});
+
+describe("issue comment pages", () => {
+  it("prepends older comments once while keeping host order", () => {
+    expect(
+      mergeEarlierIssueComments(
+        [comment({ id: "c2", body: "updated" }), comment({ id: "c3", body: "third" })],
+        [comment({ id: "c1", body: "first" }), comment({ id: "c2", body: "old" })],
+      ).map(({ id, body }) => [id, body]),
+    ).toEqual([
+      ["c1", "first"],
+      ["c2", "updated"],
+      ["c3", "third"],
+    ]);
   });
 });
 

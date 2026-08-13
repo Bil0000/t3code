@@ -563,7 +563,7 @@ describe("issue activity decoding", () => {
           ],
           comments: {
             totalCount: 250,
-            pageInfo: { hasNextPage: true, endCursor: "Y3Vyc29y" },
+            pageInfo: { hasPreviousPage: true, startCursor: "Y3Vyc29y" },
             nodes: [
               {
                 id: "IC_1",
@@ -610,11 +610,11 @@ describe("issue activity decoding", () => {
   it("carries on from nowhere once GitHub says the conversation is whole", () => {
     const activity = expectSuccess(
       decodeIssueActivityJson(
-        // GitHub sends an `endCursor` on the last page too, so the flag is what decides.
+        // GitHub sends a `startCursor` on the first page too, so the flag is what decides.
         activityJson({
           comments: {
             totalCount: 1,
-            pageInfo: { hasNextPage: false, endCursor: "Y3Vyc29y" },
+            pageInfo: { hasPreviousPage: false, startCursor: "Y3Vyc29y" },
             nodes: [],
           },
         }),
@@ -714,7 +714,7 @@ describe("issue comment page decoding", () => {
               issue: {
                 comments: {
                   totalCount: 250,
-                  pageInfo: { hasNextPage: true, endCursor: "bmV4dA==" },
+                  pageInfo: { hasPreviousPage: true, startCursor: "bmV4dA==" },
                   nodes: [{ id: "IC_2", body: "Still broken.", createdAt: "2026-07-04T00:00:00Z" }],
                 },
               },

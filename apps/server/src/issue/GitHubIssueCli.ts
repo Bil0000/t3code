@@ -177,13 +177,6 @@ export type GitHubIssueCliError =
   | GitHubIssueCommentScopeError
   | GitHubIssueRepositorySelectorError;
 
-/**
- * Pages of the conversation to follow before it is reported as truncated. GitHub serves a hundred
- * comments a page, so this is a thousand remarks — past anything an issue a person is reading
- * holds, and short of walking a machine-written thread forever.
- */
-const COMMENT_PAGES = 10;
-
 /** Where a repository configures the rest of its issue chooser, as GitHub itself spells the path. */
 const TEMPLATE_CONFIG_PATH = ".github/ISSUE_TEMPLATE/config.yml";
 
@@ -212,7 +205,13 @@ export interface GitHubIssueActivity {
   readonly comments: ReadonlyArray<IssueComment>;
   readonly commentCount: number;
   readonly commentsTruncated: boolean;
+  readonly nextCommentsCursor: string | null;
   readonly events: ReadonlyArray<IssueEvent>;
+}
+
+export interface GitHubIssueCommentsPage {
+  readonly comments: ReadonlyArray<IssueComment>;
+  readonly nextCursor: string | null;
 }
 
 export class GitHubIssueCli extends Context.Service<
@@ -279,6 +278,14 @@ export class GitHubIssueCli extends Context.Service<
       readonly host: string;
       readonly number: number;
     }) => Effect.Effect<GitHubIssueActivity, GitHubIssueCliError>;
+
+    readonly getIssueComments: (input: {
+      readonly cwd: string;
+      readonly repository: string;
+      readonly host: string;
+      readonly number: number;
+      readonly cursor: string;
+    }) => Effect.Effect<GitHubIssueCommentsPage, GitHubIssueCliError>;
 
     /** The viewer's standing on its own, for deciding a write without reading the whole issue. */
     readonly getViewerAccess: (input: {
@@ -1081,33 +1088,33 @@ export const make = Effect.gen(function* () {
           query: ISSUE_ACTIVITY_GRAPHQL_QUERY,
           decode: decodeIssueActivityJson,
         });
-        const comments = [...first.comments];
-        let cursor = first.nextCursor;
-        let page = 1;
-        while (cursor !== null && page < COMMENT_PAGES) {
-          const read = yield* graphqlRead({
-            cwd: input.cwd,
-            host: input.host,
-            operation: "getIssueActivity",
-            variables: [...identity, cursorVariable(cursor)],
-            query: ISSUE_COMMENTS_GRAPHQL_QUERY,
-            decode: decodeIssueCommentsJson,
-          });
-          comments.push(...read.comments);
-          cursor = read.nextCursor;
-          page += 1;
-        }
         return {
           author: first.author,
-          comments,
-          // GitHub's own count, so the number the page shows is the host's even where a bound kept
-          // some of the words on GitHub.
-          commentCount: Math.max(first.commentCount, comments.length),
-          commentsTruncated: cursor !== null,
+          comments: first.comments,
+          commentCount: Math.max(first.commentCount, first.comments.length),
+          commentsTruncated: first.nextCursor !== null,
+          nextCommentsCursor: first.nextCursor,
           events: first.events,
           reactions: first.reactions,
         };
       }),
+
+    getIssueComments: (input) => {
+      const { owner, name } = parseRepositorySelector(input.repository);
+      return graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "getIssueComments",
+        variables: [
+          ["-f", `owner=${owner}`],
+          ["-f", `name=${name}`],
+          ["-F", `number=${input.number}`],
+          cursorVariable(input.cursor),
+        ],
+        query: ISSUE_COMMENTS_GRAPHQL_QUERY,
+        decode: decodeIssueCommentsJson,
+      });
+    },
 
     getViewerAccess: (input) => {
       const { owner, name } = parseRepositorySelector(input.repository);

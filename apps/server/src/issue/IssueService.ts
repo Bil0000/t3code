@@ -16,6 +16,8 @@ import {
   type IssueAssigneeCandidateList,
   type IssueAssigneesInput,
   type IssueCommentInput,
+  type IssueCommentsPageInput,
+  type IssueCommentsPageResult,
   type IssueCommentUpdateInput,
   type IssueCreateInput,
   type IssueCreateResult,
@@ -109,6 +111,9 @@ export class IssueService extends Context.Service<
     readonly list: (input: IssueListInput) => Effect.Effect<IssueListResult, IssueError>;
     readonly detail: (input: IssueRef) => Effect.Effect<IssueDetail, IssueError>;
     readonly activity: (input: IssueRef) => Effect.Effect<IssueActivity, IssueError>;
+    readonly commentsPage: (
+      input: IssueCommentsPageInput,
+    ) => Effect.Effect<IssueCommentsPageResult, IssueError>;
     readonly runAction: (input: IssueActionInput) => Effect.Effect<void, IssueError>;
     readonly comment: (input: IssueCommentInput) => Effect.Effect<void, IssueError>;
     readonly updateComment: (input: IssueCommentUpdateInput) => Effect.Effect<void, IssueError>;
@@ -1041,12 +1046,38 @@ export const make = Effect.gen(function* () {
                 comments: activity.comments,
                 commentCount: activity.commentCount,
                 commentsTruncated: activity.commentsTruncated,
+                ...(activity.nextCommentsCursor === undefined
+                  ? {}
+                  : { nextCommentsCursor: activity.nextCommentsCursor }),
                 events: activity.events,
                 ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
               }),
             ),
           ),
       ),
+    );
+
+  const commentsPage: IssueService["Service"]["commentsPage"] = (input) =>
+    requireProject(input).pipe(
+      Effect.flatMap((project): Effect.Effect<IssueCommentsPageResult, IssueError> => {
+        if (project.api.getIssueComments === undefined) {
+          return Effect.fail(
+            new IssueOperationError({
+              operation: "commentsPage",
+              detail: "This host cannot continue an issue conversation.",
+            }),
+          );
+        }
+        return project.api
+          .getIssueComments({
+            cwd: project.project.workspaceRoot,
+            repository: project.repository,
+            host: project.host,
+            number: input.number,
+            cursor: input.cursor,
+          })
+          .pipe(Effect.mapError(toIssueError("commentsPage")));
+      }),
     );
 
   const runAction: IssueService["Service"]["runAction"] = (input) =>
@@ -1649,6 +1680,7 @@ export const make = Effect.gen(function* () {
     detail,
     activity,
     runAction: invalidatedByMutation(runAction),
+    commentsPage,
     comment: invalidatedByMutation(comment),
     updateComment: invalidatedByMutation(updateComment),
     setReaction: invalidatedByMutation(setReaction),

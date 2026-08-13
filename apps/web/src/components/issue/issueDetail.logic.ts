@@ -16,6 +16,14 @@ export function shouldRefreshIssueActivity(
   return previous !== null && previous.key === next.key && previous.updatedAt !== next.updatedAt;
 }
 
+export function mergeEarlierIssueComments(
+  current: ReadonlyArray<IssueComment>,
+  earlier: ReadonlyArray<IssueComment>,
+): ReadonlyArray<IssueComment> {
+  const currentIds = new Set(current.map((comment) => comment.id));
+  return [...earlier.filter((comment) => !currentIds.has(comment.id)), ...current];
+}
+
 export interface IssueTimelineEntry {
   readonly id: string;
   readonly at: string;

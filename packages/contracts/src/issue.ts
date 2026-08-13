@@ -364,11 +364,24 @@ export const IssueActivity = Schema.Struct({
   commentCount: NonNegativeInt,
   /** The read stopped at a bound of its own before the host ran out. */
   commentsTruncated: Schema.Boolean,
+  nextCommentsCursor: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   events: Schema.Array(IssueEvent),
   /** Reactions on the issue description itself. */
   reactions: Schema.optional(Schema.Array(IssueReaction)),
 });
 export type IssueActivity = typeof IssueActivity.Type;
+
+export const IssueCommentsPageInput = Schema.Struct({
+  ...IssueRef.fields,
+  cursor: TrimmedNonEmptyString,
+});
+export type IssueCommentsPageInput = typeof IssueCommentsPageInput.Type;
+
+export const IssueCommentsPageResult = Schema.Struct({
+  comments: Schema.Array(IssueComment),
+  nextCursor: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type IssueCommentsPageResult = typeof IssueCommentsPageResult.Type;
 
 /** The complete detail shape after the independently loaded activity has been applied. */
 export const IssueDetailView = Schema.Struct({

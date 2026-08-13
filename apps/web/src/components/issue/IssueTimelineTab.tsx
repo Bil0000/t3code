@@ -52,6 +52,8 @@ export function IssueTimelineTab({
   detail,
   order,
   onRefresh,
+  onLoadMoreComments,
+  loadingMoreComments,
 }: {
   environmentId: EnvironmentId;
   reference: IssueRef;
@@ -59,6 +61,8 @@ export function IssueTimelineTab({
   /** The rail is built oldest first, which is how an issue was written and how it reads. */
   order: "newest" | "oldest";
   onRefresh: () => void;
+  onLoadMoreComments: () => void;
+  loadingMoreComments: boolean;
 }) {
   const entries = buildIssueTimeline(detail);
   const rows = groupIssueTimelineConversations(order === "oldest" ? entries : entries.toReversed());
@@ -94,6 +98,17 @@ export function IssueTimelineTab({
   return (
     <div className="h-full overflow-y-auto px-4 py-5">
       <div className="mx-auto max-w-3xl">
+        {detail.nextCommentsCursor != null ? (
+          <Button
+            size="sm"
+            variant="outline"
+            className="mb-4 w-full"
+            disabled={loadingMoreComments}
+            onClick={onLoadMoreComments}
+          >
+            {loadingMoreComments ? "Loading..." : "Load older comments"}
+          </Button>
+        ) : null}
         <div className="relative">
           <span aria-hidden className="absolute bottom-5 left-[15px] top-1 w-px bg-border/45" />
           {rows.map((row) =>

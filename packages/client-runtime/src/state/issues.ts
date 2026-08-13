@@ -37,6 +37,12 @@ export function createIssueEnvironmentAtoms<R, E>(
       tag: WS_METHODS.issuesActivity,
       staleTimeMs: 15_000,
     }),
+    commentsPage: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:issues:comments-page",
+      tag: WS_METHODS.issuesCommentsPage,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
     /**
      * Its own query rather than part of the detail: the labels a repository has are only wanted
      * once somebody opens the label picker, so this atom is read then and not before. Kept fresh

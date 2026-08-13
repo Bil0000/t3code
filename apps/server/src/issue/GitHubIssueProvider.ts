@@ -158,6 +158,9 @@ export const make = Effect.gen(function* () {
     getIssueActivity: (input) =>
       cli.getIssueActivity(input).pipe(Effect.mapError(fail("getIssueActivity"))),
 
+    getIssueComments: (input) =>
+      cli.getIssueComments(input).pipe(Effect.mapError(fail("getIssueComments"))),
+
     getViewerPermissions: (input) =>
       cli
         .getViewerAccess(input)

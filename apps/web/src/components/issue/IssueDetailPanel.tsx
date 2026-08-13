@@ -4,6 +4,7 @@ import type {
   EnvironmentId,
   IssueAction,
   IssueCloseReason,
+  IssueComment,
   IssueLinkedPullRequest,
   IssueRef,
   IssueState,
@@ -65,6 +66,7 @@ import {
   buildSolveIssueHandoff,
   issueHandoffReviewComments,
   LINK_PULL_REQUESTS_HANDOFF_KIND,
+  mergeEarlierIssueComments,
   shouldRefreshIssueActivity,
   type IssueHandoff,
   type IssueHandoffSource,
@@ -246,6 +248,13 @@ export function IssueDetailPanel({
   const [actionPending, setActionPending] = useState(false);
   /** Which hand-off is under way, so only the item that was pressed says it is working. */
   const [handoff, setHandoff] = useState<string | null>(null);
+  const [loadedComments, setLoadedComments] = useState<{
+    readonly key: string;
+    readonly comments: ReadonlyArray<IssueComment>;
+    readonly nextCursor: string | null;
+  } | null>(null);
+  const [loadingMoreComments, setLoadingMoreComments] = useState(false);
+  const readCommentsPage = useAtomCommand(issueEnvironment.commentsPage, { reportFailure: false });
 
   const detailQuery = useEnvironmentQuery(
     issueEnvironment.detail({ environmentId, input: reference }),
@@ -257,6 +266,7 @@ export function IssueDetailPanel({
   );
   const coreDetail = detailQuery.data;
   const activity = activityQuery.data;
+  const loadedPage = loadedComments?.key === issueKey ? loadedComments : null;
   const detail = useMemo(
     () =>
       coreDetail === null
@@ -264,15 +274,23 @@ export function IssueDetailPanel({
         : {
             ...coreDetail,
             author: activity?.author ?? coreDetail.author,
-            comments: activity?.comments ?? [],
+            comments: mergeEarlierIssueComments(
+              activity?.comments ?? [],
+              loadedPage?.comments ?? [],
+            ),
             // The host's own count, which the core read already carries: the conversation being
             // unread is not the same as there being nothing in it.
             commentCount: activity?.commentCount ?? coreDetail.commentCount,
-            commentsTruncated: activity?.commentsTruncated ?? false,
+            commentsTruncated:
+              loadedPage === null
+                ? (activity?.commentsTruncated ?? false)
+                : loadedPage.nextCursor !== null,
+            nextCommentsCursor:
+              loadedPage === null ? (activity?.nextCommentsCursor ?? null) : loadedPage.nextCursor,
             events: activity?.events ?? [],
             ...(activity?.reactions === undefined ? {} : { reactions: activity.reactions }),
           },
-    [activity, coreDetail],
+    [activity, coreDetail, loadedPage],
   );
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
@@ -283,6 +301,36 @@ export function IssueDetailPanel({
   const activityRevision = useRef<{ readonly key: string; readonly updatedAt: string } | null>(
     null,
   );
+  const loadMoreComments = useCallback(async () => {
+    const cursor = detail?.nextCommentsCursor;
+    if (cursor == null || loadingMoreComments) return;
+    setLoadingMoreComments(true);
+    const result = await readCommentsPage({
+      environmentId,
+      input: { ...reference, cursor },
+    });
+    setLoadingMoreComments(false);
+    if (result._tag === "Failure") {
+      toastManager.add({ type: "error", title: "Could not load more comments" });
+      return;
+    }
+    setLoadedComments((previous) => {
+      const comments = previous?.key === issueKey ? previous.comments : [];
+      return {
+        key: issueKey,
+        comments: mergeEarlierIssueComments(comments, result.value.comments),
+        nextCursor: result.value.nextCursor,
+      };
+    });
+  }, [
+    detail?.nextCommentsCursor,
+    environmentId,
+    issueKey,
+    loadingMoreComments,
+    readCommentsPage,
+    reference,
+  ]);
+
   useEffect(() => {
     if (!coreDetail) return;
     const next = { key: issueKey, updatedAt: coreDetail.updatedAt };
@@ -926,6 +974,8 @@ export function IssueDetailPanel({
                   environmentId={environmentId}
                   reference={reference}
                   detail={detail}
+                  onLoadMoreComments={() => void loadMoreComments()}
+                  loadingMoreComments={loadingMoreComments}
                   activityPending={activityPending}
                   activityError={activityError}
                   editing={editing}
@@ -965,6 +1015,8 @@ export function IssueDetailPanel({
                     environmentId={environmentId}
                     reference={reference}
                     detail={detail}
+                    onLoadMoreComments={() => void loadMoreComments()}
+                    loadingMoreComments={loadingMoreComments}
                     order={timelineOrder}
                     onRefresh={refreshDetail}
                   />

@@ -95,7 +95,7 @@ function searchPage(nodes: ReadonlyArray<unknown>, hasNextPage = false, endCurso
 }
 
 /** A page of the conversation as the GraphQL reads answer with it, cursor and all. */
-function commentPage(ids: ReadonlyArray<string>, endCursor: string | null, totalCount: number) {
+function commentPage(ids: ReadonlyArray<string>, startCursor: string | null, totalCount: number) {
   return output(
     JSON.stringify({
       data: {
@@ -104,7 +104,7 @@ function commentPage(ids: ReadonlyArray<string>, endCursor: string | null, total
             author: { login: "bilal", avatarUrl: "https://avatars/bilal" },
             comments: {
               totalCount,
-              pageInfo: { hasNextPage: endCursor !== null, endCursor },
+              pageInfo: { hasPreviousPage: startCursor !== null, startCursor },
               nodes: ids.map((id) => ({ id, body: id, createdAt: "2026-07-02T00:00:00Z" })),
             },
             timelineItems: {
@@ -986,22 +986,27 @@ layer("GitHubIssueCli.layer", (it) => {
     }),
   );
 
-  it.effect("walks the rest of a long conversation, and stops at its own bound", () =>
+  it.effect("leaves the rest of a long conversation for an explicit page read", () =>
     Effect.gen(function* () {
-      // A conversation GitHub never answers the end of: the walk has to end itself.
-      mockedExecute.mockReturnValue(Effect.succeed(commentPage(["IC_1"], "Y3Vyc29y", 250)));
+      mockedExecute
+        .mockReturnValueOnce(Effect.succeed(commentPage(["IC_1"], "Y3Vyc29y", 250)))
+        .mockReturnValueOnce(Effect.succeed(commentPage(["IC_2"], null, 250)));
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
 
       const activity = yield* cli.getIssueActivity(target);
 
-      // Ten pages, and the cursor of the page before is what each of them carries.
-      assert.strictEqual(mockedExecute.mock.calls.length, 10);
-      expect(argsOfCall(1)).toContain("cursor=Y3Vyc29y");
-      assert.strictEqual(activity.comments.length, 10);
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      expect(activity.comments.map((comment) => comment.id)).toEqual(["IC_1"]);
+      assert.strictEqual(activity.nextCommentsCursor, "Y3Vyc29y");
       assert.isTrue(activity.commentsTruncated);
-      // GitHub's own count, so the number the page shows is the host's rather than the walk's.
+
+      const page = yield* cli.getIssueComments({ ...target, cursor: "Y3Vyc29y" });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      expect(argsOfCall(1)).toContain("cursor=Y3Vyc29y");
+      expect(page.comments.map((comment) => comment.id)).toEqual(["IC_2"]);
+      assert.isNull(page.nextCursor);
       assert.strictEqual(activity.commentCount, 250);
-      // The history came with the first page and is not read again.
       expect(activity.events.map((event) => event.id)).toEqual(["CE_1"]);
     }),
   );

@@ -155,6 +155,8 @@ export function IssueSummaryTab({
   pendingHandoff,
   onLinkPullRequests,
   onOpenLinkedPullRequest,
+  onLoadMoreComments,
+  loadingMoreComments,
   onRefresh,
 }: {
   environmentId: EnvironmentId;
@@ -181,6 +183,8 @@ export function IssueSummaryTab({
   onLinkPullRequests?: () => void;
   onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
   onRefresh: () => void;
+  onLoadMoreComments: () => void;
+  loadingMoreComments: boolean;
 }) {
   // Keyed by the issue, so opening another one starts at the end of its conversation rather than
   // wherever the last one had been read back to.
@@ -380,16 +384,27 @@ export function IssueSummaryTab({
           />
         ) : (
           <>
-            {detail.commentsTruncated ? (
+            {detail.commentsTruncated && detail.nextCommentsCursor == null ? (
               <p className="mb-2 rounded-md border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-xs">
-                This conversation is longer than this page reads in one go. The most recent{" "}
-                {detail.comments.length} are here; open it on the host to read the rest.
+                Only {detail.comments.length} comments are available here. Open the issue on the
+                host to read the rest.
               </p>
             ) : null}
             {detail.comments.length === 0 ? (
               <p className="py-2 text-xs text-muted-foreground">No comments yet.</p>
             ) : (
               <div className="space-y-3">
+                {detail.nextCommentsCursor != null ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    disabled={loadingMoreComments}
+                    onClick={onLoadMoreComments}
+                  >
+                    {loadingMoreComments ? "Loading..." : "Load older comments"}
+                  </Button>
+                ) : null}
                 {hiddenCommentCount > 0 ? (
                   // Hundreds of comments are hundreds of markdown renders, and the ones worth
                   // opening an issue for are the recent ones. The rest are one press away and

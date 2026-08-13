@@ -124,8 +124,14 @@ export interface ProviderIssueActivity {
    */
   readonly commentCount: number;
   readonly commentsTruncated: boolean;
+  readonly nextCommentsCursor?: string | null;
   readonly events: ReadonlyArray<IssueEvent>;
   readonly reactions?: ReadonlyArray<IssueReaction>;
+}
+
+export interface ProviderIssueCommentsPage {
+  readonly comments: ReadonlyArray<IssueComment>;
+  readonly nextCursor: string | null;
 }
 
 export interface ProviderCreatedIssue {
@@ -204,6 +210,10 @@ export interface IssueProviderApi {
   readonly getIssueActivity: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderIssueActivity, IssueProviderError>;
+
+  readonly getIssueComments?: (
+    input: ProviderRepositoryRef & { readonly number: number; readonly cursor: string },
+  ) => Effect.Effect<ProviderIssueCommentsPage, IssueProviderError>;
 
   /**
    * The same answer `getIssue` carries, on its own. Asked freshly before anything is written, so

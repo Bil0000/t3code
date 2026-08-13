@@ -72,6 +72,8 @@ import {
   IssueAssigneeCandidateList,
   IssueAssigneesInput,
   IssueCommentInput,
+  IssueCommentsPageInput,
+  IssueCommentsPageResult,
   IssueCommentUpdateInput,
   IssueCreateInput,
   IssueCreateResult,
@@ -320,6 +322,7 @@ export const WS_METHODS = {
   issuesList: "issues.list",
   issuesDetail: "issues.detail",
   issuesActivity: "issues.activity",
+  issuesCommentsPage: "issues.commentsPage",
   issuesRunAction: "issues.runAction",
   issuesComment: "issues.comment",
   issuesUpdateComment: "issues.updateComment",
@@ -645,6 +648,12 @@ export const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
 export const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
   payload: IssueRef,
   success: IssueActivity,
+  error: IssueRpcError,
+});
+
+export const WsIssuesCommentsPageRpc = Rpc.make(WS_METHODS.issuesCommentsPage, {
+  payload: IssueCommentsPageInput,
+  success: IssueCommentsPageResult,
   error: IssueRpcError,
 });
 
@@ -1160,6 +1169,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssuesDetailRpc,
   WsIssuesActivityRpc,
   WsIssuesRunActionRpc,
+  WsIssuesCommentsPageRpc,
   WsIssuesCommentRpc,
   WsIssuesUpdateCommentRpc,
   WsIssuesSetReactionRpc,
