@@ -6,6 +6,7 @@ import {
   areGitControlsBusy,
   buildGitActionProgressStages,
   buildMenuItems,
+  canUsePullRequestStackActions,
   prepareGitActionForStackSubmit,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
@@ -19,6 +20,15 @@ import {
 } from "./GitActionsControl.logic";
 
 describe("stack-aware Git actions", () => {
+  it.each([
+    ["available", true],
+    ["extension_missing", false],
+    ["unsupported", false],
+    [undefined, false],
+  ] as const)("gates stack actions for %s availability", (availability, expected) => {
+    assert.equal(canUsePullRequestStackActions(availability), expected);
+  });
+
   it("keeps Git actions disabled while stack membership loads", () => {
     assert.isTrue(
       areGitControlsBusy({

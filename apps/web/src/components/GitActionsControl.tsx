@@ -45,6 +45,7 @@ import {
   areGitControlsBusy,
   buildGitActionProgressStages,
   buildMenuItems,
+  canUsePullRequestStackActions,
   adaptMenuItemsForStack,
   adaptQuickActionForStack,
   type GitActionIconName,
@@ -1971,7 +1972,7 @@ export default function GitActionsControl({
                 </>
               ) : gitStatusForActions?.sourceControlProvider?.kind === "github" &&
                 serverConfig?.environment.capabilities.pullRequestStacks === true &&
-                stackQuery.data?.availability !== "unsupported" ? (
+                canUsePullRequestStackActions(stackQuery.data?.availability) ? (
                 <>
                   <MenuSeparator />
                   {currentStack === null ? (

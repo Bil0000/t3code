@@ -1,6 +1,7 @@
 import type {
   GitRunStackedActionResult,
   GitStackedAction,
+  PullRequestStackCurrentResult,
   VcsStatusResult,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
@@ -42,6 +43,12 @@ export function areGitControlsBusy(input: {
   readonly stackQueryPending: boolean;
 }): boolean {
   return input.gitActionRunning || input.stackActionPending || input.stackQueryPending;
+}
+
+export function canUsePullRequestStackActions(
+  availability: PullRequestStackCurrentResult["availability"] | undefined,
+): boolean {
+  return availability === "available";
 }
 
 export async function runWithPendingState<T>(
