@@ -4,6 +4,7 @@ import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
+import { githubGraphQlBudget } from "../sourceControl/githubGraphQlBudget.ts";
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import { BASE_COMPARISON_GRAPHQL_QUERY } from "./gitHubPullRequestJson.ts";
 
@@ -167,6 +168,7 @@ function searchQueryOfCall(index: number): string | undefined {
 
 afterEach(() => {
   mockedExecute.mockReset();
+  githubGraphQlBudget.reset();
 });
 
 layer("GitHubPullRequestCli.layer", (it) => {
@@ -2242,7 +2244,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       // The tuples are flattened straight into argv, so a variable without its flag is a
       // positional argument gh refuses outright.
       const args = callAt(0).args;
-      expect(args).toEqual([
+      expect(args.slice(0, -2)).toEqual([
         "api",
         "graphql",
         "--hostname",
@@ -2255,10 +2257,54 @@ layer("GitHubPullRequestCli.layer", (it) => {
         "number=7",
         "-f",
         "headRef=fork:feat/page",
-        "-f",
-        `query=${BASE_COMPARISON_GRAPHQL_QUERY}`,
       ]);
       expect(comparison).toEqual({ behindBy: 4, viewerCanUpdate: true });
+      expect(args.at(-2)).toBe("-f");
+      expect(args.at(-1)).toContain(`query=${BASE_COMPARISON_GRAPHQL_QUERY.slice(0, -2)}`);
+    }),
+  );
+
+  it.effect("stops GraphQL reads at the protected reserve until reset", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                repository: {
+                  pullRequest: {
+                    viewerCanUpdateBranch: true,
+                    baseRef: { compare: { behindBy: 4 } },
+                  },
+                },
+                rateLimit: {
+                  cost: 1,
+                  limit: 5_000,
+                  remaining: 500,
+                  resetAt: "2099-08-13T14:00:00Z",
+                },
+              },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const input = {
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        headRef: "fork:feat/page",
+      } as const;
+
+      yield* cli.getPullRequestBaseComparison(input);
+      expect(callAt(0).args.at(-1)).toContain("rateLimit { cost limit remaining resetAt }");
+
+      const error = yield* Effect.flip(cli.getPullRequestBaseComparison(input));
+
+      assert.strictEqual(error._tag, "GitHubCliRateLimitError");
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
     }),
   );
 
