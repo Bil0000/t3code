@@ -18,6 +18,7 @@ import {
   handoffPrompt,
   handoffReviewComments,
   isThreadOwnPullRequest,
+  mergePullRequestThreadComments,
   orderPullRequestComments,
   pullRequestActionNeedsHostRefresh,
   pullRequestFindingKey,
@@ -79,6 +80,26 @@ describe("pull request activity refresh", () => {
         updatedAt: "2026-08-13T13:01:00Z",
       }),
     ).toBe(false);
+  });
+});
+describe("review thread comment pages", () => {
+  it("appends new comments once and keeps refreshed base comments", () => {
+    expect(
+      mergePullRequestThreadComments(
+        [
+          { id: "c1", body: "refreshed" },
+          { id: "c2", body: "already in base" },
+        ],
+        [
+          { id: "c2", body: "stale page copy" },
+          { id: "c3", body: "next page" },
+        ],
+      ),
+    ).toEqual([
+      { id: "c1", body: "refreshed" },
+      { id: "c2", body: "already in base" },
+      { id: "c3", body: "next page" },
+    ]);
   });
 });
 
