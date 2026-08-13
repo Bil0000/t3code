@@ -14,6 +14,7 @@ import {
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
+  buildPullRequestStackHandoffContext,
   groupPullRequestTimelineConversations,
   handoffPrompt,
   handoffReviewComments,
@@ -88,6 +89,22 @@ describe("pull request stack selection", () => {
     expect(countPullRequestsMergedThrough(stack, 12)).toBe(2);
     expect(countPullRequestsMergedThrough(stack, 11)).toBe(1);
     expect(countPullRequestsMergedThrough(stack, 10)).toBe(0);
+  });
+
+  it("gives agents the current step and its nearest neighbors", () => {
+    const context = buildPullRequestStackHandoffContext(stack, 11);
+
+    expect(context).toEqual(
+      expect.objectContaining({
+        id: "pull-request-stack:11",
+        filePath: "Stack 2/3",
+        rangeLabel: "api",
+      }),
+    );
+    expect(context?.text).toContain("targets `main`");
+    expect(context?.text).toContain("Previous step: #10 `auth`");
+    expect(context?.text).toContain("Next step: #12 `ui`");
+    expect(context?.text).toContain("Keep work in this step");
   });
 });
 

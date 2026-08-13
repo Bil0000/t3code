@@ -100,6 +100,7 @@ import {
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
   buildFixFindingsHandoff,
+  buildPullRequestStackHandoffContext,
   buildResolveConflictsPrompt,
   countPullRequestsMergedThrough,
   findPullRequestStack,
@@ -738,6 +739,9 @@ export function PullRequestDetailPanel({
     const store = useComposerDraftStore.getState();
     const draft = store.getComposerDraft(target);
     const key = composerTargetKey(target);
+    const stackContext = stack
+      ? buildPullRequestStackHandoffContext(stack, reference.number)
+      : null;
     const prompt = handoffPrompt(
       { prompt: draft?.prompt ?? "", lastHandoffPrompt: lastHandoffPromptByDraft.get(key) },
       task.prompt,
@@ -746,7 +750,10 @@ export function PullRequestDetailPanel({
     store.setPrompt(target, prompt);
     store.setReviewComments(
       target,
-      handoffReviewComments(draft?.reviewComments ?? [], task.reviewComments ?? []),
+      handoffReviewComments(draft?.reviewComments ?? [], [
+        ...(task.reviewComments ?? []),
+        ...(stackContext ? [stackContext] : []),
+      ]),
     );
   };
 
