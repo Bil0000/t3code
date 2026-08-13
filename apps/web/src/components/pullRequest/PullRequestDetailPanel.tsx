@@ -103,6 +103,7 @@ import {
   handoffPrompt,
   handoffReviewComments,
   pullRequestActionNeedsHostRefresh,
+  pullRequestActionMenuHasGroup,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   readableFailure,
@@ -1039,6 +1040,14 @@ export function PullRequestDetailPanel({
     detail?.state === "open" &&
     can(detail.isDraft ? "ready" : "draft") &&
     !(detail.isDraft && primaryAction === "ready");
+  const showsAutoMerge =
+    detail?.state === "open" &&
+    ((autoMergeArmed && can("disable-auto-merge")) ||
+      (!autoMergeArmed &&
+        !detail.isDraft &&
+        !conflicting &&
+        can("enable-auto-merge") &&
+        allowedMergeMethods.length > 0));
   const showsMergeMethods =
     detail?.state === "open" &&
     can("merge") &&
@@ -1266,7 +1275,13 @@ export function PullRequestDetailPanel({
                           </MenuRadioGroup>
                         </>
                       ) : null}
-                      {showsDraftToggle || showsMergeMethods ? <MenuSeparator /> : null}
+                      {pullRequestActionMenuHasGroup(
+                        showsDraftToggle,
+                        showsAutoMerge,
+                        showsMergeMethods,
+                      ) ? (
+                        <MenuSeparator />
+                      ) : null}
                     </>
                   ) : null}
                   <MenuItem onClick={() => void readLocalApi()?.shell.openExternal(detail.url)}>
