@@ -355,6 +355,9 @@ export const make = Effect.gen(function* () {
         ),
       ),
 
+    getReviewThreadComments: (input) =>
+      cli.getReviewThreadComments(input).pipe(Effect.mapError(fail("getReviewThreadComments"))),
+
     getViewerPermissions: (input) =>
       Effect.all(
         [

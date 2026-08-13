@@ -22,6 +22,7 @@ import type {
   PullRequestReviewCommentDraft,
   PullRequestReviewDecision,
   PullRequestReviewThread,
+  PullRequestThreadCommentsResult,
   PullRequestReviewVerdict,
   PullRequestReviewerCandidateList,
   PullRequestReviewerKind,
@@ -296,6 +297,15 @@ export interface PullRequestProviderApi {
   readonly getChangeRequestActivity: (
     input: ProviderRepositoryRef & { readonly number: number },
   ) => Effect.Effect<ProviderChangeRequestActivity, PullRequestProviderError>;
+
+  /** One explicit page after a reader asks to continue an unfinished review thread. */
+  readonly getReviewThreadComments?: (
+    input: ProviderRepositoryRef & {
+      readonly number: number;
+      readonly threadId: string;
+      readonly cursor: string;
+    },
+  ) => Effect.Effect<PullRequestThreadCommentsResult, PullRequestProviderError>;
 
   /**
    * The same answer `getChangeRequest` carries, on its own. Asked before anything is written, so
