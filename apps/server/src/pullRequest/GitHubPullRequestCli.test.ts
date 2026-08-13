@@ -1,10 +1,11 @@
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
-import { githubGraphQlBudget } from "../sourceControl/githubGraphQlBudget.ts";
+import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import { BASE_COMPARISON_GRAPHQL_QUERY } from "./gitHubPullRequestJson.ts";
 
@@ -17,6 +18,7 @@ const layer = it.layer(
         execute: mockedExecute,
       }),
     ),
+    Layer.provide(GitHubGraphQlBudget.layer),
   ),
 );
 
@@ -175,7 +177,6 @@ function searchQueryOfCall(index: number): string | undefined {
 
 afterEach(() => {
   mockedExecute.mockReset();
-  githubGraphQlBudget.reset();
 });
 
 layer("GitHubPullRequestCli.layer", (it) => {
@@ -2359,8 +2360,12 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       const error = yield* Effect.flip(cli.getPullRequestBaseComparison(input));
 
-      assert.strictEqual(error._tag, "GitHubCliRateLimitError");
+      assert.strictEqual(error._tag, "GitHubGraphQlBudgetPausedError");
+      if (error._tag !== "GitHubGraphQlBudgetPausedError") return;
+      assert.strictEqual(error.host, "github.com");
+      assert.strictEqual(error.resetAt, "2099-08-13T14:00:00Z");
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      yield* TestClock.setTime(Date.parse("2100-01-01T00:00:00Z"));
     }),
   );
 

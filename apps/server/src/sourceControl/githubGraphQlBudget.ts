@@ -1,3 +1,10 @@
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Schema from "effect/Schema";
+
 const GRAPHQL_RESERVE_RATIO = 0.1;
 const RATE_LIMIT_SELECTION = "rateLimit { cost limit remaining resetAt }";
 
@@ -8,15 +15,32 @@ interface GraphQlBudgetSnapshot {
   readonly resetAtMs: number;
 }
 
-export type GitHubGraphQlBudgetDecision =
-  | { readonly _tag: "Allowed"; readonly query: string }
-  | { readonly _tag: "Paused"; readonly resetAt: string };
+export class GitHubGraphQlBudgetPausedError extends Schema.TaggedErrorClass<GitHubGraphQlBudgetPausedError>()(
+  "GitHubGraphQlBudgetPausedError",
+  {
+    host: Schema.String,
+    resetAt: Schema.String,
+  },
+) {
+  get detail(): string {
+    return `GraphQL reads for ${this.host} are paused until ${this.resetAt}.`;
+  }
 
-export interface GitHubGraphQlBudget {
-  readonly query: (host: string, document: string, now?: number) => GitHubGraphQlBudgetDecision;
-  readonly observe: (host: string, raw: string) => void;
-  readonly reset: () => void;
+  override get message(): string {
+    return `GitHub ${this.detail}`;
+  }
 }
+
+export class GitHubGraphQlBudget extends Context.Service<
+  GitHubGraphQlBudget,
+  {
+    readonly query: (
+      host: string,
+      document: string,
+    ) => Effect.Effect<string, GitHubGraphQlBudgetPausedError>;
+    readonly observe: (host: string, raw: string) => Effect.Effect<void>;
+  }
+>()("t3/sourceControl/githubGraphQlBudget") {}
 
 function hostKey(host: string): string {
   return host.trim().toLowerCase();
@@ -59,36 +83,46 @@ function withRateLimit(document: string): string {
   return `${document.slice(0, end)}\n  ${RATE_LIMIT_SELECTION}\n${document.slice(end)}`;
 }
 
-export function createGitHubGraphQlBudget(): GitHubGraphQlBudget {
-  const snapshots = new Map<string, GraphQlBudgetSnapshot>();
+export const make = Effect.gen(function* () {
+  const snapshots = yield* Ref.make<ReadonlyMap<string, GraphQlBudgetSnapshot>>(new Map());
 
-  return {
-    // @effect-diagnostics-next-line globalDate:off
-    query: (host, document, now = Date.now()) => {
-      const key = hostKey(host);
-      const snapshot = snapshots.get(key);
-      if (snapshot !== undefined && snapshot.resetAtMs <= now) snapshots.delete(key);
-      if (
-        snapshot !== undefined &&
-        snapshot.resetAtMs > now &&
-        snapshot.remaining <= snapshot.limit * GRAPHQL_RESERVE_RATIO
-      ) {
-        return { _tag: "Paused", resetAt: snapshot.resetAt };
+  const query: GitHubGraphQlBudget["Service"]["query"] = Effect.fn("GitHubGraphQlBudget.query")(
+    function* (host, document) {
+      const now = yield* Clock.currentTimeMillis;
+      const resetAt = yield* Ref.modify(snapshots, (current) => {
+        const key = hostKey(host);
+        const snapshot = current.get(key);
+        if (snapshot === undefined) return [null, current] as const;
+        if (snapshot.resetAtMs <= now) {
+          const next = new Map(current);
+          next.delete(key);
+          return [null, next] as const;
+        }
+        return [
+          snapshot.remaining <= snapshot.limit * GRAPHQL_RESERVE_RATIO ? snapshot.resetAt : null,
+          current,
+        ] as const;
+      });
+      if (resetAt !== null) {
+        return yield* new GitHubGraphQlBudgetPausedError({ host, resetAt });
       }
-      return { _tag: "Allowed", query: withRateLimit(document) };
+      return withRateLimit(document);
     },
-    observe: (host, raw) => {
-      const snapshot = snapshotFrom(raw);
-      if (snapshot !== null) snapshots.set(hostKey(host), snapshot);
-    },
-    reset: () => {
-      snapshots.clear();
-    },
-  };
-}
+  );
 
-/**
- * One budget per server process. Pull request and issue registries create separate provider
- * layers, but GitHub applies one quota to the account behind both.
- */
-export const githubGraphQlBudget = createGitHubGraphQlBudget();
+  const observe: GitHubGraphQlBudget["Service"]["observe"] = Effect.fn(
+    "GitHubGraphQlBudget.observe",
+  )(function* (host, raw) {
+    const snapshot = snapshotFrom(raw);
+    if (snapshot === null) return;
+    yield* Ref.update(snapshots, (current) => {
+      const next = new Map(current);
+      next.set(hostKey(host), snapshot);
+      return next;
+    });
+  });
+
+  return GitHubGraphQlBudget.of({ query, observe });
+});
+
+export const layer = Layer.effect(GitHubGraphQlBudget, make);

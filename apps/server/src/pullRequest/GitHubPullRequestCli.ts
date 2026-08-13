@@ -23,7 +23,7 @@ import {
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
-import { githubGraphQlBudget } from "../sourceControl/githubGraphQlBudget.ts";
+import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import {
   ACTOR_AVATARS_GRAPHQL_QUERY,
   ADD_REACTION_GRAPHQL_MUTATION,
@@ -248,6 +248,7 @@ export type GitHubPullRequestCliError =
   | GitHubDiffFileContentsUnavailableError
   | GitHubRepositorySelectorError
   | GitHubSubjectScopeError
+  | GitHubGraphQlBudget.GitHubGraphQlBudgetPausedError
   | GitHubViewerLoginUnavailableError;
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
@@ -825,6 +826,7 @@ function actionArgs(
 
 export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
+  const graphQlBudget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
 
   /**
    * The pull request's own node id, which is what a mutation against the pull request itself is
@@ -928,56 +930,47 @@ export const make = Effect.gen(function* () {
     readonly query: string;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
   }): Effect.Effect<A, GitHubPullRequestCliError> => {
-    const decision = githubGraphQlBudget.query(input.host, input.query);
-    if (decision._tag === "Paused") {
-      return Effect.fail(
-        new GitHubCli.GitHubCliRateLimitError({
-          command: "gh",
-          cwd: input.cwd,
-          cause: new Error(`GraphQL reads paused until ${decision.resetAt}`),
-        }),
-      );
-    }
-    return github
-      .execute(
-        input.privateVariables === undefined
-          ? {
-              cwd: input.cwd,
-              args: [
-                "api",
-                "graphql",
-                "--hostname",
-                input.host,
-                ...(input.variables ?? []).flat(),
-                "-f",
-                `query=${decision.query}`,
-              ],
-            }
-          : {
-              cwd: input.cwd,
-              args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
-              stdin: encodeGraphQlRequestJson({
-                query: decision.query,
-                variables: input.privateVariables,
-              }),
-            },
-      )
-      .pipe(
-        Effect.flatMap((result) => {
-          githubGraphQlBudget.observe(input.host, result.stdout);
-          const decoded = input.decode(result.stdout.trim());
-          return Result.isSuccess(decoded)
-            ? Effect.succeed(decoded.success)
-            : Effect.fail(
-                new GitHubPullRequestReadError({
-                  command: "gh",
-                  cwd: input.cwd,
-                  operation: input.operation,
-                  cause: decoded.failure,
+    return graphQlBudget.query(input.host, input.query).pipe(
+      Effect.flatMap((query) =>
+        github.execute(
+          input.privateVariables === undefined
+            ? {
+                cwd: input.cwd,
+                args: [
+                  "api",
+                  "graphql",
+                  "--hostname",
+                  input.host,
+                  ...(input.variables ?? []).flat(),
+                  "-f",
+                  `query=${query}`,
+                ],
+              }
+            : {
+                cwd: input.cwd,
+                args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
+                stdin: encodeGraphQlRequestJson({
+                  query,
+                  variables: input.privateVariables,
                 }),
-              );
-        }),
-      );
+              },
+        ),
+      ),
+      Effect.tap((result) => graphQlBudget.observe(input.host, result.stdout)),
+      Effect.flatMap((result) => {
+        const decoded = input.decode(result.stdout.trim());
+        return Result.isSuccess(decoded)
+          ? Effect.succeed(decoded.success)
+          : Effect.fail(
+              new GitHubPullRequestReadError({
+                command: "gh",
+                cwd: input.cwd,
+                operation: input.operation,
+                cause: decoded.failure,
+              }),
+            );
+      }),
+    );
   };
 
   /**
