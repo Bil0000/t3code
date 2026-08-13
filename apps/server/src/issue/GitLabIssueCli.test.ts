@@ -769,11 +769,9 @@ layer("GitLabIssueCli.layer", (it) => {
     Effect.gen(function* () {
       mockedExecute
         .mockReturnValueOnce(Effect.succeed(output("{}")))
-        .mockReturnValueOnce(Effect.succeed(output(JSON.stringify({ username: "bilal" }))))
+        .mockReturnValueOnce(Effect.succeed(output('{"username":"bilal"}')))
         .mockReturnValueOnce(
-          Effect.succeed(
-            output(JSON.stringify([{ id: 5, name: "heart", user: { username: "bilal" } }])),
-          ),
+          Effect.succeed(output('[{"id":5,"name":"heart","user":{"username":"bilal"}}]')),
         )
         .mockReturnValueOnce(Effect.succeed(output("{}")));
       const cli = yield* GitLabIssueCli.GitLabIssueCli;
