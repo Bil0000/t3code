@@ -6105,6 +6105,13 @@ function ChatViewContent(props: ChatViewProps) {
         chromeVariant="collapse"
         composerDraftTarget={composerDraftTarget}
         onStateChange={handlePullRequestTabStatusChange}
+        onNavigatePullRequest={(number) =>
+          useRightPanelStore.getState().openPullRequest(activeThreadRef, {
+            projectId: activeRightPanelSurface.projectId,
+            repository: activeRightPanelSurface.repository,
+            number,
+          })
+        }
       />
     ) : activeRightPanelSurface?.kind === "agents" ? (
       <AgentsPanel

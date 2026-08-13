@@ -4,6 +4,7 @@ import {
   type PullRequestComment,
   type PullRequestDetailView,
   type PullRequestReviewThread,
+  type PullRequestStackSummary,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -25,6 +26,8 @@ import {
   resolveBaseFreshness,
   buildPullRequestTimeline,
   describePullRequestState,
+  findPullRequestStack,
+  countPullRequestsMergedThrough,
 } from "./pullRequestDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
@@ -59,6 +62,32 @@ describe("pull request state description", () => {
     expect(describePullRequestState("open", false)).toBe("Ready for review");
     expect(describePullRequestState("merged", true)).toBe("Merged");
     expect(describePullRequestState("closed", false)).toBe("Closed");
+  });
+});
+
+const stack: PullRequestStackSummary = {
+  id: 9,
+  number: 3,
+  url: "https://api.github.com/repos/acme/app/stacks/3",
+  baseBranch: "main",
+  open: true,
+  steps: [
+    { position: 1, pullRequestNumber: 10, branch: "auth", state: "merged", draft: false },
+    { position: 2, pullRequestNumber: 11, branch: "api", state: "open", draft: false },
+    { position: 3, pullRequestNumber: 12, branch: "ui", state: "open", draft: true },
+  ],
+};
+
+describe("pull request stack selection", () => {
+  it("finds the stack containing the open pull request", () => {
+    expect(findPullRequestStack([stack], 11)).toBe(stack);
+    expect(findPullRequestStack([stack], 99)).toBeNull();
+  });
+
+  it("counts only open pull requests at or below the selected step", () => {
+    expect(countPullRequestsMergedThrough(stack, 12)).toBe(2);
+    expect(countPullRequestsMergedThrough(stack, 11)).toBe(1);
+    expect(countPullRequestsMergedThrough(stack, 10)).toBe(0);
   });
 });
 

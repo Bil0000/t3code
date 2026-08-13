@@ -172,5 +172,27 @@ export function createPullRequestEnvironmentAtoms<R, E>(
       scheduler: commandScheduler,
       concurrency: serialPerEnvironment,
     }),
+    stackList: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-request-stacks:list",
+      tag: WS_METHODS.pullRequestStacksList,
+      staleTimeMs: 30_000,
+    }),
+    stackCurrent: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:pull-request-stacks:current",
+      tag: WS_METHODS.pullRequestStacksCurrent,
+      staleTimeMs: 15_000,
+    }),
+    runStackAction: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-request-stacks:run-action",
+      tag: WS_METHODS.pullRequestStacksRunAction,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
+    mergeStack: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:pull-request-stacks:merge",
+      tag: WS_METHODS.pullRequestStacksMerge,
+      scheduler: commandScheduler,
+      concurrency: serialPerEnvironment,
+    }),
   };
 }

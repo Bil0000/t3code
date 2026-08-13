@@ -9,10 +9,32 @@ import type {
   PullRequestReaction,
   PullRequestReviewThread,
   PullRequestState,
+  PullRequestStackSummary,
   PullRequestUpdateMethod,
 } from "@t3tools/contracts";
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
+
+export function findPullRequestStack(
+  stacks: ReadonlyArray<PullRequestStackSummary>,
+  pullRequestNumber: number,
+): PullRequestStackSummary | null {
+  return (
+    stacks.find((stack) =>
+      stack.steps.some((step) => step.pullRequestNumber === pullRequestNumber),
+    ) ?? null
+  );
+}
+
+export function countPullRequestsMergedThrough(
+  stack: PullRequestStackSummary,
+  pullRequestNumber: number,
+): number {
+  const selected = stack.steps.find((step) => step.pullRequestNumber === pullRequestNumber);
+  if (selected === undefined) return 0;
+  return stack.steps.filter((step) => step.position <= selected.position && step.state === "open")
+    .length;
+}
 
 /**
  * Whether the pull request on a right-panel surface is the thread's own one. Repository and
