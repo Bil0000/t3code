@@ -3,6 +3,7 @@ import { assert, describe, it } from "vite-plus/test";
 import {
   buildGitActionProgressStages,
   buildMenuItems,
+  adaptQuickActionForStack,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
   resolveDefaultBranchActionDialogCopy,
@@ -10,7 +11,40 @@ import {
   resolveQuickAction,
   resolveThreadBranchUpdate,
   resolveThreadBranchMetadataPatch,
+  shouldSubmitStackAfterGitAction,
 } from "./GitActionsControl.logic";
+
+describe("stack-aware Git actions", () => {
+  it("submits the stack after every action that pushes", () => {
+    assert.deepEqual(
+      (["commit", "push", "create_pr", "commit_push", "commit_push_pr"] as const).map(
+        shouldSubmitStackAfterGitAction,
+      ),
+      [false, true, true, true, true],
+    );
+  });
+
+  it("uses one plain-language submit label for stacked branches", () => {
+    assert.deepInclude(
+      adaptQuickActionForStack({
+        label: "Commit & push",
+        disabled: false,
+        kind: "run_action",
+        action: "commit_push",
+      }),
+      { label: "Commit & submit stack" },
+    );
+    assert.deepInclude(
+      adaptQuickActionForStack({
+        label: "Push",
+        disabled: false,
+        kind: "run_action",
+        action: "push",
+      }),
+      { label: "Submit stack" },
+    );
+  });
+});
 
 function status(overrides: Partial<VcsStatusResult> = {}): VcsStatusResult {
   return {

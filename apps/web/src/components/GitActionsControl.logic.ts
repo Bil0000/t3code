@@ -31,6 +31,21 @@ export interface GitQuickAction {
   hint?: string;
 }
 
+export function shouldSubmitStackAfterGitAction(action: GitStackedAction): boolean {
+  return action !== "commit";
+}
+
+export function adaptQuickActionForStack(action: GitQuickAction): GitQuickAction {
+  if (action.kind !== "run_action" || action.action === undefined) return action;
+  return {
+    ...action,
+    label:
+      action.action === "commit_push" || action.action === "commit_push_pr"
+        ? "Commit & submit stack"
+        : "Submit stack",
+  };
+}
+
 export interface DefaultBranchActionDialogCopy {
   title: string;
   description: string;
