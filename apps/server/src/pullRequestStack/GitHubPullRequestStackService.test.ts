@@ -1,0 +1,181 @@
+import { assert, afterEach, describe, expect, it, vi } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import { ChildProcessSpawner } from "effect/unstable/process";
+
+import * as VcsProcess from "../vcs/VcsProcess.ts";
+import * as GitHubPullRequestStackService from "./GitHubPullRequestStackService.ts";
+
+const cwd = "/workspace/app";
+const localStackJson = JSON.stringify({
+  trunk: "main",
+  currentBranch: "api",
+  branches: [
+    {
+      name: "auth",
+      head: "a1",
+      base: "main",
+      isCurrent: false,
+      isMerged: false,
+      isQueued: false,
+      needsRebase: false,
+      pr: { number: 10, url: "https://github.com/acme/app/pull/10", state: "OPEN" },
+    },
+    {
+      name: "api",
+      head: "b2",
+      base: "auth",
+      isCurrent: true,
+      isMerged: false,
+      isQueued: false,
+      needsRebase: false,
+      pr: { number: 11, url: "https://github.com/acme/app/pull/11", state: "OPEN" },
+    },
+  ],
+});
+
+function processOutput(exitCode: number, stdout = "", stderr = ""): VcsProcess.VcsProcessOutput {
+  return {
+    exitCode: ChildProcessSpawner.ExitCode(exitCode),
+    stdout,
+    stderr,
+    stdoutTruncated: false,
+    stderrTruncated: false,
+  };
+}
+
+const run = vi.fn<VcsProcess.VcsProcess["Service"]["run"]>();
+const layer = GitHubPullRequestStackService.layer.pipe(
+  Layer.provide(Layer.mock(VcsProcess.VcsProcess)({ run })),
+);
+
+afterEach(() => {
+  run.mockReset();
+});
+
+describe("GitHubPullRequestStackService", () => {
+  it.effect("returns a normal empty state when the branch is not in a stack", () =>
+    Effect.gen(function* () {
+      run.mockReturnValueOnce(Effect.succeed(processOutput(2)));
+
+      const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
+      const current = yield* stacks.current({ cwd });
+
+      assert.deepStrictEqual(current, { availability: "available", stack: null });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("reports a missing extension without breaking normal pull requests", () =>
+    Effect.gen(function* () {
+      run.mockReturnValueOnce(
+        Effect.succeed(processOutput(1, "", 'unknown command "stack" for "gh"')),
+      );
+
+      const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
+      const current = yield* stacks.current({ cwd });
+
+      assert.deepStrictEqual(current, { availability: "extension_missing", stack: null });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("reads all remote stacks with one GitHub API call", () =>
+    Effect.gen(function* () {
+      run.mockReturnValueOnce(
+        Effect.succeed(
+          processOutput(
+            0,
+            '[{"id":41,"number":7,"url":"https://api.github.com/repos/acme/app/stacks/7","base":{"ref":"main"},"open":true,"pull_requests":[{"number":10,"state":"open","draft":false,"merged_at":null,"head":{"ref":"auth","sha":"a1"}}]}]',
+          ),
+        ),
+      );
+
+      const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
+      const response = yield* stacks.list({ cwd });
+
+      assert.strictEqual(response.availability, "available");
+      assert.strictEqual(response.stacks[0]?.steps[0]?.pullRequestNumber, 10);
+      expect(run).toHaveBeenCalledOnce();
+      expect(run).toHaveBeenCalledWith({
+        operation: "GitHubPullRequestStackService.list",
+        command: "gh",
+        args: ["api", "repos/{owner}/{repo}/stacks"],
+        cwd,
+        allowNonZeroExit: true,
+        timeoutMs: 30_000,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("runs a non-interactive submit and returns fresh local state", () =>
+    Effect.gen(function* () {
+      run
+        .mockReturnValueOnce(Effect.succeed(processOutput(0, "Submitted stack")))
+        .mockReturnValueOnce(Effect.succeed(processOutput(0, localStackJson)));
+
+      const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
+      const response = yield* stacks.runAction({
+        actionId: "stack-action-1",
+        cwd,
+        action: "submit",
+      });
+
+      assert.strictEqual(response.action, "submit");
+      assert.strictEqual(response.stack?.currentBranch, "api");
+      expect(run).toHaveBeenNthCalledWith(1, {
+        operation: "GitHubPullRequestStackService.submit",
+        command: "gh",
+        args: ["stack", "submit", "--auto"],
+        cwd,
+        allowNonZeroExit: true,
+        timeoutMs: 600_000,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("does not call a diverged sync successful", () =>
+    Effect.gen(function* () {
+      run.mockReturnValueOnce(
+        Effect.succeed(
+          processOutput(
+            0,
+            "Your local stack has diverged from the stack on GitHub\nSync aborted — no changes were made",
+          ),
+        ),
+      );
+
+      const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
+      const error = yield* stacks
+        .runAction({ actionId: "stack-action-1", cwd, action: "sync" })
+        .pipe(Effect.flip);
+
+      assert.strictEqual(error._tag, "PullRequestStackError");
+      assert.match(error.detail, /diverged/i);
+      expect(run).toHaveBeenCalledOnce();
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("returns the merge state reported by the official CLI", () =>
+    Effect.gen(function* () {
+      run.mockReturnValueOnce(
+        Effect.succeed(processOutput(0, "Added #10, #11 to the merge queue for main")),
+      );
+
+      const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
+      const response = yield* stacks.merge({
+        cwd,
+        pullRequestNumber: 11,
+        mergeMethod: "squash",
+      });
+
+      assert.deepStrictEqual(response, { status: "queued" });
+      expect(run).toHaveBeenCalledWith({
+        operation: "GitHubPullRequestStackService.merge",
+        command: "gh",
+        args: ["stack", "merge", "11", "--yes", "--squash"],
+        cwd,
+        allowNonZeroExit: true,
+        timeoutMs: 600_000,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+});
