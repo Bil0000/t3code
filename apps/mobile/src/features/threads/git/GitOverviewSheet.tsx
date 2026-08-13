@@ -75,6 +75,12 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
   const isRepo = gitStatus.data?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus.data?.hasPrimaryRemote ?? false;
   const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
+  const isGitHub = gitStatus.data?.sourceControlProvider?.kind === "github";
+  const currentStack = gitState.pullRequestStack.data?.stack ?? null;
+  const currentStackStep = currentStack?.steps.find((step) => step.isCurrent);
+  const headerStatus = currentStackStep
+    ? `${currentStatusSummary} · Stack ${currentStackStep.position}/${currentStack?.steps.length}`
+    : currentStatusSummary;
 
   const menuItems = useMemo(
     () => (isRepo ? buildMenuItems(gitStatus.data, busy, hasPrimaryRemote) : []),
@@ -205,10 +211,11 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
     setIsPullRefreshing(true);
     try {
       await gitActions.refreshSelectedThreadGitStatus();
+      gitState.pullRequestStack.refresh();
     } finally {
       setIsPullRefreshing(false);
     }
-  }, [gitActions]);
+  }, [gitActions, gitState.pullRequestStack]);
 
   const content = (
     <ScrollView
@@ -225,6 +232,13 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
         <RefreshControl refreshing={isPullRefreshing} onRefresh={() => void handlePullRefresh()} />
       }
     >
+      {currentStack && currentStackStep ? (
+        <MetaCard
+          label={`Stack step ${currentStackStep.position} of ${currentStack.steps.length}`}
+          value={`${currentStack.currentBranch} → ${currentStack.trunk}`}
+        />
+      ) : null}
+
       <View
         className={
           isInspector
@@ -237,7 +251,11 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
             {index > 0 ? <View className="ml-12 h-px bg-border" /> : null}
             <SheetListRow
               icon={menuItemIconName(item.icon)}
-              title={item.label}
+              title={
+                currentStack && (item.dialogAction === "push" || item.dialogAction === "create_pr")
+                  ? "Submit stack"
+                  : item.label
+              }
               subtitle={disabledReason ?? rowStatusDetail(item)}
               disabled={item.disabled}
               onPress={() => void onPressMenuItem(item)}
@@ -285,6 +303,91 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
           }
         />
       </View>
+
+      {isGitHub && gitState.pullRequestStack.data?.availability === "extension_missing" ? (
+        <MetaCard
+          label="Stacked PRs need GitHub Stack"
+          value="gh extension install github/gh-stack"
+        />
+      ) : null}
+
+      {isGitHub && gitState.pullRequestStack.data?.availability === "available" ? (
+        <View
+          className={
+            isInspector
+              ? "overflow-hidden rounded-2xl border border-border bg-card px-3 py-1"
+              : "overflow-hidden rounded-[22px] border border-border bg-card px-4 py-1"
+          }
+        >
+          {currentStack ? (
+            <>
+              <SheetListRow
+                icon="arrow.up.circle"
+                title="Submit stack"
+                subtitle="Push every step and update its pull request"
+                disabled={busy}
+                onPress={() => void gitActions.onRunSelectedThreadStackAction("submit")}
+              />
+              <View className="ml-12 h-px bg-border" />
+              <SheetListRow
+                icon="arrow.clockwise"
+                title="Sync stack"
+                subtitle={`Bring every step up to date with ${currentStack.trunk}`}
+                disabled={busy}
+                onPress={() => void gitActions.onRunSelectedThreadStackAction("sync")}
+              />
+              <View className="ml-12 h-px bg-border" />
+              <SheetListRow
+                icon="plus"
+                title="Add next stack step"
+                subtitle="Create the next branch on top of this one"
+                disabled={busy}
+                onPress={() =>
+                  navigation.navigate("GitBranches", {
+                    environmentId: String(environmentId),
+                    threadId: String(threadId),
+                    stackMode: "add",
+                  })
+                }
+              />
+              <View className="ml-12 h-px bg-border" />
+              <SheetListRow
+                icon="xmark"
+                title="Unstack pull requests"
+                subtitle="Keep the branches and pull requests separate"
+                disabled={busy}
+                onPress={() =>
+                  Alert.alert(
+                    "Unstack pull requests?",
+                    "The branches and pull requests stay. Only their stack link is removed.",
+                    [
+                      { text: "Cancel", style: "cancel" },
+                      {
+                        text: "Unstack",
+                        style: "destructive",
+                        onPress: () => void gitActions.onRunSelectedThreadStackAction("unstack"),
+                      },
+                    ],
+                  )
+                }
+              />
+            </>
+          ) : (
+            <SheetListRow
+              icon="point.3.connected.trianglepath.dotted"
+              title="Start a pull request stack"
+              subtitle={
+                isDefaultRef ? "Create a feature branch first" : "Make this branch the first step"
+              }
+              disabled={busy || isDefaultRef || !gitStatus.data?.refName}
+              onPress={() => {
+                const branch = gitStatus.data?.refName;
+                if (branch) void gitActions.onRunSelectedThreadStackAction("start", branch);
+              }}
+            />
+          )}
+        </View>
+      ) : null}
 
       {currentWorktreePath ? <MetaCard label="Worktree" value={currentWorktreePath} /> : null}
     </ScrollView>
@@ -395,13 +498,13 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
           </Text>
           <Text className="pr-10 text-xl font-t3-bold">{currentBranchLabel}</Text>
           <Text className="text-foreground-secondary text-sm font-medium leading-normal">
-            {currentStatusSummary}
+            {headerStatus}
           </Text>
         </View>
       ) : (
         <AndroidSheetHeader
           title={currentBranchLabel}
-          subtitle={currentStatusSummary}
+          subtitle={headerStatus}
           onBack={() => navigation.goBack()}
           actions={[
             {

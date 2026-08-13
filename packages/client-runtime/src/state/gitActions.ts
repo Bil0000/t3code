@@ -44,6 +44,10 @@ export type GitActionRequestInput = Pick<
   "action" | "commitMessage" | "featureBranch" | "filePaths"
 >;
 
+export function shouldSubmitStackAfterGitAction(action: GitStackedAction): boolean {
+  return action !== "commit";
+}
+
 export function buildGitActionProgressStages(input: {
   action: GitStackedAction;
   hasCustomCommitMessage: boolean;

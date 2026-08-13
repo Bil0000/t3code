@@ -10,6 +10,8 @@ import {
   type ChangeRequestTerminology,
 } from "../sourceControlPresentation";
 
+export { shouldSubmitStackAfterGitAction } from "@t3tools/client-runtime/state/vcs";
+
 export type GitActionIconName = "commit" | "push" | "pr";
 
 export type GitDialogAction = "commit" | "push" | "create_pr";
@@ -29,10 +31,6 @@ export interface GitQuickAction {
   kind: "run_action" | "run_pull" | "open_pr" | "open_publish" | "show_hint";
   action?: GitStackedAction;
   hint?: string;
-}
-
-export function shouldSubmitStackAfterGitAction(action: GitStackedAction): boolean {
-  return action !== "commit";
 }
 
 export function adaptQuickActionForStack(action: GitQuickAction): GitQuickAction {

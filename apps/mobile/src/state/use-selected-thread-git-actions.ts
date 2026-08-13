@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo } from "react";
+import { useAtomValue } from "@effect/atom-react";
 
 import { EnvironmentProject, EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 import {
   type GitActionRequestInput,
+  shouldSubmitStackAfterGitAction,
   type VcsActionOperation,
   type VcsRef,
 } from "@t3tools/client-runtime/state/vcs";
-import type { GitRunStackedActionResult } from "@t3tools/contracts";
+import type { GitRunStackedActionResult, PullRequestStackAction } from "@t3tools/contracts";
 import {
   dedupeRemoteBranchesWithLocalMatches,
   sanitizeFeatureBranchName,
@@ -22,9 +24,20 @@ import { uuidv4 } from "../lib/uuid";
 import { appAtomRegistry } from "./atom-registry";
 import { setPendingConnectionError } from "./use-remote-environment-registry";
 import { useAtomCommand } from "./use-atom-command";
+import { useEnvironmentQuery } from "./query";
+import { pullRequestEnvironment } from "./pullRequests";
+import { serverEnvironment } from "./server";
 import { showGitActionResult } from "./use-vcs-action-state";
 import { useThreadSelection } from "./use-thread-selection";
 import { useSelectedThreadWorktree } from "./use-selected-thread-worktree";
+
+const STACK_ACTION_SUCCESS_LABELS: Record<PullRequestStackAction, string> = {
+  start: "Stack started",
+  add_step: "Stack step added",
+  submit: "Stack submitted",
+  sync: "Stack synced",
+  unstack: "Pull requests unstacked",
+};
 
 export function useSelectedThreadGitActions() {
   const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
@@ -37,6 +50,23 @@ export function useSelectedThreadGitActions() {
   const pull = useAtomCommand(vcsEnvironment.pull, { reportFailure: false });
   const { selectedThread, selectedThreadProject } = useThreadSelection();
   const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
+  const serverConfig = useAtomValue(
+    serverEnvironment.configValueAtom(selectedThread?.environmentId ?? null),
+  );
+  const pullRequestStack = useEnvironmentQuery(
+    selectedThread !== null &&
+      selectedThreadCwd !== null &&
+      serverConfig?.environment.capabilities.pullRequestStacks === true
+      ? pullRequestEnvironment.stackCurrent({
+          environmentId: selectedThread.environmentId,
+          input: { cwd: selectedThreadCwd },
+        })
+      : null,
+  );
+  const currentStack = pullRequestStack.data?.stack ?? null;
+  const runPullRequestStackAction = useAtomCommand(pullRequestEnvironment.runStackAction, {
+    reportFailure: false,
+  });
   const runStackedAction = useAtomCommand(
     vcsActionManager.runStackedAction({
       environmentId: selectedThread?.environmentId ?? null,
@@ -335,13 +365,48 @@ export function useSelectedThreadGitActions() {
             return result;
           }
 
-          showGitActionResult({
-            type: "success",
-            title: result.value.toast.title,
-            description: result.value.toast.description,
-            prUrl:
-              result.value.toast.cta.kind === "open_pr" ? result.value.toast.cta.url : undefined,
-          });
+          const submittedStack =
+            currentStack !== null &&
+            !input.featureBranch &&
+            shouldSubmitStackAfterGitAction(input.action);
+          let stackSubmitError: string | null = null;
+          if (submittedStack) {
+            const stackResult = await runPullRequestStackAction({
+              environmentId: thread.environmentId,
+              input: {
+                actionId: uuidv4(),
+                cwd,
+                action: "submit",
+              },
+            });
+            if (AsyncResult.isFailure(stackResult)) {
+              const error = Cause.squash(stackResult.cause);
+              stackSubmitError =
+                error instanceof Error ? error.message : "GitHub could not submit this stack.";
+            } else {
+              pullRequestStack.refresh();
+            }
+          }
+
+          showGitActionResult(
+            stackSubmitError
+              ? {
+                  type: "error",
+                  title: "Changes saved, but stack submit failed",
+                  description: stackSubmitError,
+                }
+              : {
+                  type: "success",
+                  title: submittedStack ? "Stack submitted" : result.value.toast.title,
+                  description: submittedStack
+                    ? "Branches pushed. Pull requests updated."
+                    : result.value.toast.description,
+                  prUrl:
+                    result.value.toast.cta.kind === "open_pr"
+                      ? result.value.toast.cta.url
+                      : undefined,
+                },
+          );
 
           if (result.value.branch.status === "created" && result.value.branch.name) {
             const syncResult = await syncSelectedThreadBranchState({
@@ -366,6 +431,55 @@ export function useSelectedThreadGitActions() {
     [
       runStackedAction,
       refreshSelectedThreadGitStatus,
+      currentStack,
+      pullRequestStack.refresh,
+      runPullRequestStackAction,
+      runSelectedThreadGitMutation,
+      selectedThreadWorktreePath,
+      syncSelectedThreadBranchState,
+    ],
+  );
+
+  const onRunSelectedThreadStackAction = useCallback(
+    async (action: PullRequestStackAction, branch?: string) => {
+      return await runSelectedThreadGitMutation(
+        "run_change_request",
+        action === "sync" ? "Syncing stack" : "Updating stack",
+        async ({ thread, cwd }) => {
+          const result = await runPullRequestStackAction({
+            environmentId: thread.environmentId,
+            input: {
+              actionId: uuidv4(),
+              cwd,
+              action,
+              ...(branch === undefined ? {} : { branch }),
+            },
+          });
+          if (AsyncResult.isFailure(result)) return result;
+          const nextBranch = result.value.stack?.currentBranch;
+          if (nextBranch !== undefined && nextBranch !== thread.branch) {
+            const syncResult = await syncSelectedThreadBranchState({
+              thread,
+              cwd,
+              nextThreadState: { branch: nextBranch, worktreePath: selectedThreadWorktreePath },
+            });
+            if (AsyncResult.isFailure(syncResult)) return AsyncResult.failure(syncResult.cause);
+          } else {
+            await refreshSelectedThreadGitStatus({ quiet: true, cwd });
+          }
+          pullRequestStack.refresh();
+          showGitActionResult({
+            type: "success",
+            title: STACK_ACTION_SUCCESS_LABELS[action],
+          });
+          return result;
+        },
+      );
+    },
+    [
+      pullRequestStack.refresh,
+      refreshSelectedThreadGitStatus,
+      runPullRequestStackAction,
       runSelectedThreadGitMutation,
       selectedThreadWorktreePath,
       syncSelectedThreadBranchState,
@@ -380,5 +494,6 @@ export function useSelectedThreadGitActions() {
     onCreateSelectedThreadWorktree,
     onPullSelectedThreadBranch,
     onRunSelectedThreadGitAction,
+    onRunSelectedThreadStackAction,
   };
 }
