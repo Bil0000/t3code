@@ -8,6 +8,7 @@ import type {
   GitActionProgressEvent,
   GitRunStackedActionResult,
   GitStackedAction,
+  PullRequestLocalStackStep,
   PullRequestStackAction,
   SourceControlCloneProtocol,
   SourceControlProviderDiscoveryItem,
@@ -21,13 +22,17 @@ import * as Option from "effect/Option";
 import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { flushSync } from "react-dom";
 import {
+  CheckCircle2Icon,
   CheckIcon,
   ChevronDownIcon,
+  CircleDotIcon,
+  Clock3Icon,
   CloudDownloadIcon,
   CloudUploadIcon,
   ExternalLinkIcon,
   GitBranchPlusIcon,
   GitCommitIcon,
+  GitPullRequestClosedIcon,
   InfoIcon,
   LockIcon,
   GlobeIcon,
@@ -47,6 +52,7 @@ import {
   buildMenuItems,
   adaptMenuItemsForStack,
   adaptQuickActionForStack,
+  formatLocalStackStepDetail,
   type GitActionIconName,
   type GitActionMenuItem,
   type GitQuickAction,
@@ -388,6 +394,30 @@ function GitQuickActionIcon({
   if (quickAction.label === "Commit") return <GitCommitIcon className={iconClassName} />;
   if (quickAction.label === "Push") return <CloudUploadIcon className={iconClassName} />;
   return <InfoIcon className={iconClassName} />;
+}
+
+function GitStackStepIcon({ step }: { step: PullRequestLocalStackStep }) {
+  if (step.needsRebase) {
+    return <TriangleAlertIcon aria-hidden className="size-3.5 text-warning" />;
+  }
+  if (step.pullRequest?.state === "merged") {
+    return <CheckCircle2Icon aria-hidden className="size-3.5 text-emerald-500" />;
+  }
+  if (step.pullRequest?.state === "queued") {
+    return <Clock3Icon aria-hidden className="size-3.5 text-blue-500" />;
+  }
+  if (step.pullRequest?.state === "closed") {
+    return <GitPullRequestClosedIcon aria-hidden className="size-3.5 text-destructive" />;
+  }
+  if (step.pullRequest?.state === "open") {
+    return <CircleDotIcon aria-hidden className="size-3.5 text-emerald-500" />;
+  }
+  return (
+    <span
+      aria-hidden
+      className="size-3 rounded-full border border-muted-foreground/50 bg-popover"
+    />
+  );
 }
 
 interface PublishRepositoryDialogProps {
@@ -1134,7 +1164,6 @@ export default function GitActionsControl({
   const queriedStack = stackQuery.data?.stack ?? null;
   const currentStack = queriedStack?.currentBranch === gitStatus?.refName ? queriedStack : null;
   const currentStackStep = currentStack?.steps.find((step) => step.isCurrent) ?? null;
-  const currentStackPullRequestNumber = currentStackStep?.pullRequest?.number ?? null;
   const staleStackSteps = currentStack?.steps.filter((step) => step.needsRebase).length ?? 0;
   useEffect(
     () =>
@@ -1848,27 +1877,75 @@ export default function GitActionsControl({
       ) : (
         <Group aria-label="Git actions" className="shrink-0">
           {currentStack && currentStackStep ? (
-            <Button
-              aria-label={`View stack, step ${currentStackStep.position} of ${currentStack.steps.length}${staleStackSteps > 0 ? `. ${staleStackSteps} steps need refresh` : ""}`}
-              className="gap-1 px-2"
-              disabled={currentStackPullRequestNumber === null || onOpenPullRequest === undefined}
-              size="xs"
-              title={`View stack · Step ${currentStackStep.position} of ${currentStack.steps.length}`}
-              variant="outline"
-              onClick={
-                currentStackPullRequestNumber !== null && onOpenPullRequest
-                  ? () => onOpenPullRequest(currentStackPullRequestNumber)
-                  : undefined
-              }
-            >
-              <LayersIcon aria-hidden className="size-3.5 text-emerald-500" />
-              <span className="tabular-nums">
-                {currentStackStep.position}/{currentStack.steps.length}
-              </span>
-              {staleStackSteps > 0 ? (
-                <TriangleAlertIcon aria-hidden className="size-3.5 text-warning" />
-              ) : null}
-            </Button>
+            <Menu>
+              <MenuTrigger
+                render={
+                  <Button
+                    aria-label={`Open pull request stack. Step ${currentStackStep.position} of ${currentStack.steps.length}.${staleStackSteps > 0 ? ` ${staleStackSteps} steps need refresh.` : ""}`}
+                    className="gap-1 px-2"
+                    size="xs"
+                    title={`Pull request stack · Step ${currentStackStep.position} of ${currentStack.steps.length}`}
+                    variant="outline"
+                  />
+                }
+              >
+                <LayersIcon aria-hidden className="size-3.5 text-emerald-500" />
+                <span className="tabular-nums">
+                  {currentStackStep.position}/{currentStack.steps.length}
+                </span>
+                {staleStackSteps > 0 ? (
+                  <TriangleAlertIcon aria-hidden className="size-3.5 text-warning" />
+                ) : null}
+                <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground" />
+              </MenuTrigger>
+              <MenuPopup align="start" className="w-80 max-w-[calc(100vw-1rem)]" side="bottom">
+                <div className="px-2 py-1.5">
+                  <p className="text-sm font-medium">Pull request stack</p>
+                  <p className="text-xs text-muted-foreground">
+                    {currentStack.steps.length} steps into {currentStack.trunk}
+                  </p>
+                </div>
+                <MenuSeparator />
+                <div className="relative before:absolute before:bottom-4 before:left-4 before:top-4 before:w-px before:bg-border">
+                  {currentStack.steps.toReversed().map((step) => {
+                    const pullRequestNumber = step.pullRequest?.number ?? null;
+                    return (
+                      <MenuItem
+                        aria-current={step.isCurrent ? "step" : undefined}
+                        className={cn(
+                          "relative min-h-0 items-start py-2",
+                          step.isCurrent && "bg-accent/60",
+                        )}
+                        disabled={pullRequestNumber === null || onOpenPullRequest === undefined}
+                        key={step.branch}
+                        onClick={
+                          pullRequestNumber !== null && onOpenPullRequest
+                            ? () => onOpenPullRequest(pullRequestNumber)
+                            : undefined
+                        }
+                      >
+                        <span className="relative z-10 grid size-4 shrink-0 place-items-center bg-popover">
+                          <GitStackStepIcon step={step} />
+                        </span>
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate font-medium" title={step.branch}>
+                            {step.branch}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {formatLocalStackStepDetail(step)}
+                          </span>
+                        </span>
+                      </MenuItem>
+                    );
+                  })}
+                </div>
+                <MenuSeparator />
+                <div className="flex items-center gap-2 px-2 py-1.5 text-xs text-muted-foreground">
+                  <span className="size-2 rounded-full border border-border bg-background" />
+                  <span className="min-w-0 flex-1 truncate">{currentStack.trunk}</span>
+                </div>
+              </MenuPopup>
+            </Menu>
           ) : null}
           {quickActionDisabledReason ? (
             <Popover>

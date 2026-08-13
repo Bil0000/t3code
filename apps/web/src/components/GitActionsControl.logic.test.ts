@@ -1,10 +1,11 @@
-import type { VcsStatusResult } from "@t3tools/contracts";
+import type { PullRequestLocalStackStep, VcsStatusResult } from "@t3tools/contracts";
 import { assert, describe, it } from "vite-plus/test";
 import {
   adaptMenuItemsForStack,
   adaptQuickActionForStack,
   buildGitActionProgressStages,
   buildMenuItems,
+  formatLocalStackStepDetail,
   prepareGitActionForStackSubmit,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
@@ -17,6 +18,40 @@ import {
 } from "./GitActionsControl.logic";
 
 describe("stack-aware Git actions", () => {
+  it("shows the pull request number and state in stack rows", () => {
+    assert.equal(
+      formatLocalStackStepDetail({
+        position: 1,
+        branch: "feature/first",
+        isCurrent: false,
+        isMerged: true,
+        isQueued: false,
+        needsRebase: true,
+        pullRequest: {
+          number: 42,
+          url: "https://github.com/example/repo/pull/42",
+          state: "merged",
+        },
+      } satisfies PullRequestLocalStackStep),
+      "#42 · Merged · Needs refresh",
+    );
+  });
+
+  it("marks stack steps that do not have a pull request yet", () => {
+    assert.equal(
+      formatLocalStackStepDetail({
+        position: 2,
+        branch: "feature/next",
+        isCurrent: true,
+        isMerged: false,
+        isQueued: false,
+        needsRebase: false,
+        pullRequest: null,
+      } satisfies PullRequestLocalStackStep),
+      "Not submitted",
+    );
+  });
+
   it("keeps one submit action in the stack menu", () => {
     const items = buildMenuItems(status({ aheadCount: 1 }), false);
 

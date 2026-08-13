@@ -1,6 +1,7 @@
 import type {
   GitRunStackedActionResult,
   GitStackedAction,
+  PullRequestLocalStackStep,
   VcsStatusResult,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch } from "@t3tools/shared/git";
@@ -34,6 +35,20 @@ export interface GitQuickAction {
   kind: "run_action" | "run_pull" | "open_pr" | "open_publish" | "show_hint";
   action?: GitStackedAction;
   hint?: string;
+}
+
+const LOCAL_STACK_STATE_LABELS = {
+  open: "Open",
+  closed: "Closed",
+  merged: "Merged",
+  queued: "Queued",
+} as const;
+
+export function formatLocalStackStepDetail(step: PullRequestLocalStackStep): string {
+  if (step.pullRequest === null) return "Not submitted";
+
+  const pullRequestDetail = `#${step.pullRequest.number} · ${LOCAL_STACK_STATE_LABELS[step.pullRequest.state]}`;
+  return step.needsRebase ? `${pullRequestDetail} · Needs refresh` : pullRequestDetail;
 }
 
 export function adaptMenuItemsForStack(
