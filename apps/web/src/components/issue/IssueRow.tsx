@@ -1,4 +1,4 @@
-import type { IssueListEntry } from "@t3tools/contracts";
+import type { IssueListEntry, IssueListSort, IssueReactionContent } from "@t3tools/contracts";
 import { MessageSquareIcon } from "lucide-react";
 
 import { memo } from "react";
@@ -10,6 +10,20 @@ import {
 import { ListRow } from "../sourceControl/ListRow";
 import { IssueLabelChips, IssueStateGlyph } from "./issuePresentation";
 
+const REACTION_SORT: Partial<
+  Record<IssueListSort, { readonly emoji: string; readonly content?: IssueReactionContent }>
+> = {
+  reactions: { emoji: "👍" },
+  "reactions-thumbs-up": { emoji: "👍", content: "thumbs-up" },
+  "reactions-thumbs-down": { emoji: "👎", content: "thumbs-down" },
+  "reactions-rocket": { emoji: "🚀", content: "rocket" },
+  "reactions-hooray": { emoji: "🎉", content: "hooray" },
+  "reactions-eyes": { emoji: "👀", content: "eyes" },
+  "reactions-heart": { emoji: "❤️", content: "heart" },
+  "reactions-laugh": { emoji: "😄", content: "laugh" },
+  "reactions-confused": { emoji: "😕", content: "confused" },
+};
+
 /** Faces, not names: past a few of them the meta line becomes a list nobody reads. */
 const ASSIGNEE_FACES = 3;
 
@@ -19,6 +33,7 @@ function IssueRowImpl({
   showProjectTitle,
   showProvider,
   matchedElsewhere,
+  reactionSort,
   onSelect,
 }: {
   entry: IssueListEntry;
@@ -31,8 +46,20 @@ function IssueRowImpl({
    * the difference between a result and an apparently random row.
    */
   matchedElsewhere?: boolean;
+  reactionSort?: IssueListSort | undefined;
   onSelect: (entry: IssueListEntry) => void;
 }) {
+  const reactionKind = reactionSort === undefined ? undefined : REACTION_SORT[reactionSort];
+  const reactionCount =
+    reactionKind !== undefined
+      ? (entry.reactions ?? []).reduce(
+          (total, reaction) =>
+            reactionKind.content === undefined || reaction.content === reactionKind.content
+              ? total + reaction.count
+              : total,
+          0,
+        )
+      : 0;
   return (
     <ListRow
       glyph={<IssueStateGlyph state={entry.state} stateReason={entry.stateReason} />}
@@ -67,7 +94,15 @@ function IssueRowImpl({
       matchedElsewhere={matchedElsewhere === true}
       updatedAt={entry.updatedAt}
       trailing={
-        entry.commentCount > 0 ? (
+        reactionSort?.startsWith("reactions") && reactionCount > 0 ? (
+          <span
+            className="flex items-center gap-1"
+            title={`${reactionCount.toLocaleString()} reactions`}
+          >
+            <span aria-hidden>{reactionKind?.emoji ?? "👍"}</span>
+            {reactionCount.toLocaleString()}
+          </span>
+        ) : entry.commentCount > 0 ? (
           <span
             className="flex items-center gap-1"
             title={`${entry.commentCount.toLocaleString()} comments`}

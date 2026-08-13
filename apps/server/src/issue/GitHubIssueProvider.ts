@@ -110,6 +110,8 @@ export const make = Effect.gen(function* () {
           involvement: input.involvement,
           viewer: input.viewer,
           limit: input.limit,
+          sort: input.sort,
+          order: input.order,
           query: input.query,
           cursor: input.cursor,
         })
@@ -127,6 +129,8 @@ export const make = Effect.gen(function* () {
           involvement: input.involvement,
           viewer: input.viewer,
           limit: input.limit,
+          sort: input.sort,
+          order: input.order,
           query: input.query,
           cursor: input.cursor,
         })

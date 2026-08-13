@@ -10,6 +10,8 @@ import type {
   IssueComment,
   IssueEvent,
   IssueInvolvement,
+  IssueListOrder,
+  IssueListSort,
   IssueLabelCandidate,
   IssueLabelCandidateList,
   IssueListState,
@@ -227,6 +229,8 @@ export class GitHubIssueCli extends Context.Service<
       readonly involvement: IssueInvolvement;
       readonly viewer: string;
       readonly limit: number;
+      readonly sort?: IssueListSort | undefined;
+      readonly order?: IssueListOrder | undefined;
       /** Free text for `--search`, matched as one literal phrase. */
       readonly query?: string | undefined;
       /** Where to carry on from, as an `updated:` qualifier on the same search. */
@@ -247,6 +251,8 @@ export class GitHubIssueCli extends Context.Service<
       readonly involvement: IssueInvolvement;
       readonly viewer: string;
       readonly limit: number;
+      readonly sort?: IssueListSort | undefined;
+      readonly order?: IssueListOrder | undefined;
       readonly query?: string | undefined;
       readonly cursor?: ProviderListCursor | undefined;
     }) => Effect.Effect<GitHubIssueSearchBatch, GitHubIssueCliError>;
@@ -428,6 +434,29 @@ function involvementArgs(input: {
   }
 }
 
+const GITHUB_SORT: Readonly<Record<IssueListSort, string | null>> = {
+  "best-match": null,
+  created: "created",
+  updated: "updated",
+  comments: "comments",
+  reactions: "reactions",
+  "reactions-thumbs-up": "reactions-+1",
+  "reactions-thumbs-down": "reactions--1",
+  "reactions-rocket": "reactions-rocket",
+  "reactions-hooray": "reactions-tada",
+  "reactions-eyes": "reactions-eyes",
+  "reactions-heart": "reactions-heart",
+  "reactions-laugh": "reactions-smile",
+  "reactions-confused": "reactions-thinking_face",
+};
+
+function supportsIssueCursor(input: {
+  readonly sort?: IssueListSort | undefined;
+  readonly order?: IssueListOrder | undefined;
+}) {
+  return (input.sort ?? "updated") === "updated" && (input.order ?? "desc") === "desc";
+}
+
 /**
  * The one `--search` argument, which is where the order, the continuation and the reader's text
  * end up.
@@ -436,6 +465,8 @@ function involvementArgs(input: {
  * qualifier a repository's pull requests arrive on the issues page as issues.
  */
 function searchTerms(input: {
+  readonly sort?: IssueListSort | undefined;
+  readonly order?: IssueListOrder | undefined;
   readonly query?: string | undefined;
   readonly cursor?: ProviderListCursor | undefined;
 }): string {
@@ -446,12 +477,14 @@ function searchTerms(input: {
     // The instant the last slice ended on, and everything before it. Inclusive, because rows
     // sharing one instant are ordinary and the caller drops the ones it has already sent — asking
     // for strictly older would lose the rest of them instead.
-    ...(input.cursor === undefined ? [] : [`updated:<=${input.cursor.updatedBefore}`]),
-    // `gh issue list` answers newest-created first, which is not the order the page reads rows in
-    // and not an order a continuation can carry on from: an issue filed last year and touched this
-    // morning belongs at the top of the list and at the front of the first slice. Free text would
-    // otherwise come back in best-match order, which is worse again.
-    "sort:updated-desc",
+    ...(input.cursor === undefined || !supportsIssueCursor(input)
+      ? []
+      : [`updated:<=${input.cursor.updatedBefore}`]),
+    // Updated-desc stays the default because it is the only order the timestamp cursor can carry.
+    // An explicit best-match choice omits the qualifier and preserves GitHub's ranking.
+    ...(GITHUB_SORT[input.sort ?? "updated"] === null
+      ? []
+      : [`sort:${GITHUB_SORT[input.sort ?? "updated"]}-${input.order ?? "desc"}`]),
   ].join(" ");
 }
 
@@ -864,6 +897,13 @@ export const make = Effect.gen(function* () {
                   continues,
                 });
               }
+              if (!supportsIssueCursor(input)) {
+                return Effect.succeed({
+                  items: decoded.success.items.slice(0, input.limit),
+                  truncated: decoded.success.rawCount > input.limit,
+                  continues: false,
+                });
+              }
               const handed = wholeInstantRows(decoded.success.items, input.limit);
               const runsOn =
                 instantRunsOn(decoded.success.items, input.limit, handed) &&
@@ -971,10 +1011,13 @@ export const make = Effect.gen(function* () {
           read += batch.rawCount;
           hasNextPage = batch.hasNextPage;
           cursor = batch.nextCursor;
-          handed = wholeInstantRows(items, input.limit);
+          handed = supportsIssueCursor(input)
+            ? wholeInstantRows(items, input.limit)
+            : Math.min(items.length, input.limit);
         } while (
           cursor !== null &&
           read < ISSUE_SEARCH_MAX_RESULTS &&
+          supportsIssueCursor(input) &&
           instantRunsOn(items, input.limit, handed)
         );
         return {
@@ -982,9 +1025,11 @@ export const make = Effect.gen(function* () {
           // A slice still standing inside one instant has run into GitHub's ceiling on how far a
           // search may be paged, so this is every row the host will answer this query with:
           // offering a continuation would hand back a cursor answered with these same rows.
-          truncated: instantRunsOn(items, input.limit, handed)
-            ? false
-            : read > Math.max(input.limit, handed) || hasNextPage,
+          truncated: supportsIssueCursor(input)
+            ? instantRunsOn(items, input.limit, handed)
+              ? false
+              : read > Math.max(input.limit, handed) || hasNextPage
+            : read > input.limit || hasNextPage,
         };
       });
     },

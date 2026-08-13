@@ -265,6 +265,45 @@ layer("GitHubIssueCli.layer", (it) => {
     }),
   );
 
+  it.effect("uses GitHub sorting and grows non-recency pages instead of cursoring them", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issues(1, 1))));
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+
+      const batch = yield* cli.listIssues({
+        ...repository,
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        sort: "reactions-thumbs-up",
+        order: "desc",
+      });
+
+      assert.strictEqual(searchOfCall(0), "is:issue sort:reactions-+1-desc");
+      assert.isFalse(batch.continues);
+    }),
+  );
+
+  it.effect("preserves GitHub best-match ranking without a sort qualifier", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(issues(1, 1))));
+      const cli = yield* GitHubIssueCli.GitHubIssueCli;
+
+      yield* cli.listIssues({
+        ...repository,
+        state: "open",
+        involvement: "all",
+        viewer: "bilal",
+        limit: 10,
+        sort: "best-match",
+        query: "compiler crash",
+      });
+
+      assert.strictEqual(searchOfCall(0), `is:issue "compiler crash"`);
+    }),
+  );
+
   it.effect("narrows the listing to the viewer's own work with the flags gh has for it", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValue(Effect.succeed(output("[]")));

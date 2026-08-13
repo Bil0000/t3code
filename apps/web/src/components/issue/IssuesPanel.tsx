@@ -1,6 +1,8 @@
 import type {
   EnvironmentId,
   IssueInvolvement,
+  IssueListOrder,
+  IssueListSort,
   IssueListEntry,
   IssueListState,
   ProjectId,
@@ -28,8 +30,13 @@ import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { IssueDetailPanel, type IssueHandoffTarget } from "./IssueDetailPanel";
 import { ListGhost } from "../sourceControl/ListGhosts";
-import { filterIssuesByInvolvement, issueEntryKey, type IssueViewers } from "./issueList.logic";
-import { IssueFiltersMenu } from "./IssueListFilters";
+import {
+  filterIssuesByInvolvement,
+  issueEntryKey,
+  rankIssueMatches,
+  type IssueViewers,
+} from "./issueList.logic";
+import { IssueFiltersMenu, IssueSortMenu } from "./IssueListFilters";
 import { type ListFilterOption } from "../sourceControl/ListFilterMenu";
 import { IssueRow } from "./IssueRow";
 
@@ -53,6 +60,8 @@ interface PanelFilters {
   readonly state: IssueListState;
   readonly involvement: IssueInvolvement;
   readonly label: string | undefined;
+  readonly sort: IssueListSort;
+  readonly order: IssueListOrder;
 }
 
 /**
@@ -75,16 +84,6 @@ const MAX_QUERY_LENGTH = 200;
 const PAGE_SIZE = 30;
 /** The listing's own ceiling. Past it the search is the way to find something, not more rows. */
 const MAX_LIMIT = 500;
-
-/**
- * Open above closed, each side keeping the host's recency order. A closed issue is still worth
- * opening — that is why they are listed at all — but it is rarely the one being looked for.
- */
-function openFirst(entries: ReadonlyArray<IssueListEntry>): ReadonlyArray<IssueListEntry> {
-  return entries.toSorted(
-    (left, right) => Number(left.state === "closed") - Number(right.state === "closed"),
-  );
-}
 
 interface IssuesPanelProps {
   environmentId: EnvironmentId;
@@ -126,7 +125,9 @@ function ProjectIssues({
     readonly state: IssueListState;
     readonly involvement: IssueInvolvement;
     readonly label: string | undefined;
-  }>({ state: "open", involvement: "all", label: undefined });
+    readonly sort: IssueListSort;
+    readonly order: IssueListOrder;
+  }>({ state: "open", involvement: "all", label: undefined, sort: "updated", order: "desc" });
 
   if (selected) {
     return (
@@ -206,7 +207,7 @@ function IssueBrowserList({
 
   // The label is narrowed on the rows rather than on the host, so it is no part of the question
   // and no reason to start the list again.
-  const filterKey = `${filters.state}:${filters.involvement}:${sent}`;
+  const filterKey = `${filters.state}:${filters.involvement}:${filters.sort}:${filters.order}:${sent}`;
   const pageSize = page.key === filterKey ? page.size : PAGE_SIZE;
   const sentCursors = page.key === filterKey ? page.cursors : null;
 
@@ -226,12 +227,16 @@ function IssueBrowserList({
         involvement: filters.involvement,
         projectId,
         limit: pageSize,
+        sort: filters.sort,
+        order: filters.order,
         ...(sent ? { query: sent } : {}),
         ...(sentCursors === null ? {} : { cursors: sentCursors }),
       },
     }),
   );
   const answered = listQuery.data;
+  const githubSortingAvailable =
+    answered?.providers.some((provider) => provider.kind === "github") ?? false;
 
   /**
    * What the list holds, across the slices it has asked for. A continuation carries only the rows
@@ -252,11 +257,16 @@ function IssueBrowserList({
   } | null>(null);
   useEffect(() => {
     if (answered === null) return;
+    const hostOrdered =
+      filters.sort === "best-match" &&
+      answered.providers.some((provider) => provider.kind !== "github")
+        ? rankIssueMatches(answered.entries, sent)
+        : answered.entries;
     setOrdered((previous) => {
       if (previous === null || previous.key !== filterKey || sentCursors === null) {
         return {
           key: filterKey,
-          entries: openFirst(answered.entries),
+          entries: hostOrdered,
           truncated: answered.truncated,
           viewers: answered.viewers,
         };
@@ -265,15 +275,12 @@ function IssueBrowserList({
       const arrived = answered.entries.filter((entry) => !held.has(issueEntryKey(entry)));
       return {
         key: filterKey,
-        entries: [
-          ...previous.entries,
-          ...arrived.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-        ],
+        entries: [...previous.entries, ...arrived],
         truncated: answered.truncated,
         viewers: answered.viewers,
       };
     });
-  }, [answered, filterKey, sentCursors]);
+  }, [answered, filterKey, filters.order, filters.sort, sent, sentCursors]);
 
   // Involvement and the label are narrowed here as well as asked for: a host that cannot express
   // "mentioned" answers unnarrowed, and no host is asked about a label at all.
@@ -377,17 +384,27 @@ function IssueBrowserList({
           placeholder="Search issues"
           onChange={(event) => onQuery(event.target.value)}
         />
-        <IssueFiltersMenu
-          state={filters.state}
-          stateOptions={STATE_OPTIONS}
-          onState={(state) => onFilters({ ...filters, state })}
-          involvement={filters.involvement}
-          involvementOptions={INVOLVEMENT_OPTIONS}
-          onInvolvement={(involvement) => onFilters({ ...filters, involvement })}
-          label={filters.label}
-          labels={labelOptions}
-          onLabel={(label) => onFilters({ ...filters, label })}
-        />
+        <div className="flex shrink-0 items-center gap-1">
+          <IssueFiltersMenu
+            state={filters.state}
+            stateOptions={STATE_OPTIONS}
+            onState={(state) => onFilters({ ...filters, state })}
+            involvement={filters.involvement}
+            involvementOptions={INVOLVEMENT_OPTIONS}
+            onInvolvement={(involvement) => onFilters({ ...filters, involvement })}
+            label={filters.label}
+            labels={labelOptions}
+            onLabel={(label) => onFilters({ ...filters, label })}
+          />
+          {githubSortingAvailable ? (
+            <IssueSortMenu
+              sort={filters.sort}
+              order={filters.order}
+              onSort={(sort) => onFilters({ ...filters, sort })}
+              onOrder={(order) => onFilters({ ...filters, order })}
+            />
+          ) : null}
+        </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">
         <div className="space-y-0.5 px-1 pb-2">
@@ -422,6 +439,7 @@ function IssueBrowserList({
                   selected={false}
                   showProjectTitle={false}
                   showProvider={false}
+                  reactionSort={filters.sort}
                   onSelect={select}
                 />
               ))}

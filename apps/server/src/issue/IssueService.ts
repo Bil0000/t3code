@@ -27,6 +27,9 @@ import {
   type IssueListInput,
   type IssueListProjectError,
   type IssueListResult,
+  type IssueListOrder,
+  type IssueListSort,
+  type IssueReactionContent,
   type IssueProviderSummary,
   type IssueReactionInput,
   type IssueRef,
@@ -603,6 +606,7 @@ export const make = Effect.gen(function* () {
     labels: input.item.labels,
     milestone: input.item.milestone,
     commentCount: input.item.commentCount,
+    ...(input.item.reactions === undefined ? {} : { reactions: input.item.reactions }),
   });
 
   /**
@@ -621,13 +625,64 @@ export const make = Effect.gen(function* () {
         : `${project.repository} could not be read.`,
   });
 
+  const reactionContentBySort: Partial<Record<IssueListSort, IssueReactionContent>> = {
+    "reactions-thumbs-up": "thumbs-up",
+    "reactions-thumbs-down": "thumbs-down",
+    "reactions-rocket": "rocket",
+    "reactions-hooray": "hooray",
+    "reactions-eyes": "eyes",
+    "reactions-heart": "heart",
+    "reactions-laugh": "laugh",
+    "reactions-confused": "confused",
+  };
+
+  const reactionCount = (entry: IssueListEntry, sort: IssueListSort): number => {
+    const content = reactionContentBySort[sort];
+    return (entry.reactions ?? []).reduce(
+      (total, reaction) =>
+        content === undefined || reaction.content === content ? total + reaction.count : total,
+      0,
+    );
+  };
+
+  const sortEntries = (
+    entries: ReadonlyArray<IssueListEntry>,
+    sort: IssueListSort,
+    order: IssueListOrder,
+  ): ReadonlyArray<IssueListEntry> => {
+    if (sort === "best-match") return entries;
+    const compare = (left: IssueListEntry, right: IssueListEntry): number => {
+      switch (sort) {
+        case "created":
+          return left.createdAt.localeCompare(right.createdAt);
+        case "updated":
+          return left.updatedAt.localeCompare(right.updatedAt);
+        case "comments":
+          return left.commentCount - right.commentCount;
+        default:
+          return reactionCount(left, sort) - reactionCount(right, sort);
+      }
+    };
+    const direction = order === "asc" ? 1 : -1;
+    return entries.toSorted(
+      (left, right) =>
+        direction * compare(left, right) ||
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        left.repository.localeCompare(right.repository) ||
+        left.number - right.number,
+    );
+  };
+
   const listUncached: IssueService["Service"]["list"] = (input) =>
     Effect.gen(function* () {
       const involvement = input.involvement ?? "all";
+      const sort = input.sort ?? "updated";
+      const order = input.order ?? "desc";
       // Refused whole rather than per repository: a cursor is only ever a value this service
       // issued, so one that does not read as one means the page is sending something it made up,
       // and reading part of the listing under that assumption would quietly lose rows.
-      const continuation = yield* decodeCursors(input.cursors);
+      const continuation =
+        sort === "updated" && order === "desc" ? yield* decodeCursors(input.cursors) : null;
       const {
         supported: projects,
         unimplemented,
@@ -737,6 +792,8 @@ export const make = Effect.gen(function* () {
             involvement,
             viewer,
             limit,
+            sort,
+            order,
             // Each host matches this its own way, and one that cannot match text at all answers
             // unnarrowed rather than failing.
             query: input.query,
@@ -763,7 +820,9 @@ export const make = Effect.gen(function* () {
                 errors: [],
                 truncated: page.truncated,
                 nextCursor:
-                  page.continues && page.truncated ? nextListCursor(cursor, page.items) : null,
+                  sort === "updated" && order === "desc" && page.continues && page.truncated
+                    ? nextListCursor(cursor, page.items)
+                    : null,
               };
             }),
             // One unreadable repository must not blank the page — including the one whose tracker
@@ -808,6 +867,8 @@ export const make = Effect.gen(function* () {
           involvement,
           viewer,
           limit,
+          sort,
+          order,
           query: input.query,
           ...(cursor === undefined ? {} : { cursor: { updatedBefore: cursor.updatedBefore } }),
         }).pipe(
@@ -854,7 +915,7 @@ export const make = Effect.gen(function* () {
                   errors: [],
                   truncated: page.truncated,
                   nextCursor:
-                    page.truncated && boundary !== null
+                    sort === "updated" && order === "desc" && page.truncated && boundary !== null
                       ? listCursorAt(cursorHere, boundary, fetched)
                       : null,
                 });
@@ -899,9 +960,11 @@ export const make = Effect.gen(function* () {
       return {
         viewers: viewers as IssueListResult["viewers"],
         providers,
-        entries: batches
-          .flatMap((batch) => batch.entries)
-          .toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
+        entries: sortEntries(
+          batches.flatMap((batch) => batch.entries),
+          sort,
+          order,
+        ),
         errors: [...unreadable, ...batches.flatMap((batch) => batch.errors)],
         truncated: batches.some((batch) => batch.truncated),
         nextCursors,
@@ -1454,18 +1517,19 @@ export const make = Effect.gen(function* () {
     (key: string) => {
       // The parse undoes this module's own serialization, so the shapes are known exactly; the
       // cast restores the branded field types JSON cannot carry.
-      const [, state, involvement, projectId, host, limit, query, cursorEntries] = JSON.parse(
-        key,
-      ) as [
-        number,
-        string,
-        string | null,
-        string | null,
-        string | null,
-        number | null,
-        string | null,
-        ReadonlyArray<[string, string]> | null,
-      ];
+      const [, state, involvement, projectId, host, limit, query, sort, order, cursorEntries] =
+        JSON.parse(key) as [
+          number,
+          string,
+          string | null,
+          string | null,
+          string | null,
+          number | null,
+          string | null,
+          string | null,
+          string | null,
+          ReadonlyArray<[string, string]> | null,
+        ];
       return listUncached({
         state,
         ...(involvement === null ? {} : { involvement }),
@@ -1473,6 +1537,8 @@ export const make = Effect.gen(function* () {
         ...(host === null ? {} : { host }),
         ...(limit === null ? {} : { limit }),
         ...(query === null ? {} : { query }),
+        ...(sort === null ? {} : { sort }),
+        ...(order === null ? {} : { order }),
         ...(cursorEntries === null ? {} : { cursors: Object.fromEntries(cursorEntries) }),
       } as IssueListInput);
     },
@@ -1491,6 +1557,8 @@ export const make = Effect.gen(function* () {
       input.host ?? null,
       input.limit ?? null,
       input.query ?? null,
+      input.sort ?? null,
+      input.order ?? null,
       input.cursors === undefined
         ? null
         : Object.entries(input.cursors).toSorted(([left], [right]) => left.localeCompare(right)),

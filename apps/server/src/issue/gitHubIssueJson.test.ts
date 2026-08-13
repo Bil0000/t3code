@@ -214,6 +214,22 @@ describe("issue list decoding", () => {
     });
   });
 
+  it("reads reaction totals without loading issue conversations", () => {
+    const batch = expectSuccess(
+      decodeIssueListJson(
+        listJson([
+          {
+            reactionGroups: [{ content: "THUMBS_UP", reactors: { totalCount: 5, nodes: [] } }],
+          },
+        ]),
+      ),
+    );
+
+    expect(batch.items[0]?.reactions).toEqual([
+      { content: "thumbs-up", count: 5, actors: [], viewerHasReacted: false },
+    ]);
+  });
+
   it("reads why a closed issue was closed, and nothing for one still open", () => {
     const batch = expectSuccess(
       decodeIssueListJson(
@@ -313,6 +329,20 @@ describe("issue search decoding", () => {
     expect(batch.items[1]?.stateReason).toBe("not-planned");
     expect(batch.rawCount).toBe(2);
     expect(batch.hasNextPage).toBe(false);
+  });
+
+  it("reads reaction totals from cross-repository search rows", () => {
+    const batch = expectSuccess(
+      decodeIssueSearchJson(
+        searchJson([
+          searchItem({
+            reactionGroups: [{ content: "ROCKET", reactors: { totalCount: 3, nodes: [] } }],
+          }),
+        ]),
+      ),
+    );
+
+    expect(batch.items[0]?.reactions?.[0]).toMatchObject({ content: "rocket", count: 3 });
   });
 
   it("skips a node that is not an issue but still counts it", () => {

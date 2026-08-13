@@ -13,6 +13,7 @@ import type {
   IssueEventKind,
   IssueLabelCandidate,
   IssueLinkedPullRequest,
+  IssueReaction,
   IssueState,
   IssueTemplate,
   IssueTemplateField,
@@ -70,6 +71,7 @@ const RawIssueSchema = Schema.Struct({
   assignees: Schema.optional(Schema.NullOr(Schema.Array(RawActorSchema))),
   labels: Schema.optional(Schema.NullOr(Schema.Array(RawLabelSchema))),
   milestone: Schema.optional(Schema.NullOr(RawMilestoneSchema)),
+  reactionGroups: GitHubReactionGroupsSchema,
   body: Schema.optional(Schema.String),
 });
 
@@ -90,6 +92,7 @@ const RawSearchItemSchema = Schema.Struct({
   closedAt: Schema.optional(Schema.NullOr(Schema.String)),
   repository: Schema.optional(Schema.NullOr(Schema.Struct({ nameWithOwner: Schema.String }))),
   milestone: Schema.optional(Schema.NullOr(RawMilestoneSchema)),
+  reactionGroups: GitHubReactionGroupsSchema,
   comments: Schema.optional(Schema.NullOr(Schema.Struct({ totalCount: Schema.Int }))),
   assignees: Schema.optional(
     Schema.NullOr(
@@ -426,7 +429,7 @@ const RawCreatedIssueSchema = Schema.Struct({
  * this read reports no conversation size; the search below carries GitHub's own count instead.
  */
 export const ISSUE_LIST_JSON_FIELDS =
-  "number,title,url,author,state,stateReason,createdAt,updatedAt,closedAt,assignees,labels,milestone";
+  "number,title,url,author,state,stateReason,createdAt,updatedAt,closedAt,assignees,labels,milestone,reactionGroups";
 
 export const ISSUE_DETAIL_JSON_FIELDS = `${ISSUE_LIST_JSON_FIELDS},body`;
 
@@ -486,6 +489,7 @@ export function issueSearchGraphQlQuery(rows: number): string {
         repository { nameWithOwner }
         milestone { title }
         comments { totalCount }
+        ${GITHUB_REACTION_GROUPS_FIELDS}
         assignees(first: 20) { nodes { login name avatarUrl } }
         labels(first: 20) { nodes { name color } }
       }
@@ -790,6 +794,7 @@ export interface GitHubIssue {
   readonly labels: ReadonlyArray<SourceControlLabel>;
   readonly milestone: string | null;
   readonly commentCount: number;
+  readonly reactions: ReadonlyArray<IssueReaction>;
 }
 
 export interface GitHubIssueDetail extends GitHubIssue {
@@ -1017,6 +1022,7 @@ function toIssue(raw: Schema.Schema.Type<typeof RawIssueSchema>): GitHubIssue {
     milestone: trimmed(raw.milestone?.title),
     // The listing has no count that is not the whole conversation; the search below has one.
     commentCount: 0,
+    reactions: toGitHubReactions(raw.reactionGroups, null),
   };
 }
 

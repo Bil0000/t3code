@@ -1394,6 +1394,46 @@ const TWO_PROJECTS = [
   project({ id: "p2", title: "api", workspaceRoot: "/b", repository: "acme/api" }),
 ];
 
+it.effect("orders rows by the selected reaction kind across repositories", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: TWO_PROJECTS,
+      providers: [
+        fakeProvider("github", {
+          listIssuesAcross: () =>
+            Effect.succeed({
+              items: [
+                {
+                  ...batchedIssue(1, "acme/web", "2026-07-05T00:00:00Z"),
+                  reactions: [
+                    { content: "thumbs-up", count: 9, actors: [], viewerHasReacted: false },
+                    { content: "heart", count: 1, actors: [], viewerHasReacted: false },
+                  ],
+                },
+                {
+                  ...batchedIssue(2, "acme/api", "2026-07-02T00:00:00Z"),
+                  reactions: [{ content: "heart", count: 3, actors: [], viewerHasReacted: false }],
+                },
+              ],
+              truncated: false,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({
+      state: "open",
+      sort: "reactions-heart",
+      order: "desc",
+    });
+
+    assert.deepStrictEqual(
+      result.entries.map((entry) => entry.number),
+      [2, 1],
+    );
+  }),
+);
+
 it.effect("reads a host's repositories in one search, and files the rows back under each", () =>
   Effect.gen(function* () {
     const asked: Array<ReadonlyArray<string>> = [];

@@ -101,6 +101,17 @@ describe("IssueListResult", () => {
 });
 
 describe("IssueListInput", () => {
+  it("accepts GitHub-style sort choices", () => {
+    const input = decodeListInput({
+      state: "open",
+      sort: "reactions-thumbs-up",
+      order: "desc",
+    });
+
+    expect(input.sort).toBe("reactions-thumbs-up");
+    expect(input.order).toBe("desc");
+  });
+
   it("trims a search, so what is sent is what was typed", () => {
     expect(decodeListInput({ state: "open", query: "  refresh  " }).query).toBe("refresh");
   });

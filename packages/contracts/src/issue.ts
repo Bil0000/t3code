@@ -28,6 +28,26 @@ export type IssueState = typeof IssueState.Type;
 export const IssueListState = Schema.Literals(["all", "open", "closed"]);
 export type IssueListState = typeof IssueListState.Type;
 
+export const IssueListSort = Schema.Literals([
+  "best-match",
+  "created",
+  "updated",
+  "comments",
+  "reactions",
+  "reactions-thumbs-up",
+  "reactions-thumbs-down",
+  "reactions-rocket",
+  "reactions-hooray",
+  "reactions-eyes",
+  "reactions-heart",
+  "reactions-laugh",
+  "reactions-confused",
+]);
+export type IssueListSort = typeof IssueListSort.Type;
+
+export const IssueListOrder = Schema.Literals(["asc", "desc"]);
+export type IssueListOrder = typeof IssueListOrder.Type;
+
 /**
  * Why an issue was closed, which is the difference between work that got done and work that was
  * dropped. Only GitHub records it; elsewhere a closed issue simply has no reason to report.
@@ -207,6 +227,8 @@ export const IssueListEntry = Schema.Struct({
   assignees: Schema.Array(SourceControlActor),
   labels: Schema.Array(SourceControlLabel),
   milestone: Schema.NullOr(TrimmedNonEmptyString),
+  /** Present when the host can return reaction totals with the listing. */
+  reactions: Schema.optional(Schema.Array(IssueReaction)),
   commentCount: NonNegativeInt,
 });
 export type IssueListEntry = typeof IssueListEntry.Type;
@@ -238,6 +260,8 @@ export const IssueListInput = Schema.Struct({
    * answers unnarrowed rather than pretending.
    */
   query: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(200))),
+  sort: Schema.optional(IssueListSort),
+  order: Schema.optional(IssueListOrder),
 });
 export type IssueListInput = typeof IssueListInput.Type;
 
@@ -313,6 +337,8 @@ export const IssueDetail = Schema.Struct({
   assignees: Schema.Array(SourceControlActor),
   labels: Schema.Array(SourceControlLabel),
   milestone: Schema.NullOr(TrimmedNonEmptyString),
+  /** Present when the host can return reaction totals with the listing. */
+  reactions: Schema.optional(Schema.Array(IssueReaction)),
   /**
    * Signed-in host account. A comment edit is shown only when this matches its author. Absent
    * when the host cannot identify the viewer, which offers nothing rather than everything.

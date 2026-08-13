@@ -3,6 +3,8 @@ import { sourceControlHostOf, ThreadId } from "@t3tools/contracts";
 import type {
   EnvironmentId,
   IssueInvolvement,
+  IssueListOrder,
+  IssueListSort,
   IssueListEntry,
   IssueListResult,
   IssueListState,
@@ -41,7 +43,7 @@ import { IssueCreateDialog } from "../components/issue/IssueCreateDialog";
 import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
 import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
-import { IssueFiltersMenu } from "../components/issue/IssueListFilters";
+import { IssueFiltersMenu, IssueSortMenu } from "../components/issue/IssueListFilters";
 import {
   ListSearchInput,
   listFilterHostLabel,
@@ -106,6 +108,8 @@ export interface IssuesSearch {
    */
   readonly label?: string;
   readonly q?: string;
+  readonly sort?: IssueListSort;
+  readonly order?: IssueListOrder;
 }
 
 // The state filters wear the same glyphs the rows do, so the two read as one vocabulary.
@@ -121,6 +125,27 @@ const STATE_TABS = [
   { value: "open", label: "Open", Icon: CircleDotIcon },
   { value: "closed", label: "Closed", Icon: CircleCheckIcon },
 ] as const satisfies ReadonlyArray<ListFilterOption<IssueListState>>;
+
+function issueListSort(value: unknown): IssueListSort | undefined {
+  switch (value) {
+    case "best-match":
+    case "created":
+    case "updated":
+    case "comments":
+    case "reactions":
+    case "reactions-thumbs-up":
+    case "reactions-thumbs-down":
+    case "reactions-rocket":
+    case "reactions-hooray":
+    case "reactions-eyes":
+    case "reactions-heart":
+    case "reactions-laugh":
+    case "reactions-confused":
+      return value;
+    default:
+      return undefined;
+  }
+}
 
 /** Long enough that a keystroke does not become a request, short enough to feel answered. */
 const SEARCH_DEBOUNCE_MS = 250;
@@ -141,30 +166,35 @@ const EMPTY_TERMINAL_LABELS = new Map<string, string>();
 const EMPTY_PENDING_SURFACES = new Set<string>();
 
 export const Route = createFileRoute("/_chat/issues")({
-  validateSearch: (raw: Record<string, unknown>): IssuesSearch => ({
-    involvement:
-      raw.involvement === "assigned" ||
-      raw.involvement === "authored" ||
-      raw.involvement === "mentioned"
-        ? raw.involvement
-        : "all",
-    state: raw.state === "closed" || raw.state === "all" ? raw.state : "open",
-    ...(typeof raw.repository === "string" && raw.repository
-      ? { repository: raw.repository.slice(0, 200) }
-      : {}),
-    ...(typeof raw.number === "number" && Number.isInteger(raw.number) && raw.number > 0
-      ? { number: raw.number }
-      : {}),
-    ...(typeof raw.projectId === "string" && raw.projectId
-      ? { projectId: raw.projectId as ProjectId }
-      : {}),
-    ...(typeof raw.host === "string" && raw.host ? { host: raw.host.slice(0, 200) } : {}),
-    ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
-      ? { selectedProjectId: raw.selectedProjectId as ProjectId }
-      : {}),
-    ...(typeof raw.label === "string" && raw.label ? { label: raw.label.slice(0, 200) } : {}),
-    ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
-  }),
+  validateSearch: (raw: Record<string, unknown>): IssuesSearch => {
+    const sort = issueListSort(raw.sort);
+    return {
+      involvement:
+        raw.involvement === "assigned" ||
+        raw.involvement === "authored" ||
+        raw.involvement === "mentioned"
+          ? raw.involvement
+          : "all",
+      state: raw.state === "closed" || raw.state === "all" ? raw.state : "open",
+      ...(typeof raw.repository === "string" && raw.repository
+        ? { repository: raw.repository.slice(0, 200) }
+        : {}),
+      ...(typeof raw.number === "number" && Number.isInteger(raw.number) && raw.number > 0
+        ? { number: raw.number }
+        : {}),
+      ...(typeof raw.projectId === "string" && raw.projectId
+        ? { projectId: raw.projectId as ProjectId }
+        : {}),
+      ...(typeof raw.host === "string" && raw.host ? { host: raw.host.slice(0, 200) } : {}),
+      ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
+        ? { selectedProjectId: raw.selectedProjectId as ProjectId }
+        : {}),
+      ...(typeof raw.label === "string" && raw.label ? { label: raw.label.slice(0, 200) } : {}),
+      ...(sort === undefined ? {} : { sort }),
+      ...(raw.order === "asc" || raw.order === "desc" ? { order: raw.order } : {}),
+      ...(typeof raw.q === "string" && raw.q ? { q: raw.q.slice(0, 200) } : {}),
+    };
+  },
   component: IssuesRouteView,
 });
 
@@ -264,6 +294,8 @@ function IssuesRouteView() {
             ...(next.host ? { host: next.host } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
             ...(next.q ? { q: next.q } : {}),
+            ...(next.sort ? { sort: next.sort } : {}),
+            ...(next.order ? { order: next.order } : {}),
           };
         },
         replace: true,
@@ -294,9 +326,11 @@ function IssuesRouteView() {
   const typedQuery = (search.q ?? "").trim();
   const sentQuery = useDebouncedValue(typedQuery, SEARCH_DEBOUNCE_MS);
   const querySettled = typedQuery === sentQuery;
+  const sort: IssueListSort = search.sort ?? (sentQuery ? "best-match" : "updated");
+  const order: IssueListOrder = search.order ?? "desc";
 
   // Page size is view state, not a URL concern: a shared link should open the first page.
-  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}`;
+  const scopeKey = `${environmentId ?? ""}:${search.state}:${search.involvement}:${scopedProjectId ?? ""}:${search.host ?? ""}:${sort}:${order}`;
   const filterKey = `${scopeKey}:${sentQuery}`;
   // Where the next slice carries on from, per repository, as the server handed it back. Sending
   // it is what makes a second page cost a second page rather than the whole list again — and a
@@ -328,6 +362,8 @@ function IssuesRouteView() {
             // everything with the answer somewhere further down it.
             involvement: search.involvement,
             limit: pageSize,
+            sort,
+            order,
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
             ...(sentQuery ? { query: sentQuery } : {}),
@@ -355,6 +391,8 @@ function IssuesRouteView() {
             state: search.state,
             involvement: search.involvement,
             limit: PAGE_SIZE,
+            sort: search.sort ?? "updated",
+            order: search.order ?? "desc",
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
           },
@@ -366,7 +404,11 @@ function IssuesRouteView() {
   // below what is already on screen. A search re-ranks the whole list by match, so no partitions
   // are read for one. These are the same atoms the Authored and Assigned tabs ask for, so
   // switching to either is answered from cache.
-  const partitionsWanted = search.involvement === "all" && typedQuery.length === 0;
+  const partitionsWanted =
+    search.involvement === "all" &&
+    typedQuery.length === 0 &&
+    sort === "updated" &&
+    order === "desc";
   const authoredQuery = useEnvironmentQuery(
     issueEnvironmentId === null || !partitionsWanted
       ? null
@@ -376,6 +418,8 @@ function IssuesRouteView() {
             state: search.state,
             involvement: "authored",
             limit: PAGE_SIZE,
+            sort: search.sort ?? "updated",
+            order: search.order ?? "desc",
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
           },
@@ -390,6 +434,8 @@ function IssuesRouteView() {
             state: search.state,
             involvement: "assigned",
             limit: PAGE_SIZE,
+            sort: search.sort ?? "updated",
+            order: search.order ?? "desc",
             ...(scopedProjectId ? { projectId: scopedProjectId } : {}),
             ...(search.host ? { host: search.host } : {}),
           },
@@ -560,9 +606,16 @@ function IssuesRouteView() {
   } | null>(null);
   useEffect(() => {
     if (!answered) return;
+    const hostOrdered =
+      sort === "best-match" && answered.providers.some((provider) => provider.kind !== "github")
+        ? rankIssueMatches(answered.entries, sentQuery)
+        : answered.entries;
     setOrdered((previous) => {
       if (previous === null || previous.key !== filterKey) {
-        return { key: filterKey, entries: rankIssueMatches(answered.entries, sentQuery) };
+        return {
+          key: filterKey,
+          entries: hostOrdered,
+        };
       }
       if (sentCursors !== null) {
         // A continuation is a slice, not the list: it carries only what comes after the rows
@@ -571,18 +624,17 @@ function IssuesRouteView() {
         // next rows can be newer than another's last — lands under it.
         const held = new Set(previous.entries.map(issueEntryKey));
         const arrived = answered.entries.filter((entry) => !held.has(issueEntryKey(entry)));
-        const appended = rankIssueMatches(
-          arrived.toSorted((left, right) => right.updatedAt.localeCompare(left.updatedAt)),
-          sentQuery,
-        );
-        return { key: filterKey, entries: [...previous.entries, ...appended] };
+        return { key: filterKey, entries: [...previous.entries, ...arrived] };
       }
       // A whole-page answer replaces the order outright: the host answers in the order the page
       // reads, so its order stands, and an issue opened since the last read belongs at the top
       // rather than wherever the previous page happened to leave room for it.
-      return { key: filterKey, entries: rankIssueMatches(answered.entries, sentQuery) };
+      return {
+        key: filterKey,
+        entries: hostOrdered,
+      };
     });
-  }, [answered, filterKey, sentCursors, sentQuery]);
+  }, [answered, filterKey, order, sentCursors, sentQuery, sort]);
 
   // Carrying on where the last answer stopped, and only raising the page size for the hosts that
   // could not say where that was.
@@ -745,7 +797,14 @@ function IssuesRouteView() {
   ]);
 
   const groups = useMemo(() => {
-    if (search.involvement !== "all") return [{ key: "others" as const, label: "", entries }];
+    if (
+      search.involvement !== "all" ||
+      sort !== "updated" ||
+      order !== "desc" ||
+      typedQuery.length > 0
+    ) {
+      return [{ key: "others" as const, label: "", entries }];
+    }
     // Until both partitions have answered, the snapshot's stand in — they are yesterday's
     // groups, but whole ones, where grouping the feed's first page locally loses every
     // authored row older than it. Once the live reads land they take over; with neither,
@@ -774,10 +833,13 @@ function IssuesRouteView() {
     entries,
     environmentId,
     loaded,
+    order,
     partitionsWanted,
     scopeKey,
     search.involvement,
     search.label,
+    sort,
+    typedQuery.length,
     viewers,
   ]);
 
@@ -990,6 +1052,7 @@ function IssuesRouteView() {
                   entry={entry}
                   showProjectTitle
                   showProvider={showProvider}
+                  reactionSort={sort}
                   selected={
                     selected?.repository === entry.repository && selected.number === entry.number
                   }
@@ -1041,30 +1104,58 @@ function IssuesRouteView() {
       };
     }),
   ];
+  const scopedProviderKind = scopedProjectId
+    ? projects.find((project) => project.id === scopedProjectId)?.repositoryIdentity?.provider
+    : undefined;
+  const sortingHosts = search.host
+    ? hostEntries.filter((entry) => entry.host === search.host)
+    : hostEntries;
+  const githubSortingAvailable =
+    scopedProviderKind === "github" ||
+    (scopedProviderKind === undefined &&
+      sortingHosts.length > 0 &&
+      sortingHosts.every((entry) => entry.kind === "github"));
   const filtersMenu = (
-    <IssueFiltersMenu
-      state={search.state}
-      stateOptions={STATE_TABS}
-      onState={(state) => updateListScope({ state })}
-      involvement={search.involvement}
-      involvementOptions={INVOLVEMENT_TABS}
-      onInvolvement={(involvement) => updateListScope({ involvement })}
-      hostFilter={{
-        host: search.host,
-        hostOptions: hostMenuOptions,
-        onHost: (host) => updateListScope({ host }),
-      }}
-      projectFilter={{
-        environmentId,
-        projects: scopedProjects,
-        projectId: scopedProjectId,
-        unavailable: unavailableProjects,
-        onProject: (projectId) => updateListScope({ projectId }),
-      }}
-      label={search.label}
-      labels={labelOptions}
-      onLabel={(label) => updateListScope({ label })}
-    />
+    <div className="flex shrink-0 items-center gap-1">
+      <IssueFiltersMenu
+        state={search.state}
+        stateOptions={STATE_TABS}
+        onState={(state) => updateListScope({ state })}
+        involvement={search.involvement}
+        involvementOptions={INVOLVEMENT_TABS}
+        onInvolvement={(involvement) => updateListScope({ involvement })}
+        hostFilter={{
+          host: search.host,
+          hostOptions: hostMenuOptions,
+          onHost: (host) => updateListScope({ host, sort: undefined, order: undefined }),
+        }}
+        projectFilter={{
+          environmentId,
+          projects: scopedProjects,
+          projectId: scopedProjectId,
+          unavailable: unavailableProjects,
+          onProject: (projectId) =>
+            updateListScope({ projectId, sort: undefined, order: undefined }),
+        }}
+        label={search.label}
+        labels={labelOptions}
+        onLabel={(label) => updateListScope({ label })}
+      />
+      {githubSortingAvailable ? (
+        <IssueSortMenu
+          sort={sort}
+          order={order}
+          onSort={(nextSort) =>
+            updateListScope({
+              sort: nextSort === "updated" && sentQuery.length === 0 ? undefined : nextSort,
+            })
+          }
+          onOrder={(nextOrder) =>
+            updateListScope({ order: nextOrder === "desc" ? undefined : nextOrder })
+          }
+        />
+      ) : null}
+    </div>
   );
   const columnProps = {
     refreshing,
@@ -1076,7 +1167,8 @@ function IssuesRouteView() {
     hostMenuOptions,
     onInvolvement: (involvement: IssueInvolvement) => updateListScope({ involvement }),
     onState: (state: IssueListState) => updateListScope({ state }),
-    onHost: (host: string | undefined) => updateListScope({ host }),
+    onHost: (host: string | undefined) =>
+      updateListScope({ host, sort: undefined, order: undefined }),
     searchInput,
     filtersMenu,
     // Filing an issue needs a repository to file it against, so the button waits for the

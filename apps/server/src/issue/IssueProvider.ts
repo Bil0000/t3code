@@ -8,6 +8,8 @@ import type {
   IssueComment,
   IssueEvent,
   IssueInvolvement,
+  IssueListOrder,
+  IssueListSort,
   IssueLabelCandidateList,
   IssueLinkedPullRequest,
   IssueReaction,
@@ -60,6 +62,7 @@ export interface ProviderIssue {
   readonly labels: ReadonlyArray<SourceControlLabel>;
   readonly milestone: string | null;
   readonly commentCount: number;
+  readonly reactions?: ReadonlyArray<IssueReaction>;
 }
 
 export interface ProviderIssuePage {
@@ -162,6 +165,8 @@ export interface IssueProviderApi {
       readonly involvement: IssueInvolvement;
       readonly viewer: string;
       readonly limit: number;
+      readonly sort?: IssueListSort | undefined;
+      readonly order?: IssueListOrder | undefined;
       /**
        * Free text to narrow the listing by, as the host understands it. A host with no text
        * filter of its own ignores it and answers with the page it would have answered anyway.
@@ -185,6 +190,8 @@ export interface IssueProviderApi {
     readonly involvement: IssueInvolvement;
     readonly viewer: string;
     readonly limit: number;
+    readonly sort?: IssueListSort | undefined;
+    readonly order?: IssueListOrder | undefined;
     readonly query?: string | undefined;
     readonly cursor?: ProviderListCursor | undefined;
   }) => Effect.Effect<ProviderBatchedIssuePage, IssueProviderError>;

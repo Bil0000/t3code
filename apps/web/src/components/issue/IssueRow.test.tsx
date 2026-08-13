@@ -42,4 +42,23 @@ describe("IssueRow", () => {
       'class="flex min-w-0 items-center gap-1.5 max-w-40" title="long-author-name"',
     );
   });
+  it("shows the selected reaction count while sorting by reactions", () => {
+    const markup = renderToStaticMarkup(
+      <IssueRow
+        entry={{
+          ...entry,
+          commentCount: 9,
+          reactions: [{ content: "rocket", count: 3, actors: [], viewerHasReacted: false }],
+        }}
+        selected={false}
+        showProjectTitle={false}
+        showProvider={false}
+        reactionSort="reactions-rocket"
+        onSelect={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("3 reactions");
+    expect(markup).not.toContain("9 comments");
+  });
 });

@@ -1,10 +1,12 @@
 import type {
   EnvironmentId,
   IssueInvolvement,
+  IssueListOrder,
+  IssueListSort,
   IssueListState,
   ProjectId,
 } from "@t3tools/contracts";
-import { TagIcon, TagsIcon } from "lucide-react";
+import { ArrowDownUpIcon, TagIcon, TagsIcon } from "lucide-react";
 
 import {
   ALL_HOSTS_VALUE,
@@ -13,10 +15,101 @@ import {
   ListProjectFilterGroup,
   type ListFilterOption,
 } from "../sourceControl/ListFilterMenu";
-import { MenuSeparator } from "../ui/menu";
+import {
+  Menu,
+  MenuGroupLabel,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuSub,
+  MenuSubPopup,
+  MenuSubTrigger,
+  MenuTrigger,
+} from "../ui/menu";
 
 /** A label name is never empty, so the same trick the hosts use names "every label". */
 const ALL_LABELS_VALUE = "";
+
+const REACTION_SORTS = [
+  ["reactions", "Total reactions", ""],
+  ["reactions-thumbs-up", "Thumbs up", "👍"],
+  ["reactions-thumbs-down", "Thumbs down", "👎"],
+  ["reactions-rocket", "Rocket", "🚀"],
+  ["reactions-hooray", "Hooray", "🎉"],
+  ["reactions-eyes", "Eyes", "👀"],
+  ["reactions-heart", "Heart", "❤️"],
+  ["reactions-laugh", "Laugh", "😄"],
+  ["reactions-confused", "Confused", "😕"],
+] as const satisfies ReadonlyArray<readonly [IssueListSort, string, string]>;
+
+export function IssueSortMenu({
+  sort,
+  order,
+  onSort,
+  onOrder,
+}: {
+  readonly sort: IssueListSort;
+  readonly order: IssueListOrder;
+  readonly onSort: (sort: IssueListSort) => void;
+  readonly onOrder: (order: IssueListOrder) => void;
+}) {
+  const chooseSort = (value: string) => {
+    if (value !== sort) onSort(value as IssueListSort);
+  };
+  return (
+    <Menu>
+      <MenuTrigger
+        className="relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground sm:size-8"
+        aria-label="Sort issues"
+        title="Sort issues"
+      >
+        <ArrowDownUpIcon className="size-4" />
+        {sort !== "updated" || order !== "desc" ? (
+          <span
+            aria-hidden
+            className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"
+          />
+        ) : null}
+      </MenuTrigger>
+      <MenuPopup align="end" side="bottom" className="min-w-48">
+        <MenuRadioGroup value={sort} onValueChange={chooseSort}>
+          <MenuGroupLabel>Sort by</MenuGroupLabel>
+          <MenuRadioItem value="created">Created on</MenuRadioItem>
+          <MenuRadioItem value="updated">Last updated</MenuRadioItem>
+          <MenuRadioItem value="comments">Total comments</MenuRadioItem>
+          <MenuRadioItem value="best-match">Best match</MenuRadioItem>
+        </MenuRadioGroup>
+        <MenuSub>
+          <MenuSubTrigger>Reactions</MenuSubTrigger>
+          <MenuSubPopup className="min-w-48">
+            <MenuRadioGroup value={sort} onValueChange={chooseSort}>
+              {REACTION_SORTS.map(([value, label, emoji]) => (
+                <MenuRadioItem key={value} value={value}>
+                  <span className="flex items-center gap-2">
+                    {emoji ? <span aria-hidden>{emoji}</span> : null}
+                    {label}
+                  </span>
+                </MenuRadioItem>
+              ))}
+            </MenuRadioGroup>
+          </MenuSubPopup>
+        </MenuSub>
+        <MenuSeparator />
+        <MenuRadioGroup
+          value={order}
+          onValueChange={(value) => {
+            if (value !== order) onOrder(value as IssueListOrder);
+          }}
+        >
+          <MenuGroupLabel>Order</MenuGroupLabel>
+          <MenuRadioItem value="asc">Oldest</MenuRadioItem>
+          <MenuRadioItem value="desc">Newest</MenuRadioItem>
+        </MenuRadioGroup>
+      </MenuPopup>
+    </Menu>
+  );
+}
 
 export function IssueFiltersMenu({
   state,
