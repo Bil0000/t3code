@@ -152,7 +152,10 @@ export function ReviewThreadCard({
     setSavingEdit(true);
     const saved = await onEditComment(commentId, body);
     setSavingEdit(false);
-    if (saved) setEditingId(null);
+    if (saved) {
+      setLoadedPage(null);
+      setEditingId(null);
+    }
   };
 
   const send = async () => {
@@ -163,6 +166,7 @@ export function ReviewThreadCard({
     // empty box, and the words have to be written again.
     try {
       if (await onReply(trimmed)) {
+        setLoadedPage(null);
         setReply("");
         setReplying(false);
       }
@@ -282,7 +286,10 @@ export function ReviewThreadCard({
                   subjectId={comment.id}
                   environmentId={environmentId}
                   reference={reference}
-                  onRefresh={onReacted}
+                  onRefresh={() => {
+                    setLoadedPage(null);
+                    onReacted();
+                  }}
                 />
               </article>
             ))}
