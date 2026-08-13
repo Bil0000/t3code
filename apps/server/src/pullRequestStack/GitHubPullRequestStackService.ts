@@ -20,7 +20,6 @@ import {
 
 const READ_TIMEOUT_MS = 30_000;
 const ACTION_TIMEOUT_MS = 600_000;
-const COMMAND_DETAIL_MAX_LENGTH = 1_000;
 
 interface StackWorkingDirectoryInput {
   readonly cwd: string;
@@ -50,11 +49,6 @@ export class GitHubPullRequestStackService extends Context.Service<
   }
 >()("t3/pullRequestStack/GitHubPullRequestStackService") {}
 
-function commandDetail(output: VcsProcess.VcsProcessOutput): string {
-  const detail = output.stderr.trim() || output.stdout.trim() || "GitHub stack command failed.";
-  return detail.slice(0, COMMAND_DETAIL_MAX_LENGTH);
-}
-
 function commandError(
   operation: string,
   cwd: string,
@@ -63,8 +57,9 @@ function commandError(
   return new PullRequestStackError({
     operation,
     cwd,
-    detail: commandDetail(output),
+    detail: "The GitHub stack command failed.",
     exitCode: output.exitCode,
+    cause: output.stderr.trim() || output.stdout.trim(),
   });
 }
 
@@ -93,7 +88,11 @@ function isMissingExtension(output: VcsProcess.VcsProcessOutput): boolean {
 
 function isStacksUnavailable(output: VcsProcess.VcsProcessOutput): boolean {
   const detail = `${output.stdout}\n${output.stderr}`.toLowerCase();
-  return detail.includes("http 404") || detail.includes("stacks are not enabled");
+  return detail.includes("stacks are not enabled");
+}
+
+function isNotFound(output: VcsProcess.VcsProcessOutput): boolean {
+  return `${output.stdout}\n${output.stderr}`.toLowerCase().includes("http 404");
 }
 
 function actionArgs(input: PullRequestStackActionInput): ReadonlyArray<string> | null {
@@ -149,6 +148,7 @@ export const make = Effect.gen(function* () {
     const operation = "GitHubPullRequestStackService.current";
     const output = yield* run(operation, input.cwd, ["stack", "view", "--json"], READ_TIMEOUT_MS);
     if (output.exitCode === 2) return { availability: "available", stack: null };
+    if (output.exitCode === 9) return { availability: "unsupported", stack: null };
     if (output.exitCode !== 0) {
       if (isMissingExtension(output)) return { availability: "extension_missing", stack: null };
       return yield* commandError(operation, input.cwd, output);
@@ -179,6 +179,26 @@ export const make = Effect.gen(function* () {
     );
     if (output.exitCode !== 0) {
       if (isStacksUnavailable(output)) return { availability: "unsupported", stacks: [] };
+      if (isNotFound(output)) {
+        const access = yield* run(
+          operation,
+          input.cwd,
+          [
+            "api",
+            "repos/{owner}/{repo}",
+            ...(input.host === undefined ? [] : ["--hostname", input.host]),
+          ],
+          READ_TIMEOUT_MS,
+        );
+        if (access.exitCode === 0) return { availability: "unsupported", stacks: [] };
+        return yield* new PullRequestStackError({
+          operation,
+          cwd: input.cwd,
+          detail: "GitHub credentials or repository permissions could not be verified.",
+          exitCode: access.exitCode,
+          cause: access.stderr.trim() || access.stdout.trim(),
+        });
+      }
       return yield* commandError(operation, input.cwd, output);
     }
     if (output.stdoutTruncated || output.stdoutInvalidUtf8) {

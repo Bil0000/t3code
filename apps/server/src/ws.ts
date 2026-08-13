@@ -1041,7 +1041,7 @@ const makeWsRpcLayer = (
             (cause) =>
               new PullRequestStackError({
                 operation: "pullRequestStacks.resolveProject",
-                cwd: "",
+                projectId,
                 detail: "Could not read this project.",
                 cause,
               }),
@@ -1052,7 +1052,7 @@ const makeWsRpcLayer = (
                 Effect.fail(
                   new PullRequestStackError({
                     operation: "pullRequestStacks.resolveProject",
-                    cwd: "",
+                    projectId,
                     detail: "Project was not found.",
                   }),
                 ),

@@ -30,7 +30,7 @@ export type PullRequestStackSummary = typeof PullRequestStackSummary.Type;
 
 export const PullRequestLocalStackPullRequest = Schema.Struct({
   number: PositiveInt,
-  url: Schema.String,
+  url: Schema.optional(Schema.String),
   state: PullRequestStackStepState,
 });
 export type PullRequestLocalStackPullRequest = typeof PullRequestLocalStackPullRequest.Type;
@@ -72,7 +72,7 @@ export const PullRequestStackCurrentInput = Schema.Struct({
 export type PullRequestStackCurrentInput = typeof PullRequestStackCurrentInput.Type;
 
 export const PullRequestStackCurrentResult = Schema.Struct({
-  availability: Schema.Literals(["available", "extension_missing"]),
+  availability: Schema.Literals(["available", "extension_missing", "unsupported"]),
   stack: Schema.NullOr(PullRequestLocalStack),
 });
 export type PullRequestStackCurrentResult = typeof PullRequestStackCurrentResult.Type;
@@ -116,7 +116,8 @@ export class PullRequestStackError extends Schema.TaggedErrorClass<PullRequestSt
   "PullRequestStackError",
   {
     operation: TrimmedNonEmptyString,
-    cwd: Schema.String,
+    projectId: Schema.optional(ProjectId),
+    cwd: Schema.optional(TrimmedNonEmptyString),
     detail: TrimmedNonEmptyString,
     exitCode: Schema.optional(Schema.Int),
     cause: Schema.optional(Schema.Defect()),

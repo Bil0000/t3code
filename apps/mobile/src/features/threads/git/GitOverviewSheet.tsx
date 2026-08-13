@@ -140,6 +140,10 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
         Alert.alert("No pull request", "Share this stack to create or update its pull requests.");
         return;
       }
+      if (!step.pullRequest.url) {
+        Alert.alert("Unable to open PR", "This stack does not have a saved pull request link.");
+        return;
+      }
       if (!(await tryOpenExternalUrl(step.pullRequest.url, "pull-request"))) {
         Alert.alert("Unable to open PR", "The pull request could not be opened.");
       }

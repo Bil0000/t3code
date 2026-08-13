@@ -32,7 +32,7 @@ const GitHubRemoteStack = Schema.Struct({
 
 const GitHubLocalStackPullRequest = Schema.Struct({
   number: PositiveInt,
-  url: Schema.String,
+  url: Schema.optional(Schema.String),
   state: Schema.Literals(["OPEN", "MERGED", "QUEUED"]),
 });
 
@@ -113,7 +113,7 @@ function normalizeLocalStack(
           ? null
           : {
               number: branch.pr.number,
-              url: branch.pr.url,
+              ...(branch.pr.url === undefined ? {} : { url: branch.pr.url }),
               state: localStepState({ ...branch.pr, ...branch }),
             },
     })),

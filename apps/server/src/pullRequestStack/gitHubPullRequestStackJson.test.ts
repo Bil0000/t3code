@@ -139,6 +139,29 @@ describe("GitHub local stack JSON", () => {
     expect(stack.steps[1]?.needsRebase).toBe(true);
   });
 
+  it("accepts legacy pull requests without a stored URL", () => {
+    const stack = expectSuccess(
+      decodeGitHubLocalStackJson(
+        JSON.stringify({
+          trunk: "main",
+          currentBranch: "auth",
+          branches: [
+            {
+              name: "auth",
+              isCurrent: true,
+              isMerged: false,
+              isQueued: false,
+              needsRebase: false,
+              pr: { number: 10, state: "OPEN" },
+            },
+          ],
+        }),
+      ),
+    );
+
+    expect(stack.steps[0]?.pullRequest).toEqual({ number: 10, state: "open" });
+  });
+
   it("fails closed on malformed command output", () => {
     expect(Result.isFailure(decodeGitHubLocalStackJson("{not-json"))).toBe(true);
   });

@@ -106,6 +106,67 @@ describe("GitHubPullRequestStackService", () => {
     }).pipe(Effect.provide(layer)),
   );
 
+  it.effect("keeps raw command output out of the user-facing error", () =>
+    Effect.gen(function* () {
+      const rawOutput = "remote https://github.com/acme/private token expired";
+      run.mockReturnValueOnce(Effect.succeed(processOutput(1, "", rawOutput)));
+
+      const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
+      const error = yield* stacks.current({ cwd }).pipe(Effect.flip);
+
+      assert.strictEqual(error.detail, "The GitHub stack command failed.");
+      assert.strictEqual(error.cause, rawOutput);
+      assert.strictEqual(/private|token/i.test(error.message), false);
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("reports repositories without stacked pull requests as unsupported", () =>
+    Effect.gen(function* () {
+      run.mockReturnValueOnce(Effect.succeed(processOutput(9)));
+
+      const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
+      const current = yield* stacks.current({ cwd });
+
+      assert.deepStrictEqual(current, { availability: "unsupported", stack: null });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("verifies repository access before treating an HTTP 404 as unsupported", () =>
+    Effect.gen(function* () {
+      run
+        .mockReturnValueOnce(Effect.succeed(processOutput(1, "", "HTTP 404")))
+        .mockReturnValueOnce(Effect.succeed(processOutput(0, "{}")));
+
+      const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
+      const response = yield* stacks.list({ cwd, host: "github.example.com" });
+
+      assert.deepStrictEqual(response, { availability: "unsupported", stacks: [] });
+      expect(run).toHaveBeenNthCalledWith(2, {
+        operation: "GitHubPullRequestStackService.list",
+        command: "gh",
+        args: ["api", "repos/{owner}/{repo}", "--hostname", "github.example.com"],
+        cwd,
+        allowNonZeroExit: true,
+        timeoutMs: 30_000,
+      });
+    }).pipe(Effect.provide(layer)),
+  );
+
+  it.effect("surfaces repository access failures instead of hiding them as unsupported", () =>
+    Effect.gen(function* () {
+      run
+        .mockReturnValueOnce(Effect.succeed(processOutput(1, "", "HTTP 404")))
+        .mockReturnValueOnce(Effect.succeed(processOutput(1, "", "HTTP 401")));
+
+      const stacks = yield* GitHubPullRequestStackService.GitHubPullRequestStackService;
+      const error = yield* stacks.list({ cwd }).pipe(Effect.flip);
+
+      assert.match(error.detail, /credentials|permissions/i);
+      assert.strictEqual(error.cause, "HTTP 401");
+      expect(run).toHaveBeenCalledTimes(2);
+    }).pipe(Effect.provide(layer)),
+  );
+
   it.effect("runs a non-interactive submit and returns fresh local state", () =>
     Effect.gen(function* () {
       run

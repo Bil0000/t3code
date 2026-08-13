@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   PullRequestLocalStack,
   PullRequestStackActionInput,
+  PullRequestStackError,
   PullRequestStackListResult,
   PullRequestStackSummary,
 } from "./pullRequestStack.ts";
@@ -11,6 +12,7 @@ import {
 const decodeStackSummary = Schema.decodeUnknownSync(PullRequestStackSummary);
 const decodeLocalStack = Schema.decodeUnknownSync(PullRequestLocalStack);
 const decodeStackActionInput = Schema.decodeUnknownSync(PullRequestStackActionInput);
+const decodeStackError = Schema.decodeUnknownSync(PullRequestStackError);
 
 const STACK = {
   id: 41,
@@ -57,6 +59,26 @@ describe("PullRequestStackSummary", () => {
 });
 
 describe("PullRequestLocalStack", () => {
+  it("accepts tracked pull requests without a stored URL", () => {
+    const decoded = decodeLocalStack({
+      trunk: "main",
+      currentBranch: "auth",
+      steps: [
+        {
+          position: 1,
+          branch: "auth",
+          isCurrent: true,
+          isMerged: false,
+          isQueued: false,
+          needsRebase: false,
+          pullRequest: { number: 10, state: "open" },
+        },
+      ],
+    });
+
+    expect(decoded.steps[0]?.pullRequest).toEqual({ number: 10, state: "open" });
+  });
+
   it("keeps local branch health and the current step", () => {
     const decoded = decodeLocalStack({
       trunk: "main",
@@ -105,5 +127,19 @@ describe("PullRequestStackActionInput", () => {
         branch: "   ",
       }),
     ).toThrow();
+  });
+});
+
+describe("PullRequestStackError", () => {
+  it("keeps the project id when its workspace cannot be resolved", () => {
+    const decoded = decodeStackError({
+      _tag: "PullRequestStackError",
+      operation: "pullRequestStacks.resolveProject",
+      projectId: "project-1",
+      detail: "Project was not found.",
+    });
+
+    expect(decoded).toEqual(expect.objectContaining({ projectId: "project-1" }));
+    expect(decoded).not.toHaveProperty("cwd");
   });
 });
