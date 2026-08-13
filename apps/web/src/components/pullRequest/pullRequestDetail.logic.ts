@@ -14,6 +14,14 @@ import type {
 
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
 
+/** Activity changes only when the same host resource reports a newer revision. */
+export function shouldRefreshPullRequestActivity(
+  previous: { readonly key: string; readonly updatedAt: string } | null,
+  next: { readonly key: string; readonly updatedAt: string },
+): boolean {
+  return previous !== null && previous.key === next.key && previous.updatedAt !== next.updatedAt;
+}
+
 /**
  * Whether the pull request on a right-panel surface is the thread's own one. Repository and
  * number are not enough: one environment can hold two checkouts of the same repository under
