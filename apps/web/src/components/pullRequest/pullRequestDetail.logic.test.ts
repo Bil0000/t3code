@@ -22,6 +22,7 @@ import {
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   readableFailure,
+  shouldRefreshPullRequestActivity,
   resolveBaseFreshness,
   buildPullRequestTimeline,
   describePullRequestState,
@@ -52,6 +53,33 @@ const TIMELINE_SOURCE: Pick<
   mergedAt: null,
   closedAt: null,
 };
+
+describe("pull request activity refresh", () => {
+  const first = {
+    key: "project:acme/web#7",
+    updatedAt: "2026-08-13T13:00:00Z",
+  };
+
+  it("refreshes activity only after the same pull request changes", () => {
+    expect(
+      shouldRefreshPullRequestActivity(first, {
+        ...first,
+        updatedAt: "2026-08-13T13:01:00Z",
+      }),
+    ).toBe(true);
+  });
+
+  it("does not duplicate the first activity read or carry a revision across pull requests", () => {
+    expect(shouldRefreshPullRequestActivity(null, first)).toBe(false);
+    expect(shouldRefreshPullRequestActivity(first, first)).toBe(false);
+    expect(
+      shouldRefreshPullRequestActivity(first, {
+        key: "project:acme/web#8",
+        updatedAt: "2026-08-13T13:01:00Z",
+      }),
+    ).toBe(false);
+  });
+});
 
 describe("pull request state description", () => {
   it("keeps draft and conflicts orthogonal to the terminal states", () => {
