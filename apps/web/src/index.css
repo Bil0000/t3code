@@ -1135,6 +1135,16 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   --update: var(--primary);
   --update-foreground: var(--primary);
   --update-surface: color-mix(in srgb, var(--update) 12%, transparent);
+  /* Reasoning-effort ramp, calmest to hottest. Literal values (not palette vars)
+     so the ramp survives Tailwind dropping unreferenced theme colours. */
+  --reasoning-1: oklch(55.4% 0.046 257.417);
+  --reasoning-2: oklch(58.8% 0.158 241.966);
+  --reasoning-3: oklch(59.6% 0.145 163.225);
+  --reasoning-4: oklch(66.6% 0.179 58.318);
+  --reasoning-5: oklch(64.6% 0.222 41.116);
+  --reasoning-6: oklch(57.7% 0.245 27.325);
+  --reasoning-7: oklch(59.1% 0.293 322.896);
+  --reasoning-8: oklch(54.1% 0.281 293.009);
   /* Keep every sidebar primitive on the same light surface hierarchy, including
      portaled mobile sheets and settings navigation outside the app sidebar. */
   --sidebar: var(--color-zinc-50);
@@ -1201,6 +1211,15 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     --update: var(--primary);
     --update-foreground: var(--color-blue-400);
     --update-surface: color-mix(in srgb, var(--update) 18%, transparent);
+    /* Same ramp, lifted to the 400 shades so it stays legible on dark surfaces. */
+    --reasoning-1: oklch(70.4% 0.04 256.788);
+    --reasoning-2: oklch(74.6% 0.16 232.661);
+    --reasoning-3: oklch(76.5% 0.177 163.223);
+    --reasoning-4: oklch(82.8% 0.189 84.429);
+    --reasoning-5: oklch(75% 0.183 55.934);
+    --reasoning-6: oklch(70.4% 0.191 22.216);
+    --reasoning-7: oklch(74% 0.238 322.16);
+    --reasoning-8: oklch(70.2% 0.183 293.541);
     --sidebar: var(--card);
     --sidebar-foreground: var(--foreground);
     --sidebar-muted-foreground: var(--muted-foreground);

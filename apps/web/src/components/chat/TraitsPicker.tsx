@@ -27,6 +27,7 @@ import {
   MenuSeparator as MenuDivider,
   MenuTrigger,
 } from "../ui/menu";
+import { isReasoningDescriptor, ReasoningSlider } from "./ReasoningSlider";
 import { useComposerDraftStore, DraftId } from "../../composerDraftStore";
 import { getProviderModelCapabilities } from "../../providerModels";
 import { cn } from "~/lib/utils";
@@ -301,47 +302,63 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
             ? "ultrathink"
             : (getDescriptorStringValue(descriptor) ?? "");
 
+        const isLocked = ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id;
+
         return (
           <div key={descriptor.id}>
             {index > 0 ? <MenuDivider /> : null}
             <MenuGroup>
-              <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
-                {descriptor.label}
-              </div>
-              {ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id ? (
-                <div className="px-2 pb-1.5 text-muted-foreground/80 text-xs">
-                  Your prompt contains &quot;ultrathink&quot; in the text. Remove it to change this
-                  option.
-                </div>
-              ) : null}
-              <MenuRadioGroup
-                value={selectedValue}
-                onValueChange={(value) => handleSelectChange(descriptor, value)}
-              >
-                {descriptor.options.map((option) => (
-                  <MenuRadioItem
-                    key={option.id}
-                    value={option.id}
-                    hideIndicator
-                    // Base UI keeps radio menus open by default. Close on pick so
-                    // the traits menu behaves like the model picker.
-                    closeOnClick
-                    disabled={ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id}
+              {isReasoningDescriptor(descriptor) ? (
+                <>
+                  {isLocked ? (
+                    <div className="px-2 pt-1.5 text-muted-foreground/80 text-xs">
+                      Your prompt contains &quot;ultrathink&quot; in the text. Remove it to change
+                      this option.
+                    </div>
+                  ) : null}
+                  <ReasoningSlider
+                    badge={<DefaultBadge />}
+                    descriptor={descriptor}
+                    disabled={isLocked}
+                    onValueChange={(nextValue) => handleSelectChange(descriptor, nextValue)}
+                    value={selectedValue}
+                  />
+                </>
+              ) : (
+                <>
+                  <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
+                    {descriptor.label}
+                  </div>
+                  <MenuRadioGroup
+                    value={selectedValue}
+                    onValueChange={(value) => handleSelectChange(descriptor, value)}
                   >
-                    <span className="flex w-full min-w-0 items-center justify-between gap-3">
-                      <span className="min-w-0 truncate">
-                        {option.label}
-                        {option.isDefault ? (
-                          <>
-                            {" "}
-                            <DefaultBadge />
-                          </>
-                        ) : null}
-                      </span>
-                    </span>
-                  </MenuRadioItem>
-                ))}
-              </MenuRadioGroup>
+                    {descriptor.options.map((option) => (
+                      <MenuRadioItem
+                        key={option.id}
+                        value={option.id}
+                        hideIndicator
+                        // Base UI keeps radio menus open by default. Close on pick so
+                        // the traits menu behaves like the model picker.
+                        closeOnClick
+                        disabled={isLocked}
+                      >
+                        <span className="flex w-full min-w-0 items-center justify-between gap-3">
+                          <span className="min-w-0 truncate">
+                            {option.label}
+                            {option.isDefault ? (
+                              <>
+                                {" "}
+                                <DefaultBadge />
+                              </>
+                            ) : null}
+                          </span>
+                        </span>
+                      </MenuRadioItem>
+                    ))}
+                  </MenuRadioGroup>
+                </>
+              )}
             </MenuGroup>
           </div>
         );
