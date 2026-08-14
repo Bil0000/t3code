@@ -39,12 +39,18 @@ describe("DiffCommentAnnotation", () => {
         text=""
         {...callbacks}
         submitLabel="Add to review"
-        secondaryAction={{
-          label: "Ask",
-          icon: <span data-test-icon />,
-          allowEmpty: true,
-          onAction: vi.fn(),
-        }}
+        secondaryActions={[
+          {
+            label: "Ask",
+            icon: <span data-test-icon />,
+            allowEmpty: true,
+            onAction: vi.fn(),
+          },
+          {
+            label: "Add to agent",
+            onAction: vi.fn(),
+          },
+        ]}
       />,
     );
 
@@ -52,6 +58,7 @@ describe("DiffCommentAnnotation", () => {
     expect(markup).toContain(">Ask</button>");
     expect(markup).toContain(">Add to review</button>");
     expect(markup.match(/<button[^>]*disabled[^>]*>Add to review<\/button>/)).not.toBeNull();
+    expect(markup.match(/<button[^>]*disabled[^>]*>Add to agent<\/button>/)).not.toBeNull();
     const askButton = markup.match(/<button[^>]*>.*?Ask<\/button>/)?.[0];
     expect(askButton).toBeDefined();
     expect(askButton).not.toContain(' disabled=""');

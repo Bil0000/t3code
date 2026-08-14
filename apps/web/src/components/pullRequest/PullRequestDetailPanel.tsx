@@ -920,6 +920,20 @@ export function PullRequestDetailPanel({
     });
   };
 
+  /** Keeps selected-line feedback in the active composer instead of posting it to the host. */
+  const addSelectionToAgent = useCallback(
+    (comment: ReviewCommentContext) => {
+      if (!composerDraftTarget) return;
+      useComposerDraftStore.getState().addReviewComment(composerDraftTarget, comment);
+      toastManager.add({
+        type: "success",
+        title: "Added to agent",
+        description: "The comment is in the composer — send it when ready.",
+      });
+    },
+    [composerDraftTarget],
+  );
+
   /** Lines the reader marked in the diff, asked about rather than commented on. */
   const askAboutSelection = (selection: PullRequestAskSelectionInput) => {
     if (!detail) return;
@@ -1831,6 +1845,7 @@ export function PullRequestDetailPanel({
                 <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
                   <PullRequestCodeTab
                     onAskAboutSelection={askAboutSelection}
+                    {...(composerDraftTarget ? { onAddToAgentSelection: addSelectionToAgent } : {})}
                     environmentId={environmentId}
                     reference={reference}
                     detail={detail}

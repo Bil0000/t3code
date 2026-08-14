@@ -24,7 +24,7 @@ interface DiffCommentAnnotationProps {
   placeholder?: string;
   submitLabel?: string;
   pending?: boolean;
-  secondaryAction?: DiffCommentSecondaryAction;
+  secondaryActions?: ReadonlyArray<DiffCommentSecondaryAction>;
 }
 
 /** The shared inline comment treatment for file previews, thread diffs, and pull-request diffs. */
@@ -39,7 +39,7 @@ export function DiffCommentAnnotation({
   placeholder = "Add a comment…",
   submitLabel = "Comment",
   pending = false,
-  secondaryAction,
+  secondaryActions,
 }: DiffCommentAnnotationProps) {
   const [localDraftText, setLocalDraftText] = useState("");
   const displayedText = kind === "draft" && !onTextChange ? localDraftText : text;
@@ -111,17 +111,18 @@ export function DiffCommentAnnotation({
         >
           Cancel
         </Button>
-        {secondaryAction ? (
+        {secondaryActions?.map((action) => (
           <Button
+            key={action.label}
             size="xs"
             variant="outline"
-            disabled={!secondaryAction.allowEmpty && !trimmedText}
-            onClick={() => secondaryAction.onAction(trimmedText)}
+            disabled={!action.allowEmpty && !trimmedText}
+            onClick={() => action.onAction(trimmedText)}
           >
-            {secondaryAction.icon}
-            {secondaryAction.label}
+            {action.icon}
+            {action.label}
           </Button>
-        ) : null}
+        ))}
         <Button size="xs" disabled={pending || !trimmedText} onClick={() => onComment(trimmedText)}>
           {submitLabel}
         </Button>
