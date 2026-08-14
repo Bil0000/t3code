@@ -55,8 +55,11 @@ export function getReasoningLevelColor(optionId: string, index: number, total: n
   return `var(--reasoning-${getReasoningRampIndex(optionId, index, total) + 1})`;
 }
 
-/** Half the slider thumb, so the painted track lines up with the native value mapping. */
-const TRACK_INSET = "0.625rem";
+/**
+ * Half the native thumb (pinned to the capsule height below), so the painted
+ * stops line up with the browser's own value mapping.
+ */
+const TRACK_INSET = "1rem";
 
 function stopOffset(index: number, total: number): string {
   const ratio = total > 1 ? index / (total - 1) : 0;
@@ -93,59 +96,50 @@ export function ReasoningSlider({
   }
   const color = getReasoningLevelColor(selected.id, selectedIndex, total);
   const offset = stopOffset(selectedIndex, total);
-  // The track paints the whole ramp and dims everything past the thumb, so the
-  // levels ahead stay visible as a preview instead of reading as empty space.
-  const rampGradient = `linear-gradient(90deg, ${options
-    .map((option, index) => getReasoningLevelColor(option.id, index, total))
-    .join(", ")})`;
 
   return (
     <div className="min-w-72 px-3 pt-2.5 pb-2" data-slot="reasoning-slider">
-      <div className="flex items-center justify-between gap-3 pb-2.5">
+      <div className="flex items-center justify-between gap-3 pb-2">
         <span className="font-medium text-muted-foreground text-xs">{descriptor.label}</span>
         <span className="flex items-center gap-2">
-          <span className="flex items-center gap-1.5 font-semibold text-sm" style={{ color }}>
-            <span
-              className="size-2 rounded-full transition-colors duration-150"
-              style={{ backgroundColor: color }}
-            />
+          <span className="font-semibold text-sm" style={{ color }}>
             {selected.label}
           </span>
           {selected.isDefault ? badge : null}
         </span>
       </div>
-      <div className={cn("group relative flex h-7 items-center", disabled && "opacity-50")}>
+      <div
+        className={cn(
+          "group relative flex h-8 items-center rounded-full bg-foreground/10 inset-shadow-[0_1px_2px_rgb(0_0_0/0.12)]",
+          disabled && "opacity-50",
+        )}
+      >
+        {/* Filled capsule ends under the thumb, so the two read as one shape. */}
         <div
-          className="absolute right-2.5 left-2.5 h-2 overflow-hidden rounded-full"
-          style={{ backgroundImage: rampGradient }}
-        >
-          <div
-            className="absolute inset-y-0 right-0 bg-popover/80 transition-[left] duration-150"
-            style={{ left: `${total > 1 ? (selectedIndex / (total - 1)) * 100 : 100}%` }}
-          />
-        </div>
+          className="absolute left-1 h-6 rounded-full transition-[width,background-color] duration-150"
+          style={{
+            width: `calc(${offset} + 0.5rem)`,
+            backgroundColor: color,
+          }}
+        />
         {options.map((option, index) => (
           <span
             key={option.id}
             className={cn(
-              "-translate-x-1/2 absolute size-1.5 rounded-full transition-colors duration-150",
-              index <= selectedIndex ? "bg-popover/70" : "bg-foreground/25",
+              "-translate-x-1/2 absolute size-1 rounded-full transition-colors duration-150",
+              index <= selectedIndex ? "bg-black/30" : "bg-foreground/25",
             )}
             style={{ left: stopOffset(index, total) }}
           />
         ))}
         <span
-          className="-translate-x-1/2 pointer-events-none absolute size-5 rounded-full border-2 border-popover transition-[left,background-color,box-shadow] duration-150 group-active:scale-105"
-          style={{
-            left: offset,
-            backgroundColor: color,
-            boxShadow: `0 1px 3px rgb(0 0 0 / 0.25), 0 0 0 4px color-mix(in oklab, ${color} 22%, transparent)`,
-          }}
+          className="-translate-x-1/2 pointer-events-none absolute size-6 rounded-full bg-white shadow-[0_1px_3px_rgb(0_0_0/0.3)] transition-[left] duration-150 group-active:scale-105"
+          style={{ left: offset }}
         />
         <input
           aria-label={descriptor.label}
           aria-valuetext={selected.label}
-          className="absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent opacity-0 disabled:cursor-not-allowed [&::-moz-range-thumb]:size-5 [&::-moz-range-thumb]:border-0 [&::-webkit-slider-thumb]:size-5 [&::-webkit-slider-thumb]:appearance-none"
+          className="absolute inset-0 h-full w-full cursor-pointer appearance-none bg-transparent opacity-0 disabled:cursor-not-allowed [&::-moz-range-thumb]:size-8 [&::-moz-range-thumb]:border-0 [&::-webkit-slider-thumb]:size-8 [&::-webkit-slider-thumb]:appearance-none"
           disabled={disabled}
           max={total - 1}
           min={0}

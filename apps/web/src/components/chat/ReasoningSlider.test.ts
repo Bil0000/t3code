@@ -116,10 +116,10 @@ describe("ReasoningSlider", () => {
     expect(markup).toContain('aria-valuetext="high"');
   });
 
-  it("paints the thumb in the level colour and parks it at the level offset", () => {
-    expect(render("low")).toContain("left:calc(0.625rem + (100% - 0.625rem * 2) * 0)");
+  it("fills the capsule in the level colour and parks the thumb at the level offset", () => {
+    expect(render("low")).toContain("left:calc(1rem + (100% - 1rem * 2) * 0)");
     const max = render("max");
-    expect(max).toContain("left:calc(0.625rem + (100% - 0.625rem * 2) * 1)");
+    expect(max).toContain("left:calc(1rem + (100% - 1rem * 2) * 1)");
     expect(max).toContain("background-color:var(--reasoning-6)");
   });
 
