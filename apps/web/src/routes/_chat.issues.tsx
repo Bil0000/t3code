@@ -162,6 +162,7 @@ const EMPTY_VIEWERS: IssueListResult["viewers"] = {};
 /** The list owns one environment-scoped right panel rather than borrowing a real thread's. */
 const ISSUES_PANEL_ID = ThreadId.make("issues-panel");
 const EMPTY_PREVIEW_SESSIONS = {};
+const EMPTY_PREVIEW_DESKTOP_STATE = {};
 const EMPTY_TERMINAL_LABELS = new Map<string, string>();
 const EMPTY_PENDING_SURFACES = new Set<string>();
 
@@ -1234,6 +1235,7 @@ function IssuesRouteView() {
             activeSurfaceId={activeSurface.id}
             pendingSurfaceIds={EMPTY_PENDING_SURFACES}
             previewSessions={EMPTY_PREVIEW_SESSIONS}
+            desktopByTabId={EMPTY_PREVIEW_DESKTOP_STATE}
             terminalLabelsById={EMPTY_TERMINAL_LABELS}
             onActivate={activateSurface}
             onCloseSurface={closeSurface}
