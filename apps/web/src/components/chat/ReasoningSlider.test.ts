@@ -117,9 +117,9 @@ describe("ReasoningSlider", () => {
   });
 
   it("paints the thumb in the level colour and parks it at the level offset", () => {
-    expect(render("low")).toContain("left:calc(0.5rem + (100% - 0.5rem * 2) * 0)");
+    expect(render("low")).toContain("left:calc(0.625rem + (100% - 0.625rem * 2) * 0)");
     const max = render("max");
-    expect(max).toContain("left:calc(0.5rem + (100% - 0.5rem * 2) * 1)");
+    expect(max).toContain("left:calc(0.625rem + (100% - 0.625rem * 2) * 1)");
     expect(max).toContain("background-color:var(--reasoning-6)");
   });
 
