@@ -38,7 +38,6 @@ import {
 } from "@t3tools/shared/model";
 import {
   getClaudeModelCapabilities,
-  isCustomClaudeModel,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
   resolveClaudeApiModelId,
@@ -135,14 +134,12 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     });
     const findDescriptor = (id: string) => descriptors.find((descriptor) => descriptor.id === id);
     const rawEffortSelection = getModelSelectionStringOptionValue(modelSelection, "effort");
-    const customModel = isCustomClaudeModel(modelSelection.model, claudeSettings.customModels);
-    const usesFallbackCapabilities =
-      customModel && customModelCapabilities[modelSelection.model] === undefined;
-    const resolvedEffort =
-      usesFallbackCapabilities && rawEffortSelection === undefined
-        ? undefined
-        : resolveClaudeEffort(caps, rawEffortSelection);
-    const cliEffort = normalizeClaudeCliEffort(resolvedEffort, modelSelection.model, customModel);
+    const resolvedEffort = resolveClaudeEffort(caps, rawEffortSelection);
+    const cliEffort = normalizeClaudeCliEffort(
+      resolvedEffort,
+      modelSelection.model,
+      customModelCapabilities[modelSelection.model] === caps,
+    );
     const ultracode = isClaudeUltracodeEffort(resolvedEffort);
     const thinkingDescriptor = findDescriptor("thinking");
     const fastModeDescriptor = findDescriptor("fastMode");

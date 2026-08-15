@@ -126,37 +126,16 @@ export function reconcileCustomModelCapabilities(input: {
   readonly nextModels: ReadonlyArray<string>;
 }): Readonly<Record<string, ModelCapabilities>> {
   const currentModels = new Set(input.currentModels);
-  const entries: Array<readonly [string, ModelCapabilities]> = [];
+  const nextCapabilities: Record<string, ModelCapabilities> = {};
   for (const slug of input.nextModels) {
-    const capabilities = Object.hasOwn(input.capabilities, slug)
-      ? input.capabilities[slug]
-      : undefined;
+    const capabilities = input.capabilities[slug];
     if (capabilities) {
-      entries.push([slug, capabilities]);
+      nextCapabilities[slug] = capabilities;
     } else if (!currentModels.has(slug)) {
-      entries.push([slug, { optionDescriptors: [] }]);
+      nextCapabilities[slug] = { optionDescriptors: [] };
     }
   }
-  return Object.fromEntries(entries);
-}
-
-export function updateCustomModelCapabilitiesRecord(
-  current: Readonly<Record<string, ModelCapabilities>>,
-  slug: string,
-  capabilities: ModelCapabilities | undefined,
-): Readonly<Record<string, ModelCapabilities>> {
-  const next = Object.fromEntries(Object.entries(current));
-  if (capabilities) {
-    Object.defineProperty(next, slug, {
-      value: capabilities,
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  } else {
-    delete next[slug];
-  }
-  return next;
+  return nextCapabilities;
 }
 
 export function deriveProviderModelsForDisplay(input: {
@@ -565,11 +544,12 @@ export function ProviderInstanceCard({
     slug: string,
     capabilities: ModelCapabilities | undefined,
   ) => {
-    const nextCapabilities = updateCustomModelCapabilitiesRecord(
-      customModelCapabilities,
-      slug,
-      capabilities,
-    );
+    const nextCapabilities = { ...customModelCapabilities };
+    if (capabilities) {
+      nextCapabilities[slug] = capabilities;
+    } else {
+      delete nextCapabilities[slug];
+    }
     const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...customModels]);
     if (Object.keys(nextCapabilities).length > 0) {
       nextConfig.customModelCapabilities = nextCapabilities;

@@ -257,7 +257,7 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
     ),
   );
 
-  it.effect("keeps built-in effort compatibility when a custom slug collides", () =>
+  it.effect("forwards Claude fast mode and supported effort", () =>
     withFakeClaudeEnv(
       {
         output: JSON.stringify({
@@ -266,8 +266,7 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
             body: "Body",
           },
         }),
-        argsMustContain: "--effort high",
-        claudeConfig: { customModels: ["claude-sonnet-4-6"] },
+        argsMustContain: '--effort max --settings {"fastMode":true}',
       },
       (textGeneration) =>
         Effect.gen(function* () {
@@ -279,8 +278,9 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
             diffSummary: "1 file changed",
             diffPatch: "diff --git a/README.md b/README.md",
             modelSelection: {
-              ...createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-sonnet-4-6", [
+              ...createModelSelection(ProviderInstanceId.make("claudeAgent"), "claude-opus-4-6", [
                 { id: "effort", value: "max" },
+                { id: "fastMode", value: true },
               ]),
             },
           });

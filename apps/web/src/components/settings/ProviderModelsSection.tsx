@@ -77,19 +77,12 @@ export function getCustomModelCapabilityTemplates(
     if (current.type !== "select" || descriptor.type !== "select") continue;
 
     const optionIds = new Set(current.options.map((option) => option.id));
-    const promptInjectedValues = [
-      ...new Set([
-        ...(current.promptInjectedValues ?? []),
-        ...(descriptor.promptInjectedValues ?? []),
-      ]),
-    ];
     templates.set(descriptor.id, {
       ...current,
       options: [
         ...current.options,
         ...descriptor.options.filter((option) => !optionIds.has(option.id)),
       ],
-      ...(promptInjectedValues.length > 0 ? { promptInjectedValues } : {}),
     });
   }
 
@@ -240,7 +233,6 @@ function CustomModelCapabilitiesEditor(props: {
                   <label className="grid gap-1 text-[11px] text-muted-foreground">
                     Supported values
                     <DraftInput
-                      size="compact"
                       value={configured.options.map((option) => option.id).join(", ")}
                       onCommit={(value) => {
                         const supportedValues = value.split(",").map((entry) => entry.trim());
@@ -272,11 +264,7 @@ function CustomModelCapabilitiesEditor(props: {
                         )
                       }
                     >
-                      <SelectTrigger
-                        size="compact"
-                        className="w-full min-w-0"
-                        aria-label={`Default ${template.label}`}
-                      >
+                      <SelectTrigger size="compact" aria-label={`Default ${template.label}`}>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectPopup alignItemWithTrigger={false}>
@@ -650,24 +638,17 @@ export function ProviderModelsSection({
                 ) : null}
                 {model.isCustom ? (
                   <Popover>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <PopoverTrigger
-                            render={
-                              <Button
-                                size="icon-micro"
-                                variant="ghost-muted"
-                                aria-label={`Configure capabilities for ${model.slug}`}
-                              />
-                            }
-                          />
-                        }
-                      >
-                        <Settings2Icon className="size-3" />
-                      </TooltipTrigger>
-                      <TooltipPopup side="top">Configure model controls</TooltipPopup>
-                    </Tooltip>
+                    <PopoverTrigger
+                      render={
+                        <Button
+                          size="icon-micro"
+                          variant="ghost-muted"
+                          aria-label={`Configure capabilities for ${model.slug}`}
+                        >
+                          <Settings2Icon className="size-3" />
+                        </Button>
+                      }
+                    />
                     <PopoverPopup
                       side="left"
                       align="start"

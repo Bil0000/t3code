@@ -16,7 +16,6 @@ describe("custom model capability configuration", () => {
           label: "Reasoning",
           type: "select",
           options: [{ id: "ultra", label: "Ultra", isDefault: true }],
-          promptInjectedValues: ["ultra"],
         },
       ],
     };
@@ -61,7 +60,6 @@ describe("custom model capability configuration", () => {
           { id: "high", label: "High", isDefault: true },
           { id: "ultra", label: "Ultra", isDefault: true },
         ],
-        promptInjectedValues: ["ultra"],
       },
       {
         id: "fastMode",
