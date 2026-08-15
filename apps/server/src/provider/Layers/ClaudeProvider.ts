@@ -431,6 +431,18 @@ export function getClaudeModelCapabilities(
   );
 }
 
+export function isCustomClaudeModel(
+  model: string | null | undefined,
+  customModels: ReadonlyArray<string>,
+): boolean {
+  const slug = model?.trim();
+  return Boolean(
+    slug &&
+    !BUILT_IN_MODELS.some((candidate) => candidate.slug === slug) &&
+    customModels.some((candidate) => candidate.trim() === slug),
+  );
+}
+
 export function resolveClaudeEffort(
   caps: ModelCapabilities,
   raw: string | null | undefined,

@@ -782,7 +782,7 @@ describe("ClaudeAdapterLive", () => {
   it.effect("forwards default custom-model controls to Claude SDK launch options", () => {
     const harness = makeHarness({
       claudeConfig: {
-        customModels: ["gpt-5.6-sol"],
+        customModels: ["  gpt-5.6-sol  "],
       } as Partial<ClaudeSettings>,
     });
 
@@ -807,6 +807,30 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.model, "gpt-5.6-sol[1m]");
       assert.equal(createInput?.options.effort, "xhigh");
       assert.deepEqual(createInput?.options.settings, { fastMode: true });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("does not send fallback effort until a custom-model control is selected", () => {
+    const harness = makeHarness({
+      claudeConfig: {
+        customModels: ["gpt-5.6-sol"],
+      } as Partial<ClaudeSettings>,
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(ProviderInstanceId.make("claudeAgent"), "gpt-5.6-sol"),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.effort, undefined);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

@@ -80,6 +80,7 @@ import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
   getClaudeModelCapabilities,
+  isCustomClaudeModel,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
   resolveClaudeApiModelId,
@@ -1666,7 +1667,6 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 ) {
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("claudeAgent");
   const customModelCapabilities = claudeSettings.customModelCapabilities ?? {};
-  const customModelSlugs = new Set(claudeSettings.customModels);
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
@@ -4132,7 +4132,15 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         customModelCapabilities,
       );
       const rawEffort = getModelSelectionStringOptionValue(modelSelection, "effort");
-      const effort = resolveClaudeEffort(caps, rawEffort) ?? null;
+      const customModel = isCustomClaudeModel(modelSelection?.model, claudeSettings.customModels);
+      const usesFallbackCapabilities =
+        customModel &&
+        modelSelection?.model !== undefined &&
+        customModelCapabilities[modelSelection.model] === undefined;
+      const effort =
+        usesFallbackCapabilities && rawEffort === undefined
+          ? null
+          : (resolveClaudeEffort(caps, rawEffort) ?? null);
       const fastModeSupported = descriptors.some(
         (descriptor) => descriptor.type === "boolean" && descriptor.id === "fastMode",
       );
@@ -4149,7 +4157,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const effectiveEffort = getEffectiveClaudeAgentEffort(
         effort,
         modelSelection?.model,
-        modelSelection ? customModelSlugs.has(modelSelection.model) : false,
+        customModel,
       );
       const runtimeModeToPermission: Record<string, PermissionMode> = {
         "auto-accept-edits": "acceptEdits",
@@ -4405,16 +4413,17 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         model: modelSelection.model,
       };
       const turnCaps = getClaudeModelCapabilities(modelSelection.model, customModelCapabilities);
-      const turnEffort = resolveClaudeEffort(
-        turnCaps,
-        getModelSelectionStringOptionValue(modelSelection, "effort"),
-      );
+      const rawTurnEffort = getModelSelectionStringOptionValue(modelSelection, "effort");
+      const customModel = isCustomClaudeModel(modelSelection.model, claudeSettings.customModels);
+      const usesFallbackCapabilities =
+        customModel && customModelCapabilities[modelSelection.model] === undefined;
+      const turnEffort =
+        usesFallbackCapabilities && rawTurnEffort === undefined
+          ? undefined
+          : resolveClaudeEffort(turnCaps, rawTurnEffort);
       context.currentEffort =
-        getEffectiveClaudeAgentEffort(
-          turnEffort ?? null,
-          modelSelection.model,
-          customModelSlugs.has(modelSelection.model),
-        ) ?? undefined;
+        getEffectiveClaudeAgentEffort(turnEffort ?? null, modelSelection.model, customModel) ??
+        undefined;
     }
 
     // Apply interaction mode by switching the SDK's permission mode.
