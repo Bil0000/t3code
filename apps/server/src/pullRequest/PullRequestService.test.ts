@@ -11,6 +11,7 @@ import type {
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import {
   PullRequestProviderError,
   type ProviderChangeRequest,
@@ -169,6 +170,7 @@ function makeService(input: {
               updatedAt: "2026-07-01T00:00:00Z",
             }),
         }),
+        SourceControlRateLimit.layer,
       ),
     ),
   );
@@ -1336,6 +1338,43 @@ it.effect("reports repositories on a host that could not be read", () =>
       result.errors.map((error) => error.projectId),
       ["p2"],
     );
+  }),
+);
+
+it.effect("stops new calls to a host after it reports a rate limit", () =>
+  Effect.gen(function* () {
+    let listCalls = 0;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "cloud", workspaceRoot: "/cloud", repository: "acme/web" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () =>
+            Effect.sync(() => {
+              listCalls += 1;
+            }).pipe(
+              Effect.andThen(
+                Effect.fail(
+                  new PullRequestProviderError({
+                    provider: "github",
+                    operation: "listChangeRequests",
+                    reason: "rate-limited",
+                    detail: "GitHub API rate limit exceeded.",
+                  }),
+                ),
+              ),
+            ),
+        }),
+      ],
+    });
+
+    const first = yield* service.list({ state: "open", involvement: "all" });
+    const paused = yield* service.list({ state: "open", involvement: "authored" });
+
+    assert.strictEqual(listCalls, 1);
+    assert.lengthOf(first.errors, 1);
+    assert.lengthOf(paused.errors, 1);
   }),
 );
 
