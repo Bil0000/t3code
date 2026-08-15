@@ -390,7 +390,7 @@ function withRateLimitBackoff(
             provider: api.kind,
             operation,
             reason: "rate-limited",
-            detail: error.message,
+            detail: error.detail,
             retryAt: error.retryAt,
             cause: error,
           }),

@@ -36,8 +36,12 @@ export class SourceControlRateLimitPausedError extends Schema.TaggedErrorClass<S
     retryAt: Schema.Number,
   },
 ) {
+  get detail(): string {
+    return `${this.provider} requests to ${this.host} are paused until the rate limit resets.`;
+  }
+
   override get message(): string {
-    return `${this.provider} requests to ${this.host} are temporarily paused after a rate-limit response.`;
+    return this.detail;
   }
 }
 

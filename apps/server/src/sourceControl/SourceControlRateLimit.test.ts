@@ -29,6 +29,11 @@ it.effect("backs off repeated rate limits until a successful request", () =>
       host: "github.com",
       retryAt: 30_000,
     });
+    assert.equal(
+      firstPause.detail,
+      "github requests to github.com are paused until the rate limit resets.",
+    );
+    assert.equal(firstPause.message, firstPause.detail);
 
     yield* TestClock.adjust("30 seconds");
     const secondLease = yield* limits.check(github);
