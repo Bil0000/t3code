@@ -17,7 +17,6 @@ import {
   MessageSquareIcon,
   MessageSquareOffIcon,
   Rows3Icon,
-  SparklesIcon,
   TextWrapIcon,
   TriangleAlertIcon,
   XIcon,
@@ -135,12 +134,11 @@ interface DraftAnchor {
   readonly range: SelectedLineRange;
 }
 
-/** A range of the diff, and whatever the reader wants to know about it. */
-export interface PullRequestAskSelectionInput {
+/** A range of the diff and the reader's request for the agent. */
+export interface PullRequestAgentSelectionInput {
   /** The marked lines, already in the shape the composer draws and the agent reads. */
   readonly comment: ReviewCommentContext;
-  /** Empty where the reader pressed Ask without typing: the lines are the question. */
-  readonly question: string;
+  readonly request: string;
 }
 
 /** The contract's sides named the way the diff viewer names them, and back again. */
@@ -172,7 +170,6 @@ export function PullRequestCodeTab({
   pendingFinding,
   fixFindingLabel = "Fix in a thread",
   onFixFinding,
-  onAskAboutSelection,
   onAddToAgentSelection,
   onRefresh,
   refreshToken = 0,
@@ -187,10 +184,8 @@ export function PullRequestCodeTab({
   pendingFinding?: string | null;
   fixFindingLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
-  /** Absent where a selection has no agent to go to, which takes the Ask button off the box. */
-  onAskAboutSelection?: (input: PullRequestAskSelectionInput) => void;
   /** Absent where there is no active agent composer to receive a local comment. */
-  onAddToAgentSelection?: (comment: ReviewCommentContext) => void;
+  onAddToAgentSelection?: (input: PullRequestAgentSelectionInput) => void;
   onRefresh: () => void;
   /** Bumped by the panel's refresh button: drop the accumulated pages and re-read the diff. */
   refreshToken?: number;
@@ -848,30 +843,17 @@ export function PullRequestCodeTab({
             rangeLabel={`${draft.path}:${draft.line}`}
             text=""
             submitLabel="Add to review"
-            secondaryActions={[
-              ...(onAskAboutSelection
-                ? [
-                    {
-                      label: "Ask",
-                      icon: <SparklesIcon className="size-3" />,
-                      allowEmpty: true,
-                      onAction: (question: string) =>
-                        finishSelection(draft, question, (comment) =>
-                          onAskAboutSelection({ comment, question }),
-                        ),
-                    },
-                  ]
-                : []),
-              ...(onAddToAgentSelection
-                ? [
-                    {
-                      label: "Add to agent",
-                      onAction: (text: string) =>
-                        finishSelection(draft, text, onAddToAgentSelection),
-                    },
-                  ]
-                : []),
-            ]}
+            {...(onAddToAgentSelection
+              ? {
+                  secondaryAction: {
+                    label: "Add to agent",
+                    onAction: (text: string) =>
+                      finishSelection(draft, text, (comment) =>
+                        onAddToAgentSelection({ comment, request: text }),
+                      ),
+                  },
+                }
+              : {})}
             onCancel={() => {
               setDraft(null);
               setSelectedLines(null);
@@ -897,7 +879,6 @@ export function PullRequestCodeTab({
       draft,
       finishSelection,
       onAddToAgentSelection,
-      onAskAboutSelection,
       removeComment,
       renderThreadCard,
       reviewKey,

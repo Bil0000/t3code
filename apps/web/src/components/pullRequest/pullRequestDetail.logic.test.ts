@@ -8,7 +8,7 @@ import {
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  buildAskAboutLinesHandoff,
+  buildAddSelectionToAgentHandoff,
   buildAskAboutPullRequestHandoff,
   buildExplainPullRequestHandoff,
   buildFixFindingHandoff,
@@ -666,7 +666,7 @@ describe("asking about a change rather than working on it", () => {
     expect(handoff.reviewComments[0]?.text).toContain("Explain only. Do not change any code.");
   });
 
-  it("takes what the reader typed on the lines as the question", () => {
+  it("puts the reader's request in the composer and the selected lines in chips", () => {
     const comment = {
       id: "pull-request-selection:page.tsx:12:18",
       sectionId: "pull-request:42",
@@ -678,10 +678,10 @@ describe("asking about a change rather than working on it", () => {
       text: "what is this for?",
       diff: "+const answer = 42;",
     };
-    const handoff = buildAskAboutLinesHandoff({
+    const handoff = buildAddSelectionToAgentHandoff({
       ...base,
       comment,
-      question: "what is this for?",
+      request: "what is this for?",
     });
     expect(handoff.prompt).toBe("what is this for?");
     // Two chips: which pull request, and which lines.
@@ -689,25 +689,8 @@ describe("asking about a change rather than working on it", () => {
       "PR #42",
       "apps/web/src/page.tsx",
     ]);
-  });
-
-  it("leaves the composer empty where the reader marked lines and typed nothing", () => {
-    const handoff = buildAskAboutLinesHandoff({
-      ...base,
-      comment: {
-        id: "pull-request-selection:page.tsx:4:4",
-        sectionId: "pull-request:42",
-        sectionTitle: "PR #42 review",
-        filePath: "apps/web/src/page.tsx",
-        startIndex: 3,
-        endIndex: 3,
-        rangeLabel: "L4 (before)",
-        text: "",
-        diff: "-const answer = 41;",
-      },
-      question: "   ",
-    });
-    expect(handoff.prompt).toBe("");
+    expect(handoff.reviewComments[0]?.text).not.toContain("Do not change any code");
+    expect(handoff.reviewComments[1]?.text).toBe("");
   });
 });
 
