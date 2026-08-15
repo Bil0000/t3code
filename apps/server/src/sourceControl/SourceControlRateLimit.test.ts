@@ -60,6 +60,24 @@ it.effect("honors a provider reset time", () =>
   }).pipe(Effect.provide(SourceControlRateLimit.layer)),
 );
 
+it.effect("lets an interactive request through without clearing an active pause", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(1_000);
+    const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
+    const lease = yield* limits.check(github);
+    yield* limits.recordRateLimit({ ...github, lease, retryAt: 121_000 });
+
+    const interactiveLease = yield* limits.check(github, { allowPaused: true });
+    yield* limits.recordSuccess({ ...github, lease: interactiveLease });
+
+    assert.equal(interactiveLease, 1);
+    assert.equal((yield* Effect.flip(limits.check(github))).retryAt, 121_000);
+
+    yield* limits.recordRateLimit({ ...github, lease: interactiveLease, retryAt: 61_000 });
+    assert.equal((yield* Effect.flip(limits.check(github))).retryAt, 121_000);
+  }).pipe(Effect.provide(SourceControlRateLimit.layer)),
+);
+
 it.effect("keeps providers and hosts isolated", () =>
   Effect.gen(function* () {
     const limits = yield* SourceControlRateLimit.SourceControlRateLimit;

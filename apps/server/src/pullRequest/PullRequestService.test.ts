@@ -1341,9 +1341,10 @@ it.effect("reports repositories on a host that could not be read", () =>
   }),
 );
 
-it.effect("stops new calls to a host after it reports a rate limit", () =>
+it.effect("stops new reads after a rate limit while leaving manual actions available", () =>
   Effect.gen(function* () {
     let listCalls = 0;
+    let actionCalls = 0;
     const service = yield* makeService({
       projects: [
         project({ id: "p1", title: "cloud", workspaceRoot: "/cloud", repository: "acme/web" }),
@@ -1365,16 +1366,69 @@ it.effect("stops new calls to a host after it reports a rate limit", () =>
                 ),
               ),
             ),
+          runAction: () =>
+            Effect.sync(() => {
+              actionCalls += 1;
+            }),
         }),
       ],
     });
 
     const first = yield* service.list({ state: "open", involvement: "all" });
     const paused = yield* service.list({ state: "open", involvement: "authored" });
+    yield* service.runAction({
+      projectId: "p1" as ProjectId,
+      repository: "acme/web",
+      number: 1,
+      action: "close",
+    });
 
     assert.strictEqual(listCalls, 1);
+    assert.strictEqual(actionCalls, 1);
     assert.lengthOf(first.errors, 1);
     assert.lengthOf(paused.errors, 1);
+  }),
+);
+
+it.effect("uses a manual rate limit to pause later reads", () =>
+  Effect.gen(function* () {
+    let listCalls = 0;
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "cloud", workspaceRoot: "/cloud", repository: "acme/web" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          listChangeRequests: () =>
+            Effect.sync(() => {
+              listCalls += 1;
+              return { items: [], truncated: false, continues: true };
+            }),
+          runAction: () =>
+            Effect.fail(
+              new PullRequestProviderError({
+                provider: "github",
+                operation: "runAction",
+                reason: "rate-limited",
+                detail: "GitHub API rate limit exceeded.",
+              }),
+            ),
+        }),
+      ],
+    });
+
+    yield* Effect.flip(
+      service.runAction({
+        projectId: "p1" as ProjectId,
+        repository: "acme/web",
+        number: 1,
+        action: "close",
+      }),
+    );
+    const error = yield* Effect.flip(service.list({ state: "open", involvement: "all" }));
+
+    assert.strictEqual(listCalls, 0);
+    assert.strictEqual(error._tag, "PullRequestOperationError");
   }),
 );
 

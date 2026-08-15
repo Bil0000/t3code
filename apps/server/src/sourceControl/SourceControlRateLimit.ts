@@ -44,7 +44,10 @@ export class SourceControlRateLimitPausedError extends Schema.TaggedErrorClass<S
 export class SourceControlRateLimit extends Context.Service<
   SourceControlRateLimit,
   {
-    readonly check: (key: RateLimitKey) => Effect.Effect<number, SourceControlRateLimitPausedError>;
+    readonly check: (
+      key: RateLimitKey,
+      options?: { readonly allowPaused: boolean },
+    ) => Effect.Effect<number, SourceControlRateLimitPausedError>;
     readonly recordRateLimit: (
       input: RateLimitLease & { readonly retryAt?: number | undefined },
     ) => Effect.Effect<void>;
@@ -80,10 +83,10 @@ export const make = Effect.gen(function* () {
 
   const check: SourceControlRateLimit["Service"]["check"] = Effect.fn(
     "SourceControlRateLimit.check",
-  )(function* (input) {
+  )(function* (input, options) {
     const now = yield* Clock.currentTimeMillis;
     const entry = (yield* Ref.get(entries)).get(normalizedKey(input));
-    if (entry !== undefined && entry.retryAt > now) {
+    if (entry !== undefined && entry.retryAt > now && options?.allowPaused !== true) {
       return yield* new SourceControlRateLimitPausedError({
         provider: input.provider,
         host: input.host.trim().toLowerCase(),
@@ -113,10 +116,14 @@ export const make = Effect.gen(function* () {
       }
 
       const attempt = (previous?.attempt ?? 0) + 1;
-      const retryAt =
+      const proposedRetryAt =
         input.retryAt !== undefined && input.retryAt > now
           ? input.retryAt
           : now + fallbackCooldownMs(attempt);
+      const retryAt =
+        previous !== undefined && previous.retryAt > now
+          ? Math.max(previous.retryAt, proposedRetryAt)
+          : proposedRetryAt;
       const next = new Map(current);
       next.set(key, {
         attempt,

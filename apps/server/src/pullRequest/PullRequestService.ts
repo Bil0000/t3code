@@ -378,8 +378,12 @@ function withRateLimitBackoff(
   limits: SourceControlRateLimit.SourceControlRateLimit["Service"],
 ): PullRequestProviderApi {
   const key = { provider: api.kind, host };
-  const protect = <A>(operation: string, effect: Effect.Effect<A, PullRequestProviderError>) =>
-    limits.check(key).pipe(
+  const protect = <A>(
+    operation: string,
+    effect: Effect.Effect<A, PullRequestProviderError>,
+    allowPaused: boolean,
+  ) =>
+    limits.check(key, allowPaused ? { allowPaused: true } : undefined).pipe(
       Effect.mapError(
         (error) =>
           new PullRequestProviderError({
@@ -410,9 +414,14 @@ function withRateLimitBackoff(
     <Args extends ReadonlyArray<unknown>, A>(
       operation: string,
       call: (...args: Args) => Effect.Effect<A, PullRequestProviderError>,
+      allowPaused = false,
     ) =>
     (...args: Args) =>
-      protect(operation, call(...args));
+      protect(operation, call(...args), allowPaused);
+  const interactive = <Args extends ReadonlyArray<unknown>, A>(
+    operation: string,
+    call: (...args: Args) => Effect.Effect<A, PullRequestProviderError>,
+  ) => wrap(operation, call, true);
 
   return {
     kind: api.kind,
@@ -436,25 +445,27 @@ function withRateLimitBackoff(
       : {
           getReviewThreadComments: wrap("getReviewThreadComments", api.getReviewThreadComments),
         }),
-    getViewerPermissions: wrap("getViewerPermissions", api.getViewerPermissions),
+    getViewerPermissions: interactive("getViewerPermissions", api.getViewerPermissions),
     getDiff: wrap("getDiff", api.getDiff),
     ...(api.getDiffFileContents === undefined
       ? {}
       : { getDiffFileContents: wrap("getDiffFileContents", api.getDiffFileContents) }),
-    runAction: wrap("runAction", api.runAction),
+    runAction: interactive("runAction", api.runAction),
     ...(api.updateChangeRequest === undefined
       ? {}
-      : { updateChangeRequest: wrap("updateChangeRequest", api.updateChangeRequest) }),
-    comment: wrap("comment", api.comment),
+      : {
+          updateChangeRequest: interactive("updateChangeRequest", api.updateChangeRequest),
+        }),
+    comment: interactive("comment", api.comment),
     ...(api.updateComment === undefined
       ? {}
-      : { updateComment: wrap("updateComment", api.updateComment) }),
-    submitReview: wrap("submitReview", api.submitReview),
-    listReviewerCandidates: wrap("listReviewerCandidates", api.listReviewerCandidates),
-    setReviewerRequest: wrap("setReviewerRequest", api.setReviewerRequest),
-    replyToThread: wrap("replyToThread", api.replyToThread),
-    setReaction: wrap("setReaction", api.setReaction),
-    setThreadResolution: wrap("setThreadResolution", api.setThreadResolution),
+      : { updateComment: interactive("updateComment", api.updateComment) }),
+    submitReview: interactive("submitReview", api.submitReview),
+    listReviewerCandidates: interactive("listReviewerCandidates", api.listReviewerCandidates),
+    setReviewerRequest: interactive("setReviewerRequest", api.setReviewerRequest),
+    replyToThread: interactive("replyToThread", api.replyToThread),
+    setReaction: interactive("setReaction", api.setReaction),
+    setThreadResolution: interactive("setThreadResolution", api.setThreadResolution),
   };
 }
 
