@@ -9,6 +9,7 @@ const GRAPHQL_RESERVE_RATIO = 0.1;
 const RATE_LIMIT_SELECTION = "rateLimit { cost limit remaining resetAt }";
 
 interface GraphQlBudgetSnapshot {
+  readonly cost: number;
   readonly limit: number;
   readonly remaining: number;
   readonly resetAt: string;
@@ -57,8 +58,11 @@ function snapshotFrom(raw: string): GraphQlBudgetSnapshot | null {
     if (!isRecord(parsed) || !isRecord(parsed.data) || !isRecord(parsed.data.rateLimit)) {
       return null;
     }
-    const { limit, remaining, resetAt } = parsed.data.rateLimit;
+    const { cost, limit, remaining, resetAt } = parsed.data.rateLimit;
     if (
+      typeof cost !== "number" ||
+      !Number.isFinite(cost) ||
+      cost < 0 ||
       typeof limit !== "number" ||
       !Number.isFinite(limit) ||
       limit <= 0 ||
@@ -70,7 +74,7 @@ function snapshotFrom(raw: string): GraphQlBudgetSnapshot | null {
       return null;
     }
     const resetAtMs = Date.parse(resetAt);
-    return Number.isFinite(resetAtMs) ? { limit, remaining, resetAt, resetAtMs } : null;
+    return Number.isFinite(resetAtMs) ? { cost, limit, remaining, resetAt, resetAtMs } : null;
   } catch {
     return null;
   }
@@ -94,7 +98,6 @@ export const make = Effect.gen(function* () {
   const query: GitHubGraphQlBudget["Service"]["query"] = Effect.fn("GitHubGraphQlBudget.query")(
     function* (host, document, options) {
       if (!isReadOperation(document)) return document;
-      if (options?.allowReserve === true) return withRateLimit(document);
       const now = yield* Clock.currentTimeMillis;
       const resetAt = yield* Ref.modify(snapshots, (current) => {
         const key = hostKey(host);
@@ -105,10 +108,13 @@ export const make = Effect.gen(function* () {
           next.delete(key);
           return [null, next] as const;
         }
-        return [
-          snapshot.remaining <= snapshot.limit * GRAPHQL_RESERVE_RATIO ? snapshot.resetAt : null,
-          current,
-        ] as const;
+        const remaining = Math.max(0, snapshot.remaining - Math.max(1, snapshot.cost));
+        if (options?.allowReserve !== true && remaining < snapshot.limit * GRAPHQL_RESERVE_RATIO) {
+          return [snapshot.resetAt, current] as const;
+        }
+        const next = new Map(current);
+        next.set(key, { ...snapshot, remaining });
+        return [null, next] as const;
       });
       if (resetAt !== null) {
         return yield* new GitHubGraphQlBudgetPausedError({ host, resetAt });

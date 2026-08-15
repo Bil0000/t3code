@@ -119,7 +119,7 @@ describe("GitHub GraphQL budget", () => {
     Effect.gen(function* () {
       yield* TestClock.setTime(BEFORE_RESET);
       const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
-      yield* budget.observe("github.com", rateLimit(501));
+      yield* budget.observe("github.com", rateLimit(515));
 
       expect(yield* budget.query("github.com", "query { viewer { login } }")).toContain(
         "rateLimit",
@@ -138,6 +138,24 @@ describe("GitHub GraphQL budget", () => {
           allowReserve: true,
         }),
       ).toContain("rateLimit");
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("reserves an admitted query cost before its response", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(514));
+
+      expect(yield* budget.query("github.com", "query { viewer { login } }")).toContain(
+        "rateLimit",
+      );
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+
+      expect(error).toMatchObject({
+        _tag: "GitHubGraphQlBudgetPausedError",
+        resetAt: RESET_AT,
+      });
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
 
