@@ -311,15 +311,17 @@ export function ReviewThreadCard({
             ))}
           </div>
           {nextCommentsCursor !== null ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              className="mt-2 px-1"
-              disabled={loadingMore}
-              onClick={() => void loadMore()}
-            >
-              {loadingMore ? "Loading..." : "Load more comments"}
-            </Button>
+            <div className="mt-2">
+              <Button
+                size="xs"
+                variant="ghost"
+                className="px-1"
+                disabled={loadingMore}
+                onClick={() => void loadMore()}
+              >
+                {loadingMore ? "Loading..." : "Load more comments"}
+              </Button>
+            </div>
           ) : null}
 
           {canReply ? (
