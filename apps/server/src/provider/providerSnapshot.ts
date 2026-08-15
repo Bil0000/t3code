@@ -141,7 +141,8 @@ export function parseGenericCliVersion(output: string): string | null {
 export function providerModelsFromSettings(
   builtInModels: ReadonlyArray<ServerProviderModel>,
   customModels: ReadonlyArray<string>,
-  customModelCapabilities: ModelCapabilities,
+  fallbackCapabilities: ModelCapabilities,
+  customModelCapabilities: Readonly<Record<string, ModelCapabilities>> = {},
 ): ReadonlyArray<ServerProviderModel> {
   const resolvedBuiltInModels = [...builtInModels];
   const seen = new Set(resolvedBuiltInModels.map((model) => model.slug));
@@ -157,7 +158,7 @@ export function providerModelsFromSettings(
       slug: normalized,
       name: normalized,
       isCustom: true,
-      capabilities: customModelCapabilities,
+      capabilities: customModelCapabilities[normalized] ?? fallbackCapabilities,
     });
   }
 

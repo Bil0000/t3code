@@ -228,6 +228,7 @@ export function applyPreferredCodexDefaultModel(
 function appendCustomCodexModels(
   models: ReadonlyArray<ServerProviderModel>,
   customModels: ReadonlyArray<string>,
+  customModelCapabilities: Readonly<Record<string, ModelCapabilities>> = {},
 ): ReadonlyArray<ServerProviderModel> {
   if (customModels.length === 0) {
     return models;
@@ -246,7 +247,7 @@ function appendCustomCodexModels(
       slug,
       name: slug,
       isCustom: true,
-      capabilities: fallbackCapabilities,
+      capabilities: customModelCapabilities[slug] ?? fallbackCapabilities,
     });
   }
   return customEntries.length === 0 ? models : [...models, ...customEntries];
@@ -325,6 +326,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
   readonly launchArgs?: string;
   readonly cwd: string;
   readonly customModels?: ReadonlyArray<string>;
+  readonly customModelCapabilities?: Readonly<Record<string, ModelCapabilities>>;
   readonly environment?: NodeJS.ProcessEnv;
 }) {
   // `~` is not shell-expanded when env vars are set via `child_process.spawn`,
@@ -390,7 +392,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     return {
       account: accountResponse,
       version,
-      models: appendCustomCodexModels([], input.customModels ?? []),
+      models: appendCustomCodexModels([], input.customModels ?? [], input.customModelCapabilities),
       skills: [],
     } satisfies CodexAppServerProviderSnapshot;
   }
@@ -409,7 +411,7 @@ const probeCodexAppServerProvider = Effect.fn("probeCodexAppServerProvider")(fun
     account: accountResponse,
     version,
     models: applyPreferredCodexDefaultModel(
-      appendCustomCodexModels(models, input.customModels ?? []),
+      appendCustomCodexModels(models, input.customModels ?? [], input.customModelCapabilities),
     ),
     skills: parseCodexSkillsListResponse(skillsResponse, input.cwd),
   } satisfies CodexAppServerProviderSnapshot;
@@ -427,7 +429,7 @@ const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvi
     slug: model,
     name: model,
     isCustom: true,
-    capabilities: null,
+    capabilities: codexSettings.customModelCapabilities?.[model] ?? null,
   }));
 };
 
@@ -508,6 +510,7 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     readonly launchArgs?: string;
     readonly cwd: string;
     readonly customModels: ReadonlyArray<string>;
+    readonly customModelCapabilities?: Readonly<Record<string, ModelCapabilities>>;
     readonly environment?: NodeJS.ProcessEnv;
   }) => Effect.Effect<
     CodexAppServerProviderSnapshot,
@@ -547,6 +550,9 @@ export const checkCodexProviderStatus = Effect.fn("checkCodexProviderStatus")(fu
     launchArgs: resolveCodexLaunchArgs(codexSettings.launchArgs, resolvedEnvironment),
     cwd: process.cwd(),
     customModels: codexSettings.customModels,
+    ...(codexSettings.customModelCapabilities
+      ? { customModelCapabilities: codexSettings.customModelCapabilities }
+      : {}),
     environment: resolvedEnvironment,
   }).pipe(
     Effect.scoped,

@@ -70,6 +70,29 @@ describe("providerModelsFromSettings", () => {
     expect(models.map((model) => model.slug)).toEqual(["claude-opus-4-8", "opus"]);
     expect(models[1]?.isCustom).toBe(true);
   });
+
+  it("uses per-model capabilities when a custom model declares them", () => {
+    const fallbackCapabilities = createModelCapabilities({ optionDescriptors: [] });
+    const declaredCapabilities = createModelCapabilities({
+      optionDescriptors: [
+        {
+          id: "effort",
+          label: "Reasoning",
+          type: "select",
+          options: [
+            { id: "low", label: "Low" },
+            { id: "max", label: "Max", isDefault: true },
+          ],
+        },
+      ],
+    });
+
+    const models = providerModelsFromSettings([], ["gateway/model"], fallbackCapabilities, {
+      "gateway/model": declaredCapabilities,
+    });
+
+    expect(models[0]?.capabilities).toEqual(declaredCapabilities);
+  });
 });
 
 describe("ProviderCommandNotFoundError", () => {

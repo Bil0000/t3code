@@ -5,6 +5,7 @@ import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { ThreadEnvMode } from "./environment.ts";
 import {
+  CustomModelCapabilities,
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
   ProviderOptionSelections,
@@ -315,6 +316,9 @@ export const CodexSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
+    customModelCapabilities: Schema.optionalKey(CustomModelCapabilities).pipe(
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
   },
   {
     order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs"],
@@ -346,6 +350,9 @@ export const ClaudeSettings = makeProviderSettingsSchema(
     ),
     customModels: Schema.Array(Schema.String).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    customModelCapabilities: Schema.optionalKey(CustomModelCapabilities).pipe(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     launchArgs: Schema.String.pipe(
@@ -394,6 +401,9 @@ export const CursorSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
+    customModelCapabilities: Schema.optionalKey(CustomModelCapabilities).pipe(
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
   },
   {
     order: ["binaryPath", "apiEndpoint"],
@@ -416,6 +426,9 @@ export const GrokSettings = makeProviderSettingsSchema(
     ),
     customModels: Schema.Array(Schema.String).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    customModelCapabilities: Schema.optionalKey(CustomModelCapabilities).pipe(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
@@ -466,6 +479,9 @@ export const OpenCodeSettings = makeProviderSettingsSchema(
     ),
     customModels: Schema.Array(Schema.String).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    customModelCapabilities: Schema.optionalKey(CustomModelCapabilities).pipe(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
@@ -677,6 +693,7 @@ const CodexSettingsPatch = Schema.Struct({
   shadowHomePath: Schema.optionalKey(TrimmedString),
   launchArgs: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  customModelCapabilities: Schema.optionalKey(CustomModelCapabilities),
 });
 
 const ClaudeSettingsPatch = Schema.Struct({
@@ -684,6 +701,7 @@ const ClaudeSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(TrimmedString),
   homePath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  customModelCapabilities: Schema.optionalKey(CustomModelCapabilities),
   launchArgs: Schema.optionalKey(TrimmedString),
 });
 
@@ -692,12 +710,14 @@ const CursorSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(TrimmedString),
   apiEndpoint: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  customModelCapabilities: Schema.optionalKey(CustomModelCapabilities),
 });
 
 const GrokSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  customModelCapabilities: Schema.optionalKey(CustomModelCapabilities),
 });
 
 const OpenCodeSettingsPatch = Schema.Struct({
@@ -706,6 +726,7 @@ const OpenCodeSettingsPatch = Schema.Struct({
   serverUrl: Schema.optionalKey(TrimmedString),
   serverPassword: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+  customModelCapabilities: Schema.optionalKey(CustomModelCapabilities),
 });
 
 export const ServerSettingsPatch = Schema.Struct({

@@ -58,7 +58,7 @@ export function buildInitialGrokProviderSnapshot(
 ): Effect.Effect<ServerProviderDraft> {
   return Effect.gen(function* () {
     const checkedAt = yield* Effect.map(DateTime.now, DateTime.formatIso);
-    const models = grokModelsFromSettings(grokSettings.customModels);
+    const models = grokModelsFromSettings(grokSettings);
 
     if (!grokSettings.enabled) {
       return buildServerProvider({
@@ -93,10 +93,15 @@ export function buildInitialGrokProviderSnapshot(
 }
 
 function grokModelsFromSettings(
-  customModels: ReadonlyArray<string> | undefined,
+  grokSettings: Pick<GrokSettings, "customModels" | "customModelCapabilities">,
   builtInModels: ReadonlyArray<ServerProviderModel> = GROK_BUILT_IN_MODELS,
 ): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(builtInModels, customModels ?? [], EMPTY_CAPABILITIES);
+  return providerModelsFromSettings(
+    builtInModels,
+    grokSettings.customModels,
+    EMPTY_CAPABILITIES,
+    grokSettings.customModelCapabilities,
+  );
 }
 
 function buildGrokDiscoveredModelsFromSessionModelState(
@@ -167,7 +172,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   ChildProcessSpawner.ChildProcessSpawner | Crypto.Crypto
 > {
   const checkedAt = DateTime.formatIso(yield* DateTime.now);
-  const fallbackModels = grokModelsFromSettings(grokSettings.customModels);
+  const fallbackModels = grokModelsFromSettings(grokSettings);
 
   if (!grokSettings.enabled) {
     return buildServerProvider({
@@ -294,7 +299,7 @@ export const checkGrokProviderStatus = Effect.fn("checkGrokProviderStatus")(func
   const discoveredModels = discoveryExit.value.value;
   const models =
     discoveredModels.length > 0
-      ? grokModelsFromSettings(grokSettings.customModels, discoveredModels)
+      ? grokModelsFromSettings(grokSettings, discoveredModels)
       : fallbackModels;
 
   return buildServerProvider({
