@@ -56,6 +56,9 @@ const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const encodedDefaultServerSettings = encodeServerSettings(DEFAULT_SERVER_SETTINGS);
 
 const defaultClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)({});
+const customClaudeSettings: ClaudeSettings = Schema.decodeSync(ClaudeSettings)({
+  customModels: ["gpt-5.6-sol"],
+});
 const defaultCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({});
 const decodeCodexSettings = Schema.decodeSync(CodexSettings);
 const disabledCodexSettings: CodexSettings = Schema.decodeSync(CodexSettings)({
@@ -1850,6 +1853,51 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
             mockSpawnerLayer((args) => {
               const joined = args.join(" ");
               if (joined === "--version") return { stdout: "1.0.0\n", stderr: "", code: 0 };
+              if (joined === "auth status")
+                return {
+                  stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+                  stderr: "",
+                  code: 0,
+                };
+              throw new Error(`Unexpected args: ${joined}`);
+            }),
+          ),
+        ),
+      );
+
+      it.effect("exposes all Claude controls for custom models by default", () =>
+        Effect.gen(function* () {
+          const status = yield* checkClaudeProviderStatus(
+            customClaudeSettings,
+            claudeCapabilities(),
+          );
+          const customModel = status.models.find((model) => model.slug === "gpt-5.6-sol");
+
+          assert(customModel?.capabilities != null);
+          const descriptors = customModel.capabilities.optionDescriptors ?? [];
+          assert.deepEqual(
+            descriptors.map((descriptor) =>
+              descriptor.type === "select"
+                ? {
+                    id: descriptor.id,
+                    options: descriptor.options.map((option) => option.id),
+                  }
+                : { id: descriptor.id },
+            ),
+            [
+              {
+                id: "effort",
+                options: ["low", "medium", "high", "xhigh", "max", "ultracode", "ultrathink"],
+              },
+              { id: "fastMode" },
+              { id: "contextWindow", options: ["200k", "1m"] },
+            ],
+          );
+        }).pipe(
+          Effect.provide(
+            mockSpawnerLayer((args) => {
+              const joined = args.join(" ");
+              if (joined === "--version") return { stdout: "2.1.219\n", stderr: "", code: 0 };
               if (joined === "auth status")
                 return {
                   stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',

@@ -1666,6 +1666,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
 ) {
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("claudeAgent");
   const customModelCapabilities = claudeSettings.customModelCapabilities ?? {};
+  const customModelSlugs = new Set(claudeSettings.customModels);
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const serverConfig = yield* ServerConfig;
@@ -4148,7 +4149,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const effectiveEffort = getEffectiveClaudeAgentEffort(
         effort,
         modelSelection?.model,
-        modelSelection ? customModelCapabilities[modelSelection.model] === caps : false,
+        modelSelection ? customModelSlugs.has(modelSelection.model) : false,
       );
       const runtimeModeToPermission: Record<string, PermissionMode> = {
         "auto-accept-edits": "acceptEdits",
@@ -4412,7 +4413,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         getEffectiveClaudeAgentEffort(
           turnEffort ?? null,
           modelSelection.model,
-          customModelCapabilities[modelSelection.model] === turnCaps,
+          customModelSlugs.has(modelSelection.model),
         ) ?? undefined;
     }
 

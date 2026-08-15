@@ -779,6 +779,40 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("forwards default custom-model controls to Claude SDK launch options", () => {
+    const harness = makeHarness({
+      claudeConfig: {
+        customModels: ["gpt-5.6-sol"],
+      } as Partial<ClaudeSettings>,
+    });
+
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        modelSelection: createModelSelection(
+          ProviderInstanceId.make("claudeAgent"),
+          "gpt-5.6-sol",
+          [
+            { id: "effort", value: "xhigh" },
+            { id: "fastMode", value: true },
+            { id: "contextWindow", value: "1m" },
+          ],
+        ),
+        runtimeMode: "full-access",
+      });
+
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.model, "gpt-5.6-sol[1m]");
+      assert.equal(createInput?.options.effort, "xhigh");
+      assert.deepEqual(createInput?.options.settings, { fastMode: true });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("treats ultrathink as a prompt keyword instead of a session effort", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -2476,6 +2510,7 @@ describe("ClaudeAdapterLive", () => {
           usage: {
             usedTokens: 321,
             lastUsedTokens: 321,
+            maxTokens: 200_000,
             toolUses: 2,
             durationMs: 654,
           },

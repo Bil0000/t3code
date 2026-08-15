@@ -138,7 +138,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     const cliEffort = normalizeClaudeCliEffort(
       resolvedEffort,
       modelSelection.model,
-      customModelCapabilities[modelSelection.model] === caps,
+      claudeSettings.customModels.includes(modelSelection.model),
     );
     const ultracode = isClaudeUltracodeEffort(resolvedEffort);
     const thinkingDescriptor = findDescriptor("thinking");
