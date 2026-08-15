@@ -4,6 +4,7 @@ import type { ModelCapabilities, ServerProviderModel } from "@t3tools/contracts"
 import {
   deriveProviderModelsForDisplay,
   reconcileCustomModelCapabilities,
+  updateCustomModelCapabilitiesRecord,
 } from "./ProviderInstanceCard";
 
 describe("deriveProviderModelsForDisplay", () => {
@@ -81,5 +82,18 @@ describe("deriveProviderModelsForDisplay", () => {
       configured,
       new: { optionDescriptors: [] },
     });
+  });
+
+  it("stores prototype-shaped model IDs as own capability keys", () => {
+    const capabilities: ModelCapabilities = {
+      optionDescriptors: [{ id: "fastMode", label: "Fast Mode", type: "boolean" }],
+    };
+
+    const updated = updateCustomModelCapabilitiesRecord({}, "__proto__", capabilities);
+    expect(Object.hasOwn(updated, "__proto__")).toBe(true);
+    expect(updated["__proto__"]).toEqual(capabilities);
+
+    const removed = updateCustomModelCapabilitiesRecord(updated, "__proto__", undefined);
+    expect(Object.hasOwn(removed, "__proto__")).toBe(false);
   });
 });

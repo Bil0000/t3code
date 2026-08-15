@@ -298,6 +298,41 @@ describe("serverSettings helpers", () => {
     });
   });
 
+  it("replaces legacy custom model capability maps", () => {
+    const capabilities = {
+      optionDescriptors: [{ id: "fastMode", label: "Fast Mode", type: "boolean" as const }],
+    };
+    const current = {
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        claudeAgent: {
+          ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
+          customModelCapabilities: {
+            "gateway/one": capabilities,
+            "gateway/two": capabilities,
+          },
+        },
+      },
+    };
+
+    const replaced = applyServerSettingsPatch(current, {
+      providers: {
+        claudeAgent: {
+          customModelCapabilities: { "gateway/one": capabilities },
+        },
+      },
+    });
+    expect(replaced.providers.claudeAgent.customModelCapabilities).toEqual({
+      "gateway/one": capabilities,
+    });
+
+    const cleared = applyServerSettingsPatch(current, {
+      providers: { claudeAgent: { customModelCapabilities: {} } },
+    });
+    expect(cleared.providers.claudeAgent.customModelCapabilities).toEqual({});
+  });
+
   it("stores background activity profiles as a versioned object and syncs legacy aliases", () => {
     const next = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
       backgroundActivity: {
