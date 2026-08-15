@@ -95,5 +95,13 @@ describe("deriveProviderModelsForDisplay", () => {
 
     const removed = updateCustomModelCapabilitiesRecord(updated, "__proto__", undefined);
     expect(Object.hasOwn(removed, "__proto__")).toBe(false);
+
+    const reconciled = reconcileCustomModelCapabilities({
+      capabilities: {},
+      currentModels: [],
+      nextModels: ["constructor"],
+    });
+    expect(Object.hasOwn(reconciled, "constructor")).toBe(true);
+    expect(reconciled["constructor"]).toEqual({ optionDescriptors: [] });
   });
 });

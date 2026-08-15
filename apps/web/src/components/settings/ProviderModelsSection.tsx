@@ -272,7 +272,11 @@ function CustomModelCapabilitiesEditor(props: {
                         )
                       }
                     >
-                      <SelectTrigger size="compact" aria-label={`Default ${template.label}`}>
+                      <SelectTrigger
+                        size="compact"
+                        className="w-full min-w-0"
+                        aria-label={`Default ${template.label}`}
+                      >
                         <SelectValue />
                       </SelectTrigger>
                       <SelectPopup alignItemWithTrigger={false}>

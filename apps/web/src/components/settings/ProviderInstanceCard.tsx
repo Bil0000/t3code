@@ -128,7 +128,9 @@ export function reconcileCustomModelCapabilities(input: {
   const currentModels = new Set(input.currentModels);
   const entries: Array<readonly [string, ModelCapabilities]> = [];
   for (const slug of input.nextModels) {
-    const capabilities = input.capabilities[slug];
+    const capabilities = Object.hasOwn(input.capabilities, slug)
+      ? input.capabilities[slug]
+      : undefined;
     if (capabilities) {
       entries.push([slug, capabilities]);
     } else if (!currentModels.has(slug)) {
