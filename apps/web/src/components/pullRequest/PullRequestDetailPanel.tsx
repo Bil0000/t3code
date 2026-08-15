@@ -1065,13 +1065,17 @@ export function PullRequestDetailPanel({
     : null;
   const checksSummary = detail ? summarizePullRequestChecks(detail.checks) : null;
   const checksState = detail ? pullRequestChecksState(detail.checks) : null;
-  // Not counted from a conversation this page only holds the recent end of: an approval older
-  // than the window would be missing, and "1" beside a tick is read as the whole answer. The
-  // Summary tab's row can say it may be short; a bare number cannot, so it stays away.
+  // Approvals that still stand, and only those. A superseded one is dimmed beside the reviewer
+  // who gave it, so counting it here would have the header assert in a number what the row next
+  // to it has just qualified.
+  //
+  // Not counted at all from a conversation this page only holds the recent end of: an approval
+  // older than the window would be missing, and "1" beside a tick is read as the whole answer.
+  // The Summary tab's row can say it may be short; a bare number cannot, so it stays away.
   const approvalCount =
     detail && !detail.commentsTruncated
       ? latestPullRequestReviewOutcomes(detail.comments, detail.commits).filter(
-          (entry) => entry.outcome === "approved",
+          (entry) => entry.outcome === "approved" && !entry.stale,
         ).length
       : 0;
 
