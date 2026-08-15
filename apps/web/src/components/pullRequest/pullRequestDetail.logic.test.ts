@@ -20,6 +20,7 @@ import {
   mergePullRequestThreadComments,
   orderPullRequestComments,
   pullRequestActionNeedsHostRefresh,
+  pullRequestActionMenuHasGroup,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   readableFailure,
@@ -112,6 +113,12 @@ describe("review thread comment pages", () => {
       { id: "c2", body: "saved body" },
       { id: "c3", body: "another loaded comment" },
     ]);
+  });
+});
+
+describe("pull request action menu", () => {
+  it("keeps the group divider when auto-merge is the only action", () => {
+    expect(pullRequestActionMenuHasGroup(false, true, false)).toBe(true);
   });
 });
 
