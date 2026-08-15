@@ -6,6 +6,15 @@ import * as SourceControlRateLimit from "./SourceControlRateLimit.ts";
 
 const github = { provider: "github" as const, host: "github.com" };
 
+it("parses Retry-After seconds and HTTP dates", () => {
+  assert.equal(SourceControlRateLimit.retryAtFromHeader("120", 1_000), 121_000);
+  assert.equal(
+    SourceControlRateLimit.retryAtFromHeader("Thu, 01 Jan 1970 00:02:01 GMT", 1_000),
+    121_000,
+  );
+  assert.isUndefined(SourceControlRateLimit.retryAtFromHeader("later", 1_000));
+});
+
 it.effect("backs off repeated rate limits until a successful request", () =>
   Effect.gen(function* () {
     yield* TestClock.setTime(0);

@@ -1,4 +1,6 @@
 import * as Effect from "effect/Effect";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import type {
   PullRequestActor,
   PullRequestCapabilities,
@@ -9,6 +11,7 @@ import type {
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import {
   PullRequestProviderError,
+  type PullRequestProviderFailure,
   type ProviderChangeRequestActivity,
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
@@ -82,12 +85,20 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
 }
 
 /** The CLI tags that mean the tool itself is unusable, rather than one request failing. */
-function reasonFor(
+export function gitHubProviderFailure(
   error: GitHubPullRequestCli.GitHubPullRequestCliError,
-): PullRequestProviderError["reason"] {
-  if (error._tag === "GitHubCliUnavailableError") return "missing-tool";
-  if (error._tag === "GitHubCliAuthenticationError") return "unauthenticated";
-  return "failed";
+): PullRequestProviderFailure {
+  if (error._tag === "GitHubCliUnavailableError") return { reason: "missing-tool" };
+  if (error._tag === "GitHubCliAuthenticationError") return { reason: "unauthenticated" };
+  if (error._tag === "GitHubCliRateLimitError") return { reason: "rate-limited" };
+  if (error._tag === "GitHubGraphQlBudgetPausedError") {
+    const retryAt = Option.map(DateTime.make(error.resetAt), DateTime.toEpochMillis);
+    return {
+      reason: "rate-limited",
+      ...(Option.isSome(retryAt) ? { retryAt: retryAt.value } : {}),
+    };
+  }
+  return { reason: "failed" };
 }
 
 /**
@@ -128,7 +139,7 @@ export const make = Effect.gen(function* () {
     new PullRequestProviderError({
       provider: "github",
       operation,
-      reason: reasonFor(error),
+      ...gitHubProviderFailure(error),
       detail: error.detail,
       cause: error,
     });
