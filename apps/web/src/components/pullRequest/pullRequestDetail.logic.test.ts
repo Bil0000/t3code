@@ -27,6 +27,7 @@ import {
   resolveBaseFreshness,
   buildPullRequestTimeline,
   describePullRequestState,
+  editPullRequestThreadComment,
 } from "./pullRequestDetail.logic";
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
@@ -98,6 +99,18 @@ describe("review thread comment pages", () => {
       { id: "c1", body: "refreshed" },
       { id: "c2", body: "already in base" },
       { id: "c3", body: "next page" },
+    ]);
+  });
+
+  it("keeps a loaded comment after its body is edited", () => {
+    const loaded = [
+      { id: "c2", body: "old body" },
+      { id: "c3", body: "another loaded comment" },
+    ];
+
+    expect(editPullRequestThreadComment(loaded, "c2", "saved body")).toEqual([
+      { id: "c2", body: "saved body" },
+      { id: "c3", body: "another loaded comment" },
     ]);
   });
 });

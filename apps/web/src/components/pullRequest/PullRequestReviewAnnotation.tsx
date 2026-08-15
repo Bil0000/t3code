@@ -25,7 +25,10 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { isCommentSubmitShortcut } from "../diffs/commentSubmitShortcut";
-import { mergePullRequestThreadComments } from "./pullRequestDetail.logic";
+import {
+  editPullRequestThreadComment,
+  mergePullRequestThreadComments,
+} from "./pullRequestDetail.logic";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
@@ -153,7 +156,14 @@ export function ReviewThreadCard({
     const saved = await onEditComment(commentId, body);
     setSavingEdit(false);
     if (saved) {
-      setLoadedPage(null);
+      setLoadedPage((previous) =>
+        previous?.threadId === thread.id
+          ? {
+              ...previous,
+              comments: editPullRequestThreadComment(previous.comments, commentId, body),
+            }
+          : previous,
+      );
       setEditingId(null);
     }
   };
@@ -166,7 +176,16 @@ export function ReviewThreadCard({
     // empty box, and the words have to be written again.
     try {
       if (await onReply(trimmed)) {
-        setLoadedPage(null);
+        // The mutation returns no comment. Keep what the reader loaded and reopen its cursor so
+        // the new reply remains reachable without spending requests until they ask to load it.
+        setLoadedPage((previous) =>
+          previous?.threadId === thread.id
+            ? {
+                ...previous,
+                nextCursor: previous.nextCursor ?? thread.nextCommentsCursor ?? null,
+              }
+            : previous,
+        );
         setReply("");
         setReplying(false);
       }
@@ -286,10 +305,7 @@ export function ReviewThreadCard({
                   subjectId={comment.id}
                   environmentId={environmentId}
                   reference={reference}
-                  onRefresh={() => {
-                    setLoadedPage(null);
-                    onReacted();
-                  }}
+                  onRefresh={onReacted}
                 />
               </article>
             ))}

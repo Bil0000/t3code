@@ -37,6 +37,12 @@ export function mergePullRequestThreadComments<T extends { readonly id: string }
   ];
 }
 
+export function editPullRequestThreadComment<
+  T extends { readonly id: string; readonly body: string },
+>(comments: ReadonlyArray<T>, commentId: string, body: string): ReadonlyArray<T> {
+  return comments.map((comment) => (comment.id === commentId ? { ...comment, body } : comment));
+}
+
 /**
  * Whether the pull request on a right-panel surface is the thread's own one. Repository and
  * number are not enough: one environment can hold two checkouts of the same repository under
