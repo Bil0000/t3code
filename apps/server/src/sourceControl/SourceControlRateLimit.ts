@@ -108,7 +108,9 @@ export const make = Effect.gen(function* () {
       const key = normalizedKey(input);
       const previous = current.get(key);
       if (previous !== undefined && previous.generation > input.lease) {
-        if (previous.retryAt <= now) return current;
+        if (previous.retryAt <= now && (input.retryAt === undefined || input.retryAt <= now)) {
+          return current;
+        }
         const retryAt =
           input.retryAt !== undefined && input.retryAt > previous.retryAt
             ? input.retryAt

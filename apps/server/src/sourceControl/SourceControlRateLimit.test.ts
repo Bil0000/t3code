@@ -106,3 +106,17 @@ it.effect("does not let an older success clear a concurrent pause", () =>
     assert.equal((yield* Effect.flip(limits.check(github))).retryAt, 30_000);
   }).pipe(Effect.provide(SourceControlRateLimit.layer)),
 );
+
+it.effect("keeps a fresh provider reset from an older request", () =>
+  Effect.gen(function* () {
+    yield* TestClock.setTime(0);
+    const limits = yield* SourceControlRateLimit.SourceControlRateLimit;
+    const staleLease = yield* limits.check(github);
+    yield* limits.recordRateLimit({ ...github, lease: staleLease });
+
+    yield* TestClock.adjust("31 seconds");
+    yield* limits.recordRateLimit({ ...github, lease: staleLease, retryAt: 61_000 });
+
+    assert.equal((yield* Effect.flip(limits.check(github))).retryAt, 61_000);
+  }).pipe(Effect.provide(SourceControlRateLimit.layer)),
+);
