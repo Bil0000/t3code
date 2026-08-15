@@ -372,7 +372,7 @@ export const make = Effect.gen(function* () {
     getViewerPermissions: (input) =>
       Effect.all(
         [
-          cli.getViewerAccess(input),
+          cli.getViewerAccess({ ...input, allowReserve: true }),
           // Whether this viewer may update the branch is only on the comparison, and the
           // comparison only resolves through the head ref the detail carries. A failure here
           // withholds that one action rather than the whole answer, the way the detail path
@@ -385,6 +385,7 @@ export const make = Effect.gen(function* () {
                     .getPullRequestBaseComparison({
                       ...input,
                       headRef: `${pullRequest.headRepositoryOwner}:${pullRequest.headBranch}`,
+                      allowReserve: true,
                     })
                     .pipe(Effect.map((comparison) => comparison.viewerCanUpdate === true)),
             ),

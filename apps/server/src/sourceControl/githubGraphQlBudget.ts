@@ -37,6 +37,7 @@ export class GitHubGraphQlBudget extends Context.Service<
     readonly query: (
       host: string,
       document: string,
+      options?: { readonly allowReserve: boolean },
     ) => Effect.Effect<string, GitHubGraphQlBudgetPausedError>;
     readonly observe: (host: string, raw: string) => Effect.Effect<void>;
   }
@@ -75,9 +76,13 @@ function snapshotFrom(raw: string): GraphQlBudgetSnapshot | null {
   }
 }
 
-function withRateLimit(document: string): string {
+function isReadOperation(document: string): boolean {
   const operation = document.trimStart();
-  if (!operation.startsWith("query") && !operation.startsWith("{")) return document;
+  return operation.startsWith("query") || operation.startsWith("{");
+}
+
+function withRateLimit(document: string): string {
+  if (!isReadOperation(document)) return document;
   const end = document.lastIndexOf("}");
   if (end === -1 || document.includes(RATE_LIMIT_SELECTION)) return document;
   return `${document.slice(0, end)}\n  ${RATE_LIMIT_SELECTION}\n${document.slice(end)}`;
@@ -87,7 +92,9 @@ export const make = Effect.gen(function* () {
   const snapshots = yield* Ref.make<ReadonlyMap<string, GraphQlBudgetSnapshot>>(new Map());
 
   const query: GitHubGraphQlBudget["Service"]["query"] = Effect.fn("GitHubGraphQlBudget.query")(
-    function* (host, document) {
+    function* (host, document, options) {
+      if (!isReadOperation(document)) return document;
+      if (options?.allowReserve === true) return withRateLimit(document);
       const now = yield* Clock.currentTimeMillis;
       const resetAt = yield* Ref.modify(snapshots, (current) => {
         const key = hostKey(host);

@@ -127,6 +127,20 @@ describe("GitHub GraphQL budget", () => {
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
 
+  it.effect("allows an interactive read to use the reserve", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(500));
+
+      expect(
+        yield* budget.query("github.com", "query { viewer { login } }", {
+          allowReserve: true,
+        }),
+      ).toContain("rateLimit");
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
   it.effect("ignores malformed or partial rate metadata", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(BEFORE_RESET);
@@ -145,8 +159,10 @@ describe("GitHub GraphQL budget", () => {
 
   it.effect("does not add a read field to a mutation", () =>
     Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
       const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
       const mutation = "mutation { addComment(input: {}) { clientMutationId } }";
+      yield* budget.observe("github.com", rateLimit(0));
 
       expect(yield* budget.query("github.com", mutation)).toBe(mutation);
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
