@@ -102,8 +102,9 @@ import {
   buildResolveConflictsPrompt,
   handoffPrompt,
   handoffReviewComments,
-  pullRequestActionNeedsHostRefresh,
   pullRequestActionMenuHasGroup,
+  pullRequestActionNeedsHostRefresh,
+  pullRequestComposerTarget,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   readableFailure,
@@ -677,7 +678,7 @@ export function PullRequestDetailPanel({
   // Beside the thread whose own pull request this is, a task belongs in that thread's composer:
   // the branch is already checked out under it, so opening a second thread would only scatter
   // the work.
-  const attachTarget = context === "thread" ? (composerDraftTarget ?? null) : null;
+  const attachTarget = pullRequestComposerTarget(context, composerDraftTarget);
   const handoffLabels = pullRequestHandoffLabels(attachTarget !== null);
 
   const writeTaskToComposer = (target: ScopedThreadRef | DraftId, task: ThreadTask) => {
@@ -1862,7 +1863,7 @@ export function PullRequestDetailPanel({
               <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
                 <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
                   <PullRequestCodeTab
-                    {...(composerDraftTarget ? { onAddToAgentSelection: addSelectionToAgent } : {})}
+                    {...(attachTarget ? { onAddToAgentSelection: addSelectionToAgent } : {})}
                     environmentId={environmentId}
                     reference={reference}
                     detail={detail}

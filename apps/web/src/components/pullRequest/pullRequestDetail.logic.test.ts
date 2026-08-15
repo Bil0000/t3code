@@ -18,8 +18,9 @@ import {
   handoffReviewComments,
   isThreadOwnPullRequest,
   orderPullRequestComments,
-  pullRequestActionNeedsHostRefresh,
   pullRequestActionMenuHasGroup,
+  pullRequestActionNeedsHostRefresh,
+  pullRequestComposerTarget,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
   readableFailure,
@@ -88,6 +89,15 @@ describe("pull request handoff labels", () => {
       resolve: "Resolve in a new thread",
       resolveConflicts: "Resolve conflicts in a thread",
     });
+  });
+});
+
+describe("pull request composer target", () => {
+  it("rejects a page composer so agent comments cannot open another thread", () => {
+    const target = { environmentId: "env-1", threadId: "thread-1" };
+
+    expect(pullRequestComposerTarget("page", target)).toBeNull();
+    expect(pullRequestComposerTarget("thread", target)).toBe(target);
   });
 });
 

@@ -57,6 +57,13 @@ export function pullRequestHandoffLabels(inThisThread: boolean) {
       };
 }
 
+export function pullRequestComposerTarget<T>(
+  context: "page" | "thread",
+  target: T | null | undefined,
+): T | null {
+  return context === "thread" ? (target ?? null) : null;
+}
+
 /** Whether the open pull-request action group contains at least one action. */
 export function pullRequestActionMenuHasGroup(
   showsDraftToggle: boolean,
