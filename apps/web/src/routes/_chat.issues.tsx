@@ -2,6 +2,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { sourceControlHostOf, ThreadId } from "@t3tools/contracts";
 import type {
   EnvironmentId,
+  IssueProviderKind,
   IssueInvolvement,
   IssueListOrder,
   IssueListSort,
@@ -46,7 +47,6 @@ import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
 import { IssueFiltersMenu, IssueSortMenu } from "../components/issue/IssueListFilters";
 import {
   ListSearchInput,
-  listFilterHostLabel,
   type ListFilterHost,
   type ListFilterOption,
 } from "../components/sourceControl/ListFilterMenu";
@@ -85,7 +85,7 @@ import { issueEnvironment } from "../state/issues";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
-import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
+import { getIssueProviderPresentation } from "../components/issue/issuePresentation";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 
 export interface IssuesSearch {
@@ -938,7 +938,7 @@ function IssuesRouteView() {
   // The workspace's own projects already name their hosts, so the row's shape is known before
   // the list is. Only its shape: which hosts can actually be read still comes from the server.
   const expectedHosts = useMemo(() => {
-    const byHost = new Map<string, ListFilterHost>();
+    const byHost = new Map<string, ListFilterHost<IssueProviderKind>>();
     for (const project of projects) {
       const kind = project.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
       if (kind === undefined) continue;
@@ -1087,33 +1087,36 @@ function IssuesRouteView() {
   // one control: "GitHub" with its mark, never the bare hostname — unless two installs of one
   // kind force the hostname to tell them apart.
   const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
+  const hostMenuEntries = hostEntries.filter(
+    (entry, index) => hostEntries.findIndex((other) => other.host === entry.host) === index,
+  );
   const hostMenuOptions: ReadonlyArray<ListFilterOption<string>> = [
     { value: "", label: "All hosts", Icon: LayersIcon },
-    ...hostEntries.map((entry) => {
+    ...hostMenuEntries.map((entry) => {
+      const presentation = getIssueProviderPresentation(entry.kind);
+      const sharesKind = hostEntries.some((host) => host !== entry && host.kind === entry.kind);
+      const sharesHost = hostEntries.some((host) => host !== entry && host.host === entry.host);
       // `expectedHosts` stands in before the server has answered, and nothing is known to be
       // unreadable yet; once the summaries arrive they carry whether each one could be read.
-      const summary = hosts.find((host) => host.host === entry.host);
+      const summaries = hosts.filter((host) => host.host === entry.host);
+      const unavailable = summaries.length > 0 && summaries.every((summary) => !summary.configured);
       return {
         value: entry.host,
-        label: listFilterHostLabel(hostEntries, entry),
-        Icon: getSourceControlPresentationForKind(entry.kind).Icon,
-        ...(summary === undefined || summary.configured
+        label: sharesKind || sharesHost ? entry.host : presentation.providerName,
+        Icon: presentation.Icon,
+        ...(!unavailable
           ? {}
-          : { unavailable: summary.detail ?? "This host could not be read." }),
+          : { unavailable: summaries[0]?.detail ?? "This host could not be read." }),
       };
     }),
   ];
-  const scopedProviderKind = scopedProjectId
-    ? projects.find((project) => project.id === scopedProjectId)?.repositoryIdentity?.provider
-    : undefined;
+  const availableSortingHosts =
+    scopedProjectId === undefined ? hostEntries : (answered?.providers ?? []);
   const sortingHosts = search.host
-    ? hostEntries.filter((entry) => entry.host === search.host)
-    : hostEntries;
+    ? availableSortingHosts.filter((entry) => entry.host === search.host)
+    : availableSortingHosts;
   const githubSortingAvailable =
-    scopedProviderKind === "github" ||
-    (scopedProviderKind === undefined &&
-      sortingHosts.length > 0 &&
-      sortingHosts.every((entry) => entry.kind === "github"));
+    sortingHosts.length > 0 && sortingHosts.every((entry) => entry.kind === "github");
   const filtersMenu = (
     <div className="flex shrink-0 items-center gap-1">
       <IssueFiltersMenu

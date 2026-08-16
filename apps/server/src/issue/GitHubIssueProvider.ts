@@ -1,15 +1,11 @@
 import * as Effect from "effect/Effect";
-import type {
-  IssueCapabilities,
-  IssueViewerPermissions,
-  SourceControlActor,
-} from "@t3tools/contracts";
+import type { IssueCapabilities, IssueViewerPermissions, IssueActor } from "@t3tools/contracts";
 
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
 import type { GitHubIssueViewerAccess } from "./gitHubIssueJson.ts";
 import {
   IssueProviderError,
-  type IssueProviderApi,
+  type IssueAdapter,
   type ProviderIssueDetail,
 } from "./IssueProvider.ts";
 
@@ -73,9 +69,9 @@ function reasonFor(error: GitHubIssueCli.GitHubIssueCliError): IssueProviderErro
  * about keeps its initials rather than a guessed picture.
  */
 function withAvatar(
-  actor: SourceControlActor | null,
+  actor: IssueActor | null,
   avatarsByLogin: ReadonlyMap<string, string>,
-): SourceControlActor | null {
+): IssueActor | null {
   if (actor === null || actor.avatarUrl !== null) return actor;
   const avatarUrl = avatarsByLogin.get(actor.login);
   return avatarUrl === undefined ? actor : { ...actor, avatarUrl };
@@ -93,7 +89,7 @@ export const make = Effect.gen(function* () {
       cause: error,
     });
 
-  const provider: IssueProviderApi = {
+  const provider: IssueAdapter = {
     kind: "github",
     capabilities: CAPABILITIES,
 

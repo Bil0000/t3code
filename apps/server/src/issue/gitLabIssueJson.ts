@@ -11,8 +11,8 @@ import type {
   IssueLabelCandidate,
   IssueLinkedPullRequest,
   IssueState,
-  SourceControlActor,
-  SourceControlLabel,
+  IssueActor,
+  IssueLabel,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
@@ -107,15 +107,15 @@ export interface GitLabIssue {
   readonly number: number;
   readonly title: string;
   readonly url: string;
-  readonly author: SourceControlActor | null;
+  readonly author: IssueActor | null;
   readonly state: IssueState;
   /** GitLab records nothing about why an issue was closed, so there is never a reason to report. */
   readonly stateReason: null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly closedAt: string | null;
-  readonly assignees: ReadonlyArray<SourceControlActor>;
-  readonly labels: ReadonlyArray<SourceControlLabel>;
+  readonly assignees: ReadonlyArray<IssueActor>;
+  readonly labels: ReadonlyArray<IssueLabel>;
   readonly milestone: string | null;
   readonly commentCount: number;
 }
@@ -157,16 +157,14 @@ function toCandidate(
 
 function toActors(
   raw: ReadonlyArray<Schema.Schema.Type<typeof RawUserSchema>> | null | undefined,
-): ReadonlyArray<SourceControlActor> {
+): ReadonlyArray<IssueActor> {
   return (raw ?? []).flatMap((user) => {
     const actor = toActor(user);
     return actor === null ? [] : [actor];
   });
 }
 
-function toLabels(
-  raw: ReadonlyArray<string> | null | undefined,
-): ReadonlyArray<SourceControlLabel> {
+function toLabels(raw: ReadonlyArray<string> | null | undefined): ReadonlyArray<IssueLabel> {
   // GitLab returns label names only on an issue, so there is no colour to carry.
   return (raw ?? []).flatMap((label) => {
     const name = trimmed(label);

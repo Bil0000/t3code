@@ -1,9 +1,9 @@
 import * as Schema from "effect/Schema";
 
-import { IssueListEntry, IssueListResult } from "@t3tools/contracts";
+import { IssueListEntry, IssueListResult, issueSourceKey } from "@t3tools/contracts";
 import type { IssueInvolvement, IssueListSort, IssueListState } from "@t3tools/contracts";
 
-import { isAuthoredByViewer, normalizeLogin } from "../sourceControl/listHelpers";
+import { normalizeLogin } from "../sourceControl/listHelpers";
 import {
   readListSnapshot,
   writeListSnapshot,
@@ -26,7 +26,7 @@ export function issueListOrderLabels(
     : ["Oldest", "Newest"];
 }
 
-/** The signed-in account per host, as the listing reports it. */
+/** The signed-in account per adapter and host, as the listing reports it. */
 export type IssueViewers = IssueListResult["viewers"];
 
 const GROUP_LABELS: Record<IssueGroupKey, string> = {
@@ -35,11 +35,20 @@ const GROUP_LABELS: Record<IssueGroupKey, string> = {
   others: "Others",
 };
 
+function issueViewer(entry: IssueListEntry, viewers: IssueViewers): string | null {
+  return normalizeLogin(viewers[issueSourceKey(entry.provider, entry.host)] ?? viewers[entry.host]);
+}
+
 function isAssignedToViewer(entry: IssueListEntry, viewers: IssueViewers): boolean {
-  const viewer = normalizeLogin(viewers[entry.host]);
+  const viewer = issueViewer(entry, viewers);
   return (
     viewer !== null && entry.assignees.some((assignee) => normalizeLogin(assignee.login) === viewer)
   );
+}
+
+function isAuthoredByViewer(entry: IssueListEntry, viewers: IssueViewers): boolean {
+  const viewer = issueViewer(entry, viewers);
+  return viewer !== null && normalizeLogin(entry.author?.login) === viewer;
 }
 
 /** Free-text filter over the fields a row actually shows, plus `#123` / `123`. */

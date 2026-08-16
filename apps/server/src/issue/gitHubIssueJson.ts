@@ -18,8 +18,8 @@ import type {
   IssueTemplate,
   IssueTemplateField,
   IssueTemplateList,
-  SourceControlActor,
-  SourceControlLabel,
+  IssueActor,
+  IssueLabel,
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 import { parse as parseYamlDocument } from "yaml";
@@ -786,14 +786,14 @@ export interface GitHubIssue {
   readonly number: number;
   readonly title: string;
   readonly url: string;
-  readonly author: SourceControlActor | null;
+  readonly author: IssueActor | null;
   readonly state: IssueState;
   readonly stateReason: IssueCloseReason | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly closedAt: string | null;
-  readonly assignees: ReadonlyArray<SourceControlActor>;
-  readonly labels: ReadonlyArray<SourceControlLabel>;
+  readonly assignees: ReadonlyArray<IssueActor>;
+  readonly labels: ReadonlyArray<IssueLabel>;
   readonly milestone: string | null;
   readonly commentCount: number;
   readonly reactions: ReadonlyArray<IssueReaction>;
@@ -855,7 +855,7 @@ function previousCursorOf(
 
 function toActor(
   raw: Schema.Schema.Type<typeof RawActorSchema> | null | undefined,
-): SourceControlActor | null {
+): IssueActor | null {
   const login = trimmed(raw?.login);
   return login === null
     ? null
@@ -864,7 +864,7 @@ function toActor(
 
 function toActors(
   raw: ReadonlyArray<Schema.Schema.Type<typeof RawActorSchema> | null> | null | undefined,
-): ReadonlyArray<SourceControlActor> {
+): ReadonlyArray<IssueActor> {
   return (raw ?? []).flatMap((entry) => {
     const actor = toActor(entry);
     return actor === null ? [] : [actor];
@@ -873,7 +873,7 @@ function toActors(
 
 function toLabels(
   raw: ReadonlyArray<Schema.Schema.Type<typeof RawLabelSchema> | null> | null | undefined,
-): ReadonlyArray<SourceControlLabel> {
+): ReadonlyArray<IssueLabel> {
   return (raw ?? []).flatMap((label) => {
     const name = trimmed(label?.name);
     return name === null ? [] : [{ name, color: trimmed(label?.color) }];
@@ -1223,7 +1223,7 @@ export function decodeIssueViewerPermissionsJson(
 
 export interface GitHubIssueActivityPage {
   /** Richer than the listing's author: this read carries the avatar no `gh` JSON field does. */
-  readonly author: SourceControlActor | null;
+  readonly author: IssueActor | null;
   readonly comments: ReadonlyArray<IssueComment>;
   /** GitHub's own count of the conversation, which a bounded read can fall short of. */
   readonly commentCount: number;

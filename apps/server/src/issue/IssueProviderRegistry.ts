@@ -1,12 +1,21 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type { SourceControlProviderKind } from "@t3tools/contracts";
+import {
+  issueRepositoryKey,
+  issueSourceKey,
+  type IssueListInput,
+  type IssueProviderKind,
+  type OrchestrationProjectShell,
+  type SourceControlProviderInfo,
+} from "@t3tools/contracts";
+import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
+import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import * as AzureDevOpsIssueCli from "./AzureDevOpsIssueCli.ts";
 import * as AzureDevOpsIssueProvider from "./AzureDevOpsIssueProvider.ts";
 import * as BitbucketIssueApi from "./BitbucketIssueApi.ts";
@@ -15,25 +24,238 @@ import * as GitHubIssueCli from "./GitHubIssueCli.ts";
 import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
 import * as GitLabIssueCli from "./GitLabIssueCli.ts";
 import * as GitLabIssueProvider from "./GitLabIssueProvider.ts";
-import type { IssueProviderApi } from "./IssueProvider.ts";
+import type { IssueAdapter, IssueAdapterSource } from "./IssueProvider.ts";
+
+const SOURCE_RESOLUTION_CONCURRENCY = 12;
+
+export interface IssueProjectSource {
+  readonly project: OrchestrationProjectShell;
+  readonly adapter: IssueAdapter;
+  readonly repository: string;
+  readonly host: string;
+}
+
+export interface IssueWorkspaceProjects {
+  readonly supported: ReadonlyArray<IssueProjectSource>;
+  readonly unimplemented: ReadonlyMap<
+    string,
+    {
+      readonly host: string;
+      readonly kind: IssueProviderKind;
+      readonly projectCount: number;
+    }
+  >;
+  readonly viewerRoots: ReadonlyMap<string, ReadonlyArray<string>>;
+}
+
+type IssueProjectFilter = Pick<IssueListInput, "projectId" | "host">;
+
+type BoundIssueSource = IssueAdapterSource & { readonly adapter: IssueAdapter };
+
+type ResolvedProjectSource = IssueAdapterSource & {
+  readonly adapter: IssueAdapter | null;
+  readonly kind: IssueProviderKind;
+};
+
+function repositoryIdentityOf(project: OrchestrationProjectShell): string | null {
+  const identity = project.repositoryIdentity;
+  if (!identity) return null;
+  if (identity.displayName) return identity.displayName;
+  return identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
+}
+
+function issueHostOf(
+  identity: OrchestrationProjectShell["repositoryIdentity"],
+  kind: IssueProviderKind,
+): string {
+  const host = identity?.canonicalKey?.split("/")[0]?.trim();
+  return host === undefined || host.length === 0 ? kind : host.toLowerCase();
+}
+
+function adapterSourcesOf(
+  projects: ReadonlyArray<OrchestrationProjectShell>,
+  filter: IssueProjectFilter,
+  adapters: ReadonlyMap<IssueProviderKind, IssueAdapter>,
+): ReadonlyMap<OrchestrationProjectShell["id"], BoundIssueSource> {
+  const sources = new Map<OrchestrationProjectShell["id"], BoundIssueSource>();
+  for (const project of projects) {
+    if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
+    for (const adapter of adapters.values()) {
+      const source = adapter.resolveSource?.(project);
+      if (source === undefined || source === null) continue;
+      sources.set(project.id, { adapter, ...source });
+      break;
+    }
+  }
+  return sources;
+}
+
+function resolveProjectSource(
+  project: OrchestrationProjectShell,
+  bound: BoundIssueSource | undefined,
+  refinedKinds: ReadonlyMap<string, IssueProviderKind>,
+  adapters: ReadonlyMap<IssueProviderKind, IssueAdapter>,
+): ResolvedProjectSource | null {
+  if (bound !== undefined) {
+    const repository = bound.repository.trim();
+    const host = bound.host.trim().toLowerCase();
+    return repository.length === 0 || host.length === 0
+      ? null
+      : { adapter: bound.adapter, kind: bound.adapter.kind, repository, host };
+  }
+
+  const identity = project.repositoryIdentity;
+  let kind = identity?.provider;
+  const repository = repositoryIdentityOf(project);
+  if (!identity || kind === undefined || repository === null) return null;
+  if (kind === "unknown") {
+    const provider = detectSourceControlProviderFromRemoteUrl(identity.locator.remoteUrl);
+    kind = provider === null ? kind : (refinedKinds.get(provider.baseUrl) ?? kind);
+  }
+  return {
+    adapter: adapters.get(kind) ?? null,
+    kind,
+    repository,
+    host: issueHostOf(identity, kind),
+  };
+}
+
+function projectResolver(
+  byKind: ReadonlyMap<IssueProviderKind, IssueAdapter>,
+  sourceControlProviders?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"],
+) {
+  const refineUnknownKinds = Effect.fn("IssueProviderRegistry.refineUnknownKinds")(function* (
+    projects: ReadonlyArray<OrchestrationProjectShell>,
+    filter: IssueProjectFilter,
+    boundSources: ReadonlyMap<OrchestrationProjectShell["id"], BoundIssueSource>,
+  ) {
+    if (sourceControlProviders === undefined) return new Map<string, IssueProviderKind>();
+
+    type Candidate = {
+      readonly project: OrchestrationProjectShell;
+      readonly provider: SourceControlProviderInfo;
+      readonly remoteName: string;
+      readonly remoteUrl: string;
+    };
+    const refinements = new Map<string, Candidate[]>();
+    for (const project of projects) {
+      if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
+      if (boundSources.has(project.id)) continue;
+      const identity = project.repositoryIdentity;
+      if (identity?.provider !== "unknown" || repositoryIdentityOf(project) === null) continue;
+      const host = issueHostOf(identity, "unknown");
+      if (filter.host !== undefined && host !== "unknown" && host !== filter.host.toLowerCase()) {
+        continue;
+      }
+      const { remoteName, remoteUrl } = identity.locator;
+      const provider = detectSourceControlProviderFromRemoteUrl(remoteUrl);
+      if (provider === null) continue;
+      const candidate = { project, provider, remoteName, remoteUrl };
+      const candidates = refinements.get(provider.baseUrl);
+      if (candidates === undefined) refinements.set(provider.baseUrl, [candidate]);
+      else candidates.push(candidate);
+    }
+
+    const resolved = yield* Effect.forEach(
+      refinements,
+      ([baseUrl, candidates]) =>
+        Effect.firstSuccessOf(
+          candidates.map(({ project, provider, remoteName, remoteUrl }) =>
+            Effect.suspend(() =>
+              sourceControlProviders.resolveHandle({
+                cwd: project.workspaceRoot,
+                context: { provider, remoteName, remoteUrl },
+              }),
+            ).pipe(
+              Effect.flatMap((handle) => {
+                const kind = handle.context?.provider.kind;
+                return kind === undefined || kind === "unknown"
+                  ? Effect.fail(undefined)
+                  : Effect.succeed(kind);
+              }),
+            ),
+          ),
+        ).pipe(
+          Effect.map((kind) => [baseUrl, kind] as const),
+          Effect.orElseSucceed(() => [baseUrl, "unknown"] as const),
+        ),
+      { concurrency: SOURCE_RESOLUTION_CONCURRENCY },
+    );
+    return new Map(resolved);
+  });
+
+  return Effect.fn("IssueProviderRegistry.resolveProjects")(function* (
+    projects: ReadonlyArray<OrchestrationProjectShell>,
+    filter: IssueProjectFilter,
+  ) {
+    const boundSources = adapterSourcesOf(projects, filter, byKind);
+    const refinedKinds = yield* refineUnknownKinds(projects, filter, boundSources);
+    const supported: IssueProjectSource[] = [];
+    const unimplemented = new Map<
+      string,
+      {
+        host: string;
+        kind: IssueProviderKind;
+        projectCount: number;
+      }
+    >();
+    const viewerRoots = new Map<string, string[]>();
+    const seen = new Set<string>();
+
+    for (const project of projects) {
+      if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
+      const source = resolveProjectSource(
+        project,
+        boundSources.get(project.id),
+        refinedKinds,
+        byKind,
+      );
+      if (source === null) continue;
+      const { adapter, kind, repository, host } = source;
+      if (filter.host !== undefined && host !== filter.host.toLowerCase()) continue;
+      const sourceKey = issueSourceKey(kind, host);
+      if (adapter !== null) {
+        const roots = viewerRoots.get(sourceKey);
+        if (roots === undefined) viewerRoots.set(sourceKey, [project.workspaceRoot]);
+        else if (!roots.includes(project.workspaceRoot)) roots.push(project.workspaceRoot);
+      }
+      const key = issueRepositoryKey(kind, host, repository);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (adapter === null) {
+        const counted = unimplemented.get(sourceKey);
+        if (counted === undefined) {
+          unimplemented.set(sourceKey, { host, kind, projectCount: 1 });
+        } else counted.projectCount += 1;
+        continue;
+      }
+      supported.push({ project, adapter, repository, host });
+    }
+
+    return { supported, unimplemented, viewerRoots };
+  });
+}
 
 export class IssueProviderRegistry extends Context.Service<
   IssueProviderRegistry,
   {
-    /** Null for a host with no implementation, which the service reports as unsupported. */
-    readonly get: (kind: SourceControlProviderKind) => IssueProviderApi | null;
-    readonly kinds: ReadonlyArray<SourceControlProviderKind>;
+    readonly resolveProjects: (
+      projects: ReadonlyArray<OrchestrationProjectShell>,
+      filter: IssueProjectFilter,
+    ) => Effect.Effect<IssueWorkspaceProjects>;
   }
 >()("t3/issue/IssueProviderRegistry") {}
 
 /** Exported for tests, which stand a registry up from providers they supply themselves. */
 export function fromProviders(
-  providers: ReadonlyArray<IssueProviderApi>,
+  providers: ReadonlyArray<IssueAdapter>,
+  sourceControlProviders?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"],
 ): IssueProviderRegistry["Service"] {
-  const byKind = new Map(providers.map((provider) => [provider.kind, provider]));
+  const byKind = new Map<IssueProviderKind, IssueAdapter>(
+    providers.map((provider) => [provider.kind, provider]),
+  );
   return {
-    get: (kind) => byKind.get(kind) ?? null,
-    kinds: providers.map((provider) => provider.kind),
+    resolveProjects: projectResolver(byKind, sourceControlProviders),
   };
 }
 
@@ -41,15 +263,16 @@ export function fromProviders(
  * The hosts this build can read issues from. A host with no entry here still shows up in the
  * provider list as unimplemented, so its projects are explained rather than missing.
  */
-export const make = Effect.map(
-  Effect.all([
+export const make = Effect.gen(function* () {
+  const providers = yield* Effect.all([
     GitHubIssueProvider.make,
     GitLabIssueProvider.make,
     BitbucketIssueProvider.make,
     AzureDevOpsIssueProvider.make,
-  ]),
-  fromProviders,
-);
+  ]);
+  const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
+  return fromProviders(providers, sourceControlProviders);
+});
 
 export const layer = Layer.effect(IssueProviderRegistry, make).pipe(
   Layer.provide(GitHubIssueCli.layer.pipe(Layer.provide(GitHubCli.layer))),

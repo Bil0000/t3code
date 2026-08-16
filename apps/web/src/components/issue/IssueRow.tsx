@@ -9,7 +9,11 @@ import {
 } from "../sourceControl/actorPresentation";
 import { ListRow } from "../sourceControl/ListRow";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { IssueLabelChips, IssueStateGlyph } from "./issuePresentation";
+import {
+  getIssueProviderPresentation,
+  IssueLabelChips,
+  IssueStateGlyph,
+} from "./issuePresentation";
 
 const REACTION_SORT: Partial<
   Record<IssueListSort, { readonly emoji: string; readonly content?: IssueReactionContent }>
@@ -61,11 +65,13 @@ function IssueRowImpl({
           0,
         )
       : 0;
+  const { Icon, providerName } = getIssueProviderPresentation(entry.provider);
   return (
     <ListRow
       glyph={<IssueStateGlyph state={entry.state} stateReason={entry.stateReason} />}
       title={entry.title}
-      provider={entry.provider}
+      providerName={providerName}
+      ProviderIcon={Icon}
       showProvider={showProvider}
       number={entry.number}
       repository={showProjectTitle ? entry.repository : null}

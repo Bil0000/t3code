@@ -1,9 +1,4 @@
-import type {
-  IssueComment,
-  IssueDetailView,
-  IssueEvent,
-  SourceControlActor,
-} from "@t3tools/contracts";
+import type { IssueComment, IssueDetailView, IssueEvent, IssueActor } from "@t3tools/contracts";
 
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
@@ -34,7 +29,7 @@ export interface IssueTimelineEntry {
   /** Markdown, and only ever a comment's: nobody writes words for the rest of the history. */
   readonly body: string | null;
   readonly url: string | null;
-  readonly actor: SourceControlActor | null;
+  readonly actor: IssueActor | null;
 }
 
 export interface IssueCommentEditScope {

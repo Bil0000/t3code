@@ -18,7 +18,7 @@ import type {
   IssueReactionContent,
   IssueTemplate,
   IssueTemplateList,
-  SourceControlActor,
+  IssueActor,
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
@@ -201,7 +201,7 @@ export interface GitHubIssueSearchBatch {
 }
 
 export interface GitHubIssueActivity {
-  readonly author: SourceControlActor | null;
+  readonly author: IssueActor | null;
   readonly comments: ReadonlyArray<IssueComment>;
   readonly commentCount: number;
   readonly commentsTruncated: boolean;

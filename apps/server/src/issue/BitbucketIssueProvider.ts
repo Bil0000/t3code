@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import type { IssueCapabilities, IssueViewerPermissions } from "@t3tools/contracts";
 
 import * as BitbucketIssueApi from "./BitbucketIssueApi.ts";
-import { IssueProviderError, type IssueProviderApi, type ProviderIssue } from "./IssueProvider.ts";
+import { IssueProviderError, type IssueAdapter, type ProviderIssue } from "./IssueProvider.ts";
 import type { BitbucketIssue } from "./bitbucketIssueJson.ts";
 
 const CAPABILITIES: IssueCapabilities = {
@@ -111,7 +111,7 @@ export const make = Effect.gen(function* () {
       new IssueProviderError({ provider: "bitbucket", operation, reason: "failed", detail }),
     );
 
-  const provider: IssueProviderApi = {
+  const provider: IssueAdapter = {
     kind: "bitbucket",
     capabilities: CAPABILITIES,
 

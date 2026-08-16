@@ -1,7 +1,7 @@
 import type * as Cause from "effect/Cause";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import type { IssueState, SourceControlActor } from "@t3tools/contracts";
+import type { IssueState, IssueActor } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 /**
@@ -13,8 +13,8 @@ export interface AzureDevOpsWorkItem {
   readonly number: number;
   readonly title: string;
   readonly url: string;
-  readonly author: SourceControlActor | null;
-  readonly assignees: ReadonlyArray<SourceControlActor>;
+  readonly author: IssueActor | null;
+  readonly assignees: ReadonlyArray<IssueActor>;
   readonly state: IssueState;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -68,7 +68,7 @@ function browserUrl(apiUrl: string | null | undefined, id: number): string | nul
   return match === null ? null : `${match[1]}/_workitems/edit/${id}`;
 }
 
-function actorOf(value: unknown): SourceControlActor | null {
+function actorOf(value: unknown): IssueActor | null {
   if (typeof value === "string") {
     const login = value.trim();
     return login.length === 0 ? null : { login, name: null, avatarUrl: null };

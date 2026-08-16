@@ -38,9 +38,9 @@ export interface ListFilterOption<Value extends string> {
   readonly unavailable?: string | undefined;
 }
 
-export interface ListFilterHost {
+export interface ListFilterHost<Kind extends string = SourceControlProviderKind> {
   readonly host: string;
-  readonly kind: SourceControlProviderKind;
+  readonly kind: Kind;
 }
 
 /** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */

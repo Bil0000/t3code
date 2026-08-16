@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildIssueTemplateBody,
+  issueSourceKey,
   IssueCreateInput,
   IssueDetail,
   IssueListInput,
@@ -19,9 +20,11 @@ const decodeCreate = Schema.decodeUnknownSync(IssueCreateInput);
 const decodeUpdate = Schema.decodeUnknownSync(IssueUpdateInput);
 const decodeDetail = Schema.decodeUnknownSync(IssueDetail);
 const decodeTemplates = Schema.decodeUnknownSync(IssueTemplateList);
+const GITHUB_SOURCE = issueSourceKey("github", "github.com");
+const GITLAB_SOURCE = issueSourceKey("gitlab", "gitlab.com");
 
 const LIST_RESULT: IssueListResult = {
-  viewers: { "github.com": "bilal", "gitlab.com": "bilal.hassan" },
+  viewers: { [GITHUB_SOURCE]: "bilal", [GITLAB_SOURCE]: "bilal.hassan" },
   providers: [
     {
       host: "github.com",
@@ -81,14 +84,17 @@ describe("IssueListResult", () => {
     expect(decoded).toStrictEqual(LIST_RESULT);
   });
 
-  it("keys a viewer by host, so two hosts of one kind stay separate accounts", () => {
+  it("keys a viewer by adapter and host, so accounts never cross", () => {
+    const enterprise = issueSourceKey("github", "github.acme.dev");
+    const jira = issueSourceKey("jira", "github.com");
     const decoded = decodeListResult({
       ...LIST_RESULT,
-      viewers: { "github.com": "bilal", "github.acme.dev": "b.hassan" },
+      viewers: { [GITHUB_SOURCE]: "bilal", [enterprise]: "b.hassan", [jira]: "jira-user" },
     });
 
-    expect(decoded.viewers["github.com"]).toBe("bilal");
-    expect(decoded.viewers["github.acme.dev"]).toBe("b.hassan");
+    expect(decoded.viewers[GITHUB_SOURCE]).toBe("bilal");
+    expect(decoded.viewers[enterprise]).toBe("b.hassan");
+    expect(decoded.viewers[jira]).toBe("jira-user");
   });
 
   it("keeps why an issue was closed, which is not the same as that it was closed", () => {
@@ -97,6 +103,17 @@ describe("IssueListResult", () => {
     expect(decodeListResult({ ...LIST_RESULT, entries: [entry] }).entries[0]?.stateReason).toBe(
       "not-planned",
     );
+  });
+
+  it("accepts issues from adapters that are not source control providers", () => {
+    const decoded = decodeListResult({
+      ...LIST_RESULT,
+      providers: [{ ...LIST_RESULT.providers[0], kind: "jira", host: "acme.atlassian.net" }],
+      entries: [{ ...LIST_RESULT.entries[0], provider: "jira", host: "acme.atlassian.net" }],
+    });
+
+    expect(decoded.providers[0]?.kind).toBe("jira");
+    expect(decoded.entries[0]?.provider).toBe("jira");
   });
 });
 

@@ -4,7 +4,7 @@ import type { IssueCapabilities, IssueViewerPermissions } from "@t3tools/contrac
 import * as GitLabIssueCli from "./GitLabIssueCli.ts";
 import {
   IssueProviderError,
-  type IssueProviderApi,
+  type IssueAdapter,
   type ProviderIssueActivity,
   type ProviderIssueDetail,
 } from "./IssueProvider.ts";
@@ -71,7 +71,7 @@ export const make = Effect.gen(function* () {
       cause: error,
     });
 
-  const provider: IssueProviderApi = {
+  const provider: IssueAdapter = {
     kind: "gitlab",
     capabilities: CAPABILITIES,
 

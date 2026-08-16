@@ -4,7 +4,7 @@ import * as Exit from "effect/Exit";
 import * as Option from "effect/Option";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import type { IssueComment, IssueState, SourceControlActor } from "@t3tools/contracts";
+import type { IssueComment, IssueState, IssueActor } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
 /**
@@ -85,7 +85,7 @@ export interface BitbucketIssue {
   readonly number: number;
   readonly title: string;
   readonly url: string;
-  readonly author: SourceControlActor | null;
+  readonly author: IssueActor | null;
   readonly state: IssueState;
   /** Bitbucket records no reason for closing an issue, so there is never one to report. */
   readonly stateReason: null;
@@ -93,7 +93,7 @@ export interface BitbucketIssue {
   readonly updatedAt: string;
   /** Bitbucket keeps no separate closing timestamp; `updatedAt` is what a close last touched. */
   readonly closedAt: string | null;
-  readonly assignee: SourceControlActor | null;
+  readonly assignee: IssueActor | null;
   readonly milestone: string | null;
   /**
    * Read cheaply from the listing rather than by reading every issue's comments; the true count

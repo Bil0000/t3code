@@ -8,8 +8,9 @@ import * as Layer from "effect/Layer";
 import {
   IssueOperationError,
   IssueUnavailableError,
+  issueRepositoryKey,
+  issueSourceKey,
   issueProviderRequirement,
-  sourceControlHostOf,
   type IssueAction,
   type IssueActionInput,
   type IssueActivity,
@@ -38,21 +39,20 @@ import {
   type IssueRepositoryRef,
   type IssueTemplateList,
   type IssueUpdateInput,
-  type OrchestrationProjectShell,
-  type SourceControlProviderInfo,
-  type SourceControlProviderKind,
+  type IssueProviderKind,
 } from "@t3tools/contracts";
-import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import {
-  type IssueProviderApi,
   type IssueProviderError,
   type ProviderIssue,
   type ProviderListCursor,
 } from "./IssueProvider.ts";
-import { IssueProviderRegistry } from "./IssueProviderRegistry.ts";
+import {
+  type IssueProjectSource,
+  IssueProviderRegistry,
+  type IssueWorkspaceProjects,
+} from "./IssueProviderRegistry.ts";
 
 /**
  * Rows per repository when the client does not ask for a page size, and rows per slice when a
@@ -66,6 +66,18 @@ const DEFAULT_REPOSITORY_LIST_LIMIT = 99;
  * waiting on the host, so the useful ceiling is far above the core count.
  */
 const REPOSITORY_CONCURRENCY = 12;
+
+/**
+ * Cursor keys shipped before adapters were pluggable. Keep them for current source-control
+ * adapters so older remote clients and servers can carry the same listing on.
+ */
+const LEGACY_CURSOR_ADAPTERS = new Set<IssueProviderKind>([
+  "github",
+  "gitlab",
+  "bitbucket",
+  "azure-devops",
+]);
+
 /**
  * Repositories named in one read across a host. Well inside what a host's search accepts in one
  * query, and past the size of a workspace anyone opens, so a larger one reads in a handful of
@@ -151,36 +163,6 @@ const LABEL_ACCESS_REFUSAL =
 const ASSIGNEE_ACCESS_REFUSAL =
   "You need write access on this repository to change who an issue is assigned to.";
 
-/** A project this page can read: its remote is on a host with an implementation. */
-interface SupportedProject {
-  readonly project: OrchestrationProjectShell;
-  readonly api: IssueProviderApi;
-  readonly repository: string;
-  /** The host the repository lives on, which is the account boundary rather than the kind. */
-  readonly host: string;
-}
-
-/**
- * What the workspace has, split by whether this build can read it. Hosts with no implementation
- * are counted rather than dropped, so their projects are explained in the provider list instead of
- * quietly missing from the page.
- */
-interface WorkspaceProjects {
-  readonly supported: ReadonlyArray<SupportedProject>;
-  /** Keyed by host, as the readable ones are: an unimplemented host is its own switcher entry. */
-  readonly unimplemented: ReadonlyMap<
-    string,
-    { readonly kind: SourceControlProviderKind; readonly projectCount: number }
-  >;
-  /**
-   * Every checkout on a host, including the ones the listing de-duplicated away. Asking who is
-   * signed in is a question about the host rather than about a repository, and any checkout can
-   * answer it — so a broken worktree is not allowed to take the host down with it just because it
-   * happened to be the one the listing kept.
-   */
-  readonly viewerRoots: ReadonlyMap<string, ReadonlyArray<string>>;
-}
-
 interface RepositoryBatch {
   /** Which repository this slice came from, which is what a cursor for it is filed under. */
   readonly key: string;
@@ -225,12 +207,18 @@ function parseListCursor(raw: string): ListCursor | null {
   };
 }
 
+function sourceKeyOf(project: IssueProjectSource): string {
+  return issueSourceKey(project.adapter.kind, project.host);
+}
+
 /**
- * How a listing tells two repositories apart. The host is part of it because the same
- * `owner/repo` exists on github.com and on an Enterprise install, and they are two repositories.
+ * How a listing tells two adapter repositories apart. All three fields matter: different adapters
+ * can use the same host and native repository name.
  */
-function listCursorKey(host: string, repository: string): string {
-  return `${host} ${repository.toLowerCase()}`;
+function listCursorKey(project: IssueProjectSource): string {
+  return LEGACY_CURSOR_ADAPTERS.has(project.adapter.kind)
+    ? `${project.host} ${project.repository.toLowerCase()}`
+    : issueRepositoryKey(project.adapter.kind, project.host, project.repository);
 }
 
 /**
@@ -332,84 +320,13 @@ function toIssueError(operation: string): (error: IssueProviderError) => IssueEr
   };
 }
 
-/**
- * The provider-native repository identity. `displayName` is the full path below the host, which is
- * what nested GitLab groups and Azure project paths need; owner/name is the two-segment fallback
- * for identities recorded before that field existed.
- */
-function repositoryIdentityOf(project: OrchestrationProjectShell): string | null {
-  const identity = project.repositoryIdentity;
-  if (!identity) return null;
-  if (identity.displayName) return identity.displayName;
-  return identity.owner && identity.name ? `${identity.owner}/${identity.name}` : null;
-}
-
 export const make = Effect.gen(function* () {
   const registry = yield* IssueProviderRegistry;
   const projections = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
-  const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
-
-  const refineUnknownProjectKinds = (
-    projects: ReadonlyArray<OrchestrationProjectShell>,
-    filter: Pick<IssueListInput, "projectId" | "host">,
-  ) => {
-    type RefinementCandidate = {
-      readonly project: OrchestrationProjectShell;
-      readonly provider: SourceControlProviderInfo;
-      readonly remoteName: string;
-      readonly remoteUrl: string;
-    };
-    const refinements = new Map<string, RefinementCandidate[]>();
-    for (const project of projects) {
-      if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
-      const identity = project.repositoryIdentity;
-      if (identity?.provider !== "unknown" || repositoryIdentityOf(project) === null) continue;
-      const host = sourceControlHostOf(identity, "unknown");
-      // A legacy identity has no canonical host until its provider is refined, so it must reach
-      // the refinement before a host filter can decide whether it belongs in the result.
-      if (filter.host !== undefined && host !== "unknown" && host !== filter.host.toLowerCase()) {
-        continue;
-      }
-      const { remoteName, remoteUrl } = identity.locator;
-      const provider = detectSourceControlProviderFromRemoteUrl(remoteUrl);
-      if (provider !== null) {
-        const candidates = refinements.get(provider.baseUrl);
-        const candidate = { project, provider, remoteName, remoteUrl };
-        if (candidates === undefined) refinements.set(provider.baseUrl, [candidate]);
-        else candidates.push(candidate);
-      }
-    }
-
-    return Effect.forEach(
-      refinements,
-      ([baseUrl, candidates]) =>
-        Effect.firstSuccessOf(
-          candidates.map(({ project, provider, remoteName, remoteUrl }) =>
-            Effect.suspend(() =>
-              sourceControlProviders.resolveHandle({
-                cwd: project.workspaceRoot,
-                context: { provider, remoteName, remoteUrl },
-              }),
-            ).pipe(
-              Effect.flatMap((handle) => {
-                const kind = handle.context?.provider.kind;
-                return kind === undefined || kind === "unknown"
-                  ? Effect.fail(undefined)
-                  : Effect.succeed(kind);
-              }),
-            ),
-          ),
-        ).pipe(
-          Effect.map((kind) => [baseUrl, kind] as const),
-          Effect.orElseSucceed(() => [baseUrl, "unknown"] as const),
-        ),
-      { concurrency: REPOSITORY_CONCURRENCY },
-    ).pipe(Effect.map((resolved) => new Map(resolved)));
-  };
 
   const listWorkspaceProjects = (
     filter: Pick<IssueListInput, "projectId" | "host">,
-  ): Effect.Effect<WorkspaceProjects, IssueError> =>
+  ): Effect.Effect<IssueWorkspaceProjects, IssueError> =>
     projections.getShellSnapshot().pipe(
       Effect.mapError(
         (error) =>
@@ -419,55 +336,7 @@ export const make = Effect.gen(function* () {
             cause: error,
           }),
       ),
-      Effect.flatMap((snapshot) =>
-        refineUnknownProjectKinds(snapshot.projects, filter).pipe(
-          Effect.map((refinedKinds) => ({ refinedKinds, snapshot })),
-        ),
-      ),
-      Effect.map(({ refinedKinds, snapshot }) => {
-        const supported: SupportedProject[] = [];
-        const unimplemented = new Map<
-          string,
-          { kind: SourceControlProviderKind; projectCount: number }
-        >();
-        const viewerRoots = new Map<string, string[]>();
-        const seen = new Set<string>();
-        for (const project of snapshot.projects) {
-          if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
-          const identity = project.repositoryIdentity;
-          let kind = identity?.provider as SourceControlProviderKind | undefined;
-          const repository = repositoryIdentityOf(project);
-          if (!identity || kind === undefined || repository === null) continue;
-          // Worktrees of one repository are separate projects; reading the remote once keeps the
-          // page from repeating every issue per local checkout. The host is part of the key, so
-          // the same `owner/repo` on two hosts stays two repositories.
-          if (kind === "unknown") {
-            const provider = detectSourceControlProviderFromRemoteUrl(identity.locator.remoteUrl);
-            kind = provider === null ? kind : (refinedKinds.get(provider.baseUrl) ?? kind);
-          }
-          const host = sourceControlHostOf(identity, kind);
-          if (filter.host !== undefined && host !== filter.host.toLowerCase()) continue;
-          const api = registry.get(kind);
-          // Recorded before the de-duplication below, so the viewer lookup keeps the alternates
-          // the listing is about to drop.
-          if (api !== null) {
-            const roots = viewerRoots.get(host);
-            if (roots === undefined) viewerRoots.set(host, [project.workspaceRoot]);
-            else if (!roots.includes(project.workspaceRoot)) roots.push(project.workspaceRoot);
-          }
-          const key = listCursorKey(host, repository);
-          if (seen.has(key)) continue;
-          seen.add(key);
-          if (api === null) {
-            const counted = unimplemented.get(host);
-            if (counted === undefined) unimplemented.set(host, { kind, projectCount: 1 });
-            else counted.projectCount += 1;
-            continue;
-          }
-          supported.push({ project, api, repository, host });
-        }
-        return { supported, unimplemented, viewerRoots };
-      }),
+      Effect.flatMap((snapshot) => registry.resolveProjects(snapshot.projects, filter)),
     );
 
   /**
@@ -476,9 +345,9 @@ export const make = Effect.gen(function* () {
    */
   const requireProject = (
     ref: Pick<IssueRef, "projectId" | "repository">,
-  ): Effect.Effect<SupportedProject, IssueError> =>
+  ): Effect.Effect<IssueProjectSource, IssueError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
-      Effect.flatMap(({ supported }): Effect.Effect<SupportedProject, IssueError> => {
+      Effect.flatMap(({ supported }): Effect.Effect<IssueProjectSource, IssueError> => {
         const match = supported[0];
         if (!match) {
           return Effect.fail(new IssueUnavailableError({ reason: "provider-unsupported" }));
@@ -502,8 +371,8 @@ export const make = Effect.gen(function* () {
    * a provider on the client's word. Read freshly for that reason, rather than taken from whatever
    * the detail said when the page loaded.
    */
-  const viewerPermissionsOf = (project: SupportedProject, ref: IssueRef, operation: string) =>
-    project.api
+  const viewerPermissionsOf = (project: IssueProjectSource, ref: IssueRef, operation: string) =>
+    project.adapter
       .getViewerPermissions({
         cwd: project.project.workspaceRoot,
         repository: project.repository,
@@ -545,55 +414,62 @@ export const make = Effect.gen(function* () {
    * switcher shows.
    */
   type ResolvedViewer = {
+    readonly key: string;
     readonly host: string;
-    readonly kind: SourceControlProviderKind;
+    readonly kind: IssueProviderKind;
     readonly viewer: string | null;
     readonly error: IssueProviderError | null;
   };
   // Who is signed in moves on the timescale of `gh auth login`, not of a page visit. Only a
   // success is believed for a while: a failure is the "is this host set up" answer the provider
   // switcher shows, and holding it would keep saying signed-out after the reader has signed in.
-  const viewersByHost = new Map<string, { readonly at: number; readonly result: ResolvedViewer }>();
+  const viewersBySource = new Map<
+    string,
+    { readonly at: number; readonly result: ResolvedViewer }
+  >();
 
   const resolveViewers = (
-    projects: ReadonlyArray<SupportedProject>,
-    viewerRoots: WorkspaceProjects["viewerRoots"],
+    projects: ReadonlyArray<IssueProjectSource>,
+    viewerRoots: IssueWorkspaceProjects["viewerRoots"],
   ) =>
     Effect.forEach(
-      [...new Set(projects.map(({ host }) => host))],
-      (host) =>
+      new Map(projects.map((project) => [sourceKeyOf(project), project])),
+      ([key, first]) =>
         Effect.flatMap(Clock.currentTimeMillis, (now): Effect.Effect<ResolvedViewer> => {
-          const held = viewersByHost.get(host);
+          const held = viewersBySource.get(key);
           if (held !== undefined && now - held.at <= Duration.toMillis(VIEWER_CACHE_TTL)) {
             return Effect.succeed(held.result);
           }
-          const forHost = projects.filter((project) => project.host === host);
-          const api = forHost[0]!.api;
+          const forSource = projects.filter((project) => sourceKeyOf(project) === key);
+          const adapter = first.adapter;
           // Every checkout on the host, not just the ones that survived de-duplication: one
           // unreadable worktree would otherwise report the whole host as signed out.
           const roots =
-            viewerRoots.get(host) ?? forHost.map(({ project }) => project.workspaceRoot);
-          return Effect.firstSuccessOf(roots.map((cwd) => api.getViewer({ cwd }))).pipe(
+            viewerRoots.get(key) ?? forSource.map(({ project }) => project.workspaceRoot);
+          return Effect.firstSuccessOf(roots.map((cwd) => adapter.getViewer({ cwd }))).pipe(
             Effect.map((viewer) => ({
-              host,
-              kind: api.kind,
+              key,
+              host: first.host,
+              kind: adapter.kind,
               viewer: viewer as string | null,
               error: null as IssueProviderError | null,
             })),
             Effect.tap((result) =>
-              Effect.map(Clock.currentTimeMillis, (at) => viewersByHost.set(host, { at, result })),
+              Effect.map(Clock.currentTimeMillis, (at) => viewersBySource.set(key, { at, result })),
             ),
-            Effect.catch((error) => Effect.succeed({ host, kind: api.kind, viewer: null, error })),
+            Effect.catch((error) =>
+              Effect.succeed({ key, host: first.host, kind: adapter.kind, viewer: null, error }),
+            ),
           );
         }),
       { concurrency: REPOSITORY_CONCURRENCY },
     );
 
   const toEntry = (input: {
-    readonly project: SupportedProject;
+    readonly project: IssueProjectSource;
     readonly item: ProviderIssue;
   }): IssueListEntry => ({
-    provider: input.project.api.kind,
+    provider: input.project.adapter.kind,
     host: input.project.host,
     projectId: input.project.project.id,
     projectTitle: input.project.project.title,
@@ -619,7 +495,7 @@ export const make = Effect.gen(function* () {
    * so it is said as one — the repository is simply not a place issues live.
    */
   const repositoryFailure = (
-    project: SupportedProject,
+    project: IssueProjectSource,
     error: IssueProviderError,
   ): IssueListProjectError => ({
     projectId: project.project.id,
@@ -694,30 +570,33 @@ export const make = Effect.gen(function* () {
         viewerRoots,
       } = yield* listWorkspaceProjects(input);
       const projectCounts = new Map<string, number>();
-      for (const { host } of projects) {
-        projectCounts.set(host, (projectCounts.get(host) ?? 0) + 1);
+      for (const project of projects) {
+        const key = sourceKeyOf(project);
+        projectCounts.set(key, (projectCounts.get(key) ?? 0) + 1);
       }
 
       const viewerResults = yield* resolveViewers(projects, viewerRoots);
       const viewers: Record<string, string> = {};
       for (const result of viewerResults) {
-        if (result.viewer !== null) viewers[result.host] = result.viewer;
+        if (result.viewer === null) continue;
+        viewers[result.key] = result.viewer;
+        // Older clients read the host-only key. New clients prefer the adapter-safe key above.
+        viewers[result.host] ??= result.viewer;
       }
 
-      // One summary per host, which is what the viewer lookup already answers for: two GitHub
-      // hosts sign in separately, so collapsing them by kind would report one as the other.
+      // One summary per adapter and host, which is what viewer lookup already answers for.
       const providers: ReadonlyArray<IssueProviderSummary> = [
         ...viewerResults.map((result) => ({
           host: result.host,
           kind: result.kind,
           searchesOnHost:
-            projects.find((project) => project.host === result.host)?.api.capabilities.search ??
-            false,
-          projectCount: projectCounts.get(result.host) ?? 1,
+            projects.find((project) => sourceKeyOf(project) === result.key)?.adapter.capabilities
+              .search ?? false,
+          projectCount: projectCounts.get(result.key) ?? 1,
           configured: result.viewer !== null,
           detail: result.error === null ? null : providerDetail(result.error),
         })),
-        ...[...unimplemented].map(([host, { kind, projectCount }]) => ({
+        ...[...unimplemented.values()].map(({ host, kind, projectCount }) => ({
           host,
           kind,
           searchesOnHost: false,
@@ -734,14 +613,12 @@ export const make = Effect.gen(function* () {
       const selected =
         continuation === null
           ? projects
-          : projects.filter(({ host, repository }) =>
-              continuation.has(listCursorKey(host, repository)),
-            );
-      const readable = selected.filter(({ host }) => viewers[host] !== undefined);
+          : projects.filter((project) => continuation.has(listCursorKey(project)));
+      const readable = selected.filter((project) => viewers[sourceKeyOf(project)] !== undefined);
       // A host that could not be read still has projects, and they are absent from the list.
       // Reporting them keeps "N repositories were unavailable" honest instead of dropping them.
       const unreadable = selected
-        .filter(({ host }) => viewers[host] === undefined)
+        .filter((project) => viewers[sourceKeyOf(project)] === undefined)
         .map(({ project, repository }) => ({
           projectId: project.id,
           projectTitle: project.title,
@@ -757,7 +634,7 @@ export const make = Effect.gen(function* () {
         // nothing has asked for nothing, and a host it never mentioned being signed out is no
         // reason to refuse it.
         const errors = viewerResults.flatMap((result) =>
-          result.error === null || !selected.some(({ host }) => host === result.host)
+          result.error === null || !selected.some((project) => sourceKeyOf(project) === result.key)
             ? []
             : [result.error],
         );
@@ -777,18 +654,18 @@ export const make = Effect.gen(function* () {
       }
 
       const limit = input.limit ?? DEFAULT_REPOSITORY_LIST_LIMIT;
-      const cursorOf = (project: SupportedProject): ListCursor | undefined =>
-        continuation?.get(listCursorKey(project.host, project.repository));
+      const cursorOf = (project: IssueProjectSource): ListCursor | undefined =>
+        continuation?.get(listCursorKey(project));
 
       /**
        * One repository asked on its own. What every host without a search across repositories
        * does, and what a batched read falls back to for a repository it could not answer for.
        */
-      const readRepository = (project: SupportedProject): Effect.Effect<RepositoryBatch> => {
-        const viewer = viewers[project.host]!;
-        const key = listCursorKey(project.host, project.repository);
+      const readRepository = (project: IssueProjectSource): Effect.Effect<RepositoryBatch> => {
+        const viewer = viewers[sourceKeyOf(project)]!;
+        const key = listCursorKey(project);
         const cursor = cursorOf(project);
-        return project.api
+        return project.adapter
           .listIssues({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
@@ -855,14 +732,14 @@ export const make = Effect.gen(function* () {
        * repositories as unreadable before anyone has asked it about them one at a time.
        */
       const readTogether = (
-        chunk: ReadonlyArray<SupportedProject>,
+        chunk: ReadonlyArray<IssueProjectSource>,
       ): Effect.Effect<ReadonlyArray<RepositoryBatch>> => {
         const first = chunk[0]!;
-        const readAcross = first.api.listIssuesAcross;
+        const readAcross = first.adapter.listIssuesAcross;
         const separately = () =>
           Effect.forEach(chunk, readRepository, { concurrency: REPOSITORY_CONCURRENCY });
         if (readAcross === undefined) return separately();
-        const viewer = viewers[first.host]!;
+        const viewer = viewers[sourceKeyOf(first)]!;
         const cursor = cursorOf(first);
         return readAcross({
           cwd: first.project.workspaceRoot,
@@ -915,7 +792,7 @@ export const make = Effect.gen(function* () {
                           !cursorHere.seenAt.includes(item.number),
                       );
                 return Effect.succeed({
-                  key: listCursorKey(project.host, project.repository),
+                  key: listCursorKey(project),
                   entries: items.map((item) => toEntry({ project, item })),
                   errors: [],
                   truncated: page.truncated,
@@ -935,14 +812,14 @@ export const make = Effect.gen(function* () {
       // A host with a search across repositories is asked once for all of them; everyone else is
       // asked once each. Repositories standing at different points of the same listing are
       // different questions, so they are grouped by the boundary they carry on from.
-      const together = new Map<string, Array<SupportedProject>>();
-      const separate: Array<SupportedProject> = [];
+      const together = new Map<string, Array<IssueProjectSource>>();
+      const separate: Array<IssueProjectSource> = [];
       for (const project of readable) {
-        if (project.api.listIssuesAcross === undefined) {
+        if (project.adapter.listIssuesAcross === undefined) {
           separate.push(project);
           continue;
         }
-        const key = `${project.host}\n${cursorOf(project)?.updatedBefore ?? ""}`;
+        const key = `${sourceKeyOf(project)}\n${cursorOf(project)?.updatedBefore ?? ""}`;
         const group = together.get(key);
         if (group === undefined) together.set(key, [project]);
         else group.push(project);
@@ -981,14 +858,14 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((project) =>
         Effect.all(
           [
-            project.api.getIssue({
+            project.adapter.getIssue({
               cwd: project.project.workspaceRoot,
               repository: project.repository,
               host: project.host,
               number: input.number,
             }),
-            project.api.capabilities.editComment === true
-              ? project.api.getViewer({ cwd: project.project.workspaceRoot }).pipe(
+            project.adapter.capabilities.editComment === true
+              ? project.adapter.getViewer({ cwd: project.project.workspaceRoot }).pipe(
                   Effect.map((viewer): string | undefined => viewer),
                   Effect.orElseSucceed(() => undefined),
                 )
@@ -999,8 +876,8 @@ export const make = Effect.gen(function* () {
           Effect.mapError(toIssueError("detail")),
           Effect.map(
             ([issue, viewer]): IssueDetail => ({
-              provider: project.api.kind,
-              capabilities: project.api.capabilities,
+              provider: project.adapter.kind,
+              capabilities: project.adapter.capabilities,
               viewerPermissions: issue.viewerPermissions,
               projectId: project.project.id,
               projectTitle: project.project.title,
@@ -1031,7 +908,7 @@ export const make = Effect.gen(function* () {
   const activityUncached: IssueService["Service"]["activity"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project) =>
-        project.api
+        project.adapter
           .getIssueActivity({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
@@ -1060,7 +937,7 @@ export const make = Effect.gen(function* () {
   const commentsPage: IssueService["Service"]["commentsPage"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<IssueCommentsPageResult, IssueError> => {
-        if (project.api.getIssueComments === undefined) {
+        if (project.adapter.getIssueComments === undefined) {
           return Effect.fail(
             new IssueOperationError({
               operation: "commentsPage",
@@ -1068,7 +945,7 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        return project.api
+        return project.adapter
           .getIssueComments({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
@@ -1085,7 +962,7 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((project): Effect.Effect<void, IssueError> => {
         // The surface hides what a host cannot do, and this refuses it as well: a request that
         // reached here anyway must not be handed to a provider that never claimed the action.
-        if (!project.api.capabilities.actions.includes(input.action)) {
+        if (!project.adapter.capabilities.actions.includes(input.action)) {
           return Effect.fail(
             new IssueOperationError({
               operation: "runAction",
@@ -1097,7 +974,7 @@ export const make = Effect.gen(function* () {
         // that never had one to give would close the issue with no reason at all instead.
         if (
           input.reason !== undefined &&
-          !project.api.capabilities.closeReasons.includes(input.reason)
+          !project.adapter.capabilities.closeReasons.includes(input.reason)
         ) {
           return Effect.fail(
             new IssueOperationError({
@@ -1119,7 +996,7 @@ export const make = Effect.gen(function* () {
                 }),
               );
             }
-            return project.api
+            return project.adapter
               .runAction({
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
@@ -1144,7 +1021,7 @@ export const make = Effect.gen(function* () {
       : requireProject(input)
     ).pipe(
       Effect.flatMap((project): Effect.Effect<void, IssueError> => {
-        if (!project.api.capabilities.comment) {
+        if (!project.adapter.capabilities.comment) {
           return Effect.fail(
             new IssueOperationError({
               operation: "comment",
@@ -1162,7 +1039,7 @@ export const make = Effect.gen(function* () {
                 }),
               );
             }
-            return project.api
+            return project.adapter
               .comment({
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
@@ -1187,8 +1064,8 @@ export const make = Effect.gen(function* () {
       : requireProject(input)
     ).pipe(
       Effect.flatMap((project): Effect.Effect<void, IssueError> => {
-        const rewrite = project.api.updateComment;
-        if (project.api.capabilities.editComment !== true || rewrite === undefined) {
+        const rewrite = project.adapter.updateComment;
+        if (project.adapter.capabilities.editComment !== true || rewrite === undefined) {
           return Effect.fail(
             new IssueOperationError({
               operation: "updateComment",
@@ -1210,8 +1087,8 @@ export const make = Effect.gen(function* () {
   const setReaction: IssueService["Service"]["setReaction"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<void, IssueError> => {
-        const react = project.api.setReaction;
-        if (project.api.capabilities.reactions !== true || react === undefined) {
+        const react = project.adapter.setReaction;
+        if (project.adapter.capabilities.reactions !== true || react === undefined) {
           return Effect.fail(
             new IssueOperationError({
               operation: "setReaction",
@@ -1240,7 +1117,7 @@ export const make = Effect.gen(function* () {
   const create: IssueService["Service"]["create"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<IssueCreateResult, IssueError> => {
-        if (!project.api.capabilities.create) {
+        if (!project.adapter.capabilities.create) {
           return Effect.fail(
             new IssueOperationError({
               operation: "create",
@@ -1248,7 +1125,7 @@ export const make = Effect.gen(function* () {
             }),
           );
         }
-        return project.api
+        return project.adapter
           .create({
             cwd: project.project.workspaceRoot,
             repository: project.repository,
@@ -1267,7 +1144,7 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((project): Effect.Effect<void, IssueError> => {
         const refuse = (detail: string) =>
           Effect.fail(new IssueOperationError({ operation: "update", detail }));
-        if (!project.api.capabilities.edit) {
+        if (!project.adapter.capabilities.edit) {
           return refuse("This host cannot rewrite an issue.");
         }
         if (input.title === undefined && input.body === undefined) {
@@ -1288,7 +1165,7 @@ export const make = Effect.gen(function* () {
                 "You need write access on this repository, or to have opened this issue, to edit it.",
               );
             }
-            return project.api
+            return project.adapter
               .update({
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
@@ -1306,7 +1183,7 @@ export const make = Effect.gen(function* () {
   const setLabels: IssueService["Service"]["setLabels"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<void, IssueError> => {
-        if (!project.api.capabilities.labels) {
+        if (!project.adapter.capabilities.labels) {
           return Effect.fail(
             new IssueOperationError({
               operation: "setLabels",
@@ -1321,7 +1198,7 @@ export const make = Effect.gen(function* () {
                 new IssueOperationError({ operation: "setLabels", detail: LABEL_ACCESS_REFUSAL }),
               );
             }
-            return project.api
+            return project.adapter
               .setLabels({
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
@@ -1338,7 +1215,7 @@ export const make = Effect.gen(function* () {
   const setAssignees: IssueService["Service"]["setAssignees"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<void, IssueError> => {
-        if (!project.api.capabilities.assignees) {
+        if (!project.adapter.capabilities.assignees) {
           return Effect.fail(
             new IssueOperationError({
               operation: "setAssignees",
@@ -1356,7 +1233,7 @@ export const make = Effect.gen(function* () {
                 }),
               );
             }
-            return project.api
+            return project.adapter
               .setAssignees({
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
@@ -1379,7 +1256,7 @@ export const make = Effect.gen(function* () {
   const labelCandidates: IssueService["Service"]["labelCandidates"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<IssueLabelCandidateList, IssueError> => {
-        if (!project.api.capabilities.listLabelCandidates) {
+        if (!project.adapter.capabilities.listLabelCandidates) {
           return Effect.fail(
             new IssueOperationError({
               operation: "labelCandidates",
@@ -1391,7 +1268,7 @@ export const make = Effect.gen(function* () {
           Effect.flatMap(
             (viewer): Effect.Effect<IssueLabelCandidateList, IssueError> =>
               viewer.labels
-                ? project.api
+                ? project.adapter
                     .listLabelCandidates({
                       cwd: project.project.workspaceRoot,
                       repository: project.repository,
@@ -1413,7 +1290,7 @@ export const make = Effect.gen(function* () {
   const assigneeCandidates: IssueService["Service"]["assigneeCandidates"] = (input) =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<IssueAssigneeCandidateList, IssueError> => {
-        if (!project.api.capabilities.listAssigneeCandidates) {
+        if (!project.adapter.capabilities.listAssigneeCandidates) {
           return Effect.fail(
             new IssueOperationError({
               operation: "assigneeCandidates",
@@ -1425,7 +1302,7 @@ export const make = Effect.gen(function* () {
           Effect.flatMap(
             (viewer): Effect.Effect<IssueAssigneeCandidateList, IssueError> =>
               viewer.assignees
-                ? project.api
+                ? project.adapter
                     .listAssigneeCandidates({
                       cwd: project.project.workspaceRoot,
                       repository: project.repository,
@@ -1454,8 +1331,8 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<IssueTemplateList, IssueError> =>
     requireProject(input).pipe(
       Effect.flatMap((project): Effect.Effect<IssueTemplateList, IssueError> => {
-        const capabilities = project.api.capabilities;
-        const read = project.api.listIssueTemplates;
+        const capabilities = project.adapter.capabilities;
+        const read = project.adapter.listIssueTemplates;
         // A host with nothing to offer still has to say what it can do: this is the only answer a
         // composer gets before an issue exists, so refusing it would leave the form guessing about
         // exactly the two hosts that take no template — and one of them takes no issue either.
@@ -1652,7 +1529,7 @@ export const make = Effect.gen(function* () {
         templatesEpoch = ++epochCounter;
         // A whole-workspace refresh is the reader asking to be re-answered from the hosts, and
         // that includes who the hosts say they are.
-        viewersByHost.clear();
+        viewersBySource.clear();
         return;
       }
       bumpRefEpoch(input.reference);

@@ -1,23 +1,23 @@
 import { assert, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import type {
-  IssueCapabilities,
-  IssueTemplateList,
-  IssueViewerPermissions,
-  OrchestrationProjectShell,
-  ProjectId,
-  SourceControlProviderKind,
+import {
+  issueSourceKey,
+  type IssueCapabilities,
+  type IssueTemplateList,
+  type IssueProviderKind,
+  type IssueViewerPermissions,
+  type OrchestrationProjectShell,
+  type ProjectId,
 } from "@t3tools/contracts";
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
-import * as SourceControlProviderRegistry from "../sourceControl/SourceControlProviderRegistry.ts";
 import {
   IssueProviderError,
   type ProviderBatchedIssue,
   type ProviderIssue,
   type ProviderIssueDetail,
-  type IssueProviderApi,
+  type IssueAdapter,
 } from "./IssueProvider.ts";
 import { IssueProviderRegistry, fromProviders } from "./IssueProviderRegistry.ts";
 import * as IssueService from "./IssueService.ts";
@@ -89,7 +89,7 @@ function issueDetail(
   };
 }
 
-function unusable(provider: SourceControlProviderKind, reason: "missing-tool" | "unauthenticated") {
+function unusable(provider: IssueProviderKind, reason: "missing-tool" | "unauthenticated") {
   return new IssueProviderError({
     provider,
     operation: "getViewer",
@@ -136,9 +136,9 @@ const FULL_PERMISSIONS: IssueViewerPermissions = {
 
 /** A provider whose every call is supplied by the test; anything unset succeeds emptily. */
 function fakeProvider(
-  kind: SourceControlProviderKind,
-  overrides: Partial<IssueProviderApi> = {},
-): IssueProviderApi {
+  kind: IssueProviderKind,
+  overrides: Partial<IssueAdapter> = {},
+): IssueAdapter {
   return {
     kind,
     capabilities: FULL_CAPABILITIES,
@@ -161,17 +161,12 @@ function fakeProvider(
 
 function makeService(input: {
   readonly projects: ReadonlyArray<OrchestrationProjectShell>;
-  readonly providers: ReadonlyArray<IssueProviderApi>;
-  readonly resolveHandle?: SourceControlProviderRegistry.SourceControlProviderRegistry["Service"]["resolveHandle"];
+  readonly providers: ReadonlyArray<IssueAdapter>;
 }) {
   return IssueService.make.pipe(
     Effect.provide(
       Layer.mergeAll(
         Layer.succeed(IssueProviderRegistry, fromProviders(input.providers)),
-        Layer.mock(SourceControlProviderRegistry.SourceControlProviderRegistry)({
-          resolveHandle:
-            input.resolveHandle ?? (() => Effect.die("Unexpected provider refinement")),
-        }),
         Layer.mock(ProjectionSnapshotQuery.ProjectionSnapshotQuery)({
           getShellSnapshot: () =>
             Effect.succeed({
@@ -184,6 +179,10 @@ function makeService(input: {
       ),
     ),
   );
+}
+
+function cursorKey(repository: string): string {
+  return `github.com ${repository}`;
 }
 
 /** The reference every write test aims at, so a test body only says what it is about. */
@@ -278,7 +277,7 @@ it.effect("keeps a row already sent at the boundary instant from arriving twice"
 
     const result = yield* service.list({
       state: "open",
-      cursors: { "github.com acme/web": "2026-07-02T00:00:00Z|1|7" },
+      cursors: { [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|1|7" },
     });
 
     assert.deepStrictEqual(
@@ -288,7 +287,7 @@ it.effect("keeps a row already sent at the boundary instant from arriving twice"
     // The cursor sent in still carries the row count no host pages by any more, and is taken as it
     // stands; the one handed back writes that field out as zero.
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-01T00:00:00Z|0|9",
+      [cursorKey("acme/web")]: "2026-07-01T00:00:00Z|0|9",
     });
   }),
 );
@@ -311,7 +310,7 @@ it.effect("keeps the earlier exclusions when a slice ends on the instant it bega
 
     const result = yield* service.list({
       state: "open",
-      cursors: { "github.com acme/web": "2026-07-02T00:00:00Z|1|6" },
+      cursors: { [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|1|6" },
     });
 
     // A triage afternoon puts a whole slice inside one second. The next read has to keep
@@ -321,7 +320,7 @@ it.effect("keeps the earlier exclusions when a slice ends on the instant it bega
       [7, 8],
     );
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-02T00:00:00Z|0|6,7,8",
+      [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|0|6,7,8",
     });
   }),
 );
@@ -344,14 +343,14 @@ it.effect("carries on from a slice that was nothing but rows it had already sent
 
     const result = yield* service.list({
       state: "open",
-      cursors: { "github.com acme/web": "2026-07-02T00:00:00Z|1|7" },
+      cursors: { [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|1|7" },
     });
 
     // Nothing survived de-duplication, and reading that as "nothing left" would strand every
     // older row for good.
     assert.deepStrictEqual(result.entries, []);
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-02T00:00:00Z|0|7",
+      [cursorKey("acme/web")]: "2026-07-02T00:00:00Z|0|7",
     });
   }),
 );
@@ -364,7 +363,7 @@ it.effect("refuses a continuation it did not issue, before asking any host anyth
     });
 
     const error = yield* Effect.flip(
-      service.list({ state: "open", cursors: { "github.com acme/web": "yesterday" } }),
+      service.list({ state: "open", cursors: { [cursorKey("acme/web")]: "yesterday" } }),
     );
 
     assert.strictEqual(error._tag, "IssueOperationError");
@@ -605,7 +604,50 @@ it.effect("asks each host for the account signed in on that host, not on another
     assert.deepStrictEqual(result.viewers, {
       "github.com": "bilal",
       "github.acme.dev": "b.hassan",
+      [issueSourceKey("github", "github.com")]: "bilal",
+      [issueSourceKey("github", "github.acme.dev")]: "b.hassan",
     });
+  }),
+);
+
+it.effect("keeps adapters separate when they share a host and repository name", () =>
+  Effect.gen(function* () {
+    const asked: string[] = [];
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "source",
+          workspaceRoot: "/source",
+          repository: "acme/web",
+          host: "tracker.example.test",
+        }),
+        project({ id: "p2", title: "planning", workspaceRoot: "/planning" }),
+      ],
+      providers: [
+        fakeProvider("github", {
+          getViewer: () => Effect.succeed("octocat"),
+          listIssues: ({ viewer }) => {
+            asked.push(`github:${viewer}`);
+            return Effect.succeed({ items: [], truncated: false, continues: true });
+          },
+        }),
+        fakeProvider("jira", {
+          resolveSource: (candidate) =>
+            candidate.id === "p2" ? { host: "tracker.example.test", repository: "acme/web" } : null,
+          getViewer: () => Effect.succeed("jira-user"),
+          listIssues: ({ viewer }) => {
+            asked.push(`jira:${viewer}`);
+            return Effect.succeed({ items: [], truncated: false, continues: true });
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(result.providers.map(({ kind }) => kind).toSorted(), ["github", "jira"]);
+    assert.deepStrictEqual(asked.toSorted(), ["github:octocat", "jira:jira-user"]);
   }),
 );
 
@@ -1563,23 +1605,23 @@ it.effect("carries every repository of a slice on from the oldest row in it", ()
     const result = yield* service.list({
       state: "open",
       cursors: {
-        "github.com acme/web": "2026-07-06T00:00:00Z|1|1",
-        "github.com acme/api": "2026-07-06T00:00:00Z|1|5",
+        [cursorKey("acme/web")]: "2026-07-06T00:00:00Z|1|1",
+        [cursorKey("acme/api")]: "2026-07-06T00:00:00Z|1|5",
       },
     });
 
     // The repository that contributed nothing has been read to the same instant: its rows are
     // simply all older, and carrying it on from its own oldest row would say nothing about them.
     assert.deepStrictEqual(result.nextCursors, {
-      "github.com acme/web": "2026-07-03T00:00:00Z|0|2",
-      "github.com acme/api": "2026-07-03T00:00:00Z|0|",
+      [cursorKey("acme/web")]: "2026-07-03T00:00:00Z|0|2",
+      [cursorKey("acme/api")]: "2026-07-03T00:00:00Z|0|",
     });
   }),
 );
 
 it.effect("passes a reaction through with its subject id", () =>
   Effect.gen(function* () {
-    let received: Parameters<NonNullable<IssueProviderApi["setReaction"]>>[0] | null = null;
+    let received: Parameters<NonNullable<IssueAdapter["setReaction"]>>[0] | null = null;
     const service = yield* makeService({
       projects: ONE_PROJECT,
       providers: [

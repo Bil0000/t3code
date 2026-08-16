@@ -18,11 +18,12 @@ import type {
   IssueState,
   IssueTemplateList,
   IssueViewerPermissions,
-  SourceControlActor,
-  SourceControlLabel,
-  SourceControlProviderKind,
+  IssueActor,
+  IssueLabel,
+  IssueProviderKind,
+  OrchestrationProjectShell,
 } from "@t3tools/contracts";
-import { SourceControlProviderKind as SourceControlProviderKindSchema } from "@t3tools/contracts";
+import { IssueProviderKind as IssueProviderKindSchema } from "@t3tools/contracts";
 
 /**
  * The one failure shape every provider reports, so the service can decide what a failure means
@@ -35,7 +36,7 @@ import { SourceControlProviderKind as SourceControlProviderKindSchema } from "@t
 export class IssueProviderError extends Schema.TaggedErrorClass<IssueProviderError>()(
   "IssueProviderError",
   {
-    provider: SourceControlProviderKindSchema,
+    provider: IssueProviderKindSchema,
     operation: Schema.String,
     reason: Schema.Literals(["missing-tool", "unauthenticated", "tracker-disabled", "failed"]),
     detail: Schema.String,
@@ -52,14 +53,14 @@ export interface ProviderIssue {
   readonly number: number;
   readonly title: string;
   readonly url: string;
-  readonly author: SourceControlActor | null;
+  readonly author: IssueActor | null;
   readonly state: IssueState;
   readonly stateReason: IssueCloseReason | null;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly closedAt: string | null;
-  readonly assignees: ReadonlyArray<SourceControlActor>;
-  readonly labels: ReadonlyArray<SourceControlLabel>;
+  readonly assignees: ReadonlyArray<IssueActor>;
+  readonly labels: ReadonlyArray<IssueLabel>;
   readonly milestone: string | null;
   readonly commentCount: number;
   readonly reactions?: ReadonlyArray<IssueReaction>;
@@ -116,7 +117,7 @@ export interface ProviderIssueDetail extends ProviderIssue {
 /** The conversation-shaped half of a detail, loaded after the core can already render. */
 export interface ProviderIssueActivity {
   /** An optional richer actor, e.g. after a GraphQL read supplies an avatar the listing lacks. */
-  readonly author?: SourceControlActor | null;
+  readonly author?: IssueActor | null;
   readonly comments: ReadonlyArray<IssueComment>;
   /**
    * The host's own count of the conversation, which a bounded read can fall short of. A host that
@@ -151,14 +152,25 @@ export interface ProviderRepositoryRef {
   readonly host: string;
 }
 
+export interface IssueAdapterSource {
+  readonly host: string;
+  readonly repository: string;
+}
+
 /**
  * One host's issues. Implementations own their own tool and JSON shapes and hand back the neutral
  * types above; anything a host cannot do is declared in `capabilities` rather than failing at call
  * time.
  */
-export interface IssueProviderApi {
-  readonly kind: SourceControlProviderKind;
+export interface IssueAdapter {
+  readonly kind: IssueProviderKind;
   readonly capabilities: IssueCapabilities;
+
+  /**
+   * Optional local project binding for adapters selected outside source control, such as a future
+   * project-level Jira setting. Synchronous by design: discovering sources must spend no API calls.
+   */
+  readonly resolveSource?: (project: OrchestrationProjectShell) => IssueAdapterSource | null;
 
   /** The signed-in account, which is what involvement filtering compares against. */
   readonly getViewer: (input: {

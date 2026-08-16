@@ -1,4 +1,4 @@
-import type { IssueListEntry } from "@t3tools/contracts";
+import { issueSourceKey, type IssueListEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -16,7 +16,7 @@ import {
   resolveProjectScope,
 } from "./issueList.logic";
 
-const VIEWERS = { "github.com": "Bilal" } as const;
+const VIEWERS = { [issueSourceKey("github", "github.com")]: "Bilal" } as const;
 const NO_VIEWERS = {} as const;
 
 const actor = (login: string) => ({ login, name: null, avatarUrl: null });
@@ -70,6 +70,14 @@ describe("issue involvement filtering", () => {
     ).toEqual([1]);
   });
 
+  it("reads the host-only viewer key from an older server", () => {
+    expect(
+      filterIssuesByInvolvement(entries, { "github.com": "Bilal" }, "authored").map(
+        (item) => item.number,
+      ),
+    ).toEqual([1]);
+  });
+
   it("returns nothing for Authored when the viewer is unknown", () => {
     expect(filterIssuesByInvolvement(entries, NO_VIEWERS, "authored")).toEqual([]);
   });
@@ -113,6 +121,20 @@ describe("issue involvement filtering", () => {
     expect(
       filterIssuesByInvolvement(mixed, VIEWERS, "assigned").map((item) => item.number),
     ).toEqual([1]);
+  });
+
+  it("keeps two adapters on one host as two accounts", () => {
+    const mixed = [
+      entry({ number: 1, author: actor("Bilal") }),
+      entry({ number: 2, provider: "jira", author: actor("Jira User") }),
+    ];
+    const viewers = {
+      [issueSourceKey("github", "github.com")]: "Bilal",
+      [issueSourceKey("jira", "github.com")]: "Jira User",
+    };
+    expect(
+      filterIssuesByInvolvement(mixed, viewers, "authored").map((item) => item.number),
+    ).toEqual([1, 2]);
   });
 });
 
@@ -362,7 +384,7 @@ describe("the list snapshot across a reload", () => {
   };
   const data = {
     entries: [entry({ number: 1 })],
-    viewers: { "github.com": "Bilal" },
+    viewers: { [issueSourceKey("github", "github.com")]: "Bilal" },
     providers: [],
     errors: [{ projectId: "project-1", projectTitle: "t3code", message: "boom" }],
     truncated: true,

@@ -5,7 +5,7 @@ import * as AzureDevOpsIssueCli from "./AzureDevOpsIssueCli.ts";
 import type { AzureDevOpsWorkItem } from "./azureDevOpsIssueJson.ts";
 import {
   IssueProviderError,
-  type IssueProviderApi,
+  type IssueAdapter,
   type ProviderIssue,
   type ProviderIssueDetail,
 } from "./IssueProvider.ts";
@@ -196,5 +196,5 @@ export const make = Effect.gen(function* () {
     listLabelCandidates: () => unsupported("listLabelCandidates"),
 
     listAssigneeCandidates: () => unsupported("listAssigneeCandidates"),
-  } satisfies IssueProviderApi;
+  } satisfies IssueAdapter;
 });

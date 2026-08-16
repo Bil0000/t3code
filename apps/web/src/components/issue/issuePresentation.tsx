@@ -1,7 +1,13 @@
-import type { IssueCloseReason, IssueState, SourceControlLabel } from "@t3tools/contracts";
-import { CircleCheckIcon, CircleDotIcon, CircleSlashIcon } from "lucide-react";
+import type {
+  IssueCloseReason,
+  IssueLabel,
+  IssueProviderKind,
+  IssueState,
+} from "@t3tools/contracts";
+import { CircleCheckIcon, CircleDotIcon, CircleSlashIcon, TicketIcon } from "lucide-react";
 import type { CSSProperties } from "react";
 
+import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { cn } from "~/lib/utils";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -10,6 +16,19 @@ interface StatePresentation {
   readonly label: string;
   readonly toneClassName: string;
   readonly Icon: typeof CircleDotIcon;
+}
+
+export function getIssueProviderPresentation(kind: IssueProviderKind) {
+  switch (kind) {
+    case "github":
+    case "gitlab":
+    case "azure-devops":
+    case "bitbucket":
+    case "unknown":
+      return getSourceControlPresentationForKind(kind);
+    default:
+      return { providerName: kind, Icon: TicketIcon };
+  }
 }
 
 /**
@@ -108,7 +127,7 @@ export function IssueLabelChips({
   max = 3,
   className,
 }: {
-  labels: ReadonlyArray<SourceControlLabel>;
+  labels: ReadonlyArray<IssueLabel>;
   max?: number;
   className?: string;
 }) {

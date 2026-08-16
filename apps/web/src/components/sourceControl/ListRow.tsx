@@ -6,11 +6,9 @@
  * The state glyph and everything past the repository stay with the caller: open, closed, merged and
  * draft are not one vocabulary, and neither are the facts each surface thinks worth the meta line.
  */
-import type { SourceControlProviderKind } from "@t3tools/contracts";
-import type { ReactNode } from "react";
+import type { ElementType, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
-import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -19,7 +17,8 @@ import { SourceControlMetaLine } from "./actorPresentation";
 export function ListRow({
   glyph,
   title,
-  provider,
+  providerName,
+  ProviderIcon,
   showProvider,
   number,
   repository,
@@ -33,7 +32,8 @@ export function ListRow({
   /** The caller's own state drawing, which is the one thing the two surfaces do not share. */
   glyph: ReactNode;
   title: string;
-  provider: SourceControlProviderKind;
+  providerName: string;
+  ProviderIcon: ElementType<{ className?: string }>;
   /** Only when the list spans more than one host, where the repository alone is ambiguous. */
   showProvider: boolean;
   number: number;
@@ -56,7 +56,6 @@ export function ListRow({
   selected: boolean;
   onSelect: () => void;
 }) {
-  const { Icon, providerName } = getSourceControlPresentationForKind(provider);
   return (
     <button
       type="button"
@@ -79,7 +78,7 @@ export function ListRow({
             {showProvider ? (
               <Tooltip>
                 <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
-                  <Icon aria-label={providerName} className="size-3" />
+                  <ProviderIcon aria-label={providerName} className="size-3" />
                 </TooltipTrigger>
                 <TooltipPopup>{providerName}</TooltipPopup>
               </Tooltip>
