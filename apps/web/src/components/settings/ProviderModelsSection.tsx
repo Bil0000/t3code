@@ -3,6 +3,7 @@
 import {
   ArrowDownIcon,
   ArrowUpIcon,
+  CopyIcon,
   EyeIcon,
   EyeOffIcon,
   InfoIcon,
@@ -18,6 +19,7 @@ import {
   type ProviderInstanceId,
   type ProviderOptionDescriptor,
   type SelectProviderOptionDescriptor,
+  type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import {
@@ -28,9 +30,11 @@ import {
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
 import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
+import { Checkbox } from "../ui/checkbox";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Switch } from "../ui/switch";
@@ -315,12 +319,239 @@ export function getConfiguredCustomModelOptionDescriptors(
     : (configured.optionDescriptors ?? []);
 }
 
+type CustomModelCapabilitySourceProvider = Pick<
+  ServerProvider,
+  "instanceId" | "driver" | "displayName" | "models"
+>;
+
+interface CustomModelCapabilityCopySource {
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly providerLabel: string;
+  readonly modelSlug: string;
+  readonly modelName: string;
+  readonly optionDescriptors: ReadonlyArray<ProviderOptionDescriptor>;
+}
+
+interface CustomModelCapabilityCopySelection {
+  readonly providerInstanceId: ProviderInstanceId;
+  readonly modelSlug: string;
+  readonly descriptorIds: ReadonlySet<string>;
+}
+
+export function collectCustomModelCapabilityCopySources(
+  providers: ReadonlyArray<CustomModelCapabilitySourceProvider>,
+): ReadonlyArray<CustomModelCapabilityCopySource> {
+  const sources: Array<CustomModelCapabilityCopySource> = [];
+  for (const provider of providers) {
+    const baseLabel = provider.displayName ?? String(provider.driver);
+    const hasDuplicateLabel = providers.some(
+      (candidate) =>
+        candidate.instanceId !== provider.instanceId &&
+        (candidate.displayName ?? String(candidate.driver)) === baseLabel,
+    );
+    for (const model of provider.models) {
+      const optionDescriptors = model.capabilities?.optionDescriptors ?? [];
+      if (optionDescriptors.length === 0) continue;
+      sources.push({
+        providerInstanceId: provider.instanceId,
+        providerLabel: hasDuplicateLabel ? `${baseLabel} (${provider.instanceId})` : baseLabel,
+        modelSlug: model.slug,
+        modelName: model.name,
+        optionDescriptors,
+      });
+    }
+  }
+  return sources;
+}
+
+export function filterCustomModelCapabilityCopySources(
+  sources: ReadonlyArray<CustomModelCapabilityCopySource>,
+  instanceId: ProviderInstanceId,
+  modelSlug: string,
+): ReadonlyArray<CustomModelCapabilityCopySource> {
+  return sources.filter(
+    (source) => source.providerInstanceId !== instanceId || source.modelSlug !== modelSlug,
+  );
+}
+
+export function getSelectedCustomModelCapabilityCopyDescriptors(
+  source: CustomModelCapabilityCopySource,
+  selection: CustomModelCapabilityCopySelection | undefined,
+): ReadonlyArray<ProviderOptionDescriptor> {
+  if (
+    selection?.providerInstanceId !== source.providerInstanceId ||
+    selection.modelSlug !== source.modelSlug
+  ) {
+    return [];
+  }
+  return source.optionDescriptors.filter((descriptor) =>
+    selection.descriptorIds.has(descriptor.id),
+  );
+}
+
+export function copyCustomModelCapabilityDescriptors(
+  configured: ReadonlyArray<ProviderOptionDescriptor>,
+  copied: ReadonlyArray<ProviderOptionDescriptor>,
+): ReadonlyArray<ProviderOptionDescriptor> {
+  const copiedById = new Map(copied.map((descriptor) => [descriptor.id, descriptor]));
+  const configuredIds = new Set(configured.map((descriptor) => descriptor.id));
+  return [
+    ...configured.map((descriptor) => copiedById.get(descriptor.id) ?? descriptor),
+    ...copied.filter((descriptor) => !configuredIds.has(descriptor.id)),
+  ];
+}
+
+export function CustomModelCapabilityCopyPicker(props: {
+  readonly sources: ReadonlyArray<CustomModelCapabilityCopySource>;
+  readonly onCopy: (descriptors: ReadonlyArray<ProviderOptionDescriptor>) => void;
+  readonly onCancel: () => void;
+}) {
+  const providers = [
+    ...new Map(
+      props.sources.map((source) => [
+        source.providerInstanceId,
+        {
+          instanceId: source.providerInstanceId,
+          label: source.providerLabel,
+        },
+      ]),
+    ).values(),
+  ];
+  const [providerInstanceId, setProviderInstanceId] = useState(
+    props.sources[0]?.providerInstanceId,
+  );
+  const provider =
+    providers.find((candidate) => candidate.instanceId === providerInstanceId) ?? providers[0];
+  const models = props.sources.filter(
+    (candidate) => candidate.providerInstanceId === provider?.instanceId,
+  );
+  const [modelSlug, setModelSlug] = useState(props.sources[0]?.modelSlug);
+  const [selection, setSelection] = useState<CustomModelCapabilityCopySelection>();
+  const source = models.find((candidate) => candidate.modelSlug === modelSlug) ?? models[0];
+
+  if (!provider || !source) return null;
+  const selectedDescriptors = getSelectedCustomModelCapabilityCopyDescriptors(source, selection);
+  const selectedIds = new Set(selectedDescriptors.map((descriptor) => descriptor.id));
+
+  const selectProvider = (value: ProviderInstanceId | null) => {
+    if (value === null) return;
+    const nextProvider = providers.find((candidate) => candidate.instanceId === value);
+    if (!nextProvider) return;
+    const nextSource = props.sources.find(
+      (candidate) => candidate.providerInstanceId === nextProvider.instanceId,
+    );
+    setProviderInstanceId(nextProvider.instanceId);
+    setModelSlug(nextSource?.modelSlug);
+    setSelection(undefined);
+  };
+
+  const selectModel = (value: string | null) => {
+    if (value === null) return;
+    if (!models.some((candidate) => candidate.modelSlug === value)) return;
+    setModelSlug(value);
+    setSelection(undefined);
+  };
+
+  const toggleDescriptor = (id: string, checked: boolean) => {
+    const descriptorIds = new Set(selectedIds);
+    if (checked) descriptorIds.add(id);
+    else descriptorIds.delete(id);
+    setSelection({
+      providerInstanceId: source.providerInstanceId,
+      modelSlug: source.modelSlug,
+      descriptorIds,
+    });
+  };
+
+  return (
+    <div className="grid gap-2.5 rounded-md border border-border/70 p-2.5">
+      <div className="grid grid-cols-2 gap-2">
+        <label className="grid min-w-0 gap-1 text-[11px] text-muted-foreground">
+          Harness
+          <Select value={provider.instanceId} onValueChange={selectProvider}>
+            <SelectTrigger
+              size="compact"
+              className="w-full min-w-0"
+              aria-label="Harness to copy controls from"
+            >
+              <SelectValue>{provider.label}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup alignItemWithTrigger={false}>
+              {providers.map((candidate) => (
+                <SelectItem key={candidate.instanceId} hideIndicator value={candidate.instanceId}>
+                  {candidate.label}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </label>
+        <label className="grid min-w-0 gap-1 text-[11px] text-muted-foreground">
+          Model
+          <Select value={source.modelSlug} onValueChange={selectModel}>
+            <SelectTrigger
+              size="compact"
+              className="w-full min-w-0"
+              aria-label="Model to copy controls from"
+            >
+              <SelectValue>{source.modelName}</SelectValue>
+            </SelectTrigger>
+            <SelectPopup alignItemWithTrigger={false}>
+              {models.map((candidate) => (
+                <SelectItem key={candidate.modelSlug} hideIndicator value={candidate.modelSlug}>
+                  {candidate.modelName}
+                </SelectItem>
+              ))}
+            </SelectPopup>
+          </Select>
+        </label>
+      </div>
+
+      <div className="grid gap-1">
+        {source.optionDescriptors.map((descriptor) => (
+          <label
+            key={descriptor.id}
+            className="flex min-h-7 items-center gap-2 rounded-sm px-1.5 text-xs text-foreground hover:bg-muted/50"
+          >
+            <Checkbox
+              checked={selectedIds.has(descriptor.id)}
+              onCheckedChange={(checked) => toggleDescriptor(descriptor.id, Boolean(checked))}
+              aria-label={`Copy ${descriptor.label} (${descriptor.id})`}
+            />
+            <span className="min-w-0 truncate">{descriptor.label}</span>
+            <code className="ml-auto shrink-0 text-[10px] text-muted-foreground">
+              {descriptor.id}
+            </code>
+          </label>
+        ))}
+      </div>
+
+      <p className="text-[10px] leading-snug text-muted-foreground">
+        Copies exact IDs and values. Target harness decides whether it can send them.
+      </p>
+      <div className="flex justify-end gap-1.5">
+        <Button size="xs" variant="ghost-muted" onClick={props.onCancel}>
+          Cancel
+        </Button>
+        <Button
+          size="xs"
+          disabled={selectedDescriptors.length === 0}
+          onClick={() => props.onCopy(selectedDescriptors)}
+        >
+          Copy selected
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function CustomModelCapabilitiesEditor(props: {
   readonly model: ServerProviderModel;
   readonly value: ModelCapabilities | undefined;
+  readonly copySources: ReadonlyArray<CustomModelCapabilityCopySource>;
   readonly onChange: (value: ModelCapabilities | undefined) => void;
   readonly onSave: () => void;
 }) {
+  const [copyOpen, setCopyOpen] = useState(false);
   const configuredDescriptors = getConfiguredCustomModelOptionDescriptors(
     props.value,
     props.model.capabilities,
@@ -431,9 +662,44 @@ export function CustomModelCapabilitiesEditor(props: {
           </div>
         );
       })}
+      {copyOpen ? (
+        props.copySources.length > 0 ? (
+          <CustomModelCapabilityCopyPicker
+            sources={props.copySources}
+            onCopy={(descriptors) => {
+              props.onChange({
+                optionDescriptors: copyCustomModelCapabilityDescriptors(
+                  configuredDescriptors,
+                  descriptors,
+                ),
+              });
+              setCopyOpen(false);
+            }}
+            onCancel={() => setCopyOpen(false)}
+          />
+        ) : (
+          <div className="flex items-center justify-between gap-2 rounded-md border border-border/70 p-2.5">
+            <span className="text-xs text-muted-foreground">
+              No model controls available to copy.
+            </span>
+            <Button size="xs" variant="ghost-muted" onClick={() => setCopyOpen(false)}>
+              Close
+            </Button>
+          </div>
+        )
+      ) : null}
 
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-wrap gap-1.5">
+          <Button
+            size="xs"
+            variant="outline"
+            aria-expanded={copyOpen}
+            onClick={() => setCopyOpen((open) => !open)}
+          >
+            <CopyIcon />
+            Copy controls
+          </Button>
           <Button
             size="xs"
             variant="outline"
@@ -464,6 +730,7 @@ export function CustomModelCapabilitiesEditor(props: {
 function CustomModelCapabilitiesPopover(props: {
   readonly model: ServerProviderModel;
   readonly value: ModelCapabilities | undefined;
+  readonly copySources: ReadonlyArray<CustomModelCapabilityCopySource>;
   readonly onSave: (capabilities: ModelCapabilities | undefined) => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -508,6 +775,7 @@ function CustomModelCapabilitiesPopover(props: {
         <CustomModelCapabilitiesEditor
           model={props.model}
           value={draft}
+          copySources={props.copySources}
           onChange={updateDraft}
           onSave={() => {
             props.onSave(draftRef.current);
@@ -532,6 +800,7 @@ interface ProviderModelsSectionProps {
    * and custom entries, distinguished by `isCustom`.
    */
   readonly models: ReadonlyArray<ServerProviderModel>;
+  readonly sourceProviders: ReadonlyArray<CustomModelCapabilitySourceProvider>;
   /**
    * The persisted custom-model slug list for this instance. Drives dedup,
    * and is the array we hand back verbatim (with the new slug appended /
@@ -575,6 +844,7 @@ export function ProviderModelsSection({
   instanceId,
   driverKind,
   models,
+  sourceProviders,
   customModels,
   customModelCapabilities,
   onCustomModelCapabilitiesChange,
@@ -591,6 +861,10 @@ export function ProviderModelsSection({
   const listRef = useRef<HTMLDivElement | null>(null);
   const hiddenModelSet = useMemo(() => new Set(hiddenModels), [hiddenModels]);
   const favoriteModelSet = useMemo(() => new Set(favoriteModels), [favoriteModels]);
+  const copySources = useMemo(
+    () => collectCustomModelCapabilityCopySources(sourceProviders),
+    [sourceProviders],
+  );
   const orderedModels = useMemo(() => {
     return sortModelsForProviderInstance(models, {
       favoriteModels: favoriteModelSet,
@@ -828,6 +1102,11 @@ export function ProviderModelsSection({
                   <CustomModelCapabilitiesPopover
                     model={model}
                     value={getDeclaredCustomModelCapabilities(customModelCapabilities, model.slug)}
+                    copySources={filterCustomModelCapabilityCopySources(
+                      copySources,
+                      instanceId,
+                      model.slug,
+                    )}
                     onSave={(capabilities) =>
                       onCustomModelCapabilitiesChange(model.slug, capabilities)
                     }

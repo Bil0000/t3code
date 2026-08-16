@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderInstanceId,
+  ProviderDriverKind,
   type ModelCapabilities,
   type SelectProviderOptionDescriptor,
   type ServerProviderModel,
@@ -10,11 +11,16 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   CustomModelCapabilitiesEditor,
+  CustomModelCapabilityCopyPicker,
   ProviderModelsSection,
   addSelectCustomModelCapabilityValue,
   applySelectCustomModelCapabilityUpdate,
+  collectCustomModelCapabilityCopySources,
+  copyCustomModelCapabilityDescriptors,
   createCustomModelCapabilityDescriptor,
+  filterCustomModelCapabilityCopySources,
   getConfiguredCustomModelOptionDescriptors,
+  getSelectedCustomModelCapabilityCopyDescriptors,
   isSelectCustomModelCapabilityValueCommitKey,
   makeSelectCustomModelCapabilityDescriptor,
   replaceCustomModelCapabilityDescriptor,
@@ -52,6 +58,7 @@ describe("custom model capability configuration", () => {
         model,
         value: { optionDescriptors: [] },
         onChange: () => undefined,
+        copySources: [],
         onSave: () => undefined,
       }),
     );
@@ -83,6 +90,7 @@ describe("custom model capability configuration", () => {
           ],
         },
         onChange: () => undefined,
+        copySources: [],
         onSave: () => undefined,
       }),
     );
@@ -197,12 +205,268 @@ describe("custom model capability configuration", () => {
           ],
         },
         onChange: () => undefined,
+        copySources: [],
         onSave: () => undefined,
       }),
     );
 
     expect(markup).toContain("ON / OFF");
     expect(markup).toContain(">Save</button>");
+    expect(markup).toContain(">Copy controls</button>");
+  });
+
+  it("collects declared controls from multiple harnesses", () => {
+    expect(
+      collectCustomModelCapabilityCopySources([
+        {
+          instanceId: ProviderInstanceId.make("codex_default"),
+          driver: ProviderDriverKind.make("codex"),
+          displayName: "Work Codex",
+          models: [
+            {
+              slug: "gpt-5",
+              name: "GPT 5",
+              isCustom: false,
+              capabilities: {
+                optionDescriptors: [
+                  {
+                    id: "fastMode",
+                    label: "Fast Mode",
+                    type: "boolean",
+                    currentValue: false,
+                  },
+                ],
+              },
+            },
+            {
+              slug: "plain-model",
+              name: "Plain model",
+              isCustom: false,
+              capabilities: null,
+            },
+          ],
+        },
+        {
+          instanceId: ProviderInstanceId.make("claude_default"),
+          driver: ProviderDriverKind.make("claudeAgent"),
+          models: [
+            {
+              slug: "opus",
+              name: "Opus",
+              isCustom: false,
+              capabilities: {
+                optionDescriptors: [
+                  {
+                    id: "fastMode",
+                    label: "Fast Mode",
+                    type: "boolean",
+                    currentValue: false,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      ]),
+    ).toEqual([
+      {
+        providerInstanceId: ProviderInstanceId.make("codex_default"),
+        providerLabel: "Work Codex",
+        modelSlug: "gpt-5",
+        modelName: "GPT 5",
+        optionDescriptors: [
+          {
+            id: "fastMode",
+            label: "Fast Mode",
+            type: "boolean",
+            currentValue: false,
+          },
+        ],
+      },
+      {
+        providerInstanceId: ProviderInstanceId.make("claude_default"),
+        providerLabel: "claudeAgent",
+        modelSlug: "opus",
+        modelName: "Opus",
+        optionDescriptors: [
+          {
+            id: "fastMode",
+            label: "Fast Mode",
+            type: "boolean",
+            currentValue: false,
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("disambiguates harness instances that share a display name", () => {
+    const providers = ["codex_one", "codex_two"].map((instanceId) => ({
+      instanceId: ProviderInstanceId.make(instanceId),
+      driver: ProviderDriverKind.make("codex"),
+      displayName: "Codex",
+      models: [
+        {
+          slug: `${instanceId}/model`,
+          name: `${instanceId} model`,
+          isCustom: false,
+          capabilities: {
+            optionDescriptors: [{ id: "effort", label: "Reasoning", type: "boolean" as const }],
+          },
+        },
+      ],
+    }));
+
+    expect(
+      collectCustomModelCapabilityCopySources(providers).map((source) => source.providerLabel),
+    ).toEqual(["Codex (codex_one)", "Codex (codex_two)"]);
+  });
+
+  it("clears checked controls when a refreshed catalog changes the source model", () => {
+    const source = {
+      providerInstanceId: ProviderInstanceId.make("codex_default"),
+      providerLabel: "Codex",
+      modelSlug: "new-model",
+      modelName: "New model",
+      optionDescriptors: [{ id: "effort", label: "New effort", type: "boolean" as const }],
+    };
+
+    expect(
+      getSelectedCustomModelCapabilityCopyDescriptors(source, {
+        providerInstanceId: ProviderInstanceId.make("codex_default"),
+        modelSlug: "removed-model",
+        descriptorIds: new Set(["effort"]),
+      }),
+    ).toEqual([]);
+  });
+
+  it("excludes only the custom model currently being edited from copy sources", () => {
+    const sources = [
+      {
+        providerInstanceId: ProviderInstanceId.make("codex_default"),
+        providerLabel: "Codex",
+        modelSlug: "target",
+        modelName: "Target",
+        optionDescriptors: [{ id: "effort", label: "Reasoning", type: "boolean" as const }],
+      },
+      {
+        providerInstanceId: ProviderInstanceId.make("codex_default"),
+        providerLabel: "Codex",
+        modelSlug: "other",
+        modelName: "Other",
+        optionDescriptors: [{ id: "effort", label: "Reasoning", type: "boolean" as const }],
+      },
+      {
+        providerInstanceId: ProviderInstanceId.make("claude_default"),
+        providerLabel: "Claude",
+        modelSlug: "target",
+        modelName: "Target",
+        optionDescriptors: [{ id: "effort", label: "Reasoning", type: "boolean" as const }],
+      },
+    ];
+
+    expect(
+      filterCustomModelCapabilityCopySources(
+        sources,
+        ProviderInstanceId.make("codex_default"),
+        "target",
+      ).map((source) => `${source.providerInstanceId}:${source.modelSlug}`),
+    ).toEqual(["codex_default:other", "claude_default:target"]);
+  });
+
+  it("shows harness, model, and multiple controls in the copy picker", () => {
+    const markup = renderToStaticMarkup(
+      createElement(CustomModelCapabilityCopyPicker, {
+        sources: [
+          {
+            providerInstanceId: ProviderInstanceId.make("codex_default"),
+            providerLabel: "Work Codex",
+            modelSlug: "gpt-5",
+            modelName: "GPT 5",
+            optionDescriptors: [
+              {
+                id: "reasoningEffort",
+                label: "Reasoning",
+                type: "select",
+                options: [{ id: "high", label: "High", isDefault: true }],
+                currentValue: "high",
+              },
+              {
+                id: "serviceTier",
+                label: "Fast service",
+                type: "boolean",
+                currentValue: false,
+              },
+            ],
+          },
+        ],
+        onCopy: () => undefined,
+        onCancel: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain('aria-label="Harness to copy controls from"');
+    expect(markup).toContain("Work Codex");
+    expect(markup).toContain('aria-label="Model to copy controls from"');
+    expect(markup).toContain("GPT 5");
+    expect(markup).toContain('aria-label="Copy Reasoning (reasoningEffort)"');
+    expect(markup).toContain('aria-label="Copy Fast service (serviceTier)"');
+    expect(markup).toContain("Copies exact IDs and values");
+    expect(markup).toContain(">Copy selected</button>");
+  });
+
+  it("replaces copied controls in place and appends new controls", () => {
+    expect(
+      copyCustomModelCapabilityDescriptors(
+        [
+          {
+            id: "effort",
+            label: "Old effort",
+            type: "select",
+            options: [{ id: "medium", label: "Medium" }],
+          },
+          { id: "thinking", label: "Thinking", type: "boolean", currentValue: false },
+        ],
+        [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select",
+            options: [
+              { id: "low", label: "Low" },
+              { id: "high", label: "High", isDefault: true },
+            ],
+            currentValue: "high",
+          },
+          {
+            id: "contextWindow",
+            label: "Context Window",
+            type: "select",
+            options: [{ id: "1m", label: "1M", isDefault: true }],
+            currentValue: "1m",
+          },
+        ],
+      ),
+    ).toEqual([
+      {
+        id: "effort",
+        label: "Reasoning",
+        type: "select",
+        options: [
+          { id: "low", label: "Low" },
+          { id: "high", label: "High", isDefault: true },
+        ],
+        currentValue: "high",
+      },
+      { id: "thinking", label: "Thinking", type: "boolean", currentValue: false },
+      {
+        id: "contextWindow",
+        label: "Context Window",
+        type: "select",
+        options: [{ id: "1m", label: "1M", isDefault: true }],
+        currentValue: "1m",
+      },
+    ]);
   });
 
   it("shows model details for arbitrary descriptors", () => {
@@ -227,6 +491,7 @@ describe("custom model capability configuration", () => {
         driverKind: null,
         models: [model],
         customModels: [model.slug],
+        sourceProviders: [],
         customModelCapabilities: {},
         onCustomModelCapabilitiesChange: () => undefined,
         hiddenModels: [],

@@ -367,6 +367,7 @@ interface ProviderInstanceCardProps {
   readonly instance: ProviderInstanceConfig;
   readonly driverOption: DriverOption | undefined;
   readonly liveProvider: ServerProvider | undefined;
+  readonly sourceProviders: ReadonlyArray<ServerProvider>;
   readonly isExpanded: boolean;
   readonly onExpandedChange: (open: boolean) => void;
   readonly onUpdate: (nextInstance: ProviderInstanceConfig) => void;
@@ -424,6 +425,7 @@ export function ProviderInstanceCard({
   instance,
   driverOption,
   liveProvider,
+  sourceProviders,
   isExpanded,
   onExpandedChange,
   onUpdate,
@@ -852,6 +854,7 @@ export function ProviderInstanceCard({
                 instanceId={instanceId}
                 driverKind={driverKind}
                 models={modelsForDisplay}
+                sourceProviders={sourceProviders}
                 customModels={customModels}
                 customModelCapabilities={customModelCapabilities}
                 onCustomModelCapabilitiesChange={updateCustomModelCapabilities}
