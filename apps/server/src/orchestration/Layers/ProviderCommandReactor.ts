@@ -664,7 +664,7 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
-      const previousModelSelection = threadModelSelections.get(threadId);
+      const previousModelSelection = threadModelSelections.get(threadId) ?? thread.modelSelection;
       const codexContextWindowChanged =
         preferredProvider === "codex" &&
         requestedModelSelection !== undefined &&
