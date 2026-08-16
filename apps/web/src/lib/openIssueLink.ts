@@ -166,6 +166,10 @@ export function findProjectForIssue(
   });
 }
 
+export function repositoryForProjectLink(project: EnvironmentProject, fallback: string): string {
+  return project.repositoryIdentity?.displayName ?? fallback;
+}
+
 /**
  * The project a linked issue or change request belongs to, or nothing. A link carries the
  * repository it was filed in, which need not be the one on screen — a cross-repository reference
@@ -255,7 +259,7 @@ export function useOpenIssueLink(threadRef?: ScopedThreadRef) {
           projectId: project.id,
           // The identity's own spelling, not the one read out of the URL: the panel asks the
           // provider for this repository, while matching a link only ever compares lower case.
-          repository: project.repositoryIdentity?.displayName ?? parsed.repository,
+          repository: repositoryForProjectLink(project, parsed.repository),
           number: parsed.number,
         });
         return true;

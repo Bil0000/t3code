@@ -12,6 +12,7 @@ import { CheckIcon } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Button } from "../ui/button";
+import { Input } from "../ui/input";
 import { Menu, MenuPopup, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -78,13 +79,13 @@ export function EntityPicker({
       />
       <MenuPopup align="start" side="bottom" className="w-72 p-0">
         <div className="border-b border-border/60 p-2">
-          <input
+          <Input
             autoFocus
             value={query}
             onChange={(event) => onQueryChange(event.currentTarget.value)}
             placeholder={searchLabel}
             aria-label={searchLabel}
-            className="h-7 w-full rounded-md border border-input bg-background px-2 text-xs outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring"
+            size="compact"
           />
         </div>
         <div className="max-h-72 overflow-y-auto p-1">

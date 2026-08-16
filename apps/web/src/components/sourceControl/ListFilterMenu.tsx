@@ -24,6 +24,7 @@ import {
   MenuRadioItem,
   MenuTrigger,
 } from "../ui/menu";
+import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export interface ListFilterOption<Value extends string> {
@@ -46,6 +47,9 @@ export interface ListFilterHost<Kind extends string = SourceControlProviderKind>
 /** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
 export const ALL_HOSTS_VALUE = "";
 const ALL_PROJECTS_VALUE = "all";
+
+export const LIST_MENU_TRIGGER_CLASS_NAME =
+  "relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground sm:size-8";
 
 /**
  * What to call a host in the row. The provider's own name reads best — "GitHub" over
@@ -80,29 +84,18 @@ export function ListSearchInput({
   onChange: (value: string) => void;
 }) {
   return (
-    <div className="relative min-w-0 flex-1">
-      {busy ? (
-        <LoaderIcon
-          aria-hidden
-          className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 animate-spin text-muted-foreground"
-        />
-      ) : (
-        <SearchIcon
-          aria-hidden
-          className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-        />
-      )}
-      <input
-        type="text"
+    <InputGroup className="min-w-0 flex-1 **:[input]:h-9 sm:**:[input]:h-8">
+      <InputGroupAddon>
+        {busy ? <LoaderIcon aria-hidden className="animate-spin" /> : <SearchIcon aria-hidden />}
+      </InputGroupAddon>
+      <InputGroupInput
+        type="search"
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
         placeholder={placeholder}
         aria-label={label}
-        // Tracks the shared input's height at both widths, so it stays level with the icon
-        // button beside it rather than towering over it on wide screens.
-        className="h-9 w-full rounded-lg border border-input bg-background pr-3 pl-9 text-sm outline-none placeholder:text-muted-foreground/72 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/24 sm:h-8"
       />
-    </div>
+    </InputGroup>
   );
 }
 
@@ -127,7 +120,7 @@ export function ListFilterMenu({
       <MenuTrigger
         className={cn(
           // The icon-button size that pairs with a full-height input, so the two read as one strip.
-          "relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground sm:size-8",
+          LIST_MENU_TRIGGER_CLASS_NAME,
           filtered && "text-foreground",
         )}
         aria-label={label}

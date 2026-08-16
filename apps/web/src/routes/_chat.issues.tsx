@@ -1658,7 +1658,7 @@ function IssuesColumn({
 
       <div
         ref={scrollRef}
-        className="pull-requests-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto"
+        className="topbar-scroll-fade scrollbar-gutter-both min-h-0 flex-1 overflow-y-auto [--topbar-scroll-fade-height:1.5rem] sm:[--topbar-scroll-fade-height:1.5rem]"
       >
         {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
             settings page makes: at rest the controls sit fully below the mask, and only

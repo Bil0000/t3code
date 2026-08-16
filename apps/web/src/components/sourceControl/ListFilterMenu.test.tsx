@@ -4,6 +4,7 @@ import { Children, isValidElement, type ReactElement, type ReactNode } from "rea
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { DetailTabStrip } from "./DetailTabStrip";
+import { EntityPicker } from "./EntityPicker";
 import { ListFilterRadioGroup, ListProjectFilterGroup, ListSearchInput } from "./ListFilterMenu";
 
 function findValueChange(
@@ -38,11 +39,52 @@ describe("list filter menu", () => {
       onChange: vi.fn(),
     });
     const field = Children.toArray(input.props.children).find(
-      (child) => isValidElement(child) && child.type === "input",
-    ) as ReactElement<{ readonly "aria-label": string; readonly placeholder: string }>;
+      (child) =>
+        isValidElement(child) &&
+        (child.props as { readonly "aria-label"?: string })["aria-label"] ===
+          "Search pull requests",
+    ) as ReactElement<{
+      readonly "aria-label": string;
+      readonly placeholder: string;
+      readonly type: string;
+    }>;
 
     expect(field.props["aria-label"]).toBe("Search pull requests");
     expect(field.props.placeholder).toBe("Search pull requests, or label:bug");
+    expect(field.props.type).toBe("search");
+  });
+
+  it("uses the compact input primitive in entity pickers", () => {
+    const picker = EntityPicker({
+      icon: null,
+      label: "Assign people",
+      allowed: true,
+      disallowedReason: "Unavailable",
+      open: true,
+      onOpenChange: vi.fn(),
+      searchLabel: "Search people",
+      query: "",
+      onQueryChange: vi.fn(),
+      message: null,
+      note: null,
+      children: null,
+    });
+    const popup = Children.toArray(picker.props.children).find(
+      (child) =>
+        isValidElement(child) &&
+        (child.props as { readonly className?: string }).className === "w-72 p-0",
+    ) as ReactElement<{ readonly children: ReactNode }>;
+    const frame = Children.toArray(popup.props.children)[0] as ReactElement<{
+      readonly children: ReactNode;
+    }>;
+    const field = Children.only(frame.props.children) as ReactElement<{
+      readonly "aria-label": string;
+      readonly size: string;
+    }>;
+
+    expect(field.type).not.toBe("input");
+    expect(field.props["aria-label"]).toBe("Search people");
+    expect(field.props.size).toBe("compact");
   });
 
   it("hides the native scrollbar on detail tabs", () => {

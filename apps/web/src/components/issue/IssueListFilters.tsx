@@ -10,6 +10,7 @@ import { ArrowDownUpIcon, TagIcon, TagsIcon } from "lucide-react";
 
 import {
   ALL_HOSTS_VALUE,
+  LIST_MENU_TRIGGER_CLASS_NAME,
   ListFilterMenu,
   ListFilterRadioGroup,
   ListProjectFilterGroup,
@@ -62,7 +63,7 @@ export function IssueSortMenu({
   return (
     <Menu>
       <MenuTrigger
-        className="relative inline-flex size-9 shrink-0 items-center justify-center rounded-lg border border-input text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground sm:size-8"
+        className={LIST_MENU_TRIGGER_CLASS_NAME}
         aria-label="Sort issues"
         title="Sort issues"
       >

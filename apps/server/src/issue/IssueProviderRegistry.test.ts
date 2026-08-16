@@ -77,6 +77,28 @@ it.effect("keeps two adapters that share one host and repository", () =>
   }),
 );
 
+it.effect("derives a self-hosted hostname from a legacy remote identity", () =>
+  Effect.gen(function* () {
+    const project: OrchestrationProjectShell = {
+      ...PROJECT,
+      repositoryIdentity: {
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "https://code.example.test/group/project.git",
+        },
+        provider: "gitlab",
+        displayName: "group/project",
+      } as unknown as OrchestrationProjectShell["repositoryIdentity"],
+    };
+    const registry = fromProviders([{ kind: "gitlab" } as unknown as IssueAdapter]);
+
+    const result = yield* registry.resolveProjects([project], {});
+
+    assert.strictEqual(result.supported[0]?.host, "code.example.test");
+  }),
+);
+
 it.effect("refines one unknown remote before de-duplicating its worktrees", () =>
   Effect.gen(function* () {
     let refinementCalls = 0;
@@ -91,7 +113,7 @@ it.effect("refines one unknown remote before de-duplicating its worktrees", () =
         },
         provider: "unknown",
         displayName: "group/project",
-      },
+      } as unknown as OrchestrationProjectShell["repositoryIdentity"],
     };
     const sourceControl = SourceControlProviderRegistry.SourceControlProviderRegistry.of({
       get: () => Effect.die("unused"),

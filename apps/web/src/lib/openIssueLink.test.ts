@@ -5,6 +5,7 @@ import {
   IssueLinkOpenError,
   openIssueLink,
   parseIssueUrl,
+  repositoryForProjectLink,
 } from "./openIssueLink";
 
 describe("openIssueLink", () => {
@@ -255,5 +256,15 @@ describe("findProjectForIssue", () => {
         number: 17,
       }),
     ).toBeUndefined();
+  });
+});
+
+describe("repositoryForProjectLink", () => {
+  it("keeps the repository identity casing used by the provider", () => {
+    const project = {
+      repositoryIdentity: { displayName: "Acme/Web" },
+    } as never;
+
+    expect(repositoryForProjectLink(project, "acme/web")).toBe("Acme/Web");
   });
 });

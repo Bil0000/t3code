@@ -224,7 +224,11 @@ import {
   formatElementContextLabel,
 } from "../lib/elementContext";
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
-import { findProjectForLink, openLinkInBrowser } from "../lib/openIssueLink";
+import {
+  findProjectForLink,
+  openLinkInBrowser,
+  repositoryForProjectLink,
+} from "../lib/openIssueLink";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -3374,7 +3378,11 @@ function ChatViewContent(props: ChatViewProps) {
         openLinkInBrowser(link.url);
         return;
       }
-      const reference = { projectId: project.id, repository: link.repository, number: link.number };
+      const reference = {
+        projectId: project.id,
+        repository: repositoryForProjectLink(project, link.repository),
+        number: link.number,
+      };
       const panel = useRightPanelStore.getState();
       if (kind === "issue") {
         panel.openIssue(activeThreadRef, reference);

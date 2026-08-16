@@ -68,8 +68,12 @@ function issueHostOf(
   identity: OrchestrationProjectShell["repositoryIdentity"],
   kind: IssueProviderKind,
 ): string {
-  const host = identity?.canonicalKey?.split("/")[0]?.trim();
-  return host === undefined || host.length === 0 ? kind : host.toLowerCase();
+  const canonicalHost = identity?.canonicalKey?.split("/")[0]?.trim();
+  if (canonicalHost !== undefined && canonicalHost.length > 0) return canonicalHost.toLowerCase();
+  const provider = identity
+    ? detectSourceControlProviderFromRemoteUrl(identity.locator.remoteUrl)
+    : null;
+  return provider === null ? kind : new URL(provider.baseUrl).host.toLowerCase();
 }
 
 function adapterSourcesOf(
