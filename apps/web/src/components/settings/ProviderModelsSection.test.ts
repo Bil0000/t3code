@@ -117,6 +117,32 @@ describe("custom model capability configuration", () => {
       currentValue: "ultra",
     });
   });
+
+  it("uses the declared default when currentValue is absent", () => {
+    const template = {
+      id: "effort",
+      label: "Reasoning",
+      type: "select" as const,
+      options: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High", isDefault: true },
+      ],
+    };
+
+    expect(makeSelectCustomModelCapabilityDescriptor(template, ["low", "high"], undefined)).toEqual(
+      {
+        id: "effort",
+        label: "Reasoning",
+        type: "select",
+        options: [
+          { id: "low", label: "Low" },
+          { id: "high", label: "High", isDefault: true },
+        ],
+        currentValue: "high",
+      },
+    );
+  });
+
   it("accepts arbitrary values for every select descriptor", () => {
     const template = {
       id: "contextWindow",

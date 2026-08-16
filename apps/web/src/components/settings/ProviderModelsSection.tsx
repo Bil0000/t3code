@@ -53,6 +53,21 @@ function capabilityOptionLabel(id: string): string {
   return words.length > 0 ? words[0]!.toUpperCase() + words.slice(1) : id;
 }
 
+function resolveSelectCustomModelCapabilityDefault(
+  descriptor: SelectProviderOptionDescriptor,
+  supportedValues: ReadonlyArray<string>,
+  requestedDefault: string | undefined,
+): string | undefined {
+  return (
+    (requestedDefault && supportedValues.includes(requestedDefault)
+      ? requestedDefault
+      : undefined) ??
+    descriptor.options.find((option) => option.isDefault && supportedValues.includes(option.id))
+      ?.id ??
+    supportedValues[0]
+  );
+}
+
 export function createCustomModelCapabilityDescriptor(
   configured: ReadonlyArray<ProviderOptionDescriptor>,
   type: ProviderOptionDescriptor["type"],
@@ -83,8 +98,11 @@ export function makeSelectCustomModelCapabilityDescriptor(
     ...new Set(supportedValues.map((value) => value.trim()).filter((value) => value.length > 0)),
   ];
   if (values.length === 0) return undefined;
-  const defaultValue =
-    requestedDefault && values.includes(requestedDefault) ? requestedDefault : values[0];
+  const defaultValue = resolveSelectCustomModelCapabilityDefault(
+    template,
+    values,
+    requestedDefault,
+  );
   const templateOptions = new Map(template.options.map((option) => [option.id, option]));
   const options = values.map((id) => {
     const templateOption = templateOptions.get(id);
@@ -245,7 +263,13 @@ export function CustomModelCapabilitiesEditor(props: {
                 <label className="grid gap-1 text-[11px] text-muted-foreground">
                   Default
                   <Select
-                    value={descriptor.currentValue ?? descriptor.options[0]?.id ?? ""}
+                    value={
+                      resolveSelectCustomModelCapabilityDefault(
+                        descriptor,
+                        descriptor.options.map((option) => option.id),
+                        descriptor.currentValue,
+                      ) ?? ""
+                    }
                     onValueChange={(value) =>
                       replaceDescriptor(
                         makeSelectCustomModelCapabilityDescriptor(
