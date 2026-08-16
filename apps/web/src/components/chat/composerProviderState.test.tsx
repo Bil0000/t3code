@@ -11,6 +11,7 @@ import {
   renderProviderTraitsMenuContent,
   renderProviderTraitsPicker,
 } from "./composerProviderState";
+import { DraftId } from "../../composerDraftStore";
 
 // Everything in composerProviderState is now data-driven by the model's
 // optionDescriptors, so these tests use a single synthetic provider/model and
@@ -293,6 +294,21 @@ describe("getComposerProviderState", () => {
 });
 
 describe("provider traits render guards", () => {
+  it("renders an arbitrary on/off descriptor for a custom model", () => {
+    const args = {
+      provider: PROVIDER,
+      model: MODEL,
+      models: modelWith([booleanDescriptor("option")]),
+      modelOptions: undefined,
+      prompt: "",
+      onPromptChange: () => {},
+      draftId: DraftId.make("draft-custom-boolean"),
+    };
+
+    expect(renderProviderTraitsPicker(args)).not.toBeNull();
+    expect(renderProviderTraitsMenuContent(args)).not.toBeNull();
+  });
+
   it("returns null when no thread target is provided", () => {
     const models = modelWith([
       selectDescriptor("effort", [{ id: "high", label: "High", isDefault: true }]),
