@@ -80,6 +80,16 @@ it("maps current Codex model capability fields", () => {
       ],
       currentValue: "flex",
     },
+    {
+      id: "contextWindow",
+      label: "Context Window",
+      type: "select",
+      options: [
+        { id: "258k", label: "258k" },
+        { id: "1m", label: "1M", isDefault: true },
+      ],
+      currentValue: "1m",
+    },
   ]);
 });
 
@@ -118,6 +128,16 @@ it("uses standard routing when the catalog has no default service tier", () => {
         },
       ],
       currentValue: "default",
+    },
+    {
+      id: "contextWindow",
+      label: "Context Window",
+      type: "select",
+      options: [
+        { id: "258k", label: "258k" },
+        { id: "1m", label: "1M", isDefault: true },
+      ],
+      currentValue: "1m",
     },
   ]);
 });

@@ -174,6 +174,16 @@ export function mapCodexModelCapabilities(
       currentValue: defaultServiceTier,
     });
   }
+  optionDescriptors.push({
+    id: "contextWindow",
+    label: "Context Window",
+    type: "select",
+    options: [
+      { id: "258k", label: "258k" },
+      { id: "1m", label: "1M", isDefault: true },
+    ],
+    currentValue: "1m",
+  });
 
   return createModelCapabilities({
     optionDescriptors,

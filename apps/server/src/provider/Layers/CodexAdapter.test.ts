@@ -273,6 +273,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         threadId: asThreadId("thread-1"),
         modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", [
           { id: "serviceTier", value: "priority" },
+          { id: "contextWindow", value: "258k" },
         ]),
         runtimeMode: "full-access",
       });
@@ -281,6 +282,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         binaryPath: "codex",
         cwd: process.cwd(),
         launchArgs: "",
+        appServerArgs: ["-c", "model_context_window=258400"],
         model: "gpt-5.3-codex",
         providerInstanceId: ProviderInstanceId.make("codex"),
         serviceTier: "priority",
@@ -361,7 +363,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
     }),
   );
 
-  it.effect("passes configured launch args into the session runtime", () => {
+  it.effect("passes launch args and default context into the session runtime", () => {
     const runtimeFactory = makeRuntimeFactory();
     const layer = Layer.effect(
       CodexAdapter,
@@ -389,6 +391,10 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       const runtime = runtimeFactory.lastRuntime;
       NodeAssert.ok(runtime);
       NodeAssert.equal(runtime.options.launchArgs, "--strict-config --enable foo");
+      NodeAssert.deepStrictEqual(runtime.options.appServerArgs, [
+        "-c",
+        "model_context_window=1000000",
+      ]);
     }).pipe(Effect.provide(layer));
   });
 
