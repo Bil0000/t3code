@@ -187,9 +187,14 @@ function CollapsedComment({
           {open ? (
             <div className="px-3 pb-3">
               {comment.path ? (
-                <p className="truncate text-xs text-muted-foreground" title={comment.path}>
-                  {comment.path}
-                </p>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <p className="truncate text-xs text-muted-foreground">{comment.path}</p>
+                    }
+                  />
+                  <TooltipPopup side="top">{comment.path}</TooltipPopup>
+                </Tooltip>
               ) : null}
               {/* A dismissal carries no more words than an approval does, and an empty markdown
                   block reads as a card somebody forgot to fill in. */}
@@ -552,6 +557,7 @@ export function PullRequestSummaryTab({
                         >
                           <PullRequestActorLabel
                             actor={entry.actor}
+                            tooltip={false}
                             className={cn(
                               "gap-0 [&>span:last-child]:sr-only",
                               // Only where the wrapper is not already drawing one, or the opaque
@@ -876,12 +882,16 @@ export function PullRequestSummaryTab({
                         ) : null}
                       </div>
                       {comment.path ? (
-                        <p
-                          className="mt-1 truncate text-xs text-muted-foreground"
-                          title={comment.path}
-                        >
-                          {comment.path}
-                        </p>
+                        <Tooltip>
+                          <TooltipTrigger
+                            render={
+                              <p className="mt-1 truncate text-xs text-muted-foreground">
+                                {comment.path}
+                              </p>
+                            }
+                          />
+                          <TooltipPopup side="top">{comment.path}</TooltipPopup>
+                        </Tooltip>
                       ) : null}
                       {/* A verdict usually carries no words, and an empty markdown block reads as
                           a card somebody forgot to fill in — the badge above already said it.
