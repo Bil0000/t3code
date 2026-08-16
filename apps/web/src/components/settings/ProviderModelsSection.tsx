@@ -163,11 +163,23 @@ export function isSelectCustomModelCapabilityValueCommitKey(key: string): boolea
   return key === " " || key === "," || key === "Enter";
 }
 
+export function applySelectCustomModelCapabilityUpdate(
+  descriptorRef: { current: SelectProviderOptionDescriptor },
+  update: (descriptor: SelectProviderOptionDescriptor) => SelectProviderOptionDescriptor,
+  onChange: (descriptor: SelectProviderOptionDescriptor) => void,
+): void {
+  const descriptor = update(descriptorRef.current);
+  if (descriptor === descriptorRef.current) return;
+  descriptorRef.current = descriptor;
+  onChange(descriptor);
+}
+
 function SelectCustomModelCapabilityValueTag(props: {
   readonly descriptor: SelectProviderOptionDescriptor;
   readonly option: SelectProviderOptionDescriptor["options"][number];
   readonly defaultValue: string | undefined;
-  readonly onChange: (descriptor: SelectProviderOptionDescriptor) => void;
+  readonly onSelect: () => void;
+  readonly onRemove: () => void;
 }) {
   const isDefault = props.option.id === props.defaultValue;
   return (
@@ -181,9 +193,7 @@ function SelectCustomModelCapabilityValueTag(props: {
         className="h-full min-w-0 cursor-pointer truncate rounded-l-sm py-0.5 ps-1.5 pe-1 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
         aria-label={`Set ${props.option.id} as default for ${props.descriptor.label}`}
         aria-pressed={isDefault}
-        onClick={() =>
-          props.onChange(setSelectCustomModelCapabilityDefault(props.descriptor, props.option.id))
-        }
+        onClick={props.onSelect}
       >
         {props.option.id}
       </button>
@@ -192,16 +202,7 @@ function SelectCustomModelCapabilityValueTag(props: {
         className="flex h-full w-5 cursor-pointer items-center justify-center rounded-r-sm outline-none opacity-70 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-35"
         disabled={props.descriptor.options.length === 1}
         aria-label={`Remove ${props.option.id} from ${props.descriptor.label}`}
-        onClick={() => {
-          const descriptor = makeSelectCustomModelCapabilityDescriptor(
-            props.descriptor,
-            props.descriptor.options
-              .filter((candidate) => candidate.id !== props.option.id)
-              .map((candidate) => candidate.id),
-            props.descriptor.currentValue,
-          );
-          if (descriptor) props.onChange(descriptor);
-        }}
+        onClick={props.onRemove}
       >
         <XIcon className="size-3" />
       </button>
@@ -214,14 +215,18 @@ function SelectCustomModelCapabilityValues(props: {
   readonly onChange: (descriptor: SelectProviderOptionDescriptor) => void;
 }) {
   const [draftValue, setDraftValue] = useState("");
+  const descriptorRef = useRef(props.descriptor);
+  descriptorRef.current = props.descriptor;
   const defaultValue = resolveSelectCustomModelCapabilityDefault(
     props.descriptor,
     props.descriptor.options.map((option) => option.id),
     props.descriptor.currentValue,
   );
+  const updateDescriptor = (
+    update: (descriptor: SelectProviderOptionDescriptor) => SelectProviderOptionDescriptor,
+  ) => applySelectCustomModelCapabilityUpdate(descriptorRef, update, props.onChange);
   const commitInput = () => {
-    const next = addSelectCustomModelCapabilityValue(props.descriptor, draftValue);
-    if (next !== props.descriptor) props.onChange(next);
+    updateDescriptor((descriptor) => addSelectCustomModelCapabilityValue(descriptor, draftValue));
     setDraftValue("");
   };
 
@@ -235,7 +240,23 @@ function SelectCustomModelCapabilityValues(props: {
             descriptor={props.descriptor}
             option={option}
             defaultValue={defaultValue}
-            onChange={props.onChange}
+            onSelect={() =>
+              updateDescriptor((descriptor) =>
+                setSelectCustomModelCapabilityDefault(descriptor, option.id),
+              )
+            }
+            onRemove={() =>
+              updateDescriptor(
+                (descriptor) =>
+                  makeSelectCustomModelCapabilityDescriptor(
+                    descriptor,
+                    descriptor.options
+                      .filter((candidate) => candidate.id !== option.id)
+                      .map((candidate) => candidate.id),
+                    descriptor.currentValue,
+                  ) ?? descriptor,
+              )
+            }
           />
         ))}
         <Input
@@ -447,12 +468,17 @@ function CustomModelCapabilitiesPopover(props: {
 }) {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(props.value);
+  const draftRef = useRef(props.value);
+  const updateDraft = (capabilities: ModelCapabilities | undefined) => {
+    draftRef.current = capabilities;
+    setDraft(capabilities);
+  };
 
   return (
     <Popover
       open={open}
       onOpenChange={(nextOpen) => {
-        if (nextOpen) setDraft(props.value);
+        if (nextOpen) updateDraft(props.value);
         setOpen(nextOpen);
       }}
     >
@@ -482,9 +508,9 @@ function CustomModelCapabilitiesPopover(props: {
         <CustomModelCapabilitiesEditor
           model={props.model}
           value={draft}
-          onChange={setDraft}
+          onChange={updateDraft}
           onSave={() => {
-            props.onSave(draft);
+            props.onSave(draftRef.current);
             setOpen(false);
           }}
         />

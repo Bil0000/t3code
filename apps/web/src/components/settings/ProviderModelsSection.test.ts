@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   ProviderInstanceId,
   type ModelCapabilities,
+  type SelectProviderOptionDescriptor,
   type ServerProviderModel,
 } from "@t3tools/contracts";
 import { createElement } from "react";
@@ -11,6 +12,7 @@ import {
   CustomModelCapabilitiesEditor,
   ProviderModelsSection,
   addSelectCustomModelCapabilityValue,
+  applySelectCustomModelCapabilityUpdate,
   createCustomModelCapabilityDescriptor,
   getConfiguredCustomModelOptionDescriptors,
   isSelectCustomModelCapabilityValueCommitKey,
@@ -131,6 +133,43 @@ describe("custom model capability configuration", () => {
       ],
       currentValue: "high",
     });
+  });
+
+  it("keeps a blurred value when the next tag action sets the default", () => {
+    const descriptorRef: { current: SelectProviderOptionDescriptor } = {
+      current: {
+        id: "effort",
+        label: "Reasoning",
+        type: "select" as const,
+        options: [
+          { id: "low", label: "Low", isDefault: true },
+          { id: "high", label: "High" },
+        ],
+        currentValue: "low",
+      },
+    };
+    let savedDescriptor: SelectProviderOptionDescriptor = descriptorRef.current;
+    const saveDescriptor = (descriptor: SelectProviderOptionDescriptor) => {
+      savedDescriptor = descriptor;
+    };
+
+    applySelectCustomModelCapabilityUpdate(
+      descriptorRef,
+      (descriptor) => addSelectCustomModelCapabilityValue(descriptor, "max"),
+      saveDescriptor,
+    );
+    applySelectCustomModelCapabilityUpdate(
+      descriptorRef,
+      (descriptor) => setSelectCustomModelCapabilityDefault(descriptor, "high"),
+      saveDescriptor,
+    );
+
+    expect(savedDescriptor.options).toEqual([
+      { id: "low", label: "Low" },
+      { id: "high", label: "High", isDefault: true },
+      { id: "max", label: "Max" },
+    ]);
+    expect(savedDescriptor.currentValue).toBe("high");
   });
 
   it("commits select values with space, comma, or Enter", () => {
