@@ -10,10 +10,13 @@ import { renderToStaticMarkup } from "react-dom/server";
 import {
   CustomModelCapabilitiesEditor,
   ProviderModelsSection,
+  addSelectCustomModelCapabilityValue,
   createCustomModelCapabilityDescriptor,
   getConfiguredCustomModelOptionDescriptors,
+  isSelectCustomModelCapabilityValueCommitKey,
   makeSelectCustomModelCapabilityDescriptor,
   replaceCustomModelCapabilityDescriptor,
+  setSelectCustomModelCapabilityDefault,
 } from "./ProviderModelsSection";
 describe("custom model capability configuration", () => {
   it("creates free-form select and boolean descriptors without provider templates", () => {
@@ -47,6 +50,7 @@ describe("custom model capability configuration", () => {
         model,
         value: { optionDescriptors: [] },
         onChange: () => undefined,
+        onSave: () => undefined,
       }),
     );
 
@@ -55,7 +59,7 @@ describe("custom model capability configuration", () => {
     expect(markup).not.toContain("Provider has not reported configurable model controls");
   });
 
-  it("renders each select value independently so commas stay inside IDs", () => {
+  it("renders exact select values as tags so commas stay inside IDs", () => {
     const model: ServerProviderModel = {
       slug: "vendor/model",
       name: "vendor/model",
@@ -77,13 +81,88 @@ describe("custom model capability configuration", () => {
           ],
         },
         onChange: () => undefined,
+        onSave: () => undefined,
       }),
     );
 
-    expect(markup).toContain('aria-label="Value 1 for Quality"');
-    expect(markup).toContain('aria-label="Value label 1 for Quality"');
-    expect(markup).toContain('value="quality,high"');
-    expect(markup).toContain('value="Quality high"');
+    expect(markup).toContain('aria-label="Set quality,high as default for Quality"');
+    expect(markup).toContain('aria-pressed="true"');
+    expect(markup).toContain("quality,high");
+    expect(markup).toContain('placeholder="Add value…"');
+  });
+
+  it("adds one trimmed select value without changing existing labels", () => {
+    const descriptor = {
+      id: "quality",
+      label: "Quality",
+      type: "select" as const,
+      options: [{ id: "low", label: "Low quality", isDefault: true }],
+      currentValue: "low",
+    };
+
+    expect(addSelectCustomModelCapabilityValue(descriptor, " quality,high ")).toEqual({
+      ...descriptor,
+      options: [
+        { id: "low", label: "Low quality", isDefault: true },
+        { id: "quality,high", label: "Quality,high" },
+      ],
+    });
+    expect(addSelectCustomModelCapabilityValue(descriptor, " low ")).toBe(descriptor);
+  });
+
+  it("makes a clicked select value the only default", () => {
+    const descriptor = {
+      id: "effort",
+      label: "Reasoning",
+      type: "select" as const,
+      options: [
+        { id: "low", label: "Low", isDefault: true },
+        { id: "high", label: "High" },
+      ],
+      currentValue: "low",
+    };
+
+    expect(setSelectCustomModelCapabilityDefault(descriptor, "high")).toEqual({
+      ...descriptor,
+      options: [
+        { id: "low", label: "Low" },
+        { id: "high", label: "High", isDefault: true },
+      ],
+      currentValue: "high",
+    });
+  });
+
+  it("commits select values with space, comma, or Enter", () => {
+    expect([" ", ",", "Enter"].map(isSelectCustomModelCapabilityValueCommitKey)).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect(isSelectCustomModelCapabilityValueCommitKey("Tab")).toBe(false);
+  });
+
+  it("shows a Save action and capitalized boolean heading", () => {
+    const model: ServerProviderModel = {
+      slug: "vendor/model",
+      name: "vendor/model",
+      isCustom: true,
+      capabilities: { optionDescriptors: [] },
+    };
+    const markup = renderToStaticMarkup(
+      createElement(CustomModelCapabilitiesEditor, {
+        model,
+        value: {
+          optionDescriptors: [
+            { id: "fastMode", label: "Fast Mode", type: "boolean", currentValue: false },
+          ],
+        },
+        onChange: () => undefined,
+        onSave: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain("ON / OFF");
+    expect(markup).toContain(">Save</button>");
   });
 
   it("shows model details for arbitrary descriptors", () => {

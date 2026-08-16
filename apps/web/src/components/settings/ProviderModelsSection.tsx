@@ -28,11 +28,11 @@ import {
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
 import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -129,6 +129,145 @@ export function makeSelectCustomModelCapabilityDescriptor(
     ...(promptInjectedValues && promptInjectedValues.length > 0 ? { promptInjectedValues } : {}),
   };
 }
+
+export function addSelectCustomModelCapabilityValue(
+  descriptor: SelectProviderOptionDescriptor,
+  rawValue: string,
+): SelectProviderOptionDescriptor {
+  const id = rawValue.trim();
+  if (!id || descriptor.options.some((option) => option.id === id)) return descriptor;
+  return (
+    makeSelectCustomModelCapabilityDescriptor(
+      descriptor,
+      [...descriptor.options.map((option) => option.id), id],
+      descriptor.currentValue,
+    ) ?? descriptor
+  );
+}
+
+export function setSelectCustomModelCapabilityDefault(
+  descriptor: SelectProviderOptionDescriptor,
+  defaultValueId: string,
+): SelectProviderOptionDescriptor {
+  if (!descriptor.options.some((option) => option.id === defaultValueId)) return descriptor;
+  return (
+    makeSelectCustomModelCapabilityDescriptor(
+      descriptor,
+      descriptor.options.map((option) => option.id),
+      defaultValueId,
+    ) ?? descriptor
+  );
+}
+
+export function isSelectCustomModelCapabilityValueCommitKey(key: string): boolean {
+  return key === " " || key === "," || key === "Enter";
+}
+
+function SelectCustomModelCapabilityValueTag(props: {
+  readonly descriptor: SelectProviderOptionDescriptor;
+  readonly option: SelectProviderOptionDescriptor["options"][number];
+  readonly defaultValue: string | undefined;
+  readonly onChange: (descriptor: SelectProviderOptionDescriptor) => void;
+}) {
+  const isDefault = props.option.id === props.defaultValue;
+  return (
+    <Badge
+      variant={isDefault ? "default" : "outline"}
+      className="h-5.5 gap-0 px-0 sm:h-5"
+      title={props.option.label === props.option.id ? undefined : props.option.label}
+    >
+      <button
+        type="button"
+        className="h-full min-w-0 cursor-pointer truncate rounded-l-sm py-0.5 ps-1.5 pe-1 text-[11px] outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        aria-label={`Set ${props.option.id} as default for ${props.descriptor.label}`}
+        aria-pressed={isDefault}
+        onClick={() =>
+          props.onChange(setSelectCustomModelCapabilityDefault(props.descriptor, props.option.id))
+        }
+      >
+        {props.option.id}
+      </button>
+      <button
+        type="button"
+        className="flex h-full w-5 cursor-pointer items-center justify-center rounded-r-sm outline-none opacity-70 hover:opacity-100 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-35"
+        disabled={props.descriptor.options.length === 1}
+        aria-label={`Remove ${props.option.id} from ${props.descriptor.label}`}
+        onClick={() => {
+          const descriptor = makeSelectCustomModelCapabilityDescriptor(
+            props.descriptor,
+            props.descriptor.options
+              .filter((candidate) => candidate.id !== props.option.id)
+              .map((candidate) => candidate.id),
+            props.descriptor.currentValue,
+          );
+          if (descriptor) props.onChange(descriptor);
+        }}
+      >
+        <XIcon className="size-3" />
+      </button>
+    </Badge>
+  );
+}
+
+function SelectCustomModelCapabilityValues(props: {
+  readonly descriptor: SelectProviderOptionDescriptor;
+  readonly onChange: (descriptor: SelectProviderOptionDescriptor) => void;
+}) {
+  const [draftValue, setDraftValue] = useState("");
+  const defaultValue = resolveSelectCustomModelCapabilityDefault(
+    props.descriptor,
+    props.descriptor.options.map((option) => option.id),
+    props.descriptor.currentValue,
+  );
+  const commitInput = () => {
+    const next = addSelectCustomModelCapabilityValue(props.descriptor, draftValue);
+    if (next !== props.descriptor) props.onChange(next);
+    setDraftValue("");
+  };
+
+  return (
+    <div className="grid gap-1">
+      <span className="text-[11px] text-muted-foreground">Values</span>
+      <div className="flex min-h-8 flex-wrap items-center gap-1 rounded-md border border-input bg-background p-1 shadow-xs/5 dark:bg-input/32">
+        {props.descriptor.options.map((option) => (
+          <SelectCustomModelCapabilityValueTag
+            key={option.id}
+            descriptor={props.descriptor}
+            option={option}
+            defaultValue={defaultValue}
+            onChange={props.onChange}
+          />
+        ))}
+        <Input
+          nativeInput
+          unstyled
+          size="compact"
+          className="min-w-20 flex-1"
+          value={draftValue}
+          onChange={(event) => setDraftValue(event.target.value)}
+          onKeyDown={(event) => {
+            if (
+              event.nativeEvent.isComposing ||
+              !isSelectCustomModelCapabilityValueCommitKey(event.key)
+            ) {
+              return;
+            }
+            event.preventDefault();
+            commitInput();
+          }}
+          onBlur={commitInput}
+          placeholder="Add value…"
+          aria-label={`Add value to ${props.descriptor.label}`}
+          spellCheck={false}
+        />
+      </div>
+      <span className="text-[10px] leading-snug text-muted-foreground">
+        Press Space, comma, or Enter to add. Click a value to make it the default.
+      </span>
+    </div>
+  );
+}
+
 export function replaceCustomModelCapabilityDescriptor(
   configured: ReadonlyArray<ProviderOptionDescriptor>,
   descriptor: ProviderOptionDescriptor | undefined,
@@ -159,6 +298,7 @@ export function CustomModelCapabilitiesEditor(props: {
   readonly model: ServerProviderModel;
   readonly value: ModelCapabilities | undefined;
   readonly onChange: (value: ModelCapabilities | undefined) => void;
+  readonly onSave: () => void;
 }) {
   const configuredDescriptors = getConfiguredCustomModelOptionDescriptors(
     props.value,
@@ -211,7 +351,7 @@ export function CustomModelCapabilitiesEditor(props: {
           <div key={descriptor.id} className="rounded-md border border-border/70 p-2.5">
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] font-medium text-muted-foreground">
-                {descriptor.type === "select" ? "Select" : "On / off"}
+                {descriptor.type === "select" ? "Select" : "ON / OFF"}
               </span>
               <Button
                 size="icon-micro"
@@ -246,164 +386,11 @@ export function CustomModelCapabilitiesEditor(props: {
             </div>
 
             {descriptor.type === "select" ? (
-              <div className="mt-2 grid gap-2">
-                <div className="grid gap-1 text-[11px] text-muted-foreground">
-                  <span>Values</span>
-                  <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.25rem] gap-1.5 px-0.5 text-[10px]">
-                    <span>ID</span>
-                    <span>Label</span>
-                  </div>
-                  {descriptor.options.map((option, index) => (
-                    <div
-                      key={option.id}
-                      className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.25rem] items-center gap-1.5"
-                    >
-                      <DraftInput
-                        size="compact"
-                        value={option.id}
-                        onCommit={(value) => {
-                          const id = value.trim();
-                          if (
-                            !id ||
-                            descriptor.options.some(
-                              (candidate, candidateIndex) =>
-                                candidateIndex !== index && candidate.id === id,
-                            )
-                          ) {
-                            return;
-                          }
-                          replaceDescriptor(
-                            {
-                              ...descriptor,
-                              options: descriptor.options.map((candidate, candidateIndex) =>
-                                candidateIndex === index ? { ...candidate, id } : candidate,
-                              ),
-                              ...(descriptor.currentValue === option.id
-                                ? { currentValue: id }
-                                : {}),
-                              ...(descriptor.promptInjectedValues
-                                ? {
-                                    promptInjectedValues: descriptor.promptInjectedValues.map(
-                                      (value) => (value === option.id ? id : value),
-                                    ),
-                                  }
-                                : {}),
-                            },
-                            descriptor.id,
-                          );
-                        }}
-                        aria-label={`Value ${index + 1} for ${descriptor.label}`}
-                        spellCheck={false}
-                      />
-                      <DraftInput
-                        size="compact"
-                        value={option.label}
-                        onCommit={(value) => {
-                          const label = value.trim();
-                          if (!label) return;
-                          replaceDescriptor(
-                            {
-                              ...descriptor,
-                              options: descriptor.options.map((candidate, candidateIndex) =>
-                                candidateIndex === index ? { ...candidate, label } : candidate,
-                              ),
-                            },
-                            descriptor.id,
-                          );
-                        }}
-                        aria-label={`Value label ${index + 1} for ${descriptor.label}`}
-                      />
-                      <Button
-                        size="icon-micro"
-                        variant="ghost-muted"
-                        disabled={descriptor.options.length === 1}
-                        onClick={() =>
-                          replaceDescriptor(
-                            makeSelectCustomModelCapabilityDescriptor(
-                              descriptor,
-                              descriptor.options
-                                .filter((_, candidateIndex) => candidateIndex !== index)
-                                .map((candidate) => candidate.id),
-                              descriptor.currentValue,
-                            ),
-                            descriptor.id,
-                          )
-                        }
-                        aria-label={`Remove ${option.id} from ${descriptor.label}`}
-                      >
-                        <XIcon />
-                      </Button>
-                    </div>
-                  ))}
-                  <Button
-                    size="xs"
-                    variant="ghost-muted"
-                    className="w-fit"
-                    onClick={() => {
-                      const ids = new Set(descriptor.options.map((option) => option.id));
-                      let suffix = 1;
-                      while (ids.has(suffix === 1 ? "value" : `value${suffix}`)) suffix += 1;
-                      const id = suffix === 1 ? "value" : `value${suffix}`;
-                      const isFirst = descriptor.options.length === 0;
-                      replaceDescriptor(
-                        {
-                          ...descriptor,
-                          options: [
-                            ...descriptor.options,
-                            {
-                              id,
-                              label: capabilityOptionLabel(id),
-                              ...(isFirst ? { isDefault: true } : {}),
-                            },
-                          ],
-                          ...(isFirst ? { currentValue: id } : {}),
-                        },
-                        descriptor.id,
-                      );
-                    }}
-                    aria-label={`Add value to ${descriptor.label}`}
-                  >
-                    <PlusIcon />
-                    Add value
-                  </Button>
-                </div>
-                <label className="grid gap-1 text-[11px] text-muted-foreground">
-                  Default
-                  <Select
-                    value={
-                      resolveSelectCustomModelCapabilityDefault(
-                        descriptor,
-                        descriptor.options.map((option) => option.id),
-                        descriptor.currentValue,
-                      ) ?? ""
-                    }
-                    onValueChange={(value) =>
-                      replaceDescriptor(
-                        makeSelectCustomModelCapabilityDescriptor(
-                          descriptor,
-                          descriptor.options.map((option) => option.id),
-                          value ?? undefined,
-                        ),
-                        descriptor.id,
-                      )
-                    }
-                  >
-                    <SelectTrigger
-                      size="compact"
-                      className="w-full min-w-0"
-                      aria-label={`Default ${descriptor.label}`}
-                    >
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectPopup alignItemWithTrigger={false}>
-                      {descriptor.options.map((option) => (
-                        <SelectItem key={option.id} value={option.id}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
-                </label>
+              <div className="mt-2">
+                <SelectCustomModelCapabilityValues
+                  descriptor={descriptor}
+                  onChange={(next) => replaceDescriptor(next, descriptor.id)}
+                />
               </div>
             ) : (
               <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
@@ -424,27 +411,85 @@ export function CustomModelCapabilitiesEditor(props: {
         );
       })}
 
-      <div className="flex flex-wrap gap-1.5">
-        <Button
-          size="xs"
-          variant="outline"
-          onClick={() => addDescriptor("select")}
-          aria-label={`Add select control for ${props.model.name}`}
-        >
-          <PlusIcon />
-          Add select
-        </Button>
-        <Button
-          size="xs"
-          variant="outline"
-          onClick={() => addDescriptor("boolean")}
-          aria-label={`Add boolean control for ${props.model.name}`}
-        >
-          <PlusIcon />
-          Add on / off
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex flex-wrap gap-1.5">
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => addDescriptor("select")}
+            aria-label={`Add select control for ${props.model.name}`}
+          >
+            <PlusIcon />
+            Add select
+          </Button>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => addDescriptor("boolean")}
+            aria-label={`Add boolean control for ${props.model.name}`}
+          >
+            <PlusIcon />
+            Add on / off
+          </Button>
+        </div>
+        <Button size="xs" onClick={props.onSave}>
+          Save
         </Button>
       </div>
     </div>
+  );
+}
+
+function CustomModelCapabilitiesPopover(props: {
+  readonly model: ServerProviderModel;
+  readonly value: ModelCapabilities | undefined;
+  readonly onSave: (capabilities: ModelCapabilities | undefined) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState(props.value);
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) setDraft(props.value);
+        setOpen(nextOpen);
+      }}
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <Button
+                  size="icon-micro"
+                  variant="ghost-muted"
+                  aria-label={`Configure capabilities for ${props.model.slug}`}
+                />
+              }
+            />
+          }
+        >
+          <Settings2Icon className="size-3" />
+        </TooltipTrigger>
+        <TooltipPopup side="top">Configure model controls</TooltipPopup>
+      </Tooltip>
+      <PopoverPopup
+        side="left"
+        align="start"
+        className="w-[min(24rem,calc(100vw-1.5rem))] [--popup-width:min(24rem,calc(100vw-1.5rem))]"
+      >
+        <CustomModelCapabilitiesEditor
+          model={props.model}
+          value={draft}
+          onChange={setDraft}
+          onSave={() => {
+            props.onSave(draft);
+            setOpen(false);
+          }}
+        />
+      </PopoverPopup>
+    </Popover>
   );
 }
 
@@ -754,40 +799,13 @@ export function ProviderModelsSection({
                   </Tooltip>
                 ) : null}
                 {model.isCustom ? (
-                  <Popover>
-                    <Tooltip>
-                      <TooltipTrigger
-                        render={
-                          <PopoverTrigger
-                            render={
-                              <Button
-                                size="icon-micro"
-                                variant="ghost-muted"
-                                aria-label={`Configure capabilities for ${model.slug}`}
-                              />
-                            }
-                          />
-                        }
-                      >
-                        <Settings2Icon className="size-3" />
-                      </TooltipTrigger>
-                      <TooltipPopup side="top">Configure model controls</TooltipPopup>
-                    </Tooltip>
-                    <PopoverPopup
-                      side="left"
-                      align="start"
-                      className="w-[min(24rem,calc(100vw-1.5rem))] [--popup-width:min(24rem,calc(100vw-1.5rem))]"
-                    >
-                      <CustomModelCapabilitiesEditor
-                        model={model}
-                        value={getDeclaredCustomModelCapabilities(
-                          customModelCapabilities,
-                          model.slug,
-                        )}
-                        onChange={(value) => onCustomModelCapabilitiesChange(model.slug, value)}
-                      />
-                    </PopoverPopup>
-                  </Popover>
+                  <CustomModelCapabilitiesPopover
+                    model={model}
+                    value={getDeclaredCustomModelCapabilities(customModelCapabilities, model.slug)}
+                    onSave={(capabilities) =>
+                      onCustomModelCapabilitiesChange(model.slug, capabilities)
+                    }
+                  />
                 ) : null}
                 {model.isCustom ? (
                   <Tooltip>
