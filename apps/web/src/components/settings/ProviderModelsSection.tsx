@@ -239,27 +239,127 @@ export function CustomModelCapabilitiesEditor(props: {
             </div>
 
             {descriptor.type === "select" ? (
-              <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem]">
-                <label className="grid gap-1 text-[11px] text-muted-foreground">
-                  Values
-                  <DraftInput
-                    size="compact"
-                    value={descriptor.options.map((option) => option.id).join(", ")}
-                    onCommit={(value) => {
-                      const supportedValues = value.split(",").map((entry) => entry.trim());
+              <div className="mt-2 grid gap-2">
+                <div className="grid gap-1 text-[11px] text-muted-foreground">
+                  <span>Values</span>
+                  <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.25rem] gap-1.5 px-0.5 text-[10px]">
+                    <span>ID</span>
+                    <span>Label</span>
+                  </div>
+                  {descriptor.options.map((option, index) => (
+                    <div
+                      key={option.id}
+                      className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_1.25rem] items-center gap-1.5"
+                    >
+                      <DraftInput
+                        size="compact"
+                        value={option.id}
+                        onCommit={(value) => {
+                          const id = value.trim();
+                          if (
+                            !id ||
+                            descriptor.options.some(
+                              (candidate, candidateIndex) =>
+                                candidateIndex !== index && candidate.id === id,
+                            )
+                          ) {
+                            return;
+                          }
+                          replaceDescriptor(
+                            {
+                              ...descriptor,
+                              options: descriptor.options.map((candidate, candidateIndex) =>
+                                candidateIndex === index ? { ...candidate, id } : candidate,
+                              ),
+                              ...(descriptor.currentValue === option.id
+                                ? { currentValue: id }
+                                : {}),
+                              ...(descriptor.promptInjectedValues
+                                ? {
+                                    promptInjectedValues: descriptor.promptInjectedValues.map(
+                                      (value) => (value === option.id ? id : value),
+                                    ),
+                                  }
+                                : {}),
+                            },
+                            descriptor.id,
+                          );
+                        }}
+                        aria-label={`Value ${index + 1} for ${descriptor.label}`}
+                        spellCheck={false}
+                      />
+                      <DraftInput
+                        size="compact"
+                        value={option.label}
+                        onCommit={(value) => {
+                          const label = value.trim();
+                          if (!label) return;
+                          replaceDescriptor(
+                            {
+                              ...descriptor,
+                              options: descriptor.options.map((candidate, candidateIndex) =>
+                                candidateIndex === index ? { ...candidate, label } : candidate,
+                              ),
+                            },
+                            descriptor.id,
+                          );
+                        }}
+                        aria-label={`Value label ${index + 1} for ${descriptor.label}`}
+                      />
+                      <Button
+                        size="icon-micro"
+                        variant="ghost-muted"
+                        disabled={descriptor.options.length === 1}
+                        onClick={() =>
+                          replaceDescriptor(
+                            makeSelectCustomModelCapabilityDescriptor(
+                              descriptor,
+                              descriptor.options
+                                .filter((_, candidateIndex) => candidateIndex !== index)
+                                .map((candidate) => candidate.id),
+                              descriptor.currentValue,
+                            ),
+                            descriptor.id,
+                          )
+                        }
+                        aria-label={`Remove ${option.id} from ${descriptor.label}`}
+                      >
+                        <XIcon />
+                      </Button>
+                    </div>
+                  ))}
+                  <Button
+                    size="xs"
+                    variant="ghost-muted"
+                    className="w-fit"
+                    onClick={() => {
+                      const ids = new Set(descriptor.options.map((option) => option.id));
+                      let suffix = 1;
+                      while (ids.has(suffix === 1 ? "value" : `value${suffix}`)) suffix += 1;
+                      const id = suffix === 1 ? "value" : `value${suffix}`;
+                      const isFirst = descriptor.options.length === 0;
                       replaceDescriptor(
-                        makeSelectCustomModelCapabilityDescriptor(
-                          descriptor,
-                          supportedValues,
-                          descriptor.currentValue,
-                        ),
+                        {
+                          ...descriptor,
+                          options: [
+                            ...descriptor.options,
+                            {
+                              id,
+                              label: capabilityOptionLabel(id),
+                              ...(isFirst ? { isDefault: true } : {}),
+                            },
+                          ],
+                          ...(isFirst ? { currentValue: id } : {}),
+                        },
                         descriptor.id,
                       );
                     }}
-                    aria-label={`Values for ${descriptor.label}`}
-                    spellCheck={false}
-                  />
-                </label>
+                    aria-label={`Add value to ${descriptor.label}`}
+                  >
+                    <PlusIcon />
+                    Add value
+                  </Button>
+                </div>
                 <label className="grid gap-1 text-[11px] text-muted-foreground">
                   Default
                   <Select

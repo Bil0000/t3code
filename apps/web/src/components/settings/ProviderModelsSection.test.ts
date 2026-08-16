@@ -55,6 +55,37 @@ describe("custom model capability configuration", () => {
     expect(markup).not.toContain("Provider has not reported configurable model controls");
   });
 
+  it("renders each select value independently so commas stay inside IDs", () => {
+    const model: ServerProviderModel = {
+      slug: "vendor/model",
+      name: "vendor/model",
+      isCustom: true,
+      capabilities: { optionDescriptors: [] },
+    };
+    const markup = renderToStaticMarkup(
+      createElement(CustomModelCapabilitiesEditor, {
+        model,
+        value: {
+          optionDescriptors: [
+            {
+              id: "quality",
+              label: "Quality",
+              type: "select",
+              options: [{ id: "quality,high", label: "Quality high", isDefault: true }],
+              currentValue: "quality,high",
+            },
+          ],
+        },
+        onChange: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain('aria-label="Value 1 for Quality"');
+    expect(markup).toContain('aria-label="Value label 1 for Quality"');
+    expect(markup).toContain('value="quality,high"');
+    expect(markup).toContain('value="Quality high"');
+  });
+
   it("shows model details for arbitrary descriptors", () => {
     const model: ServerProviderModel = {
       slug: "vendor/model",
