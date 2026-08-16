@@ -3,7 +3,7 @@ import { assert, it } from "@effect/vitest";
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "../sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
-import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import * as GitLabCli from "../sourceControl/GitLabCli.ts";
 import { azureDevOpsProviderFailure } from "./AzureDevOpsPullRequestProvider.ts";
 import { bitbucketProviderFailure } from "./BitbucketPullRequestProvider.ts";
@@ -55,12 +55,13 @@ it("classifies rate limits from every pull-request provider", () => {
   );
 });
 
-it("keeps GitHub GraphQL's exact reset time", () => {
+it("keeps GitHub's exact retry time", () => {
   assert.deepStrictEqual(
     gitHubProviderFailure(
-      new GitHubGraphQlBudget.GitHubGraphQlBudgetPausedError({
+      new SourceControlRateLimit.SourceControlRateLimitPausedError({
+        provider: "github",
         host: "github.com",
-        resetAt: "2026-08-15T14:00:00.000Z",
+        retryAt: 1_786_802_400_000,
       }),
     ),
     { reason: "rate-limited", retryAt: 1_786_802_400_000 },

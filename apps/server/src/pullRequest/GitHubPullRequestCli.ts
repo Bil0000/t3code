@@ -24,6 +24,7 @@ import {
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import {
   ACTOR_AVATARS_GRAPHQL_QUERY,
   ADD_REACTION_GRAPHQL_MUTATION,
@@ -248,7 +249,7 @@ export type GitHubPullRequestCliError =
   | GitHubDiffFileContentsUnavailableError
   | GitHubRepositorySelectorError
   | GitHubSubjectScopeError
-  | GitHubGraphQlBudget.GitHubGraphQlBudgetPausedError
+  | SourceControlRateLimit.SourceControlRateLimitPausedError
   | GitHubViewerLoginUnavailableError;
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */

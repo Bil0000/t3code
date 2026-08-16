@@ -2395,10 +2395,10 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       const error = yield* Effect.flip(cli.getPullRequestBaseComparison(input));
 
-      assert.strictEqual(error._tag, "GitHubGraphQlBudgetPausedError");
-      if (error._tag !== "GitHubGraphQlBudgetPausedError") return;
+      assert.strictEqual(error._tag, "SourceControlRateLimitPausedError");
+      if (error._tag !== "SourceControlRateLimitPausedError") return;
       assert.strictEqual(error.host, "github.com");
-      assert.strictEqual(error.resetAt, "2099-08-13T14:00:00Z");
+      assert.strictEqual(error.retryAt, Date.parse("2099-08-13T14:00:00Z"));
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
       yield* TestClock.setTime(Date.parse("2100-01-01T00:00:00Z"));
     }),

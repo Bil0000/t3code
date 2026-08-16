@@ -33,7 +33,7 @@ describe("GitHub GraphQL budget", () => {
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
 
-  it.effect("protects the last ten percent until reset", () =>
+  it.effect("protects the last ten percent with the shared provider cooldown error", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(BEFORE_RESET);
       const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
@@ -41,12 +41,13 @@ describe("GitHub GraphQL budget", () => {
 
       const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
       expect(error).toMatchObject({
-        _tag: "GitHubGraphQlBudgetPausedError",
+        _tag: "SourceControlRateLimitPausedError",
+        provider: "github",
         host: "github.com",
-        resetAt: RESET_AT,
+        retryAt: Date.parse(RESET_AT),
       });
       expect(error.message).toBe(
-        `GitHub GraphQL reads for github.com are paused until ${RESET_AT}.`,
+        "github requests to github.com are paused until the rate limit resets.",
       );
 
       yield* TestClock.setTime(AFTER_RESET);
@@ -63,7 +64,7 @@ describe("GitHub GraphQL budget", () => {
       yield* budget.observe("github.com", rateLimit(0));
 
       const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
-      expect(error._tag).toBe("GitHubGraphQlBudgetPausedError");
+      expect(error._tag).toBe("SourceControlRateLimitPausedError");
       expect(yield* budget.query("github.example.com", "query { viewer { login } }")).toContain(
         "rateLimit",
       );
@@ -79,8 +80,8 @@ describe("GitHub GraphQL budget", () => {
 
       const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
       expect(error).toMatchObject({
-        _tag: "GitHubGraphQlBudgetPausedError",
-        resetAt: RESET_AT,
+        _tag: "SourceControlRateLimitPausedError",
+        retryAt: Date.parse(RESET_AT),
       });
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
@@ -94,8 +95,8 @@ describe("GitHub GraphQL budget", () => {
 
       const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
       expect(error).toMatchObject({
-        _tag: "GitHubGraphQlBudgetPausedError",
-        resetAt: NEXT_RESET_AT,
+        _tag: "SourceControlRateLimitPausedError",
+        retryAt: Date.parse(NEXT_RESET_AT),
       });
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
@@ -109,8 +110,8 @@ describe("GitHub GraphQL budget", () => {
 
       const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
       expect(error).toMatchObject({
-        _tag: "GitHubGraphQlBudgetPausedError",
-        resetAt: NEXT_RESET_AT,
+        _tag: "SourceControlRateLimitPausedError",
+        retryAt: Date.parse(NEXT_RESET_AT),
       });
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
@@ -153,8 +154,8 @@ describe("GitHub GraphQL budget", () => {
       const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
 
       expect(error).toMatchObject({
-        _tag: "GitHubGraphQlBudgetPausedError",
-        resetAt: RESET_AT,
+        _tag: "SourceControlRateLimitPausedError",
+        retryAt: Date.parse(RESET_AT),
       });
     }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );

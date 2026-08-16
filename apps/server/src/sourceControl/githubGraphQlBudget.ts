@@ -3,7 +3,9 @@ import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Ref from "effect/Ref";
-import * as Schema from "effect/Schema";
+import * as Predicate from "effect/Predicate";
+
+import * as SourceControlRateLimit from "./SourceControlRateLimit.ts";
 
 const GRAPHQL_RESERVE_RATIO = 0.1;
 const RATE_LIMIT_SELECTION = "rateLimit { cost limit remaining resetAt }";
@@ -12,24 +14,7 @@ interface GraphQlBudgetSnapshot {
   readonly cost: number;
   readonly limit: number;
   readonly remaining: number;
-  readonly resetAt: string;
   readonly resetAtMs: number;
-}
-
-export class GitHubGraphQlBudgetPausedError extends Schema.TaggedErrorClass<GitHubGraphQlBudgetPausedError>()(
-  "GitHubGraphQlBudgetPausedError",
-  {
-    host: Schema.String,
-    resetAt: Schema.String,
-  },
-) {
-  get detail(): string {
-    return `GraphQL reads for ${this.host} are paused until ${this.resetAt}.`;
-  }
-
-  override get message(): string {
-    return `GitHub ${this.detail}`;
-  }
 }
 
 export class GitHubGraphQlBudget extends Context.Service<
@@ -39,7 +24,7 @@ export class GitHubGraphQlBudget extends Context.Service<
       host: string,
       document: string,
       options?: { readonly allowReserve: boolean },
-    ) => Effect.Effect<string, GitHubGraphQlBudgetPausedError>;
+    ) => Effect.Effect<string, SourceControlRateLimit.SourceControlRateLimitPausedError>;
     readonly observe: (host: string, raw: string) => Effect.Effect<void>;
   }
 >()("t3/sourceControl/githubGraphQlBudget") {}
@@ -48,14 +33,14 @@ function hostKey(host: string): string {
   return host.trim().toLowerCase();
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function snapshotFrom(raw: string): GraphQlBudgetSnapshot | null {
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed) || !isRecord(parsed.data) || !isRecord(parsed.data.rateLimit)) {
+    if (
+      !Predicate.isObject(parsed) ||
+      !Predicate.isObject(parsed.data) ||
+      !Predicate.isObject(parsed.data.rateLimit)
+    ) {
       return null;
     }
     const { cost, limit, remaining, resetAt } = parsed.data.rateLimit;
@@ -74,7 +59,7 @@ function snapshotFrom(raw: string): GraphQlBudgetSnapshot | null {
       return null;
     }
     const resetAtMs = Date.parse(resetAt);
-    return Number.isFinite(resetAtMs) ? { cost, limit, remaining, resetAt, resetAtMs } : null;
+    return Number.isFinite(resetAtMs) ? { cost, limit, remaining, resetAtMs } : null;
   } catch {
     return null;
   }
@@ -99,7 +84,7 @@ export const make = Effect.gen(function* () {
     function* (host, document, options) {
       if (!isReadOperation(document)) return document;
       const now = yield* Clock.currentTimeMillis;
-      const resetAt = yield* Ref.modify(snapshots, (current) => {
+      const retryAt = yield* Ref.modify(snapshots, (current) => {
         const key = hostKey(host);
         const snapshot = current.get(key);
         if (snapshot === undefined) return [null, current] as const;
@@ -110,14 +95,18 @@ export const make = Effect.gen(function* () {
         }
         const remaining = Math.max(0, snapshot.remaining - Math.max(1, snapshot.cost));
         if (options?.allowReserve !== true && remaining < snapshot.limit * GRAPHQL_RESERVE_RATIO) {
-          return [snapshot.resetAt, current] as const;
+          return [snapshot.resetAtMs, current] as const;
         }
         const next = new Map(current);
         next.set(key, { ...snapshot, remaining });
         return [null, next] as const;
       });
-      if (resetAt !== null) {
-        return yield* new GitHubGraphQlBudgetPausedError({ host, resetAt });
+      if (retryAt !== null) {
+        return yield* new SourceControlRateLimit.SourceControlRateLimitPausedError({
+          provider: "github",
+          host: hostKey(host),
+          retryAt,
+        });
       }
       return withRateLimit(document);
     },

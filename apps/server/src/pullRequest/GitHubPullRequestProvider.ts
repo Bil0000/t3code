@@ -1,6 +1,4 @@
 import * as Effect from "effect/Effect";
-import * as DateTime from "effect/DateTime";
-import * as Option from "effect/Option";
 import type {
   PullRequestActor,
   PullRequestCapabilities,
@@ -91,12 +89,8 @@ export function gitHubProviderFailure(
   if (error._tag === "GitHubCliUnavailableError") return { reason: "missing-tool" };
   if (error._tag === "GitHubCliAuthenticationError") return { reason: "unauthenticated" };
   if (error._tag === "GitHubCliRateLimitError") return { reason: "rate-limited" };
-  if (error._tag === "GitHubGraphQlBudgetPausedError") {
-    const retryAt = Option.map(DateTime.make(error.resetAt), DateTime.toEpochMillis);
-    return {
-      reason: "rate-limited",
-      ...(Option.isSome(retryAt) ? { retryAt: retryAt.value } : {}),
-    };
+  if (error._tag === "SourceControlRateLimitPausedError") {
+    return { reason: "rate-limited", retryAt: error.retryAt };
   }
   return { reason: "failed" };
 }
