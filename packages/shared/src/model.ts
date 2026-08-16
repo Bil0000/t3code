@@ -28,7 +28,7 @@ const CUSTOM_MODEL_OPTION_TYPES_BY_PROVIDER: Readonly<
     contextWindow: "select",
     thinking: "boolean",
   },
-  opencode: { variant: "select" },
+  opencode: { variant: "select", agent: "select" },
   grok: {},
 };
 

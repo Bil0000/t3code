@@ -198,6 +198,9 @@ describe("custom model option support", () => {
       ),
     ).toBe(true);
     expect(
+      isCustomModelOptionDescriptorSupported(ProviderDriverKind.make("opencode"), select("agent")),
+    ).toBe(true);
+    expect(
       isCustomModelOptionDescriptorSupported(ProviderDriverKind.make("grok"), select("effort")),
     ).toBe(false);
     expect(

@@ -1,18 +1,21 @@
 import { describe, expect, it } from "vite-plus/test";
 import {
-  ProviderDriverKind,
+  ProviderInstanceId,
   type ModelCapabilities,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  ProviderModelsSection,
   getCustomModelCapabilityTemplates,
   getConfiguredCustomModelOptionDescriptors,
   makeSelectCustomModelCapabilityDescriptor,
   replaceCustomModelCapabilityDescriptor,
 } from "./ProviderModelsSection";
 describe("custom model capability configuration", () => {
-  it("merges provider-supported controls and configured custom values", () => {
+  it("merges every reported descriptor and configured custom value", () => {
     const configured: ModelCapabilities = {
       optionDescriptors: [
         {
@@ -55,9 +58,7 @@ describe("custom model capability configuration", () => {
       },
     ];
 
-    expect(
-      getCustomModelCapabilityTemplates(models, configured, ProviderDriverKind.make("claudeAgent")),
-    ).toEqual([
+    expect(getCustomModelCapabilityTemplates(models, configured)).toEqual([
       {
         id: "effort",
         label: "Reasoning",
@@ -74,28 +75,65 @@ describe("custom model capability configuration", () => {
         label: "Fast Mode",
         type: "boolean",
       },
+      {
+        id: "toolMode",
+        label: "Tool Mode",
+        type: "boolean",
+      },
     ]);
   });
 
-  it("shows Cursor thinking but hides controls unsupported by the selected harness", () => {
+  it("supports arbitrary select and boolean descriptor IDs", () => {
     const configured: ModelCapabilities = {
       optionDescriptors: [
-        { id: "thinking", label: "Thinking", type: "boolean" },
+        { id: "streaming", label: "Streaming", type: "boolean" },
         {
-          id: "effort",
-          label: "Reasoning",
+          id: "temperature",
+          label: "Temperature",
           type: "select",
-          options: [{ id: "high", label: "High" }],
+          options: [{ id: "balanced", label: "Balanced" }],
         },
       ],
     };
 
-    expect(
-      getCustomModelCapabilityTemplates([], configured, ProviderDriverKind.make("cursor")),
-    ).toEqual([{ id: "thinking", label: "Thinking", type: "boolean" }]);
-    expect(
-      getCustomModelCapabilityTemplates([], configured, ProviderDriverKind.make("grok")),
-    ).toEqual([]);
+    expect(getCustomModelCapabilityTemplates([], configured)).toEqual(configured.optionDescriptors);
+  });
+
+  it("shows model details for arbitrary descriptors", () => {
+    const model: ServerProviderModel = {
+      slug: "vendor/model",
+      name: "vendor/model",
+      isCustom: true,
+      capabilities: {
+        optionDescriptors: [
+          {
+            id: "temperature",
+            label: "Temperature",
+            type: "select",
+            options: [{ id: "balanced", label: "Balanced" }],
+          },
+        ],
+      },
+    };
+    const markup = renderToStaticMarkup(
+      createElement(ProviderModelsSection, {
+        instanceId: ProviderInstanceId.make("test-provider"),
+        driverKind: null,
+        models: [model],
+        customModels: [model.slug],
+        customModelCapabilities: {},
+        onCustomModelCapabilitiesChange: () => undefined,
+        hiddenModels: [],
+        favoriteModels: [],
+        modelOrder: [],
+        onChange: () => undefined,
+        onHiddenModelsChange: () => undefined,
+        onFavoriteModelsChange: () => undefined,
+        onModelOrderChange: () => undefined,
+      }),
+    );
+
+    expect(markup).toContain('aria-label="Details for vendor/model"');
   });
 
   it("builds declared supported values with one explicit default", () => {

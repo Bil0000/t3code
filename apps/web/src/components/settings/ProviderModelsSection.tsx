@@ -22,7 +22,6 @@ import {
 } from "@t3tools/contracts";
 import {
   getDeclaredCustomModelCapabilities,
-  isCustomModelOptionDescriptorSupported,
   normalizeCustomModelSlug,
 } from "@t3tools/shared/model";
 
@@ -54,7 +53,6 @@ const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 export function getCustomModelCapabilityTemplates(
   models: ReadonlyArray<ServerProviderModel>,
   configured: ModelCapabilities | undefined,
-  driverKind: ProviderDriverKind | null,
 ): ReadonlyArray<ProviderOptionDescriptor> {
   const templates = new Map<string, ProviderOptionDescriptor>();
   const descriptors = [
@@ -63,7 +61,6 @@ export function getCustomModelCapabilityTemplates(
   ];
 
   for (const descriptor of descriptors) {
-    if (!driverKind || !isCustomModelOptionDescriptorSupported(driverKind, descriptor)) continue;
     const current = templates.get(descriptor.id);
     if (!current) {
       templates.set(descriptor.id, descriptor);
@@ -170,7 +167,7 @@ function CustomModelCapabilitiesEditor(props: {
     props.value,
     props.model.capabilities,
   );
-  const templates = getCustomModelCapabilityTemplates(props.models, props.value, props.driverKind);
+  const templates = getCustomModelCapabilityTemplates(props.models, props.value);
 
   const replaceDescriptor = (descriptor: ProviderOptionDescriptor | undefined, id: string) => {
     props.onChange(replaceCustomModelCapabilityDescriptor(configuredDescriptors, descriptor, id));
@@ -483,7 +480,6 @@ export function ProviderModelsSection({
       <div ref={listRef} className="mt-2 max-h-40 overflow-y-auto pb-1">
         {orderedModels.map((model, index) => {
           const caps = model.capabilities;
-          const capLabels: string[] = [];
           const isHidden = !model.isCustom && hiddenModelSet.has(model.slug);
           const isFavorite = favoriteModelSet.has(model.slug);
           const previousModel = orderedModels[index - 1];
@@ -493,24 +489,7 @@ export function ProviderModelsSection({
           const canMoveDown =
             nextModel !== undefined && favoriteModelSet.has(nextModel.slug) === isFavorite;
           const descriptors = caps?.optionDescriptors ?? [];
-          if (descriptors.some((descriptor) => descriptor.id === "fastMode")) {
-            capLabels.push("Fast mode");
-          }
-          if (descriptors.some((descriptor) => descriptor.id === "thinking")) {
-            capLabels.push("Thinking");
-          }
-          if (
-            descriptors.some(
-              (descriptor) =>
-                descriptor.type === "select" &&
-                (descriptor.id === "reasoningEffort" ||
-                  descriptor.id === "effort" ||
-                  descriptor.id === "reasoning" ||
-                  descriptor.id === "variant"),
-            )
-          ) {
-            capLabels.push("Reasoning");
-          }
+          const capLabels = [...new Set(descriptors.map((descriptor) => descriptor.label))];
           const hasDetails = capLabels.length > 0 || model.name !== model.slug;
 
           return (
