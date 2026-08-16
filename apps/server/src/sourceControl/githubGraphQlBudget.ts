@@ -1,3 +1,8 @@
+import * as Clock from "effect/Clock";
+import * as Context from "effect/Context";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+
 const GRAPHQL_RESERVE_RATIO = 0.1;
 const RATE_LIMIT_SELECTION = "rateLimit { cost limit remaining resetAt }";
 
@@ -12,8 +17,8 @@ export type GitHubGraphQlBudgetDecision =
   | { readonly _tag: "Allowed"; readonly query: string }
   | { readonly _tag: "Paused"; readonly resetAt: string };
 
-export interface GitHubGraphQlBudget {
-  readonly query: (host: string, document: string, now?: number) => GitHubGraphQlBudgetDecision;
+export interface GitHubGraphQlBudgetState {
+  readonly query: (host: string, document: string, now: number) => GitHubGraphQlBudgetDecision;
   readonly observe: (host: string, raw: string) => void;
   readonly reset: () => void;
 }
@@ -78,12 +83,11 @@ function withRateLimit(document: string): string {
   return `${document.slice(0, end)}\n  ${RATE_LIMIT_SELECTION}\n${document.slice(end)}`;
 }
 
-export function createGitHubGraphQlBudget(): GitHubGraphQlBudget {
+export function createGitHubGraphQlBudget(): GitHubGraphQlBudgetState {
   const snapshots = new Map<string, GraphQlBudgetSnapshot>();
 
   return {
-    // @effect-diagnostics-next-line globalDate:off
-    query: (host, document, now = Date.now()) => {
+    query: (host, document, now) => {
       const key = hostKey(host);
       const snapshot = snapshots.get(key);
       if (snapshot !== undefined && snapshot.resetAtMs <= now) snapshots.delete(key);
@@ -106,8 +110,27 @@ export function createGitHubGraphQlBudget(): GitHubGraphQlBudget {
   };
 }
 
-/**
- * One budget per server process. Pull request and issue registries create separate provider
- * layers, but GitHub applies one quota to the account behind both.
- */
-export const githubGraphQlBudget = createGitHubGraphQlBudget();
+export class GitHubGraphQlBudget extends Context.Service<
+  GitHubGraphQlBudget,
+  {
+    readonly query: (host: string, document: string) => Effect.Effect<GitHubGraphQlBudgetDecision>;
+    readonly observe: (host: string, raw: string) => Effect.Effect<void>;
+    readonly reset: Effect.Effect<void>;
+  }
+>()("t3/sourceControl/githubGraphQlBudget") {}
+
+export const make = Effect.sync(() => {
+  const state = createGitHubGraphQlBudget();
+  const query = Effect.fn("GitHubGraphQlBudget.query")(function* (host: string, document: string) {
+    const now = yield* Clock.currentTimeMillis;
+    return state.query(host, document, now);
+  });
+
+  return GitHubGraphQlBudget.of({
+    query,
+    observe: (host, raw) => Effect.sync(() => state.observe(host, raw)),
+    reset: Effect.sync(state.reset),
+  });
+});
+
+export const layer = Layer.effect(GitHubGraphQlBudget, make);

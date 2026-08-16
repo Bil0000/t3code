@@ -22,7 +22,7 @@ import type {
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
-import { githubGraphQlBudget } from "../sourceControl/githubGraphQlBudget.ts";
+import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import {
   ADD_REACTION_GRAPHQL_MUTATION,
   REMOVE_REACTION_GRAPHQL_MUTATION,
@@ -586,6 +586,7 @@ function closeReasonArgs(reason: IssueCloseReason | undefined): ReadonlyArray<st
 
 export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
+  const graphQlBudget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
 
   // `gh` resolves a bare `owner/repo` against whichever host it defaults to, which is github.com.
   // Naming the host makes a GitHub Enterprise repository resolve to its own install rather than to
@@ -619,19 +620,17 @@ export const make = Effect.gen(function* () {
     readonly privateVariables?: Readonly<Record<string, string>>;
     readonly query: string;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
-  }): Effect.Effect<A, GitHubIssueCliError> => {
-    const decision = githubGraphQlBudget.query(input.host, input.query);
-    if (decision._tag === "Paused") {
-      return Effect.fail(
-        new GitHubCli.GitHubCliRateLimitError({
+  }): Effect.Effect<A, GitHubIssueCliError> =>
+    Effect.gen(function* () {
+      const decision = yield* graphQlBudget.query(input.host, input.query);
+      if (decision._tag === "Paused") {
+        return yield* new GitHubCli.GitHubCliRateLimitError({
           command: "gh",
           cwd: input.cwd,
           cause: new Error(`GraphQL reads paused until ${decision.resetAt}`),
-        }),
-      );
-    }
-    return github
-      .execute(
+        });
+      }
+      const result = yield* github.execute(
         input.privateVariables === undefined
           ? {
               cwd: input.cwd,
@@ -653,17 +652,11 @@ export const make = Effect.gen(function* () {
                 variables: input.privateVariables,
               }),
             },
-      )
-      .pipe(
-        Effect.flatMap((result) => {
-          githubGraphQlBudget.observe(input.host, result.stdout);
-          const decoded = input.decode(result.stdout.trim());
-          return Result.isSuccess(decoded)
-            ? Effect.succeed(decoded.success)
-            : Effect.fail(readError(input)(decoded.failure));
-        }),
       );
-  };
+      yield* graphQlBudget.observe(input.host, result.stdout);
+      const decoded = input.decode(result.stdout.trim());
+      return Result.isSuccess(decoded) ? decoded.success : yield* readError(input)(decoded.failure);
+    });
 
   const graphql = (input: {
     readonly cwd: string;

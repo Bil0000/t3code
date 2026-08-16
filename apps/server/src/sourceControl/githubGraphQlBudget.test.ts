@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as TestClock from "effect/testing/TestClock";
 
-import { createGitHubGraphQlBudget } from "./githubGraphQlBudget.ts";
+import { createGitHubGraphQlBudget, GitHubGraphQlBudget, layer } from "./githubGraphQlBudget.ts";
 
 const RESET_AT = "2026-08-13T14:00:00.000Z";
 const BEFORE_RESET = Date.parse("2026-08-13T13:30:00.000Z");
@@ -110,4 +112,23 @@ fragment RepositoryName on Repository {
 
     expect(decision).toEqual({ _tag: "Allowed", query: mutation });
   });
+
+  it.effect("uses the injected clock to release the reserve", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(500));
+
+      expect(yield* budget.query("github.com", "query { viewer { login } }")).toEqual({
+        _tag: "Paused",
+        resetAt: RESET_AT,
+      });
+
+      yield* TestClock.setTime(AFTER_RESET);
+
+      expect((yield* budget.query("github.com", "query { viewer { login } }"))._tag).toBe(
+        "Allowed",
+      );
+    }).pipe(Effect.provide(layer)),
+  );
 });

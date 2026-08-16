@@ -4,7 +4,7 @@ import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
-import { githubGraphQlBudget } from "../sourceControl/githubGraphQlBudget.ts";
+import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import { BASE_COMPARISON_GRAPHQL_QUERY } from "./gitHubPullRequestJson.ts";
 
@@ -17,6 +17,7 @@ const layer = it.layer(
         execute: mockedExecute,
       }),
     ),
+    Layer.provideMerge(GitHubGraphQlBudget.layer),
   ),
 );
 
@@ -171,7 +172,6 @@ function searchQueryOfCall(index: number): string | undefined {
 
 afterEach(() => {
   mockedExecute.mockReset();
-  githubGraphQlBudget.reset();
 });
 
 layer("GitHubPullRequestCli.layer", (it) => {
@@ -2329,6 +2329,8 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
   it.effect("stops GraphQL reads at the protected reserve until reset", () =>
     Effect.gen(function* () {
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.reset;
       mockedExecute.mockReturnValue(
         Effect.succeed(
           output(
@@ -2368,6 +2370,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       assert.strictEqual(error._tag, "GitHubCliRateLimitError");
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      yield* budget.reset;
     }),
   );
 

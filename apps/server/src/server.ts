@@ -42,6 +42,7 @@ import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
 import * as BitbucketApi from "./sourceControl/BitbucketApi.ts";
 import * as GitHubCli from "./sourceControl/GitHubCli.ts";
+import * as GitHubGraphQlBudget from "./sourceControl/githubGraphQlBudget.ts";
 import * as GitLabCli from "./sourceControl/GitLabCli.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { ProviderInstanceRegistryHydrationLive } from "./provider/Layers/ProviderInstanceRegistryHydration.ts";
@@ -474,6 +475,8 @@ export const makeRoutesLayer = Layer.mergeAll(
   // One server-lifetime instance, so every client shares its caches and a mutation one of them
   // makes is invalidated for all of them.
   Layer.provide(IssueServiceLive),
+  // GitHub applies one GraphQL quota to both features, so both registries share one budget.
+  Layer.provide(GitHubGraphQlBudget.layer),
   Layer.provide(PreviewAutomationBroker.layer),
   Layer.provide(ServerSelfUpdate.layer),
   Layer.provide(commandReadinessLayer),

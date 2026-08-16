@@ -24,7 +24,7 @@ import {
 } from "@t3tools/contracts";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
-import { githubGraphQlBudget } from "../sourceControl/githubGraphQlBudget.ts";
+import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import {
   ACTOR_AVATARS_GRAPHQL_QUERY,
   ADD_REACTION_GRAPHQL_MUTATION,
@@ -850,6 +850,7 @@ function actionArgs(
 
 export const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
+  const graphQlBudget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
 
   /**
    * The pull request's own node id, which is what a mutation against the pull request itself is
@@ -952,19 +953,17 @@ export const make = Effect.gen(function* () {
     readonly privateVariables?: Readonly<Record<string, string>>;
     readonly query: string;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
-  }): Effect.Effect<A, GitHubPullRequestCliError> => {
-    const decision = githubGraphQlBudget.query(input.host, input.query);
-    if (decision._tag === "Paused") {
-      return Effect.fail(
-        new GitHubCli.GitHubCliRateLimitError({
+  }): Effect.Effect<A, GitHubPullRequestCliError> =>
+    Effect.gen(function* () {
+      const decision = yield* graphQlBudget.query(input.host, input.query);
+      if (decision._tag === "Paused") {
+        return yield* new GitHubCli.GitHubCliRateLimitError({
           command: "gh",
           cwd: input.cwd,
           cause: new Error(`GraphQL reads paused until ${decision.resetAt}`),
-        }),
-      );
-    }
-    return github
-      .execute(
+        });
+      }
+      const result = yield* github.execute(
         input.privateVariables === undefined
           ? {
               cwd: input.cwd,
@@ -986,24 +985,18 @@ export const make = Effect.gen(function* () {
                 variables: input.privateVariables,
               }),
             },
-      )
-      .pipe(
-        Effect.flatMap((result) => {
-          githubGraphQlBudget.observe(input.host, result.stdout);
-          const decoded = input.decode(result.stdout.trim());
-          return Result.isSuccess(decoded)
-            ? Effect.succeed(decoded.success)
-            : Effect.fail(
-                new GitHubPullRequestReadError({
-                  command: "gh",
-                  cwd: input.cwd,
-                  operation: input.operation,
-                  cause: decoded.failure,
-                }),
-              );
-        }),
       );
-  };
+      yield* graphQlBudget.observe(input.host, result.stdout);
+      const decoded = input.decode(result.stdout.trim());
+      return Result.isSuccess(decoded)
+        ? decoded.success
+        : yield* new GitHubPullRequestReadError({
+            command: "gh",
+            cwd: input.cwd,
+            operation: input.operation,
+            cause: decoded.failure,
+          });
+    });
 
   /**
    * One page of the patch, read from the files API. GitHub refuses `pr diff` outright past 300

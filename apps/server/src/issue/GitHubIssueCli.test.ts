@@ -3,7 +3,7 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
-import { githubGraphQlBudget } from "../sourceControl/githubGraphQlBudget.ts";
+import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as GitHubIssueCli from "./GitHubIssueCli.ts";
 
@@ -16,6 +16,7 @@ const layer = it.layer(
         execute: mockedExecute,
       }),
     ),
+    Layer.provideMerge(GitHubGraphQlBudget.layer),
   ),
 );
 
@@ -215,7 +216,6 @@ const target = { ...repository, number: 7 } as const;
 
 afterEach(() => {
   mockedExecute.mockReset();
-  githubGraphQlBudget.reset();
 });
 
 layer("GitHubIssueCli.layer", (it) => {
@@ -941,6 +941,8 @@ layer("GitHubIssueCli.layer", (it) => {
 
   it.effect("stops issue GraphQL reads at the protected reserve until reset", () =>
     Effect.gen(function* () {
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.reset;
       const page = commentPage(["IC_1"], null, 1);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       const limited = JSON.parse(page.stdout) as { data: Record<string, unknown> };
@@ -961,6 +963,7 @@ layer("GitHubIssueCli.layer", (it) => {
 
       assert.strictEqual(error._tag, "GitHubCliRateLimitError");
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
+      yield* budget.reset;
     }),
   );
   it.effect("reads the conversation and the history in one request", () =>
