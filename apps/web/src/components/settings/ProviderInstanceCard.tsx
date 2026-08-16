@@ -126,16 +126,18 @@ export function reconcileCustomModelCapabilities(input: {
   readonly nextModels: ReadonlyArray<string>;
 }): Readonly<Record<string, ModelCapabilities>> {
   const currentModels = new Set(input.currentModels);
-  const nextCapabilities: Record<string, ModelCapabilities> = {};
+  const entries: Array<readonly [string, ModelCapabilities]> = [];
   for (const slug of input.nextModels) {
-    const capabilities = input.capabilities[slug];
+    const capabilities = Object.hasOwn(input.capabilities, slug)
+      ? input.capabilities[slug]
+      : undefined;
     if (capabilities) {
-      nextCapabilities[slug] = capabilities;
+      entries.push([slug, capabilities]);
     } else if (!currentModels.has(slug)) {
-      nextCapabilities[slug] = { optionDescriptors: [] };
+      entries.push([slug, { optionDescriptors: [] }]);
     }
   }
-  return nextCapabilities;
+  return Object.fromEntries(entries);
 }
 
 export function deriveProviderModelsForDisplay(input: {
@@ -154,7 +156,10 @@ export function deriveProviderModelsForDisplay(input: {
     .filter((slug) => !serverModelSlugs.has(slug))
     .map((slug) => {
       const liveModel = liveCustomModelsBySlug.get(slug);
-      const capabilities = input.customModelCapabilities?.[slug];
+      const capabilities =
+        input.customModelCapabilities && Object.hasOwn(input.customModelCapabilities, slug)
+          ? input.customModelCapabilities[slug]
+          : undefined;
       if (liveModel) {
         return capabilities ? { ...liveModel, capabilities } : liveModel;
       }
@@ -544,12 +549,10 @@ export function ProviderInstanceCard({
     slug: string,
     capabilities: ModelCapabilities | undefined,
   ) => {
-    const nextCapabilities = { ...customModelCapabilities };
-    if (capabilities) {
-      nextCapabilities[slug] = capabilities;
-    } else {
-      delete nextCapabilities[slug];
-    }
+    const nextCapabilities = Object.fromEntries([
+      ...Object.entries(customModelCapabilities).filter(([key]) => key !== slug),
+      ...(capabilities ? ([[slug, capabilities]] as const) : []),
+    ]);
     const nextConfig = nextConfigBlobWithValue(instance.config, "customModels", [...customModels]);
     if (Object.keys(nextCapabilities).length > 0) {
       nextConfig.customModelCapabilities = nextCapabilities;

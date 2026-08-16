@@ -82,4 +82,27 @@ describe("deriveProviderModelsForDisplay", () => {
       new: { optionDescriptors: [] },
     });
   });
+
+  it("stores reserved model IDs as own capability keys", () => {
+    const capabilities = reconcileCustomModelCapabilities({
+      capabilities: {},
+      currentModels: [],
+      nextModels: ["__proto__", "constructor"],
+    });
+
+    expect(Object.hasOwn(capabilities, "__proto__")).toBe(true);
+    expect(capabilities["__proto__"]).toEqual({ optionDescriptors: [] });
+    expect(Object.hasOwn(capabilities, "constructor")).toBe(true);
+    expect(capabilities.constructor).toEqual({ optionDescriptors: [] });
+  });
+
+  it("does not read inherited properties as configured capabilities", () => {
+    const [model] = deriveProviderModelsForDisplay({
+      liveModels: [],
+      customModels: ["constructor"],
+      customModelCapabilities: {},
+    });
+
+    expect(model?.capabilities).toBeNull();
+  });
 });
