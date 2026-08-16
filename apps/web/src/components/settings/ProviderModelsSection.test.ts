@@ -89,6 +89,7 @@ describe("custom model capability configuration", () => {
     expect(markup).toContain('aria-pressed="true"');
     expect(markup).toContain("quality,high");
     expect(markup).toContain('placeholder="Add value…"');
+    expect(markup).toContain("focus-within:ring-[3px]");
   });
 
   it("adds one trimmed select value without changing existing labels", () => {

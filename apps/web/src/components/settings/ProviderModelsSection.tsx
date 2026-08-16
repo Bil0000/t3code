@@ -228,7 +228,7 @@ function SelectCustomModelCapabilityValues(props: {
   return (
     <div className="grid gap-1">
       <span className="text-[11px] text-muted-foreground">Values</span>
-      <div className="flex min-h-8 flex-wrap items-center gap-1 rounded-md border border-input bg-background p-1 shadow-xs/5 dark:bg-input/32">
+      <div className="flex min-h-8 flex-wrap items-center gap-1 rounded-md border border-input bg-background p-1 shadow-xs/5 ring-ring/24 transition-shadow focus-within:border-ring focus-within:ring-[3px] dark:bg-input/32">
         {props.descriptor.options.map((option) => (
           <SelectCustomModelCapabilityValueTag
             key={option.id}
