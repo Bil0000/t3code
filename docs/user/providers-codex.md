@@ -13,17 +13,16 @@ Common reasons:
 ## Custom Model Controls
 
 Add a custom model in **Settings → Providers → Codex → Models**. Use the settings button beside the
-model to declare supported controls, values, and defaults. The message composer only shows controls
-you enable. See [Custom models](./providers-custom-models.md) for the controls supported by every
-provider.
+model to add controls by exact option ID, then set their labels, values, and defaults. Codex's
+adapter recognizes `reasoningEffort` and `serviceTier`. The message composer shows every control you
+add. See [Custom models](./providers-custom-models.md) for adapter behavior.
 
 Codex reasoning choices are sent as `reasoningEffort`. Service-tier choices are sent as
 `serviceTier`; this is where Standard, Fast, priority, or other tiers reported by the Codex app
 server belong. A tier only works when the selected Codex endpoint supports it.
 
 T3 Code does not treat Claude fast mode as a Codex or OpenAI service tier. Each provider adapter uses
-its own native request option. The Codex adapter has no context-window request option today, so T3
-Code does not offer a Codex context-window template.
+its own native request option. The Codex adapter has no `contextWindow` request translation today.
 
 Existing custom models with no declared controls continue to work as before.
 

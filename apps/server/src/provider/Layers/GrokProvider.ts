@@ -1,5 +1,4 @@
 import {
-  ProviderDriverKind,
   type GrokSettings,
   type ModelCapabilities,
   type ServerProvider,
@@ -41,8 +40,6 @@ const GROK_PRESENTATION = {
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
-const GROK_DRIVER_KIND = ProviderDriverKind.make("grok");
-
 const VERSION_PROBE_TIMEOUT_MS = 4_000;
 const GROK_ACP_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 
@@ -99,7 +96,6 @@ function grokModelsFromSettings(
   builtInModels: ReadonlyArray<ServerProviderModel> = GROK_BUILT_IN_MODELS,
 ): ReadonlyArray<ServerProviderModel> {
   return providerModelsFromSettings(builtInModels, grokSettings.customModels, EMPTY_CAPABILITIES, {
-    provider: GROK_DRIVER_KIND,
     customModelCapabilities: grokSettings.customModelCapabilities,
   });
 }

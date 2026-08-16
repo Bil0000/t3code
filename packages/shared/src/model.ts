@@ -12,26 +12,6 @@ import {
 
 const DEFAULT_PROVIDER_DRIVER_KIND = ProviderDriverKind.make("codex");
 
-const CUSTOM_MODEL_OPTION_TYPES_BY_PROVIDER: Readonly<
-  Record<string, Readonly<Record<string, ProviderOptionDescriptor["type"]>>>
-> = {
-  codex: { reasoningEffort: "select", serviceTier: "select" },
-  claudeAgent: {
-    effort: "select",
-    fastMode: "boolean",
-    contextWindow: "select",
-    thinking: "boolean",
-  },
-  cursor: {
-    reasoning: "select",
-    fastMode: "boolean",
-    contextWindow: "select",
-    thinking: "boolean",
-  },
-  opencode: { variant: "select", agent: "select" },
-  grok: {},
-};
-
 export interface SelectableModelOption {
   slug: string;
   name: string;
@@ -43,27 +23,6 @@ export function createModelCapabilities(input: {
   return {
     optionDescriptors: input.optionDescriptors.map(cloneDescriptor),
   };
-}
-
-export function isCustomModelOptionDescriptorSupported(
-  provider: ProviderDriverKind,
-  descriptor: ProviderOptionDescriptor,
-): boolean {
-  return CUSTOM_MODEL_OPTION_TYPES_BY_PROVIDER[provider]?.[descriptor.id] === descriptor.type;
-}
-
-export function filterCustomModelCapabilities(
-  provider: ProviderDriverKind,
-  capabilities: ModelCapabilities,
-): ModelCapabilities {
-  return capabilities.optionDescriptors === undefined
-    ? capabilities
-    : {
-        ...capabilities,
-        optionDescriptors: capabilities.optionDescriptors.filter((descriptor) =>
-          isCustomModelOptionDescriptorSupported(provider, descriptor),
-        ),
-      };
 }
 
 export function getDeclaredCustomModelCapabilities(

@@ -35,7 +35,7 @@ describe("buildInitialGrokProviderSnapshot", () => {
     }),
   );
 
-  it.effect("keeps unsupported custom controls out of the Grok catalog", () =>
+  it.effect("keeps arbitrary custom controls in the Grok catalog", () =>
     Effect.gen(function* () {
       const snapshot = yield* buildInitialGrokProviderSnapshot(
         decodeGrokSettings({
@@ -56,7 +56,16 @@ describe("buildInitialGrokProviderSnapshot", () => {
       );
       const custom = snapshot.models.find((model) => model.slug === "vendor/preview");
 
-      expect(custom?.capabilities).toEqual({ optionDescriptors: [] });
+      expect(custom?.capabilities).toEqual({
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select",
+            options: [{ id: "high", label: "High" }],
+          },
+        ],
+      });
     }),
   );
 });

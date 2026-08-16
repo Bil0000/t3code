@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vite-plus/test";
-import {
-  ProviderDriverKind,
-  type ModelCapabilities,
-  type ServerProviderModel,
-} from "@t3tools/contracts";
+import type { ModelCapabilities, ServerProviderModel } from "@t3tools/contracts";
 
 import {
   deriveProviderModelsForDisplay,
@@ -37,7 +33,6 @@ describe("deriveProviderModelsForDisplay", () => {
       deriveProviderModelsForDisplay({
         liveModels,
         customModels: ["server-model", "kept-custom"],
-        driverKind: ProviderDriverKind.make("codex"),
       }).map((model) => model.slug),
     ).toEqual(["server-model", "kept-custom"]);
   });
@@ -64,7 +59,6 @@ describe("deriveProviderModelsForDisplay", () => {
       ],
       customModels: ["gateway/model"],
       customModelCapabilities: { "gateway/model": capabilities },
-      driverKind: ProviderDriverKind.make("claudeAgent"),
     } satisfies Parameters<typeof deriveProviderModelsForDisplay>[0] & {
       readonly customModelCapabilities: Readonly<Record<string, ModelCapabilities>>;
     };
@@ -72,26 +66,24 @@ describe("deriveProviderModelsForDisplay", () => {
     expect(deriveProviderModelsForDisplay(input)[0]?.capabilities).toEqual(capabilities);
   });
 
-  it("filters unsupported capabilities from optimistic custom rows", () => {
+  it("preserves arbitrary capabilities in optimistic custom rows", () => {
+    const capabilities: ModelCapabilities = {
+      optionDescriptors: [
+        {
+          id: "temperature",
+          label: "Temperature",
+          type: "select",
+          options: [{ id: "warm", label: "Warm" }],
+        },
+      ],
+    };
     const [model] = deriveProviderModelsForDisplay({
       liveModels: [],
       customModels: ["vendor/preview"],
-      customModelCapabilities: {
-        "vendor/preview": {
-          optionDescriptors: [
-            {
-              id: "effort",
-              label: "Reasoning",
-              type: "select",
-              options: [{ id: "high", label: "High" }],
-            },
-          ],
-        },
-      },
-      driverKind: ProviderDriverKind.make("grok"),
+      customModelCapabilities: { "vendor/preview": capabilities },
     });
 
-    expect(model?.capabilities).toEqual({ optionDescriptors: [] });
+    expect(model?.capabilities).toEqual(capabilities);
   });
 
   it("keeps legacy metadata absent and seeds newly added models with no controls", () => {
@@ -129,7 +121,6 @@ describe("deriveProviderModelsForDisplay", () => {
       liveModels: [],
       customModels: ["constructor"],
       customModelCapabilities: {},
-      driverKind: ProviderDriverKind.make("codex"),
     });
 
     expect(model?.capabilities).toBeNull();

@@ -8,95 +8,51 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 
 import {
+  CustomModelCapabilitiesEditor,
   ProviderModelsSection,
-  getCustomModelCapabilityTemplates,
+  createCustomModelCapabilityDescriptor,
   getConfiguredCustomModelOptionDescriptors,
   makeSelectCustomModelCapabilityDescriptor,
   replaceCustomModelCapabilityDescriptor,
 } from "./ProviderModelsSection";
 describe("custom model capability configuration", () => {
-  it("merges every reported descriptor and configured custom value", () => {
-    const configured: ModelCapabilities = {
-      optionDescriptors: [
-        {
-          id: "effort",
-          label: "Reasoning",
-          type: "select",
-          options: [{ id: "ultra", label: "Ultra", isDefault: true }],
-          promptInjectedValues: ["ultra"],
-        },
-      ],
-    };
-    const models: ReadonlyArray<ServerProviderModel> = [
-      {
-        slug: "built-in",
-        name: "Built In",
-        isCustom: false,
-        capabilities: {
-          optionDescriptors: [
-            {
-              id: "effort",
-              label: "Reasoning",
-              type: "select",
-              options: [
-                { id: "low", label: "Low" },
-                { id: "high", label: "High", isDefault: true },
-              ],
-            },
-            {
-              id: "fastMode",
-              label: "Fast Mode",
-              type: "boolean",
-            },
-            {
-              id: "toolMode",
-              label: "Tool Mode",
-              type: "boolean",
-            },
-          ],
-        },
-      },
-    ];
+  it("creates free-form select and boolean descriptors without provider templates", () => {
+    const select = createCustomModelCapabilityDescriptor([], "select");
+    const boolean = createCustomModelCapabilityDescriptor([select], "boolean");
 
-    expect(getCustomModelCapabilityTemplates(models, configured)).toEqual([
-      {
-        id: "effort",
-        label: "Reasoning",
-        type: "select",
-        options: [
-          { id: "low", label: "Low" },
-          { id: "high", label: "High", isDefault: true },
-          { id: "ultra", label: "Ultra", isDefault: true },
-        ],
-        promptInjectedValues: ["ultra"],
-      },
-      {
-        id: "fastMode",
-        label: "Fast Mode",
-        type: "boolean",
-      },
-      {
-        id: "toolMode",
-        label: "Tool Mode",
-        type: "boolean",
-      },
-    ]);
+    expect(select).toEqual({
+      id: "option",
+      label: "Option",
+      type: "select",
+      options: [{ id: "default", label: "Default", isDefault: true }],
+      currentValue: "default",
+    });
+    expect(boolean).toEqual({
+      id: "option2",
+      label: "Option 2",
+      type: "boolean",
+      currentValue: false,
+    });
   });
 
-  it("supports arbitrary select and boolean descriptor IDs", () => {
-    const configured: ModelCapabilities = {
-      optionDescriptors: [
-        { id: "streaming", label: "Streaming", type: "boolean" },
-        {
-          id: "temperature",
-          label: "Temperature",
-          type: "select",
-          options: [{ id: "balanced", label: "Balanced" }],
-        },
-      ],
+  it("offers free-form descriptor types when provider reports no templates", () => {
+    const model: ServerProviderModel = {
+      slug: "vendor/model",
+      name: "vendor/model",
+      isCustom: true,
+      capabilities: { optionDescriptors: [] },
     };
+    const markup = renderToStaticMarkup(
+      createElement(CustomModelCapabilitiesEditor, {
+        model,
+        value: { optionDescriptors: [] },
+        onChange: () => undefined,
+      }),
+    );
 
-    expect(getCustomModelCapabilityTemplates([], configured)).toEqual(configured.optionDescriptors);
+    expect(markup).toContain('aria-label="Add select control for vendor/model"');
+    expect(markup).toContain('aria-label="Add boolean control for vendor/model"');
+    expect(markup).not.toContain("Provider has not reported configurable model controls");
   });
 
   it("shows model details for arbitrary descriptors", () => {
@@ -161,7 +117,7 @@ describe("custom model capability configuration", () => {
       currentValue: "ultra",
     });
   });
-  it("keeps context values within the provider-supported options", () => {
+  it("accepts arbitrary values for every select descriptor", () => {
     const template = {
       id: "contextWindow",
       label: "Context Window",
@@ -183,14 +139,22 @@ describe("custom model capability configuration", () => {
       label: "Context Window",
       type: "select",
       options: [
-        { id: "200k", label: "200K", isDefault: true },
+        { id: "200k", label: "200K" },
+        { id: "unsupported", label: "Unsupported", isDefault: true },
         { id: "1m", label: "1M" },
       ],
-      currentValue: "200k",
+      currentValue: "unsupported",
     });
-    expect(makeSelectCustomModelCapabilityDescriptor(template, ["unsupported"], undefined)).toBe(
-      undefined,
+    expect(makeSelectCustomModelCapabilityDescriptor(template, ["unsupported"], undefined)).toEqual(
+      {
+        id: "contextWindow",
+        label: "Context Window",
+        type: "select",
+        options: [{ id: "unsupported", label: "Unsupported", isDefault: true }],
+        currentValue: "unsupported",
+      },
     );
+    expect(makeSelectCustomModelCapabilityDescriptor(template, [], undefined)).toBeUndefined();
   });
 
   it("preserves an explicit empty capability set when the last control is disabled", () => {

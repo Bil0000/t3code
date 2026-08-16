@@ -29,7 +29,6 @@ import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
 import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
 import { Button } from "../ui/button";
-import { Checkbox } from "../ui/checkbox";
 import { DraftInput } from "../ui/draft-input";
 import { Input } from "../ui/input";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -49,48 +48,30 @@ const CUSTOM_MODEL_PLACEHOLDER_BY_KIND: Partial<Record<ProviderDriverKind, strin
   [ProviderDriverKind.make("opencode")]: "openai/gpt-5",
 };
 
-const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
-export function getCustomModelCapabilityTemplates(
-  models: ReadonlyArray<ServerProviderModel>,
-  configured: ModelCapabilities | undefined,
-): ReadonlyArray<ProviderOptionDescriptor> {
-  const templates = new Map<string, ProviderOptionDescriptor>();
-  const descriptors = [
-    ...models.flatMap((model) => model.capabilities?.optionDescriptors ?? []),
-    ...(configured?.optionDescriptors ?? []),
-  ];
-
-  for (const descriptor of descriptors) {
-    const current = templates.get(descriptor.id);
-    if (!current) {
-      templates.set(descriptor.id, descriptor);
-      continue;
-    }
-    if (current.type !== "select" || descriptor.type !== "select") continue;
-
-    const optionIds = new Set(current.options.map((option) => option.id));
-    const promptInjectedValues = [
-      ...new Set([
-        ...(current.promptInjectedValues ?? []),
-        ...(descriptor.promptInjectedValues ?? []),
-      ]),
-    ];
-    templates.set(descriptor.id, {
-      ...current,
-      options: [
-        ...current.options,
-        ...descriptor.options.filter((option) => !optionIds.has(option.id)),
-      ],
-      ...(promptInjectedValues.length > 0 ? { promptInjectedValues } : {}),
-    });
-  }
-
-  return [...templates.values()];
-}
-
 function capabilityOptionLabel(id: string): string {
   const words = id.replaceAll(/[-_]+/g, " ").trim();
   return words.length > 0 ? words[0]!.toUpperCase() + words.slice(1) : id;
+}
+
+export function createCustomModelCapabilityDescriptor(
+  configured: ReadonlyArray<ProviderOptionDescriptor>,
+  type: ProviderOptionDescriptor["type"],
+): ProviderOptionDescriptor {
+  const ids = new Set(configured.map((descriptor) => descriptor.id));
+  let suffix = 1;
+  while (ids.has(suffix === 1 ? "option" : `option${suffix}`)) suffix += 1;
+  const id = suffix === 1 ? "option" : `option${suffix}`;
+  const label = suffix === 1 ? "Option" : `Option ${suffix}`;
+
+  return type === "select"
+    ? {
+        id,
+        label,
+        type,
+        options: [{ id: "default", label: "Default", isDefault: true }],
+        currentValue: "default",
+      }
+    : { id, label, type, currentValue: false };
 }
 
 export function makeSelectCustomModelCapabilityDescriptor(
@@ -98,19 +79,12 @@ export function makeSelectCustomModelCapabilityDescriptor(
   supportedValues: ReadonlyArray<string>,
   requestedDefault: string | undefined,
 ): SelectProviderOptionDescriptor | undefined {
-  const templateIds = new Set(template.options.map((option) => option.id));
   const values = [
-    ...new Set(
-      supportedValues
-        .map((value) => value.trim())
-        .filter((value) => value && (template.id !== "contextWindow" || templateIds.has(value))),
-    ),
+    ...new Set(supportedValues.map((value) => value.trim()).filter((value) => value.length > 0)),
   ];
-  if (values.length === 0) {
-    return undefined;
-  }
+  if (values.length === 0) return undefined;
   const defaultValue =
-    requestedDefault && values.includes(requestedDefault) ? requestedDefault : values[0]!;
+    requestedDefault && values.includes(requestedDefault) ? requestedDefault : values[0];
   const templateOptions = new Map(template.options.map((option) => [option.id, option]));
   const options = values.map((id) => {
     const templateOption = templateOptions.get(id);
@@ -133,7 +107,7 @@ export function makeSelectCustomModelCapabilityDescriptor(
     type: "select",
     options,
     ...(template.description ? { description: template.description } : {}),
-    currentValue: defaultValue,
+    ...(defaultValue ? { currentValue: defaultValue } : {}),
     ...(promptInjectedValues && promptInjectedValues.length > 0 ? { promptInjectedValues } : {}),
   };
 }
@@ -156,9 +130,7 @@ export function getConfiguredCustomModelOptionDescriptors(
     : (configured.optionDescriptors ?? []);
 }
 
-function CustomModelCapabilitiesEditor(props: {
-  readonly driverKind: ProviderDriverKind | null;
-  readonly models: ReadonlyArray<ServerProviderModel>;
+export function CustomModelCapabilitiesEditor(props: {
   readonly model: ServerProviderModel;
   readonly value: ModelCapabilities | undefined;
   readonly onChange: (value: ModelCapabilities | undefined) => void;
@@ -167,10 +139,17 @@ function CustomModelCapabilitiesEditor(props: {
     props.value,
     props.model.capabilities,
   );
-  const templates = getCustomModelCapabilityTemplates(props.models, props.value);
 
   const replaceDescriptor = (descriptor: ProviderOptionDescriptor | undefined, id: string) => {
     props.onChange(replaceCustomModelCapabilityDescriptor(configuredDescriptors, descriptor, id));
+  };
+  const addDescriptor = (type: ProviderOptionDescriptor["type"]) => {
+    props.onChange({
+      optionDescriptors: [
+        ...configuredDescriptors,
+        createCustomModelCapabilityDescriptor(configuredDescriptors, type),
+      ],
+    });
   };
 
   return (
@@ -178,141 +157,162 @@ function CustomModelCapabilitiesEditor(props: {
       <div>
         <p className="text-xs font-medium text-foreground">Custom model controls</p>
         <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
-          Enable only controls supported by {props.model.name}. Separate values with commas.
+          Add controls by exact option ID. Provider adapter decides how each value is sent.
         </p>
       </div>
 
-      {templates.length === 0 ? (
-        <p className="text-xs text-muted-foreground">
-          Provider has not reported configurable model controls.
-        </p>
-      ) : (
-        templates.map((template) => {
-          const configured = configuredDescriptors.find(
-            (candidate) => candidate.id === template.id && candidate.type === template.type,
-          );
-          const enabled = configured !== undefined;
+      {configuredDescriptors.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No controls added.</p>
+      ) : null}
+      {configuredDescriptors.map((descriptor) => {
+        const commitId = (value: string) => {
+          const id = value.trim();
+          if (
+            !id ||
+            configuredDescriptors.some(
+              (candidate) => candidate.id === id && candidate.id !== descriptor.id,
+            )
+          ) {
+            return;
+          }
+          replaceDescriptor({ ...descriptor, id }, descriptor.id);
+        };
+        const commitLabel = (value: string) => {
+          const label = value.trim();
+          if (label) replaceDescriptor({ ...descriptor, label }, descriptor.id);
+        };
 
-          const toggle = (checked: boolean) => {
-            if (!checked) {
-              replaceDescriptor(undefined, template.id);
-              return;
-            }
-            if (template.type === "select") {
-              const supportedValues = template.options.map((option) => option.id);
-              const defaultValue =
-                template.currentValue ??
-                template.options.find((option) => option.isDefault)?.id ??
-                supportedValues[0];
-              replaceDescriptor(
-                makeSelectCustomModelCapabilityDescriptor(template, supportedValues, defaultValue),
-                template.id,
-              );
-              return;
-            }
-            replaceDescriptor(
-              { ...template, currentValue: template.currentValue ?? false },
-              template.id,
-            );
-          };
+        return (
+          <div key={descriptor.id} className="rounded-md border border-border/70 p-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-medium text-muted-foreground">
+                {descriptor.type === "select" ? "Select" : "On / off"}
+              </span>
+              <Button
+                size="icon-micro"
+                variant="ghost-muted"
+                onClick={() => replaceDescriptor(undefined, descriptor.id)}
+                aria-label={`Remove ${descriptor.label} from ${props.model.name}`}
+              >
+                <XIcon />
+              </Button>
+            </div>
 
-          return (
-            <div key={template.id} className="rounded-md border border-border/70 p-2.5">
-              <label className="flex cursor-pointer items-center gap-2 text-xs font-medium text-foreground">
-                <Checkbox
-                  checked={enabled}
-                  onCheckedChange={(checked) => toggle(Boolean(checked))}
-                  aria-label={`Enable ${template.label} for ${props.model.name}`}
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <label className="grid gap-1 text-[11px] text-muted-foreground">
+                ID
+                <DraftInput
+                  size="compact"
+                  value={descriptor.id}
+                  onCommit={commitId}
+                  aria-label={`Control ID for ${descriptor.label}`}
+                  spellCheck={false}
                 />
-                {template.label}
               </label>
+              <label className="grid gap-1 text-[11px] text-muted-foreground">
+                Label
+                <DraftInput
+                  size="compact"
+                  value={descriptor.label}
+                  onCommit={commitLabel}
+                  aria-label={`Control label for ${descriptor.id}`}
+                />
+              </label>
+            </div>
 
-              {enabled && configured?.type === "select" && template.type === "select" ? (
-                <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem]">
-                  <label className="grid gap-1 text-[11px] text-muted-foreground">
-                    Supported values
-                    <DraftInput
-                      size="compact"
-                      value={configured.options.map((option) => option.id).join(", ")}
-                      onCommit={(value) => {
-                        const supportedValues = value.split(",").map((entry) => entry.trim());
-                        replaceDescriptor(
-                          makeSelectCustomModelCapabilityDescriptor(
-                            template,
-                            supportedValues,
-                            configured.currentValue,
-                          ),
-                          template.id,
-                        );
-                      }}
-                      aria-label={`Supported ${template.label} values for ${props.model.name}`}
-                      spellCheck={false}
-                    />
-                  </label>
-                  <label className="grid gap-1 text-[11px] text-muted-foreground">
-                    Default
-                    <Select
-                      value={configured.currentValue ?? configured.options[0]?.id ?? ""}
-                      onValueChange={(value) =>
-                        replaceDescriptor(
-                          makeSelectCustomModelCapabilityDescriptor(
-                            template,
-                            configured.options.map((option) => option.id),
-                            value ?? undefined,
-                          ),
-                          template.id,
-                        )
-                      }
-                    >
-                      <SelectTrigger
-                        size="compact"
-                        className="w-full min-w-0"
-                        aria-label={`Default ${template.label}`}
-                      >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectPopup alignItemWithTrigger={false}>
-                        {configured.options.map((option) => (
-                          <SelectItem key={option.id} value={option.id}>
-                            {option.label}
-                          </SelectItem>
-                        ))}
-                      </SelectPopup>
-                    </Select>
-                  </label>
-                </div>
-              ) : null}
-
-              {enabled && configured?.type === "boolean" ? (
-                <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
-                  <span>Default {configured.currentValue ? "On" : "Off"}</span>
-                  <Switch
-                    checked={configured.currentValue ?? false}
-                    onCheckedChange={(checked) =>
+            {descriptor.type === "select" ? (
+              <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_8rem]">
+                <label className="grid gap-1 text-[11px] text-muted-foreground">
+                  Values
+                  <DraftInput
+                    size="compact"
+                    value={descriptor.options.map((option) => option.id).join(", ")}
+                    onCommit={(value) => {
+                      const supportedValues = value.split(",").map((entry) => entry.trim());
                       replaceDescriptor(
-                        { ...configured, currentValue: Boolean(checked) },
-                        template.id,
+                        makeSelectCustomModelCapabilityDescriptor(
+                          descriptor,
+                          supportedValues,
+                          descriptor.currentValue,
+                        ),
+                        descriptor.id,
+                      );
+                    }}
+                    aria-label={`Values for ${descriptor.label}`}
+                    spellCheck={false}
+                  />
+                </label>
+                <label className="grid gap-1 text-[11px] text-muted-foreground">
+                  Default
+                  <Select
+                    value={descriptor.currentValue ?? descriptor.options[0]?.id ?? ""}
+                    onValueChange={(value) =>
+                      replaceDescriptor(
+                        makeSelectCustomModelCapabilityDescriptor(
+                          descriptor,
+                          descriptor.options.map((option) => option.id),
+                          value ?? undefined,
+                        ),
+                        descriptor.id,
                       )
                     }
-                    aria-label={`Default ${template.label} for ${props.model.name}`}
-                  />
-                </div>
-              ) : null}
+                  >
+                    <SelectTrigger
+                      size="compact"
+                      className="w-full min-w-0"
+                      aria-label={`Default ${descriptor.label}`}
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup alignItemWithTrigger={false}>
+                      {descriptor.options.map((option) => (
+                        <SelectItem key={option.id} value={option.id}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                </label>
+              </div>
+            ) : (
+              <div className="mt-2 flex items-center justify-between gap-3 text-[11px] text-muted-foreground">
+                <span>Default {descriptor.currentValue ? "On" : "Off"}</span>
+                <Switch
+                  checked={descriptor.currentValue ?? false}
+                  onCheckedChange={(checked) =>
+                    replaceDescriptor(
+                      { ...descriptor, currentValue: Boolean(checked) },
+                      descriptor.id,
+                    )
+                  }
+                  aria-label={`Default ${descriptor.label} for ${props.model.name}`}
+                />
+              </div>
+            )}
+          </div>
+        );
+      })}
 
-              {template.id === "fastMode" && props.driverKind === CLAUDE_DRIVER_KIND ? (
-                <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
-                  Claude fast mode is a Claude SDK setting. It is not OpenAI priority service.
-                </p>
-              ) : null}
-              {template.id === "contextWindow" && props.driverKind === CLAUDE_DRIVER_KIND ? (
-                <p className="mt-2 text-[10px] leading-snug text-muted-foreground">
-                  1M adds Claude model selector at launch. Saved model ID stays unchanged.
-                </p>
-              ) : null}
-            </div>
-          );
-        })
-      )}
+      <div className="flex flex-wrap gap-1.5">
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => addDescriptor("select")}
+          aria-label={`Add select control for ${props.model.name}`}
+        >
+          <PlusIcon />
+          Add select
+        </Button>
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => addDescriptor("boolean")}
+          aria-label={`Add boolean control for ${props.model.name}`}
+        >
+          <PlusIcon />
+          Add on / off
+        </Button>
+      </div>
     </div>
   );
 }
@@ -648,8 +648,6 @@ export function ProviderModelsSection({
                       className="w-[min(24rem,calc(100vw-1.5rem))] [--popup-width:min(24rem,calc(100vw-1.5rem))]"
                     >
                       <CustomModelCapabilitiesEditor
-                        driverKind={driverKind}
-                        models={models}
                         model={model}
                         value={getDeclaredCustomModelCapabilities(
                           customModelCapabilities,

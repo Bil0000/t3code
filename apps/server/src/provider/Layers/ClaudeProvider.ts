@@ -2,7 +2,6 @@ import {
   type ClaudeSettings,
   type ModelCapabilities,
   type ModelSelection,
-  ProviderDriverKind,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
@@ -15,7 +14,6 @@ import * as Result from "effect/Result";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import {
   createModelCapabilities,
-  filterCustomModelCapabilities,
   getDeclaredCustomModelCapabilities,
   getModelSelectionStringOptionValue,
   getProviderOptionCurrentValue,
@@ -49,8 +47,6 @@ import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
-const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
-
 const CLAUDE_PRESENTATION = {
   displayName: "Claude",
   showInteractionModeToggle: true,
@@ -400,9 +396,7 @@ export function getClaudeModelCapabilities(
   const customCapabilities = getDeclaredCustomModelCapabilities(customModelCapabilities, slug);
   return (
     BUILT_IN_MODELS.find((candidate) => candidate.slug === slug)?.capabilities ??
-    (customCapabilities
-      ? filterCustomModelCapabilities(CLAUDE_DRIVER_KIND, customCapabilities)
-      : undefined) ??
+    customCapabilities ??
     DEFAULT_CLAUDE_MODEL_CAPABILITIES
   );
 }
@@ -857,7 +851,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     claudeSettings.customModels,
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
     {
-      provider: CLAUDE_DRIVER_KIND,
       customModelCapabilities: claudeSettings.customModelCapabilities,
     },
   );
@@ -951,7 +944,6 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     claudeSettings.customModels.filter((model) => !BUILT_IN_MODEL_SLUGS.has(model.trim())),
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
     {
-      provider: CLAUDE_DRIVER_KIND,
       customModelCapabilities: claudeSettings.customModelCapabilities,
     },
   );
@@ -1028,7 +1020,6 @@ export const makePendingClaudeProvider = (
       claudeSettings.customModels,
       DEFAULT_CLAUDE_MODEL_CAPABILITIES,
       {
-        provider: CLAUDE_DRIVER_KIND,
         customModelCapabilities: claudeSettings.customModelCapabilities,
       },
     );

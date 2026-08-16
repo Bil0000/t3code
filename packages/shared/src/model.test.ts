@@ -10,7 +10,6 @@ import {
   getProviderOptionDescriptors,
   getProviderOptionBooleanSelectionValue,
   getProviderOptionStringSelectionValue,
-  isCustomModelOptionDescriptorSupported,
   normalizeCustomModelSlug,
   normalizeModelSlug,
 } from "./model.ts";
@@ -154,57 +153,5 @@ describe("model slug normalization", () => {
 
     expect(normalizeModelSlug("opus", claude)).toBe("claude-opus-5");
     expect(normalizeCustomModelSlug(" opus ")).toBe("opus");
-  });
-});
-
-describe("custom model option support", () => {
-  it("matches only option shapes each provider adapter can send", () => {
-    const select = (id: string) => ({
-      id,
-      label: id,
-      type: "select" as const,
-      options: [{ id: "value", label: "Value" }],
-    });
-    const boolean = (id: string) => ({ id, label: id, type: "boolean" as const });
-
-    expect(
-      isCustomModelOptionDescriptorSupported(
-        ProviderDriverKind.make("claudeAgent"),
-        select("effort"),
-      ),
-    ).toBe(true);
-    expect(
-      isCustomModelOptionDescriptorSupported(
-        ProviderDriverKind.make("claudeAgent"),
-        boolean("thinking"),
-      ),
-    ).toBe(true);
-    expect(
-      isCustomModelOptionDescriptorSupported(
-        ProviderDriverKind.make("codex"),
-        select("serviceTier"),
-      ),
-    ).toBe(true);
-    expect(
-      isCustomModelOptionDescriptorSupported(
-        ProviderDriverKind.make("cursor"),
-        boolean("thinking"),
-      ),
-    ).toBe(true);
-    expect(
-      isCustomModelOptionDescriptorSupported(
-        ProviderDriverKind.make("opencode"),
-        select("variant"),
-      ),
-    ).toBe(true);
-    expect(
-      isCustomModelOptionDescriptorSupported(ProviderDriverKind.make("opencode"), select("agent")),
-    ).toBe(true);
-    expect(
-      isCustomModelOptionDescriptorSupported(ProviderDriverKind.make("grok"), select("effort")),
-    ).toBe(false);
-    expect(
-      isCustomModelOptionDescriptorSupported(ProviderDriverKind.make("cursor"), select("fastMode")),
-    ).toBe(false);
   });
 });

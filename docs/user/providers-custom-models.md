@@ -1,34 +1,32 @@
 # Custom models
 
-Add a model in **Settings → Providers → Models**. Use the settings button beside the custom model
-to declare only the controls that model supports. Set its supported values and default value. The
-message composer then shows only those controls.
+Add a model in **Settings → Providers → your provider → Models**. Use the settings button beside the
+custom model to add any select or on/off control by its exact option ID. Set its label, values, and
+default. The message composer then shows the declared controls.
 
 T3 Code keeps the saved model ID exact. A provider adapter can change request syntax only when its
 native API requires it. Existing custom models with no capability metadata keep their old behavior.
 
-## Supported controls
+## Adapter behavior
 
-| Provider | Custom controls T3 Code can send                             |
-| -------- | ------------------------------------------------------------ |
-| Claude   | Reasoning effort, Claude fast mode, context window, thinking |
-| Codex    | Reasoning effort, service tier                               |
-| Cursor   | Reasoning, context window, fast mode, thinking               |
-| OpenCode | Variant and agent                                            |
-| Grok     | None; T3 Code's Grok adapter sends only model selection      |
+| Provider | Control IDs with runtime translation                    |
+| -------- | ------------------------------------------------------- |
+| Claude   | `effort`, `fastMode`, `contextWindow`, `thinking`       |
+| Codex    | `reasoningEffort`, `serviceTier`                        |
+| Cursor   | `reasoning`, `contextWindow`, `fastMode`, `thinking`    |
+| OpenCode | `variant`, `agent`                                      |
+| Grok     | None; T3 Code's Grok adapter sends only model selection |
 
-T3 Code hides metadata with an unsupported control name or value type. This prevents a control from
-appearing when its provider adapter cannot send it.
-
-The capability editor renders every select or on/off descriptor offered by the provider. New control
-IDs do not need model-specific UI code.
+The capability editor and composer render every declared select or on/off descriptor without a
+provider control list. This does not add a new provider API option. An adapter sends IDs it
+understands and ignores other selections.
 
 Cursor sends choices through ACP session configuration. A choice is applied only when the active
 Cursor CLI reports a matching configuration option for the selected model.
 
 OpenCode sends `variant` and `agent` through its SDK request. Its adapter has no model speed-tier or
-context-window request option. The Grok session data T3 Code consumes reports models but no supported
-model options, so Grok custom models do not show capability controls.
+context-window request option. The Grok adapter sends only model selection, so custom controls can be
+displayed but do not change its request.
 
 Claude `fastMode` is a Claude Code setting. It is not OpenAI priority service. Codex sends speed as
 its native `serviceTier` value. Do not use one as a substitute for the other.

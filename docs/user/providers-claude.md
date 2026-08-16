@@ -13,10 +13,9 @@ Common reasons:
 ## Custom Model Controls
 
 Add a custom model in **Settings → Providers → Claude → Models**. Use the settings button beside
-the model to declare the controls that model supports. You can enable reasoning effort, Claude fast
-mode, context-window, and thinking controls, then set supported values and defaults. The message
-composer only shows controls you enable. See [Custom models](./providers-custom-models.md) for the
-controls supported by every provider.
+the model to add controls by exact option ID, then set their labels, values, and defaults. Claude's
+adapter recognizes `effort`, `fastMode`, `contextWindow`, and `thinking`. The message composer shows
+every control you add. See [Custom models](./providers-custom-models.md) for adapter behavior.
 
 The saved model ID stays exact. For example, a custom model saved as `gateway/model` stays visible as
 `gateway/model`. If you declare a `1m` context option and select it, T3 Code gives Claude Code the

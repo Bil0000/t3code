@@ -287,7 +287,7 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
-  it("hides custom controls the Claude adapter cannot send", () => {
+  it("keeps arbitrary custom controls in the Claude catalog", () => {
     const resolved = getClaudeModelCapabilities("vendor/preview", {
       "vendor/preview": {
         optionDescriptors: [
@@ -309,7 +309,7 @@ describe("ClaudeAdapterLive", () => {
 
     assert.deepEqual(
       resolved.optionDescriptors?.map((descriptor) => descriptor.id),
-      ["effort"],
+      ["effort", "serviceTier"],
     );
   });
 

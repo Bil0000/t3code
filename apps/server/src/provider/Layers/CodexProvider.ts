@@ -22,17 +22,9 @@ import type {
   ServerProviderModel,
   ServerProviderSkill,
 } from "@t3tools/contracts";
-import {
-  PREFERRED_DEFAULT_CODEX_MODELS,
-  ProviderDriverKind,
-  ServerSettingsError,
-} from "@t3tools/contracts";
+import { PREFERRED_DEFAULT_CODEX_MODELS, ServerSettingsError } from "@t3tools/contracts";
 
-import {
-  createModelCapabilities,
-  filterCustomModelCapabilities,
-  getDeclaredCustomModelCapabilities,
-} from "@t3tools/shared/model";
+import { createModelCapabilities, getDeclaredCustomModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
@@ -45,8 +37,6 @@ import packageJson from "../../../package.json" with { type: "json" };
 const isCodexAppServerSpawnError = Schema.is(CodexErrors.CodexAppServerSpawnError);
 
 const CODEX_APP_SERVER_PROBE_FORCE_KILL_AFTER = "2 seconds" as const;
-const CODEX_DRIVER_KIND = ProviderDriverKind.make("codex");
-
 const CODEX_PRESENTATION = {
   displayName: "Codex",
   showInteractionModeToggle: true,
@@ -257,9 +247,7 @@ function appendCustomCodexModels(
       slug,
       name: slug,
       isCustom: true,
-      capabilities: declaredCapabilities
-        ? filterCustomModelCapabilities(CODEX_DRIVER_KIND, declaredCapabilities)
-        : fallbackCapabilities,
+      capabilities: declaredCapabilities ?? fallbackCapabilities,
     });
   }
   return customEntries.length === 0 ? models : [...models, ...customEntries];
@@ -446,9 +434,7 @@ const emptyCodexModelsFromSettings = (codexSettings: CodexSettings): ServerProvi
       slug: model,
       name: model,
       isCustom: true,
-      capabilities: capabilities
-        ? filterCustomModelCapabilities(CODEX_DRIVER_KIND, capabilities)
-        : null,
+      capabilities: capabilities ?? null,
     };
   });
 };
