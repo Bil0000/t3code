@@ -606,7 +606,9 @@ describe("review thread decoding", () => {
       decodeReviewThreadCommentsJson(
         JSON.stringify({
           data: {
+            repository: { pullRequest: { id: "PR_1" } },
             node: {
+              pullRequest: { id: "PR_1" },
               comments: {
                 pageInfo: { hasNextPage: false, endCursor: "Y3Vyc29yOjk" },
                 nodes: [{ id: "t9", body: "last", createdAt: "2026-07-01T00:00:00Z" }],
@@ -625,7 +627,9 @@ describe("reaction decoding", () => {
   const commentWithGroups = (reactionGroups: ReadonlyArray<Record<string, unknown>>) =>
     JSON.stringify({
       data: {
+        repository: { pullRequest: { id: "PR_1" } },
         node: {
+          pullRequest: { id: "PR_1" },
           comments: {
             pageInfo: { hasNextPage: false, endCursor: null },
             nodes: [{ id: "t1", body: "nice", createdAt: "2026-07-01T00:00:00Z", reactionGroups }],
@@ -671,7 +675,9 @@ describe("reaction decoding", () => {
         JSON.stringify({
           data: {
             viewer: { login: "Bilal" },
+            repository: { pullRequest: { id: "PR_1" } },
             node: {
+              pullRequest: { id: "PR_1" },
               comments: {
                 pageInfo: { hasNextPage: false, endCursor: null },
                 nodes: [

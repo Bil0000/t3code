@@ -15,6 +15,7 @@ import type {
   PullRequestOmittedFileStat,
   PullRequestMergeability,
   PullRequestReaction,
+  PullRequestReactionContent,
   PullRequestReviewCommentDraft,
   PullRequestReviewDecision,
   PullRequestReviewPosition,
@@ -28,12 +29,6 @@ import type {
 } from "@t3tools/contracts";
 import { decodeJsonResult } from "@t3tools/shared/schemaJson";
 
-import {
-  GITHUB_REACTION_GROUPS_FIELDS as REACTION_GROUPS_FIELDS,
-  GitHubReactionGroupsSchema as RawReactionGroupsSchema,
-  toGitHubReactions as toReactions,
-} from "../sourceControl/gitHubReactionJson.ts";
-export { gitHubReactionContent } from "../sourceControl/gitHubReactionJson.ts";
 import type { IssueReference } from "./issueReferences.ts";
 import { dedupeChecks } from "./pullRequestChecks.ts";
 
@@ -224,6 +219,110 @@ const RawStatsSchema = Schema.Struct({
     ),
   ),
 });
+
+/** How many of a reaction's people the hover names before it counts the rest. */
+const REACTORS_PER_GROUP = 10;
+
+/**
+ * A reaction group as every reactable node reports it. `reactors` is bounded rather than paged:
+ * a hover says who reacted, and a hundred and forty names is a count, not a sentence.
+ */
+const REACTION_GROUPS_FIELDS = `reactionGroups {
+  content
+  viewerHasReacted
+  reactors(first: ${REACTORS_PER_GROUP}) {
+    totalCount
+    nodes {
+      ... on User { login }
+      ... on Bot { login }
+      ... on Organization { login }
+      ... on Mannequin { login }
+    }
+  }
+}`;
+
+/** GitHub's reaction names, which are the same eight the contract carries under other spellings. */
+const REACTION_CONTENT_BY_GITHUB: Readonly<Record<string, PullRequestReactionContent>> = {
+  THUMBS_UP: "thumbs-up",
+  THUMBS_DOWN: "thumbs-down",
+  LAUGH: "laugh",
+  HOORAY: "hooray",
+  CONFUSED: "confused",
+  HEART: "heart",
+  ROCKET: "rocket",
+  EYES: "eyes",
+};
+
+const GITHUB_REACTION_BY_CONTENT: Readonly<Record<PullRequestReactionContent, string>> = {
+  "thumbs-up": "THUMBS_UP",
+  "thumbs-down": "THUMBS_DOWN",
+  laugh: "LAUGH",
+  hooray: "HOORAY",
+  confused: "CONFUSED",
+  heart: "HEART",
+  rocket: "ROCKET",
+  eyes: "EYES",
+};
+
+export function gitHubReactionContent(content: PullRequestReactionContent): string {
+  return GITHUB_REACTION_BY_CONTENT[content];
+}
+
+const RawReactionGroupsSchema = Schema.optional(
+  Schema.NullOr(
+    Schema.Array(
+      Schema.Struct({
+        content: Schema.optional(Schema.NullOr(Schema.String)),
+        viewerHasReacted: Schema.optional(Schema.Boolean),
+        reactors: Schema.optional(
+          Schema.NullOr(
+            Schema.Struct({
+              totalCount: Schema.optional(Schema.Int),
+              nodes: Schema.optional(
+                Schema.NullOr(
+                  Schema.Array(
+                    Schema.NullOr(
+                      Schema.Struct({ login: Schema.optional(Schema.NullOr(Schema.String)) }),
+                    ),
+                  ),
+                ),
+              ),
+            }),
+          ),
+        ),
+      }),
+    ),
+  ),
+);
+
+type RawReactionGroups = typeof RawReactionGroupsSchema.Type;
+
+/**
+ * The groups GitHub answered with, as the contract carries them. A group with nobody behind it is
+ * dropped: GitHub answers with a group per content it knows, including the ones nobody chose. The
+ * viewer's own login is left out of `actors` — the page names them "You" instead, and leaving it
+ * in would name them twice — but `count` still counts them along with everyone else.
+ */
+function toReactions(
+  groups: RawReactionGroups,
+  viewer: string | null,
+): ReadonlyArray<PullRequestReaction> {
+  const normalizedViewer = viewer?.toLowerCase() ?? null;
+  const reactions: PullRequestReaction[] = [];
+  for (const group of groups ?? []) {
+    const content = REACTION_CONTENT_BY_GITHUB[trimmed(group.content)?.toUpperCase() ?? ""];
+    if (content === undefined) continue;
+    const logins = (group.reactors?.nodes ?? []).flatMap((node) => trimmed(node?.login) ?? []);
+    const count = Math.max(group.reactors?.totalCount ?? logins.length, logins.length);
+    if (count <= 0) continue;
+    const actors =
+      normalizedViewer === null
+        ? logins
+        : logins.filter((login) => login.toLowerCase() !== normalizedViewer);
+    reactions.push({ content, count, actors, viewerHasReacted: group.viewerHasReacted === true });
+  }
+  return reactions;
+}
 
 const RawCommentSchema = Schema.Struct({
   id: Schema.String,
@@ -666,10 +765,8 @@ const RawReviewThreadCommentsSchema = Schema.Struct({
     viewer: Schema.optional(
       Schema.NullOr(Schema.Struct({ login: Schema.optional(Schema.NullOr(Schema.String)) })),
     ),
-    repository: Schema.optional(
-      Schema.NullOr(
-        Schema.Struct({ pullRequest: Schema.NullOr(Schema.Struct({ id: Schema.String })) }),
-      ),
+    repository: Schema.NullOr(
+      Schema.Struct({ pullRequest: Schema.NullOr(Schema.Struct({ id: Schema.String })) }),
     ),
     /** Null for an id that names nothing the viewer can read, which is not a thread to page. */
     node: Schema.NullOr(
@@ -1751,11 +1848,11 @@ export function decodeReviewThreadCommentsJson(raw: string): Result.Result<
   }
   const viewer = trimmed(decoded.success.data.viewer?.login);
   const comments = decoded.success.data.node?.comments;
-  const expectedPullRequestId = decoded.success.data.repository?.pullRequest?.id;
-  const actualPullRequestId = decoded.success.data.node?.pullRequest?.id;
   return Result.succeed({
     belongsToPullRequest:
-      expectedPullRequestId !== undefined && expectedPullRequestId === actualPullRequestId,
+      decoded.success.data.repository?.pullRequest?.id !== undefined &&
+      decoded.success.data.repository?.pullRequest?.id ===
+        decoded.success.data.node?.pullRequest?.id,
     comments: (comments?.nodes ?? []).map((comment) => ({
       id: comment.id,
       author: toActor(comment.author),
@@ -2080,10 +2177,6 @@ export function decodeViewerPermissionsJson(
   });
 }
 
-/**
- * How many links each half of the read asks for. A pull request that names more issues than this
- * is a listing of its own, and the section it feeds is a summary rather than one.
- */
 export const LINKED_ISSUES_MAX_ROWS = 25;
 
 /** The four things a link is opened by, shared by both reads that collect one. */

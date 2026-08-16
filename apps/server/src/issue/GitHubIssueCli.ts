@@ -622,14 +622,16 @@ export const make = Effect.gen(function* () {
     readonly decode: (raw: string) => Result.Result<A, unknown>;
   }): Effect.Effect<A, GitHubIssueCliError> =>
     Effect.gen(function* () {
-      const decision = yield* graphQlBudget.query(input.host, input.query);
-      if (decision._tag === "Paused") {
-        return yield* new GitHubCli.GitHubCliRateLimitError({
-          command: "gh",
-          cwd: input.cwd,
-          cause: new Error(`GraphQL reads paused until ${decision.resetAt}`),
-        });
-      }
+      const query = yield* graphQlBudget.query(input.host, input.query).pipe(
+        Effect.mapError(
+          (error) =>
+            new GitHubCli.GitHubCliRateLimitError({
+              command: "gh",
+              cwd: input.cwd,
+              cause: error,
+            }),
+        ),
+      );
       const result = yield* github.execute(
         input.privateVariables === undefined
           ? {
@@ -641,14 +643,14 @@ export const make = Effect.gen(function* () {
                 input.host,
                 ...(input.variables ?? []).flat(),
                 "-f",
-                `query=${decision.query}`,
+                `query=${query}`,
               ],
             }
           : {
               cwd: input.cwd,
               args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
               stdin: encodeGraphQlRequestJson({
-                query: decision.query,
+                query,
                 variables: input.privateVariables,
               }),
             },

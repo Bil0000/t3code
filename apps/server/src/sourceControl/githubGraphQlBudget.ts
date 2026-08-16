@@ -2,43 +2,52 @@ import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Ref from "effect/Ref";
+import * as Predicate from "effect/Predicate";
+
+import * as SourceControlRateLimit from "./SourceControlRateLimit.ts";
 
 const GRAPHQL_RESERVE_RATIO = 0.1;
 const RATE_LIMIT_SELECTION = "rateLimit { cost limit remaining resetAt }";
 
 interface GraphQlBudgetSnapshot {
+  readonly cost: number;
   readonly limit: number;
   readonly remaining: number;
-  readonly resetAt: string;
   readonly resetAtMs: number;
 }
 
-export type GitHubGraphQlBudgetDecision =
-  | { readonly _tag: "Allowed"; readonly query: string }
-  | { readonly _tag: "Paused"; readonly resetAt: string };
-
-export interface GitHubGraphQlBudgetState {
-  readonly query: (host: string, document: string, now: number) => GitHubGraphQlBudgetDecision;
-  readonly observe: (host: string, raw: string) => void;
-  readonly reset: () => void;
-}
+export class GitHubGraphQlBudget extends Context.Service<
+  GitHubGraphQlBudget,
+  {
+    readonly query: (
+      host: string,
+      document: string,
+      options?: { readonly allowReserve: boolean },
+    ) => Effect.Effect<string, SourceControlRateLimit.SourceControlRateLimitPausedError>;
+    readonly observe: (host: string, raw: string) => Effect.Effect<void>;
+  }
+>()("t3/sourceControl/githubGraphQlBudget") {}
 
 function hostKey(host: string): string {
   return host.trim().toLowerCase();
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
-}
-
 function snapshotFrom(raw: string): GraphQlBudgetSnapshot | null {
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed) || !isRecord(parsed.data) || !isRecord(parsed.data.rateLimit)) {
+    if (
+      !Predicate.isObject(parsed) ||
+      !Predicate.isObject(parsed.data) ||
+      !Predicate.isObject(parsed.data.rateLimit)
+    ) {
       return null;
     }
-    const { limit, remaining, resetAt } = parsed.data.rateLimit;
+    const { cost, limit, remaining, resetAt } = parsed.data.rateLimit;
     if (
+      typeof cost !== "number" ||
+      !Number.isFinite(cost) ||
+      cost < 0 ||
       typeof limit !== "number" ||
       !Number.isFinite(limit) ||
       limit <= 0 ||
@@ -50,10 +59,15 @@ function snapshotFrom(raw: string): GraphQlBudgetSnapshot | null {
       return null;
     }
     const resetAtMs = Date.parse(resetAt);
-    return Number.isFinite(resetAtMs) ? { limit, remaining, resetAt, resetAtMs } : null;
+    return Number.isFinite(resetAtMs) ? { cost, limit, remaining, resetAtMs } : null;
   } catch {
     return null;
   }
+}
+
+function isReadOperation(document: string): boolean {
+  const operation = document.trimStart();
+  return operation.startsWith("query") || operation.startsWith("{");
 }
 
 /**
@@ -76,61 +90,71 @@ function operationSelectionEnd(document: string): number {
 }
 
 function withRateLimit(document: string): string {
-  const operation = document.trimStart();
-  if (!operation.startsWith("query") && !operation.startsWith("{")) return document;
+  if (!isReadOperation(document)) return document;
   const end = operationSelectionEnd(document);
   if (end === -1 || document.includes(RATE_LIMIT_SELECTION)) return document;
   return `${document.slice(0, end)}\n  ${RATE_LIMIT_SELECTION}\n${document.slice(end)}`;
 }
 
-export function createGitHubGraphQlBudget(): GitHubGraphQlBudgetState {
-  const snapshots = new Map<string, GraphQlBudgetSnapshot>();
+export const make = Effect.gen(function* () {
+  const snapshots = yield* Ref.make<ReadonlyMap<string, GraphQlBudgetSnapshot>>(new Map());
 
-  return {
-    query: (host, document, now) => {
-      const key = hostKey(host);
-      const snapshot = snapshots.get(key);
-      if (snapshot !== undefined && snapshot.resetAtMs <= now) snapshots.delete(key);
-      if (
-        snapshot !== undefined &&
-        snapshot.resetAtMs > now &&
-        snapshot.remaining <= snapshot.limit * GRAPHQL_RESERVE_RATIO
-      ) {
-        return { _tag: "Paused", resetAt: snapshot.resetAt };
+  const query: GitHubGraphQlBudget["Service"]["query"] = Effect.fn("GitHubGraphQlBudget.query")(
+    function* (host, document, options) {
+      if (!isReadOperation(document)) return document;
+      const now = yield* Clock.currentTimeMillis;
+      const retryAt = yield* Ref.modify(snapshots, (current) => {
+        const key = hostKey(host);
+        const snapshot = current.get(key);
+        if (snapshot === undefined) return [null, current] as const;
+        if (snapshot.resetAtMs <= now) {
+          const next = new Map(current);
+          next.delete(key);
+          return [null, next] as const;
+        }
+        const remaining = Math.max(0, snapshot.remaining - Math.max(1, snapshot.cost));
+        if (options?.allowReserve !== true && remaining < snapshot.limit * GRAPHQL_RESERVE_RATIO) {
+          return [snapshot.resetAtMs, current] as const;
+        }
+        const next = new Map(current);
+        next.set(key, { ...snapshot, remaining });
+        return [null, next] as const;
+      });
+      if (retryAt !== null) {
+        return yield* new SourceControlRateLimit.SourceControlRateLimitPausedError({
+          provider: "github",
+          host: hostKey(host),
+          retryAt,
+        });
       }
-      return { _tag: "Allowed", query: withRateLimit(document) };
+      return withRateLimit(document);
     },
-    observe: (host, raw) => {
-      const snapshot = snapshotFrom(raw);
-      if (snapshot !== null) snapshots.set(hostKey(host), snapshot);
-    },
-    reset: () => {
-      snapshots.clear();
-    },
-  };
-}
+  );
 
-export class GitHubGraphQlBudget extends Context.Service<
-  GitHubGraphQlBudget,
-  {
-    readonly query: (host: string, document: string) => Effect.Effect<GitHubGraphQlBudgetDecision>;
-    readonly observe: (host: string, raw: string) => Effect.Effect<void>;
-    readonly reset: Effect.Effect<void>;
-  }
->()("t3/sourceControl/githubGraphQlBudget") {}
-
-export const make = Effect.sync(() => {
-  const state = createGitHubGraphQlBudget();
-  const query = Effect.fn("GitHubGraphQlBudget.query")(function* (host: string, document: string) {
-    const now = yield* Clock.currentTimeMillis;
-    return state.query(host, document, now);
+  const observe: GitHubGraphQlBudget["Service"]["observe"] = Effect.fn(
+    "GitHubGraphQlBudget.observe",
+  )(function* (host, raw) {
+    const snapshot = snapshotFrom(raw);
+    if (snapshot === null) return;
+    yield* Ref.update(snapshots, (current) => {
+      const key = hostKey(host);
+      const previous = current.get(key);
+      // Concurrent reads can finish out of order. Quota only falls within one reset window, and
+      // an answer from an older window must not replace the current one.
+      if (
+        previous !== undefined &&
+        (snapshot.resetAtMs < previous.resetAtMs ||
+          (snapshot.resetAtMs === previous.resetAtMs && snapshot.remaining >= previous.remaining))
+      ) {
+        return current;
+      }
+      const next = new Map(current);
+      next.set(key, snapshot);
+      return next;
+    });
   });
 
-  return GitHubGraphQlBudget.of({
-    query,
-    observe: (host, raw) => Effect.sync(() => state.observe(host, raw)),
-    reset: Effect.sync(state.reset),
-  });
+  return GitHubGraphQlBudget.of({ query, observe });
 });
 
 export const layer = Layer.effect(GitHubGraphQlBudget, make);

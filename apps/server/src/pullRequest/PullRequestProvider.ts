@@ -39,21 +39,28 @@ import { SourceControlProviderKind as SourceControlProviderKindSchema } from "@t
  * without knowing which CLI or API produced it.
  *
  * `reason` is the part the service acts on: a missing or unauthenticated tool disables the
- * provider for the whole workspace, while anything else is specific to the request.
+ * provider for the whole workspace, a rate limit pauses its host, and anything else is specific
+ * to the request.
  */
 export class PullRequestProviderError extends Schema.TaggedErrorClass<PullRequestProviderError>()(
   "PullRequestProviderError",
   {
     provider: SourceControlProviderKindSchema,
     operation: Schema.String,
-    reason: Schema.Literals(["missing-tool", "unauthenticated", "failed"]),
+    reason: Schema.Literals(["missing-tool", "unauthenticated", "rate-limited", "failed"]),
     detail: Schema.String,
+    retryAt: Schema.optional(Schema.Number),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
     return `${this.provider} failed in ${this.operation}: ${this.detail}`;
   }
+}
+
+export interface PullRequestProviderFailure {
+  readonly reason: PullRequestProviderError["reason"];
+  readonly retryAt?: number | undefined;
 }
 
 /** A change request as the provider sees it, before the service attaches project context. */

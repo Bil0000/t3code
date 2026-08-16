@@ -2,51 +2,50 @@ import { describe, expect, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as TestClock from "effect/testing/TestClock";
 
-import { createGitHubGraphQlBudget, GitHubGraphQlBudget, layer } from "./githubGraphQlBudget.ts";
+import * as GitHubGraphQlBudget from "./githubGraphQlBudget.ts";
 
 const RESET_AT = "2026-08-13T14:00:00.000Z";
+const NEXT_RESET_AT = "2026-08-13T15:00:00.000Z";
 const BEFORE_RESET = Date.parse("2026-08-13T13:30:00.000Z");
 const AFTER_RESET = Date.parse("2026-08-13T14:00:01.000Z");
 
-function rateLimit(remaining: number, limit = 5_000): string {
+function rateLimit(remaining: number, limit = 5_000, resetAt = RESET_AT): string {
   return JSON.stringify({
     data: {
       viewer: { login: "bilal" },
-      rateLimit: { cost: 14, limit, remaining, resetAt: RESET_AT },
+      rateLimit: { cost: 14, limit, remaining, resetAt },
     },
   });
 }
 
 describe("GitHub GraphQL budget", () => {
-  it("adds rate metadata to a read query", () => {
-    const budget = createGitHubGraphQlBudget();
-    const decision = budget.query(
-      "github.com",
-      'query { repository(owner: "acme", name: "web") { name } }',
-      BEFORE_RESET,
-    );
+  it.effect("adds rate metadata to a read query", () =>
+    Effect.gen(function* () {
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
 
-    expect(decision._tag).toBe("Allowed");
-    if (decision._tag !== "Allowed") throw new Error("expected an allowed query");
-    expect(decision.query).toContain("rateLimit { cost limit remaining resetAt }");
-    expect(decision.query).toContain('repository(owner: "acme", name: "web") { name }');
-  });
+      const query = yield* budget.query(
+        "github.com",
+        'query { repository(owner: "acme", name: "web") { name } }',
+      );
 
-  it("adds rate metadata to the operation before trailing fragments", () => {
-    const budget = createGitHubGraphQlBudget();
-    const document = `query {
+      expect(query).toContain("rateLimit { cost limit remaining resetAt }");
+      expect(query).toContain('repository(owner: "acme", name: "web") { name }');
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("adds rate metadata to the operation before trailing fragments", () =>
+    Effect.gen(function* () {
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      const document = `query {
   repository(owner: "acme", name: "web") { ...RepositoryName }
 }
 
 fragment RepositoryName on Repository {
   name
 }`;
+      const query = yield* budget.query("github.com", document);
 
-    const decision = budget.query("github.com", document, BEFORE_RESET);
-
-    expect(decision).toEqual({
-      _tag: "Allowed",
-      query: `query {
+      expect(query).toBe(`query {
   repository(owner: "acme", name: "web") { ...RepositoryName }
 
   rateLimit { cost limit remaining resetAt }
@@ -54,81 +53,161 @@ fragment RepositoryName on Repository {
 
 fragment RepositoryName on Repository {
   name
-}`,
-    });
-  });
+}`);
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
 
-  it("protects the last ten percent until reset", () => {
-    const budget = createGitHubGraphQlBudget();
-    budget.observe("github.com", rateLimit(500));
-
-    expect(budget.query("github.com", "query { viewer { login } }", BEFORE_RESET)).toEqual({
-      _tag: "Paused",
-      resetAt: RESET_AT,
-    });
-    expect(budget.query("github.com", "query { viewer { login } }", AFTER_RESET)._tag).toBe(
-      "Allowed",
-    );
-  });
-
-  it("keeps hosts isolated", () => {
-    const budget = createGitHubGraphQlBudget();
-    budget.observe("github.com", rateLimit(0));
-
-    expect(budget.query("github.com", "query { viewer { login } }", BEFORE_RESET)._tag).toBe(
-      "Paused",
-    );
-    expect(
-      budget.query("github.example.com", "query { viewer { login } }", BEFORE_RESET)._tag,
-    ).toBe("Allowed");
-  });
-
-  it("allows reads above the reserve", () => {
-    const budget = createGitHubGraphQlBudget();
-    budget.observe("github.com", rateLimit(501));
-
-    expect(budget.query("github.com", "query { viewer { login } }", BEFORE_RESET)._tag).toBe(
-      "Allowed",
-    );
-  });
-
-  it("ignores malformed or partial rate metadata", () => {
-    const budget = createGitHubGraphQlBudget();
-    budget.observe("github.com", "{");
-    budget.observe(
-      "github.com",
-      JSON.stringify({ data: { rateLimit: { limit: 0, remaining: -1, resetAt: "never" } } }),
-    );
-
-    expect(budget.query("github.com", "query { viewer { login } }", BEFORE_RESET)._tag).toBe(
-      "Allowed",
-    );
-  });
-
-  it("does not add a read field to a mutation", () => {
-    const budget = createGitHubGraphQlBudget();
-    const mutation = "mutation { addComment(input: {}) { clientMutationId } }";
-    const decision = budget.query("github.com", mutation, BEFORE_RESET);
-
-    expect(decision).toEqual({ _tag: "Allowed", query: mutation });
-  });
-
-  it.effect("uses the injected clock to release the reserve", () =>
+  it.effect("protects the last ten percent with the shared provider cooldown error", () =>
     Effect.gen(function* () {
       yield* TestClock.setTime(BEFORE_RESET);
-      const budget = yield* GitHubGraphQlBudget;
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
       yield* budget.observe("github.com", rateLimit(500));
 
-      expect(yield* budget.query("github.com", "query { viewer { login } }")).toEqual({
-        _tag: "Paused",
-        resetAt: RESET_AT,
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+      expect(error).toMatchObject({
+        _tag: "SourceControlRateLimitPausedError",
+        provider: "github",
+        host: "github.com",
+        retryAt: Date.parse(RESET_AT),
       });
+      expect(error.message).toBe(
+        "github requests to github.com are paused until the rate limit resets.",
+      );
 
       yield* TestClock.setTime(AFTER_RESET);
-
-      expect((yield* budget.query("github.com", "query { viewer { login } }"))._tag).toBe(
-        "Allowed",
+      expect(yield* budget.query("github.com", "query { viewer { login } }")).toContain(
+        "rateLimit",
       );
-    }).pipe(Effect.provide(layer)),
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("keeps hosts isolated", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(0));
+
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+      expect(error._tag).toBe("SourceControlRateLimitPausedError");
+      expect(yield* budget.query("github.example.com", "query { viewer { login } }")).toContain(
+        "rateLimit",
+      );
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("keeps the lower remaining value from out-of-order responses", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(400));
+      yield* budget.observe("github.com", rateLimit(600));
+
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+      expect(error).toMatchObject({
+        _tag: "SourceControlRateLimitPausedError",
+        retryAt: Date.parse(RESET_AT),
+      });
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("ignores a response from an older reset window", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(400, 5_000, NEXT_RESET_AT));
+      yield* budget.observe("github.com", rateLimit(1_000, 5_000, RESET_AT));
+
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+      expect(error).toMatchObject({
+        _tag: "SourceControlRateLimitPausedError",
+        retryAt: Date.parse(NEXT_RESET_AT),
+      });
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("accepts a response from a later reset window", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(1_000));
+      yield* budget.observe("github.com", rateLimit(400, 5_000, NEXT_RESET_AT));
+
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+      expect(error).toMatchObject({
+        _tag: "SourceControlRateLimitPausedError",
+        retryAt: Date.parse(NEXT_RESET_AT),
+      });
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("allows reads above the reserve", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(515));
+
+      expect(yield* budget.query("github.com", "query { viewer { login } }")).toContain(
+        "rateLimit",
+      );
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("allows an interactive read to use the reserve", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(500));
+
+      expect(
+        yield* budget.query("github.com", "query { viewer { login } }", {
+          allowReserve: true,
+        }),
+      ).toContain("rateLimit");
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("reserves an admitted query cost before its response", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", rateLimit(514));
+
+      expect(yield* budget.query("github.com", "query { viewer { login } }")).toContain(
+        "rateLimit",
+      );
+      const error = yield* Effect.flip(budget.query("github.com", "query { viewer { login } }"));
+
+      expect(error).toMatchObject({
+        _tag: "SourceControlRateLimitPausedError",
+        retryAt: Date.parse(RESET_AT),
+      });
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("ignores malformed or partial rate metadata", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      yield* budget.observe("github.com", "{");
+      yield* budget.observe(
+        "github.com",
+        '{"data":{"rateLimit":{"limit":0,"remaining":-1,"resetAt":"never"}}}',
+      );
+
+      expect(yield* budget.query("github.com", "query { viewer { login } }")).toContain(
+        "rateLimit",
+      );
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
+  );
+
+  it.effect("does not add a read field to a mutation", () =>
+    Effect.gen(function* () {
+      yield* TestClock.setTime(BEFORE_RESET);
+      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
+      const mutation = "mutation { addComment(input: {}) { clientMutationId } }";
+      yield* budget.observe("github.com", rateLimit(0));
+
+      expect(yield* budget.query("github.com", mutation)).toBe(mutation);
+    }).pipe(Effect.provide(GitHubGraphQlBudget.layer)),
   );
 });

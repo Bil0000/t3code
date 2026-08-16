@@ -1,6 +1,7 @@
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
@@ -17,7 +18,7 @@ const layer = it.layer(
         execute: mockedExecute,
       }),
     ),
-    Layer.provideMerge(GitHubGraphQlBudget.layer),
+    Layer.provide(GitHubGraphQlBudget.layer),
   ),
 );
 
@@ -109,11 +110,15 @@ function threadCommentsPage(
   ids: ReadonlyArray<string>,
   endCursor: string | null,
   totalCount: number,
+  pullRequestId = "PR_7",
 ): string {
   return JSON.stringify({
     data: {
       repository: { pullRequest: { id: "PR_7" } },
-      node: { pullRequest: { id: "PR_7" }, comments: threadComments(ids, endCursor, totalCount) },
+      node: {
+        pullRequest: { id: pullRequestId },
+        comments: threadComments(ids, endCursor, totalCount),
+      },
     },
   });
 }
@@ -1606,6 +1611,41 @@ layer("GitHubPullRequestCli.layer", (it) => {
     }),
   );
 
+  it.effect("accounts for the avatar lookup in the GraphQL budget", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            // @effect-diagnostics-next-line preferSchemaOverJson:off
+            JSON.stringify({
+              data: {
+                nodes: [{ login: "octocat", avatarUrl: "https://avatars/octocat" }],
+                rateLimit: {
+                  cost: 1,
+                  limit: 5_000,
+                  remaining: 4_999,
+                  resetAt: "2099-08-13T14:00:00Z",
+                },
+              },
+            }),
+          ),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      const avatars = yield* cli.listActorAvatars({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        ids: ["MDQ6VXNlcjE="],
+      });
+
+      expect(callAt(0).args).toContain("ids[]=MDQ6VXNlcjE=");
+      expect(callAt(0).args.at(-1)).toContain("rateLimit { cost limit remaining resetAt }");
+      expect(avatars.get("octocat")).toBe("https://avatars/octocat");
+    }),
+  );
+
   it.effect("fails when the authenticated account has no login", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("  ")));
@@ -2196,47 +2236,36 @@ layer("GitHubPullRequestCli.layer", (it) => {
         cursor: "Y3Vyc29yOjI",
       });
 
+      expect(callAt(0).args).toContain("owner=acme");
+      expect(callAt(0).args).toContain("name=web");
+      expect(callAt(0).args).toContain("number=7");
       expect(callAt(0).args).toContain("threadId=PRRT_1");
       expect(callAt(0).args).toContain("cursor=Y3Vyc29yOjI");
+      assert.strictEqual(mockedExecute.mock.calls.length, 1);
       expect(page.comments.map((comment) => comment.id)).toEqual(["c2", "c3"]);
       expect(page.nextCursor).toBeNull();
     }),
   );
 
-  it.effect("refuses a review thread that belongs to a different pull request", () =>
+  it.effect("refuses a review thread from another pull request", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(
-        Effect.succeed(
-          output(
-            // @effect-diagnostics-next-line preferSchemaOverJson:off
-            JSON.stringify({
-              data: {
-                repository: { pullRequest: { id: "PR_7" } },
-                node: {
-                  pullRequest: { id: "PR_99" },
-                  comments: threadComments(["private-comment"], null),
-                },
-              },
-            }),
-          ),
-        ),
+        Effect.succeed(output(threadCommentsPage(["foreign"], null, 1, "PR_8"))),
       );
       const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
-      const request = {
-        cwd: "/w",
-        repository: "acme/web",
-        host: "github.com",
-        number: 7,
-        threadId: "PRRT_99",
-        cursor: "Y3Vyc29yOjI",
-      } as const;
 
-      const error = yield* Effect.flip(cli.getReviewThreadComments(request));
+      const error = yield* Effect.flip(
+        cli.getReviewThreadComments({
+          cwd: "/w",
+          repository: "acme/web",
+          host: "github.com",
+          number: 7,
+          threadId: "PRRT_FOREIGN",
+          cursor: "Y3Vyc29yOjI",
+        }),
+      );
 
       assert.strictEqual(error._tag, "GitHubSubjectScopeError");
-      expect(callAt(0).args).toEqual(
-        expect.arrayContaining(["owner=acme", "name=web", "number=7", "threadId=PRRT_99"]),
-      );
     }),
   );
 
@@ -2329,8 +2358,6 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
   it.effect("stops GraphQL reads at the protected reserve until reset", () =>
     Effect.gen(function* () {
-      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
-      yield* budget.reset;
       mockedExecute.mockReturnValue(
         Effect.succeed(
           output(
@@ -2368,9 +2395,76 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       const error = yield* Effect.flip(cli.getPullRequestBaseComparison(input));
 
-      assert.strictEqual(error._tag, "GitHubCliRateLimitError");
+      assert.strictEqual(error._tag, "SourceControlRateLimitPausedError");
+      if (error._tag !== "SourceControlRateLimitPausedError") return;
+      assert.strictEqual(error.host, "github.com");
+      assert.strictEqual(error.retryAt, Date.parse("2099-08-13T14:00:00Z"));
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
-      yield* budget.reset;
+      yield* TestClock.setTime(Date.parse("2100-01-01T00:00:00Z"));
+    }),
+  );
+
+  it.effect("lets an interactive permission read use the protected reserve", () =>
+    Effect.gen(function* () {
+      mockedExecute
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify({
+                data: {
+                  repository: {
+                    pullRequest: {
+                      viewerCanUpdateBranch: true,
+                      baseRef: { compare: { behindBy: 4 } },
+                    },
+                  },
+                  rateLimit: {
+                    cost: 1,
+                    limit: 5_000,
+                    remaining: 500,
+                    resetAt: "2099-08-13T14:00:00Z",
+                  },
+                },
+              }),
+            ),
+          ),
+        )
+        .mockReturnValueOnce(
+          Effect.succeed(
+            output(
+              // @effect-diagnostics-next-line preferSchemaOverJson:off
+              JSON.stringify({
+                data: {
+                  repository: {
+                    viewerPermission: "READ",
+                    pullRequest: { viewerCanUpdate: true, viewerDidAuthor: true },
+                  },
+                },
+              }),
+            ),
+          ),
+        );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+
+      yield* cli.getPullRequestBaseComparison({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        headRef: "fork:feat/page",
+      });
+      const access = yield* cli.getViewerAccess({
+        cwd: "/w",
+        repository: "acme/web",
+        host: "github.com",
+        number: 7,
+        allowReserve: true,
+      });
+
+      assert.strictEqual(mockedExecute.mock.calls.length, 2);
+      expect(access).toEqual({ canWrite: false, canUpdate: true, didAuthor: true });
+      yield* TestClock.setTime(Date.parse("2100-01-01T00:00:00Z"));
     }),
   );
 

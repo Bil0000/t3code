@@ -22,12 +22,13 @@ export const LIVE_REFRESH_MIN_INTERVAL_MS = 10_000;
 export const LIVE_REFRESH_INTERVAL_MS = 5 * 60_000;
 
 /**
- * How long a showing window goes untouched before it stops reading. A window left open on a
+ * How long a showing window goes untouched before it stops reading. This leaves one minute after
+ * the five-minute interval for the first timer tick to run. A window left open on a
  * monitor nobody is sitting at is showing in every sense the browser knows about, and polling it
  * until morning spends a night of somebody's rate limit on an answer nobody read. Their next
  * click, key or scroll starts the interval up again.
  */
-export const LIVE_REFRESH_IDLE_AFTER_MS = 5 * 60_000;
+export const LIVE_REFRESH_IDLE_AFTER_MS = 6 * 60_000;
 
 /**
  * Whether a view should read again now. Separate from the hook because the rule is the whole of

@@ -25,6 +25,7 @@ import {
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import {
   ACTOR_AVATARS_GRAPHQL_QUERY,
   ADD_REACTION_GRAPHQL_MUTATION,
@@ -255,6 +256,7 @@ export type GitHubPullRequestCliError =
   | GitHubDiffFileContentsUnavailableError
   | GitHubRepositorySelectorError
   | GitHubSubjectScopeError
+  | SourceControlRateLimit.SourceControlRateLimitPausedError
   | GitHubViewerLoginUnavailableError;
 
 /** A large pull request can produce a multi-megabyte patch; past this it is truncated. */
@@ -384,6 +386,8 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly number: number;
       /** Qualified `owner:branch`, which is the only form a fork's head resolves under. */
       readonly headRef: string;
+      /** Manual action checks may use the quota held back from automatic reads. */
+      readonly allowReserve?: boolean | undefined;
     }) => Effect.Effect<GitHubBaseComparison, GitHubPullRequestCliError>;
 
     readonly getPullRequestActivity: (input: {
@@ -449,7 +453,6 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly host: string;
     }) => Effect.Effect<GitHubRepositoryAccess, GitHubPullRequestCliError>;
 
-    /** The issues this pull request closes or cites, which no `gh pr view --json` field carries. */
     readonly listLinkedIssues: (input: {
       readonly cwd: string;
       readonly repository: string;
@@ -473,6 +476,8 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
+      /** Manual action checks may use the quota held back from automatic reads. */
+      readonly allowReserve?: boolean | undefined;
     }) => Effect.Effect<GitHubViewerAccess, GitHubPullRequestCliError>;
 
     /** Who this pull request may be sent to, and who it has already been sent to. */
@@ -868,6 +873,7 @@ export const make = Effect.gen(function* () {
       cwd: input.cwd,
       host: input.host,
       operation: input.operation,
+      allowReserve: true,
       variables: [
         ["-f", `owner=${owner}`],
         ["-f", `name=${name}`],
@@ -897,6 +903,7 @@ export const make = Effect.gen(function* () {
       cwd: input.cwd,
       host: input.host,
       operation: input.operation,
+      allowReserve: true,
       variables: [
         ["-f", `owner=${owner}`],
         ["-f", `name=${name}`],
@@ -943,6 +950,7 @@ export const make = Effect.gen(function* () {
     readonly cwd: string;
     readonly host: string;
     readonly operation: string;
+    readonly allowReserve?: boolean | undefined;
     /** Variables as `-f` flags, for values this module composed itself. */
     readonly variables?: ReadonlyArray<readonly [string, string]>;
     /**
@@ -953,50 +961,55 @@ export const make = Effect.gen(function* () {
     readonly privateVariables?: Readonly<Record<string, string>>;
     readonly query: string;
     readonly decode: (raw: string) => Result.Result<A, unknown>;
-  }): Effect.Effect<A, GitHubPullRequestCliError> =>
-    Effect.gen(function* () {
-      const decision = yield* graphQlBudget.query(input.host, input.query);
-      if (decision._tag === "Paused") {
-        return yield* new GitHubCli.GitHubCliRateLimitError({
-          command: "gh",
-          cwd: input.cwd,
-          cause: new Error(`GraphQL reads paused until ${decision.resetAt}`),
-        });
-      }
-      const result = yield* github.execute(
-        input.privateVariables === undefined
-          ? {
-              cwd: input.cwd,
-              args: [
-                "api",
-                "graphql",
-                "--hostname",
-                input.host,
-                ...(input.variables ?? []).flat(),
-                "-f",
-                `query=${decision.query}`,
-              ],
-            }
-          : {
-              cwd: input.cwd,
-              args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
-              stdin: encodeGraphQlRequestJson({
-                query: decision.query,
-                variables: input.privateVariables,
-              }),
-            },
+  }): Effect.Effect<A, GitHubPullRequestCliError> => {
+    return graphQlBudget
+      .query(
+        input.host,
+        input.query,
+        input.allowReserve === true ? { allowReserve: true } : undefined,
+      )
+      .pipe(
+        Effect.flatMap((query) =>
+          github.execute(
+            input.privateVariables === undefined
+              ? {
+                  cwd: input.cwd,
+                  args: [
+                    "api",
+                    "graphql",
+                    "--hostname",
+                    input.host,
+                    ...(input.variables ?? []).flat(),
+                    "-f",
+                    `query=${query}`,
+                  ],
+                }
+              : {
+                  cwd: input.cwd,
+                  args: ["api", "graphql", "--hostname", input.host, "--input", "-"],
+                  stdin: encodeGraphQlRequestJson({
+                    query,
+                    variables: input.privateVariables,
+                  }),
+                },
+          ),
+        ),
+        Effect.tap((result) => graphQlBudget.observe(input.host, result.stdout)),
+        Effect.flatMap((result) => {
+          const decoded = input.decode(result.stdout.trim());
+          return Result.isSuccess(decoded)
+            ? Effect.succeed(decoded.success)
+            : Effect.fail(
+                new GitHubPullRequestReadError({
+                  command: "gh",
+                  cwd: input.cwd,
+                  operation: input.operation,
+                  cause: decoded.failure,
+                }),
+              );
+        }),
       );
-      yield* graphQlBudget.observe(input.host, result.stdout);
-      const decoded = input.decode(result.stdout.trim());
-      return Result.isSuccess(decoded)
-        ? decoded.success
-        : yield* new GitHubPullRequestReadError({
-            command: "gh",
-            cwd: input.cwd,
-            operation: input.operation,
-            cause: decoded.failure,
-          });
-    });
+  };
 
   /**
    * One page of the patch, read from the files API. GitHub refuses `pr diff` outright past 300
@@ -1372,6 +1385,7 @@ export const make = Effect.gen(function* () {
         cwd: input.cwd,
         host: input.host,
         operation: "getPullRequestBaseComparison",
+        ...(input.allowReserve === true ? { allowReserve: true } : {}),
         variables: [
           ["-f", `owner=${owner}`],
           ["-f", `name=${name}`],
@@ -1611,34 +1625,14 @@ export const make = Effect.gen(function* () {
       if (input.ids.length === 0) {
         return Effect.succeed(new Map<string, string>());
       }
-      return github
-        .execute({
-          cwd: input.cwd,
-          args: [
-            "api",
-            "graphql",
-            "--hostname",
-            input.host,
-            ...input.ids.flatMap((id) => ["-f", `ids[]=${id}`]),
-            "-f",
-            `query=${ACTOR_AVATARS_GRAPHQL_QUERY}`,
-          ],
-        })
-        .pipe(
-          Effect.flatMap((result) => {
-            const decoded = decodeActorAvatarsJson(result.stdout.trim());
-            return Result.isSuccess(decoded)
-              ? Effect.succeed(decoded.success)
-              : Effect.fail(
-                  new GitHubPullRequestReadError({
-                    command: "gh",
-                    cwd: input.cwd,
-                    operation: "listActorAvatars",
-                    cause: decoded.failure,
-                  }),
-                );
-          }),
-        );
+      return graphqlRead({
+        cwd: input.cwd,
+        host: input.host,
+        operation: "listActorAvatars",
+        variables: input.ids.map((id) => ["-f", `ids[]=${id}`]),
+        query: ACTOR_AVATARS_GRAPHQL_QUERY,
+        decode: decodeActorAvatarsJson,
+      });
     },
 
     getRepositoryAccess: (input) =>
@@ -1705,6 +1699,7 @@ export const make = Effect.gen(function* () {
         cwd: input.cwd,
         host: input.host,
         operation: "getViewerAccess",
+        ...(input.allowReserve === true ? { allowReserve: true } : {}),
         variables: [
           ["-f", `owner=${owner}`],
           ["-f", `name=${name}`],
@@ -1721,6 +1716,7 @@ export const make = Effect.gen(function* () {
         cwd: input.cwd,
         host: input.host,
         operation: "listReviewerCandidates",
+        allowReserve: true,
         variables: [
           ["-f", `owner=${owner}`],
           ["-f", `name=${name}`],

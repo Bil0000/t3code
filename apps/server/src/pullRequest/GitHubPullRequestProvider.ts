@@ -10,6 +10,7 @@ import type {
 import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import {
   PullRequestProviderError,
+  type PullRequestProviderFailure,
   type ProviderChangeRequestActivity,
   type ProviderChangeRequestDetail,
   type PullRequestProviderApi,
@@ -88,12 +89,16 @@ export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequest
 }
 
 /** The CLI tags that mean the tool itself is unusable, rather than one request failing. */
-function reasonFor(
+export function gitHubProviderFailure(
   error: GitHubPullRequestCli.GitHubPullRequestCliError,
-): PullRequestProviderError["reason"] {
-  if (error._tag === "GitHubCliUnavailableError") return "missing-tool";
-  if (error._tag === "GitHubCliAuthenticationError") return "unauthenticated";
-  return "failed";
+): PullRequestProviderFailure {
+  if (error._tag === "GitHubCliUnavailableError") return { reason: "missing-tool" };
+  if (error._tag === "GitHubCliAuthenticationError") return { reason: "unauthenticated" };
+  if (error._tag === "GitHubCliRateLimitError") return { reason: "rate-limited" };
+  if (error._tag === "SourceControlRateLimitPausedError") {
+    return { reason: "rate-limited", retryAt: error.retryAt };
+  }
+  return { reason: "failed" };
 }
 
 /**
@@ -134,7 +139,7 @@ export const make = Effect.gen(function* () {
     new PullRequestProviderError({
       provider: "github",
       operation,
-      reason: reasonFor(error),
+      ...gitHubProviderFailure(error),
       detail: error.detail,
       cause: error,
     });
@@ -408,7 +413,7 @@ export const make = Effect.gen(function* () {
     getViewerPermissions: (input) =>
       Effect.all(
         [
-          cli.getViewerAccess(input),
+          cli.getViewerAccess({ ...input, allowReserve: true }),
           // Whether this viewer may update the branch is only on the comparison, and the
           // comparison only resolves through the head ref the detail carries. A failure here
           // withholds that one action rather than the whole answer, the way the detail path
@@ -421,6 +426,7 @@ export const make = Effect.gen(function* () {
                     .getPullRequestBaseComparison({
                       ...input,
                       headRef: `${pullRequest.headRepositoryOwner}:${pullRequest.headBranch}`,
+                      allowReserve: true,
                     })
                     .pipe(Effect.map((comparison) => comparison.viewerCanUpdate === true)),
             ),

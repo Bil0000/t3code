@@ -25,7 +25,10 @@ import { cn } from "~/lib/utils";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { isCommentSubmitShortcut } from "../diffs/commentSubmitShortcut";
-import { mergePullRequestThreadComments } from "./pullRequestDetail.logic";
+import {
+  editPullRequestThreadComment,
+  mergePullRequestThreadComments,
+} from "./pullRequestDetail.logic";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
@@ -152,7 +155,17 @@ export function ReviewThreadCard({
     setSavingEdit(true);
     const saved = await onEditComment(commentId, body);
     setSavingEdit(false);
-    if (saved) setEditingId(null);
+    if (saved) {
+      setLoadedPage((previous) =>
+        previous?.threadId === thread.id
+          ? {
+              ...previous,
+              comments: editPullRequestThreadComment(previous.comments, commentId, body),
+            }
+          : previous,
+      );
+      setEditingId(null);
+    }
   };
 
   const send = async () => {
@@ -163,6 +176,16 @@ export function ReviewThreadCard({
     // empty box, and the words have to be written again.
     try {
       if (await onReply(trimmed)) {
+        // The mutation returns no comment. Keep what the reader loaded and reopen its cursor so
+        // the new reply remains reachable without spending requests until they ask to load it.
+        setLoadedPage((previous) =>
+          previous?.threadId === thread.id
+            ? {
+                ...previous,
+                nextCursor: previous.nextCursor ?? thread.nextCommentsCursor ?? null,
+              }
+            : previous,
+        );
         setReply("");
         setReplying(false);
       }
@@ -288,15 +311,17 @@ export function ReviewThreadCard({
             ))}
           </div>
           {nextCommentsCursor !== null ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              className="mt-2 px-1"
-              disabled={loadingMore}
-              onClick={() => void loadMore()}
-            >
-              {loadingMore ? "Loading..." : "Load more comments"}
-            </Button>
+            <div className="mt-2">
+              <Button
+                size="xs"
+                variant="ghost"
+                className="px-1"
+                disabled={loadingMore}
+                onClick={() => void loadMore()}
+              >
+                {loadingMore ? "Loading..." : "Load more comments"}
+              </Button>
+            </div>
           ) : null}
 
           {canReply ? (

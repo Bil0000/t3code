@@ -1,6 +1,7 @@
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
 import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
@@ -16,7 +17,7 @@ const layer = it.layer(
         execute: mockedExecute,
       }),
     ),
-    Layer.provideMerge(GitHubGraphQlBudget.layer),
+    Layer.provide(GitHubGraphQlBudget.layer),
   ),
 );
 
@@ -941,8 +942,6 @@ layer("GitHubIssueCli.layer", (it) => {
 
   it.effect("stops issue GraphQL reads at the protected reserve until reset", () =>
     Effect.gen(function* () {
-      const budget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
-      yield* budget.reset;
       const page = commentPage(["IC_1"], null, 1);
       // @effect-diagnostics-next-line preferSchemaOverJson:off
       const limited = JSON.parse(page.stdout) as { data: Record<string, unknown> };
@@ -963,7 +962,7 @@ layer("GitHubIssueCli.layer", (it) => {
 
       assert.strictEqual(error._tag, "GitHubCliRateLimitError");
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
-      yield* budget.reset;
+      yield* TestClock.setTime(Date.parse("2100-01-01T00:00:00Z"));
     }),
   );
   it.effect("reads the conversation and the history in one request", () =>
