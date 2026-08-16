@@ -57,6 +57,7 @@ import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import {
   buildAskAboutIssueHandoff,
@@ -548,21 +549,32 @@ export function IssueDetailPanel({
           >
             {detail && statePresentation ? (
               <>
-                <span className="min-w-0 truncate" title={detail.repository}>
-                  {detail.repository}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => openOnHost(detail.url)}
-                  className={cn(
-                    "shrink-0 font-medium underline-offset-2 hover:underline",
-                    statePresentation.toneClassName,
-                  )}
-                  title={OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                  aria-label={`Open issue #${detail.number} on host`}
-                >
-                  #{detail.number}
-                </button>
+                <Tooltip>
+                  <TooltipTrigger render={<span className="min-w-0 truncate" />}>
+                    {detail.repository}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{detail.repository}</TooltipPopup>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        onClick={() => openOnHost(detail.url)}
+                        className={cn(
+                          "shrink-0 font-medium underline-offset-2 hover:underline",
+                          statePresentation.toneClassName,
+                        )}
+                        aria-label={`Open issue #${detail.number} on host`}
+                      />
+                    }
+                  >
+                    #{detail.number}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">
+                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  </TooltipPopup>
+                </Tooltip>
               </>
             ) : null}
           </div>
@@ -578,22 +590,35 @@ export function IssueDetailPanel({
           >
             {detail && statePresentation ? (
               <>
-                <button
-                  type="button"
-                  tabIndex={condensed ? 0 : -1}
-                  onClick={() => openOnHost(detail.url)}
-                  className={cn(
-                    "shrink-0 font-medium underline-offset-2 hover:underline",
-                    statePresentation.toneClassName,
-                  )}
-                  title={OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                  aria-label={`Open issue #${detail.number} on host`}
-                >
-                  #{detail.number}
-                </button>
-                <span className="min-w-0 truncate font-medium text-foreground" title={detail.title}>
-                  {detail.title}
-                </span>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        tabIndex={condensed ? 0 : -1}
+                        onClick={() => openOnHost(detail.url)}
+                        className={cn(
+                          "shrink-0 font-medium underline-offset-2 hover:underline",
+                          statePresentation.toneClassName,
+                        )}
+                        aria-label={`Open issue #${detail.number} on host`}
+                      />
+                    }
+                  >
+                    #{detail.number}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">
+                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                  </TooltipPopup>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger
+                    render={<span className="min-w-0 truncate font-medium text-foreground" />}
+                  >
+                    {detail.title}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{detail.title}</TooltipPopup>
+                </Tooltip>
                 <statePresentation.Icon
                   role="img"
                   aria-label={statePresentation.label}

@@ -118,22 +118,29 @@ export function IssueLabelChips({
   return (
     <span className={cn("flex min-w-0 items-center gap-1", className)}>
       {shown.map((label) => (
-        <span
-          key={label.name}
-          title={label.name}
-          style={labelStyle(label.color)}
-          className="max-w-28 shrink-0 truncate rounded-full border border-border/60 px-1.5 text-[10px] leading-4 font-medium"
-        >
-          {label.name}
-        </span>
+        <Tooltip key={label.name}>
+          <TooltipTrigger
+            render={
+              <span
+                style={labelStyle(label.color)}
+                className="max-w-28 shrink-0 truncate rounded-full border border-border/60 px-1.5 text-[10px] leading-4 font-medium"
+              />
+            }
+          >
+            {label.name}
+          </TooltipTrigger>
+          <TooltipPopup side="top">{label.name}</TooltipPopup>
+        </Tooltip>
       ))}
       {hidden.length > 0 ? (
-        <span
-          className="shrink-0 text-[10px] text-muted-foreground/70"
-          title={hidden.map((label) => label.name).join(", ")}
-        >
-          +{hidden.length}
-        </span>
+        <Tooltip>
+          <TooltipTrigger
+            render={<span className="shrink-0 text-[10px] text-muted-foreground/70" />}
+          >
+            +{hidden.length}
+          </TooltipTrigger>
+          <TooltipPopup side="top">{hidden.map((label) => label.name).join(", ")}</TooltipPopup>
+        </Tooltip>
       ) : null}
     </span>
   );

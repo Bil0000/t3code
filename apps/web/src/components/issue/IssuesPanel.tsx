@@ -216,7 +216,6 @@ function IssueBrowserList({
   useEffect(() => {
     onPage({ key: filterKey, size: PAGE_SIZE, cursors: null });
     // Only the question itself starts the list over; `onPage` is the setter and never changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filterKey]);
 
   const listQuery = useEnvironmentQuery(
@@ -341,7 +340,6 @@ function IssueBrowserList({
     observer.observe(sentinel);
     return () => observer.disconnect();
     // `loadMore` is rebuilt every render and reads only what is listed here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     truncated,
     canContinue,

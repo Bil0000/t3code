@@ -23,6 +23,7 @@ import {
   type ListFilterOption,
 } from "../sourceControl/ListFilterMenu";
 import { MenuGroupLabel, MenuRadioGroup, MenuRadioItem, MenuSeparator } from "../ui/menu";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export type PullRequestFilterOption<Value extends string> = ListFilterOption<Value>;
 
@@ -238,12 +239,12 @@ export function PullRequestFiltersMenu({
           )
           .map((project) => {
             const reason = unavailable.get(pullRequestProjectKey(project));
-            return (
+            const item = (
               <MenuRadioItem
                 key={pullRequestProjectKey(project)}
                 value={pullRequestProjectKey(project)}
+                className={reason !== undefined ? "data-disabled:pointer-events-auto" : undefined}
                 disabled={reason !== undefined}
-                title={reason}
               >
                 <span className="flex min-w-0 flex-1 items-center gap-2">
                   <ProjectFavicon
@@ -260,6 +261,15 @@ export function PullRequestFiltersMenu({
                   )}
                 </span>
               </MenuRadioItem>
+            );
+            if (reason === undefined) return item;
+            return (
+              <Tooltip key={pullRequestProjectKey(project)}>
+                <TooltipTrigger render={item} />
+                <TooltipPopup side="top" className="max-w-80">
+                  {reason}
+                </TooltipPopup>
+              </Tooltip>
             );
           })}
       </MenuRadioGroup>

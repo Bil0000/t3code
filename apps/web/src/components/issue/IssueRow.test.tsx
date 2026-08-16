@@ -38,9 +38,8 @@ describe("IssueRow", () => {
     );
 
     expect(markup).toContain("mt-0.5 overflow-hidden text-xs");
-    expect(markup).toContain(
-      'class="flex min-w-0 items-center gap-1.5 max-w-40" title="long-author-name"',
-    );
+    expect(markup).toContain('class="flex min-w-0 items-center gap-1.5 max-w-40"');
+    expect(markup).not.toContain(" title=");
   });
   it("shows the selected reaction count while sorting by reactions", () => {
     const markup = renderToStaticMarkup(

@@ -49,6 +49,7 @@ import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../
 import { Textarea } from "../ui/textarea";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 /**
  * A list written by hand, since a new issue has no reference for the candidate reads a picker
@@ -563,9 +564,12 @@ export function IssueCreateDialog({
                 </Select>
                 {/* Read-only, because it is the project's own remote rather than a choice: filing
                     against another repository is choosing another project. */}
-                <p className="truncate text-xs text-muted-foreground" title={selected.repository}>
-                  {selected.repository}
-                </p>
+                <Tooltip>
+                  <TooltipTrigger render={<p className="truncate text-xs text-muted-foreground" />}>
+                    {selected.repository}
+                  </TooltipTrigger>
+                  <TooltipPopup side="top">{selected.repository}</TooltipPopup>
+                </Tooltip>
               </div>
 
               {templatesQuery.isPending ? (

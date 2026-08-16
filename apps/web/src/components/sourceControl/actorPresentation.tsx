@@ -3,6 +3,8 @@ import { Children, isValidElement, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+
 export function SourceControlActorAvatar({
   actor,
   className,
@@ -38,16 +40,31 @@ export function SourceControlActorAvatar({
 export function SourceControlActorLabel({
   actor,
   className,
+  tooltip = true,
 }: {
   actor: SourceControlActor | null;
   className?: string;
+  tooltip?: boolean;
 }) {
   const login = actor?.login ?? "ghost";
-  return (
-    <span className={cn("flex min-w-0 items-center gap-1.5", className)} title={login}>
+  const label = (
+    <>
       <SourceControlActorAvatar actor={actor} />
       <span className="truncate">{login}</span>
-    </span>
+    </>
+  );
+  if (!tooltip) {
+    return <span className={cn("flex min-w-0 items-center gap-1.5", className)}>{label}</span>;
+  }
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={<span className={cn("flex min-w-0 items-center gap-1.5", className)} />}
+      >
+        {label}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{login}</TooltipPopup>
+    </Tooltip>
   );
 }
 

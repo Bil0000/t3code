@@ -8,6 +8,7 @@ import {
   SourceControlActorLabel,
 } from "../sourceControl/actorPresentation";
 import { ListRow } from "../sourceControl/ListRow";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { IssueLabelChips, IssueStateGlyph } from "./issuePresentation";
 
 const REACTION_SORT: Partial<
@@ -71,19 +72,27 @@ function IssueRowImpl({
       meta={[
         <SourceControlActorLabel key="author" actor={entry.author} className="max-w-40" />,
         entry.assignees.length > 0 ? (
-          <span
-            key="assignees"
-            className="flex shrink-0 items-center -space-x-1"
-            title={`Assigned to ${entry.assignees.map((assignee) => assignee.login).join(", ")}`}
-          >
-            {entry.assignees.slice(0, ASSIGNEE_FACES).map((assignee) => (
-              <SourceControlActorAvatar
-                key={assignee.login}
-                actor={assignee}
-                className="ring-1 ring-background"
-              />
-            ))}
-          </span>
+          <Tooltip key="assignees">
+            <TooltipTrigger
+              render={
+                <span
+                  className="flex shrink-0 items-center -space-x-1"
+                  aria-label={`Assigned to ${entry.assignees.map((assignee) => assignee.login).join(", ")}`}
+                />
+              }
+            >
+              {entry.assignees.slice(0, ASSIGNEE_FACES).map((assignee) => (
+                <SourceControlActorAvatar
+                  key={assignee.login}
+                  actor={assignee}
+                  className="ring-1 ring-background"
+                />
+              ))}
+            </TooltipTrigger>
+            <TooltipPopup side="top">
+              Assigned to {entry.assignees.map((assignee) => assignee.login).join(", ")}
+            </TooltipPopup>
+          </Tooltip>
         ) : null,
         // Guarded here rather than left to the chips: a component that renders nothing is still a
         // child, and the meta line would draw a separator in front of it.
@@ -95,21 +104,35 @@ function IssueRowImpl({
       updatedAt={entry.updatedAt}
       trailing={
         reactionSort?.startsWith("reactions") && reactionCount > 0 ? (
-          <span
-            className="flex items-center gap-1"
-            title={`${reactionCount.toLocaleString()} reactions`}
-          >
-            <span aria-hidden>{reactionKind?.emoji ?? "👍"}</span>
-            {reactionCount.toLocaleString()}
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  className="flex items-center gap-1"
+                  aria-label={`${reactionCount.toLocaleString()} reactions`}
+                />
+              }
+            >
+              <span aria-hidden>{reactionKind?.emoji ?? "👍"}</span>
+              {reactionCount.toLocaleString()}
+            </TooltipTrigger>
+            <TooltipPopup side="top">{reactionCount.toLocaleString()} reactions</TooltipPopup>
+          </Tooltip>
         ) : entry.commentCount > 0 ? (
-          <span
-            className="flex items-center gap-1"
-            title={`${entry.commentCount.toLocaleString()} comments`}
-          >
-            <MessageSquareIcon aria-hidden className="size-3" />
-            {entry.commentCount.toLocaleString()}
-          </span>
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <span
+                  className="flex items-center gap-1"
+                  aria-label={`${entry.commentCount.toLocaleString()} comments`}
+                />
+              }
+            >
+              <MessageSquareIcon aria-hidden className="size-3" />
+              {entry.commentCount.toLocaleString()}
+            </TooltipTrigger>
+            <TooltipPopup side="top">{entry.commentCount.toLocaleString()} comments</TooltipPopup>
+          </Tooltip>
         ) : null
       }
       selected={selected}
