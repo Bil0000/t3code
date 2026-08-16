@@ -1,5 +1,6 @@
 import { describe, expect, it } from "@effect/vitest";
 import type { ModelCapabilities } from "@t3tools/contracts";
+import { ProviderDriverKind } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { createModelCapabilities } from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
@@ -40,6 +41,7 @@ describe("providerModelsFromSettings", () => {
       [],
       ["openai/gpt-5"],
       OPENCODE_CUSTOM_MODEL_CAPABILITIES,
+      { provider: ProviderDriverKind.make("opencode") },
     );
 
     expect(models).toEqual([
@@ -65,10 +67,21 @@ describe("providerModelsFromSettings", () => {
       ],
       [" opus "],
       capabilities,
+      { provider: ProviderDriverKind.make("claudeAgent") },
     );
 
     expect(models.map((model) => model.slug)).toEqual(["claude-opus-4-8", "opus"]);
     expect(models[1]?.isCustom).toBe(true);
+  });
+
+  it("does not read inherited object keys as custom capabilities", () => {
+    const fallbackCapabilities = createModelCapabilities({ optionDescriptors: [] });
+    const models = providerModelsFromSettings([], ["constructor"], fallbackCapabilities, {
+      provider: ProviderDriverKind.make("codex"),
+      customModelCapabilities: {},
+    });
+
+    expect(models[0]?.capabilities).toBe(fallbackCapabilities);
   });
 
   it("uses per-model capabilities when a custom model declares them", () => {
@@ -88,7 +101,8 @@ describe("providerModelsFromSettings", () => {
     });
 
     const models = providerModelsFromSettings([], ["gateway/model"], fallbackCapabilities, {
-      "gateway/model": declaredCapabilities,
+      provider: ProviderDriverKind.make("claudeAgent"),
+      customModelCapabilities: { "gateway/model": declaredCapabilities },
     });
 
     expect(models[0]?.capabilities).toEqual(declaredCapabilities);

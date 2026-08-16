@@ -2,6 +2,7 @@ import {
   type ClaudeSettings,
   type ModelCapabilities,
   type ModelSelection,
+  ProviderDriverKind,
   type ServerProviderModel,
   type ServerProviderSlashCommand,
 } from "@t3tools/contracts";
@@ -14,6 +15,8 @@ import * as Result from "effect/Result";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import {
   createModelCapabilities,
+  filterCustomModelCapabilities,
+  getDeclaredCustomModelCapabilities,
   getModelSelectionStringOptionValue,
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
@@ -46,6 +49,7 @@ import { discoverClaudeSkills } from "../Drivers/ClaudeSkills.ts";
 const DEFAULT_CLAUDE_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
+const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
 
 const CLAUDE_PRESENTATION = {
   displayName: "Claude",
@@ -393,10 +397,25 @@ export function getClaudeModelCapabilities(
   customModelCapabilities: Readonly<Record<string, ModelCapabilities>> = {},
 ): ModelCapabilities {
   const slug = model?.trim();
+  const customCapabilities = getDeclaredCustomModelCapabilities(customModelCapabilities, slug);
   return (
     BUILT_IN_MODELS.find((candidate) => candidate.slug === slug)?.capabilities ??
-    (slug ? customModelCapabilities[slug] : undefined) ??
+    (customCapabilities
+      ? filterCustomModelCapabilities(CLAUDE_DRIVER_KIND, customCapabilities)
+      : undefined) ??
     DEFAULT_CLAUDE_MODEL_CAPABILITIES
+  );
+}
+
+export function isConfiguredCustomClaudeModel(
+  model: string | null | undefined,
+  customModelCapabilities: Readonly<Record<string, ModelCapabilities>>,
+): boolean {
+  const slug = model?.trim();
+  return Boolean(
+    slug &&
+    !BUILT_IN_MODEL_SLUGS.has(slug) &&
+    getDeclaredCustomModelCapabilities(customModelCapabilities, slug),
   );
 }
 
@@ -837,7 +856,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     BUILT_IN_MODELS,
     claudeSettings.customModels,
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-    claudeSettings.customModelCapabilities,
+    {
+      provider: CLAUDE_DRIVER_KIND,
+      customModelCapabilities: claudeSettings.customModelCapabilities,
+    },
   );
 
   if (!claudeSettings.enabled) {
@@ -928,7 +950,10 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     getBuiltInClaudeModelsForVersion(parsedVersion),
     claudeSettings.customModels.filter((model) => !BUILT_IN_MODEL_SLUGS.has(model.trim())),
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-    claudeSettings.customModelCapabilities,
+    {
+      provider: CLAUDE_DRIVER_KIND,
+      customModelCapabilities: claudeSettings.customModelCapabilities,
+    },
   );
   const versionUpgradeMessage = supportsClaudeOpus5(parsedVersion)
     ? undefined
@@ -1002,7 +1027,10 @@ export const makePendingClaudeProvider = (
       BUILT_IN_MODELS,
       claudeSettings.customModels,
       DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-      claudeSettings.customModelCapabilities,
+      {
+        provider: CLAUDE_DRIVER_KIND,
+        customModelCapabilities: claudeSettings.customModelCapabilities,
+      },
     );
 
     if (!claudeSettings.enabled) {

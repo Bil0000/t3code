@@ -13,7 +13,11 @@ import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
-import { normalizeCustomModelSlug } from "@t3tools/shared/model";
+import {
+  filterCustomModelCapabilities,
+  getDeclaredCustomModelCapabilities,
+  normalizeCustomModelSlug,
+} from "@t3tools/shared/model";
 import { isWindowsCommandNotFound } from "../processRunner.ts";
 import { createProviderVersionAdvisory } from "./providerMaintenance.ts";
 import { collectUint8StreamText } from "../stream/collectUint8StreamText.ts";
@@ -142,7 +146,10 @@ export function providerModelsFromSettings(
   builtInModels: ReadonlyArray<ServerProviderModel>,
   customModels: ReadonlyArray<string>,
   fallbackCapabilities: ModelCapabilities,
-  customModelCapabilities: Readonly<Record<string, ModelCapabilities>> = {},
+  options: {
+    readonly provider: ProviderDriverKind;
+    readonly customModelCapabilities?: Readonly<Record<string, ModelCapabilities>> | undefined;
+  },
 ): ReadonlyArray<ServerProviderModel> {
   const resolvedBuiltInModels = [...builtInModels];
   const seen = new Set(resolvedBuiltInModels.map((model) => model.slug));
@@ -154,11 +161,17 @@ export function providerModelsFromSettings(
       continue;
     }
     seen.add(normalized);
+    const declaredCapabilities = getDeclaredCustomModelCapabilities(
+      options.customModelCapabilities,
+      normalized,
+    );
     customEntries.push({
       slug: normalized,
       name: normalized,
       isCustom: true,
-      capabilities: customModelCapabilities[normalized] ?? fallbackCapabilities,
+      capabilities: declaredCapabilities
+        ? filterCustomModelCapabilities(options.provider, declaredCapabilities)
+        : fallbackCapabilities,
     });
   }
 

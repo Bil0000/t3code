@@ -287,6 +287,38 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it("hides custom controls the Claude adapter cannot send", () => {
+    const resolved = getClaudeModelCapabilities("vendor/preview", {
+      "vendor/preview": {
+        optionDescriptors: [
+          {
+            id: "effort",
+            label: "Reasoning",
+            type: "select",
+            options: [{ id: "high", label: "High" }],
+          },
+          {
+            id: "serviceTier",
+            label: "Service Tier",
+            type: "select",
+            options: [{ id: "priority", label: "Priority" }],
+          },
+        ],
+      },
+    });
+
+    assert.deepEqual(
+      resolved.optionDescriptors?.map((descriptor) => descriptor.id),
+      ["effort"],
+    );
+  });
+
+  it("does not read inherited object keys as Claude custom capabilities", () => {
+    const resolved = getClaudeModelCapabilities("constructor", {});
+
+    assert.deepEqual(resolved, { optionDescriptors: [] });
+  });
+
   it.effect("returns validation error for non-claude provider on startSession", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
@@ -734,6 +766,11 @@ describe("ClaudeAdapterLive", () => {
             type: "boolean" as const,
           },
           {
+            id: "thinking",
+            label: "Thinking",
+            type: "boolean" as const,
+          },
+          {
             id: "contextWindow",
             label: "Context Window",
             type: "select" as const,
@@ -763,6 +800,7 @@ describe("ClaudeAdapterLive", () => {
           [
             { id: "effort", value: "xhigh" },
             { id: "fastMode", value: false },
+            { id: "thinking", value: false },
             { id: "contextWindow", value: "1m" },
           ],
         ),
@@ -772,7 +810,10 @@ describe("ClaudeAdapterLive", () => {
       const createInput = harness.getLastCreateQueryInput();
       assert.equal(createInput?.options.model, "gateway/model[1m]");
       assert.equal(createInput?.options.effort, "xhigh");
-      assert.deepEqual(createInput?.options.settings, { fastMode: false });
+      assert.deepEqual(createInput?.options.settings, {
+        alwaysThinkingEnabled: false,
+        fastMode: false,
+      });
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

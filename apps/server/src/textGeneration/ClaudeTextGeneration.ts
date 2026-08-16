@@ -38,6 +38,7 @@ import {
 } from "@t3tools/shared/model";
 import {
   getClaudeModelCapabilities,
+  isConfiguredCustomClaudeModel,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
   resolveClaudeApiModelId,
@@ -138,7 +139,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     const cliEffort = normalizeClaudeCliEffort(
       resolvedEffort,
       modelSelection.model,
-      customModelCapabilities[modelSelection.model] === caps,
+      isConfiguredCustomClaudeModel(modelSelection.model, customModelCapabilities),
     );
     const ultracode = isClaudeUltracodeEffort(resolvedEffort);
     const thinkingDescriptor = findDescriptor("thinking");

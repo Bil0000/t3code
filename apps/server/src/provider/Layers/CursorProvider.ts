@@ -8,6 +8,7 @@ import type {
   ServerProviderModel,
   ServerProviderState,
 } from "@t3tools/contracts";
+import { ProviderDriverKind } from "@t3tools/contracts";
 import type * as EffectAcpSchema from "effect-acp/schema";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as Crypto from "effect/Crypto";
@@ -58,6 +59,7 @@ const CURSOR_PRESENTATION = {
 const EMPTY_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
+const CURSOR_DRIVER_KIND = ProviderDriverKind.make("cursor");
 
 const CURSOR_ACP_MODEL_DISCOVERY_TIMEOUT_MS = 15_000;
 const CURSOR_PARAMETERIZED_MODEL_PICKER_MIN_VERSION_DATE = 2026_04_08;
@@ -574,12 +576,10 @@ export const discoverCursorModelsViaAcp = (
 export function getCursorFallbackModels(
   cursorSettings: Pick<CursorSettings, "customModels" | "customModelCapabilities">,
 ): ReadonlyArray<ServerProviderModel> {
-  return providerModelsFromSettings(
-    [],
-    cursorSettings.customModels,
-    EMPTY_CAPABILITIES,
-    cursorSettings.customModelCapabilities,
-  );
+  return providerModelsFromSettings([], cursorSettings.customModels, EMPTY_CAPABILITIES, {
+    provider: CURSOR_DRIVER_KIND,
+    customModelCapabilities: cursorSettings.customModelCapabilities,
+  });
 }
 
 /** Timeout for `agent about` — it's slower than a simple `--version` probe. */
@@ -643,7 +643,10 @@ export function buildCursorProviderSnapshot(input: {
       input.discoveredModels ?? [],
       input.cursorSettings.customModels,
       EMPTY_CAPABILITIES,
-      input.cursorSettings.customModelCapabilities,
+      {
+        provider: CURSOR_DRIVER_KIND,
+        customModelCapabilities: input.cursorSettings.customModelCapabilities,
+      },
     ),
     probe: {
       installed: true,

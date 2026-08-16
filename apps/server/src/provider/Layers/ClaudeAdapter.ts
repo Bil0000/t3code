@@ -80,6 +80,7 @@ import { resolveClaudeSdkExecutablePath } from "../Drivers/ClaudeExecutable.ts";
 import { makeClaudeEnvironment } from "../Drivers/ClaudeHome.ts";
 import {
   getClaudeModelCapabilities,
+  isConfiguredCustomClaudeModel,
   isClaudeUltracodeEffort,
   normalizeClaudeCliEffort,
   resolveClaudeApiModelId,
@@ -4148,7 +4149,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const effectiveEffort = getEffectiveClaudeAgentEffort(
         effort,
         modelSelection?.model,
-        modelSelection ? customModelCapabilities[modelSelection.model] === caps : false,
+        isConfiguredCustomClaudeModel(modelSelection?.model, customModelCapabilities),
       );
       const runtimeModeToPermission: Record<string, PermissionMode> = {
         "auto-accept-edits": "acceptEdits",
@@ -4412,7 +4413,7 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         getEffectiveClaudeAgentEffort(
           turnEffort ?? null,
           modelSelection.model,
-          customModelCapabilities[modelSelection.model] === turnCaps,
+          isConfiguredCustomClaudeModel(modelSelection.model, customModelCapabilities),
         ) ?? undefined;
     }
 

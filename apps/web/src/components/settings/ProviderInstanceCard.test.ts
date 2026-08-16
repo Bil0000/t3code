@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { ModelCapabilities, ServerProviderModel } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  type ModelCapabilities,
+  type ServerProviderModel,
+} from "@t3tools/contracts";
 
 import {
   deriveProviderModelsForDisplay,
@@ -33,6 +37,7 @@ describe("deriveProviderModelsForDisplay", () => {
       deriveProviderModelsForDisplay({
         liveModels,
         customModels: ["server-model", "kept-custom"],
+        driverKind: ProviderDriverKind.make("codex"),
       }).map((model) => model.slug),
     ).toEqual(["server-model", "kept-custom"]);
   });
@@ -59,11 +64,34 @@ describe("deriveProviderModelsForDisplay", () => {
       ],
       customModels: ["gateway/model"],
       customModelCapabilities: { "gateway/model": capabilities },
+      driverKind: ProviderDriverKind.make("claudeAgent"),
     } satisfies Parameters<typeof deriveProviderModelsForDisplay>[0] & {
       readonly customModelCapabilities: Readonly<Record<string, ModelCapabilities>>;
     };
 
     expect(deriveProviderModelsForDisplay(input)[0]?.capabilities).toEqual(capabilities);
+  });
+
+  it("filters unsupported capabilities from optimistic custom rows", () => {
+    const [model] = deriveProviderModelsForDisplay({
+      liveModels: [],
+      customModels: ["vendor/preview"],
+      customModelCapabilities: {
+        "vendor/preview": {
+          optionDescriptors: [
+            {
+              id: "effort",
+              label: "Reasoning",
+              type: "select",
+              options: [{ id: "high", label: "High" }],
+            },
+          ],
+        },
+      },
+      driverKind: ProviderDriverKind.make("grok"),
+    });
+
+    expect(model?.capabilities).toEqual({ optionDescriptors: [] });
   });
 
   it("keeps legacy metadata absent and seeds newly added models with no controls", () => {
@@ -101,6 +129,7 @@ describe("deriveProviderModelsForDisplay", () => {
       liveModels: [],
       customModels: ["constructor"],
       customModelCapabilities: {},
+      driverKind: ProviderDriverKind.make("codex"),
     });
 
     expect(model?.capabilities).toBeNull();

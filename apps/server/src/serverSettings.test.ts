@@ -156,7 +156,7 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }),
   );
 
-  it.effect("decodes custom-model capability metadata in settings and patches", () =>
+  it.effect("decodes custom-model capability metadata for every provider and patches", () =>
     Effect.gen(function* () {
       const customModelCapabilities = {
         "gateway/model": {
@@ -176,24 +176,33 @@ it.layer(NodeServices.layer)("server settings", (it) => {
 
       const decoded = yield* decodeServerSettings({
         providers: {
-          claudeAgent: {
-            customModels: ["gateway/model"],
-            customModelCapabilities,
-          },
+          codex: { customModels: ["gateway/model"], customModelCapabilities },
+          claudeAgent: { customModels: ["gateway/model"], customModelCapabilities },
+          cursor: { customModels: ["gateway/model"], customModelCapabilities },
+          grok: { customModels: ["gateway/model"], customModelCapabilities },
+          opencode: { customModels: ["gateway/model"], customModelCapabilities },
         },
       });
       const patch = yield* decodeSettingsPatch({
-        providers: { claudeAgent: { customModelCapabilities } },
+        providers: {
+          codex: { customModelCapabilities },
+          claudeAgent: { customModelCapabilities },
+          cursor: { customModelCapabilities },
+          grok: { customModelCapabilities },
+          opencode: { customModelCapabilities },
+        },
       });
 
-      assert.deepEqual(
-        decoded.providers.claudeAgent.customModelCapabilities,
-        customModelCapabilities,
-      );
-      assert.deepEqual(
-        patch.providers?.claudeAgent?.customModelCapabilities,
-        customModelCapabilities,
-      );
+      for (const provider of ["codex", "claudeAgent", "cursor", "grok", "opencode"] as const) {
+        assert.deepEqual(
+          decoded.providers[provider].customModelCapabilities,
+          customModelCapabilities,
+        );
+        assert.deepEqual(
+          patch.providers?.[provider]?.customModelCapabilities,
+          customModelCapabilities,
+        );
+      }
     }),
   );
 

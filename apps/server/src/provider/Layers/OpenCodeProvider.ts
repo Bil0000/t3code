@@ -1,4 +1,5 @@
 import {
+  ProviderDriverKind,
   type ModelCapabilities,
   type OpenCodeSettings,
   type ServerProviderModel,
@@ -28,6 +29,7 @@ const OPENCODE_PRESENTATION = {
   displayName: "OpenCode",
   showInteractionModeToggle: false,
 } as const;
+const OPENCODE_DRIVER_KIND = ProviderDriverKind.make("opencode");
 const MINIMUM_OPENCODE_VERSION = "1.14.19";
 
 class OpenCodeProbeError extends Data.TaggedError("OpenCodeProbeError")<{
@@ -259,7 +261,10 @@ export const makePendingOpenCodeProvider = (
       [],
       openCodeSettings.customModels,
       DEFAULT_OPENCODE_MODEL_CAPABILITIES,
-      openCodeSettings.customModelCapabilities,
+      {
+        provider: OPENCODE_DRIVER_KIND,
+        customModelCapabilities: openCodeSettings.customModelCapabilities,
+      },
     );
 
     if (!openCodeSettings.enabled) {
@@ -318,12 +323,10 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       presentation: OPENCODE_PRESENTATION,
       enabled: openCodeSettings.enabled,
       checkedAt,
-      models: providerModelsFromSettings(
-        [],
-        customModels,
-        DEFAULT_OPENCODE_MODEL_CAPABILITIES,
+      models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES, {
+        provider: OPENCODE_DRIVER_KIND,
         customModelCapabilities,
-      ),
+      }),
       probe: {
         installed: failure.installed,
         version,
@@ -339,12 +342,10 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
       presentation: OPENCODE_PRESENTATION,
       enabled: false,
       checkedAt,
-      models: providerModelsFromSettings(
-        [],
-        customModels,
-        DEFAULT_OPENCODE_MODEL_CAPABILITIES,
+      models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES, {
+        provider: OPENCODE_DRIVER_KIND,
         customModelCapabilities,
-      ),
+      }),
       probe: {
         installed: false,
         version: null,
@@ -390,12 +391,10 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
         presentation: OPENCODE_PRESENTATION,
         enabled: openCodeSettings.enabled,
         checkedAt,
-        models: providerModelsFromSettings(
-          [],
-          customModels,
-          DEFAULT_OPENCODE_MODEL_CAPABILITIES,
+        models: providerModelsFromSettings([], customModels, DEFAULT_OPENCODE_MODEL_CAPABILITIES, {
+          provider: OPENCODE_DRIVER_KIND,
           customModelCapabilities,
-        ),
+        }),
         probe: {
           installed: true,
           version,
@@ -445,7 +444,7 @@ export const checkOpenCodeProviderStatus = Effect.fn("checkOpenCodeProviderStatu
     flattenOpenCodeModels(inventoryExit.value),
     customModels,
     DEFAULT_OPENCODE_MODEL_CAPABILITIES,
-    customModelCapabilities,
+    { provider: OPENCODE_DRIVER_KIND, customModelCapabilities },
   );
   const connectedCount = inventoryExit.value.providerList.connected.length;
   return buildServerProvider({

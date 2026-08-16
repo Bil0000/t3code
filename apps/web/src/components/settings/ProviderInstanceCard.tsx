@@ -25,6 +25,10 @@ import {
   type ServerProvider,
   type ServerProviderModel,
 } from "@t3tools/contracts";
+import {
+  filterCustomModelCapabilities,
+  getDeclaredCustomModelCapabilities,
+} from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
@@ -144,6 +148,7 @@ export function deriveProviderModelsForDisplay(input: {
   readonly liveModels: ReadonlyArray<ServerProviderModel> | undefined;
   readonly customModels: ReadonlyArray<string>;
   readonly customModelCapabilities?: Readonly<Record<string, ModelCapabilities>>;
+  readonly driverKind: ProviderDriverKind | null;
 }): ReadonlyArray<ServerProviderModel> {
   const liveCustomModelsBySlug = new Map(
     Arr.filterMap(input.liveModels ?? [], (model) =>
@@ -156,10 +161,14 @@ export function deriveProviderModelsForDisplay(input: {
     .filter((slug) => !serverModelSlugs.has(slug))
     .map((slug) => {
       const liveModel = liveCustomModelsBySlug.get(slug);
+      const configuredCapabilities = getDeclaredCustomModelCapabilities(
+        input.customModelCapabilities,
+        slug,
+      );
       const capabilities =
-        input.customModelCapabilities && Object.hasOwn(input.customModelCapabilities, slug)
-          ? input.customModelCapabilities[slug]
-          : undefined;
+        configuredCapabilities && input.driverKind
+          ? filterCustomModelCapabilities(input.driverKind, configuredCapabilities)
+          : configuredCapabilities;
       if (liveModel) {
         return capabilities ? { ...liveModel, capabilities } : liveModel;
       }
@@ -494,6 +503,7 @@ export function ProviderInstanceCard({
     liveModels: liveProvider?.models,
     customModels,
     customModelCapabilities,
+    driverKind,
   });
 
   const updateDisplayName = (value: string) => {

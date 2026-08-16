@@ -20,7 +20,11 @@ import {
   type SelectProviderOptionDescriptor,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { normalizeCustomModelSlug } from "@t3tools/shared/model";
+import {
+  getDeclaredCustomModelCapabilities,
+  isCustomModelOptionDescriptorSupported,
+  normalizeCustomModelSlug,
+} from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
@@ -47,19 +51,10 @@ const CUSTOM_MODEL_PLACEHOLDER_BY_KIND: Partial<Record<ProviderDriverKind, strin
 };
 
 const CLAUDE_DRIVER_KIND = ProviderDriverKind.make("claudeAgent");
-const CONFIGURABLE_CUSTOM_MODEL_OPTION_IDS = new Set([
-  "effort",
-  "reasoningEffort",
-  "reasoning",
-  "variant",
-  "fastMode",
-  "serviceTier",
-  "contextWindow",
-]);
-
 export function getCustomModelCapabilityTemplates(
   models: ReadonlyArray<ServerProviderModel>,
   configured: ModelCapabilities | undefined,
+  driverKind: ProviderDriverKind | null,
 ): ReadonlyArray<ProviderOptionDescriptor> {
   const templates = new Map<string, ProviderOptionDescriptor>();
   const descriptors = [
@@ -68,7 +63,7 @@ export function getCustomModelCapabilityTemplates(
   ];
 
   for (const descriptor of descriptors) {
-    if (!CONFIGURABLE_CUSTOM_MODEL_OPTION_IDS.has(descriptor.id)) continue;
+    if (!driverKind || !isCustomModelOptionDescriptorSupported(driverKind, descriptor)) continue;
     const current = templates.get(descriptor.id);
     if (!current) {
       templates.set(descriptor.id, descriptor);
@@ -175,7 +170,7 @@ function CustomModelCapabilitiesEditor(props: {
     props.value,
     props.model.capabilities,
   );
-  const templates = getCustomModelCapabilityTemplates(props.models, props.value);
+  const templates = getCustomModelCapabilityTemplates(props.models, props.value, props.driverKind);
 
   const replaceDescriptor = (descriptor: ProviderOptionDescriptor | undefined, id: string) => {
     props.onChange(replaceCustomModelCapabilityDescriptor(configuredDescriptors, descriptor, id));
@@ -677,7 +672,10 @@ export function ProviderModelsSection({
                         driverKind={driverKind}
                         models={models}
                         model={model}
-                        value={customModelCapabilities[model.slug]}
+                        value={getDeclaredCustomModelCapabilities(
+                          customModelCapabilities,
+                          model.slug,
+                        )}
                         onChange={(value) => onCustomModelCapabilitiesChange(model.slug, value)}
                       />
                     </PopoverPopup>

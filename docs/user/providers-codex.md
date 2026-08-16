@@ -14,7 +14,8 @@ Common reasons:
 
 Add a custom model in **Settings → Providers → Codex → Models**. Use the settings button beside the
 model to declare supported controls, values, and defaults. The message composer only shows controls
-you enable.
+you enable. See [Custom models](./providers-custom-models.md) for the controls supported by every
+provider.
 
 Codex reasoning choices are sent as `reasoningEffort`. Service-tier choices are sent as
 `serviceTier`; this is where Standard, Fast, priority, or other tiers reported by the Codex app

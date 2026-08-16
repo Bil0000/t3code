@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vite-plus/test";
-import type { ModelCapabilities, ServerProviderModel } from "@t3tools/contracts";
+import {
+  ProviderDriverKind,
+  type ModelCapabilities,
+  type ServerProviderModel,
+} from "@t3tools/contracts";
 
 import {
   getCustomModelCapabilityTemplates,
@@ -51,7 +55,9 @@ describe("custom model capability configuration", () => {
       },
     ];
 
-    expect(getCustomModelCapabilityTemplates(models, configured)).toEqual([
+    expect(
+      getCustomModelCapabilityTemplates(models, configured, ProviderDriverKind.make("claudeAgent")),
+    ).toEqual([
       {
         id: "effort",
         label: "Reasoning",
@@ -69,6 +75,27 @@ describe("custom model capability configuration", () => {
         type: "boolean",
       },
     ]);
+  });
+
+  it("shows Cursor thinking but hides controls unsupported by the selected harness", () => {
+    const configured: ModelCapabilities = {
+      optionDescriptors: [
+        { id: "thinking", label: "Thinking", type: "boolean" },
+        {
+          id: "effort",
+          label: "Reasoning",
+          type: "select",
+          options: [{ id: "high", label: "High" }],
+        },
+      ],
+    };
+
+    expect(
+      getCustomModelCapabilityTemplates([], configured, ProviderDriverKind.make("cursor")),
+    ).toEqual([{ id: "thinking", label: "Thinking", type: "boolean" }]);
+    expect(
+      getCustomModelCapabilityTemplates([], configured, ProviderDriverKind.make("grok")),
+    ).toEqual([]);
   });
 
   it("builds declared supported values with one explicit default", () => {
