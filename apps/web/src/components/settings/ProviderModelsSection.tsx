@@ -134,8 +134,15 @@ export function replaceCustomModelCapabilityDescriptor(
   descriptor: ProviderOptionDescriptor | undefined,
   id: string,
 ): ModelCapabilities {
-  const next = configured.filter((candidate) => candidate.id !== id);
-  if (descriptor) next.push(descriptor);
+  const next = [...configured];
+  const index = next.findIndex((candidate) => candidate.id === id);
+  if (index < 0) {
+    if (descriptor) next.push(descriptor);
+  } else if (descriptor) {
+    next[index] = descriptor;
+  } else {
+    next.splice(index, 1);
+  }
   return { optionDescriptors: next };
 }
 

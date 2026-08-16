@@ -224,6 +224,26 @@ describe("custom model capability configuration", () => {
     ).toEqual({ optionDescriptors: [] });
   });
 
+  it("replaces a control without changing its position", () => {
+    const effort = {
+      id: "effort",
+      label: "Effort",
+      type: "select" as const,
+      options: [{ id: "high", label: "High", isDefault: true }],
+    };
+    const fastMode = { id: "fastMode", label: "Fast Mode", type: "boolean" as const };
+
+    expect(
+      replaceCustomModelCapabilityDescriptor(
+        [effort, fastMode],
+        { ...effort, label: "Reasoning effort" },
+        effort.id,
+      ),
+    ).toEqual({
+      optionDescriptors: [{ ...effort, label: "Reasoning effort" }, fastMode],
+    });
+  });
+
   it("uses legacy fallback controls only when explicit metadata is absent", () => {
     const inherited: ModelCapabilities = {
       optionDescriptors: [{ id: "fastMode", label: "Fast Mode", type: "boolean" }],
