@@ -40,7 +40,10 @@ import * as CodexErrors from "effect-codex-app-server/errors";
 import * as EffectCodexSchema from "effect-codex-app-server/schema";
 
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
-import { getCodexServiceTierOptionValue } from "../../codexModelOptions.ts";
+import {
+  getCodexServiceTierOptionValue,
+  supportsCodexLongContext,
+} from "../../codexModelOptions.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 
 import {
@@ -1662,20 +1665,15 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           input.modelSelection?.instanceId === boundInstanceId
             ? getCodexServiceTierOptionValue(input.modelSelection)
             : undefined;
-        const contextWindow =
-          input.modelSelection?.instanceId === boundInstanceId
-            ? getModelSelectionStringOptionValue(input.modelSelection, "contextWindow")
-            : undefined;
+        const useLongContext =
+          input.modelSelection?.instanceId === boundInstanceId &&
+          supportsCodexLongContext(input.modelSelection.model) &&
+          getModelSelectionStringOptionValue(input.modelSelection, "contextWindow") !== "258k";
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const appServerArgs = [
-          ...(contextWindow === "258k"
-            ? []
-            : [
-                "-c",
-                "model_context_window=1000000",
-                "-c",
-                "model_auto_compact_token_limit=900000",
-              ]),
+          ...(useLongContext
+            ? ["-c", "model_context_window=1000000", "-c", "model_auto_compact_token_limit=900000"]
+            : []),
           ...(mcpSession
             ? [
                 "-c",

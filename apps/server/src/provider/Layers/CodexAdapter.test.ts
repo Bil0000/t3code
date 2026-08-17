@@ -271,7 +271,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
       yield* adapter.startSession({
         provider: ProviderDriverKind.make("codex"),
         threadId: asThreadId("thread-1"),
-        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.3-codex", [
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.6-sol", [
           { id: "serviceTier", value: "priority" },
           { id: "contextWindow", value: "258k" },
         ]),
@@ -283,12 +283,33 @@ validationLayer("CodexAdapterLive validation", (it) => {
         cwd: process.cwd(),
         launchArgs: "",
         appServerArgs: [],
-        model: "gpt-5.3-codex",
+        model: "gpt-5.6-sol",
         providerInstanceId: ProviderInstanceId.make("codex"),
         serviceTier: "priority",
         threadId: asThreadId("thread-1"),
         runtimeMode: "full-access",
       });
+    }),
+  );
+
+  it.effect("ignores 1m context for unsupported codex models", () =>
+    Effect.gen(function* () {
+      validationRuntimeFactory.factory.mockClear();
+      const adapter = yield* CodexAdapter;
+
+      yield* adapter.startSession({
+        provider: ProviderDriverKind.make("codex"),
+        threadId: asThreadId("thread-unsupported-context"),
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5", [
+          { id: "contextWindow", value: "1m" },
+        ]),
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.deepStrictEqual(
+        validationRuntimeFactory.factory.mock.calls[0]?.[0]?.appServerArgs,
+        [],
+      );
     }),
   );
 });
@@ -385,6 +406,7 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       yield* adapter.startSession({
         provider: ProviderDriverKind.make("codex"),
         threadId: asThreadId("sess-launch-args"),
+        modelSelection: createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.6-sol", []),
         runtimeMode: "full-access",
       });
 

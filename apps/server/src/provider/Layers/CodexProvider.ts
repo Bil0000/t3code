@@ -26,6 +26,7 @@ import { PREFERRED_DEFAULT_CODEX_MODELS, ServerSettingsError } from "@t3tools/co
 
 import { createModelCapabilities } from "@t3tools/shared/model";
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
+import { supportsCodexLongContext } from "../../codexModelOptions.ts";
 import { codexAppServerArgs, resolveCodexLaunchArgs } from "./codexLaunchArgs.ts";
 import {
   AUTH_PROBE_TIMEOUT_MS,
@@ -174,16 +175,18 @@ export function mapCodexModelCapabilities(
       currentValue: defaultServiceTier,
     });
   }
-  optionDescriptors.push({
-    id: "contextWindow",
-    label: "Context Window",
-    type: "select",
-    options: [
-      { id: "258k", label: "258k" },
-      { id: "1m", label: "1M", isDefault: true },
-    ],
-    currentValue: "1m",
-  });
+  if (supportsCodexLongContext(model.model)) {
+    optionDescriptors.push({
+      id: "contextWindow",
+      label: "Context Window",
+      type: "select",
+      options: [
+        { id: "258k", label: "258k" },
+        { id: "1m", label: "1M", isDefault: true },
+      ],
+      currentValue: "1m",
+    });
+  }
 
   return createModelCapabilities({
     optionDescriptors,

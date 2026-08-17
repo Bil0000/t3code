@@ -28,9 +28,9 @@ it("maps current Codex model capability fields", () => {
     description: "Test model",
     displayName: "GPT Test",
     hidden: false,
-    id: "gpt-test",
+    id: "gpt-5.6-luna",
     isDefault: true,
-    model: "gpt-test",
+    model: "gpt-5.6-luna",
     defaultServiceTier: "flex",
     serviceTiers: [
       {
@@ -101,9 +101,9 @@ it("uses standard routing when the catalog has no default service tier", () => {
     description: "Test model",
     displayName: "GPT Test",
     hidden: false,
-    id: "gpt-test",
+    id: "gpt-5.5",
     isDefault: true,
-    model: "gpt-test",
+    model: "gpt-5.5",
     serviceTiers: [
       {
         id: "priority",
@@ -128,16 +128,6 @@ it("uses standard routing when the catalog has no default service tier", () => {
         },
       ],
       currentValue: "default",
-    },
-    {
-      id: "contextWindow",
-      label: "Context Window",
-      type: "select",
-      options: [
-        { id: "258k", label: "258k" },
-        { id: "1m", label: "1M", isDefault: true },
-      ],
-      currentValue: "1m",
     },
   ]);
 });
