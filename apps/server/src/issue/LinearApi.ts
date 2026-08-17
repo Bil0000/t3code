@@ -470,6 +470,14 @@ export const make = Effect.gen(function* () {
       accounts,
     };
   };
+  const failedConnection = (error: LinearApiError): LinearConnection => ({
+    status: error.reason === "unauthenticated" ? "unauthenticated" : "unverified",
+    hasStoredToken: false,
+    accountName: null,
+    accountEmail: null,
+    teams: [],
+    accounts: [],
+  });
 
   const connectionUnlocked = Effect.gen(function* () {
     const credentials = yield* storedCredentials;
@@ -481,7 +489,14 @@ export const make = Effect.gen(function* () {
     }
     const legacy = yield* storedToken;
     if (Option.isSome(legacy)) {
-      const account = yield* probeToken(legacy.value);
+      const inspected = yield* probeToken(legacy.value).pipe(
+        Effect.map((account) => ({ _tag: "Success" as const, account })),
+        Effect.catch((error) => Effect.succeed({ _tag: "Failure" as const, error })),
+      );
+      if (inspected._tag === "Failure") {
+        return { ...failedConnection(inspected.error), hasStoredToken: true };
+      }
+      const account = inspected.account;
       yield* writeCredentials([{ credentialId: account.credentialId, token: legacy.value }]);
       yield* removeLegacyToken.pipe(Effect.ignore);
       return connectionOf([account], true);
@@ -498,18 +513,7 @@ export const make = Effect.gen(function* () {
       };
     }
     return connectionOf([], false);
-  }).pipe(
-    Effect.catch((error) =>
-      Effect.succeed<LinearConnection>({
-        status: error.reason === "unauthenticated" ? "unauthenticated" : "unverified",
-        hasStoredToken: false,
-        accountName: null,
-        accountEmail: null,
-        teams: [],
-        accounts: [],
-      }),
-    ),
-  );
+  }).pipe(Effect.catch((error) => Effect.succeed(failedConnection(error))));
   const connection = credentialPoolMutex.withPermits(1)(connectionUnlocked);
 
   const getViewer = ({ credentialId }: { readonly credentialId?: string }) =>

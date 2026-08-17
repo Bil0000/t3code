@@ -118,6 +118,24 @@ it.effect("reports a disconnected Linear account without making a request", () =
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("reports an invalid legacy key as stored so old clients can disconnect it", () => {
+  const { layer } = makeLayer({
+    token: "lin_api_invalid",
+    response: () => ({ data: { viewer: null, teams: { nodes: [] } } }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    assert.deepStrictEqual(yield* api.connection, {
+      status: "unauthenticated",
+      hasStoredToken: true,
+      accountName: null,
+      accountEmail: null,
+      teams: [],
+      accounts: [],
+    });
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("migrates the legacy token after it has been verified", () => {
   const { layer, values } = makeLayer({
     token: "lin_api_test",
