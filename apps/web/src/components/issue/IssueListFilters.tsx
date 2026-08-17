@@ -196,9 +196,12 @@ export function IssueFiltersMenu({
             options={providerOptions}
             onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
           />
-          {hostFilter.onManageLinear !== undefined &&
-          !providerOptions.some((option) => option.action !== undefined) ? (
-            <MenuItem onClick={hostFilter.onManageLinear}>Connect Linear…</MenuItem>
+          {hostFilter.onManageLinear !== undefined ? (
+            <MenuItem onClick={hostFilter.onManageLinear}>
+              {providerOptions.some((option) => option.value === "linear.app")
+                ? "Linear settings…"
+                : "Connect Linear…"}
+            </MenuItem>
           ) : null}
         </>
       ) : null}

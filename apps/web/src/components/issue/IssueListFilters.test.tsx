@@ -59,4 +59,35 @@ describe("issue filters", () => {
     ).toEqual(["", "github.com"]);
     expect(collect(menu, MenuItem).map((item) => item.props.children)).toContain("Connect Linear…");
   });
+
+  it("offers Linear settings as a separate menu item when connected", () => {
+    const onManageLinear = vi.fn();
+    const menu = IssueFiltersMenu({
+      state: "open",
+      stateOptions: [],
+      onState: vi.fn(),
+      involvement: "all",
+      involvementOptions: [],
+      onInvolvement: vi.fn(),
+      hostFilter: {
+        host: undefined,
+        hostOptions: [
+          { value: "", label: "All providers", Icon: LayersIcon },
+          { value: "linear.app", label: "Linear", Icon: LayersIcon },
+        ],
+        onHost: vi.fn(),
+        onManageLinear,
+      },
+      label: undefined,
+      labels: [],
+      onLabel: vi.fn(),
+    } as Parameters<typeof IssueFiltersMenu>[0]);
+
+    const item = collect(menu, MenuItem).find(
+      (candidate) => candidate.props.children === "Linear settings…",
+    );
+    expect(item).toBeDefined();
+    (item?.props.onClick as (() => void) | undefined)?.();
+    expect(onManageLinear).toHaveBeenCalledOnce();
+  });
 });

@@ -23,6 +23,7 @@ import { Input } from "../ui/input";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 
 const UNMAPPED = "__unmapped__";
+export type LinearProviderChange = "available" | "updated" | "unavailable";
 
 export function LinearConnectionDialog({
   open,
@@ -31,7 +32,7 @@ export function LinearConnectionDialog({
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onProviderChanged: (host: string | undefined) => void;
+  onProviderChanged: (change: LinearProviderChange) => void;
 }) {
   const environmentId = usePrimaryEnvironment()?.environmentId ?? null;
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
@@ -74,7 +75,13 @@ export function LinearConnectionDialog({
           environmentId,
           input: { patch: { issueTracking: { linear: { projectTeams: next } } } },
         }),
-      () => onProviderChanged(Object.keys(next).length > 0 ? "linear.app" : undefined),
+      () => {
+        const wasAvailable = Object.keys(projectTeams).length > 0;
+        const isAvailable = Object.keys(next).length > 0;
+        onProviderChanged(
+          wasAvailable === isAvailable ? "updated" : isAvailable ? "available" : "unavailable",
+        );
+      },
     );
   };
 
@@ -123,7 +130,7 @@ export function LinearConnectionDialog({
                   setToken("");
                   connection.refresh();
                   onProviderChanged(
-                    Object.keys(projectTeams).length > 0 ? "linear.app" : undefined,
+                    !connected && Object.keys(projectTeams).length > 0 ? "available" : "updated",
                   );
                 },
               );
@@ -209,7 +216,7 @@ export function LinearConnectionDialog({
                       () => {
                         setToken("");
                         connection.refresh();
-                        onProviderChanged(undefined);
+                        onProviderChanged("unavailable");
                       },
                     )
               }

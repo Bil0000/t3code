@@ -20,6 +20,9 @@ const commands = vi.hoisted(() => ({
   disconnect: vi.fn(),
   settings: vi.fn(),
 }));
+const settingsState = vi.hoisted(() => ({
+  projectTeams: {} as Record<string, string>,
+}));
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -34,7 +37,7 @@ vi.mock("react/compiler-runtime", async () => {
 
 vi.mock("../../hooks/useSettings", () => ({
   usePrimarySettings: (select: (settings: unknown) => unknown) =>
-    select({ issueTracking: { linear: { projectTeams: {} } } }),
+    select({ issueTracking: { linear: { projectTeams: settingsState.projectTeams } } }),
 }));
 
 vi.mock("../../state/environments", () => ({
@@ -81,6 +84,7 @@ describe("Linear connection dialog", () => {
       teams: [],
     };
     connectionState.error = "Linear status failed";
+    settingsState.projectTeams = {};
   });
 
   it("keeps connection management and errors inside one dialog", () => {
@@ -143,5 +147,34 @@ describe("Linear connection dialog", () => {
     expect(visitElements(dialog, (element) => element.props.role === "alert")?.props.children).toBe(
       "Invalid Linear API key",
     );
+  });
+
+  it("does not change the provider filter when replacing a key", async () => {
+    connectionState.error = null;
+    commands.connect.mockResolvedValue(AsyncResult.success(undefined));
+    const onProviderChanged = vi.fn();
+    const props = { open: true, onOpenChange: vi.fn(), onProviderChanged };
+
+    hooks.beginRender();
+    let dialog = LinearConnectionDialog(props);
+    const input = visitElements(
+      dialog,
+      (element) =>
+        element.type === Input && element.props["aria-label"] === "Replace Linear API key",
+    );
+    (
+      input?.props.onChange as ((event: { currentTarget: { value: string } }) => void) | undefined
+    )?.({ currentTarget: { value: "new-key" } });
+
+    hooks.beginRender();
+    dialog = LinearConnectionDialog(props);
+    const form = visitElements(dialog, (element) => element.type === "form");
+    await (
+      form?.props.onSubmit as ((event: { preventDefault: () => void }) => Promise<void>) | undefined
+    )?.({ preventDefault: vi.fn() });
+    await commands.connect.mock.results[0]?.value;
+    await Promise.resolve();
+
+    expect(onProviderChanged).toHaveBeenCalledWith("updated");
   });
 });

@@ -25,7 +25,15 @@ import {
   SettingsIcon,
   UserCheckIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ElementType,
+  type ReactNode,
+} from "react";
 
 import {
   filterIssuesByInvolvement,
@@ -66,7 +74,15 @@ import {
 } from "../components/WorkspaceBreadcrumb";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
+import {
+  Menu,
+  MenuItem,
+  MenuPopup,
+  MenuRadioGroup,
+  MenuRadioItem,
+  MenuSeparator,
+  MenuTrigger,
+} from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import {
@@ -112,6 +128,22 @@ export interface IssuesSearch {
   readonly q?: string;
   readonly sort?: IssueListSort;
   readonly order?: IssueListOrder;
+}
+
+export function mergeIssueProviderSummaries(
+  previous: IssueListResult["providers"],
+  next: IssueListResult["providers"],
+  filteredHost: string | undefined,
+): IssueListResult["providers"] {
+  return filteredHost === undefined
+    ? next
+    : [...previous.filter((provider) => provider.host !== filteredHost), ...next];
+}
+
+interface CompactFilterAction {
+  readonly label: string;
+  readonly Icon: ElementType<{ className?: string }>;
+  readonly onClick: () => void;
 }
 
 // The state filters wear the same glyphs the rows do, so the two read as one vocabulary.
@@ -458,7 +490,7 @@ function IssuesRouteView() {
   // from the first moment rather than the second: a button that stays live through the slow half
   // of its own work is a button that gets pressed again, and buys the whole cascade twice.
   const [invalidating, setInvalidating] = useState(false);
-  const refreshFromHost = async () => {
+  const invalidateHost = async () => {
     setInvalidating(true);
     try {
       if (issueEnvironmentId !== null) {
@@ -467,6 +499,9 @@ function IssuesRouteView() {
     } finally {
       setInvalidating(false);
     }
+  };
+  const refreshFromHost = async () => {
+    await invalidateHost();
     refreshList();
     baselineQuery.refresh();
     authoredQuery.refresh();
@@ -933,13 +968,12 @@ function IssuesRouteView() {
     // host summaries of the question they answered, and coming back from one host to all of them
     // would take the switcher's other hosts out of it on the strength of the narrowed answer.
     if (answered === null) return;
-    // An unfiltered response is the full set of hosts. A filtered one only seeds the switcher
-    // when there is nothing to seed it with, which is a link that arrived already scoped.
-    setHosts((previous) =>
-      search.host === undefined || previous.length === 0 ? answered.providers : previous,
-    );
+    // An unfiltered response is the full set. A filtered response replaces only its host, so
+    // connection changes become visible without dropping every other provider from the menu.
+    setHosts((previous) => mergeIssueProviderSummaries(previous, answered.providers, search.host));
   }, [answered, search.host]);
   const activeHosts = hosts.filter((entry) => entry.configured);
+  const linearConnected = activeHosts.some((entry) => entry.kind === "linear");
   const showProvider = activeHosts.length > 1;
 
   /** Reported per project rather than as a count, so the reader can see which one it was. */
@@ -1129,15 +1163,6 @@ function IssuesRouteView() {
         value: entry.host,
         label: sharesKind || sharesHost ? entry.host : presentation.providerName,
         Icon: presentation.Icon,
-        ...(entry.kind === "linear"
-          ? {
-              action: {
-                label: "Linear settings",
-                Icon: SettingsIcon,
-                onClick: () => setLinearDialogOpen(true),
-              },
-            }
-          : {}),
       };
     }),
   ];
@@ -1201,6 +1226,11 @@ function IssuesRouteView() {
     state: search.state,
     host: search.host,
     hostMenuOptions,
+    hostMenuAction: {
+      label: linearConnected ? "Linear settings…" : "Connect Linear…",
+      Icon: SettingsIcon,
+      onClick: () => setLinearDialogOpen(true),
+    },
     onInvolvement: (involvement: IssueInvolvement) => updateListScope({ involvement }),
     onState: (state: IssueListState) => updateListScope({ state }),
     onHost: (host: string | undefined) =>
@@ -1395,14 +1425,21 @@ function IssuesRouteView() {
           <LinearConnectionDialog
             open={linearDialogOpen}
             onOpenChange={setLinearDialogOpen}
-            onProviderChanged={(host) => {
-              if (host !== undefined) {
-                updateListScope({ host, sort: undefined, order: undefined });
-              } else {
+            onProviderChanged={(change) => {
+              if (change === "unavailable") {
                 setHosts((current) => current.filter((entry) => entry.kind !== "linear"));
               }
-              if (host === undefined && search.host === "linear.app") {
-                updateListScope({ host: undefined, sort: undefined, order: undefined });
+              const shouldSelectLinear = change === "available" && !linearConnected;
+              const shouldClearLinear = change === "unavailable" && search.host === "linear.app";
+              if (shouldSelectLinear || shouldClearLinear) {
+                void invalidateHost().then(() =>
+                  updateListScope({
+                    host: shouldSelectLinear ? "linear.app" : undefined,
+                    sort: undefined,
+                    order: undefined,
+                  }),
+                );
+                return;
               }
               void refreshFromHost();
             }}
@@ -1417,16 +1454,18 @@ function IssuesRouteView() {
  * A compact stand-in for one pill group: the trigger wears the current choice, the choices
  * live in a menu. Same options, same handler — only the footprint changes.
  */
-function CompactFilterMenu<Value extends string>({
+export function CompactFilterMenu<Value extends string>({
   label,
   value,
   options,
   onChange,
+  action,
 }: {
   label: string;
   value: Value;
   options: ReadonlyArray<ListFilterOption<Value>>;
   onChange: (value: Value) => void;
+  action?: CompactFilterAction | undefined;
 }) {
   const current = options.find((option) => option.value === value) ?? options[0]!;
   return (
@@ -1457,6 +1496,15 @@ function CompactFilterMenu<Value extends string>({
             </MenuRadioItem>
           ))}
         </MenuRadioGroup>
+        {action ? (
+          <>
+            <MenuSeparator />
+            <MenuItem onClick={action.onClick}>
+              <action.Icon aria-hidden className="size-3.5" />
+              {action.label}
+            </MenuItem>
+          </>
+        ) : null}
       </MenuPopup>
     </Menu>
   );
@@ -1543,6 +1591,7 @@ export function IssuesColumn({
   state,
   host,
   hostMenuOptions,
+  hostMenuAction,
   onInvolvement,
   onState,
   onHost,
@@ -1560,6 +1609,7 @@ export function IssuesColumn({
   state: IssueListState;
   host: string | undefined;
   hostMenuOptions: ReadonlyArray<ListFilterOption<string>>;
+  hostMenuAction: CompactFilterAction | undefined;
   onInvolvement: (involvement: IssueInvolvement) => void;
   onState: (state: IssueListState) => void;
   onHost: (host: string | undefined) => void;
@@ -1663,12 +1713,13 @@ export function IssuesColumn({
                 options={INVOLVEMENT_TABS}
                 onChange={onInvolvement}
               />
-              {hostMenuOptions.length > 2 ? (
+              {hostMenuOptions.length > 2 || hostMenuAction !== undefined ? (
                 <CompactFilterMenu
-                  label="Filter by host"
+                  label="Filter by provider"
                   value={host ?? ""}
                   options={hostMenuOptions}
                   onChange={(next) => onHost(next === "" ? undefined : next)}
+                  action={hostMenuAction}
                 />
               ) : null}
             </WorkspaceBreadcrumbItem>

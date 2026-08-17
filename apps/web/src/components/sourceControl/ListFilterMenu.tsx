@@ -16,7 +16,6 @@ import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 
 import { ProjectFavicon } from "../ProjectFavicon";
-import { Button } from "../ui/button";
 import {
   Menu,
   MenuGroupLabel,
@@ -38,11 +37,6 @@ export interface ListFilterOption<Value extends string> {
   readonly Icon: ElementType<{ className?: string }>;
   /** Why it cannot be chosen, carried onto the item as its title. */
   readonly unavailable?: string | undefined;
-  readonly action?: {
-    readonly label: string;
-    readonly Icon: ElementType<{ className?: string }>;
-    readonly onClick: () => void;
-  };
 }
 
 export interface ListFilterHost<Kind extends string = SourceControlProviderKind> {
@@ -178,23 +172,6 @@ export function ListFilterRadioGroup<Value extends string>({
             <span className="flex min-w-0 items-center gap-2">
               <option.Icon aria-hidden className="size-3.5" />
               <span className="min-w-0 flex-1 truncate">{option.label}</span>
-              {option.action ? (
-                <Button
-                  size="icon-xs"
-                  variant="ghost-muted"
-                  className="ms-auto size-6"
-                  aria-label={option.action.label}
-                  title={option.action.label}
-                  onPointerDown={(event) => event.stopPropagation()}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    option.action?.onClick();
-                  }}
-                >
-                  <option.action.Icon className="size-3.5" />
-                </Button>
-              ) : null}
             </span>
           </MenuRadioItem>
         );
