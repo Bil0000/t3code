@@ -27,6 +27,7 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { toastManager } from "../ui/toast";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   buildPullRequestTimeline,
   groupPullRequestTimelineConversations,
@@ -458,18 +459,24 @@ function ReviewVerdictEvent({
                 loses that colour: it still happened, and it no longer speaks for what is on the
                 branch. Lowercased in the styling rather than the string, so what a screen reader
                 announces stays the label every other surface uses. */}
-            <span
-              className={cn(
-                "font-medium lowercase",
-                stale
-                  ? "text-muted-foreground opacity-70"
-                  : pullRequestReviewOutcomeToneClassName(outcome),
-              )}
-              title={stale ? pullRequestReviewOutcomeStaleLabel(outcome) : undefined}
-            >
-              {pullRequestReviewOutcomeLabel(outcome)}
-              {stale ? <span className="sr-only">, before the latest commits</span> : null}
-            </span>
+            <Tooltip disabled={!stale}>
+              <TooltipTrigger
+                render={
+                  <span
+                    className={cn(
+                      "font-medium lowercase",
+                      stale
+                        ? "text-muted-foreground opacity-70"
+                        : pullRequestReviewOutcomeToneClassName(outcome),
+                    )}
+                  />
+                }
+              >
+                {pullRequestReviewOutcomeLabel(outcome)}
+                {stale ? <span className="sr-only">, before the latest commits</span> : null}
+              </TooltipTrigger>
+              <TooltipPopup>{pullRequestReviewOutcomeStaleLabel(outcome)}</TooltipPopup>
+            </Tooltip>
           </div>
           {/* The reaction bar rides this line rather than taking one of its own. Its add button
               is invisible until hovered but still occupies `h-6`, and under a verdict — usually a
