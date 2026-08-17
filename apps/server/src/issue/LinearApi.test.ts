@@ -318,3 +318,36 @@ it.effect("creates and removes Linear issue reactions", () => {
     assert.deepStrictEqual(requests.at(-1)?.body.variables, { id: "reaction-1" });
   }).pipe(Effect.provide(layer));
 });
+
+it.effect("removes Linear comment reactions from API arrays", () => {
+  const { layer, requests } = makeLayer({
+    token: "lin_api_test",
+    response: (body) => {
+      const query = String(body.query);
+      if (query.includes("reactions { nodes")) {
+        return { errors: [{ message: 'Field "nodes" does not exist on type "Reaction".' }] };
+      }
+      if (query.includes("reactionDelete")) return { data: { reactionDelete: { success: true } } };
+      return {
+        data: {
+          viewer: { id: "user-1" },
+          comment: {
+            reactions: [{ id: "reaction-1", emoji: "👍", user: { id: "user-1" } }],
+          },
+        },
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* api.setReaction({
+      issueId: "ENG-7",
+      commentId: "comment-1",
+      emoji: "👍",
+      reacted: false,
+    });
+
+    assert.deepStrictEqual(requests[0]?.body.variables, { id: "comment-1" });
+    assert.deepStrictEqual(requests.at(-1)?.body.variables, { id: "reaction-1" });
+  }).pipe(Effect.provide(layer));
+});
