@@ -196,6 +196,34 @@ it.effect("probes a new key before appending a second saved account", () => {
   }).pipe(Effect.provide(test.layer));
 });
 
+it.effect("retains a legacy key and aborts connect when legacy verification fails", () => {
+  const { layer, values, requests } = makeLayer({
+    token: "lin_api_legacy",
+    response: (_body, authorization) => ({
+      data: {
+        viewer:
+          authorization === "lin_api_legacy" ? null : { id: "user-2", name: "Grace", email: null },
+        teams: { nodes: [] },
+      },
+    }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+
+    yield* Effect.flip(api.connect("lin_api_two"));
+
+    assert.strictEqual(
+      new TextDecoder().decode(values.get(LinearApi.LINEAR_API_TOKEN_SECRET)),
+      "lin_api_legacy",
+    );
+    assert.strictEqual(values.has(LinearApi.LINEAR_CREDENTIALS_SECRET), false);
+    assert.deepStrictEqual(
+      requests.map(({ authorization }) => authorization),
+      ["lin_api_legacy"],
+    );
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("keeps every account from concurrent connects", () => {
   const { layer, values } = makeLayer({
     credentials: pool(["user-1", "lin_api_one"]),
@@ -352,6 +380,21 @@ it.effect("deletes only the selected saved account", () => {
       decodeJson(new TextDecoder().decode(values.get("linear.credentials"))),
       decodeJson(pool(["user-2", "lin_api_two"])),
     );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("disconnects a lone legacy key even when it cannot be verified", () => {
+  const { layer, values } = makeLayer({
+    token: "lin_api_invalid",
+    response: () => ({ data: { viewer: null, teams: { nodes: [] } } }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    assert.deepStrictEqual((yield* api.connection).accounts, []);
+
+    yield* api.disconnect(undefined);
+
+    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), false);
   }).pipe(Effect.provide(layer));
 });
 

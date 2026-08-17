@@ -188,7 +188,7 @@ export class LinearApi extends Context.Service<
   {
     readonly connection: Effect.Effect<LinearConnection, LinearApiError>;
     readonly connect: (token: string) => Effect.Effect<LinearConnection, LinearApiError>;
-    readonly disconnect: (input: {
+    readonly disconnect: (input?: {
       readonly credentialId: string;
     }) => Effect.Effect<LinearConnection, LinearApiError>;
     readonly getViewer: (input: {
@@ -551,14 +551,8 @@ export const make = Effect.gen(function* () {
           const credentials = [...(yield* storedCredentials)];
           const legacy = yield* storedToken;
           if (credentials.length === 0 && Option.isSome(legacy)) {
-            yield* probeToken(legacy.value).pipe(
-              Effect.tap((account) =>
-                Effect.sync(() => {
-                  credentials.push({ credentialId: account.credentialId, token: legacy.value });
-                }),
-              ),
-              Effect.ignore,
-            );
+            const account = yield* probeToken(legacy.value);
+            credentials.push({ credentialId: account.credentialId, token: legacy.value });
           }
 
           const token = value.trim();
@@ -574,10 +568,24 @@ export const make = Effect.gen(function* () {
           return yield* connectionUnlocked;
         }),
       ),
-    disconnect: ({ credentialId }) =>
+    disconnect: (input) =>
       credentialPoolMutex.withPermits(1)(
         Effect.gen(function* () {
           const credentials = yield* storedCredentials;
+          if (input === undefined && credentials.length > 1) {
+            return yield* new LinearApiError({
+              reason: "failed",
+              detail: "Choose the Linear account to disconnect.",
+            });
+          }
+          const credentialId =
+            input?.credentialId ??
+            (credentials.length === 1 ? credentials[0]?.credentialId : undefined);
+          if (credentialId === undefined) {
+            const legacy = yield* storedToken;
+            if (Option.isSome(legacy)) yield* removeLegacyToken;
+            return yield* connectionUnlocked;
+          }
           const removed = credentials.find(
             (credential) => credential.credentialId === credentialId,
           );
