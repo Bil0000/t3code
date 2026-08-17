@@ -1,11 +1,13 @@
 import type { ProjectId } from "@t3tools/contracts";
-import { CircleIcon } from "lucide-react";
+import { CircleIcon, SettingsIcon } from "lucide-react";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { DetailTabStrip } from "./DetailTabStrip";
 import { EntityPicker } from "./EntityPicker";
 import { ListFilterRadioGroup, ListProjectFilterGroup, ListSearchInput } from "./ListFilterMenu";
+import { Button } from "../ui/button";
+import { visitElements } from "../../test/reactElementTree";
 
 function findValueChange(
   node: ReactNode,
@@ -119,6 +121,37 @@ describe("list filter menu", () => {
     group?.props.onValueChange("closed");
     expect(onChange).toHaveBeenCalledOnce();
     expect(onChange).toHaveBeenCalledWith("closed");
+  });
+
+  it("keeps provider settings separate from selecting the provider", () => {
+    const onChange = vi.fn();
+    const onSettings = vi.fn();
+    const group = ListFilterRadioGroup({
+      label: "Provider",
+      value: "linear.app",
+      options: [
+        {
+          value: "linear.app",
+          label: "Linear",
+          Icon: CircleIcon,
+          action: { label: "Linear settings", Icon: SettingsIcon, onClick: onSettings },
+        },
+      ],
+      onChange,
+    } as Parameters<typeof ListFilterRadioGroup<string>>[0]);
+    const settings = visitElements(
+      group,
+      (element) => element.type === Button && element.props["aria-label"] === "Linear settings",
+    );
+
+    expect(settings).not.toBeNull();
+    (
+      settings?.props.onClick as
+        | ((event: { preventDefault: () => void; stopPropagation: () => void }) => void)
+        | undefined
+    )?.({ preventDefault: vi.fn(), stopPropagation: vi.fn() });
+    expect(onSettings).toHaveBeenCalledOnce();
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("does not emit a change when the selected project is chosen again", () => {

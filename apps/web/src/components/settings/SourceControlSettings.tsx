@@ -22,7 +22,6 @@ import { cn } from "../../lib/utils";
 import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import { useEnvironmentQuery } from "../../state/query";
 import { sourceControlEnvironment } from "../../state/sourceControl";
-import { IssueTrackingSettingsSection } from "./IssueTrackingSettings";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsibleContent } from "../ui/collapsible";
@@ -581,7 +580,6 @@ export function SourceControlSettingsPanel() {
         />
       )}
 
-      {isPrimaryEnvironment ? <IssueTrackingSettingsSection /> : null}
       {isPrimaryEnvironment ? <SourceControlWritingSettingsSection /> : null}
     </SettingsPageContainer>
   );

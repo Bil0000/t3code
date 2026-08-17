@@ -2,7 +2,6 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { sourceControlHostOf, ThreadId } from "@t3tools/contracts";
 import type {
   EnvironmentId,
-  IssueProviderKind,
   IssueInvolvement,
   IssueListOrder,
   IssueListSort,
@@ -23,6 +22,7 @@ import {
   PenLineIcon,
   RefreshCwIcon,
   SearchIcon,
+  SettingsIcon,
   UserCheckIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -41,14 +41,11 @@ import {
 } from "../components/issue/issueList.logic";
 import { IssueCreateDialog } from "../components/issue/IssueCreateDialog";
 import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
+import { LinearConnectionDialog } from "../components/issue/LinearConnectionDialog";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
 import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
 import { IssueFiltersMenu, IssueSortMenu } from "../components/issue/IssueListFilters";
-import {
-  ListSearchInput,
-  type ListFilterHost,
-  type ListFilterOption,
-} from "../components/sourceControl/ListFilterMenu";
+import { ListSearchInput, type ListFilterOption } from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
 import {
   WorkItemSelectButton,
@@ -942,19 +939,8 @@ function IssuesRouteView() {
       search.host === undefined || previous.length === 0 ? answered.providers : previous,
     );
   }, [answered, search.host]);
-  const showProvider = hosts.length > 1;
-  // The workspace's own projects already name their hosts, so the row's shape is known before
-  // the list is. Only its shape: which hosts can actually be read still comes from the server.
-  const expectedHosts = useMemo(() => {
-    const byHost = new Map<string, ListFilterHost<IssueProviderKind>>();
-    for (const project of projects) {
-      const kind = project.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
-      if (kind === undefined) continue;
-      const host = sourceControlHostOf(project.repositoryIdentity, kind);
-      if (!byHost.has(host)) byHost.set(host, { host, kind });
-    }
-    return [...byHost.values()];
-  }, [projects]);
+  const activeHosts = hosts.filter((entry) => entry.configured);
+  const showProvider = activeHosts.length > 1;
 
   /** Reported per project rather than as a count, so the reader can see which one it was. */
   const unavailableProjects = useMemo(
@@ -997,6 +983,7 @@ function IssuesRouteView() {
   );
 
   const [creating, setCreating] = useState(false);
+  const [linearDialogOpen, setLinearDialogOpen] = useState(false);
   const searchInput = (
     <ListSearchInput
       label="Search issues"
@@ -1129,32 +1116,35 @@ function IssuesRouteView() {
   // The same names and glyphs the host pills wear, so the compact menu and the pills read as
   // one control: "GitHub" with its mark, never the bare hostname — unless two installs of one
   // kind force the hostname to tell them apart.
-  const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
-  const hostMenuEntries = hostEntries.filter(
-    (entry, index) => hostEntries.findIndex((other) => other.host === entry.host) === index,
+  const hostMenuEntries = activeHosts.filter(
+    (entry, index) => activeHosts.findIndex((other) => other.host === entry.host) === index,
   );
   const hostMenuOptions: ReadonlyArray<ListFilterOption<string>> = [
-    { value: "", label: "All hosts", Icon: LayersIcon },
+    { value: "", label: "All providers", Icon: LayersIcon },
     ...hostMenuEntries.map((entry) => {
       const presentation = getIssueProviderPresentation(entry.kind);
-      const sharesKind = hostEntries.some((host) => host !== entry && host.kind === entry.kind);
-      const sharesHost = hostEntries.some((host) => host !== entry && host.host === entry.host);
-      // `expectedHosts` stands in before the server has answered, and nothing is known to be
-      // unreadable yet; once the summaries arrive they carry whether each one could be read.
-      const summaries = hosts.filter((host) => host.host === entry.host);
-      const unavailable = summaries.length > 0 && summaries.every((summary) => !summary.configured);
+      const sharesKind = activeHosts.some((host) => host !== entry && host.kind === entry.kind);
+      const sharesHost = activeHosts.some((host) => host !== entry && host.host === entry.host);
       return {
         value: entry.host,
         label: sharesKind || sharesHost ? entry.host : presentation.providerName,
         Icon: presentation.Icon,
-        ...(!unavailable
-          ? {}
-          : { unavailable: summaries[0]?.detail ?? "This host could not be read." }),
+        ...(entry.kind === "linear"
+          ? {
+              action: {
+                label: "Linear settings",
+                Icon: SettingsIcon,
+                onClick: () => setLinearDialogOpen(true),
+              },
+            }
+          : {}),
       };
     }),
   ];
   const availableSortingHosts =
-    scopedProjectId === undefined ? hostEntries : (answered?.providers ?? []);
+    scopedProjectId === undefined
+      ? activeHosts
+      : (answered?.providers.filter((entry) => entry.configured) ?? []);
   const sortingHosts = search.host
     ? availableSortingHosts.filter((entry) => entry.host === search.host)
     : availableSortingHosts;
@@ -1173,6 +1163,7 @@ function IssuesRouteView() {
           host: search.host,
           hostOptions: hostMenuOptions,
           onHost: (host) => updateListScope({ host, sort: undefined, order: undefined }),
+          onManageLinear: () => setLinearDialogOpen(true),
         }}
         projectFilter={{
           environmentId,
@@ -1377,29 +1368,46 @@ function IssuesRouteView() {
       </div>
 
       {issueEnvironmentId === null ? null : (
-        <IssueCreateDialog
-          open={creating}
-          onOpenChange={setCreating}
-          environmentId={issueEnvironmentId}
-          projects={scopedProjects}
-          projectId={scopedProjectId}
-          // Filed and then read: the new issue opens in the panel, and the list it was filed
-          // from is a row out of date until the hosts are asked again.
-          onCreated={(created) => {
-            if (rightPanelRef !== null) {
-              useRightPanelStore.getState().openIssue(rightPanelRef, created);
-            }
-            updateSearch({
-              repository: created.repository,
-              number: created.number,
-              selectedProjectId: created.projectId,
-            });
-            refreshList();
-            baselineQuery.refresh();
-            authoredQuery.refresh();
-            assignedQuery.refresh();
-          }}
-        />
+        <>
+          <IssueCreateDialog
+            open={creating}
+            onOpenChange={setCreating}
+            environmentId={issueEnvironmentId}
+            projects={scopedProjects}
+            projectId={scopedProjectId}
+            // Filed and then read: the new issue opens in the panel, and the list it was filed
+            // from is a row out of date until the hosts are asked again.
+            onCreated={(created) => {
+              if (rightPanelRef !== null) {
+                useRightPanelStore.getState().openIssue(rightPanelRef, created);
+              }
+              updateSearch({
+                repository: created.repository,
+                number: created.number,
+                selectedProjectId: created.projectId,
+              });
+              refreshList();
+              baselineQuery.refresh();
+              authoredQuery.refresh();
+              assignedQuery.refresh();
+            }}
+          />
+          <LinearConnectionDialog
+            open={linearDialogOpen}
+            onOpenChange={setLinearDialogOpen}
+            onProviderChanged={(host) => {
+              if (host !== undefined) {
+                updateListScope({ host, sort: undefined, order: undefined });
+              } else {
+                setHosts((current) => current.filter((entry) => entry.kind !== "linear"));
+              }
+              if (host === undefined && search.host === "linear.app") {
+                updateListScope({ host: undefined, sort: undefined, order: undefined });
+              }
+              void refreshFromHost();
+            }}
+          />
+        </>
       )}
     </SidebarInset>
   );

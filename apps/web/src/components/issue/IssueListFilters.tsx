@@ -19,6 +19,7 @@ import {
 import {
   Menu,
   MenuGroupLabel,
+  MenuItem,
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
@@ -145,6 +146,7 @@ export function IssueFiltersMenu({
      */
     readonly hostOptions: ReadonlyArray<ListFilterOption<string>>;
     readonly onHost: (host: string | undefined) => void;
+    readonly onManageLinear?: () => void;
   };
   /** Absent for the same reason `hostFilter` is: one project is not a choice. */
   projectFilter?: {
@@ -167,6 +169,7 @@ export function IssueFiltersMenu({
   labels: ReadonlyArray<string>;
   onLabel: (label: string | undefined) => void;
 }) {
+  const providerOptions = hostFilter?.hostOptions.filter((option) => !option.unavailable) ?? [];
   const filtered =
     state !== "open" ||
     involvement !== "all" ||
@@ -183,15 +186,20 @@ export function IssueFiltersMenu({
         options={involvementOptions}
         onChange={onInvolvement}
       />
-      {hostFilter !== undefined && hostFilter.hostOptions.length > 2 ? (
+      {hostFilter !== undefined &&
+      (providerOptions.length > 2 || hostFilter.onManageLinear !== undefined) ? (
         <>
           <MenuSeparator />
           <ListFilterRadioGroup
-            label="Host"
+            label="Provider"
             value={hostFilter.host ?? ALL_HOSTS_VALUE}
-            options={hostFilter.hostOptions}
+            options={providerOptions}
             onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
           />
+          {hostFilter.onManageLinear !== undefined &&
+          !providerOptions.some((option) => option.action !== undefined) ? (
+            <MenuItem onClick={hostFilter.onManageLinear}>Connect Linear…</MenuItem>
+          ) : null}
         </>
       ) : null}
       {projectFilter === undefined ? null : (
