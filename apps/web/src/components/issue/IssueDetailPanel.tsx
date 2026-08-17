@@ -113,7 +113,7 @@ const CLOSE_REASON_PHRASES: Record<IssueCloseReason, string> = {
   "not-planned": " as not planned",
 };
 
-export const openOnIssueLabel = (provider: IssueProviderKind): string =>
+const openOnIssueLabel = (provider: IssueProviderKind): string =>
   `Open on ${getIssueProviderPresentation(provider).providerName}`;
 
 /** Names no hand-off, which is the point: it holds the controls shut without claiming one is running. */

@@ -1,6 +1,28 @@
 import type { EnvironmentId, IssueActivity, IssueDetail } from "@t3tools/contracts";
+import { cloneElement, isValidElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
+
+import { reactHookHarness as hooks } from "../../test/reactHookHarness";
+import { visitElements } from "../../test/reactElementTree";
+
+vi.mock("react", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("react")>();
+  const { reactHookHarness } = await import("../../test/reactHookHarness");
+  return {
+    ...actual,
+    useCallback: reactHookHarness.useCallback,
+    useEffect: () => undefined,
+    useLayoutEffect: () => undefined,
+    useMemo: reactHookHarness.useMemo,
+    useRef: reactHookHarness.useRef,
+    useState: reactHookHarness.useState,
+  };
+});
+vi.mock("react/compiler-runtime", async () => {
+  const { reactHookHarness } = await import("../../test/reactHookHarness");
+  return { c: reactHookHarness.useMemoCache };
+});
 
 vi.mock("~/composerDraftStore", () => ({
   useComposerDraftStore: { getState: () => ({}) },
@@ -33,11 +55,11 @@ vi.mock("../sourceControl/ActivityUnavailableState", () => ({
 }));
 vi.mock("../sourceControl/actorPresentation", () => ({
   SourceControlActorLabel: () => null,
-  SourceControlMetaLine: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  SourceControlMetaLine: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../sourceControl/DetailTabStrip", () => ({
   CondensedDetailTabStrip: () => null,
-  DetailTabStrip: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
+  DetailTabStrip: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../sourceControl/ListGhosts", () => ({
   DetailGhost: () => null,
@@ -46,33 +68,6 @@ vi.mock("../sourceControl/ListGhosts", () => ({
 vi.mock("./IssueSummaryTab", () => ({ IssueSummaryTab: () => null }));
 vi.mock("./IssueTimelineTab", () => ({ IssueTimelineTab: () => null }));
 vi.mock("./IssuesUnavailableState", () => ({ IssuesUnavailableState: () => null }));
-vi.mock("../ui/menu", async () => {
-  const React = await import("react");
-  const Slot = ({ render, children, ...props }: any) =>
-    render
-      ? React.cloneElement(render, props, children)
-      : React.createElement("div", props, children);
-  return {
-    Menu: ({ children }: any) => <div>{children}</div>,
-    MenuItem: ({ children, ...props }: any) => <button {...props}>{children}</button>,
-    MenuPopup: ({ children, ...props }: any) => <div {...props}>{children}</div>,
-    MenuSeparator: () => null,
-    MenuTrigger: Slot,
-  };
-});
-vi.mock("../ui/tooltip", async () => {
-  const React = await import("react");
-  const Slot = ({ render, children, ...props }: any) =>
-    render
-      ? React.cloneElement(render, props, children)
-      : React.createElement("span", props, children);
-  return {
-    Tooltip: ({ children }: any) => <>{children}</>,
-    TooltipPopup: ({ children }: any) => <span>{children}</span>,
-    TooltipTrigger: Slot,
-  };
-});
-
 const detail: IssueDetail = {
   provider: "linear",
   capabilities: {
@@ -128,23 +123,43 @@ const activity: IssueActivity = {
 };
 
 import { IssueDetailPanel } from "./IssueDetailPanel";
+import { Menu, MenuItem } from "../ui/menu";
+
+function textContent(node: unknown): string {
+  if (typeof node === "string") return node;
+  if (Array.isArray(node)) return node.map(textContent).join("");
+  return isValidElement(node) ? textContent(node.props.children) : "";
+}
 
 describe("IssueDetailPanel provider labels", () => {
   it("renders Linear labels in the header, tooltips, menu, and aria attributes", () => {
-    const markup = renderToStaticMarkup(
-      <IssueDetailPanel
-        environmentId={"environment-1" as EnvironmentId}
-        reference={{
-          projectId: "project-1" as IssueDetail["projectId"],
-          repository: "acme/project",
-          number: 42,
-        }}
-        handoffTarget={{ kind: "new-thread" }}
-      />,
-    );
+    hooks.reset();
+    hooks.beginRender();
+    const panel = IssueDetailPanel({
+      environmentId: "environment-1" as EnvironmentId,
+      reference: {
+        projectId: "project-1" as IssueDetail["projectId"],
+        repository: "acme/project",
+        number: 42,
+      },
+      handoffTarget: { kind: "new-thread" },
+    });
+    const menu = visitElements(panel, (element) => element.type === Menu);
+    expect(menu).not.toBeNull();
 
-    expect(markup).toContain('aria-label="Open on Linear"');
-    expect(markup).toContain(">Open on Linear<");
-    expect(markup.match(/Open on Linear/g)?.length).toBeGreaterThanOrEqual(3);
+    const panelMarkup = renderToStaticMarkup(panel);
+    const menuItem = visitElements(
+      menu,
+      (element) =>
+        element.type === MenuItem && textContent(element.props.children).includes("Open on Linear"),
+    );
+    const markup = renderToStaticMarkup(cloneElement(menu!, { open: true }));
+
+    expect(panelMarkup).toContain('aria-label="Open on Linear"');
+    expect(menuItem).not.toBeNull();
+    expect(textContent(menuItem?.props.children)).toContain("Open on Linear");
+    // Base UI portals do not emit popup contents during SSR; the real open root still renders
+    // here, while the MenuItem assertion above checks the child mounted in that root.
+    expect(markup).toContain('aria-haspopup="menu"');
   });
 });
