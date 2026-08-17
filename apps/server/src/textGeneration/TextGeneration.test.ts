@@ -155,4 +155,43 @@ describe("makeTextGenerationFromRegistry", () => {
       expect(matches.matches[0]?.candidate).toBe(1);
     }),
   );
+
+  it.effect("preserves the complete selected model for work item task generation", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("codex_work");
+      const selection = createModelSelection(instanceId, "gpt-5.4", [
+        { id: "reasoningEffort", value: "xhigh" },
+        { id: "serviceTier", value: "priority" },
+      ]);
+      let received: typeof selection | undefined;
+      const textGeneration = makeStubTextGeneration({
+        generateWorkItemTask: (input) => {
+          received = input.modelSelection;
+          return Effect.succeed({ prompt: "Draft" });
+        },
+      });
+      const tg = TextGeneration.makeTextGenerationFromRegistry(
+        makeStubRegistry([makeStubInstance(instanceId, textGeneration)]),
+      );
+
+      yield* tg.generateWorkItemTask({
+        cwd: process.cwd(),
+        mode: "compound",
+        items: [
+          {
+            kind: "issue",
+            provider: "github",
+            repository: "acme/app",
+            number: 12,
+            title: "Fix sessions",
+            url: "https://github.com/acme/app/issues/12",
+            body: "Sessions expire early.",
+          },
+        ],
+        modelSelection: selection,
+      });
+
+      expect(received).toEqual(selection);
+    }),
+  );
 });

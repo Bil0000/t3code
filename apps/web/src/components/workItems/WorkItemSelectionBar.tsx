@@ -28,12 +28,26 @@ export function workItemGeneratingDraft(
   ].join("\n");
 }
 
+function workItemGenerationFailureDraft(
+  mode: "compound" | "subtasks",
+  items: ReadonlyArray<SelectedWorkItem>,
+) {
+  return workItemGeneratingDraft(mode, items).replace(
+    "Generating a task from the selected sources…",
+    "AI task generation failed. You can edit this draft or try again.",
+  );
+}
 type WorkItemTaskGeneration =
   | { readonly _tag: "Failure" }
   | {
       readonly _tag: "Success";
       readonly value: { readonly prompt: string; readonly generated: boolean };
     };
+
+type WorkItemTaskDraftResult =
+  | { readonly status: "thread-failure" }
+  | { readonly status: "generation-failure" }
+  | { readonly status: "success"; readonly generated: boolean };
 
 export async function createGeneratedWorkItemDraft<TDraftId>(input: {
   readonly mode: "compound" | "subtasks";
@@ -43,19 +57,24 @@ export async function createGeneratedWorkItemDraft<TDraftId>(input: {
   readonly getPrompt: (draftId: TDraftId) => string | undefined;
   readonly setPrompt: (draftId: TDraftId, prompt: string) => void;
   readonly clear: () => void;
-}): Promise<{ readonly status: "success" | "generation-failure" | "thread-failure" }> {
+  readonly isSelectionCurrent: () => boolean;
+}): Promise<WorkItemTaskDraftResult> {
   const opened = await input.openThread();
   if (opened === null) return { status: "thread-failure" };
 
   const draft = workItemGeneratingDraft(input.mode, input.items);
   input.setPrompt(opened.draftId, draft);
   const generation = await input.generate();
-  if (generation._tag === "Failure") return { status: "generation-failure" };
+  if (generation._tag === "Failure") {
+    if (input.getPrompt(opened.draftId) === draft)
+      input.setPrompt(opened.draftId, workItemGenerationFailureDraft(input.mode, input.items));
+    return { status: "generation-failure" };
+  }
 
   if (input.getPrompt(opened.draftId) === draft)
     input.setPrompt(opened.draftId, generation.value.prompt);
-  input.clear();
-  return { status: "success" };
+  if (input.isSelectionCurrent()) input.clear();
+  return { status: "success", generated: generation.value.generated };
 }
 
 export function WorkItemSelectButton() {
@@ -106,6 +125,7 @@ export function WorkItemSelectionBar() {
         }),
       getPrompt: (draftId) => useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt,
       setPrompt: (draftId, prompt) => useComposerDraftStore.getState().setPrompt(draftId, prompt),
+      isSelectionCurrent: () => useWorkItemSelection.getState().items === items,
       clear,
     });
     setBusy(false);
@@ -123,7 +143,7 @@ export function WorkItemSelectionBar() {
     }
     toastManager.add({
       type: "success",
-      title: "Task drafted",
+      title: result.generated ? "Task drafted with AI" : "Task drafted",
       description: "Review the task in the composer, then send it.",
     });
   };
