@@ -280,6 +280,27 @@ describe("getChangeRequest linked issues", () => {
     );
   });
 
+  it.effect("applies the citation cap after removing other projects", () => {
+    const listCitedIssues = vi.fn<
+      GitLabPullRequestCli.GitLabPullRequestCli["Service"]["listCitedIssues"]
+    >(() => Effect.succeed([issue(34, false)]));
+    const external = Array.from({ length: 10 }, (_, index) => `group/tools#${index + 1}`).join(" ");
+
+    return read.pipe(
+      Effect.map((detail) => {
+        expect(listCitedIssues.mock.calls[0]?.[0].numbers).toEqual([34]);
+        expect(detail.linkedIssues.map((link) => link.number)).toEqual([34]);
+      }),
+      Effect.provide(
+        layerWith({
+          body: `${external} then #34`,
+          linked: [],
+          listCitedIssues,
+        }),
+      ),
+    );
+  });
+
   it.effect("drops a reference GitLab answered nothing for", () =>
     read.pipe(
       Effect.map((detail) => expect(detail.linkedIssues).toEqual([])),

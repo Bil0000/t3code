@@ -97,7 +97,10 @@ function urlReference(token: string, source: IssueReferenceSource): IssueReferen
  * A link whose URL is not an issue is removed before the numbers are scanned, so the fragment of
  * an ordinary URL never reads as one.
  */
-export function parseIssueReferences(source: IssueReferenceSource): ReadonlyArray<IssueReference> {
+export function parseIssueReferences(
+  source: IssueReferenceSource,
+  include: (reference: IssueReference) => boolean = () => true,
+): ReadonlyArray<IssueReference> {
   const found = new Map<string, IssueReference>();
   const add = (reference: IssueReference | null) => {
     if (reference === null) return;
@@ -111,7 +114,7 @@ export function parseIssueReferences(source: IssueReferenceSource): ReadonlyArra
       add(toReference(source, match[1], Number(match[2])));
     }
   }
-  return [...found.values()].slice(0, CITED_ISSUE_REFERENCES_MAX);
+  return [...found.values()].filter(include).slice(0, CITED_ISSUE_REFERENCES_MAX);
 }
 
 /** The references the host said nothing about, which are the only ones worth a lookup. */

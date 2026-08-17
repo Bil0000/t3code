@@ -134,17 +134,18 @@ export const make = Effect.gen(function* () {
   ): Effect.Effect<ReadonlyArray<IssueLink>> => {
     const project = input.repository.trim().toLowerCase();
     const numbers = unlinkedIssueReferences(
-      parseIssueReferences({
-        kind: "gitlab",
-        host: input.host,
-        repository: input.repository,
-        title: mergeRequest.title,
-        body: mergeRequest.body,
-      }),
+      parseIssueReferences(
+        {
+          kind: "gitlab",
+          host: input.host,
+          repository: input.repository,
+          title: mergeRequest.title,
+          body: mergeRequest.body,
+        },
+        (reference) => reference.repository.trim().toLowerCase() === project,
+      ),
       hostLinks,
-    )
-      .filter((reference) => reference.repository.trim().toLowerCase() === project)
-      .map((reference) => reference.number);
+    ).map((reference) => reference.number);
     return numbers.length === 0
       ? Effect.succeed([])
       : cli
