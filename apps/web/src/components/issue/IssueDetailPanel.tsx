@@ -6,6 +6,7 @@ import type {
   IssueCloseReason,
   IssueComment,
   IssueLinkedPullRequest,
+  IssueProviderKind,
   IssueRef,
   IssueState,
   ScopedProjectRef,
@@ -77,7 +78,7 @@ import { DetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
 import { IssueSummaryTab } from "./IssueSummaryTab";
 import { IssuesUnavailableState } from "./IssuesUnavailableState";
 import { IssueTimelineTab } from "./IssueTimelineTab";
-import { resolveIssueState } from "./issuePresentation";
+import { getIssueProviderPresentation, resolveIssueState } from "./issuePresentation";
 
 /** An issue has no patch to read, so there is no third tab here as there is on a change request. */
 type DetailTab = "summary" | "timeline";
@@ -112,13 +113,8 @@ const CLOSE_REASON_PHRASES: Record<IssueCloseReason, string> = {
   "not-planned": " as not planned",
 };
 
-/** Named for the host rather than "externally": the point is where you will land. */
-const OPEN_ON_HOST_LABELS: Partial<Record<string, string>> = {
-  github: "Open on GitHub",
-  gitlab: "Open on GitLab",
-  bitbucket: "Open on Bitbucket",
-  "azure-devops": "Open on Azure DevOps",
-};
+export const openOnIssueLabel = (provider: IssueProviderKind): string =>
+  `Open on ${getIssueProviderPresentation(provider).providerName}`;
 
 /** Names no hand-off, which is the point: it holds the controls shut without claiming one is running. */
 const HANDOFF_WAITING_KIND = "waiting-for-activity";
@@ -566,15 +562,13 @@ export function IssueDetailPanel({
                           "shrink-0 font-medium underline-offset-2 hover:underline",
                           statePresentation.toneClassName,
                         )}
-                        aria-label={`Open issue #${detail.number} on host`}
+                        aria-label={openOnIssueLabel(detail.provider)}
                       />
                     }
                   >
                     #{detail.number}
                   </TooltipTrigger>
-                  <TooltipPopup side="top">
-                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                  </TooltipPopup>
+                  <TooltipPopup side="top">{openOnIssueLabel(detail.provider)}</TooltipPopup>
                 </Tooltip>
               </>
             ) : null}
@@ -602,15 +596,13 @@ export function IssueDetailPanel({
                           "shrink-0 font-medium underline-offset-2 hover:underline",
                           statePresentation.toneClassName,
                         )}
-                        aria-label={`Open issue #${detail.number} on host`}
+                        aria-label={openOnIssueLabel(detail.provider)}
                       />
                     }
                   >
                     #{detail.number}
                   </TooltipTrigger>
-                  <TooltipPopup side="top">
-                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
-                  </TooltipPopup>
+                  <TooltipPopup side="top">{openOnIssueLabel(detail.provider)}</TooltipPopup>
                 </Tooltip>
                 <Tooltip>
                   <TooltipTrigger
@@ -716,7 +708,7 @@ export function IssueDetailPanel({
                   <MenuSeparator />
                   <MenuItem onClick={() => openOnHost(detail.url)}>
                     <ArrowUpRightIcon className="size-3.5" />
-                    {OPEN_ON_HOST_LABELS[detail.provider] ?? "Open on host"}
+                    {openOnIssueLabel(detail.provider)}
                   </MenuItem>
                   {/* A clipboard that is switched off or refuses says nothing on its own, and a
                       reader who has been handed nothing goes and pastes whatever was there
