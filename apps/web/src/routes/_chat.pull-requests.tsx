@@ -71,6 +71,10 @@ import {
 import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
+import {
+  WorkItemSelectButton,
+  WorkItemSelectionBar,
+} from "../components/workItems/WorkItemSelectionBar";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import {
   RightPanelTabs,
@@ -110,6 +114,8 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
+import { toastManager } from "../components/ui/toast";
+import { isWorkItemSelected, useWorkItemSelection } from "../workItemSelection";
 
 export interface PullRequestsSearch {
   readonly involvement: PullRequestInvolvement;
@@ -228,6 +234,9 @@ export const Route = createFileRoute("/_chat/pull-requests")({
 });
 
 function PullRequestsRouteView() {
+  const selectingWorkItems = useWorkItemSelection((state) => state.selecting);
+  const selectedWorkItems = useWorkItemSelection((state) => state.items);
+  const toggleWorkItem = useWorkItemSelection((state) => state.toggle);
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const { environments } = useEnvironments();
@@ -1308,6 +1317,26 @@ function PullRequestsRouteView() {
     [rightPanelRef, updateSearch],
   );
 
+  const selectOrToggleEntry = useCallback(
+    (entry: EnvironmentPullRequestEntry) => {
+      if (!selectingWorkItems) return selectEntry(entry);
+      const error = toggleWorkItem({
+        kind: "pull-request",
+        environmentId: entry.environmentId,
+        projectId: entry.projectId,
+        repository: entry.repository,
+        number: entry.number,
+        title: entry.title,
+        url: entry.url,
+      });
+      if (error === "project")
+        toastManager.add({ type: "warning", title: "Select items from one project" });
+      if (error === "limit")
+        toastManager.add({ type: "warning", title: "You can select up to 20 items" });
+    },
+    [selectEntry, selectingWorkItems, toggleWorkItem],
+  );
+
   const searchInput = (
     <ListSearchInput
       label="Search pull requests"
@@ -1352,6 +1381,7 @@ function PullRequestsRouteView() {
     showingCarried && listQuery.isPending && entries.length === 0 && typedQuery.length === 0;
   const listBody = (
     <>
+      <WorkItemSelectionBar />
       {!capabilityKnown ? (
         <ListGhost rows={7} label="Loading pull requests" />
       ) : !pullRequestsSupported ? (
@@ -1412,11 +1442,21 @@ function PullRequestsRouteView() {
                     scorePullRequestMatch(entry, typedParsed.text) <= MATCHED_ELSEWHERE_SCORE
                   }
                   selected={
-                    selected?.environmentId === entry.environmentId &&
-                    selected.repository === entry.repository &&
-                    selected.number === entry.number
+                    selectingWorkItems
+                      ? isWorkItemSelected(selectedWorkItems, {
+                          kind: "pull-request",
+                          environmentId: entry.environmentId,
+                          projectId: entry.projectId,
+                          repository: entry.repository,
+                          number: entry.number,
+                          title: entry.title,
+                          url: entry.url,
+                        })
+                      : selected?.environmentId === entry.environmentId &&
+                        selected.repository === entry.repository &&
+                        selected.number === entry.number
                   }
-                  onSelect={selectEntry}
+                  onSelect={selectOrToggleEntry}
                 />
               ))}
             </div>
@@ -1475,36 +1515,41 @@ function PullRequestsRouteView() {
     })),
   ];
   const filtersMenu = (
-    <PullRequestFiltersMenu
-      state={search.state}
-      stateOptions={STATE_TABS}
-      onState={(state) => updateListScope({ state })}
-      involvement={search.involvement}
-      involvementOptions={INVOLVEMENT_TABS}
-      onInvolvement={(involvement) => updateListScope({ involvement })}
-      filters={menuFilters}
-      onFilters={(next) =>
-        updateListScope({ draft: next.draft, review: next.review, checks: next.checks })
-      }
-      host={search.host}
-      hostOptions={hostMenuOptions}
-      onHost={(host) => updateListScope({ host })}
-      server={scopedEnvironmentId ?? undefined}
-      serverOptions={serverMenuOptions}
-      // Narrowing to one server drops a project scope belonging to another, which would
-      // otherwise narrow the list to nothing with no visible filter to explain it.
-      onServer={(server) => updateListScope({ environmentId: server, projectId: undefined })}
-      projects={scopedProjects}
-      projectId={scopedProjectId}
-      projectEnvironmentId={scopedProject?.environmentId}
-      unavailable={unavailableProjects}
-      // The environment comes along with the project it belongs to, so a duplicate id on
-      // another server never gets narrowed to by mistake; picking "All projects" leaves the
-      // server scope as it was rather than clearing it.
-      onProject={(projectId, environmentId) =>
-        updateListScope(environmentId === undefined ? { projectId } : { projectId, environmentId })
-      }
-    />
+    <div className="flex shrink-0 items-center gap-1">
+      <PullRequestFiltersMenu
+        state={search.state}
+        stateOptions={STATE_TABS}
+        onState={(state) => updateListScope({ state })}
+        involvement={search.involvement}
+        involvementOptions={INVOLVEMENT_TABS}
+        onInvolvement={(involvement) => updateListScope({ involvement })}
+        filters={menuFilters}
+        onFilters={(next) =>
+          updateListScope({ draft: next.draft, review: next.review, checks: next.checks })
+        }
+        host={search.host}
+        hostOptions={hostMenuOptions}
+        onHost={(host) => updateListScope({ host })}
+        server={scopedEnvironmentId ?? undefined}
+        serverOptions={serverMenuOptions}
+        // Narrowing to one server drops a project scope belonging to another, which would
+        // otherwise narrow the list to nothing with no visible filter to explain it.
+        onServer={(server) => updateListScope({ environmentId: server, projectId: undefined })}
+        projects={scopedProjects}
+        projectId={scopedProjectId}
+        projectEnvironmentId={scopedProject?.environmentId}
+        unavailable={unavailableProjects}
+        // The environment comes along with the project it belongs to, so a duplicate id on
+        // another server never gets narrowed to by mistake; picking "All projects" leaves the
+        // server scope as it was rather than clearing it.
+        onProject={(projectId, environmentId) =>
+          updateListScope(
+            environmentId === undefined ? { projectId } : { projectId, environmentId },
+          )
+        }
+      />
+      <WorkItemSelectButton />
+    </div>
   );
   const columnProps = {
     refreshing,

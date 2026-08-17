@@ -51,6 +51,10 @@ import {
   type ListFilterOption,
 } from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
+import {
+  WorkItemSelectButton,
+  WorkItemSelectionBar,
+} from "../components/workItems/WorkItemSelectionBar";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import { resolveProjectScope } from "../components/sourceControl/projectScope";
@@ -87,6 +91,8 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { getIssueProviderPresentation } from "../components/issue/issuePresentation";
 import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
+import { toastManager } from "../components/ui/toast";
+import { isWorkItemSelected, useWorkItemSelection } from "../workItemSelection";
 
 export interface IssuesSearch {
   readonly involvement: IssueInvolvement;
@@ -210,6 +216,9 @@ function IssuesRouteView() {
   // The primary environment may still be connecting, or may predate this feature. In either
   // case every query remains idle until the server has explicitly advertised these APIs.
   const issueEnvironmentId = issuesSupported ? environmentId : null;
+  const selectingWorkItems = useWorkItemSelection((state) => state.selecting);
+  const selectedWorkItems = useWorkItemSelection((state) => state.items);
+  const toggleWorkItem = useWorkItemSelection((state) => state.toggle);
   const allProjects = useProjects();
   // Whether the workspace has said what it holds yet. Until it has, an empty project list is
   // "not loaded" rather than "none", and telling a reader to add a project they already have is
@@ -968,6 +977,26 @@ function IssuesRouteView() {
     [rightPanelRef, updateSearch],
   );
 
+  const selectOrToggleEntry = useCallback(
+    (entry: IssueListEntry) => {
+      if (!selectingWorkItems || issueEnvironmentId === null) return selectEntry(entry);
+      const error = toggleWorkItem({
+        kind: "issue",
+        environmentId: issueEnvironmentId,
+        projectId: entry.projectId,
+        repository: entry.repository,
+        number: entry.number,
+        title: entry.title,
+        url: entry.url,
+      });
+      if (error === "project")
+        toastManager.add({ type: "warning", title: "Select items from one project" });
+      if (error === "limit")
+        toastManager.add({ type: "warning", title: "You can select up to 20 items" });
+    },
+    [issueEnvironmentId, selectEntry, selectingWorkItems, toggleWorkItem],
+  );
+
   const [creating, setCreating] = useState(false);
   const searchInput = (
     <ListSearchInput
@@ -1005,6 +1034,7 @@ function IssuesRouteView() {
     showingCarried && listQuery.isPending && entries.length === 0 && typedQuery.length === 0;
   const listBody = (
     <>
+      <WorkItemSelectionBar />
       {!capabilityKnown ? (
         <ListGhost rows={7} label="Loading issues" />
       ) : !issuesSupported ? (
@@ -1053,9 +1083,20 @@ function IssuesRouteView() {
                   showProvider={showProvider}
                   reactionSort={sort}
                   selected={
-                    selected?.repository === entry.repository && selected.number === entry.number
+                    selectingWorkItems && issueEnvironmentId !== null
+                      ? isWorkItemSelected(selectedWorkItems, {
+                          kind: "issue",
+                          environmentId: issueEnvironmentId,
+                          projectId: entry.projectId,
+                          repository: entry.repository,
+                          number: entry.number,
+                          title: entry.title,
+                          url: entry.url,
+                        })
+                      : selected?.repository === entry.repository &&
+                        selected.number === entry.number
                   }
-                  onSelect={selectEntry}
+                  onSelect={selectOrToggleEntry}
                 />
               ))}
             </div>
@@ -1157,6 +1198,7 @@ function IssuesRouteView() {
           }
         />
       ) : null}
+      <WorkItemSelectButton />
     </div>
   );
   const columnProps = {
