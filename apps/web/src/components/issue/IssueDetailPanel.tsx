@@ -1024,6 +1024,7 @@ export function IssueDetailPanel({
                       ? openOnHost(link.url)
                       : onOpenLinkedPullRequest(link)
                   }
+                  onOpenAiMatch={(match) => openOnHost(match.url)}
                   onRefresh={refreshDetail}
                 />
               </div>

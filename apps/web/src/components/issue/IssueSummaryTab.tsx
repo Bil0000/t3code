@@ -4,6 +4,7 @@ import type {
   IssueDetailView,
   IssueLinkedPullRequest,
   IssueRef,
+  WorkItemMatch,
 } from "@t3tools/contracts";
 import {
   LinkIcon,
@@ -43,6 +44,11 @@ import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { IssueLabelPicker } from "./IssueLabelPicker";
 import { IssueLabelChips } from "./issuePresentation";
 import { IssueReactionBar } from "./IssueReactions";
+import {
+  useWorkItemMatches,
+  WorkItemMatchButton,
+  WorkItemMatchRows,
+} from "../workItems/WorkItemMatches";
 
 /**
  * Rewriting the issue where it is read, rather than in a dialog over the top of it: what the
@@ -155,6 +161,7 @@ export function IssueSummaryTab({
   pendingHandoff,
   onLinkPullRequests,
   onOpenLinkedPullRequest,
+  onOpenAiMatch,
   onLoadMoreComments,
   loadingMoreComments,
   onRefresh,
@@ -182,6 +189,7 @@ export function IssueSummaryTab({
    */
   onLinkPullRequests?: () => void;
   onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
+  onOpenAiMatch: (match: WorkItemMatch) => void;
   onRefresh: () => void;
   onLoadMoreComments: () => void;
   loadingMoreComments: boolean;
@@ -189,6 +197,12 @@ export function IssueSummaryTab({
   // Keyed by the issue, so opening another one starts at the end of its conversation rather than
   // wherever the last one had been read back to.
   const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
+  const aiMatches = useWorkItemMatches({
+    environmentId,
+    projectId: reference.projectId,
+    source: { kind: "issue", repository: reference.repository, number: reference.number },
+    version: detail.updatedAt,
+  });
   const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;
   // An issue reads in the order it was written, so the window reaches backwards from the end.
   const recentComments = detail.comments.slice(Math.max(0, detail.comments.length - shownComments));
@@ -304,16 +318,20 @@ export function IssueSummaryTab({
         </div>
       </SummarySection>
 
-      {/* Only where the host reports links at all: an empty section under a host that never
-          answers this question says the issue has no work on it, which it cannot know. */}
-      {detail.capabilities.linkedPullRequests ? (
-        <SummarySection
-          title="Related pull requests"
-          count={detail.linkedPullRequests.length}
-          // Offered whether or not anything is listed: an issue one change already mentions can
-          // still be worked on by another that never named it.
-          actions={
-            onLinkPullRequests ? (
+      <SummarySection
+        title="Related pull requests"
+        {...(detail.capabilities.linkedPullRequests
+          ? { count: detail.linkedPullRequests.length }
+          : {})}
+        actions={
+          <div className="flex items-center gap-1">
+            <WorkItemMatchButton
+              busy={aiMatches.pending === "related"}
+              disabled={aiMatches.pending !== null}
+              loaded={aiMatches.related !== undefined}
+              onClick={() => void aiMatches.find("related")}
+            />
+            {detail.capabilities.linkedPullRequests && onLinkPullRequests ? (
               <Button
                 size="xs"
                 variant="ghost"
@@ -326,10 +344,12 @@ export function IssueSummaryTab({
                   ? "Preparing..."
                   : "Link with agent"}
               </Button>
-            ) : null
-          }
-        >
-          {detail.linkedPullRequests.length === 0 ? (
+            ) : null}
+          </div>
+        }
+      >
+        {detail.capabilities.linkedPullRequests ? (
+          detail.linkedPullRequests.length === 0 ? (
             <p className="text-xs text-muted-foreground">No pull request mentions this issue.</p>
           ) : (
             <div className="space-y-0.5">
@@ -365,9 +385,47 @@ export function IssueSummaryTab({
                 );
               })}
             </div>
-          )}
-        </SummarySection>
-      ) : null}
+          )
+        ) : (
+          <p className="text-xs text-muted-foreground">
+            This tracker does not report pull request links.
+          </p>
+        )}
+        {aiMatches.related === undefined ? null : (
+          <div className="mt-2">
+            <WorkItemMatchRows
+              matches={aiMatches.related}
+              emptyText="No likely related pull requests found."
+              onOpen={onOpenAiMatch}
+            />
+          </div>
+        )}
+      </SummarySection>
+
+      <SummarySection
+        title="Possible duplicate issues"
+        {...(aiMatches.duplicate === undefined ? {} : { count: aiMatches.duplicate.length })}
+        actions={
+          <WorkItemMatchButton
+            busy={aiMatches.pending === "duplicate"}
+            disabled={aiMatches.pending !== null}
+            loaded={aiMatches.duplicate !== undefined}
+            onClick={() => void aiMatches.find("duplicate")}
+          />
+        }
+      >
+        {aiMatches.duplicate === undefined ? (
+          <p className="text-xs text-muted-foreground">
+            Find issues that describe the same problem.
+          </p>
+        ) : (
+          <WorkItemMatchRows
+            matches={aiMatches.duplicate}
+            emptyText="No likely duplicate issues found."
+            onOpen={onOpenAiMatch}
+          />
+        )}
+      </SummarySection>
 
       <SummarySection
         title="Comments"

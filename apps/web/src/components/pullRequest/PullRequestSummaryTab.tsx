@@ -55,6 +55,11 @@ import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
+import {
+  useWorkItemMatches,
+  WorkItemMatchButton,
+  WorkItemMatchRows,
+} from "../workItems/WorkItemMatches";
 
 /** A host colour only when it is one, so a malformed value falls back to the neutral dot. */
 function labelDotColor(color: string | null): string | null {
@@ -315,6 +320,15 @@ export function PullRequestSummaryTab({
   // Keyed by the pull request, so opening another one starts at the end of its conversation
   // rather than wherever the last one had been read back to.
   const [shown, setShown] = useState({ url: detail.url, count: COMMENT_PAGE });
+  const aiMatches = useWorkItemMatches({
+    environmentId,
+    projectId: reference.projectId,
+    source: { kind: "pull-request", repository: reference.repository, number: reference.number },
+    version: detail.updatedAt,
+  });
+  const openAiMatch = (match: { readonly url: string }) => {
+    void readLocalApi()?.shell.openExternal(match.url);
+  };
   const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;
   // Windowed by recency regardless of display order: expanding always reaches further back in
   // time, whether the newest comment currently reads first or last.
@@ -524,16 +538,18 @@ export function PullRequestSummaryTab({
         </div>
       </Section>
 
-      {/* Absent under a host that never answers this question, rather than empty: an empty
-          section would say this change closes nothing, which such a host cannot know. */}
-      {detail.linkedIssues === undefined ? null : (
-        <Section
-          title="Linked issues"
-          count={detail.linkedIssues.length}
-          // Offered whether or not anything is listed: a change that already closes one issue can
-          // still be about another nobody thought to mention.
-          actions={
-            onLinkIssues ? (
+      <Section
+        title="Related issues"
+        {...(detail.linkedIssues === undefined ? {} : { count: detail.linkedIssues.length })}
+        actions={
+          <div className="flex items-center gap-1">
+            <WorkItemMatchButton
+              busy={aiMatches.pending === "related"}
+              disabled={aiMatches.pending !== null}
+              loaded={aiMatches.related !== undefined}
+              onClick={() => void aiMatches.find("related")}
+            />
+            {detail.linkedIssues !== undefined && onLinkIssues ? (
               <Button
                 size="xs"
                 variant="ghost"
@@ -544,47 +560,81 @@ export function PullRequestSummaryTab({
                 <LinkIcon aria-hidden className="size-3" />
                 {pendingFinding === LINK_ISSUES_HANDOFF_KIND ? "Preparing..." : "Link with agent"}
               </Button>
-            ) : null
-          }
-        >
-          {detail.linkedIssues.length === 0 ? (
-            <p className="text-xs text-muted-foreground">This change mentions no issue.</p>
-          ) : (
-            <div className="space-y-0.5">
-              {detail.linkedIssues.map((link) => (
-                <button
-                  key={`${link.repository}#${link.number}`}
-                  type="button"
-                  // Beside the change rather than instead of it: reading what a change is for is
-                  // reading the two together.
-                  onClick={() =>
-                    onOpenLinkedIssue === undefined
-                      ? void readLocalApi()?.shell.openExternal(link.url)
-                      : onOpenLinkedIssue(link)
-                  }
-                  className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60"
-                >
-                  <IssueStateGlyph state={link.state} stateReason={null} className="size-3.5" />
-                  <span className="min-w-0 flex-1 truncate">{link.title}</span>
-                  {link.closesIssue ? (
-                    <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px] text-muted-foreground">
-                      closed by this
-                    </span>
-                  ) : null}
-                  <span className="shrink-0 text-muted-foreground tabular-nums">
-                    #{link.number}
+            ) : null}
+          </div>
+        }
+      >
+        {detail.linkedIssues === undefined ? (
+          <p className="text-xs text-muted-foreground">This host does not report issue links.</p>
+        ) : detail.linkedIssues.length === 0 ? (
+          <p className="text-xs text-muted-foreground">This change mentions no issue.</p>
+        ) : (
+          <div className="space-y-0.5">
+            {detail.linkedIssues.map((link) => (
+              <button
+                key={`${link.repository}#${link.number}`}
+                type="button"
+                // Beside the change rather than instead of it: reading what a change is for is
+                // reading the two together.
+                onClick={() =>
+                  onOpenLinkedIssue === undefined
+                    ? void readLocalApi()?.shell.openExternal(link.url)
+                    : onOpenLinkedIssue(link)
+                }
+                className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60"
+              >
+                <IssueStateGlyph state={link.state} stateReason={null} className="size-3.5" />
+                <span className="min-w-0 flex-1 truncate">{link.title}</span>
+                {link.closesIssue ? (
+                  <span className="shrink-0 rounded-full border border-border/60 px-1.5 text-[10px] text-muted-foreground">
+                    closed by this
                   </span>
-                </button>
-              ))}
-              {detail.linkedIssuesTruncated === true ? (
-                <p className="px-2 pt-1 text-xs text-muted-foreground">
-                  More linked issues exist on the host.
-                </p>
-              ) : null}
-            </div>
-          )}
-        </Section>
-      )}
+                ) : null}
+                <span className="shrink-0 text-muted-foreground tabular-nums">#{link.number}</span>
+              </button>
+            ))}
+            {detail.linkedIssuesTruncated === true ? (
+              <p className="px-2 pt-1 text-xs text-muted-foreground">
+                More linked issues exist on the host.
+              </p>
+            ) : null}
+          </div>
+        )}
+        {aiMatches.related === undefined ? null : (
+          <div className="mt-2">
+            <WorkItemMatchRows
+              matches={aiMatches.related}
+              emptyText="No likely related issues found."
+              onOpen={openAiMatch}
+            />
+          </div>
+        )}
+      </Section>
+
+      <Section
+        title="Possible duplicate pull requests"
+        {...(aiMatches.duplicate === undefined ? {} : { count: aiMatches.duplicate.length })}
+        actions={
+          <WorkItemMatchButton
+            busy={aiMatches.pending === "duplicate"}
+            disabled={aiMatches.pending !== null}
+            loaded={aiMatches.duplicate !== undefined}
+            onClick={() => void aiMatches.find("duplicate")}
+          />
+        }
+      >
+        {aiMatches.duplicate === undefined ? (
+          <p className="text-xs text-muted-foreground">
+            Find pull requests that make the same change.
+          </p>
+        ) : (
+          <WorkItemMatchRows
+            matches={aiMatches.duplicate}
+            emptyText="No likely duplicate pull requests found."
+            onOpen={openAiMatch}
+          />
+        )}
+      </Section>
 
       <Section title="Checks" count={detail.checks.length}>
         {detail.checks.length === 0 ? (

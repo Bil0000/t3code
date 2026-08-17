@@ -7,3 +7,8 @@ export const generateWorkItemTask = createEnvironmentRpcCommand(connectionAtomRu
   label: "environment-data:work-items:generate-task",
   tag: WS_METHODS.workItemsGenerateTask,
 });
+
+export const findWorkItemMatches = createEnvironmentRpcCommand(connectionAtomRuntime, {
+  label: "environment-data:work-items:find-matches",
+  tag: WS_METHODS.workItemsFindMatches,
+});
