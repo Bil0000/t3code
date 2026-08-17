@@ -446,7 +446,9 @@ export const make = Effect.gen(function* () {
           // unreadable worktree would otherwise report the whole host as signed out.
           const roots =
             viewerRoots.get(key) ?? forSource.map(({ project }) => project.workspaceRoot);
-          return Effect.firstSuccessOf(roots.map((cwd) => adapter.getViewer({ cwd }))).pipe(
+          return Effect.firstSuccessOf(
+            roots.map((cwd) => adapter.getViewer({ cwd, host: first.host })),
+          ).pipe(
             Effect.map((viewer) => ({
               key,
               host: first.host,
@@ -865,10 +867,12 @@ export const make = Effect.gen(function* () {
               number: input.number,
             }),
             project.adapter.capabilities.editComment === true
-              ? project.adapter.getViewer({ cwd: project.project.workspaceRoot }).pipe(
-                  Effect.map((viewer): string | undefined => viewer),
-                  Effect.orElseSucceed(() => undefined),
-                )
+              ? project.adapter
+                  .getViewer({ cwd: project.project.workspaceRoot, host: project.host })
+                  .pipe(
+                    Effect.map((viewer): string | undefined => viewer),
+                    Effect.orElseSucceed(() => undefined),
+                  )
               : Effect.void,
           ],
           { concurrency: 2 },

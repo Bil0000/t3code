@@ -175,6 +175,7 @@ export interface IssueAdapter {
   /** The signed-in account, which is what involvement filtering compares against. */
   readonly getViewer: (input: {
     readonly cwd: string;
+    readonly host: string;
   }) => Effect.Effect<string, IssueProviderError>;
 
   readonly listIssues: (

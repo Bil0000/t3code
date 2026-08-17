@@ -960,7 +960,7 @@ layer("GitHubIssueCli.layer", (it) => {
 
       const error = yield* Effect.flip(cli.getIssueActivity(target));
 
-      assert.strictEqual(error._tag, "GitHubCliRateLimitError");
+      assert.strictEqual(error._tag, "SourceControlRateLimitPausedError");
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
       yield* TestClock.setTime(Date.parse("2100-01-01T00:00:00Z"));
     }),
@@ -1270,11 +1270,23 @@ layer("GitHubIssueCli.layer", (it) => {
         .mockReturnValueOnce(Effect.succeed(output("")));
       const cli = yield* GitHubIssueCli.GitHubIssueCli;
 
-      const viewer = yield* cli.getViewerLogin({ cwd: "/w" });
-      const error = yield* Effect.flip(cli.getViewerLogin({ cwd: "/w" }));
+      const viewer = yield* cli.getViewerLogin({
+        cwd: "/w",
+        host: "github.example.com",
+      });
+      const error = yield* Effect.flip(
+        cli.getViewerLogin({ cwd: "/w", host: "github.example.com" }),
+      );
 
       assert.strictEqual(viewer, "bilal");
-      expect(argsOfCall(0)).toEqual(["api", "user", "--jq", ".login"]);
+      expect(argsOfCall(0)).toEqual([
+        "api",
+        "user",
+        "--hostname",
+        "github.example.com",
+        "--jq",
+        ".login",
+      ]);
       assert.strictEqual(error._tag, "GitHubIssueViewerLoginUnavailableError");
     }),
   );

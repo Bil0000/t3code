@@ -23,6 +23,7 @@ import type {
 
 import * as GitHubCli from "../sourceControl/GitHubCli.ts";
 import * as GitHubGraphQlBudget from "../sourceControl/githubGraphQlBudget.ts";
+import * as SourceControlRateLimit from "../sourceControl/SourceControlRateLimit.ts";
 import {
   ADD_REACTION_GRAPHQL_MUTATION,
   REMOVE_REACTION_GRAPHQL_MUTATION,
@@ -175,6 +176,7 @@ export type GitHubIssueCliError =
   | GitHubIssueViewerLoginUnavailableError
   | GitHubIssuesDisabledError
   | GitHubIssueCommentScopeError
+  | SourceControlRateLimit.SourceControlRateLimitPausedError
   | GitHubIssueRepositorySelectorError;
 
 /** Where a repository configures the rest of its issue chooser, as GitHub itself spells the path. */
@@ -219,6 +221,7 @@ export class GitHubIssueCli extends Context.Service<
   {
     readonly getViewerLogin: (input: {
       readonly cwd: string;
+      readonly host: string;
     }) => Effect.Effect<string, GitHubIssueCliError>;
 
     readonly listIssues: (input: {
@@ -622,16 +625,7 @@ export const make = Effect.gen(function* () {
     readonly decode: (raw: string) => Result.Result<A, unknown>;
   }): Effect.Effect<A, GitHubIssueCliError> =>
     Effect.gen(function* () {
-      const query = yield* graphQlBudget.query(input.host, input.query).pipe(
-        Effect.mapError(
-          (error) =>
-            new GitHubCli.GitHubCliRateLimitError({
-              command: "gh",
-              cwd: input.cwd,
-              cause: error,
-            }),
-        ),
-      );
+      const query = yield* graphQlBudget.query(input.host, input.query);
       const result = yield* github.execute(
         input.privateVariables === undefined
           ? {
@@ -850,16 +844,21 @@ export const make = Effect.gen(function* () {
 
   return GitHubIssueCli.of({
     getViewerLogin: (input) =>
-      github.execute({ cwd: input.cwd, args: ["api", "user", "--jq", ".login"] }).pipe(
-        Effect.flatMap((result) => {
-          const login = result.stdout.trim();
-          return login.length > 0
-            ? Effect.succeed(login)
-            : Effect.fail(
-                new GitHubIssueViewerLoginUnavailableError({ command: "gh", cwd: input.cwd }),
-              );
-        }),
-      ),
+      github
+        .execute({
+          cwd: input.cwd,
+          args: ["api", "user", "--hostname", input.host, "--jq", ".login"],
+        })
+        .pipe(
+          Effect.flatMap((result) => {
+            const login = result.stdout.trim();
+            return login.length > 0
+              ? Effect.succeed(login)
+              : Effect.fail(
+                  new GitHubIssueViewerLoginUnavailableError({ command: "gh", cwd: input.cwd }),
+                );
+          }),
+        ),
 
     listIssues: (input) => {
       const read = (
