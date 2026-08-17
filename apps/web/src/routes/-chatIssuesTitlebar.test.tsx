@@ -4,7 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { IssuesColumn } from "./_chat.issues";
 
 describe("IssuesColumn", () => {
-  it("keeps its breadcrumb and controls in one fixed-height row", () => {
+  it("keeps issue actions in the fixed titlebar", () => {
     const markup = renderToStaticMarkup(
       <IssuesColumn
         refreshing={false}
@@ -18,8 +18,8 @@ describe("IssuesColumn", () => {
         onState={() => undefined}
         onHost={() => undefined}
         searchInput={<input aria-label="Search issues" />}
-        filtersMenu={null}
-        newIssueControl={<button type="button">New issue</button>}
+        filtersMenu={<button type="button">Filters</button>}
+        selectionControl={<button type="button">Select</button>}
         rightPanelControl={null}
         rightPanelOpen={false}
         listBody={null}
@@ -29,5 +29,8 @@ describe("IssuesColumn", () => {
     expect(markup).toContain(
       "drag-region flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center",
     );
+    const header = markup.slice(markup.indexOf("<header"), markup.indexOf("</header>"));
+    expect(header).toContain(">Select</button>");
+    expect(header).not.toContain(">Filters</button>");
   });
 });

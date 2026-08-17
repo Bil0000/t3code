@@ -21,7 +21,6 @@ import {
   LayersIcon,
   LoaderIcon,
   PenLineIcon,
-  PlusIcon,
   RefreshCwIcon,
   SearchIcon,
   UserCheckIcon,
@@ -1198,7 +1197,6 @@ function IssuesRouteView() {
           }
         />
       ) : null}
-      <WorkItemSelectButton />
     </div>
   );
   const columnProps = {
@@ -1215,14 +1213,7 @@ function IssuesRouteView() {
       updateListScope({ host, sort: undefined, order: undefined }),
     searchInput,
     filtersMenu,
-    // Filing an issue needs a repository to file it against, so the button waits for the
-    // environment to say it can read any.
-    newIssueControl: issuesSupported ? (
-      <Button size="xs" variant="outline" onClick={() => setCreating(true)}>
-        <PlusIcon aria-hidden className="size-3.5" />
-        New issue
-      </Button>
-    ) : null,
+    selectionControl: issuesSupported ? <WorkItemSelectButton /> : null,
     rightPanelControl: !issuesSupported || rightPanelState.isOpen ? null : panelToggleControls,
     rightPanelOpen: rightPanelState.isOpen,
     listBody,
@@ -1546,7 +1537,7 @@ export function IssuesColumn({
   onHost,
   searchInput,
   filtersMenu,
-  newIssueControl,
+  selectionControl,
   rightPanelControl,
   rightPanelOpen,
   listBody,
@@ -1563,7 +1554,7 @@ export function IssuesColumn({
   onHost: (host: string | undefined) => void;
   searchInput: ReactNode;
   filtersMenu: ReactNode;
-  newIssueControl: ReactNode;
+  selectionControl: ReactNode;
   rightPanelControl: ReactNode;
   rightPanelOpen: boolean;
   listBody: ReactNode;
@@ -1691,7 +1682,7 @@ export function IssuesColumn({
             }}
           />
         ) : null}
-        {newIssueControl}
+        {selectionControl}
         <Button size="icon-sm" variant="ghost" aria-label="Refresh issues" onClick={onRefresh}>
           <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
         </Button>
