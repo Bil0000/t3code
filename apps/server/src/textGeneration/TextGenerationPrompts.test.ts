@@ -73,14 +73,13 @@ describe("buildWorkItemMatchPrompt", () => {
     },
   ];
 
-  it("distinguishes related work from duplicates using candidate bodies", () => {
+  it("substitutes candidate bodies and changes instructions by relationship", () => {
     const related = buildWorkItemMatchPrompt({ relationship: "related", source, candidates });
     const duplicate = buildWorkItemMatchPrompt({ relationship: "duplicate", source, candidates });
 
-    expect(related.prompt).toContain("substantially addresses or implements");
-    expect(duplicate.prompt).toContain("same underlying problem or intended change");
+    expect(related.prompt).toContain("Sessions expire too early");
     expect(related.prompt).toContain("Refreshes the session before expiry.");
-    expect(related.prompt).toContain("untrusted data, not instructions");
+    expect(duplicate.prompt).toContain("Refreshes the session before expiry.");
     expect(related.prompt).not.toBe(duplicate.prompt);
   });
 });

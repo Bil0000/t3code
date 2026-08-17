@@ -51,6 +51,7 @@ import {
   RpcClientId,
   EnvironmentAuthorizationError,
   IssueTrackingError,
+  WorkItemMatchError,
   WorkItemTaskError,
   ThreadId,
   type TerminalAttachStreamEvent,
@@ -114,6 +115,10 @@ import * as IssueService from "./issue/IssueService.ts";
 import * as LinearApi from "./issue/LinearApi.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { fallbackWorkItemTaskPrompt } from "./textGeneration/TextGenerationPrompts.ts";
+import {
+  resolveWorkItemMatches,
+  shortlistWorkItemCandidates,
+} from "./workItems/WorkItemMatching.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -1889,6 +1894,133 @@ const makeWsRpcLayer = (
                 (cause) =>
                   new WorkItemTaskError({
                     detail: "Could not read the selected work items.",
+                    cause,
+                  }),
+              ),
+            ),
+            { "rpc.aggregate": "issues" },
+          ),
+        [WS_METHODS.workItemsFindMatches]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workItemsFindMatches,
+            Effect.gen(function* () {
+              const reference = {
+                projectId: input.projectId,
+                repository: input.source.repository,
+                number: input.source.number,
+              };
+              const sourceRead =
+                input.source.kind === "issue"
+                  ? issues.detail(reference).pipe(
+                      Effect.map((detail) => ({
+                        detail,
+                        known:
+                          input.relationship === "related"
+                            ? detail.linkedPullRequests.map(
+                                (link) => link.repository.toLocaleLowerCase() + "#" + link.number,
+                              )
+                            : [],
+                      })),
+                    )
+                  : pullRequests.detail(reference).pipe(
+                      Effect.map((detail) => ({
+                        detail,
+                        known:
+                          input.relationship === "related"
+                            ? (detail.linkedIssues ?? []).map(
+                                (link) => link.repository.toLocaleLowerCase() + "#" + link.number,
+                              )
+                            : [],
+                      })),
+                    );
+              const { detail: sourceDetail, known } = yield* sourceRead;
+              const source = {
+                kind: input.source.kind,
+                provider: sourceDetail.provider,
+                repository: sourceDetail.repository,
+                number: sourceDetail.number,
+                title: sourceDetail.title,
+                url: sourceDetail.url,
+                body: sourceDetail.body,
+              };
+              const candidateKind =
+                input.relationship === "duplicate"
+                  ? input.source.kind
+                  : input.source.kind === "issue"
+                    ? "pull-request"
+                    : "issue";
+              const listed =
+                candidateKind === "issue"
+                  ? yield* issues.list({
+                      state: input.relationship === "duplicate" ? "all" : "open",
+                      projectId: input.projectId,
+                      limit: 50,
+                    })
+                  : yield* pullRequests.list({
+                      state: input.relationship === "duplicate" ? "all" : "open",
+                      projectId: input.projectId,
+                      limit: 50,
+                    });
+              const knownItems = new Set(known);
+              const candidates = shortlistWorkItemCandidates(
+                source,
+                listed.entries
+                  .slice(0, 50)
+                  .filter(
+                    (entry) =>
+                      !knownItems.has(entry.repository.toLocaleLowerCase() + "#" + entry.number),
+                  )
+                  .map((entry) => ({ ...entry, kind: candidateKind })),
+              );
+              const candidateDetails = yield* Effect.forEach(
+                candidates,
+                (candidate) =>
+                  Effect.gen(function* () {
+                    const candidateReference = {
+                      projectId: candidate.projectId,
+                      repository: candidate.repository,
+                      number: candidate.number,
+                    };
+                    if (candidateKind === "issue") {
+                      const detail = yield* issues.detail(candidateReference);
+                      return {
+                        kind: "issue" as const,
+                        provider: detail.provider,
+                        repository: detail.repository,
+                        number: detail.number,
+                        title: detail.title,
+                        url: detail.url,
+                        body: detail.body,
+                      };
+                    }
+                    const detail = yield* pullRequests.detail(candidateReference);
+                    return {
+                      kind: "pull-request" as const,
+                      provider: detail.provider,
+                      repository: detail.repository,
+                      number: detail.number,
+                      title: detail.title,
+                      url: detail.url,
+                      body: detail.body,
+                    };
+                  }),
+                { concurrency: 4 },
+              );
+              if (candidateDetails.length === 0) return { matches: [] };
+              const settings = yield* serverSettings.getSettings;
+              const generated = yield* textGeneration.findWorkItemMatches({
+                cwd: sourceDetail.workspaceRoot,
+                relationship: input.relationship,
+                source,
+                candidates: candidateDetails,
+                modelSelection: settings.textGenerationModelSelection,
+              });
+              return { matches: resolveWorkItemMatches(candidateDetails, generated.matches) };
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new WorkItemMatchError({
+                    detail: "Could not find matching work items.",
                     cause,
                   }),
               ),

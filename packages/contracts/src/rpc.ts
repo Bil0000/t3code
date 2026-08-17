@@ -92,7 +92,14 @@ import {
   IssueUpdateInput,
 } from "./issue.ts";
 import { IssueTrackingError, LinearConnectInput, LinearConnection } from "./issueTracking.ts";
-import { WorkItemTaskError, WorkItemTaskInput, WorkItemTaskResult } from "./workItem.ts";
+import {
+  WorkItemMatchError,
+  WorkItemMatchInput,
+  WorkItemMatchResult,
+  WorkItemTaskError,
+  WorkItemTaskInput,
+  WorkItemTaskResult,
+} from "./workItem.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
@@ -347,6 +354,7 @@ export const WS_METHODS = {
   linearConnect: "linear.connect",
   linearDisconnect: "linear.disconnect",
   workItemsGenerateTask: "workItems.generateTask",
+  workItemsFindMatches: "workItems.findMatches",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -777,6 +785,12 @@ export const WsWorkItemsGenerateTaskRpc = Rpc.make(WS_METHODS.workItemsGenerateT
   payload: WorkItemTaskInput,
   success: WorkItemTaskResult,
   error: Schema.Union([WorkItemTaskError, EnvironmentAuthorizationError]),
+});
+
+export const WsWorkItemsFindMatchesRpc = Rpc.make(WS_METHODS.workItemsFindMatches, {
+  payload: WorkItemMatchInput,
+  success: WorkItemMatchResult,
+  error: Schema.Union([WorkItemMatchError, EnvironmentAuthorizationError]),
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -1228,6 +1242,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsLinearConnectRpc,
   WsLinearDisconnectRpc,
   WsWorkItemsGenerateTaskRpc,
+  WsWorkItemsFindMatchesRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
