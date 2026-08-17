@@ -1668,8 +1668,14 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
             : undefined;
         const mcpSession = McpProviderSession.readMcpProviderSession(input.threadId);
         const appServerArgs = [
-          "-c",
-          `model_context_window=${contextWindow === "258k" ? 258_400 : 1_000_000}`,
+          ...(contextWindow === "258k"
+            ? []
+            : [
+                "-c",
+                "model_context_window=1000000",
+                "-c",
+                "model_auto_compact_token_limit=900000",
+              ]),
           ...(mcpSession
             ? [
                 "-c",

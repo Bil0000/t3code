@@ -282,7 +282,7 @@ validationLayer("CodexAdapterLive validation", (it) => {
         binaryPath: "codex",
         cwd: process.cwd(),
         launchArgs: "",
-        appServerArgs: ["-c", "model_context_window=258400"],
+        appServerArgs: [],
         model: "gpt-5.3-codex",
         providerInstanceId: ProviderInstanceId.make("codex"),
         serviceTier: "priority",
@@ -394,6 +394,8 @@ sessionErrorLayer("CodexAdapterLive session errors", (it) => {
       NodeAssert.deepStrictEqual(runtime.options.appServerArgs, [
         "-c",
         "model_context_window=1000000",
+        "-c",
+        "model_auto_compact_token_limit=900000",
       ]);
     }).pipe(Effect.provide(layer));
   });
