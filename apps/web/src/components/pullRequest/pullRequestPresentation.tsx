@@ -198,36 +198,34 @@ export function pullRequestChecksState(
  * passing check already wears in the same panel, so "approved" and "all checks passed" cannot
  * look like two different kinds of good news.
  *
- * The ring runs a shade stronger than the text tones and a pixel wider than the avatar separator
- * it stands in for: at 16px across it is a thin arc, and the muted pairing that reads well as a
- * word was barely there as an outline.
+ * The ring runs a shade stronger than the text tones. At 16px across it is a thin arc, and the
+ * muted pairing that reads well as a word was barely there as an outline.
  */
 const REVIEW_OUTCOME_PRESENTATION = {
   approved: {
     label: "Approved",
     Icon: CircleCheckIcon,
     toneClassName: "text-emerald-600 dark:text-emerald-300/90",
-    ringClassName: "ring-[3px] ring-emerald-500 dark:ring-emerald-400",
+    ringClassName: "ring-2 ring-emerald-500 dark:ring-emerald-400",
     staleRingClassName:
-      "ring-[3px] ring-[color-mix(in_srgb,var(--color-emerald-500)_35%,var(--background))] dark:ring-[color-mix(in_srgb,var(--color-emerald-400)_35%,var(--background))]",
+      "ring-2 ring-[color-mix(in_srgb,var(--color-emerald-500)_35%,var(--background))] dark:ring-[color-mix(in_srgb,var(--color-emerald-400)_35%,var(--background))]",
     badgeVariant: "success",
   },
   "changes-requested": {
     label: "Changes requested",
     Icon: CircleXIcon,
     toneClassName: "text-destructive",
-    ringClassName: "ring-[3px] ring-destructive",
-    staleRingClassName:
-      "ring-[3px] ring-[color-mix(in_srgb,var(--destructive)_35%,var(--background))]",
+    ringClassName: "ring-2 ring-destructive",
+    staleRingClassName: "ring-2 ring-[color-mix(in_srgb,var(--destructive)_35%,var(--background))]",
     badgeVariant: "error",
   },
   dismissed: {
     label: "Review dismissed",
     Icon: CircleDashedIcon,
     toneClassName: "text-muted-foreground/70",
-    ringClassName: "ring-[3px] ring-muted-foreground/60",
+    ringClassName: "ring-2 ring-muted-foreground/60",
     staleRingClassName:
-      "ring-[3px] ring-[color-mix(in_srgb,var(--muted-foreground)_30%,var(--background))]",
+      "ring-2 ring-[color-mix(in_srgb,var(--muted-foreground)_30%,var(--background))]",
     badgeVariant: "outline",
   },
 } as const satisfies Record<
