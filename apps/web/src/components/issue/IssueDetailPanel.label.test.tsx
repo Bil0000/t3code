@@ -128,7 +128,7 @@ import { Menu, MenuItem } from "../ui/menu";
 function textContent(node: unknown): string {
   if (typeof node === "string") return node;
   if (Array.isArray(node)) return node.map(textContent).join("");
-  return isValidElement(node) ? textContent(node.props.children) : "";
+  return isValidElement<{ children?: ReactNode }>(node) ? textContent(node.props.children) : "";
 }
 
 describe("IssueDetailPanel provider labels", () => {
