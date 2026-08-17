@@ -51,6 +51,7 @@ import {
   RpcClientId,
   EnvironmentAuthorizationError,
   IssueTrackingError,
+  WorkItemTaskError,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -111,6 +112,8 @@ import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as IssueService from "./issue/IssueService.ts";
 import * as LinearApi from "./issue/LinearApi.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import { fallbackWorkItemTaskPrompt } from "./textGeneration/TextGenerationPrompts.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -417,6 +420,7 @@ const makeWsRpcLayer = (
       const pullRequests = yield* PullRequestService.PullRequestService;
       const issues = yield* IssueService.IssueService;
       const linear = yield* LinearApi.LinearApi;
+      const textGeneration = yield* TextGeneration.TextGeneration;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
@@ -1817,6 +1821,78 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             WS_METHODS.linearDisconnect,
             linear.disconnect.pipe(Effect.mapError(issueTrackingError("disconnect"))),
+            { "rpc.aggregate": "issues" },
+          ),
+        [WS_METHODS.workItemsGenerateTask]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.workItemsGenerateTask,
+            Effect.gen(function* () {
+              const items = yield* Effect.forEach(
+                input.items,
+                (item) =>
+                  Effect.gen(function* () {
+                    const reference = {
+                      projectId: input.projectId,
+                      repository: item.repository,
+                      number: item.number,
+                    };
+                    if (item.kind === "issue") {
+                      const detail = yield* issues.detail(reference);
+                      return {
+                        kind: "issue" as const,
+                        provider: detail.provider,
+                        repository: detail.repository,
+                        number: detail.number,
+                        title: detail.title,
+                        url: detail.url,
+                        body: detail.body,
+                        workspaceRoot: detail.workspaceRoot,
+                      };
+                    }
+                    const detail = yield* pullRequests.detail(reference);
+                    return {
+                      kind: "pull-request" as const,
+                      provider: detail.provider,
+                      repository: detail.repository,
+                      number: detail.number,
+                      title: detail.title,
+                      url: detail.url,
+                      body: detail.body,
+                      workspaceRoot: detail.workspaceRoot,
+                    };
+                  }),
+                { concurrency: 4 },
+              );
+              const settings = yield* serverSettings.getSettings;
+              const generated = yield* textGeneration
+                .generateWorkItemTask({
+                  cwd: items[0]!.workspaceRoot,
+                  mode: input.mode,
+                  items,
+                  modelSelection: settings.textGenerationModelSelection,
+                })
+                .pipe(
+                  Effect.map(({ prompt }) => ({ prompt: prompt.trim(), generated: true })),
+                  Effect.orElseSucceed(() => ({
+                    prompt: fallbackWorkItemTaskPrompt({ mode: input.mode, items }),
+                    generated: false,
+                  })),
+                );
+              return generated.prompt.length > 0
+                ? generated
+                : {
+                    prompt: fallbackWorkItemTaskPrompt({ mode: input.mode, items }),
+                    generated: false,
+                  };
+            }).pipe(
+              Effect.mapError(
+                (cause) =>
+                  new WorkItemTaskError({
+                    detail: "Could not read the selected work items.",
+                    cause,
+                  }),
+              ),
+            ),
             { "rpc.aggregate": "issues" },
           ),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>

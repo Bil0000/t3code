@@ -21,6 +21,7 @@ export * from "./sourceControl.ts";
 export * from "./pullRequest.ts";
 export * from "./issue.ts";
 export * from "./issueTracking.ts";
+export * from "./workItem.ts";
 export * from "./orchestration.ts";
 export * from "./t3ProjectFile.ts";
 export * from "./editor.ts";

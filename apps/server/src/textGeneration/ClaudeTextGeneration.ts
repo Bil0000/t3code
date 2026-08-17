@@ -24,6 +24,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
+  buildWorkItemTaskPrompt,
 } from "./TextGenerationPrompts.ts";
 import {
   normalizeCliError,
@@ -85,7 +86,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "generateWorkItemTask",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -115,7 +117,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "generateWorkItemTask";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -359,10 +362,24 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       };
     });
 
+  const generateWorkItemTask: TextGeneration.TextGeneration["Service"]["generateWorkItemTask"] =
+    Effect.fn("ClaudeTextGeneration.generateWorkItemTask")(function* (input) {
+      const { prompt, outputSchema } = buildWorkItemTaskPrompt(input);
+      const generated = yield* runClaudeJson({
+        operation: "generateWorkItemTask",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+      return { prompt: generated.prompt.trim() };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    generateWorkItemTask,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

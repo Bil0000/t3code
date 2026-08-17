@@ -92,6 +92,7 @@ export const RPC_REQUIRED_SCOPES = {
   [WS_METHODS.linearConnectionStatus]: AuthOrchestrationReadScope,
   [WS_METHODS.linearConnect]: AuthOrchestrationOperateScope,
   [WS_METHODS.linearDisconnect]: AuthOrchestrationOperateScope,
+  [WS_METHODS.workItemsGenerateTask]: AuthOrchestrationOperateScope,
   [WS_METHODS.sourceControlLookupRepository]: AuthOrchestrationReadScope,
   [WS_METHODS.sourceControlCloneRepository]: AuthOrchestrationOperateScope,
   [WS_METHODS.sourceControlPublishRepository]: AuthOrchestrationOperateScope,

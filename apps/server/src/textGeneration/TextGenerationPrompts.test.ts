@@ -6,6 +6,7 @@ import {
   buildPrContentPrompt,
   buildThreadTitlePrompt,
   buildWorkItemTaskPrompt,
+  fallbackWorkItemTaskPrompt,
 } from "./TextGenerationPrompts.ts";
 import { normalizeCliError, sanitizeThreadTitle } from "./TextGenerationUtils.ts";
 import { TextGenerationError } from "@t3tools/contracts";
@@ -44,6 +45,12 @@ describe("buildWorkItemTaskPrompt", () => {
   it("asks for ordered subtasks", () => {
     expect(buildWorkItemTaskPrompt({ mode: "subtasks", items }).prompt).toContain(
       "ordered subtasks",
+    );
+  });
+
+  it("keeps a deterministic draft when AI is unavailable", () => {
+    expect(fallbackWorkItemTaskPrompt({ mode: "subtasks", items })).toContain(
+      "1. [Fix login](https://linear.app/acme/issue/ENG-12)",
     );
   });
 });

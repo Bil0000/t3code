@@ -73,6 +73,20 @@ export function buildWorkItemTaskPrompt(input: WorkItemTaskPromptInput) {
   };
 }
 
+export function fallbackWorkItemTaskPrompt(input: WorkItemTaskPromptInput): string {
+  const sources = input.items.map(
+    (item, index) =>
+      `${input.mode === "subtasks" ? `${index + 1}.` : "-"} [${item.title}](${item.url}) (${item.repository}#${item.number})`,
+  );
+  return [
+    input.mode === "compound"
+      ? "Implement the selected work as one compound task. Reconcile overlap and order dependencies before coding."
+      : "Implement the selected work as one parent task with these ordered subtasks:",
+    "",
+    ...sources,
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Commit message
 // ---------------------------------------------------------------------------

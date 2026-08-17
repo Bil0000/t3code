@@ -92,6 +92,7 @@ import {
   IssueUpdateInput,
 } from "./issue.ts";
 import { IssueTrackingError, LinearConnectInput, LinearConnection } from "./issueTracking.ts";
+import { WorkItemTaskError, WorkItemTaskInput, WorkItemTaskResult } from "./workItem.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
@@ -345,6 +346,7 @@ export const WS_METHODS = {
   linearConnectionStatus: "linear.connectionStatus",
   linearConnect: "linear.connect",
   linearDisconnect: "linear.disconnect",
+  workItemsGenerateTask: "workItems.generateTask",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -757,18 +759,24 @@ export const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
 
 export const WsLinearConnectionStatusRpc = Rpc.make(WS_METHODS.linearConnectionStatus, {
   success: LinearConnection,
-  error: IssueTrackingError,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
 
 export const WsLinearConnectRpc = Rpc.make(WS_METHODS.linearConnect, {
   payload: LinearConnectInput,
   success: LinearConnection,
-  error: IssueTrackingError,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
 
 export const WsLinearDisconnectRpc = Rpc.make(WS_METHODS.linearDisconnect, {
   success: LinearConnection,
-  error: IssueTrackingError,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
+});
+
+export const WsWorkItemsGenerateTaskRpc = Rpc.make(WS_METHODS.workItemsGenerateTask, {
+  payload: WorkItemTaskInput,
+  success: WorkItemTaskResult,
+  error: Schema.Union([WorkItemTaskError, EnvironmentAuthorizationError]),
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -1219,6 +1227,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsLinearConnectionStatusRpc,
   WsLinearConnectRpc,
   WsLinearDisconnectRpc,
+  WsWorkItemsGenerateTaskRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
