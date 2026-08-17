@@ -92,14 +92,9 @@ describe("searchSettings", () => {
     });
   });
 
-  it("keeps issue tracking inside the combined source control section", () => {
-    expect(SETTINGS_SECTION_LABELS["/settings/source-control"]).toBe(
-      "Source Control & Issue Tracking",
-    );
+  it("keeps issue tracking out of settings", () => {
+    expect(SETTINGS_SECTION_LABELS["/settings/source-control"]).toBe("Source Control");
     expect(Object.keys(SETTINGS_SECTION_LABELS)).not.toContain("/settings/issue-tracking");
-    expect(searchSettings("issue tracking")[0]).toMatchObject({
-      id: "issue-tracking",
-      to: "/settings/source-control",
-    });
+    expect(searchSettings("issue tracking")).toEqual([]);
   });
 });
