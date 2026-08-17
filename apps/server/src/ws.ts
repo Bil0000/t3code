@@ -1819,20 +1819,6 @@ const makeWsRpcLayer = (
             linear.disconnect.pipe(Effect.mapError(issueTrackingError("disconnect"))),
             { "rpc.aggregate": "issues" },
           ),
-        [WS_METHODS.linearSetProjectTeam]: ({ projectId, teamKey }) =>
-          observeRpcEffect(
-            WS_METHODS.linearSetProjectTeam,
-            Effect.gen(function* () {
-              const current = yield* serverSettings.getSettings;
-              const projectTeams = { ...current.issueTracking.linear.projectTeams };
-              if (teamKey === null) delete projectTeams[projectId];
-              else projectTeams[projectId] = teamKey;
-              yield* serverSettings.updateSettings({
-                issueTracking: { linear: { projectTeams } },
-              });
-            }),
-            { "rpc.aggregate": "issues" },
-          ),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,

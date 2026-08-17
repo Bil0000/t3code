@@ -14,6 +14,7 @@ import {
   GitBranchIcon,
   KeyboardIcon,
   Link2Icon,
+  ListTodoIcon,
   PaletteIcon,
   SearchIcon,
   Settings2Icon,
@@ -50,6 +51,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/keybindings": KeyboardIcon,
   "/settings/providers": BotIcon,
   "/settings/source-control": GitBranchIcon,
+  "/settings/issue-tracking": ListTodoIcon,
   "/settings/connections": Link2Icon,
   "/settings/archived": ArchiveIcon,
 };

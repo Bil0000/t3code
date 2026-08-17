@@ -1,6 +1,6 @@
 import * as Schema from "effect/Schema";
 
-import { ProjectId, TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { TrimmedNonEmptyString } from "./baseSchemas.ts";
 
 export const LinearTeam = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -22,15 +22,10 @@ export const LinearConnectInput = Schema.Struct({
   token: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
 });
 
-export const LinearProjectTeamInput = Schema.Struct({
-  projectId: ProjectId,
-  teamKey: Schema.NullOr(TrimmedNonEmptyString),
-});
-
 export class IssueTrackingError extends Schema.TaggedErrorClass<IssueTrackingError>()(
   "IssueTrackingError",
   {
-    operation: Schema.Literals(["status", "connect", "disconnect", "set-project-team"]),
+    operation: Schema.Literals(["status", "connect", "disconnect"]),
     detail: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },

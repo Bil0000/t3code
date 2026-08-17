@@ -91,12 +91,7 @@ import {
   IssueUnavailableError,
   IssueUpdateInput,
 } from "./issue.ts";
-import {
-  IssueTrackingError,
-  LinearConnectInput,
-  LinearConnection,
-  LinearProjectTeamInput,
-} from "./issueTracking.ts";
+import { IssueTrackingError, LinearConnectInput, LinearConnection } from "./issueTracking.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
@@ -350,7 +345,6 @@ export const WS_METHODS = {
   linearConnectionStatus: "linear.connectionStatus",
   linearConnect: "linear.connect",
   linearDisconnect: "linear.disconnect",
-  linearSetProjectTeam: "linear.setProjectTeam",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -775,12 +769,6 @@ export const WsLinearConnectRpc = Rpc.make(WS_METHODS.linearConnect, {
 export const WsLinearDisconnectRpc = Rpc.make(WS_METHODS.linearDisconnect, {
   success: LinearConnection,
   error: IssueTrackingError,
-});
-
-export const WsLinearSetProjectTeamRpc = Rpc.make(WS_METHODS.linearSetProjectTeam, {
-  payload: LinearProjectTeamInput,
-  success: Schema.Void,
-  error: Schema.Union([IssueTrackingError, ServerSettingsError]),
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -1231,7 +1219,6 @@ export const WsRpcGroup = RpcGroup.make(
   WsLinearConnectionStatusRpc,
   WsLinearConnectRpc,
   WsLinearDisconnectRpc,
-  WsLinearSetProjectTeamRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,
