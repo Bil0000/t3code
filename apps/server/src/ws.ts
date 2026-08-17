@@ -2602,6 +2602,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
     const issues = yield* IssueService.IssueService;
+    const linear = yield* LinearApi.LinearApi;
+    const textGeneration = yield* TextGeneration.TextGeneration;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2629,6 +2631,8 @@ export const websocketRpcRouteLayer = Layer.unwrap(
               // mutation invalidates the HTTP diff cache that every client reads from.
               Layer.provide(Layer.succeed(PullRequestService.PullRequestService, pullRequests)),
               Layer.provide(Layer.succeed(IssueService.IssueService, issues)),
+              Layer.provide(Layer.succeed(LinearApi.LinearApi, linear)),
+              Layer.provide(Layer.succeed(TextGeneration.TextGeneration, textGeneration)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(
