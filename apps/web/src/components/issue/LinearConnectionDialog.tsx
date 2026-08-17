@@ -61,10 +61,14 @@ export function LinearConnectionDialog({
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [pendingDisconnect, setPendingDisconnect] = useState<string | null>(null);
+  const [pendingDisconnect, setPendingDisconnect] = useState<{
+    credentialId: string | null;
+    accountName: string;
+  } | null>(null);
   const linear = connection.data;
   const accounts = linear?.accounts ?? [];
-  const pendingAccount = accounts.find((account) => account.credentialId === pendingDisconnect);
+  const legacyKeyNeedsRemoval = linear?.hasStoredToken === true && accounts.length === 0;
+  const hasCurrentProjectBinding = projects.some((project) => projectBindings[project.id] != null);
   const teamOptions = accounts.flatMap((account) =>
     account.teams.map((team) => ({
       value: JSON.stringify([account.credentialId, team.key]),
@@ -93,16 +97,19 @@ export function LinearConnectionDialog({
     binding: LinearProjectBinding | null,
   ) => {
     if (environmentId === null) return;
-    const next = { ...projectBindings, [projectId]: binding };
     void runCommand(
       () =>
         updateSettings({
           environmentId,
-          input: { patch: { issueTracking: { linear: { projectBindings: next } } } },
+          input: {
+            patch: { issueTracking: { linear: { projectBindings: { [projectId]: binding } } } },
+          },
         }),
       () => {
-        const wasAvailable = Object.values(projectBindings).some(Boolean);
-        const isAvailable = Object.values(next).some(Boolean);
+        const wasAvailable = projects.some((project) => projectBindings[project.id] != null);
+        const isAvailable = projects.some((project) =>
+          project.id === projectId ? binding !== null : projectBindings[project.id] != null,
+        );
         onProviderChanged(
           wasAvailable === isAvailable ? "updated" : isAvailable ? "available" : "unavailable",
         );
@@ -111,18 +118,15 @@ export function LinearConnectionDialog({
   };
 
   const error = actionError ?? connection.error;
+  const closeDialog = (nextOpen: boolean) => {
+    if (busy) return;
+    setActionError(null);
+    onOpenChange(nextOpen);
+  };
 
   return (
     <>
-      <Dialog
-        open={open}
-        onOpenChange={(nextOpen) => {
-          if (!busy) {
-            setActionError(null);
-            onOpenChange(nextOpen);
-          }
-        }}
-      >
+      <Dialog open={open} onOpenChange={closeDialog}>
         <DialogPopup className="max-w-xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-lg">
@@ -144,7 +148,8 @@ export function LinearConnectionDialog({
               className="space-y-2"
               onSubmit={(event) => {
                 event.preventDefault();
-                if (environmentId === null || token.trim().length === 0) return;
+                if (environmentId === null || token.trim().length === 0 || legacyKeyNeedsRemoval)
+                  return;
                 void runCommand(
                   () => connect({ environmentId, input: { token: token.trim() } }),
                   () => {
@@ -168,11 +173,36 @@ export function LinearConnectionDialog({
                   aria-label="Linear API key"
                   autoComplete="off"
                 />
-                <Button type="submit" disabled={busy || token.trim().length === 0}>
+                <Button
+                  type="submit"
+                  disabled={busy || token.trim().length === 0 || legacyKeyNeedsRemoval}
+                >
                   Add
                 </Button>
               </div>
             </form>
+
+            {legacyKeyNeedsRemoval ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                <div>
+                  <p className="text-sm font-medium">Saved API key needs attention</p>
+                  <p className="text-xs text-muted-foreground">
+                    Disconnect it before you add another key.
+                  </p>
+                </div>
+                <Button
+                  size="xs"
+                  variant="destructive-outline"
+                  disabled={busy}
+                  aria-label="Disconnect saved Linear API key"
+                  onClick={() =>
+                    setPendingDisconnect({ credentialId: null, accountName: "saved API key" })
+                  }
+                >
+                  Disconnect
+                </Button>
+              </div>
+            ) : null}
 
             {accounts.length > 0 ? (
               <div className="space-y-2">
@@ -188,13 +218,21 @@ export function LinearConnectionDialog({
                               {account.accountEmail}
                             </p>
                           ) : null}
+                          {account.status !== "authenticated" ? (
+                            <p className="text-xs text-destructive">Needs attention</p>
+                          ) : null}
                         </div>
                         <Button
                           size="xs"
                           variant="destructive-outline"
                           disabled={busy}
                           aria-label={`Disconnect ${account.accountName} from Linear`}
-                          onClick={() => setPendingDisconnect(account.credentialId)}
+                          onClick={() =>
+                            setPendingDisconnect({
+                              credentialId: account.credentialId,
+                              accountName: account.accountName,
+                            })
+                          }
                         >
                           Disconnect
                         </Button>
@@ -214,7 +252,7 @@ export function LinearConnectionDialog({
               </div>
             ) : null}
 
-            {accounts.length > 0 ? (
+            {accounts.length > 0 || hasCurrentProjectBinding ? (
               <div className="space-y-2">
                 <div>
                   <h3 className="text-sm font-medium">Project connections</h3>
@@ -228,9 +266,11 @@ export function LinearConnectionDialog({
                     const value = binding
                       ? JSON.stringify([binding.credentialId, binding.teamKey])
                       : UNMAPPED;
-                    const selectedLabel =
-                      teamOptions.find((option) => option.value === value)?.label ??
-                      "Not connected";
+                    const selectedOption = teamOptions.find((option) => option.value === value);
+                    const bindingUnavailable = binding != null && selectedOption === undefined;
+                    const selectedLabel = bindingUnavailable
+                      ? "Needs attention"
+                      : (selectedOption?.label ?? "Not connected");
                     return (
                       <div
                         key={project.id}
@@ -255,11 +295,17 @@ export function LinearConnectionDialog({
                             size="sm"
                             className="w-64"
                             aria-label={`Linear account and team for ${project.title}`}
+                            aria-invalid={bindingUnavailable || undefined}
                           >
                             <SelectValue>{selectedLabel}</SelectValue>
                           </SelectTrigger>
                           <SelectPopup align="end" alignItemWithTrigger={false}>
                             <SelectItem value={UNMAPPED}>Not connected</SelectItem>
+                            {bindingUnavailable ? (
+                              <SelectItem value={value} disabled>
+                                Unavailable account or team
+                              </SelectItem>
+                            ) : null}
                             {teamOptions.map((option) => (
                               <SelectItem key={option.value} value={option.value}>
                                 {option.label}
@@ -278,7 +324,7 @@ export function LinearConnectionDialog({
             ) : null}
           </DialogPanel>
           <DialogFooter>
-            <Button variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
+            <Button variant="ghost" disabled={busy} onClick={() => closeDialog(false)}>
               Done
             </Button>
           </DialogFooter>
@@ -288,18 +334,26 @@ export function LinearConnectionDialog({
       <AlertDialog
         open={pendingDisconnect !== null}
         onOpenChange={(nextOpen) => {
-          if (!nextOpen && !busy) setPendingDisconnect(null);
+          if (!nextOpen && !busy) {
+            setPendingDisconnect(null);
+            setActionError(null);
+          }
         }}
       >
         <AlertDialogPopup>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              Disconnect {pendingAccount?.accountName ?? "account"}?
+              Disconnect {pendingDisconnect?.accountName ?? "account"}?
             </AlertDialogTitle>
             <AlertDialogDescription>
               This deletes this API key. All T3 projects linked to this account will lose Linear
               access.
             </AlertDialogDescription>
+            {actionError && pendingDisconnect ? (
+              <p role="alert" className="text-sm text-destructive">
+                {actionError}
+              </p>
+            ) : null}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" disabled={busy} />}>
@@ -310,23 +364,34 @@ export function LinearConnectionDialog({
               disabled={busy || environmentId === null || pendingDisconnect === null}
               onClick={() => {
                 if (environmentId === null || pendingDisconnect === null) return;
-                const credentialId = pendingDisconnect;
+                const { credentialId } = pendingDisconnect;
                 return runCommand(
-                  () => disconnect({ environmentId, input: { credentialId } }),
+                  () =>
+                    disconnect({
+                      environmentId,
+                      input: credentialId === null ? undefined : { credentialId },
+                    }),
                   () => {
                     setToken("");
                     setPendingDisconnect(null);
                     connection.refresh();
-                    const wasAvailable = Object.values(projectBindings).some(Boolean);
-                    const isAvailable = Object.values(projectBindings).some(
-                      (binding) => binding !== null && binding.credentialId !== credentialId,
+                    const wasAvailable = projects.some(
+                      (project) => projectBindings[project.id] != null,
                     );
+                    const isAvailable =
+                      credentialId !== null &&
+                      projects.some((project) => {
+                        const binding = projectBindings[project.id];
+                        return binding !== null && binding?.credentialId !== credentialId;
+                      });
                     onProviderChanged(wasAvailable && !isAvailable ? "unavailable" : "updated");
                   },
                 );
               }}
             >
-              Disconnect account
+              {pendingDisconnect?.credentialId === null
+                ? "Disconnect saved key"
+                : "Disconnect account"}
             </Button>
           </AlertDialogFooter>
         </AlertDialogPopup>

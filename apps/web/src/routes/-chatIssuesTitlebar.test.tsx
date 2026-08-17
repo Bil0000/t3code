@@ -1,13 +1,14 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsIcon } from "lucide-react";
+import type { LinearProjectBinding, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../test/reactElementTree";
 import { LinearIcon } from "../components/Icons";
-import { Button } from "../components/ui/button";
 import { MenuItem, MenuRadioItem } from "../components/ui/menu";
 import {
   CompactFilterMenu,
+  hasLinearManagementState,
   IssuesColumn,
   mergeIssueProviderSummaries,
   stabilizeLinearProviderSummary,
@@ -65,7 +66,7 @@ describe("IssuesColumn", () => {
     expect(onClick).toHaveBeenCalledOnce();
   });
 
-  it("puts a separate Linear settings gear beside the compact radio item", () => {
+  it("puts a keyboard-navigable Linear settings menu action beside the compact radio item", () => {
     const onClick = vi.fn();
     const menu = CompactFilterMenu({
       label: "Filter by provider",
@@ -79,7 +80,7 @@ describe("IssuesColumn", () => {
     });
     const gear = visitElements(
       menu,
-      (element) => element.type === Button && element.props["aria-label"] === "Linear settings",
+      (element) => element.type === MenuItem && element.props["aria-label"] === "Linear settings",
     );
     const linearRadio = visitElements(
       menu,
@@ -87,7 +88,8 @@ describe("IssuesColumn", () => {
     );
 
     expect(gear).not.toBeNull();
-    expect(visitElements(linearRadio, (element) => element.type === Button)).toBeNull();
+    expect(visitElements(gear, (element) => element.type === SettingsIcon)).not.toBeNull();
+    expect(visitElements(linearRadio, (element) => element.type === MenuItem)).toBeNull();
     (gear?.props.onClick as (() => void) | undefined)?.();
     expect(onClick).toHaveBeenCalledOnce();
   });
@@ -118,7 +120,7 @@ describe("IssuesColumn", () => {
     expect(mergeIssueProviderSummaries([github], [linear], undefined)).toEqual([linear]);
   });
 
-  it("keeps Linear visible when a stale pre-connect All response arrives", () => {
+  it("keeps Linear visible from current non-null bindings when a stale All response arrives", () => {
     const github = {
       kind: "github",
       host: "github.com",
@@ -128,16 +130,40 @@ describe("IssuesColumn", () => {
       detail: null,
     } as const;
 
-    expect(stabilizeLinearProviderSummary([github], 2)).toEqual([
+    const project_1 = "project_1" as ProjectId;
+    const project_2 = "project_2" as ProjectId;
+    const deleted = "deleted" as ProjectId;
+    const bindings = {
+      [project_1]: { credentialId: "user-1", teamKey: "ENG" },
+      [project_2]: null,
+      [deleted]: { credentialId: "user-2", teamKey: "OPS" },
+    } satisfies Readonly<Record<ProjectId, LinearProjectBinding | null>>;
+
+    expect(stabilizeLinearProviderSummary([github], [project_1, project_2], bindings)).toEqual([
       github,
       {
         kind: "linear",
         host: "linear.app",
         configured: true,
         searchesOnHost: false,
-        projectCount: 2,
+        projectCount: 1,
         detail: null,
       },
     ]);
+  });
+
+  it("recognizes legacy teams and authenticated environment tokens as Linear management state", () => {
+    expect(
+      hasLinearManagementState(
+        { status: "unverified", hasStoredToken: false },
+        { projectBindings: {}, projectTeams: { project_1: "ENG" } },
+      ),
+    ).toBe(true);
+    expect(
+      hasLinearManagementState(
+        { status: "authenticated", hasStoredToken: false },
+        { projectBindings: {}, projectTeams: {} },
+      ),
+    ).toBe(true);
   });
 });

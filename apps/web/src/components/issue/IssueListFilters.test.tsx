@@ -1,10 +1,9 @@
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
-import { LayersIcon } from "lucide-react";
+import { LayersIcon, SettingsIcon } from "lucide-react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ListFilterRadioGroup } from "../sourceControl/ListFilterMenu";
 import { LinearIcon } from "../Icons";
-import { Button } from "../ui/button";
 import { MenuItem, MenuRadioItem } from "../ui/menu";
 import { IssueFiltersMenu } from "./IssueListFilters";
 
@@ -94,7 +93,7 @@ describe("issue filters", () => {
     expect(collect(settingsItem, LinearIcon)).toHaveLength(1);
   });
 
-  it("offers a separate keyboard-accessible gear beside connected Linear", () => {
+  it("offers a separate keyboard-navigable menu action beside connected Linear", () => {
     const onManageLinear = vi.fn();
     const menu = IssueFiltersMenu({
       state: "open",
@@ -117,15 +116,15 @@ describe("issue filters", () => {
       onLabel: vi.fn(),
     } as Parameters<typeof IssueFiltersMenu>[0]);
 
-    const gear = collect(menu, Button).find(
+    const gear = collect(menu, MenuItem).find(
       (candidate) => candidate.props["aria-label"] === "Linear settings",
     );
     const linearRadio = collect(menu, MenuRadioItem).find(
       (candidate) => candidate.props.value === "linear.app",
     );
     expect(gear).toBeDefined();
-    expect(collect(linearRadio, Button)).toHaveLength(0);
-    expect(collect(menu, MenuItem)).toHaveLength(0);
+    expect(collect(gear, SettingsIcon)).toHaveLength(1);
+    expect(collect(linearRadio, MenuItem)).toHaveLength(0);
     (gear?.props.onClick as (() => void) | undefined)?.();
     expect(onManageLinear).toHaveBeenCalledOnce();
   });

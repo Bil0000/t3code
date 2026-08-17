@@ -17,7 +17,6 @@ import {
   type ListFilterOption,
 } from "../sourceControl/ListFilterMenu";
 import { LinearIcon } from "../Icons";
-import { Button } from "../ui/button";
 import {
   Menu,
   MenuGroupLabel,
@@ -35,6 +34,63 @@ import { issueListOrderLabels } from "./issueList.logic";
 
 /** A label name is never empty, so the same trick the hosts use names "every label". */
 const ALL_LABELS_VALUE = "";
+
+export function renderIssueProviderMenuRadioGroup({
+  label,
+  value,
+  options,
+  onChange,
+  onManageLinear,
+}: {
+  label?: string;
+  value: string;
+  options: ReadonlyArray<ListFilterOption<string>>;
+  onChange: (value: string) => void;
+  onManageLinear?: () => void;
+}) {
+  return (
+    <MenuRadioGroup value={value} onValueChange={onChange}>
+      {label ? <MenuGroupLabel>{label}</MenuGroupLabel> : null}
+      {options.map((option) => {
+        const content = (
+          <span className="flex min-w-0 items-center gap-2">
+            <option.Icon aria-hidden className="size-3.5" />
+            <span className="min-w-0 flex-1 truncate">{option.label}</span>
+          </span>
+        );
+        return option.value === "linear.app" && onManageLinear ? (
+          <div key={option.value} className="flex items-center gap-1">
+            <MenuRadioItem
+              value={option.value}
+              className="min-w-0 flex-1"
+              disabled={option.unavailable !== undefined}
+              title={option.unavailable}
+            >
+              {content}
+            </MenuRadioItem>
+            <MenuItem
+              aria-label="Linear settings"
+              title="Linear settings"
+              className="size-7 shrink-0 justify-center p-0"
+              onClick={onManageLinear}
+            >
+              <SettingsIcon aria-hidden />
+            </MenuItem>
+          </div>
+        ) : (
+          <MenuRadioItem
+            key={option.value}
+            value={option.value}
+            disabled={option.unavailable !== undefined}
+            title={option.unavailable}
+          >
+            {content}
+          </MenuRadioItem>
+        );
+      })}
+    </MenuRadioGroup>
+  );
+}
 
 const REACTION_SORTS = [
   ["reactions", "Total reactions", ""],
@@ -196,44 +252,17 @@ export function IssueFiltersMenu({
         <>
           <MenuSeparator />
           {linearOption && hostFilter.onManageLinear ? (
-            <MenuRadioGroup
-              value={hostFilter.host ?? ALL_HOSTS_VALUE}
-              onValueChange={(next) => {
+            renderIssueProviderMenuRadioGroup({
+              label: "Provider",
+              value: hostFilter.host ?? ALL_HOSTS_VALUE,
+              options: providerOptions,
+              onChange: (next) => {
                 if (next !== (hostFilter.host ?? ALL_HOSTS_VALUE)) {
                   hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next);
                 }
-              }}
-            >
-              <MenuGroupLabel>Provider</MenuGroupLabel>
-              {providerOptions.map((option) =>
-                option.value === linearOption.value ? (
-                  <div key={option.value} className="flex items-center gap-1">
-                    <MenuRadioItem value={option.value} className="min-w-0 flex-1">
-                      <span className="flex min-w-0 items-center gap-2">
-                        <option.Icon aria-hidden className="size-3.5" />
-                        <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                      </span>
-                    </MenuRadioItem>
-                    <Button
-                      size="icon-micro"
-                      variant="ghost"
-                      aria-label="Linear settings"
-                      title="Linear settings"
-                      onClick={hostFilter.onManageLinear}
-                    >
-                      <SettingsIcon aria-hidden />
-                    </Button>
-                  </div>
-                ) : (
-                  <MenuRadioItem key={option.value} value={option.value}>
-                    <span className="flex min-w-0 items-center gap-2">
-                      <option.Icon aria-hidden className="size-3.5" />
-                      <span className="min-w-0 flex-1 truncate">{option.label}</span>
-                    </span>
-                  </MenuRadioItem>
-                ),
-              )}
-            </MenuRadioGroup>
+              },
+              onManageLinear: hostFilter.onManageLinear,
+            })
           ) : (
             <ListFilterRadioGroup
               label="Provider"
