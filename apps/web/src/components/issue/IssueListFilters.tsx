@@ -16,6 +16,7 @@ import {
   ListProjectFilterGroup,
   type ListFilterOption,
 } from "../sourceControl/ListFilterMenu";
+import { LinearIcon } from "../Icons";
 import {
   Menu,
   MenuGroupLabel,
@@ -198,6 +199,7 @@ export function IssueFiltersMenu({
           />
           {hostFilter.onManageLinear !== undefined ? (
             <MenuItem onClick={hostFilter.onManageLinear}>
+              <LinearIcon aria-hidden className="size-3.5" />
               {providerOptions.some((option) => option.value === "linear.app")
                 ? "Linear settings…"
                 : "Connect Linear…"}

@@ -3,6 +3,7 @@ import { LayersIcon } from "lucide-react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ListFilterRadioGroup } from "../sourceControl/ListFilterMenu";
+import { LinearIcon } from "../Icons";
 import { MenuItem } from "../ui/menu";
 import { IssueFiltersMenu } from "./IssueListFilters";
 
@@ -57,7 +58,9 @@ describe("issue filters", () => {
         (item) => item.value,
       ),
     ).toEqual(["", "github.com"]);
-    expect(collect(menu, MenuItem).map((item) => item.props.children)).toContain("Connect Linear…");
+    const connectItem = collect(menu, MenuItem)[0];
+    expect(Children.toArray(connectItem?.props.children as ReactNode)).toContain("Connect Linear…");
+    expect(collect(connectItem, LinearIcon)).toHaveLength(1);
   });
 
   it("offers Linear settings as a separate menu item when connected", () => {
@@ -83,10 +86,11 @@ describe("issue filters", () => {
       onLabel: vi.fn(),
     } as Parameters<typeof IssueFiltersMenu>[0]);
 
-    const item = collect(menu, MenuItem).find(
-      (candidate) => candidate.props.children === "Linear settings…",
+    const item = collect(menu, MenuItem).find((candidate) =>
+      Children.toArray(candidate.props.children as ReactNode).includes("Linear settings…"),
     );
     expect(item).toBeDefined();
+    expect(collect(item, LinearIcon)).toHaveLength(1);
     (item?.props.onClick as (() => void) | undefined)?.();
     expect(onManageLinear).toHaveBeenCalledOnce();
   });
