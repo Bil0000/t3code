@@ -5,7 +5,7 @@ import type {
   WorkItemMatchInput,
   WorkItemMatchRelationship,
 } from "@t3tools/contracts";
-import { ArrowUpRightIcon, LoaderIcon, SparklesIcon } from "lucide-react";
+import { ArrowUpRightIcon, LinkIcon, LoaderIcon, SparklesIcon } from "lucide-react";
 import { useCallback, useState } from "react";
 
 import { findWorkItemMatches } from "~/state/workItems";
@@ -42,10 +42,14 @@ export function WorkItemMatchRows({
   matches,
   emptyText,
   onOpen,
+  onLink,
+  linking = false,
 }: {
   matches: ReadonlyArray<WorkItemMatch>;
   emptyText: string;
   onOpen: (match: WorkItemMatch) => void;
+  onLink?: (match: WorkItemMatch) => void;
+  linking?: boolean;
 }) {
   if (matches.length === 0) {
     return <p className="text-xs text-muted-foreground">{emptyText}</p>;
@@ -56,21 +60,40 @@ export function WorkItemMatchRows({
         Suggested by AI
       </p>
       {matches.map((match) => (
-        <button
+        <div
           key={`${match.provider}:${match.repository}#${match.number}`}
-          type="button"
           className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted/60"
-          onClick={() => onOpen(match)}
         >
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-xs font-medium">{match.title}</span>
-            <span className="block text-[11px] text-muted-foreground">{match.reason}</span>
-          </span>
-          <Badge variant="outline" className="shrink-0 text-[9px]">
-            {match.confidence === "high" ? "High confidence" : "Medium confidence"}
-          </Badge>
-          <ArrowUpRightIcon aria-hidden className="mt-0.5 size-3 shrink-0 text-muted-foreground" />
-        </button>
+          <button
+            type="button"
+            className="flex min-w-0 flex-1 items-start gap-2 text-left"
+            onClick={() => onOpen(match)}
+          >
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-xs font-medium">{match.title}</span>
+              <span className="block text-[11px] text-muted-foreground">{match.reason}</span>
+            </span>
+            <Badge variant="outline" className="shrink-0 text-[9px]">
+              {match.confidence === "high" ? "High confidence" : "Medium confidence"}
+            </Badge>
+            <ArrowUpRightIcon
+              aria-hidden
+              className="mt-0.5 size-3 shrink-0 text-muted-foreground"
+            />
+          </button>
+          {onLink ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              className="h-6 shrink-0 px-2 text-[10px] text-muted-foreground"
+              disabled={linking}
+              onClick={() => onLink(match)}
+            >
+              <LinkIcon aria-hidden className="size-3" />
+              {linking ? "Preparing..." : "Link with agent"}
+            </Button>
+          ) : null}
+        </div>
       ))}
     </div>
   );

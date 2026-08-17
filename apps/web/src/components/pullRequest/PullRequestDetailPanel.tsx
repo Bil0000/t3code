@@ -9,6 +9,7 @@ import type {
   PullRequestRef,
   PullRequestState,
   ScopedThreadRef,
+  WorkItemMatch,
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
@@ -943,20 +944,23 @@ export function PullRequestDetailPanel({
   };
 
   /**
-   * Which issues this change is about, decided by an agent. No checkout: the link is a line in
+   * Links one selected issue with an agent. No checkout: the link is a line in
    * the description, and nothing here touches code.
    */
-  const linkIssues = () => {
+  const linkIssues = (issue: WorkItemMatch) => {
     if (!detail) return;
     void startAsk(
       LINK_ISSUES_HANDOFF_KIND,
-      buildLinkIssuesHandoff({
-        number: detail.number,
-        title: detail.title,
-        url: detail.url,
-        headBranch: detail.headBranch,
-        baseBranch: detail.baseBranch,
-      }),
+      buildLinkIssuesHandoff(
+        {
+          number: detail.number,
+          title: detail.title,
+          url: detail.url,
+          headBranch: detail.headBranch,
+          baseBranch: detail.baseBranch,
+        },
+        issue,
+      ),
       {
         title: "Opened in a thread",
         description: "The task is in the composer — read it over, then send.",

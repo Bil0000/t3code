@@ -1,4 +1,4 @@
-import type { IssueComment, IssueDetailView, IssueEvent } from "@t3tools/contracts";
+import type { IssueComment, IssueDetailView, IssueEvent, WorkItemMatch } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -254,13 +254,22 @@ describe("issue handoffs", () => {
     body: "Open the issues page, reload, and the right panel renders nothing.",
     comments: [comment({ body: "same here on 0.9.2" })],
   };
+  const relatedPullRequest = {
+    kind: "pull-request",
+    provider: "github",
+    repository: "pingdotgg/t3code",
+    number: 7065,
+    title: "Link related work items",
+    url: "https://github.com/pingdotgg/t3code/pull/7065",
+    confidence: "high",
+    reason: "Implements this issue.",
+  } satisfies WorkItemMatch;
 
   const builders = [
     ["solve", buildSolveIssueHandoff],
     ["ask", buildAskAboutIssueHandoff],
     ["explain", buildExplainIssueHandoff],
     ["attach", buildAttachIssueContext],
-    ["link", buildLinkPullRequestsHandoff],
   ] as const;
 
   for (const [name, build] of builders) {
@@ -319,24 +328,28 @@ describe("issue handoffs", () => {
     }
   });
 
-  it("asks for the links by the host's closing keyword, not by an API of its own", () => {
-    const prompt = buildLinkPullRequestsHandoff(source).prompt;
+  it("links only the AI match selected by the user", () => {
+    const prompt = buildLinkPullRequestsHandoff(source, relatedPullRequest).prompt;
     expect(prompt).toContain("Closes #812");
     expect(prompt).toContain("a plain `#812` mention");
-    expect(prompt).toContain("open pull requests");
+    expect(prompt).toContain("pull request #7065");
+    expect(prompt).toContain(relatedPullRequest.url);
+    expect(prompt).not.toContain("open pull requests");
     // Nothing to call: a link is a line in a description, and pointing at an endpoint that does
     // not exist is how an agent spends a thread finding that out.
     expect(prompt).not.toMatch(/\bAPI\b/u);
-    expect(prompt).toContain("an empty answer is a valid one");
   });
 
   it("bounds the issue text the link hand-off quotes", () => {
     const long = "x".repeat(4_000);
-    const [context] = buildLinkPullRequestsHandoff({
-      ...source,
-      title: long,
-      body: long,
-    }).reviewComments;
+    const [context] = buildLinkPullRequestsHandoff(
+      {
+        ...source,
+        title: long,
+        body: long,
+      },
+      relatedPullRequest,
+    ).reviewComments;
     expect(context?.rangeLabel).toHaveLength(1_000);
     expect(context?.text).toContain(`${"x".repeat(997)}...`);
     expect(context?.text).not.toContain("x".repeat(1_001));

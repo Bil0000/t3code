@@ -1,4 +1,10 @@
-import type { IssueComment, IssueDetailView, IssueEvent, IssueActor } from "@t3tools/contracts";
+import type {
+  IssueComment,
+  IssueDetailView,
+  IssueEvent,
+  IssueActor,
+  WorkItemMatch,
+} from "@t3tools/contracts";
 
 import type { ReviewCommentContext } from "~/reviewCommentContext";
 
@@ -334,17 +340,20 @@ export function buildExplainIssueHandoff(input: IssueHandoffSource): IssueHandof
 export const LINK_PULL_REQUESTS_HANDOFF_KIND = "link-pull-requests";
 
 /**
- * Which change requests are working on this issue, worked out by an agent and written where the
- * host reads them from. There is no call to make for a link: the host derives one from a closing
+ * Links one selected change request to this issue where the host reads the relationship. There
+ * is no call to make for a link: the host derives one from a closing
  * keyword in a change request's description, so those descriptions are what get edited — and
  * saying so is what keeps the agent from going looking for an API that does not exist.
  */
-export function buildLinkPullRequestsHandoff(input: IssueHandoffSource): IssueHandoff {
+export function buildLinkPullRequestsHandoff(
+  input: IssueHandoffSource,
+  pullRequest: WorkItemMatch,
+): IssueHandoff {
   return {
     prompt: [
-      `Link issue #${input.number} on \`${boundedField(input.repository)}\` to the change requests that address it.`,
-      `Read the issue, then read the repository's open pull requests, and decide which of them actually address it — read the change each one makes, not only its title. Record each link the way this host records one — in that pull request's own description: \`Closes #${input.number}\` where the change closes this issue, and a plain \`#${input.number}\` mention where it only relates to it.`,
-      "Edit those descriptions and nothing else: keep every word they already have and add only the line carrying the link. Link nothing you are not confident about, and if no open change request addresses this issue, change nothing and say so — an empty answer is a valid one.",
+      `Link pull request #${pullRequest.number} on \`${boundedField(pullRequest.repository)}\` to issue #${input.number} on \`${boundedField(input.repository)}\`.`,
+      `Read the issue and the selected pull request at ${boundedField(pullRequest.url)}. Record the link in that pull request's own description: \`Closes #${input.number}\` where the change closes this issue, and a plain \`#${input.number}\` mention where it only relates to it.`,
+      "Edit that description and nothing else: keep every word it already has and add only the line carrying the link.",
     ].join("\n"),
     reviewComments: [
       issueContextComment(input, "deciding which change requests address it", [

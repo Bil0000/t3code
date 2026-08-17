@@ -6,14 +6,7 @@ import type {
   IssueRef,
   WorkItemMatch,
 } from "@t3tools/contracts";
-import {
-  LinkIcon,
-  MessageSquareIcon,
-  MilestoneIcon,
-  PencilIcon,
-  TagIcon,
-  UsersIcon,
-} from "lucide-react";
+import { MessageSquareIcon, MilestoneIcon, PencilIcon, TagIcon, UsersIcon } from "lucide-react";
 import { useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -183,11 +176,11 @@ export function IssueSummaryTab({
   /** The hand-off currently preparing, if any, so only the control that started it says so. */
   pendingHandoff?: string | null;
   /**
-   * Hands the question of which change requests address this issue to an agent. Supplied by
+   * Hands one selected change request to an agent for linking. Supplied by
    * whoever mounted the panel, because only they can open a thread for it; without one the
    * section offers nothing, which is never a dead control.
    */
-  onLinkPullRequests?: () => void;
+  onLinkPullRequests?: (match: WorkItemMatch) => void;
   onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
   onOpenAiMatch: (match: WorkItemMatch) => void;
   onRefresh: () => void;
@@ -324,28 +317,12 @@ export function IssueSummaryTab({
           ? { count: detail.linkedPullRequests.length }
           : {})}
         actions={
-          <div className="flex items-center gap-1">
-            <WorkItemMatchButton
-              busy={aiMatches.pending === "related"}
-              disabled={aiMatches.pending !== null}
-              loaded={aiMatches.related !== undefined}
-              onClick={() => void aiMatches.find("related")}
-            />
-            {detail.capabilities.linkedPullRequests && onLinkPullRequests ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
-                disabled={pendingHandoff !== null && pendingHandoff !== undefined}
-                onClick={onLinkPullRequests}
-              >
-                <LinkIcon aria-hidden className="size-3" />
-                {pendingHandoff === LINK_PULL_REQUESTS_HANDOFF_KIND
-                  ? "Preparing..."
-                  : "Link with agent"}
-              </Button>
-            ) : null}
-          </div>
+          <WorkItemMatchButton
+            busy={aiMatches.pending === "related"}
+            disabled={aiMatches.pending !== null}
+            loaded={aiMatches.related !== undefined}
+            onClick={() => void aiMatches.find("related")}
+          />
         }
       >
         {detail.capabilities.linkedPullRequests ? (
@@ -397,6 +374,12 @@ export function IssueSummaryTab({
               matches={aiMatches.related}
               emptyText="No likely related pull requests found."
               onOpen={onOpenAiMatch}
+              {...(detail.capabilities.linkedPullRequests && onLinkPullRequests
+                ? {
+                    onLink: onLinkPullRequests,
+                    linking: pendingHandoff === LINK_PULL_REQUESTS_HANDOFF_KIND,
+                  }
+                : {})}
             />
           </div>
         )}

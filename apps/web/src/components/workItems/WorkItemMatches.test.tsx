@@ -36,6 +36,20 @@ describe("work item matches", () => {
     expect(markup).toContain("Refresh active sessions");
     expect(markup).toContain("Implements the session refresh requested here.");
     expect(markup).toContain("High confidence");
+    expect(markup).not.toContain("Link with agent");
+  });
+
+  it("offers agent linking on each actionable AI match", () => {
+    const markup = renderToStaticMarkup(
+      <WorkItemMatchRows
+        matches={[match]}
+        emptyText="No likely matches found."
+        onOpen={() => undefined}
+        onLink={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain("Link with agent");
   });
 
   it("shows a clear empty result", () => {

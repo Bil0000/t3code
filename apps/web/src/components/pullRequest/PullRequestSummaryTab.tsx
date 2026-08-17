@@ -5,13 +5,13 @@ import type {
   PullRequestComment,
   PullRequestDetailView,
   PullRequestRef,
+  WorkItemMatch,
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
   ChevronDownIcon,
   ChevronRightIcon,
   HammerIcon,
-  LinkIcon,
   MessageSquareIcon,
   PencilIcon,
   TagIcon,
@@ -304,11 +304,11 @@ export function PullRequestSummaryTab({
   fixCheckLabel?: string;
   onFixFinding?: (finding: PullRequestFinding) => void;
   /**
-   * Hands the question of which issues this change is about to an agent. Supplied by whoever
+   * Hands one selected issue to an agent for linking. Supplied by whoever
    * mounted the panel, because only they can open a thread for it; without one the section
    * offers nothing, which is never a dead control.
    */
-  onLinkIssues?: () => void;
+  onLinkIssues?: (match: WorkItemMatch) => void;
   /**
    * Opens one of the issues this pull request references. Supplied by whoever mounted the panel,
    * because only they know which thread's panel a peer tab belongs beside; without one the row
@@ -542,26 +542,12 @@ export function PullRequestSummaryTab({
         title="Related issues"
         {...(detail.linkedIssues === undefined ? {} : { count: detail.linkedIssues.length })}
         actions={
-          <div className="flex items-center gap-1">
-            <WorkItemMatchButton
-              busy={aiMatches.pending === "related"}
-              disabled={aiMatches.pending !== null}
-              loaded={aiMatches.related !== undefined}
-              onClick={() => void aiMatches.find("related")}
-            />
-            {detail.linkedIssues !== undefined && onLinkIssues ? (
-              <Button
-                size="xs"
-                variant="ghost"
-                className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
-                disabled={pendingFinding !== null && pendingFinding !== undefined}
-                onClick={onLinkIssues}
-              >
-                <LinkIcon aria-hidden className="size-3" />
-                {pendingFinding === LINK_ISSUES_HANDOFF_KIND ? "Preparing..." : "Link with agent"}
-              </Button>
-            ) : null}
-          </div>
+          <WorkItemMatchButton
+            busy={aiMatches.pending === "related"}
+            disabled={aiMatches.pending !== null}
+            loaded={aiMatches.related !== undefined}
+            onClick={() => void aiMatches.find("related")}
+          />
         }
       >
         {detail.linkedIssues === undefined ? (
@@ -606,6 +592,12 @@ export function PullRequestSummaryTab({
               matches={aiMatches.related}
               emptyText="No likely related issues found."
               onOpen={openAiMatch}
+              {...(detail.linkedIssues !== undefined && onLinkIssues
+                ? {
+                    onLink: onLinkIssues,
+                    linking: pendingFinding === LINK_ISSUES_HANDOFF_KIND,
+                  }
+                : {})}
             />
           </div>
         )}

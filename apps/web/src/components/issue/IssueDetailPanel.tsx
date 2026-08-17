@@ -10,6 +10,7 @@ import type {
   IssueState,
   ScopedProjectRef,
   ScopedThreadRef,
+  WorkItemMatch,
 } from "@t3tools/contracts";
 import {
   ArrowDownUpIcon,
@@ -1016,8 +1017,10 @@ export function IssueDetailPanel({
                   // The section's own button knows only about a hand-off already under way, so
                   // "cannot go yet" is said to it in the one word it understands.
                   pendingHandoff={handoff ?? (activityPending ? HANDOFF_WAITING_KIND : null)}
-                  onLinkPullRequests={() =>
-                    void startHandoff(LINK_PULL_REQUESTS_HANDOFF_KIND, buildLinkPullRequestsHandoff)
+                  onLinkPullRequests={(match: WorkItemMatch) =>
+                    void startHandoff(LINK_PULL_REQUESTS_HANDOFF_KIND, (source) =>
+                      buildLinkPullRequestsHandoff(source, match),
+                    )
                   }
                   onOpenLinkedPullRequest={(link) =>
                     onOpenLinkedPullRequest === undefined
