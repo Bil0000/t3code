@@ -44,6 +44,7 @@ import {
 
 import * as ProjectionSnapshotQuery from "../orchestration/Services/ProjectionSnapshotQuery.ts";
 import {
+  issueProviderContextKey,
   type IssueProviderError,
   type ProviderIssue,
   type ProviderListCursor,
@@ -208,8 +209,11 @@ function parseListCursor(raw: string): ListCursor | null {
 }
 
 function sourceKeyOf(project: IssueProjectSource): string {
-  return issueSourceKey(project.adapter.kind, project.host);
+  return issueProviderContextKey(project.adapter.kind, project.host, project.credentialId);
 }
+
+const providerContextOf = (project: IssueProjectSource) =>
+  project.credentialId === undefined ? {} : { credentialId: project.credentialId };
 
 /**
  * How a listing tells two adapter repositories apart. All three fields matter: different adapters
@@ -374,6 +378,7 @@ export const make = Effect.gen(function* () {
   const viewerPermissionsOf = (project: IssueProjectSource, ref: IssueRef, operation: string) =>
     project.adapter
       .getViewerPermissions({
+        ...providerContextOf(project),
         cwd: project.project.workspaceRoot,
         repository: project.repository,
         host: project.host,
@@ -447,7 +452,9 @@ export const make = Effect.gen(function* () {
           const roots =
             viewerRoots.get(key) ?? forSource.map(({ project }) => project.workspaceRoot);
           return Effect.firstSuccessOf(
-            roots.map((cwd) => adapter.getViewer({ cwd, host: first.host })),
+            roots.map((cwd) =>
+              adapter.getViewer({ ...providerContextOf(first), cwd, host: first.host }),
+            ),
           ).pipe(
             Effect.map((viewer) => ({
               key,
@@ -571,33 +578,41 @@ export const make = Effect.gen(function* () {
         unimplemented,
         viewerRoots,
       } = yield* listWorkspaceProjects(input);
-      const projectCounts = new Map<string, number>();
-      for (const project of projects) {
-        const key = sourceKeyOf(project);
-        projectCounts.set(key, (projectCounts.get(key) ?? 0) + 1);
-      }
-
       const viewerResults = yield* resolveViewers(projects, viewerRoots);
       const viewers: Record<string, string> = {};
       for (const result of viewerResults) {
         if (result.viewer === null) continue;
         viewers[result.key] = result.viewer;
+        viewers[issueSourceKey(result.kind, result.host)] ??= result.viewer;
         // Older clients read the host-only key. New clients prefer the adapter-safe key above.
         viewers[result.host] ??= result.viewer;
       }
 
-      // One summary per adapter and host, which is what viewer lookup already answers for.
-      const providers: ReadonlyArray<IssueProviderSummary> = [
-        ...viewerResults.map((result) => ({
+      // One user-facing summary per adapter and host, even when internal routing has one viewer
+      // per saved credential on that host.
+      const configuredProviders = new Map<string, IssueProviderSummary>();
+      for (const result of viewerResults) {
+        const key = issueSourceKey(result.kind, result.host);
+        const held = configuredProviders.get(key);
+        const configured = result.viewer !== null || held?.configured === true;
+        configuredProviders.set(key, {
           host: result.host,
           kind: result.kind,
           searchesOnHost:
-            projects.find((project) => sourceKeyOf(project) === result.key)?.adapter.capabilities
-              .search ?? false,
-          projectCount: projectCounts.get(result.key) ?? 1,
-          configured: result.viewer !== null,
-          detail: result.error === null ? null : providerDetail(result.error),
-        })),
+            projects.find(
+              (project) => project.adapter.kind === result.kind && project.host === result.host,
+            )?.adapter.capabilities.search ?? false,
+          projectCount: projects.filter(
+            (project) => project.adapter.kind === result.kind && project.host === result.host,
+          ).length,
+          configured,
+          detail: configured
+            ? null
+            : (held?.detail ?? (result.error === null ? null : providerDetail(result.error))),
+        });
+      }
+      const providers: ReadonlyArray<IssueProviderSummary> = [
+        ...configuredProviders.values(),
         ...[...unimplemented.values()].map(({ host, kind, projectCount }) => ({
           host,
           kind,
@@ -669,6 +684,7 @@ export const make = Effect.gen(function* () {
         const cursor = cursorOf(project);
         return project.adapter
           .listIssues({
+            ...providerContextOf(project),
             cwd: project.project.workspaceRoot,
             repository: project.repository,
             host: project.host,
@@ -744,6 +760,7 @@ export const make = Effect.gen(function* () {
         const viewer = viewers[sourceKeyOf(first)]!;
         const cursor = cursorOf(first);
         return readAcross({
+          ...providerContextOf(first),
           cwd: first.project.workspaceRoot,
           host: first.host,
           repositories: chunk.map((project) => project.repository),
@@ -861,6 +878,7 @@ export const make = Effect.gen(function* () {
         Effect.all(
           [
             project.adapter.getIssue({
+              ...providerContextOf(project),
               cwd: project.project.workspaceRoot,
               repository: project.repository,
               host: project.host,
@@ -868,7 +886,11 @@ export const make = Effect.gen(function* () {
             }),
             project.adapter.capabilities.editComment === true
               ? project.adapter
-                  .getViewer({ cwd: project.project.workspaceRoot, host: project.host })
+                  .getViewer({
+                    ...providerContextOf(project),
+                    cwd: project.project.workspaceRoot,
+                    host: project.host,
+                  })
                   .pipe(
                     Effect.map((viewer): string | undefined => viewer),
                     Effect.orElseSucceed(() => undefined),
@@ -914,6 +936,7 @@ export const make = Effect.gen(function* () {
       Effect.flatMap((project) =>
         project.adapter
           .getIssueActivity({
+            ...providerContextOf(project),
             cwd: project.project.workspaceRoot,
             repository: project.repository,
             host: project.host,
@@ -951,6 +974,7 @@ export const make = Effect.gen(function* () {
         }
         return project.adapter
           .getIssueComments({
+            ...providerContextOf(project),
             cwd: project.project.workspaceRoot,
             repository: project.repository,
             host: project.host,
@@ -1002,6 +1026,7 @@ export const make = Effect.gen(function* () {
             }
             return project.adapter
               .runAction({
+                ...providerContextOf(project),
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
                 host: project.host,
@@ -1045,6 +1070,7 @@ export const make = Effect.gen(function* () {
             }
             return project.adapter
               .comment({
+                ...providerContextOf(project),
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
                 host: project.host,
@@ -1078,6 +1104,7 @@ export const make = Effect.gen(function* () {
           );
         }
         return rewrite({
+          ...providerContextOf(project),
           cwd: project.project.workspaceRoot,
           repository: project.repository,
           host: project.host,
@@ -1101,6 +1128,7 @@ export const make = Effect.gen(function* () {
           );
         }
         return react({
+          ...providerContextOf(project),
           cwd: project.project.workspaceRoot,
           repository: project.repository,
           host: project.host,
@@ -1131,6 +1159,7 @@ export const make = Effect.gen(function* () {
         }
         return project.adapter
           .create({
+            ...providerContextOf(project),
             cwd: project.project.workspaceRoot,
             repository: project.repository,
             host: project.host,
@@ -1171,6 +1200,7 @@ export const make = Effect.gen(function* () {
             }
             return project.adapter
               .update({
+                ...providerContextOf(project),
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
                 host: project.host,
@@ -1204,6 +1234,7 @@ export const make = Effect.gen(function* () {
             }
             return project.adapter
               .setLabels({
+                ...providerContextOf(project),
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
                 host: project.host,
@@ -1239,6 +1270,7 @@ export const make = Effect.gen(function* () {
             }
             return project.adapter
               .setAssignees({
+                ...providerContextOf(project),
                 cwd: project.project.workspaceRoot,
                 repository: project.repository,
                 host: project.host,
@@ -1274,6 +1306,7 @@ export const make = Effect.gen(function* () {
               viewer.labels
                 ? project.adapter
                     .listLabelCandidates({
+                      ...providerContextOf(project),
                       cwd: project.project.workspaceRoot,
                       repository: project.repository,
                       host: project.host,
@@ -1308,6 +1341,7 @@ export const make = Effect.gen(function* () {
               viewer.assignees
                 ? project.adapter
                     .listAssigneeCandidates({
+                      ...providerContextOf(project),
                       cwd: project.project.workspaceRoot,
                       repository: project.repository,
                       host: project.host,
@@ -1349,6 +1383,7 @@ export const make = Effect.gen(function* () {
           });
         }
         return read({
+          ...providerContextOf(project),
           cwd: project.project.workspaceRoot,
           repository: project.repository,
           host: project.host,

@@ -191,7 +191,10 @@ describe("ServerSettings worktree defaults", () => {
 
 describe("ServerSettings issue tracking", () => {
   it("defaults Linear project mappings to empty", () => {
-    expect(decodeServerSettings({}).issueTracking.linear.projectTeams).toEqual({});
+    expect(decodeServerSettings({}).issueTracking.linear).toEqual({
+      projectBindings: {},
+      projectTeams: {},
+    });
   });
 
   it("accepts a full Linear project mapping replacement", () => {
@@ -200,6 +203,24 @@ describe("ServerSettings issue tracking", () => {
     });
 
     expect(patch.issueTracking?.linear?.projectTeams).toEqual({ project_1: "ENG" });
+  });
+
+  it("accepts account-aware Linear project bindings", () => {
+    const patch = decodeServerSettingsPatch({
+      issueTracking: {
+        linear: {
+          projectBindings: {
+            project_1: { credentialId: "  user-1  ", teamKey: "  ENG  " },
+            project_2: null,
+          },
+        },
+      },
+    });
+
+    expect(patch.issueTracking?.linear?.projectBindings).toEqual({
+      project_1: { credentialId: "user-1", teamKey: "ENG" },
+      project_2: null,
+    });
   });
 });
 

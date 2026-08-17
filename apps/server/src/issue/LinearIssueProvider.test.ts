@@ -1,6 +1,21 @@
 import { assert, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import type { OrchestrationProjectShell, ProjectId } from "@t3tools/contracts";
 
-import { linearIssueState, linearReactions } from "./LinearIssueProvider.ts";
+import * as ServerSettings from "../serverSettings.ts";
+import * as LinearApi from "./LinearApi.ts";
+import { linearIssueState, linearReactions, make } from "./LinearIssueProvider.ts";
+
+const PROJECT: OrchestrationProjectShell = {
+  id: "project-1" as ProjectId,
+  title: "web",
+  workspaceRoot: "/work/web",
+  defaultModelSelection: null,
+  scripts: [],
+  createdAt: "2026-07-01T00:00:00Z",
+  updatedAt: "2026-07-01T00:00:00Z",
+};
 
 it("maps Linear workflow states onto the neutral open/closed states", () => {
   assert.strictEqual(linearIssueState("started"), "open");
@@ -26,3 +41,70 @@ it("groups supported Linear emoji reactions and marks the viewer", () => {
     ],
   );
 });
+
+it.effect("uses the project binding credential for Linear requests", () => {
+  const asked: Array<string | undefined> = [];
+  const api = {
+    getViewer: (input: { readonly credentialId?: string }) => {
+      asked.push(input.credentialId);
+      return Effect.succeed({ id: "user-1" });
+    },
+  } as unknown as LinearApi.LinearApi["Service"];
+
+  return Effect.gen(function* () {
+    const adapter = yield* make;
+    const source = yield* adapter.resolveSource!(PROJECT);
+    assert.deepStrictEqual(source, {
+      host: "linear.app",
+      repository: "ENG",
+      credentialId: "user-1",
+    });
+
+    yield* (
+      adapter.getViewer as (input: {
+        readonly cwd: string;
+        readonly host: string;
+        readonly credentialId: string;
+      }) => Effect.Effect<string>
+    )({
+      cwd: PROJECT.workspaceRoot,
+      host: "linear.app",
+      credentialId: "user-1",
+    });
+    assert.deepStrictEqual(asked, ["user-1"]);
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(LinearApi.LinearApi, api),
+        ServerSettings.layerTest({
+          issueTracking: {
+            linear: {
+              projectBindings: {
+                "project-1": { credentialId: "user-1", teamKey: "ENG" },
+              },
+            },
+          },
+        } as never),
+      ),
+    ),
+  );
+});
+
+it.effect("keeps reading legacy project team settings", () =>
+  Effect.gen(function* () {
+    const adapter = yield* make;
+    assert.deepStrictEqual(yield* adapter.resolveSource!(PROJECT), {
+      host: "linear.app",
+      repository: "LEGACY",
+    });
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(LinearApi.LinearApi, {} as LinearApi.LinearApi["Service"]),
+        ServerSettings.layerTest({
+          issueTracking: { linear: { projectTeams: { [PROJECT.id]: "LEGACY" } } },
+        }),
+      ),
+    ),
+  ),
+);

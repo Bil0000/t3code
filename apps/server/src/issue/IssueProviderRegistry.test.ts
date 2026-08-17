@@ -115,6 +115,39 @@ it.effect("keeps source-control and external issue sources for one project", () 
   }),
 );
 
+it.effect("keeps account-bound sources distinct on linear.app", () =>
+  Effect.gen(function* () {
+    const linear = {
+      kind: "linear",
+      resolveSource: (candidate: OrchestrationProjectShell) =>
+        Effect.succeed({
+          host: "linear.app",
+          repository: candidate.id === "p1" ? "ENG" : "OPS",
+          credentialId: candidate.id === "p1" ? "user-1" : "user-2",
+        }),
+    } as unknown as IssueAdapter;
+    const registry = fromProviders([linear]);
+
+    const result = yield* registry.resolveProjects(
+      [PROJECT, { ...PROJECT, id: "p2" as ProjectId, workspaceRoot: "/work/api" }],
+      {},
+    );
+
+    assert.deepStrictEqual(
+      result.supported.map(({ credentialId, repository }) => [credentialId, repository]),
+      [
+        ["user-1", "ENG"],
+        ["user-2", "OPS"],
+      ],
+    );
+    assert.strictEqual(result.viewerRoots.size, 2);
+    assert.deepStrictEqual([...result.viewerRoots.values()].flat().toSorted(), [
+      "/work/api",
+      "/work/web",
+    ]);
+  }),
+);
+
 it.effect("derives a self-hosted hostname from a legacy remote identity", () =>
   Effect.gen(function* () {
     const project: OrchestrationProjectShell = {

@@ -91,7 +91,12 @@ import {
   IssueUnavailableError,
   IssueUpdateInput,
 } from "./issue.ts";
-import { IssueTrackingError, LinearConnectInput, LinearConnection } from "./issueTracking.ts";
+import {
+  IssueTrackingError,
+  LinearConnectInput,
+  LinearConnection,
+  LinearDisconnectInput,
+} from "./issueTracking.ts";
 import {
   WorkItemMatchError,
   WorkItemMatchInput,
@@ -777,6 +782,7 @@ export const WsLinearConnectRpc = Rpc.make(WS_METHODS.linearConnect, {
 });
 
 export const WsLinearDisconnectRpc = Rpc.make(WS_METHODS.linearDisconnect, {
+  payload: LinearDisconnectInput,
   success: LinearConnection,
   error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });

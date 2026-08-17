@@ -655,6 +655,47 @@ it.effect("keeps adapters separate when they share a host and repository name", 
   }),
 );
 
+it.effect("routes projects on one host through distinct credential viewers", () =>
+  Effect.gen(function* () {
+    const viewers: Array<string | undefined> = [];
+    const listings: Array<[string | undefined, string]> = [];
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/web" }),
+        project({ id: "p2", title: "api", workspaceRoot: "/api" }),
+      ],
+      providers: [
+        fakeProvider("linear", {
+          resolveSource: (candidate) =>
+            Effect.succeed({
+              host: "linear.app",
+              repository: candidate.id === "p1" ? "ENG" : "OPS",
+              credentialId: candidate.id === "p1" ? "user-1" : "user-2",
+            }),
+          getViewer: (input: { readonly credentialId?: string }) => {
+            viewers.push(input.credentialId);
+            return Effect.succeed(input.credentialId ?? "missing");
+          },
+          listIssues: (input: { readonly credentialId?: string; readonly repository: string }) => {
+            listings.push([input.credentialId, input.repository]);
+            return Effect.succeed({ items: [], truncated: false, continues: true });
+          },
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(viewers.toSorted(), ["user-1", "user-2"]);
+    assert.deepStrictEqual(listings.toSorted(), [
+      ["user-1", "ENG"],
+      ["user-2", "OPS"],
+    ]);
+    assert.strictEqual(result.providers.length, 1);
+    assert.strictEqual(result.providers[0]?.projectCount, 2);
+  }),
+);
+
 it.effect("hands each involvement the reader picked straight to the host", () =>
   Effect.gen(function* () {
     const asked: string[] = [];

@@ -139,13 +139,21 @@ export const make = Effect.gen(function* () {
     resolveSource: (project) =>
       settings.getSettings.pipe(
         Effect.map((value) => {
-          const team = value.issueTracking.linear.projectTeams[project.id];
-          return team === undefined ? null : { host: "linear.app", repository: team };
+          const binding = value.issueTracking.linear.projectBindings[project.id];
+          if (binding !== undefined && binding !== null) {
+            return {
+              host: "linear.app",
+              repository: binding.teamKey,
+              credentialId: binding.credentialId,
+            };
+          }
+          const legacyTeam = value.issueTracking.linear.projectTeams[project.id];
+          return legacyTeam === undefined ? null : { host: "linear.app", repository: legacyTeam };
         }),
         Effect.orElseSucceed(() => null),
       ),
-    getViewer: () =>
-      api.getViewer.pipe(
+    getViewer: ({ credentialId }) =>
+      api.getViewer(credentialId === undefined ? {} : { credentialId }).pipe(
         Effect.map((viewer) => viewer.id),
         Effect.mapError(fail("getViewer")),
       ),
@@ -159,6 +167,7 @@ export const make = Effect.gen(function* () {
           limit: input.limit,
           ...(input.query === undefined ? {} : { query: input.query }),
           ...(input.cursor === undefined ? {} : { updatedBefore: input.cursor.updatedBefore }),
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
         })
         .pipe(
           Effect.mapError(fail("listIssues")),
@@ -169,38 +178,52 @@ export const make = Effect.gen(function* () {
           })),
         ),
     getIssue: (input) =>
-      api.getIssue(identifier(input.repository, input.number)).pipe(
-        Effect.mapError(fail("getIssue")),
-        Effect.map((issue) => ({
-          ...toIssue(issue),
-          body: issue.description ?? "",
-          linkedPullRequests: [],
-          viewerPermissions: PERMISSIONS,
-        })),
-      ),
-    getIssueActivity: (input) =>
-      api.getActivity(identifier(input.repository, input.number)).pipe(
-        Effect.mapError(fail("getIssueActivity")),
-        Effect.map((activity) => ({
-          comments: activity.comments.map((comment) => ({
-            id: comment.id,
-            author: actor(comment.user),
-            body: comment.body,
-            createdAt: comment.createdAt,
-            url: comment.url ?? null,
-            reactions: linearReactions(comment.reactions?.nodes ?? [], activity.viewerId),
+      api
+        .getIssue({
+          identifier: identifier(input.repository, input.number),
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(
+          Effect.mapError(fail("getIssue")),
+          Effect.map((issue) => ({
+            ...toIssue(issue),
+            body: issue.description ?? "",
+            linkedPullRequests: [],
+            viewerPermissions: PERMISSIONS,
           })),
-          commentCount: activity.comments.length,
-          commentsTruncated: activity.commentsTruncated,
-          events: [],
-          reactions: linearReactions(activity.reactions, activity.viewerId),
-        })),
-      ),
+        ),
+    getIssueActivity: (input) =>
+      api
+        .getActivity({
+          identifier: identifier(input.repository, input.number),
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
+        .pipe(
+          Effect.mapError(fail("getIssueActivity")),
+          Effect.map((activity) => ({
+            comments: activity.comments.map((comment) => ({
+              id: comment.id,
+              author: actor(comment.user),
+              body: comment.body,
+              createdAt: comment.createdAt,
+              url: comment.url ?? null,
+              reactions: linearReactions(comment.reactions?.nodes ?? [], activity.viewerId),
+            })),
+            commentCount: activity.comments.length,
+            commentsTruncated: activity.commentsTruncated,
+            events: [],
+            reactions: linearReactions(activity.reactions, activity.viewerId),
+          })),
+        ),
     getViewerPermissions: () => Effect.succeed(PERMISSIONS),
     runAction: () => unsupported("runAction"),
     comment: (input) =>
       api
-        .comment({ issueId: identifier(input.repository, input.number), body: input.body })
+        .comment({
+          issueId: identifier(input.repository, input.number),
+          body: input.body,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
+        })
         .pipe(Effect.mapError(fail("comment"))),
     setReaction: (input) =>
       api
@@ -209,6 +232,7 @@ export const make = Effect.gen(function* () {
           ...(input.subjectId === undefined ? {} : { commentId: input.subjectId }),
           emoji: EMOJI[input.content],
           reacted: input.reacted,
+          ...(input.credentialId === undefined ? {} : { credentialId: input.credentialId }),
         })
         .pipe(Effect.mapError(fail("setReaction"))),
     create: () => unsupported("create"),

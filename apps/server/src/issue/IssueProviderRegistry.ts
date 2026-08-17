@@ -3,7 +3,6 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import {
   issueRepositoryKey,
-  issueSourceKey,
   type IssueListInput,
   type IssueProviderKind,
   type OrchestrationProjectShell,
@@ -25,7 +24,11 @@ import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
 import * as GitLabIssueCli from "./GitLabIssueCli.ts";
 import * as GitLabIssueProvider from "./GitLabIssueProvider.ts";
 import * as LinearIssueProvider from "./LinearIssueProvider.ts";
-import type { IssueAdapter, IssueAdapterSource } from "./IssueProvider.ts";
+import {
+  issueProviderContextKey,
+  type IssueAdapter,
+  type IssueAdapterSource,
+} from "./IssueProvider.ts";
 
 const SOURCE_RESOLUTION_CONCURRENCY = 12;
 
@@ -34,6 +37,7 @@ export interface IssueProjectSource {
   readonly adapter: IssueAdapter;
   readonly repository: string;
   readonly host: string;
+  readonly credentialId?: string;
 }
 
 export interface IssueWorkspaceProjects {
@@ -208,21 +212,27 @@ function projectResolver(
         const repository = bound.repository.trim();
         const host = bound.host.trim().toLowerCase();
         if (repository.length > 0 && host.length > 0) {
-          sources.push({ adapter: bound.adapter, kind: bound.adapter.kind, repository, host });
+          sources.push({
+            adapter: bound.adapter,
+            kind: bound.adapter.kind,
+            repository,
+            host,
+            ...(bound.credentialId === undefined ? {} : { credentialId: bound.credentialId }),
+          });
         }
       }
       const sourceControl = resolveProjectSource(project, refinedKinds, byKind);
       if (sourceControl !== null) sources.push(sourceControl);
 
-      for (const { adapter, kind, repository, host } of sources) {
+      for (const { adapter, kind, repository, host, credentialId } of sources) {
         if (filter.host !== undefined && host !== filter.host.toLowerCase()) continue;
-        const sourceKey = issueSourceKey(kind, host);
+        const sourceKey = issueProviderContextKey(kind, host, credentialId);
         if (adapter !== null) {
           const roots = viewerRoots.get(sourceKey);
           if (roots === undefined) viewerRoots.set(sourceKey, [project.workspaceRoot]);
           else if (!roots.includes(project.workspaceRoot)) roots.push(project.workspaceRoot);
         }
-        const key = issueRepositoryKey(kind, host, repository);
+        const key = `${issueRepositoryKey(kind, host, repository)}\n${credentialId ?? ""}`;
         if (seen.has(key)) continue;
         seen.add(key);
         if (adapter === null) {
@@ -232,7 +242,13 @@ function projectResolver(
           } else counted.projectCount += 1;
           continue;
         }
-        supported.push({ project, adapter, repository, host });
+        supported.push({
+          project,
+          adapter,
+          repository,
+          host,
+          ...(credentialId === undefined ? {} : { credentialId }),
+        });
       }
     }
 

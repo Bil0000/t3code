@@ -5,7 +5,13 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
-import type { IssueListState, IssueInvolvement, LinearConnection } from "@t3tools/contracts";
+import type {
+  IssueListState,
+  IssueInvolvement,
+  LinearAccount,
+  LinearConnection,
+  LinearProjectBinding,
+} from "@t3tools/contracts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
 import * as ServerSecretStore from "../auth/ServerSecretStore.ts";
@@ -14,6 +20,20 @@ const API_URL = "https://api.linear.app/graphql";
 const MAX_PAGE = 250;
 
 export const LINEAR_API_TOKEN_SECRET = "linear.api-token";
+export const LINEAR_CREDENTIALS_SECRET = "linear.credentials";
+
+const Credential = Schema.Struct({
+  credentialId: Schema.String,
+  token: Schema.String,
+});
+const CredentialPool = Schema.Struct({
+  version: Schema.Literal(1),
+  credentials: Schema.Array(Credential),
+});
+type Credential = typeof Credential.Type;
+const CredentialPoolJson = Schema.fromJsonString(CredentialPool);
+const decodeCredentialPool = Schema.decodeUnknownEffect(CredentialPoolJson);
+const encodeCredentialPool = Schema.encodeSync(CredentialPoolJson);
 
 const ApiConfig = Config.all({
   baseUrl: Config.string("T3CODE_LINEAR_API_BASE_URL").pipe(Config.withDefault(API_URL)),
@@ -172,8 +192,12 @@ export class LinearApi extends Context.Service<
   {
     readonly connection: Effect.Effect<LinearConnection, LinearApiError>;
     readonly connect: (token: string) => Effect.Effect<LinearConnection, LinearApiError>;
-    readonly disconnect: Effect.Effect<LinearConnection, LinearApiError>;
-    readonly getViewer: Effect.Effect<LinearUser, LinearApiError>;
+    readonly disconnect: (input: {
+      readonly credentialId: string;
+    }) => Effect.Effect<LinearConnection, LinearApiError>;
+    readonly getViewer: (input: {
+      readonly credentialId?: string;
+    }) => Effect.Effect<LinearUser, LinearApiError>;
     readonly listIssues: (input: {
       readonly teamKey: string;
       readonly state: IssueListState;
@@ -182,12 +206,19 @@ export class LinearApi extends Context.Service<
       readonly limit: number;
       readonly query?: string;
       readonly updatedBefore?: string;
+      readonly credentialId?: string;
     }) => Effect.Effect<
       { readonly issues: ReadonlyArray<LinearIssue>; readonly truncated: boolean },
       LinearApiError
     >;
-    readonly getIssue: (identifier: string) => Effect.Effect<LinearIssue, LinearApiError>;
-    readonly getActivity: (identifier: string) => Effect.Effect<
+    readonly getIssue: (input: {
+      readonly identifier: string;
+      readonly credentialId?: string;
+    }) => Effect.Effect<LinearIssue, LinearApiError>;
+    readonly getActivity: (input: {
+      readonly identifier: string;
+      readonly credentialId?: string;
+    }) => Effect.Effect<
       {
         readonly viewerId: string;
         readonly comments: ReadonlyArray<LinearComment>;
@@ -199,12 +230,14 @@ export class LinearApi extends Context.Service<
     readonly comment: (input: {
       readonly issueId: string;
       readonly body: string;
+      readonly credentialId?: string;
     }) => Effect.Effect<void, LinearApiError>;
     readonly setReaction: (input: {
       readonly issueId: string;
       readonly commentId?: string;
       readonly emoji: string;
       readonly reacted: boolean;
+      readonly credentialId?: string;
     }) => Effect.Effect<void, LinearApiError>;
   }
 >()("t3/issue/LinearApi") {}
@@ -212,155 +245,289 @@ export class LinearApi extends Context.Service<
 const clean = (value: string | null | undefined) => value?.trim() || null;
 const isAuthError = (message: string) => /auth|api key|access token/i.test(message);
 
+export function clearCredentialBindings(
+  bindings: Readonly<Record<string, LinearProjectBinding | null>>,
+  credentialId: string,
+): Record<string, LinearProjectBinding | null> {
+  return Object.fromEntries(
+    Object.entries(bindings).map(([projectId, binding]) => [
+      projectId,
+      binding?.credentialId === credentialId ? null : binding,
+    ]),
+  );
+}
+
 export const make = Effect.gen(function* () {
   const config = yield* ApiConfig;
   const http = yield* HttpClient.HttpClient;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
 
-  const storedToken = secrets.get(LINEAR_API_TOKEN_SECRET).pipe(
+  const readSecret = (name: string) =>
+    secrets.get(name).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LinearApiError({
+            reason: "failed",
+            detail: "Could not read the saved Linear token.",
+            cause,
+          }),
+      ),
+      Effect.map((value) => Option.map(value, (bytes) => new TextDecoder().decode(bytes).trim())),
+    );
+  const storedToken = readSecret(LINEAR_API_TOKEN_SECRET);
+  const storedCredentials = readSecret(LINEAR_CREDENTIALS_SECRET).pipe(
+    Effect.flatMap(
+      Option.match({
+        onNone: () => Effect.succeed<ReadonlyArray<Credential>>([]),
+        onSome: (value) =>
+          decodeCredentialPool(value).pipe(
+            Effect.map((pool) => pool.credentials),
+            Effect.mapError((cause) =>
+              cause instanceof LinearApiError
+                ? cause
+                : new LinearApiError({
+                    reason: "failed",
+                    detail: "Could not read the saved Linear accounts.",
+                    cause,
+                  }),
+            ),
+          ),
+      }),
+    ),
+  );
+  const writeCredentials = (credentials: ReadonlyArray<Credential>) =>
+    secrets
+      .set(
+        LINEAR_CREDENTIALS_SECRET,
+        new TextEncoder().encode(encodeCredentialPool({ version: 1, credentials })),
+      )
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new LinearApiError({
+              reason: "failed",
+              detail: "Could not save the Linear accounts.",
+              cause,
+            }),
+        ),
+      );
+  const removeLegacyToken = secrets.remove(LINEAR_API_TOKEN_SECRET).pipe(
     Effect.mapError(
       (cause) =>
         new LinearApiError({
           reason: "failed",
-          detail: "Could not read the saved Linear token.",
+          detail: "Could not remove the legacy Linear token.",
           cause,
         }),
     ),
-    Effect.map((value) => Option.map(value, (bytes) => new TextDecoder().decode(bytes).trim())),
-  );
-  const auth = storedToken.pipe(
-    Effect.map((stored) => ({
-      token: Option.orElse(stored, () => config.envToken),
-      hasStoredToken: Option.isSome(stored),
-    })),
-  );
-  const token = auth.pipe(
-    Effect.flatMap(({ token }) =>
-      Option.match(token, {
-        onNone: () =>
-          Effect.fail(
-            new LinearApiError({
-              reason: "unauthenticated",
-              detail: "Connect Linear in Settings.",
-            }),
-          ),
-        onSome: Effect.succeed,
-      }),
-    ),
   );
 
-  const request = <S extends Schema.Codec<unknown, unknown, never, never>>(
+  const requestWithToken = <S extends Schema.Codec<unknown, unknown, never, never>>(
+    key: string,
     operation: string,
     document: string,
     variables: Record<string, unknown>,
     schema: S,
   ): Effect.Effect<S["Type"], LinearApiError> =>
-    token.pipe(
-      Effect.flatMap((key) =>
-        http.execute(
-          HttpClientRequest.post(config.baseUrl).pipe(
-            HttpClientRequest.setHeader("authorization", key),
-            HttpClientRequest.acceptJson,
-            HttpClientRequest.bodyJsonUnsafe({ query: document, variables }),
-          ),
+    http
+      .execute(
+        HttpClientRequest.post(config.baseUrl).pipe(
+          HttpClientRequest.setHeader("authorization", key),
+          HttpClientRequest.acceptJson,
+          HttpClientRequest.bodyJsonUnsafe({ query: document, variables }),
         ),
-      ),
-      Effect.mapError((cause) =>
-        cause instanceof LinearApiError
-          ? cause
-          : new LinearApiError({
-              reason: "failed",
-              detail: `Linear ${operation} request failed.`,
-              cause,
+      )
+      .pipe(
+        Effect.mapError((cause) =>
+          cause instanceof LinearApiError
+            ? cause
+            : new LinearApiError({
+                reason: "failed",
+                detail: `Linear ${operation} request failed.`,
+                cause,
+              }),
+        ),
+        Effect.flatMap((response) =>
+          response.status === 401 || response.status === 403
+            ? Effect.fail(
+                new LinearApiError({
+                  reason: "unauthenticated",
+                  detail: "Linear rejected the API token.",
+                }),
+              )
+            : response.status < 200 || response.status >= 300
+              ? Effect.fail(
+                  new LinearApiError({
+                    reason: "failed",
+                    detail: `Linear returned HTTP ${response.status}.`,
+                  }),
+                )
+              : HttpClientResponse.schemaBodyJson(schema)(response).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new LinearApiError({
+                        reason: "failed",
+                        detail: "Linear returned an invalid response.",
+                        cause,
+                      }),
+                  ),
+                ),
+        ),
+        Effect.flatMap((envelope) => {
+          const errors = (envelope as { errors?: ReadonlyArray<{ message: string }> }).errors;
+          const message = errors?.[0]?.message;
+          return message === undefined
+            ? Effect.succeed(envelope)
+            : Effect.fail(
+                new LinearApiError({
+                  reason: isAuthError(message) ? "unauthenticated" : "failed",
+                  detail: message,
+                }),
+              );
+        }),
+      );
+
+  const credentialToken = (credentialId?: string) =>
+    storedCredentials.pipe(
+      Effect.flatMap((credentials) => {
+        const credential =
+          credentialId === undefined
+            ? credentials.length === 1
+              ? credentials[0]
+              : undefined
+            : credentials.find((candidate) => candidate.credentialId === credentialId);
+        if (credential !== undefined) return Effect.succeed(credential.token);
+        if (credentials.length > 0) {
+          return Effect.fail(
+            new LinearApiError({
+              reason: "unauthenticated",
+              detail: "The selected Linear account is not connected.",
             }),
-      ),
-      Effect.flatMap((response) =>
-        response.status === 401 || response.status === 403
+          );
+        }
+        return storedToken.pipe(
+          Effect.map((legacy) => Option.orElse(legacy, () => config.envToken)),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(
+                  new LinearApiError({
+                    reason: "unauthenticated",
+                    detail: "Connect Linear in Settings.",
+                  }),
+                ),
+              onSome: Effect.succeed,
+            }),
+          ),
+        );
+      }),
+    );
+
+  const request = <S extends Schema.Codec<unknown, unknown, never, never>>(
+    credentialId: string | undefined,
+    operation: string,
+    document: string,
+    variables: Record<string, unknown>,
+    schema: S,
+  ): Effect.Effect<S["Type"], LinearApiError> =>
+    credentialToken(credentialId).pipe(
+      Effect.flatMap((key) => requestWithToken(key, operation, document, variables, schema)),
+    );
+
+  const probeToken = (key: string): Effect.Effect<LinearAccount, LinearApiError> =>
+    requestWithToken(key, "connection", CONNECTION_QUERY, {}, ConnectionEnvelope).pipe(
+      Effect.flatMap(({ data }) =>
+        data.viewer === null
           ? Effect.fail(
               new LinearApiError({
                 reason: "unauthenticated",
                 detail: "Linear rejected the API token.",
               }),
             )
-          : response.status < 200 || response.status >= 300
-            ? Effect.fail(
-                new LinearApiError({
-                  reason: "failed",
-                  detail: `Linear returned HTTP ${response.status}.`,
-                }),
-              )
-            : HttpClientResponse.schemaBodyJson(schema)(response).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new LinearApiError({
-                      reason: "failed",
-                      detail: "Linear returned an invalid response.",
-                      cause,
-                    }),
-                ),
-              ),
-      ),
-      Effect.flatMap((envelope) => {
-        const errors = (envelope as { errors?: ReadonlyArray<{ message: string }> }).errors;
-        const message = errors?.[0]?.message;
-        return message === undefined
-          ? Effect.succeed(envelope)
-          : Effect.fail(
-              new LinearApiError({
-                reason: isAuthError(message) ? "unauthenticated" : "failed",
-                detail: message,
-              }),
-            );
-      }),
-    );
-
-  const probe = (hasStoredToken: boolean): Effect.Effect<LinearConnection, LinearApiError> =>
-    request("connection", CONNECTION_QUERY, {}, ConnectionEnvelope).pipe(
-      Effect.map(
-        ({ data }): LinearConnection => ({
-          status: "authenticated" as const,
-          hasStoredToken,
-          accountName: clean(data.viewer?.name) ?? "Linear account",
-          accountEmail: clean(data.viewer?.email),
-          teams: data.teams.nodes.map((team) => ({ id: team.id, key: team.key, name: team.name })),
-        }),
-      ),
-      Effect.catch((error) =>
-        error.reason === "unauthenticated"
-          ? Effect.succeed<LinearConnection>({
-              status: "unauthenticated",
-              hasStoredToken,
-              accountName: null,
-              accountEmail: null,
-              teams: [],
-            })
-          : Effect.succeed<LinearConnection>({
-              status: "unverified",
-              hasStoredToken,
-              accountName: null,
-              accountEmail: null,
-              teams: [],
+          : Effect.succeed({
+              credentialId: data.viewer.id,
+              status: "authenticated" as const,
+              accountName: clean(data.viewer.name) ?? "Linear account",
+              accountEmail: clean(data.viewer.email),
+              teams: data.teams.nodes.map((team) => ({
+                id: team.id,
+                key: team.key,
+                name: team.name,
+              })),
             }),
       ),
     );
 
-  const connection = auth.pipe(
-    Effect.flatMap(({ token, hasStoredToken }) =>
-      Option.isNone(token)
-        ? Effect.succeed<LinearConnection>({
-            status: "unauthenticated",
-            hasStoredToken,
-            accountName: null,
-            accountEmail: null,
-            teams: [],
-          })
-        : probe(hasStoredToken),
+  const inspectCredential = (credential: Credential): Effect.Effect<LinearAccount> =>
+    probeToken(credential.token).pipe(
+      Effect.catch((error) =>
+        Effect.succeed({
+          credentialId: credential.credentialId,
+          status: error.reason === "unauthenticated" ? "unauthenticated" : "unverified",
+          accountName: "Linear account",
+          accountEmail: null,
+          teams: [],
+        } as const),
+      ),
+    );
+
+  const connectionOf = (
+    accounts: ReadonlyArray<LinearAccount>,
+    hasStoredToken: boolean,
+  ): LinearConnection => {
+    const primary = accounts.find((account) => account.status === "authenticated") ?? accounts[0];
+    return {
+      status: primary?.status ?? "unauthenticated",
+      hasStoredToken,
+      accountName: primary?.accountName ?? null,
+      accountEmail: primary?.accountEmail ?? null,
+      teams: primary?.teams ?? [],
+      accounts,
+    };
+  };
+
+  const connection = Effect.gen(function* () {
+    const credentials = yield* storedCredentials;
+    if (credentials.length > 0) {
+      const accounts = yield* Effect.forEach(credentials, inspectCredential);
+      return connectionOf(accounts, true);
+    }
+    const legacy = yield* storedToken;
+    if (Option.isSome(legacy)) {
+      const account = yield* probeToken(legacy.value);
+      yield* writeCredentials([{ credentialId: account.credentialId, token: legacy.value }]);
+      yield* removeLegacyToken;
+      return connectionOf([account], true);
+    }
+    if (Option.isSome(config.envToken)) {
+      const account = yield* probeToken(config.envToken.value);
+      return {
+        status: account.status,
+        hasStoredToken: false,
+        accountName: account.accountName,
+        accountEmail: account.accountEmail,
+        teams: account.teams,
+        accounts: [],
+      };
+    }
+    return connectionOf([], false);
+  }).pipe(
+    Effect.catch((error) =>
+      Effect.succeed<LinearConnection>({
+        status: error.reason === "unauthenticated" ? "unauthenticated" : "unverified",
+        hasStoredToken: false,
+        accountName: null,
+        accountEmail: null,
+        teams: [],
+        accounts: [],
+      }),
     ),
   );
 
-  const getViewer = request("viewer", VIEWER_QUERY, {}, ViewerEnvelope).pipe(
-    Effect.map(({ data }) => data.viewer),
-  );
+  const getViewer = ({ credentialId }: { readonly credentialId?: string }) =>
+    request(credentialId, "viewer", VIEWER_QUERY, {}, ViewerEnvelope).pipe(
+      Effect.map(({ data }) => data.viewer),
+    );
 
   const issueOrFail = (identifier: string, issue: LinearIssue | null) =>
     issue === null
@@ -372,8 +539,13 @@ export const make = Effect.gen(function* () {
         )
       : Effect.succeed(issue);
 
-  const mutation = (operation: string, document: string, variables: Record<string, unknown>) =>
-    request(operation, document, variables, MutationEnvelope).pipe(
+  const mutation = (
+    credentialId: string | undefined,
+    operation: string,
+    document: string,
+    variables: Record<string, unknown>,
+  ) =>
+    request(credentialId, operation, document, variables, MutationEnvelope).pipe(
       Effect.flatMap(({ data }) =>
         Object.values(data).some((payload) => payload.success)
           ? Effect.void
@@ -386,28 +558,39 @@ export const make = Effect.gen(function* () {
   return LinearApi.of({
     connection,
     connect: (value) =>
-      secrets.set(LINEAR_API_TOKEN_SECRET, new TextEncoder().encode(value.trim())).pipe(
-        Effect.mapError(
-          (cause) =>
-            new LinearApiError({
-              reason: "failed",
-              detail: "Could not save the Linear token.",
-              cause,
-            }),
+      Effect.gen(function* () {
+        const credentials = [...(yield* storedCredentials)];
+        const legacy = yield* storedToken;
+        if (credentials.length === 0 && Option.isSome(legacy)) {
+          yield* probeToken(legacy.value).pipe(
+            Effect.tap((account) =>
+              Effect.sync(() => {
+                credentials.push({ credentialId: account.credentialId, token: legacy.value });
+              }),
+            ),
+            Effect.ignore,
+          );
+        }
+
+        const token = value.trim();
+        const account = yield* probeToken(token);
+        const next = credentials.filter(
+          (credential) => credential.credentialId !== account.credentialId,
+        );
+        next.push({ credentialId: account.credentialId, token });
+        yield* writeCredentials(next);
+        if (Option.isSome(legacy)) yield* removeLegacyToken;
+        return yield* connection;
+      }),
+    disconnect: ({ credentialId }) =>
+      storedCredentials.pipe(
+        Effect.flatMap((credentials) =>
+          writeCredentials(
+            credentials.filter((credential) => credential.credentialId !== credentialId),
+          ),
         ),
-        Effect.flatMap(() => probe(true)),
+        Effect.flatMap(() => connection),
       ),
-    disconnect: secrets.remove(LINEAR_API_TOKEN_SECRET).pipe(
-      Effect.mapError(
-        (cause) =>
-          new LinearApiError({
-            reason: "failed",
-            detail: "Could not remove the Linear token.",
-            cause,
-          }),
-      ),
-      Effect.flatMap(() => probe(false)),
-    ),
     getViewer,
     listIssues: (input) => {
       const filter: Record<string, unknown> = { team: { key: { eq: input.teamKey } } };
@@ -436,6 +619,7 @@ export const make = Effect.gen(function* () {
       if (input.updatedBefore !== undefined) filter.updatedAt = { lte: input.updatedBefore };
       const first = Math.min(input.limit + 1, MAX_PAGE);
       return request(
+        input.credentialId,
         "issue list",
         LIST_QUERY,
         first === 0 ? {} : { first, filter },
@@ -447,12 +631,13 @@ export const make = Effect.gen(function* () {
         })),
       );
     },
-    getIssue: (identifier) =>
-      request("issue", ISSUE_QUERY, { id: identifier }, IssueEnvelope).pipe(
+    getIssue: ({ identifier, credentialId }) =>
+      request(credentialId, "issue", ISSUE_QUERY, { id: identifier }, IssueEnvelope).pipe(
         Effect.flatMap(({ data }) => issueOrFail(identifier, data.issue)),
       ),
-    getActivity: (identifier) =>
+    getActivity: ({ identifier, credentialId }) =>
       request(
+        credentialId,
         "issue activity",
         ACTIVITY_QUERY,
         { id: identifier, comments: 50 },
@@ -470,11 +655,11 @@ export const make = Effect.gen(function* () {
           }),
         ),
       ),
-    comment: ({ issueId, body }) =>
-      mutation("comment", COMMENT_MUTATION, { input: { issueId, body } }),
+    comment: ({ issueId, body, credentialId }) =>
+      mutation(credentialId, "comment", COMMENT_MUTATION, { input: { issueId, body } }),
     setReaction: (input) => {
       if (input.reacted) {
-        return mutation("reaction", REACTION_CREATE_MUTATION, {
+        return mutation(input.credentialId, "reaction", REACTION_CREATE_MUTATION, {
           input:
             input.commentId === undefined
               ? { issueId: input.issueId, emoji: input.emoji }
@@ -484,7 +669,13 @@ export const make = Effect.gen(function* () {
       const document =
         input.commentId === undefined ? ISSUE_REACTIONS_QUERY : COMMENT_REACTIONS_QUERY;
       const id = input.commentId ?? input.issueId;
-      return request("reaction lookup", document, { id }, ReactionLookupEnvelope).pipe(
+      return request(
+        input.credentialId,
+        "reaction lookup",
+        document,
+        { id },
+        ReactionLookupEnvelope,
+      ).pipe(
         Effect.flatMap(({ data }) => {
           const reactions = (data.comment ?? data.issue)?.reactions.nodes ?? [];
           const reaction = reactions.find(
@@ -492,7 +683,9 @@ export const make = Effect.gen(function* () {
           );
           return reaction === undefined
             ? Effect.void
-            : mutation("reaction", REACTION_DELETE_MUTATION, { id: reaction.id });
+            : mutation(input.credentialId, "reaction", REACTION_DELETE_MUTATION, {
+                id: reaction.id,
+              });
         }),
       );
     },
