@@ -77,6 +77,42 @@ it.effect("keeps two adapters that share one host and repository", () =>
   }),
 );
 
+it.effect("keeps source-control and external issue sources for one project", () =>
+  Effect.gen(function* () {
+    const project: OrchestrationProjectShell = {
+      ...PROJECT,
+      repositoryIdentity: {
+        canonicalKey: "github.com/acme/web",
+        locator: {
+          source: "git-remote",
+          remoteName: "origin",
+          remoteUrl: "https://github.com/acme/web.git",
+        },
+        provider: "github",
+        displayName: "acme/web",
+      },
+    };
+    const github = { kind: "github" } as unknown as IssueAdapter;
+    const linear = {
+      kind: "linear",
+      resolveSource: () => ({ host: "linear.app", repository: "ENG" }),
+    } as unknown as IssueAdapter;
+    const registry = fromProviders([github, linear]);
+
+    const result = yield* registry.resolveProjects([project], {});
+
+    assert.deepStrictEqual(
+      result.supported
+        .map(({ adapter, host, repository }) => ({ kind: adapter.kind, host, repository }))
+        .toSorted((left, right) => left.kind.localeCompare(right.kind)),
+      [
+        { kind: "github", host: "github.com", repository: "acme/web" },
+        { kind: "linear", host: "linear.app", repository: "ENG" },
+      ],
+    );
+  }),
+);
+
 it.effect("derives a self-hosted hostname from a legacy remote identity", () =>
   Effect.gen(function* () {
     const project: OrchestrationProjectShell = {

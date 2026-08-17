@@ -80,15 +80,17 @@ function adapterSourcesOf(
   projects: ReadonlyArray<OrchestrationProjectShell>,
   filter: IssueProjectFilter,
   adapters: ReadonlyMap<IssueProviderKind, IssueAdapter>,
-): ReadonlyMap<OrchestrationProjectShell["id"], BoundIssueSource> {
-  const sources = new Map<OrchestrationProjectShell["id"], BoundIssueSource>();
+): ReadonlyMap<OrchestrationProjectShell["id"], ReadonlyArray<BoundIssueSource>> {
+  const sources = new Map<OrchestrationProjectShell["id"], BoundIssueSource[]>();
   for (const project of projects) {
     if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
     for (const adapter of adapters.values()) {
       const source = adapter.resolveSource?.(project);
       if (source === undefined || source === null) continue;
-      sources.set(project.id, { adapter, ...source });
-      break;
+      const bound = { adapter, ...source };
+      const projectSources = sources.get(project.id);
+      if (projectSources === undefined) sources.set(project.id, [bound]);
+      else projectSources.push(bound);
     }
   }
   return sources;
@@ -96,18 +98,9 @@ function adapterSourcesOf(
 
 function resolveProjectSource(
   project: OrchestrationProjectShell,
-  bound: BoundIssueSource | undefined,
   refinedKinds: ReadonlyMap<string, IssueProviderKind>,
   adapters: ReadonlyMap<IssueProviderKind, IssueAdapter>,
 ): ResolvedProjectSource | null {
-  if (bound !== undefined) {
-    const repository = bound.repository.trim();
-    const host = bound.host.trim().toLowerCase();
-    return repository.length === 0 || host.length === 0
-      ? null
-      : { adapter: bound.adapter, kind: bound.adapter.kind, repository, host };
-  }
-
   const identity = project.repositoryIdentity;
   let kind = identity?.provider;
   const repository = repositoryIdentityOf(project);
@@ -131,7 +124,6 @@ function projectResolver(
   const refineUnknownKinds = Effect.fn("IssueProviderRegistry.refineUnknownKinds")(function* (
     projects: ReadonlyArray<OrchestrationProjectShell>,
     filter: IssueProjectFilter,
-    boundSources: ReadonlyMap<OrchestrationProjectShell["id"], BoundIssueSource>,
   ) {
     if (sourceControlProviders === undefined) return new Map<string, IssueProviderKind>();
 
@@ -144,7 +136,6 @@ function projectResolver(
     const refinements = new Map<string, Candidate[]>();
     for (const project of projects) {
       if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
-      if (boundSources.has(project.id)) continue;
       const identity = project.repositoryIdentity;
       if (identity?.provider !== "unknown" || repositoryIdentityOf(project) === null) continue;
       const host = issueHostOf(identity, "unknown");
@@ -193,7 +184,7 @@ function projectResolver(
     filter: IssueProjectFilter,
   ) {
     const boundSources = adapterSourcesOf(projects, filter, byKind);
-    const refinedKinds = yield* refineUnknownKinds(projects, filter, boundSources);
+    const refinedKinds = yield* refineUnknownKinds(projects, filter);
     const supported: IssueProjectSource[] = [];
     const unimplemented = new Map<
       string,
@@ -208,32 +199,37 @@ function projectResolver(
 
     for (const project of projects) {
       if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
-      const source = resolveProjectSource(
-        project,
-        boundSources.get(project.id),
-        refinedKinds,
-        byKind,
-      );
-      if (source === null) continue;
-      const { adapter, kind, repository, host } = source;
-      if (filter.host !== undefined && host !== filter.host.toLowerCase()) continue;
-      const sourceKey = issueSourceKey(kind, host);
-      if (adapter !== null) {
-        const roots = viewerRoots.get(sourceKey);
-        if (roots === undefined) viewerRoots.set(sourceKey, [project.workspaceRoot]);
-        else if (!roots.includes(project.workspaceRoot)) roots.push(project.workspaceRoot);
+      const sources: ResolvedProjectSource[] = [];
+      for (const bound of boundSources.get(project.id) ?? []) {
+        const repository = bound.repository.trim();
+        const host = bound.host.trim().toLowerCase();
+        if (repository.length > 0 && host.length > 0) {
+          sources.push({ adapter: bound.adapter, kind: bound.adapter.kind, repository, host });
+        }
       }
-      const key = issueRepositoryKey(kind, host, repository);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      if (adapter === null) {
-        const counted = unimplemented.get(sourceKey);
-        if (counted === undefined) {
-          unimplemented.set(sourceKey, { host, kind, projectCount: 1 });
-        } else counted.projectCount += 1;
-        continue;
+      const sourceControl = resolveProjectSource(project, refinedKinds, byKind);
+      if (sourceControl !== null) sources.push(sourceControl);
+
+      for (const { adapter, kind, repository, host } of sources) {
+        if (filter.host !== undefined && host !== filter.host.toLowerCase()) continue;
+        const sourceKey = issueSourceKey(kind, host);
+        if (adapter !== null) {
+          const roots = viewerRoots.get(sourceKey);
+          if (roots === undefined) viewerRoots.set(sourceKey, [project.workspaceRoot]);
+          else if (!roots.includes(project.workspaceRoot)) roots.push(project.workspaceRoot);
+        }
+        const key = issueRepositoryKey(kind, host, repository);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (adapter === null) {
+          const counted = unimplemented.get(sourceKey);
+          if (counted === undefined) {
+            unimplemented.set(sourceKey, { host, kind, projectCount: 1 });
+          } else counted.projectCount += 1;
+          continue;
+        }
+        supported.push({ project, adapter, repository, host });
       }
-      supported.push({ project, adapter, repository, host });
     }
 
     return { supported, unimplemented, viewerRoots };
