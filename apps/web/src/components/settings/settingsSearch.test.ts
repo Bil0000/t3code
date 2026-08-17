@@ -94,7 +94,7 @@ describe("searchSettings", () => {
 
   it("keeps issue tracking inside the combined source control section", () => {
     expect(SETTINGS_SECTION_LABELS["/settings/source-control"]).toBe(
-      "Source Control and Issue Tracking",
+      "Source Control & Issue Tracking",
     );
     expect(Object.keys(SETTINGS_SECTION_LABELS)).not.toContain("/settings/issue-tracking");
     expect(searchSettings("issue tracking")[0]).toMatchObject({

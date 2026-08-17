@@ -28,7 +28,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
   "/settings/providers": "Providers",
-  "/settings/source-control": "Source Control and Issue Tracking",
+  "/settings/source-control": "Source Control & Issue Tracking",
   "/settings/connections": "Connections",
   "/settings/archived": "Archive",
 };
