@@ -576,6 +576,11 @@ export function PullRequestSummaryTab({
                   </span>
                 </button>
               ))}
+              {detail.linkedIssuesTruncated === true ? (
+                <p className="px-2 pt-1 text-xs text-muted-foreground">
+                  More linked issues exist on the host.
+                </p>
+              ) : null}
             </div>
           )}
         </Section>

@@ -111,7 +111,7 @@ describe("gitHubViewerPermissions", () => {
             }),
           getViewerAccess: () =>
             Effect.succeed({ canWrite: false, canUpdate: true, didAuthor: false }),
-          listLinkedIssues: () => Effect.succeed([]),
+          listLinkedIssues: () => Effect.succeed({ links: [], truncated: false }),
         }),
       ),
     ),
@@ -171,7 +171,7 @@ describe("getChangeRequest linked issues", () => {
           mergeCapabilities: { merge: true, squash: true, rebase: true },
         }),
       getViewerAccess: () => Effect.succeed({ canWrite: true, canUpdate: true, didAuthor: false }),
-      listLinkedIssues: () => Effect.succeed(input.linked),
+      listLinkedIssues: () => Effect.succeed({ links: input.linked, truncated: false }),
       listCitedIssues: input.listCitedIssues,
     });
 

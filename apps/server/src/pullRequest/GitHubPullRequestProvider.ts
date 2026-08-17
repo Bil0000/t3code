@@ -293,13 +293,13 @@ export const make = Effect.gen(function* () {
           // answers nothing useful here leaves the section empty rather than blanking the detail.
           cli
             .listLinkedIssues(input)
-            .pipe(Effect.orElseSucceed((): ReadonlyArray<IssueLink> => [])),
+            .pipe(Effect.orElseSucceed(() => ({ links: [], truncated: false }))),
         ],
         { concurrency: 4 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
         Effect.flatMap(([detail, repository, viewerAccess, linkedIssues]) =>
-          citedIssues(input, detail.pullRequest, linkedIssues).pipe(
+          citedIssues(input, detail.pullRequest, linkedIssues.links).pipe(
             Effect.map(
               (cited): ProviderChangeRequestDetail => ({
                 ...detail.pullRequest,
@@ -313,7 +313,8 @@ export const make = Effect.gen(function* () {
                   ...viewerAccess,
                   canUpdateBranch: detail.comparison?.viewerCanUpdate === true,
                 }),
-                linkedIssues: mergeIssueLinks(linkedIssues, cited),
+                linkedIssues: mergeIssueLinks(linkedIssues.links, cited),
+                linkedIssuesTruncated: linkedIssues.truncated,
                 baseComparison:
                   detail.comparison === null || detail.comparison.behindBy === null
                     ? "unknown"

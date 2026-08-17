@@ -2200,8 +2200,12 @@ const LINKED_ISSUE_FRAGMENT = `fragment LinkedIssue on Issue {
 export const LINKED_ISSUES_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!, $first: Int!) {
   repository(owner: $owner, name: $name) {
     pullRequest(number: $number) {
-      closingIssuesReferences(first: $first) { nodes { ...LinkedIssue } }
+      closingIssuesReferences(first: $first) {
+        pageInfo { hasNextPage }
+        nodes { ...LinkedIssue }
+      }
       timelineItems(first: $first, itemTypes: [CROSS_REFERENCED_EVENT]) {
+        pageInfo { hasNextPage }
         nodes {
           ... on CrossReferencedEvent {
             source { ...LinkedIssue }
@@ -2244,6 +2248,7 @@ const RawLinkedIssuesSchema = Schema.Struct({
             closingIssuesReferences: Schema.optional(
               Schema.NullOr(
                 Schema.Struct({
+                  pageInfo: Schema.optional(Schema.NullOr(RawPageInfoSchema)),
                   nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
                 }),
               ),
@@ -2251,6 +2256,7 @@ const RawLinkedIssuesSchema = Schema.Struct({
             timelineItems: Schema.optional(
               Schema.NullOr(
                 Schema.Struct({
+                  pageInfo: Schema.optional(Schema.NullOr(RawPageInfoSchema)),
                   nodes: Schema.optional(Schema.NullOr(Schema.Array(Schema.Unknown))),
                 }),
               ),
@@ -2282,6 +2288,11 @@ function toLinkedIssue(raw: RawLinkedIssue, closesIssue: boolean): IssueLink | n
   };
 }
 
+export interface GitHubLinkedIssues {
+  readonly links: ReadonlyArray<IssueLink>;
+  readonly truncated: boolean;
+}
+
 /**
  * Every issue this pull request points at, closing links first: GitHub reports the same issue in
  * both halves whenever a closing keyword also left a cross-reference behind, and de-duplication
@@ -2292,7 +2303,7 @@ function toLinkedIssue(raw: RawLinkedIssue, closesIssue: boolean): IssueLink | n
  */
 export function decodeLinkedIssuesJson(
   raw: string,
-): Result.Result<ReadonlyArray<IssueLink>, DecodeFailure> {
+): Result.Result<GitHubLinkedIssues, DecodeFailure> {
   const decoded = decodeLinkedIssues(raw);
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
@@ -2315,7 +2326,12 @@ export function decodeLinkedIssuesJson(
     add(event.value.source, false);
     add(event.value.target, false);
   }
-  return Result.succeed([...links.values()]);
+  return Result.succeed({
+    links: [...links.values()],
+    truncated:
+      pullRequest?.closingIssuesReferences?.pageInfo?.hasNextPage === true ||
+      pullRequest?.timelineItems?.pageInfo?.hasNextPage === true,
+  });
 }
 
 /**

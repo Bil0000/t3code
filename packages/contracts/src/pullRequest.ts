@@ -658,6 +658,8 @@ export const PullRequestDetail = Schema.Struct({
    * host with no notion of the link answers with nothing rather than with an empty promise.
    */
   linkedIssues: Schema.optional(Schema.Array(IssueLink)),
+  /** True when the host has more linked issues than this bounded read returned. */
+  linkedIssuesTruncated: Schema.optional(Schema.Boolean),
   /**
    * Who the host says the reader is, which is the one thing a conversation cannot be read without
    * to tell the reader's own remarks from everybody else's — and rewriting a remark is offered

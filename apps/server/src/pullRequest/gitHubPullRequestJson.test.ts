@@ -7,6 +7,7 @@ import {
   buildReviewerRequestJson,
   decodeBaseComparisonJson,
   decodeCitedIssuesJson,
+  decodeLinkedIssuesJson,
   decodePullRequestActivityJson,
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
@@ -1361,6 +1362,39 @@ describe("how far a branch trails its base", () => {
 
   it("refuses a body that is not the answer to this question", () => {
     expect(Result.isSuccess(decodeBaseComparisonJson("{"))).toBe(false);
+  });
+});
+
+describe("linked issue resolution", () => {
+  it("reports when either bounded connection has more links", () => {
+    const result = expectSuccess(
+      decodeLinkedIssuesJson(
+        JSON.stringify({
+          data: {
+            repository: {
+              pullRequest: {
+                closingIssuesReferences: {
+                  pageInfo: { hasNextPage: true },
+                  nodes: [
+                    {
+                      number: 12,
+                      title: "Fix the dialog",
+                      url: "https://github.com/acme/web/issues/12",
+                      state: "OPEN",
+                      repository: { nameWithOwner: "acme/web" },
+                    },
+                  ],
+                },
+                timelineItems: { pageInfo: { hasNextPage: false }, nodes: [] },
+              },
+            },
+          },
+        }),
+      ),
+    );
+
+    expect(result.truncated).toBe(true);
+    expect(result.links.map((link) => link.number)).toEqual([12]);
   });
 });
 

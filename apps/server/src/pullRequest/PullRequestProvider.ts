@@ -167,6 +167,8 @@ export interface ProviderChangeRequestDetail extends ProviderChangeRequest {
    * read that failed — so a provider never guesses a link out of the words in a body.
    */
   readonly linkedIssues: ReadonlyArray<IssueLink>;
+  /** True when the host has more linked issues than this bounded read returned. */
+  readonly linkedIssuesTruncated?: boolean;
   /** Absent from a host that cannot compare the branch with its base, which is most of them. */
   readonly baseComparison?: PullRequestBaseComparison;
   readonly behindBy?: number;

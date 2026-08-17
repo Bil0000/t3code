@@ -35,6 +35,7 @@ import {
   decodeActorAvatarsJson,
   decodeCitedIssuesJson,
   decodeLinkedIssuesJson,
+  type GitHubLinkedIssues,
   decodePullRequestActivityJson,
   decodePullRequestDetailJson,
   decodePullRequestFilesJson,
@@ -458,7 +459,7 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
-    }) => Effect.Effect<ReadonlyArray<IssueLink>, GitHubPullRequestCliError>;
+    }) => Effect.Effect<GitHubLinkedIssues, GitHubPullRequestCliError>;
 
     /**
      * The issues a pull request's own words name, looked up so that only ones which exist — and
