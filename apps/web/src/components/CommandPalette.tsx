@@ -321,7 +321,7 @@ function buildAddProjectRemoteSourceReadiness(
 ): AddProjectRemoteSourceReadiness {
   const unavailable = {
     ready: false,
-    hint: "Provider status unavailable. Open Settings -> Source Control and rescan.",
+    hint: "Provider status unavailable. Open Settings -> Source Control and Issue Tracking and rescan.",
   } as const;
   const defaultReadiness: AddProjectRemoteSourceReadiness = {
     url: { ready: true, hint: null },
@@ -357,7 +357,7 @@ function buildAddProjectRemoteSourceReadiness(
         ready: false,
         hint:
           Option.getOrNull(provider.auth.detail) ??
-          `${provider.label} is not authenticated. Open Settings -> Source Control for setup guidance.`,
+          `${provider.label} is not authenticated. Open Settings -> Source Control and Issue Tracking for setup guidance.`,
       };
       continue;
     }
@@ -1254,7 +1254,8 @@ function OpenCommandPaletteDialog(props: {
                 }
               />
               <TooltipPopup align="end" side="left">
-                {disabledHint ?? "Open Settings -> Source Control to configure this provider."}
+                {disabledHint ??
+                  "Open Settings -> Source Control and Issue Tracking to configure this provider."}
               </TooltipPopup>
             </Tooltip>
           </span>

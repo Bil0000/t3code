@@ -1,7 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-
-import { IssueTrackingSettingsPanel } from "../components/settings/IssueTrackingSettings";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
 export const Route = createFileRoute("/settings/issue-tracking")({
-  component: IssueTrackingSettingsPanel,
+  beforeLoad: () => {
+    throw redirect({ to: "/settings/source-control", hash: "issue-tracking", replace: true });
+  },
 });

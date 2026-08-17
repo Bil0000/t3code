@@ -4,6 +4,7 @@ import {
   searchableSetting,
   searchSettings,
   SETTINGS_SEARCH_ITEMS,
+  SETTINGS_SECTION_LABELS,
   type SettingsSearchItem,
 } from "./settingsSearch";
 
@@ -88,6 +89,17 @@ describe("searchSettings", () => {
       id: "environment-identification",
       to: "/settings/appearance",
       targetId: "appearance",
+    });
+  });
+
+  it("keeps issue tracking inside the combined source control section", () => {
+    expect(SETTINGS_SECTION_LABELS["/settings/source-control"]).toBe(
+      "Source Control and Issue Tracking",
+    );
+    expect(Object.keys(SETTINGS_SECTION_LABELS)).not.toContain("/settings/issue-tracking");
+    expect(searchSettings("issue tracking")[0]).toMatchObject({
+      id: "issue-tracking",
+      to: "/settings/source-control",
     });
   });
 });
