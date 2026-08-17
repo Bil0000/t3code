@@ -5,9 +5,48 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
+  buildWorkItemTaskPrompt,
 } from "./TextGenerationPrompts.ts";
 import { normalizeCliError, sanitizeThreadTitle } from "./TextGenerationUtils.ts";
 import { TextGenerationError } from "@t3tools/contracts";
+
+describe("buildWorkItemTaskPrompt", () => {
+  const items = [
+    {
+      kind: "issue" as const,
+      provider: "linear",
+      repository: "ENG",
+      number: 12,
+      title: "Fix login",
+      url: "https://linear.app/acme/issue/ENG-12",
+      body: "Sessions expire too early.",
+    },
+    {
+      kind: "pull-request" as const,
+      provider: "github",
+      repository: "acme/app",
+      number: 34,
+      title: "Keep sessions alive",
+      url: "https://github.com/acme/app/pull/34",
+      body: "Refreshes sessions before expiry.",
+    },
+  ];
+
+  it("asks for one compound task from only the supplied sources", () => {
+    const result = buildWorkItemTaskPrompt({ mode: "compound", items });
+
+    expect(result.prompt).toContain("one compound task");
+    expect(result.prompt).toContain("ENG-12");
+    expect(result.prompt).toContain("acme/app#34");
+    expect(result.prompt).toContain("Use only the selected sources below");
+  });
+
+  it("asks for ordered subtasks", () => {
+    expect(buildWorkItemTaskPrompt({ mode: "subtasks", items }).prompt).toContain(
+      "ordered subtasks",
+    );
+  });
+});
 
 describe("buildCommitMessagePrompt", () => {
   it("includes staged patch and summary in the prompt", () => {

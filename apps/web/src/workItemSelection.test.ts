@@ -1,0 +1,40 @@
+import { describe, expect, it } from "vitest";
+
+import { addWorkItem, type SelectedWorkItem } from "./workItemSelection";
+
+const issue: SelectedWorkItem = {
+  kind: "issue",
+  environmentId: "env-1" as SelectedWorkItem["environmentId"],
+  projectId: "project-1" as SelectedWorkItem["projectId"],
+  repository: "acme/app",
+  number: 12,
+  title: "Fix login",
+  url: "https://linear.app/acme/issue/APP-12",
+};
+
+describe("addWorkItem", () => {
+  it("mixes issues and pull requests from one project", () => {
+    const pullRequest = { ...issue, kind: "pull-request" as const, number: 34 };
+
+    expect(addWorkItem([issue], pullRequest)).toEqual({
+      items: [issue, pullRequest],
+      error: null,
+    });
+  });
+
+  it("rejects work from another project", () => {
+    const other = {
+      ...issue,
+      projectId: "project-2" as SelectedWorkItem["projectId"],
+      number: 99,
+    };
+
+    expect(addWorkItem([issue], other)).toEqual({ items: [issue], error: "project" });
+  });
+
+  it("caps a task at twenty sources", () => {
+    const items = Array.from({ length: 20 }, (_, index) => ({ ...issue, number: index + 1 }));
+
+    expect(addWorkItem(items, { ...issue, number: 21 })).toEqual({ items, error: "limit" });
+  });
+});
