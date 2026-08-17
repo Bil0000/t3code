@@ -22,18 +22,9 @@ import {
   PenLineIcon,
   RefreshCwIcon,
   SearchIcon,
-  SettingsIcon,
   UserCheckIcon,
 } from "lucide-react";
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ElementType,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
   filterIssuesByInvolvement,
@@ -50,6 +41,7 @@ import {
 import { IssueCreateDialog } from "../components/issue/IssueCreateDialog";
 import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
 import { LinearConnectionDialog } from "../components/issue/LinearConnectionDialog";
+import { LinearIcon } from "../components/Icons";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
 import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
 import { IssueFiltersMenu, IssueSortMenu } from "../components/issue/IssueListFilters";
@@ -142,7 +134,6 @@ export function mergeIssueProviderSummaries(
 
 interface CompactFilterAction {
   readonly label: string;
-  readonly Icon: ElementType<{ className?: string }>;
   readonly onClick: () => void;
 }
 
@@ -1228,7 +1219,6 @@ function IssuesRouteView() {
     hostMenuOptions,
     hostMenuAction: {
       label: linearConnected ? "Linear settings…" : "Connect Linear…",
-      Icon: SettingsIcon,
       onClick: () => setLinearDialogOpen(true),
     },
     onInvolvement: (involvement: IssueInvolvement) => updateListScope({ involvement }),
@@ -1500,7 +1490,7 @@ export function CompactFilterMenu<Value extends string>({
           <>
             <MenuSeparator />
             <MenuItem onClick={action.onClick}>
-              <action.Icon aria-hidden className="size-3.5" />
+              <LinearIcon aria-hidden className="size-3.5" />
               {action.label}
             </MenuItem>
           </>

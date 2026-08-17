@@ -3,6 +3,7 @@ import { SettingsIcon } from "lucide-react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../test/reactElementTree";
+import { LinearIcon } from "../components/Icons";
 import { MenuItem } from "../components/ui/menu";
 import { CompactFilterMenu, IssuesColumn, mergeIssueProviderSummaries } from "./_chat.issues";
 
@@ -45,7 +46,7 @@ describe("IssuesColumn", () => {
       value: "",
       options: [{ value: "", label: "All providers", Icon: SettingsIcon }],
       onChange: vi.fn(),
-      action: { label: "Connect Linear…", Icon: SettingsIcon, onClick },
+      action: { label: "Connect Linear…", onClick },
     });
     const action = visitElements(
       menu,
@@ -53,6 +54,7 @@ describe("IssuesColumn", () => {
     );
 
     expect(action?.props.children).toContain("Connect Linear…");
+    expect(visitElements(action, (element) => element.type === LinearIcon)).not.toBeNull();
     (action?.props.onClick as (() => void) | undefined)?.();
     expect(onClick).toHaveBeenCalledOnce();
   });
