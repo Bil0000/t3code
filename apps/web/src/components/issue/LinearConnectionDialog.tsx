@@ -1,4 +1,5 @@
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
+import type { LinearProjectBinding } from "@t3tools/contracts";
 import { useState } from "react";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -9,6 +10,15 @@ import { issueTrackingEnvironment } from "../../state/issueTracking";
 import { formatEnvironmentQueryError, useEnvironmentQuery } from "../../state/query";
 import { serverEnvironment } from "../../state/server";
 import { LinearIcon } from "../Icons";
+import {
+  AlertDialog,
+  AlertDialogClose,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "../ui/alert-dialog";
 import { Button } from "../ui/button";
 import {
   Dialog,
@@ -36,7 +46,8 @@ export function LinearConnectionDialog({
 }) {
   const environmentId = usePrimaryEnvironment()?.environmentId ?? null;
   const projects = useProjects().filter((project) => project.environmentId === environmentId);
-  const projectTeams = usePrimarySettings((settings) => settings.issueTracking.linear.projectTeams);
+  const linearSettings = usePrimarySettings((settings) => settings.issueTracking.linear);
+  const projectBindings = linearSettings.projectBindings;
   const connection = useEnvironmentQuery(
     !open || environmentId === null
       ? null
@@ -50,9 +61,22 @@ export function LinearConnectionDialog({
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [pendingDisconnect, setPendingDisconnect] = useState<string | null>(null);
   const linear = connection.data;
+  const accounts = linear?.accounts ?? [];
+  const pendingAccount = accounts.find((account) => account.credentialId === pendingDisconnect);
+  const teamOptions = accounts.flatMap((account) =>
+    account.teams.map((team) => ({
+      value: JSON.stringify([account.credentialId, team.key]),
+      label: `${account.accountName} — ${team.name} (${team.key})`,
+      binding: { credentialId: account.credentialId, teamKey: team.key },
+    })),
+  );
 
-  async function run<A, E>(action: () => Promise<AtomCommandResult<A, E>>, after: () => void) {
+  async function runCommand<A, E>(
+    action: () => Promise<AtomCommandResult<A, E>>,
+    after: () => void,
+  ) {
     setBusy(true);
     setActionError(null);
     const commandResult = await action();
@@ -64,20 +88,21 @@ export function LinearConnectionDialog({
     after();
   }
 
-  const setProjectTeam = (projectId: (typeof projects)[number]["id"], teamKey: string | null) => {
+  const setProjectBinding = (
+    projectId: (typeof projects)[number]["id"],
+    binding: LinearProjectBinding | null,
+  ) => {
     if (environmentId === null) return;
-    const next = { ...projectTeams };
-    if (teamKey === null) delete next[projectId];
-    else next[projectId] = teamKey;
-    void run(
+    const next = { ...projectBindings, [projectId]: binding };
+    void runCommand(
       () =>
         updateSettings({
           environmentId,
-          input: { patch: { issueTracking: { linear: { projectTeams: next } } } },
+          input: { patch: { issueTracking: { linear: { projectBindings: next } } } },
         }),
       () => {
-        const wasAvailable = Object.keys(projectTeams).length > 0;
-        const isAvailable = Object.keys(next).length > 0;
+        const wasAvailable = Object.values(projectBindings).some(Boolean);
+        const isAvailable = Object.values(next).some(Boolean);
         onProviderChanged(
           wasAvailable === isAvailable ? "updated" : isAvailable ? "available" : "unavailable",
         );
@@ -85,150 +110,227 @@ export function LinearConnectionDialog({
     );
   };
 
-  const connected = linear?.status === "authenticated";
   const error = actionError ?? connection.error;
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!busy) {
-          setActionError(null);
-          onOpenChange(nextOpen);
-        }
-      }}
-    >
-      <DialogPopup className="max-w-xl">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-lg">
-            <LinearIcon className="size-4.5" />
-            Linear
-          </DialogTitle>
-          <DialogDescription>
-            {connected
-              ? `Connected as ${linear.accountName ?? "Linear account"}${linear.accountEmail ? ` (${linear.accountEmail})` : ""}.`
-              : linear?.status === "unverified"
-                ? "API key saved. Linear could not verify it."
-                : "Connect Linear with a personal API key. The key stays on this server."}
-          </DialogDescription>
-        </DialogHeader>
-        <DialogPanel className="space-y-5">
-          {error ? (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
-          ) : null}
+    <>
+      <Dialog
+        open={open}
+        onOpenChange={(nextOpen) => {
+          if (!busy) {
+            setActionError(null);
+            onOpenChange(nextOpen);
+          }
+        }}
+      >
+        <DialogPopup className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-lg">
+              <LinearIcon className="size-4.5" />
+              Linear
+            </DialogTitle>
+            <DialogDescription>
+              Add personal API keys, then choose the Linear account and team for each T3 project.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogPanel className="space-y-5">
+            {error ? (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            ) : null}
 
-          <form
-            className="space-y-2"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (environmentId === null || token.trim().length === 0) return;
-              void run(
-                () => connect({ environmentId, input: { token: token.trim() } }),
-                () => {
-                  setToken("");
-                  connection.refresh();
-                  onProviderChanged(
-                    !connected && Object.keys(projectTeams).length > 0 ? "available" : "updated",
-                  );
-                },
-              );
-            }}
-          >
-            <label className="block text-sm font-medium" htmlFor="linear-api-key">
-              {connected ? "Replace API key" : "API key"}
-            </label>
-            <div className="flex gap-2">
-              <Input
-                id="linear-api-key"
-                type="password"
-                value={token}
-                onChange={(event) => setToken(event.currentTarget.value)}
-                placeholder="lin_api_…"
-                aria-label={connected ? "Replace Linear API key" : "Linear API key"}
-                autoComplete="off"
-              />
-              <Button type="submit" disabled={busy || token.trim().length === 0}>
-                {connected ? "Replace" : "Connect"}
-              </Button>
-            </div>
-          </form>
-
-          {connected ? (
-            <div className="space-y-2">
-              <div>
-                <h3 className="text-sm font-medium">Project teams</h3>
-                <p className="text-xs text-muted-foreground">
-                  Choose which Linear team appears beside each T3 project.
-                </p>
-              </div>
-              <div className="divide-y divide-border/50">
-                {projects.map((project) => {
-                  const value = projectTeams[project.id] ?? UNMAPPED;
-                  return (
-                    <div key={project.id} className="flex items-center justify-between gap-4 py-2">
-                      <span className="min-w-0 truncate text-sm">{project.title}</span>
-                      <Select
-                        value={value}
-                        disabled={busy}
-                        onValueChange={(next) =>
-                          next && setProjectTeam(project.id, next === UNMAPPED ? null : next)
-                        }
-                      >
-                        <SelectTrigger
-                          size="sm"
-                          className="w-52"
-                          aria-label={`Linear team for ${project.title}`}
-                        >
-                          <SelectValue>{value === UNMAPPED ? "Not connected" : value}</SelectValue>
-                        </SelectTrigger>
-                        <SelectPopup align="end" alignItemWithTrigger={false}>
-                          <SelectItem value={UNMAPPED}>Not connected</SelectItem>
-                          {linear.teams.map((team) => (
-                            <SelectItem key={team.id} value={team.key}>
-                              {team.name} ({team.key})
-                            </SelectItem>
-                          ))}
-                        </SelectPopup>
-                      </Select>
-                    </div>
-                  );
-                })}
-                {projects.length === 0 ? (
-                  <p className="py-3 text-sm text-muted-foreground">Add a project first.</p>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-        </DialogPanel>
-        <DialogFooter>
-          {linear?.hasStoredToken ? (
-            <Button
-              variant="destructive-outline"
-              className="sm:me-auto"
-              disabled={busy || environmentId === null}
-              onClick={() =>
-                environmentId === null
-                  ? undefined
-                  : void run(
-                      () => disconnect({ environmentId, input: undefined }),
-                      () => {
-                        setToken("");
-                        connection.refresh();
-                        onProviderChanged("unavailable");
-                      },
-                    )
-              }
+            <form
+              className="space-y-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (environmentId === null || token.trim().length === 0) return;
+                void runCommand(
+                  () => connect({ environmentId, input: { token: token.trim() } }),
+                  () => {
+                    setToken("");
+                    connection.refresh();
+                    onProviderChanged("updated");
+                  },
+                );
+              }}
             >
-              Disconnect
+              <label className="block text-sm font-medium" htmlFor="linear-api-key">
+                Add API key
+              </label>
+              <div className="flex gap-2">
+                <Input
+                  id="linear-api-key"
+                  type="password"
+                  value={token}
+                  onChange={(event) => setToken(event.currentTarget.value)}
+                  placeholder="lin_api_…"
+                  aria-label="Linear API key"
+                  autoComplete="off"
+                />
+                <Button type="submit" disabled={busy || token.trim().length === 0}>
+                  Add
+                </Button>
+              </div>
+            </form>
+
+            {accounts.length > 0 ? (
+              <div className="space-y-2">
+                <h3 className="text-sm font-medium">Saved accounts</h3>
+                <div className="space-y-2">
+                  {accounts.map((account) => (
+                    <div key={account.credentialId} className="rounded-lg border p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">{account.accountName}</p>
+                          {account.accountEmail ? (
+                            <p className="truncate text-xs text-muted-foreground">
+                              {account.accountEmail}
+                            </p>
+                          ) : null}
+                        </div>
+                        <Button
+                          size="xs"
+                          variant="destructive-outline"
+                          disabled={busy}
+                          aria-label={`Disconnect ${account.accountName} from Linear`}
+                          onClick={() => setPendingDisconnect(account.credentialId)}
+                        >
+                          Disconnect
+                        </Button>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-muted-foreground">
+                        {account.teams.length === 0
+                          ? "No teams available."
+                          : account.teams.map((team) => (
+                              <span key={team.id} className="rounded-md bg-muted px-1.5 py-0.5">
+                                {team.name} ({team.key})
+                              </span>
+                            ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {accounts.length > 0 ? (
+              <div className="space-y-2">
+                <div>
+                  <h3 className="text-sm font-medium">Project connections</h3>
+                  <p className="text-xs text-muted-foreground">
+                    Choose the Linear account and team for each T3 project.
+                  </p>
+                </div>
+                <div className="divide-y divide-border/50">
+                  {projects.map((project) => {
+                    const binding = projectBindings[project.id];
+                    const value = binding
+                      ? JSON.stringify([binding.credentialId, binding.teamKey])
+                      : UNMAPPED;
+                    const selectedLabel =
+                      teamOptions.find((option) => option.value === value)?.label ??
+                      "Not connected";
+                    return (
+                      <div
+                        key={project.id}
+                        className="flex items-center justify-between gap-4 py-2"
+                      >
+                        <span className="min-w-0 truncate text-sm">{project.title}</span>
+                        <Select
+                          value={value}
+                          disabled={busy}
+                          onValueChange={(next) => {
+                            if (!next) return;
+                            setProjectBinding(
+                              project.id,
+                              next === UNMAPPED
+                                ? null
+                                : (teamOptions.find((option) => option.value === next)?.binding ??
+                                    null),
+                            );
+                          }}
+                        >
+                          <SelectTrigger
+                            size="sm"
+                            className="w-64"
+                            aria-label={`Linear account and team for ${project.title}`}
+                          >
+                            <SelectValue>{selectedLabel}</SelectValue>
+                          </SelectTrigger>
+                          <SelectPopup align="end" alignItemWithTrigger={false}>
+                            <SelectItem value={UNMAPPED}>Not connected</SelectItem>
+                            {teamOptions.map((option) => (
+                              <SelectItem key={option.value} value={option.value}>
+                                {option.label}
+                              </SelectItem>
+                            ))}
+                          </SelectPopup>
+                        </Select>
+                      </div>
+                    );
+                  })}
+                  {projects.length === 0 ? (
+                    <p className="py-3 text-sm text-muted-foreground">Add a project first.</p>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </DialogPanel>
+          <DialogFooter>
+            <Button variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
+              Done
             </Button>
-          ) : null}
-          <Button variant="ghost" disabled={busy} onClick={() => onOpenChange(false)}>
-            Done
-          </Button>
-        </DialogFooter>
-      </DialogPopup>
-    </Dialog>
+          </DialogFooter>
+        </DialogPopup>
+      </Dialog>
+
+      <AlertDialog
+        open={pendingDisconnect !== null}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !busy) setPendingDisconnect(null);
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Disconnect {pendingAccount?.accountName ?? "account"}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              This deletes this API key. All T3 projects linked to this account will lose Linear
+              access.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogClose render={<Button variant="outline" disabled={busy} />}>
+              Cancel
+            </AlertDialogClose>
+            <Button
+              variant="destructive"
+              disabled={busy || environmentId === null || pendingDisconnect === null}
+              onClick={() => {
+                if (environmentId === null || pendingDisconnect === null) return;
+                const credentialId = pendingDisconnect;
+                return runCommand(
+                  () => disconnect({ environmentId, input: { credentialId } }),
+                  () => {
+                    setToken("");
+                    setPendingDisconnect(null);
+                    connection.refresh();
+                    const wasAvailable = Object.values(projectBindings).some(Boolean);
+                    const isAvailable = Object.values(projectBindings).some(
+                      (binding) => binding !== null && binding.credentialId !== credentialId,
+                    );
+                    onProviderChanged(wasAvailable && !isAvailable ? "unavailable" : "updated");
+                  },
+                );
+              }}
+            >
+              Disconnect account
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
+    </>
   );
 }

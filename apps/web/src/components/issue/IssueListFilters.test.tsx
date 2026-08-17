@@ -4,7 +4,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ListFilterRadioGroup } from "../sourceControl/ListFilterMenu";
 import { LinearIcon } from "../Icons";
-import { MenuItem } from "../ui/menu";
+import { Button } from "../ui/button";
+import { MenuItem, MenuRadioItem } from "../ui/menu";
 import { IssueFiltersMenu } from "./IssueListFilters";
 
 function collect(
@@ -63,7 +64,37 @@ describe("issue filters", () => {
     expect(collect(connectItem, LinearIcon)).toHaveLength(1);
   });
 
-  it("offers Linear settings as a separate menu item when connected", () => {
+  it("uses saved connection state for management copy when the provider list is stale", () => {
+    const menu = IssueFiltersMenu({
+      state: "open",
+      stateOptions: [],
+      onState: vi.fn(),
+      involvement: "all",
+      involvementOptions: [],
+      onInvolvement: vi.fn(),
+      hostFilter: {
+        host: undefined,
+        hostOptions: [
+          { value: "", label: "All providers", Icon: LayersIcon },
+          { value: "github.com", label: "GitHub", Icon: LayersIcon },
+        ],
+        onHost: vi.fn(),
+        onManageLinear: vi.fn(),
+        linearManaged: true,
+      },
+      label: undefined,
+      labels: [],
+      onLabel: vi.fn(),
+    } as Parameters<typeof IssueFiltersMenu>[0]);
+
+    const settingsItem = collect(menu, MenuItem)[0];
+    expect(Children.toArray(settingsItem?.props.children as ReactNode)).toContain(
+      "Linear settings…",
+    );
+    expect(collect(settingsItem, LinearIcon)).toHaveLength(1);
+  });
+
+  it("offers a separate keyboard-accessible gear beside connected Linear", () => {
     const onManageLinear = vi.fn();
     const menu = IssueFiltersMenu({
       state: "open",
@@ -86,12 +117,16 @@ describe("issue filters", () => {
       onLabel: vi.fn(),
     } as Parameters<typeof IssueFiltersMenu>[0]);
 
-    const item = collect(menu, MenuItem).find((candidate) =>
-      Children.toArray(candidate.props.children as ReactNode).includes("Linear settings…"),
+    const gear = collect(menu, Button).find(
+      (candidate) => candidate.props["aria-label"] === "Linear settings",
     );
-    expect(item).toBeDefined();
-    expect(collect(item, LinearIcon)).toHaveLength(1);
-    (item?.props.onClick as (() => void) | undefined)?.();
+    const linearRadio = collect(menu, MenuRadioItem).find(
+      (candidate) => candidate.props.value === "linear.app",
+    );
+    expect(gear).toBeDefined();
+    expect(collect(linearRadio, Button)).toHaveLength(0);
+    expect(collect(menu, MenuItem)).toHaveLength(0);
+    (gear?.props.onClick as (() => void) | undefined)?.();
     expect(onManageLinear).toHaveBeenCalledOnce();
   });
 });

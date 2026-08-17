@@ -1,5 +1,6 @@
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
+import { isValidElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
@@ -7,11 +8,18 @@ import { visitElements } from "../../test/reactElementTree";
 
 const connectionState = vi.hoisted(() => ({
   data: {
-    status: "authenticated" as "authenticated" | "unauthenticated",
+    status: "authenticated" as "authenticated" | "unauthenticated" | "unverified",
     hasStoredToken: true,
     accountName: "Ada" as string | null,
     accountEmail: "ada@example.com" as string | null,
     teams: [] as ReadonlyArray<{ id: string; key: string; name: string }>,
+    accounts: [] as ReadonlyArray<{
+      credentialId: string;
+      status: "authenticated" | "unauthenticated" | "unverified";
+      accountName: string;
+      accountEmail: string | null;
+      teams: ReadonlyArray<{ id: string; key: string; name: string }>;
+    }>,
   },
   error: "Linear status failed" as string | null,
 }));
@@ -21,7 +29,11 @@ const commands = vi.hoisted(() => ({
   settings: vi.fn(),
 }));
 const settingsState = vi.hoisted(() => ({
+  projectBindings: {} as Record<string, { credentialId: string; teamKey: string } | null>,
   projectTeams: {} as Record<string, string>,
+}));
+const projectsState = vi.hoisted(() => ({
+  projects: [] as ReadonlyArray<{ id: string; title: string; environmentId: string }>,
 }));
 
 vi.mock("react", async (importOriginal) => {
@@ -37,14 +49,21 @@ vi.mock("react/compiler-runtime", async () => {
 
 vi.mock("../../hooks/useSettings", () => ({
   usePrimarySettings: (select: (settings: unknown) => unknown) =>
-    select({ issueTracking: { linear: { projectTeams: settingsState.projectTeams } } }),
+    select({
+      issueTracking: {
+        linear: {
+          projectBindings: settingsState.projectBindings,
+          projectTeams: settingsState.projectTeams,
+        },
+      },
+    }),
 }));
 
 vi.mock("../../state/environments", () => ({
   usePrimaryEnvironment: () => ({ environmentId: "primary" }),
 }));
 
-vi.mock("../../state/entities", () => ({ useProjects: () => [] }));
+vi.mock("../../state/entities", () => ({ useProjects: () => projectsState.projects }));
 vi.mock("../../state/issueTracking", () => ({
   issueTrackingEnvironment: {
     linearStatus: vi.fn(),
@@ -68,9 +87,34 @@ vi.mock("../../state/server", () => ({ serverEnvironment: { updateSettings: "set
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (command: keyof typeof commands) => commands[command],
 }));
-import { Input } from "../ui/input";
+import { AlertDialogDescription } from "../ui/alert-dialog";
+import { Button } from "../ui/button";
 import { DialogPopup } from "../ui/dialog";
+import { Input } from "../ui/input";
+import { Select, SelectItem } from "../ui/select";
 import { LinearConnectionDialog } from "./LinearConnectionDialog";
+
+const ada = {
+  credentialId: "user-1",
+  status: "authenticated" as const,
+  accountName: "Ada",
+  accountEmail: "ada@example.com",
+  teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
+};
+const grace = {
+  credentialId: "user-2",
+  status: "authenticated" as const,
+  accountName: "Grace",
+  accountEmail: "grace@example.com",
+  teams: [{ id: "team-2", key: "OPS", name: "Operations" }],
+};
+
+function textContent(node: ReactNode): string {
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textContent).join("");
+  if (!isValidElement<{ children?: ReactNode }>(node)) return "";
+  return textContent(node.props.children);
+}
 
 describe("Linear connection dialog", () => {
   beforeEach(() => {
@@ -82,12 +126,15 @@ describe("Linear connection dialog", () => {
       accountName: "Ada",
       accountEmail: "ada@example.com",
       teams: [],
+      accounts: [ada, grace],
     };
     connectionState.error = "Linear status failed";
+    settingsState.projectBindings = {};
+    projectsState.projects = [];
     settingsState.projectTeams = {};
   });
 
-  it("keeps connection management and errors inside one dialog", () => {
+  it("adds API keys and lists every saved account with its teams", () => {
     hooks.beginRender();
     const dialog = LinearConnectionDialog({
       open: true,
@@ -99,10 +146,16 @@ describe("Linear connection dialog", () => {
     expect(
       visitElements(
         dialog,
-        (element) =>
-          element.type === Input && element.props["aria-label"] === "Replace Linear API key",
+        (element) => element.type === Input && element.props["aria-label"] === "Linear API key",
       ),
     ).not.toBeNull();
+    expect(textContent(dialog)).toContain("Add API key");
+    expect(textContent(dialog)).not.toContain("Replace");
+    expect(textContent(dialog)).toContain("Ada");
+    expect(textContent(dialog)).toContain("ada@example.com");
+    expect(textContent(dialog)).toContain("Engineering (ENG)");
+    expect(textContent(dialog)).toContain("Grace");
+    expect(textContent(dialog)).toContain("Operations (OPS)");
     expect(visitElements(dialog, (element) => element.props.role === "alert")?.props.children).toBe(
       "Linear status failed",
     );
@@ -118,6 +171,7 @@ describe("Linear connection dialog", () => {
       accountName: null,
       accountEmail: null,
       teams: [],
+      accounts: [],
     };
     connectionState.error = null;
     commands.connect.mockResolvedValue(
@@ -149,7 +203,7 @@ describe("Linear connection dialog", () => {
     );
   });
 
-  it("does not change the provider filter when replacing a key", async () => {
+  it("does not change the provider filter when adding another key", async () => {
     connectionState.error = null;
     commands.connect.mockResolvedValue(AsyncResult.success(undefined));
     const onProviderChanged = vi.fn();
@@ -159,8 +213,7 @@ describe("Linear connection dialog", () => {
     let dialog = LinearConnectionDialog(props);
     const input = visitElements(
       dialog,
-      (element) =>
-        element.type === Input && element.props["aria-label"] === "Replace Linear API key",
+      (element) => element.type === Input && element.props["aria-label"] === "Linear API key",
     );
     (
       input?.props.onChange as ((event: { currentTarget: { value: string } }) => void) | undefined
@@ -176,5 +229,107 @@ describe("Linear connection dialog", () => {
     await Promise.resolve();
 
     expect(onProviderChanged).toHaveBeenCalledWith("updated");
+  });
+
+  it("disconnects one account only after warning about its linked projects", async () => {
+    connectionState.error = null;
+    settingsState.projectBindings = {
+      project_1: { credentialId: "user-1", teamKey: "ENG" },
+      project_2: { credentialId: "user-2", teamKey: "OPS" },
+    };
+    commands.disconnect.mockResolvedValue(AsyncResult.success(undefined));
+    const onProviderChanged = vi.fn();
+    const props = { open: true, onOpenChange: vi.fn(), onProviderChanged };
+
+    hooks.beginRender();
+    let dialog = LinearConnectionDialog(props);
+    const disconnectAda = visitElements(
+      dialog,
+      (element) =>
+        element.type === Button && element.props["aria-label"] === "Disconnect Ada from Linear",
+    );
+    (disconnectAda?.props.onClick as (() => void) | undefined)?.();
+
+    hooks.beginRender();
+    dialog = LinearConnectionDialog(props);
+    const warning = visitElements(dialog, (element) => element.type === AlertDialogDescription);
+    expect(textContent(warning)).toContain(
+      "All T3 projects linked to this account will lose Linear",
+    );
+    const confirm = visitElements(
+      dialog,
+      (element) => element.type === Button && element.props.children === "Disconnect account",
+    );
+    await (confirm?.props.onClick as (() => Promise<void>) | undefined)?.();
+
+    expect(commands.disconnect).toHaveBeenCalledWith({
+      environmentId: "primary",
+      input: { credentialId: "user-1" },
+    });
+    expect(onProviderChanged).toHaveBeenCalledWith("updated");
+  });
+
+  it("stores an account and team per project and uses null for an unbound project", async () => {
+    connectionState.error = null;
+    projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
+    settingsState.projectBindings = {
+      project_1: { credentialId: "user-1", teamKey: "ENG" },
+    };
+    commands.settings.mockResolvedValue(AsyncResult.success(undefined));
+    const props = { open: true, onOpenChange: vi.fn(), onProviderChanged: vi.fn() };
+
+    hooks.beginRender();
+    let dialog = LinearConnectionDialog(props);
+    const projectSelect = visitElements(
+      dialog,
+      (element) => element.type === Select && element.props.value !== undefined,
+    );
+    const operations = visitElements(
+      dialog,
+      (element) => element.type === SelectItem && textContent(element).includes("Operations (OPS)"),
+    );
+    (projectSelect?.props.onValueChange as ((value: string) => void) | undefined)?.(
+      operations?.props.value as string,
+    );
+    await commands.settings.mock.results[0]?.value;
+    await Promise.resolve();
+    expect(commands.settings).toHaveBeenLastCalledWith({
+      environmentId: "primary",
+      input: {
+        patch: {
+          issueTracking: {
+            linear: {
+              projectBindings: {
+                project_1: { credentialId: "user-2", teamKey: "OPS" },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    hooks.beginRender();
+    dialog = LinearConnectionDialog(props);
+    const unbound = visitElements(
+      dialog,
+      (element) => element.type === SelectItem && element.props.children === "Not connected",
+    );
+    const rerenderedSelect = visitElements(
+      dialog,
+      (element) => element.type === Select && element.props.value !== undefined,
+    );
+    (rerenderedSelect?.props.onValueChange as ((value: string) => void) | undefined)?.(
+      unbound?.props.value as string,
+    );
+    await commands.settings.mock.results[1]?.value;
+    await Promise.resolve();
+    expect(commands.settings).toHaveBeenLastCalledWith({
+      environmentId: "primary",
+      input: {
+        patch: {
+          issueTracking: { linear: { projectBindings: { project_1: null } } },
+        },
+      },
+    });
   });
 });

@@ -22,6 +22,7 @@ import {
   PenLineIcon,
   RefreshCwIcon,
   SearchIcon,
+  SettingsIcon,
   UserCheckIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -77,6 +78,7 @@ import {
 } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
+import { usePrimarySettings } from "../hooks/useSettings";
 import {
   issueSurfaceId,
   pullRequestSurfaceId,
@@ -90,6 +92,7 @@ import { useDebouncedValue } from "../state/queries";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
 import { usePrimaryEnvironment } from "../state/environments";
 import { issueEnvironment } from "../state/issues";
+import { issueTrackingEnvironment } from "../state/issueTracking";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
@@ -132,8 +135,27 @@ export function mergeIssueProviderSummaries(
     : [...previous.filter((provider) => provider.host !== filteredHost), ...next];
 }
 
+export function stabilizeLinearProviderSummary(
+  providers: IssueListResult["providers"],
+  projectCount: number,
+): IssueListResult["providers"] {
+  if (projectCount === 0) return providers;
+  const linear = providers.find((provider) => provider.kind === "linear");
+  const connected = {
+    kind: "linear" as const,
+    host: "linear.app",
+    configured: true,
+    searchesOnHost: false,
+    projectCount,
+    detail: null,
+  };
+  return linear === undefined
+    ? [...providers, connected]
+    : providers.map((provider) => (provider === linear ? { ...linear, ...connected } : provider));
+}
+
 interface CompactFilterAction {
-  readonly label: string;
+  readonly connected: boolean;
   readonly onClick: () => void;
 }
 
@@ -235,6 +257,15 @@ function IssuesRouteView() {
   // The primary environment may still be connecting, or may predate this feature. In either
   // case every query remains idle until the server has explicitly advertised these APIs.
   const issueEnvironmentId = issuesSupported ? environmentId : null;
+  const linearSettings = usePrimarySettings((settings) => settings.issueTracking.linear);
+  const linearConnection = useEnvironmentQuery(
+    issueEnvironmentId === null
+      ? null
+      : issueTrackingEnvironment.linearStatus({
+          environmentId: issueEnvironmentId,
+          input: undefined,
+        }),
+  );
   const selectingWorkItems = useWorkItemSelection((state) => state.selecting);
   const selectedWorkItems = useWorkItemSelection((state) => state.items);
   const toggleWorkItem = useWorkItemSelection((state) => state.toggle);
@@ -249,6 +280,19 @@ function IssuesRouteView() {
     () => allProjects.filter((project) => project.environmentId === environmentId),
     [allProjects, environmentId],
   );
+  const linearAccounts = linearConnection.data?.accounts;
+  const linearProjectCount = projects.filter((project) => {
+    const binding = linearSettings.projectBindings[project.id];
+    return (
+      binding !== null &&
+      binding !== undefined &&
+      (linearAccounts === undefined ||
+        linearAccounts.some((account) => account.credentialId === binding.credentialId))
+    );
+  }).length;
+  const linearManaged =
+    linearConnection.data?.hasStoredToken === true ||
+    Object.values(linearSettings.projectBindings).some(Boolean);
   const scopedProjects = useMemo(
     () =>
       projects
@@ -963,8 +1007,9 @@ function IssuesRouteView() {
     // connection changes become visible without dropping every other provider from the menu.
     setHosts((previous) => mergeIssueProviderSummaries(previous, answered.providers, search.host));
   }, [answered, search.host]);
-  const activeHosts = hosts.filter((entry) => entry.configured);
-  const linearConnected = activeHosts.some((entry) => entry.kind === "linear");
+  const activeHosts = stabilizeLinearProviderSummary(hosts, linearProjectCount).filter(
+    (entry) => entry.configured,
+  );
   const showProvider = activeHosts.length > 1;
 
   /** Reported per project rather than as a count, so the reader can see which one it was. */
@@ -1180,6 +1225,7 @@ function IssuesRouteView() {
           hostOptions: hostMenuOptions,
           onHost: (host) => updateListScope({ host, sort: undefined, order: undefined }),
           onManageLinear: () => setLinearDialogOpen(true),
+          linearManaged,
         }}
         projectFilter={{
           environmentId,
@@ -1218,7 +1264,7 @@ function IssuesRouteView() {
     host: search.host,
     hostMenuOptions,
     hostMenuAction: {
-      label: linearConnected ? "Linear settings…" : "Connect Linear…",
+      connected: linearManaged,
       onClick: () => setLinearDialogOpen(true),
     },
     onInvolvement: (involvement: IssueInvolvement) => updateListScope({ involvement }),
@@ -1419,7 +1465,7 @@ function IssuesRouteView() {
               if (change === "unavailable") {
                 setHosts((current) => current.filter((entry) => entry.kind !== "linear"));
               }
-              const shouldSelectLinear = change === "available" && !linearConnected;
+              const shouldSelectLinear = change === "available" && linearProjectCount === 0;
               const shouldClearLinear = change === "unavailable" && search.host === "linear.app";
               if (shouldSelectLinear || shouldClearLinear) {
                 void invalidateHost().then(() =>
@@ -1458,6 +1504,8 @@ export function CompactFilterMenu<Value extends string>({
   action?: CompactFilterAction | undefined;
 }) {
   const current = options.find((option) => option.value === value) ?? options[0]!;
+  const inlineLinearSettings =
+    action?.connected === true && options.some((option) => option.value === "linear.app");
   return (
     <Menu>
       <MenuTrigger
@@ -1469,29 +1517,46 @@ export function CompactFilterMenu<Value extends string>({
       </MenuTrigger>
       <MenuPopup align="start" side="bottom" className="min-w-40">
         <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as Value)}>
-          {options.map((option) => (
-            <MenuRadioItem
-              key={option.value}
-              value={option.value}
-              // A host the server has already said it cannot read is not a choice here either.
-              // The pills disable it; a menu that offers it would answer the press by replacing
-              // a working list with the same failure the pill row exists to explain.
-              disabled={option.unavailable !== undefined}
-              title={option.unavailable}
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <option.Icon aria-hidden className="size-3.5" />
-                {option.label}
-              </span>
-            </MenuRadioItem>
-          ))}
+          {options.map((option) => {
+            const item = (
+              <MenuRadioItem
+                value={option.value}
+                // A host the server has already said it cannot read is not a choice here either.
+                // The pills disable it; a menu that offers it would answer the press by replacing
+                // a working list with the same failure the pill row exists to explain.
+                disabled={option.unavailable !== undefined}
+                title={option.unavailable}
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <option.Icon aria-hidden className="size-3.5" />
+                  {option.label}
+                </span>
+              </MenuRadioItem>
+            );
+            return inlineLinearSettings && option.value === "linear.app" ? (
+              <div key={option.value} className="flex items-center gap-1">
+                <div className="min-w-0 flex-1">{item}</div>
+                <Button
+                  size="icon-micro"
+                  variant="ghost"
+                  aria-label="Linear settings"
+                  title="Linear settings"
+                  onClick={action.onClick}
+                >
+                  <SettingsIcon aria-hidden />
+                </Button>
+              </div>
+            ) : (
+              <div key={option.value}>{item}</div>
+            );
+          })}
         </MenuRadioGroup>
-        {action ? (
+        {action && !inlineLinearSettings ? (
           <>
             <MenuSeparator />
             <MenuItem onClick={action.onClick}>
               <LinearIcon aria-hidden className="size-3.5" />
-              {action.label}
+              {action.connected ? "Linear settings…" : "Connect Linear…"}
             </MenuItem>
           </>
         ) : null}

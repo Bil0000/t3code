@@ -6,7 +6,7 @@ import type {
   IssueListState,
   ProjectId,
 } from "@t3tools/contracts";
-import { ArrowDownUpIcon, TagIcon, TagsIcon } from "lucide-react";
+import { ArrowDownUpIcon, SettingsIcon, TagIcon, TagsIcon } from "lucide-react";
 
 import {
   ALL_HOSTS_VALUE,
@@ -17,6 +17,7 @@ import {
   type ListFilterOption,
 } from "../sourceControl/ListFilterMenu";
 import { LinearIcon } from "../Icons";
+import { Button } from "../ui/button";
 import {
   Menu,
   MenuGroupLabel,
@@ -148,6 +149,7 @@ export function IssueFiltersMenu({
     readonly hostOptions: ReadonlyArray<ListFilterOption<string>>;
     readonly onHost: (host: string | undefined) => void;
     readonly onManageLinear?: () => void;
+    readonly linearManaged?: boolean;
   };
   /** Absent for the same reason `hostFilter` is: one project is not a choice. */
   projectFilter?: {
@@ -171,6 +173,8 @@ export function IssueFiltersMenu({
   onLabel: (label: string | undefined) => void;
 }) {
   const providerOptions = hostFilter?.hostOptions.filter((option) => !option.unavailable) ?? [];
+  const linearOption = providerOptions.find((option) => option.value === "linear.app");
+  const linearManaged = hostFilter?.linearManaged ?? linearOption !== undefined;
   const filtered =
     state !== "open" ||
     involvement !== "all" ||
@@ -191,18 +195,57 @@ export function IssueFiltersMenu({
       (providerOptions.length > 2 || hostFilter.onManageLinear !== undefined) ? (
         <>
           <MenuSeparator />
-          <ListFilterRadioGroup
-            label="Provider"
-            value={hostFilter.host ?? ALL_HOSTS_VALUE}
-            options={providerOptions}
-            onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
-          />
-          {hostFilter.onManageLinear !== undefined ? (
+          {linearOption && hostFilter.onManageLinear ? (
+            <MenuRadioGroup
+              value={hostFilter.host ?? ALL_HOSTS_VALUE}
+              onValueChange={(next) => {
+                if (next !== (hostFilter.host ?? ALL_HOSTS_VALUE)) {
+                  hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next);
+                }
+              }}
+            >
+              <MenuGroupLabel>Provider</MenuGroupLabel>
+              {providerOptions.map((option) =>
+                option.value === linearOption.value ? (
+                  <div key={option.value} className="flex items-center gap-1">
+                    <MenuRadioItem value={option.value} className="min-w-0 flex-1">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <option.Icon aria-hidden className="size-3.5" />
+                        <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                      </span>
+                    </MenuRadioItem>
+                    <Button
+                      size="icon-micro"
+                      variant="ghost"
+                      aria-label="Linear settings"
+                      title="Linear settings"
+                      onClick={hostFilter.onManageLinear}
+                    >
+                      <SettingsIcon aria-hidden />
+                    </Button>
+                  </div>
+                ) : (
+                  <MenuRadioItem key={option.value} value={option.value}>
+                    <span className="flex min-w-0 items-center gap-2">
+                      <option.Icon aria-hidden className="size-3.5" />
+                      <span className="min-w-0 flex-1 truncate">{option.label}</span>
+                    </span>
+                  </MenuRadioItem>
+                ),
+              )}
+            </MenuRadioGroup>
+          ) : (
+            <ListFilterRadioGroup
+              label="Provider"
+              value={hostFilter.host ?? ALL_HOSTS_VALUE}
+              options={providerOptions}
+              onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
+            />
+          )}
+          {hostFilter.onManageLinear !== undefined && linearOption === undefined ? (
             <MenuItem onClick={hostFilter.onManageLinear}>
               <LinearIcon aria-hidden className="size-3.5" />
-              {providerOptions.some((option) => option.value === "linear.app")
-                ? "Linear settings…"
-                : "Connect Linear…"}
+              {linearManaged ? "Linear settings…" : "Connect Linear…"}
             </MenuItem>
           ) : null}
         </>
