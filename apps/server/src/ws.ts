@@ -52,7 +52,6 @@ import {
   RpcClientId,
   EnvironmentAuthorizationError,
   IssueTrackingError,
-  type LinearConnection,
   WorkItemMatchError,
   WorkItemTaskError,
   ThreadId,
@@ -115,6 +114,7 @@ import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as IssueService from "./issue/IssueService.ts";
 import * as LinearApi from "./issue/LinearApi.ts";
+import * as LinearConnection from "./issue/LinearConnection.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import { fallbackWorkItemTaskPrompt } from "./textGeneration/TextGenerationPrompts.ts";
 import {
@@ -426,7 +426,6 @@ const makeWsRpcLayer = (
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const issues = yield* IssueService.IssueService;
-      const linear = yield* LinearApi.LinearApi;
       const textGeneration = yield* TextGeneration.TextGeneration;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
@@ -443,25 +442,6 @@ const makeWsRpcLayer = (
             detail: error instanceof LinearApi.LinearApiError ? error.detail : settingsDetail,
             cause: error,
           });
-      const syncLegacyLinearBindings = (connection: LinearConnection) =>
-        Effect.gen(function* () {
-          const account = connection.accounts.length === 1 ? connection.accounts[0] : undefined;
-          if (account === undefined) return connection;
-          const current = yield* serverSettings.getSettings;
-          const additions = Object.fromEntries(
-            Object.entries(current.issueTracking.linear.projectTeams).flatMap(
-              ([projectId, teamKey]) =>
-                current.issueTracking.linear.projectBindings[projectId as ProjectId] === undefined
-                  ? [[projectId, { credentialId: account.credentialId, teamKey }]]
-                  : [],
-            ),
-          );
-          if (Object.keys(additions).length === 0) return connection;
-          yield* serverSettings.updateSettings({
-            issueTracking: { linear: { projectBindings: additions } },
-          });
-          return connection;
-        });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1839,8 +1819,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.linearConnectionStatus]: (_input) =>
           observeRpcEffect(
             WS_METHODS.linearConnectionStatus,
-            linear.connection.pipe(
-              Effect.flatMap(syncLegacyLinearBindings),
+            LinearConnection.linearConnectionStatus.pipe(
               Effect.mapError(
                 issueTrackingError("status", "Could not migrate the Linear project bindings."),
               ),
@@ -1850,34 +1829,17 @@ const makeWsRpcLayer = (
         [WS_METHODS.linearConnect]: ({ token }) =>
           observeRpcEffect(
             WS_METHODS.linearConnect,
-            linear
-              .connect(token)
-              .pipe(
-                Effect.flatMap(syncLegacyLinearBindings),
-                Effect.mapError(
-                  issueTrackingError("connect", "Could not migrate the Linear project bindings."),
-                ),
+            LinearConnection.connectLinearAccount(token).pipe(
+              Effect.mapError(
+                issueTrackingError("connect", "Could not migrate the Linear project bindings."),
               ),
+            ),
             { "rpc.aggregate": "issues" },
           ),
-        [WS_METHODS.linearDisconnect]: ({ credentialId }) =>
+        [WS_METHODS.linearDisconnect]: (input) =>
           observeRpcEffect(
             WS_METHODS.linearDisconnect,
-            Effect.gen(function* () {
-              const connection = yield* linear.disconnect({ credentialId });
-              const current = yield* serverSettings.getSettings;
-              yield* serverSettings.updateSettings({
-                issueTracking: {
-                  linear: {
-                    projectBindings: LinearApi.clearCredentialBindings(
-                      current.issueTracking.linear.projectBindings,
-                      credentialId,
-                    ),
-                  },
-                },
-              });
-              return connection;
-            }).pipe(
+            LinearConnection.disconnectLinearAccount(input).pipe(
               Effect.mapError(
                 issueTrackingError("disconnect", "Could not clear the Linear project bindings."),
               ),

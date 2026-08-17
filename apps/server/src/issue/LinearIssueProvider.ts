@@ -140,7 +140,8 @@ export const make = Effect.gen(function* () {
       settings.getSettings.pipe(
         Effect.map((value) => {
           const binding = value.issueTracking.linear.projectBindings[project.id];
-          if (binding !== undefined && binding !== null) {
+          if (binding === null) return null;
+          if (binding !== undefined) {
             return {
               host: "linear.app",
               repository: binding.teamKey,

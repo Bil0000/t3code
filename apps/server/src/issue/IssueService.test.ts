@@ -696,6 +696,42 @@ it.effect("routes projects on one host through distinct credential viewers", () 
   }),
 );
 
+it.effect("keeps separate cursors for accounts that use the same Linear team", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({ id: "p1", title: "web", workspaceRoot: "/web" }),
+        project({ id: "p2", title: "api", workspaceRoot: "/api" }),
+      ],
+      providers: [
+        fakeProvider("linear", {
+          resolveSource: (candidate) =>
+            Effect.succeed({
+              host: "linear.app",
+              repository: "ENG",
+              credentialId: candidate.id === "p1" ? "user-1" : "user-2",
+            }),
+          getViewer: ({ credentialId }: { readonly credentialId?: string }) =>
+            Effect.succeed(credentialId ?? "missing"),
+          listIssues: ({ credentialId }: { readonly credentialId?: string }) =>
+            Effect.succeed({
+              items: [issue(credentialId === "user-1" ? 1 : 2, "2026-07-02T00:00:00Z")],
+              truncated: true,
+              continues: true,
+            }),
+        }),
+      ],
+    });
+
+    const result = yield* service.list({ state: "open" });
+
+    assert.deepStrictEqual(Object.keys(result.nextCursors).toSorted(), [
+      '["linear","linear.app","eng","user-1"]',
+      '["linear","linear.app","eng","user-2"]',
+    ]);
+  }),
+);
+
 it.effect("hands each involvement the reader picked straight to the host", () =>
   Effect.gen(function* () {
     const asked: string[] = [];

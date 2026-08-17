@@ -216,13 +216,22 @@ const providerContextOf = (project: IssueProjectSource) =>
   project.credentialId === undefined ? {} : { credentialId: project.credentialId };
 
 /**
- * How a listing tells two adapter repositories apart. All three fields matter: different adapters
- * can use the same host and native repository name.
+ * How a listing tells two adapter repositories apart. The account also matters when one provider
+ * has more than one credential for the same native repository.
  */
 function listCursorKey(project: IssueProjectSource): string {
-  return LEGACY_CURSOR_ADAPTERS.has(project.adapter.kind)
-    ? `${project.host} ${project.repository.toLowerCase()}`
-    : issueRepositoryKey(project.adapter.kind, project.host, project.repository);
+  if (LEGACY_CURSOR_ADAPTERS.has(project.adapter.kind)) {
+    return `${project.host} ${project.repository.toLowerCase()}`;
+  }
+  if (project.credentialId === undefined) {
+    return issueRepositoryKey(project.adapter.kind, project.host, project.repository);
+  }
+  return JSON.stringify([
+    project.adapter.kind,
+    project.host.toLowerCase(),
+    project.repository.toLowerCase(),
+    project.credentialId,
+  ]);
 }
 
 /**

@@ -162,3 +162,24 @@ it.effect("keeps reading legacy project team settings", () =>
     ),
   ),
 );
+
+it.effect("does not fall back to a legacy team after a binding was cleared", () =>
+  Effect.gen(function* () {
+    const adapter = yield* make;
+    assert.isNull(yield* adapter.resolveSource!(PROJECT));
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(LinearApi.LinearApi, {} as LinearApi.LinearApi["Service"]),
+        ServerSettings.layerTest({
+          issueTracking: {
+            linear: {
+              projectBindings: { [PROJECT.id]: null },
+              projectTeams: { [PROJECT.id]: "LEGACY" },
+            },
+          },
+        }),
+      ),
+    ),
+  ),
+);

@@ -33,7 +33,11 @@ describe("Linear connection contracts", () => {
     expect(JSON.stringify(decoded)).not.toContain("lin_api_");
   });
 
-  it("requires the credential being disconnected", () => {
+  it("accepts old disconnect calls without a payload", () => {
+    expect(Schema.decodeUnknownSync(LinearDisconnectInput)(undefined)).toBeUndefined();
+  });
+
+  it("accepts the credential being disconnected", () => {
     expect(Schema.decodeUnknownSync(LinearDisconnectInput)({ credentialId: " user-1 " })).toEqual({
       credentialId: "user-1",
     });

@@ -33,9 +33,11 @@ export const LinearConnectInput = Schema.Struct({
   token: TrimmedNonEmptyString.check(Schema.isMaxLength(2048)),
 });
 
-export const LinearDisconnectInput = Schema.Struct({
-  credentialId: TrimmedNonEmptyString,
-});
+export const LinearDisconnectInput = Schema.Union([
+  Schema.Struct({ credentialId: TrimmedNonEmptyString }),
+  Schema.Undefined,
+]);
+export type LinearDisconnectInput = typeof LinearDisconnectInput.Type;
 
 export class IssueTrackingError extends Schema.TaggedErrorClass<IssueTrackingError>()(
   "IssueTrackingError",

@@ -5,12 +5,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 import type {
   IssueListState,
   IssueInvolvement,
   LinearAccount,
   LinearConnection,
-  LinearProjectBinding,
 } from "@t3tools/contracts";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
@@ -241,22 +241,11 @@ export class LinearApi extends Context.Service<
 const clean = (value: string | null | undefined) => value?.trim() || null;
 const isAuthError = (message: string) => /auth|api key|access token/i.test(message);
 
-export function clearCredentialBindings(
-  bindings: Readonly<Record<string, LinearProjectBinding | null>>,
-  credentialId: string,
-): Record<string, LinearProjectBinding | null> {
-  return Object.fromEntries(
-    Object.entries(bindings).map(([projectId, binding]) => [
-      projectId,
-      binding?.credentialId === credentialId ? null : binding,
-    ]),
-  );
-}
-
 export const make = Effect.gen(function* () {
   const config = yield* ApiConfig;
   const http = yield* HttpClient.HttpClient;
   const secrets = yield* ServerSecretStore.ServerSecretStore;
+  const credentialPoolMutex = yield* Semaphore.make(1);
 
   const readSecret = (name: string) =>
     secrets.get(name).pipe(
@@ -482,9 +471,11 @@ export const make = Effect.gen(function* () {
     };
   };
 
-  const connection = Effect.gen(function* () {
+  const connectionUnlocked = Effect.gen(function* () {
     const credentials = yield* storedCredentials;
     if (credentials.length > 0) {
+      const legacy = yield* storedToken;
+      if (Option.isSome(legacy)) yield* removeLegacyToken.pipe(Effect.ignore);
       const accounts = yield* Effect.forEach(credentials, inspectCredential);
       return connectionOf(accounts, true);
     }
@@ -492,7 +483,7 @@ export const make = Effect.gen(function* () {
     if (Option.isSome(legacy)) {
       const account = yield* probeToken(legacy.value);
       yield* writeCredentials([{ credentialId: account.credentialId, token: legacy.value }]);
-      yield* removeLegacyToken;
+      yield* removeLegacyToken.pipe(Effect.ignore);
       return connectionOf([account], true);
     }
     if (Option.isSome(config.envToken)) {
@@ -519,6 +510,7 @@ export const make = Effect.gen(function* () {
       }),
     ),
   );
+  const connection = credentialPoolMutex.withPermits(1)(connectionUnlocked);
 
   const getViewer = ({ credentialId }: { readonly credentialId?: string }) =>
     request(credentialId, "viewer", VIEWER_QUERY, {}, ViewerEnvelope).pipe(
@@ -554,38 +546,52 @@ export const make = Effect.gen(function* () {
   return LinearApi.of({
     connection,
     connect: (value) =>
-      Effect.gen(function* () {
-        const credentials = [...(yield* storedCredentials)];
-        const legacy = yield* storedToken;
-        if (credentials.length === 0 && Option.isSome(legacy)) {
-          yield* probeToken(legacy.value).pipe(
-            Effect.tap((account) =>
-              Effect.sync(() => {
-                credentials.push({ credentialId: account.credentialId, token: legacy.value });
-              }),
-            ),
-            Effect.ignore,
-          );
-        }
+      credentialPoolMutex.withPermits(1)(
+        Effect.gen(function* () {
+          const credentials = [...(yield* storedCredentials)];
+          const legacy = yield* storedToken;
+          if (credentials.length === 0 && Option.isSome(legacy)) {
+            yield* probeToken(legacy.value).pipe(
+              Effect.tap((account) =>
+                Effect.sync(() => {
+                  credentials.push({ credentialId: account.credentialId, token: legacy.value });
+                }),
+              ),
+              Effect.ignore,
+            );
+          }
 
-        const token = value.trim();
-        const account = yield* probeToken(token);
-        const next = credentials.filter(
-          (credential) => credential.credentialId !== account.credentialId,
-        );
-        next.push({ credentialId: account.credentialId, token });
-        yield* writeCredentials(next);
-        if (Option.isSome(legacy)) yield* removeLegacyToken;
-        return yield* connection;
-      }),
+          const token = value.trim();
+          const account = yield* probeToken(token);
+          const index = credentials.findIndex(
+            (credential) => credential.credentialId === account.credentialId,
+          );
+          const credential = { credentialId: account.credentialId, token };
+          if (index === -1) credentials.push(credential);
+          else credentials[index] = credential;
+          yield* writeCredentials(credentials);
+          if (Option.isSome(legacy)) yield* removeLegacyToken.pipe(Effect.ignore);
+          return yield* connectionUnlocked;
+        }),
+      ),
     disconnect: ({ credentialId }) =>
-      storedCredentials.pipe(
-        Effect.flatMap((credentials) =>
-          writeCredentials(
+      credentialPoolMutex.withPermits(1)(
+        Effect.gen(function* () {
+          const credentials = yield* storedCredentials;
+          const removed = credentials.find(
+            (credential) => credential.credentialId === credentialId,
+          );
+          if (removed !== undefined) {
+            const legacy = yield* storedToken;
+            if (Option.isSome(legacy) && legacy.value === removed.token) {
+              yield* removeLegacyToken;
+            }
+          }
+          yield* writeCredentials(
             credentials.filter((credential) => credential.credentialId !== credentialId),
-          ),
-        ),
-        Effect.flatMap(() => connection),
+          );
+          return yield* connectionUnlocked;
+        }),
       ),
     getViewer,
     listIssues: (input) => {
