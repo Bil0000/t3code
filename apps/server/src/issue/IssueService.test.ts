@@ -634,7 +634,11 @@ it.effect("keeps adapters separate when they share a host and repository name", 
         }),
         fakeProvider("jira", {
           resolveSource: (candidate) =>
-            candidate.id === "p2" ? { host: "tracker.example.test", repository: "acme/web" } : null,
+            Effect.succeed(
+              candidate.id === "p2"
+                ? { host: "tracker.example.test", repository: "acme/web" }
+                : null,
+            ),
           getViewer: () => Effect.succeed("jira-user"),
           listIssues: ({ viewer }) => {
             asked.push(`jira:${viewer}`);

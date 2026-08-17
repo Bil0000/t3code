@@ -168,9 +168,11 @@ export interface IssueAdapter {
 
   /**
    * Optional local project binding for adapters selected outside source control, such as a future
-   * project-level Jira setting. Synchronous by design: discovering sources must spend no API calls.
+   * project-level Jira setting. Reads local settings only; it must not spend API calls.
    */
-  readonly resolveSource?: (project: OrchestrationProjectShell) => IssueAdapterSource | null;
+  readonly resolveSource?: (
+    project: OrchestrationProjectShell,
+  ) => Effect.Effect<IssueAdapterSource | null>;
 
   /** The signed-in account, which is what involvement filtering compares against. */
   readonly getViewer: (input: {

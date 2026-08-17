@@ -50,6 +50,7 @@ import {
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  IssueTrackingError,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -109,6 +110,7 @@ import * as ResourceTelemetry from "./resourceTelemetry/ResourceTelemetry.ts";
 import * as UsageService from "./usage/UsageService.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
 import * as IssueService from "./issue/IssueService.ts";
+import * as LinearApi from "./issue/LinearApi.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
@@ -414,6 +416,7 @@ const makeWsRpcLayer = (
         yield* SourceControlRepositoryService.SourceControlRepositoryService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const issues = yield* IssueService.IssueService;
+      const linear = yield* LinearApi.LinearApi;
       const bootstrapCredentials = yield* PairingGrantStore.PairingGrantStore;
       const sessions = yield* SessionStore.SessionStore;
       const processDiagnostics = yield* ProcessDiagnostics.ProcessDiagnostics;
@@ -421,6 +424,9 @@ const makeWsRpcLayer = (
       const resourceTelemetry = yield* ResourceTelemetry.ResourceTelemetry;
       const usage = yield* UsageService.UsageService;
       const relayClient = yield* RelayClient.RelayClient;
+      const issueTrackingError =
+        (operation: IssueTrackingError["operation"]) => (error: LinearApi.LinearApiError) =>
+          new IssueTrackingError({ operation, detail: error.detail, cause: error });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -1795,6 +1801,38 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.issuesInvalidate, issues.invalidate(input), {
             "rpc.aggregate": "issues",
           }),
+        [WS_METHODS.linearConnectionStatus]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.linearConnectionStatus,
+            linear.connection.pipe(Effect.mapError(issueTrackingError("status"))),
+            { "rpc.aggregate": "issues" },
+          ),
+        [WS_METHODS.linearConnect]: ({ token }) =>
+          observeRpcEffect(
+            WS_METHODS.linearConnect,
+            linear.connect(token).pipe(Effect.mapError(issueTrackingError("connect"))),
+            { "rpc.aggregate": "issues" },
+          ),
+        [WS_METHODS.linearDisconnect]: (_input) =>
+          observeRpcEffect(
+            WS_METHODS.linearDisconnect,
+            linear.disconnect.pipe(Effect.mapError(issueTrackingError("disconnect"))),
+            { "rpc.aggregate": "issues" },
+          ),
+        [WS_METHODS.linearSetProjectTeam]: ({ projectId, teamKey }) =>
+          observeRpcEffect(
+            WS_METHODS.linearSetProjectTeam,
+            Effect.gen(function* () {
+              const current = yield* serverSettings.getSettings;
+              const projectTeams = { ...current.issueTracking.linear.projectTeams };
+              if (teamKey === null) delete projectTeams[projectId];
+              else projectTeams[projectId] = teamKey;
+              yield* serverSettings.updateSettings({
+                issueTracking: { linear: { projectTeams } },
+              });
+            }),
+            { "rpc.aggregate": "issues" },
+          ),
         [WS_METHODS.sourceControlLookupRepository]: (input) =>
           observeRpcEffect(
             WS_METHODS.sourceControlLookupRepository,

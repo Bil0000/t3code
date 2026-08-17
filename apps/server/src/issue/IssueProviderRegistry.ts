@@ -24,6 +24,7 @@ import * as GitHubIssueCli from "./GitHubIssueCli.ts";
 import * as GitHubIssueProvider from "./GitHubIssueProvider.ts";
 import * as GitLabIssueCli from "./GitLabIssueCli.ts";
 import * as GitLabIssueProvider from "./GitLabIssueProvider.ts";
+import * as LinearIssueProvider from "./LinearIssueProvider.ts";
 import type { IssueAdapter, IssueAdapterSource } from "./IssueProvider.ts";
 
 const SOURCE_RESOLUTION_CONCURRENCY = 12;
@@ -80,20 +81,23 @@ function adapterSourcesOf(
   projects: ReadonlyArray<OrchestrationProjectShell>,
   filter: IssueProjectFilter,
   adapters: ReadonlyMap<IssueProviderKind, IssueAdapter>,
-): ReadonlyMap<OrchestrationProjectShell["id"], ReadonlyArray<BoundIssueSource>> {
-  const sources = new Map<OrchestrationProjectShell["id"], BoundIssueSource[]>();
-  for (const project of projects) {
-    if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
-    for (const adapter of adapters.values()) {
-      const source = adapter.resolveSource?.(project);
-      if (source === undefined || source === null) continue;
-      const bound = { adapter, ...source };
-      const projectSources = sources.get(project.id);
-      if (projectSources === undefined) sources.set(project.id, [bound]);
-      else projectSources.push(bound);
+): Effect.Effect<ReadonlyMap<OrchestrationProjectShell["id"], ReadonlyArray<BoundIssueSource>>> {
+  return Effect.gen(function* () {
+    const sources = new Map<OrchestrationProjectShell["id"], BoundIssueSource[]>();
+    for (const project of projects) {
+      if (filter.projectId !== undefined && project.id !== filter.projectId) continue;
+      for (const adapter of adapters.values()) {
+        const source =
+          adapter.resolveSource === undefined ? null : yield* adapter.resolveSource(project);
+        if (source === undefined || source === null) continue;
+        const bound = { adapter, ...source };
+        const projectSources = sources.get(project.id);
+        if (projectSources === undefined) sources.set(project.id, [bound]);
+        else projectSources.push(bound);
+      }
     }
-  }
-  return sources;
+    return sources;
+  });
 }
 
 function resolveProjectSource(
@@ -183,7 +187,7 @@ function projectResolver(
     projects: ReadonlyArray<OrchestrationProjectShell>,
     filter: IssueProjectFilter,
   ) {
-    const boundSources = adapterSourcesOf(projects, filter, byKind);
+    const boundSources = yield* adapterSourcesOf(projects, filter, byKind);
     const refinedKinds = yield* refineUnknownKinds(projects, filter);
     const supported: IssueProjectSource[] = [];
     const unimplemented = new Map<
@@ -269,6 +273,7 @@ export const make = Effect.gen(function* () {
     GitLabIssueProvider.make,
     BitbucketIssueProvider.make,
     AzureDevOpsIssueProvider.make,
+    LinearIssueProvider.make,
   ]);
   const sourceControlProviders = yield* SourceControlProviderRegistry.SourceControlProviderRegistry;
   return fromProviders(providers, sourceControlProviders);

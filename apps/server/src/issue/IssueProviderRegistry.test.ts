@@ -20,7 +20,7 @@ it.effect("binds a project to an issue adapter without source-control types", ()
   Effect.gen(function* () {
     const jira = {
       kind: "jira",
-      resolveSource: () => ({ host: "acme.atlassian.net", repository: "ACME" }),
+      resolveSource: () => Effect.succeed({ host: "acme.atlassian.net", repository: "ACME" }),
     } as unknown as IssueAdapter;
     const registry = fromProviders([jira]);
 
@@ -58,7 +58,9 @@ it.effect("keeps two adapters that share one host and repository", () =>
     const jira = {
       kind: "jira",
       resolveSource: (candidate: OrchestrationProjectShell) =>
-        candidate.id === "p2" ? { host: "tracker.example.test", repository: "acme/web" } : null,
+        Effect.succeed(
+          candidate.id === "p2" ? { host: "tracker.example.test", repository: "acme/web" } : null,
+        ),
     } as unknown as IssueAdapter;
     const registry = fromProviders([github, jira]);
 
@@ -95,7 +97,7 @@ it.effect("keeps source-control and external issue sources for one project", () 
     const github = { kind: "github" } as unknown as IssueAdapter;
     const linear = {
       kind: "linear",
-      resolveSource: () => ({ host: "linear.app", repository: "ENG" }),
+      resolveSource: () => Effect.succeed({ host: "linear.app", repository: "ENG" }),
     } as unknown as IssueAdapter;
     const registry = fromProviders([github, linear]);
 
