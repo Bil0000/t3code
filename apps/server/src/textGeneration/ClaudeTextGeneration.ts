@@ -24,6 +24,7 @@ import {
   buildCommitMessagePrompt,
   buildPrContentPrompt,
   buildThreadTitlePrompt,
+  buildWorkItemMatchPrompt,
   buildWorkItemTaskPrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -87,7 +88,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateWorkItemTask",
+      | "generateWorkItemTask"
+      | "findWorkItemMatches",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -118,7 +120,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generatePrContent"
       | "generateBranchName"
       | "generateThreadTitle"
-      | "generateWorkItemTask";
+      | "generateWorkItemTask"
+      | "findWorkItemMatches";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -375,11 +378,24 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       return { prompt: generated.prompt.trim() };
     });
 
+  const findWorkItemMatches: TextGeneration.TextGeneration["Service"]["findWorkItemMatches"] =
+    Effect.fn("ClaudeTextGeneration.findWorkItemMatches")(function* (input) {
+      const { prompt, outputSchema } = buildWorkItemMatchPrompt(input);
+      return yield* runClaudeJson({
+        operation: "findWorkItemMatches",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
     generateWorkItemTask,
+    findWorkItemMatches,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

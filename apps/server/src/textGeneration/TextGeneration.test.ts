@@ -23,6 +23,7 @@ const makeStubTextGeneration = (
     generateThreadTitle: () => Effect.die("generateThreadTitle stub not configured for this test"),
     generateWorkItemTask: () =>
       Effect.die("generateWorkItemTask stub not configured for this test"),
+    findWorkItemMatches: () => Effect.die("findWorkItemMatches stub not configured for this test"),
     ...overrides,
   });
 
@@ -118,6 +119,40 @@ describe("makeTextGenerationFromRegistry", () => {
         expect(result.failure.operation).toBe("generateBranchName");
         expect(result.failure.detail).toContain("missing_instance");
       }
+    }),
+  );
+
+  it.effect("routes work item matching through the selected instance", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("codex_work");
+      const textGeneration = makeStubTextGeneration({
+        findWorkItemMatches: () =>
+          Effect.succeed({
+            matches: [{ candidate: 1, confidence: "high", reason: "Same work." }],
+          }),
+      });
+      const tg = TextGeneration.makeTextGenerationFromRegistry(
+        makeStubRegistry([makeStubInstance(instanceId, textGeneration)]),
+      );
+      const source = {
+        kind: "issue" as const,
+        provider: "github",
+        repository: "acme/app",
+        number: 12,
+        title: "Fix sessions",
+        url: "https://github.com/acme/app/issues/12",
+        body: "Sessions expire early.",
+      };
+
+      const matches = yield* tg.findWorkItemMatches({
+        cwd: process.cwd(),
+        relationship: "duplicate",
+        source,
+        candidates: [source],
+        modelSelection: createModelSelection(instanceId, "gpt-5"),
+      });
+
+      expect(matches.matches[0]?.candidate).toBe(1);
     }),
   );
 });

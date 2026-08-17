@@ -36,3 +36,42 @@ export class WorkItemTaskError extends Schema.TaggedErrorClass<WorkItemTaskError
     return `Work item task generation failed: ${this.detail}`;
   }
 }
+
+export const WorkItemMatchRelationship = Schema.Literals(["related", "duplicate"]);
+export type WorkItemMatchRelationship = typeof WorkItemMatchRelationship.Type;
+
+export const WorkItemMatchInput = Schema.Struct({
+  projectId: ProjectId,
+  relationship: WorkItemMatchRelationship,
+  source: WorkItemTaskSourceRef,
+});
+export type WorkItemMatchInput = typeof WorkItemMatchInput.Type;
+
+export const WorkItemMatch = Schema.Struct({
+  kind: Schema.Literals(["issue", "pull-request"]),
+  provider: TrimmedNonEmptyString,
+  repository: TrimmedNonEmptyString,
+  number: PositiveInt,
+  title: TrimmedNonEmptyString,
+  url: TrimmedNonEmptyString,
+  confidence: Schema.Literals(["high", "medium"]),
+  reason: TrimmedNonEmptyString.check(Schema.isMaxLength(300)),
+});
+export type WorkItemMatch = typeof WorkItemMatch.Type;
+
+export const WorkItemMatchResult = Schema.Struct({
+  matches: Schema.Array(WorkItemMatch).check(Schema.isMaxLength(5)),
+});
+export type WorkItemMatchResult = typeof WorkItemMatchResult.Type;
+
+export class WorkItemMatchError extends Schema.TaggedErrorClass<WorkItemMatchError>()(
+  "WorkItemMatchError",
+  {
+    detail: TrimmedNonEmptyString,
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    return `Work item matching failed: ${this.detail}`;
+  }
+}

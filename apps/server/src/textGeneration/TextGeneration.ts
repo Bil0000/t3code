@@ -5,6 +5,7 @@ import type {
   ChatAttachment,
   ModelSelection,
   ProviderInstanceId,
+  WorkItemMatchRelationship,
   WorkItemTaskMode,
 } from "@t3tools/contracts";
 import { TextGenerationError } from "@t3tools/contracts";
@@ -97,6 +98,22 @@ export interface WorkItemTaskGenerationResult {
   prompt: string;
 }
 
+export interface WorkItemMatchGenerationInput {
+  cwd: string;
+  relationship: WorkItemMatchRelationship;
+  source: WorkItemTaskGenerationInput["items"][number];
+  candidates: ReadonlyArray<WorkItemTaskGenerationInput["items"][number]>;
+  modelSelection: ModelSelection;
+}
+
+export interface WorkItemMatchGenerationResult {
+  matches: ReadonlyArray<{
+    candidate: number;
+    confidence: "high" | "medium";
+    reason: string;
+  }>;
+}
+
 export interface TextGenerationService {
   generateCommitMessage(
     input: CommitMessageGenerationInput,
@@ -105,6 +122,7 @@ export interface TextGenerationService {
   generateBranchName(input: BranchNameGenerationInput): Promise<BranchNameGenerationResult>;
   generateThreadTitle(input: ThreadTitleGenerationInput): Promise<ThreadTitleGenerationResult>;
   generateWorkItemTask(input: WorkItemTaskGenerationInput): Promise<WorkItemTaskGenerationResult>;
+  findWorkItemMatches(input: WorkItemMatchGenerationInput): Promise<WorkItemMatchGenerationResult>;
 }
 
 /**
@@ -142,6 +160,10 @@ export class TextGeneration extends Context.Service<
     readonly generateWorkItemTask: (
       input: WorkItemTaskGenerationInput,
     ) => Effect.Effect<WorkItemTaskGenerationResult, TextGenerationError>;
+
+    readonly findWorkItemMatches: (
+      input: WorkItemMatchGenerationInput,
+    ) => Effect.Effect<WorkItemMatchGenerationResult, TextGenerationError>;
   }
 >()("t3/textGeneration/TextGeneration") {}
 
@@ -153,7 +175,8 @@ type TextGenerationOp =
   | "generatePrContent"
   | "generateBranchName"
   | "generateThreadTitle"
-  | "generateWorkItemTask";
+  | "generateWorkItemTask"
+  | "findWorkItemMatches";
 
 const resolveInstance = (
   registry: ProviderInstanceRegistry.ProviderInstanceRegistry["Service"],
@@ -196,6 +219,10 @@ export const makeTextGenerationFromRegistry = (
     generateWorkItemTask: (input) =>
       resolveInstance(registry, "generateWorkItemTask", input.modelSelection.instanceId).pipe(
         Effect.flatMap((textGeneration) => textGeneration.generateWorkItemTask(input)),
+      ),
+    findWorkItemMatches: (input) =>
+      resolveInstance(registry, "findWorkItemMatches", input.modelSelection.instanceId).pipe(
+        Effect.flatMap((textGeneration) => textGeneration.findWorkItemMatches(input)),
       ),
   });
 
