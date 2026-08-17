@@ -42,6 +42,60 @@ it("groups supported Linear emoji reactions and marks the viewer", () => {
   );
 });
 
+it.effect("maps Linear comment reaction arrays into issue activity", () => {
+  const api = {
+    getActivity: () =>
+      Effect.succeed({
+        viewerId: "user-1",
+        comments: [
+          {
+            id: "comment-1",
+            body: "Looks good",
+            createdAt: "2026-08-17T00:00:00.000Z",
+            reactions: [{ id: "reaction-1", emoji: "👍", user: { id: "user-1" } }],
+          },
+        ],
+        reactions: [{ id: "reaction-2", emoji: "🎉", user: { id: "user-2" } }],
+        commentsTruncated: false,
+      }),
+  } as unknown as LinearApi.LinearApi["Service"];
+
+  return Effect.gen(function* () {
+    const adapter = yield* make;
+    const activity = yield* adapter.getIssueActivity({
+      cwd: PROJECT.workspaceRoot,
+      host: "linear.app",
+      repository: "ENG",
+      number: 7,
+    });
+    assert.deepStrictEqual(activity, {
+      comments: [
+        {
+          id: "comment-1",
+          author: null,
+          body: "Looks good",
+          createdAt: "2026-08-17T00:00:00.000Z",
+          url: null,
+          reactions: [
+            { content: "thumbs-up", count: 1, actors: ["user-1"], viewerHasReacted: true },
+          ],
+        },
+      ],
+      commentCount: 1,
+      commentsTruncated: false,
+      events: [],
+      reactions: [{ content: "hooray", count: 1, actors: ["user-2"], viewerHasReacted: false }],
+    });
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(LinearApi.LinearApi, api),
+        ServerSettings.layerTest({ issueTracking: { linear: {} } } as never),
+      ),
+    ),
+  );
+});
+
 it.effect("uses the project binding credential for Linear requests", () => {
   const asked: Array<string | undefined> = [];
   const api = {

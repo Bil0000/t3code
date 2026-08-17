@@ -207,7 +207,7 @@ export const make = Effect.gen(function* () {
               body: comment.body,
               createdAt: comment.createdAt,
               url: comment.url ?? null,
-              reactions: linearReactions(comment.reactions?.nodes ?? [], activity.viewerId),
+              reactions: linearReactions(comment.reactions ?? [], activity.viewerId),
             })),
             commentCount: activity.comments.length,
             commentsTruncated: activity.commentsTruncated,

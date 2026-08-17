@@ -60,7 +60,7 @@ const Comment = Schema.Struct({
   createdAt: Schema.String,
   url: Schema.optional(Schema.NullOr(Schema.String)),
   user: Schema.optional(Schema.NullOr(User)),
-  reactions: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Reaction) }))),
+  reactions: Schema.optional(Schema.NullOr(Schema.Array(Reaction))),
 });
 const Issue = Schema.Struct({
   id: Schema.String,
@@ -85,7 +85,7 @@ const Issue = Schema.Struct({
       }),
     ),
   ),
-  reactions: Schema.optional(Schema.NullOr(Schema.Struct({ nodes: Schema.Array(Reaction) }))),
+  reactions: Schema.optional(Schema.NullOr(Schema.Array(Reaction))),
 });
 
 const Errors = { errors: Schema.optional(Schema.Array(Schema.Struct({ message: Schema.String }))) };
@@ -113,12 +113,8 @@ const ReactionLookupEnvelope = Schema.Struct({
   ...Errors,
   data: Schema.Struct({
     viewer: User,
-    issue: Schema.optional(
-      Schema.NullOr(Schema.Struct({ reactions: Schema.Struct({ nodes: Schema.Array(Reaction) }) })),
-    ),
-    comment: Schema.optional(
-      Schema.NullOr(Schema.Struct({ reactions: Schema.Struct({ nodes: Schema.Array(Reaction) }) })),
-    ),
+    issue: Schema.optional(Schema.NullOr(Schema.Struct({ reactions: Schema.Array(Reaction) }))),
+    comment: Schema.optional(Schema.NullOr(Schema.Struct({ reactions: Schema.Array(Reaction) }))),
   }),
 });
 const MutationEnvelope = Schema.Struct({
@@ -152,10 +148,10 @@ const ACTIVITY_QUERY = `query T3LinearIssueActivity($id: String!, $comments: Int
   issue(id: $id) {
     ${ISSUE_FIELDS}
     comments(first: $comments) {
-      nodes { id body createdAt url user { ${USER_FIELDS} } reactions { nodes { ${REACTION_FIELDS} } } }
+      nodes { id body createdAt url user { ${USER_FIELDS} } reactions { ${REACTION_FIELDS} } }
       pageInfo { hasNextPage }
     }
-    reactions { nodes { ${REACTION_FIELDS} } }
+    reactions { ${REACTION_FIELDS} }
   }
 }`;
 const COMMENT_MUTATION = `mutation T3LinearComment($input: CommentCreateInput!) {
@@ -169,11 +165,11 @@ const REACTION_DELETE_MUTATION = `mutation T3LinearReactionDelete($id: String!) 
 }`;
 const ISSUE_REACTIONS_QUERY = `query T3LinearIssueReactions($id: String!) {
   viewer { id name email avatarUrl }
-  issue(id: $id) { reactions { nodes { ${REACTION_FIELDS} } } }
+  issue(id: $id) { reactions { ${REACTION_FIELDS} } }
 }`;
 const COMMENT_REACTIONS_QUERY = `query T3LinearCommentReactions($id: String!) {
   viewer { id name email avatarUrl }
-  comment(id: $id) { reactions { nodes { ${REACTION_FIELDS} } } }
+  comment(id: $id) { reactions { ${REACTION_FIELDS} } }
 }`;
 
 export class LinearApiError extends Data.TaggedError("LinearApiError")<{
@@ -649,7 +645,7 @@ export const make = Effect.gen(function* () {
             return {
               viewerId: data.viewer.id,
               comments: issue.comments?.nodes ?? [],
-              reactions: issue.reactions?.nodes ?? [],
+              reactions: issue.reactions ?? [],
               commentsTruncated: issue.comments?.pageInfo?.hasNextPage ?? false,
             };
           }),
@@ -677,7 +673,7 @@ export const make = Effect.gen(function* () {
         ReactionLookupEnvelope,
       ).pipe(
         Effect.flatMap(({ data }) => {
-          const reactions = (data.comment ?? data.issue)?.reactions.nodes ?? [];
+          const reactions = (data.comment ?? data.issue)?.reactions ?? [];
           const reaction = reactions.find(
             (item) => item.emoji === input.emoji && item.user?.id === data.viewer.id,
           );

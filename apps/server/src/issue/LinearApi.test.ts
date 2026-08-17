@@ -231,6 +231,61 @@ it("clears every project binding for a disconnected account", () => {
   );
 });
 
+it.effect("loads Linear activity reactions from API arrays", () => {
+  const { layer } = makeLayer({
+    token: "lin_api_test",
+    response: (body) => {
+      const query = String(body.query);
+      if (query.includes("reactions { nodes")) {
+        return { errors: [{ message: 'Field "nodes" does not exist on type "Reaction".' }] };
+      }
+      return {
+        data: {
+          viewer: { id: "user-1", name: "Ada", email: "ada@example.com" },
+          issue: {
+            id: "issue-1",
+            identifier: "ENG-7",
+            number: 7,
+            title: "Activity",
+            url: "https://linear.app/eng/issue/ENG-7",
+            createdAt: "2026-08-17T00:00:00.000Z",
+            updatedAt: "2026-08-17T00:00:00.000Z",
+            state: { name: "In Progress", type: "started" },
+            comments: {
+              nodes: [
+                {
+                  id: "comment-1",
+                  body: "Looks good",
+                  createdAt: "2026-08-17T00:00:00.000Z",
+                  reactions: [{ id: "reaction-1", emoji: "👍", user: { id: "user-1" } }],
+                },
+              ],
+              pageInfo: { hasNextPage: false },
+            },
+            reactions: [{ id: "reaction-2", emoji: "🎉", user: { id: "user-2" } }],
+          },
+        },
+      };
+    },
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    assert.deepStrictEqual(yield* api.getActivity({ identifier: "ENG-7" }), {
+      viewerId: "user-1",
+      comments: [
+        {
+          id: "comment-1",
+          body: "Looks good",
+          createdAt: "2026-08-17T00:00:00.000Z",
+          reactions: [{ id: "reaction-1", emoji: "👍", user: { id: "user-1" } }],
+        },
+      ],
+      reactions: [{ id: "reaction-2", emoji: "🎉", user: { id: "user-2" } }],
+      commentsTruncated: false,
+    });
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("creates and removes Linear issue reactions", () => {
   const { layer, requests } = makeLayer({
     token: "lin_api_test",
@@ -238,11 +293,14 @@ it.effect("creates and removes Linear issue reactions", () => {
       const query = String(body.query);
       if (query.includes("reactionCreate")) return { data: { reactionCreate: { success: true } } };
       if (query.includes("reactionDelete")) return { data: { reactionDelete: { success: true } } };
+      if (query.includes("reactions { nodes")) {
+        return { errors: [{ message: 'Field "nodes" does not exist on type "Reaction".' }] };
+      }
       return {
         data: {
           viewer: { id: "user-1" },
           issue: {
-            reactions: { nodes: [{ id: "reaction-1", emoji: "👍", user: { id: "user-1" } }] },
+            reactions: [{ id: "reaction-1", emoji: "👍", user: { id: "user-1" } }],
           },
         },
       };
