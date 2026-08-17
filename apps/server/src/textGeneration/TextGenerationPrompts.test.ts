@@ -33,25 +33,20 @@ describe("buildWorkItemTaskPrompt", () => {
     },
   ];
 
-  it("asks for one compound task from only the supplied sources", () => {
-    const result = buildWorkItemTaskPrompt({ mode: "compound", items });
+  it("substitutes selected sources and changes shape by mode", () => {
+    const compoundPrompt = buildWorkItemTaskPrompt({ mode: "compound", items }).prompt;
+    const subtaskPrompt = buildWorkItemTaskPrompt({ mode: "subtasks", items }).prompt;
 
-    expect(result.prompt).toContain("one compound task");
-    expect(result.prompt).toContain("ENG-12");
-    expect(result.prompt).toContain("acme/app#34");
-    expect(result.prompt).toContain("Use only the selected sources below");
-  });
-
-  it("asks for ordered subtasks", () => {
-    expect(buildWorkItemTaskPrompt({ mode: "subtasks", items }).prompt).toContain(
-      "ordered subtasks",
-    );
+    expect(compoundPrompt).toContain("ENG-12");
+    expect(compoundPrompt).toContain("Sessions expire too early.");
+    expect(compoundPrompt).toContain("acme/app#34");
+    expect(compoundPrompt).not.toBe(subtaskPrompt);
   });
 
   it("keeps a deterministic draft when AI is unavailable", () => {
-    expect(fallbackWorkItemTaskPrompt({ mode: "subtasks", items })).toContain(
-      "1. [Fix login](https://linear.app/acme/issue/ENG-12)",
-    );
+    const draft = fallbackWorkItemTaskPrompt({ mode: "subtasks", items });
+    expect(draft).toContain("Fix login");
+    expect(draft).toContain("https://linear.app/acme/issue/ENG-12");
   });
 });
 

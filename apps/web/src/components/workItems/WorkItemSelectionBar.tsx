@@ -44,7 +44,7 @@ export function WorkItemSelectionBar() {
     const first = items[0];
     if (!first || busy) return;
     setBusy(true);
-    const result = await generate({
+    const generation = await generate({
       environmentId: first.environmentId,
       input: {
         projectId: first.projectId,
@@ -52,7 +52,7 @@ export function WorkItemSelectionBar() {
         items: items.map(({ kind, repository, number }) => ({ kind, repository, number })),
       },
     });
-    if (result._tag === "Failure") {
+    if (generation._tag === "Failure") {
       setBusy(false);
       toastManager.add({
         type: "error",
@@ -67,11 +67,11 @@ export function WorkItemSelectionBar() {
       toastManager.add({ type: "error", title: "Could not open a thread" });
       return;
     }
-    useComposerDraftStore.getState().setPrompt(opened.draftId, result.value.prompt);
+    useComposerDraftStore.getState().setPrompt(opened.draftId, generation.value.prompt);
     clear();
     toastManager.add({
       type: "success",
-      title: result.value.generated ? "Task drafted with AI" : "Task drafted",
+      title: generation.value.generated ? "Task drafted with AI" : "Task drafted",
       description: "Review the task in the composer, then send it.",
     });
   };
