@@ -91,6 +91,12 @@ import {
   IssueUnavailableError,
   IssueUpdateInput,
 } from "./issue.ts";
+import {
+  IssueTrackingError,
+  LinearConnectInput,
+  LinearConnection,
+  LinearProjectTeamInput,
+} from "./issueTracking.ts";
 import { ProviderInstanceId } from "./providerInstance.ts";
 import {
   PullRequestActionInput,
@@ -339,6 +345,12 @@ export const WS_METHODS = {
   issuesAssigneeCandidates: "issues.assigneeCandidates",
   issuesTemplates: "issues.templates",
   issuesInvalidate: "issues.invalidate",
+
+  // Issue tracking connection methods
+  linearConnectionStatus: "linear.connectionStatus",
+  linearConnect: "linear.connect",
+  linearDisconnect: "linear.disconnect",
+  linearSetProjectTeam: "linear.setProjectTeam",
 
   // Source control methods
   sourceControlLookupRepository: "sourceControl.lookupRepository",
@@ -747,6 +759,28 @@ export const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
   payload: IssueInvalidateInput,
   success: Schema.Void,
   error: IssueRpcError,
+});
+
+export const WsLinearConnectionStatusRpc = Rpc.make(WS_METHODS.linearConnectionStatus, {
+  success: LinearConnection,
+  error: IssueTrackingError,
+});
+
+export const WsLinearConnectRpc = Rpc.make(WS_METHODS.linearConnect, {
+  payload: LinearConnectInput,
+  success: LinearConnection,
+  error: IssueTrackingError,
+});
+
+export const WsLinearDisconnectRpc = Rpc.make(WS_METHODS.linearDisconnect, {
+  success: LinearConnection,
+  error: IssueTrackingError,
+});
+
+export const WsLinearSetProjectTeamRpc = Rpc.make(WS_METHODS.linearSetProjectTeam, {
+  payload: LinearProjectTeamInput,
+  success: Schema.Void,
+  error: Schema.Union([IssueTrackingError, ServerSettingsError]),
 });
 
 export const WsSourceControlLookupRepositoryRpc = Rpc.make(
@@ -1194,6 +1228,10 @@ export const WsRpcGroup = RpcGroup.make(
   WsIssuesAssigneeCandidatesRpc,
   WsIssuesTemplatesRpc,
   WsIssuesInvalidateRpc,
+  WsLinearConnectionStatusRpc,
+  WsLinearConnectRpc,
+  WsLinearDisconnectRpc,
+  WsLinearSetProjectTeamRpc,
   WsSourceControlLookupRepositoryRpc,
   WsSourceControlCloneRepositoryRpc,
   WsSourceControlPublishRepositoryRpc,

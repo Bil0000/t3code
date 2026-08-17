@@ -189,6 +189,20 @@ describe("ServerSettings worktree defaults", () => {
   });
 });
 
+describe("ServerSettings issue tracking", () => {
+  it("defaults Linear project mappings to empty", () => {
+    expect(decodeServerSettings({}).issueTracking.linear.projectTeams).toEqual({});
+  });
+
+  it("accepts a full Linear project mapping replacement", () => {
+    const patch = decodeServerSettingsPatch({
+      issueTracking: { linear: { projectTeams: { project_1: "  ENG  " } } },
+    });
+
+    expect(patch.issueTracking?.linear?.projectTeams).toEqual({ project_1: "ENG" });
+  });
+});
+
 describe("ServerSettings.sourceControlWritingStyle", () => {
   it("defaults all style settings for legacy configs", () => {
     const settings = decodeServerSettings({});
