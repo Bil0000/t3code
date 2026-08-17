@@ -6,10 +6,57 @@ import { useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { generateWorkItemTask } from "~/state/workItems";
-import { useWorkItemSelection } from "~/workItemSelection";
+import { type SelectedWorkItem, useWorkItemSelection } from "~/workItemSelection";
 
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+
+export const WORK_ITEM_MODE_HELP = {
+  compound: "One task that merges overlap and orders dependencies.",
+  subtasks: "One parent task split into ordered child steps.",
+} as const;
+
+export function workItemGeneratingDraft(
+  mode: "compound" | "subtasks",
+  items: ReadonlyArray<SelectedWorkItem>,
+) {
+  return [
+    "Generating a task from the selected sources…",
+    "",
+    mode === "compound" ? "Compound task sources:" : "Parent task sources:",
+    ...items.map((item) => `- [${item.title}](${item.url}) (${item.repository}#${item.number})`),
+  ].join("\n");
+}
+
+type WorkItemTaskGeneration =
+  | { readonly _tag: "Failure" }
+  | {
+      readonly _tag: "Success";
+      readonly value: { readonly prompt: string; readonly generated: boolean };
+    };
+
+export async function createGeneratedWorkItemDraft<TDraftId>(input: {
+  readonly mode: "compound" | "subtasks";
+  readonly items: ReadonlyArray<SelectedWorkItem>;
+  readonly openThread: () => Promise<{ readonly draftId: TDraftId } | null>;
+  readonly generate: () => Promise<WorkItemTaskGeneration>;
+  readonly getPrompt: (draftId: TDraftId) => string | undefined;
+  readonly setPrompt: (draftId: TDraftId, prompt: string) => void;
+  readonly clear: () => void;
+}): Promise<{ readonly status: "success" | "generation-failure" | "thread-failure" }> {
+  const opened = await input.openThread();
+  if (opened === null) return { status: "thread-failure" };
+
+  const draft = workItemGeneratingDraft(input.mode, input.items);
+  input.setPrompt(opened.draftId, draft);
+  const generation = await input.generate();
+  if (generation._tag === "Failure") return { status: "generation-failure" };
+
+  if (input.getPrompt(opened.draftId) === draft)
+    input.setPrompt(opened.draftId, generation.value.prompt);
+  input.clear();
+  return { status: "success" };
+}
 
 export function WorkItemSelectButton() {
   const selecting = useWorkItemSelection((state) => state.selecting);
@@ -44,34 +91,39 @@ export function WorkItemSelectionBar() {
     const first = items[0];
     if (!first || busy) return;
     setBusy(true);
-    const generation = await generate({
-      environmentId: first.environmentId,
-      input: {
-        projectId: first.projectId,
-        mode,
-        items: items.map(({ kind, repository, number }) => ({ kind, repository, number })),
-      },
+    const result = await createGeneratedWorkItemDraft({
+      mode,
+      items,
+      openThread: () => newThread(scopeProjectRef(first.environmentId, first.projectId)),
+      generate: () =>
+        generate({
+          environmentId: first.environmentId,
+          input: {
+            projectId: first.projectId,
+            mode,
+            items: items.map(({ kind, repository, number }) => ({ kind, repository, number })),
+          },
+        }),
+      getPrompt: (draftId) => useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt,
+      setPrompt: (draftId, prompt) => useComposerDraftStore.getState().setPrompt(draftId, prompt),
+      clear,
     });
-    if (generation._tag === "Failure") {
-      setBusy(false);
-      toastManager.add({
-        type: "error",
-        title: "Could not create task",
-        description: "Refresh the selected items and try again.",
-      });
-      return;
-    }
-    const opened = await newThread(scopeProjectRef(first.environmentId, first.projectId));
     setBusy(false);
-    if (opened === null) {
+    if (result.status === "thread-failure") {
       toastManager.add({ type: "error", title: "Could not open a thread" });
       return;
     }
-    useComposerDraftStore.getState().setPrompt(opened.draftId, generation.value.prompt);
-    clear();
+    if (result.status === "generation-failure") {
+      toastManager.add({
+        type: "error",
+        title: "Could not generate a task",
+        description: "The source links are in the draft. You can edit it or try again.",
+      });
+      return;
+    }
     toastManager.add({
       type: "success",
-      title: generation.value.generated ? "Task drafted with AI" : "Task drafted",
+      title: "Task drafted",
       description: "Review the task in the composer, then send it.",
     });
   };
@@ -97,6 +149,7 @@ export function WorkItemSelectionBar() {
           Subtasks
         </Button>
       </div>
+      <span className="text-xs text-muted-foreground">{WORK_ITEM_MODE_HELP[mode]}</span>
       <Button size="xs" disabled={items.length === 0 || busy} onClick={() => void createTask()}>
         {busy ? (
           <LoaderIcon aria-hidden className="size-3.5 animate-spin" />
