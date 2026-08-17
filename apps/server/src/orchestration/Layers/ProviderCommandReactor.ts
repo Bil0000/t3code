@@ -664,12 +664,13 @@ const make = Effect.gen(function* () {
         requestedModelSelection !== undefined &&
         activeSession?.providerInstanceId !== requestedModelSelection.instanceId;
       const shouldRestartForModelChange = modelChanged && sessionModelSwitch === "unsupported";
-      const previousModelSelection = threadModelSelections.get(threadId) ?? thread.modelSelection;
+      const previousModelSelection = threadModelSelections.get(threadId);
       const codexContextWindowChanged =
         preferredProvider === "codex" &&
         requestedModelSelection !== undefined &&
-        (getModelSelectionStringOptionValue(previousModelSelection, "contextWindow") ?? "1m") !==
-          (getModelSelectionStringOptionValue(requestedModelSelection, "contextWindow") ?? "1m");
+        (previousModelSelection === undefined ||
+          (getModelSelectionStringOptionValue(previousModelSelection, "contextWindow") ?? "1m") !==
+            (getModelSelectionStringOptionValue(requestedModelSelection, "contextWindow") ?? "1m"));
       const shouldRestartForModelSelectionChange =
         (preferredProvider === "claudeAgent" &&
           requestedModelSelection !== undefined &&

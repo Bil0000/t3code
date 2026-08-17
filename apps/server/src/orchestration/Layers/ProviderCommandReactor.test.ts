@@ -2985,6 +2985,14 @@ describe("ProviderCommandReactor", () => {
         },
         createdAt: now,
       });
+      yield* harness.engine.dispatch({
+        type: "thread.meta.update",
+        commandId: CommandId.make("cmd-meta-update-codex-context-recovered"),
+        threadId,
+        modelSelection: createModelSelection(providerInstanceId, "gpt-5-codex", [
+          { id: "contextWindow", value: "1m" },
+        ]),
+      });
 
       yield* harness.engine.dispatch({
         type: "thread.turn.start",
