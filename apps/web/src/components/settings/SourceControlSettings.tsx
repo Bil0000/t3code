@@ -581,7 +581,7 @@ export function SourceControlSettingsPanel() {
         />
       )}
 
-      <IssueTrackingSettingsSection />
+      {isPrimaryEnvironment ? <IssueTrackingSettingsSection /> : null}
       {isPrimaryEnvironment ? <SourceControlWritingSettingsSection /> : null}
     </SettingsPageContainer>
   );
