@@ -1,6 +1,6 @@
+// @effect-diagnostics globalDate:off - This isolated Electron preload does not run inside an Effect runtime.
 import { ipcRenderer } from "electron";
 import type { DesktopPreviewDesignChangePayload } from "@t3tools/contracts";
-import * as DateTime from "effect/DateTime";
 
 import {
   createDesignSelectionAnnotation,
@@ -10,13 +10,13 @@ import {
   resolveDesignPosition,
   serializeDesignDocument,
 } from "./DesignDocument.ts";
-import { DESIGN_CHANGED_CHANNEL } from "./GuestProtocol.ts";
+import { ANNOTATION_TOOL_ATTRIBUTE, DESIGN_CHANGED_CHANNEL } from "./GuestProtocol.ts";
 
 type Tool = "select" | "draw" | "arrow" | "box" | "circle" | "highlight";
 type Point = { x: number; y: number };
 type ElementState = {
   style: string;
-  text: string | null;
+  html: string;
   x: string | null;
   y: string | null;
 };
@@ -86,7 +86,7 @@ function targetFromPoint(x: number, y: number): Element | null {
 function stateOf(element: HTMLElement | SVGElement): ElementState {
   return {
     style: element.style.cssText,
-    text: element.childElementCount === 0 ? element.textContent : null,
+    html: element.innerHTML,
     x: element.getAttribute("data-t3-design-x"),
     y: element.getAttribute("data-t3-design-y"),
   };
@@ -94,7 +94,7 @@ function stateOf(element: HTMLElement | SVGElement): ElementState {
 
 function applyState(element: HTMLElement | SVGElement, state: ElementState): void {
   element.style.cssText = state.style;
-  if (state.text !== null && element.childElementCount === 0) element.textContent = state.text;
+  if (element.innerHTML !== state.html) element.innerHTML = state.html;
   for (const [name, value] of [
     ["data-t3-design-x", state.x],
     ["data-t3-design-y", state.y],
@@ -107,7 +107,7 @@ function applyState(element: HTMLElement | SVGElement, state: ElementState): voi
 function statesMatch(left: ElementState, right: ElementState): boolean {
   return (
     left.style === right.style &&
-    left.text === right.text &&
+    left.html === right.html &&
     left.x === right.x &&
     left.y === right.y
   );
@@ -155,32 +155,65 @@ function startDesignEditor(): void {
   const root = host.attachShadow({ mode: "closed" });
   const style = document.createElement("style");
   style.textContent = `
-    :host{color-scheme:light dark;font:12px/1.35 ui-sans-serif,system-ui,sans-serif;color:light-dark(#171717,#f5f5f5)}
+    :host{color-scheme:light dark;font:12px/1.35 ui-sans-serif,system-ui,sans-serif;color:light-dark(#202020,#f3f3f3)}
     *{box-sizing:border-box}
-    button,input,textarea{font:inherit;color:inherit}
-    button{height:28px;border:0;border-radius:7px;background:transparent;padding:0 9px;cursor:pointer;white-space:nowrap}
-    button:hover:not(:disabled){background:light-dark(#eee,#333)}
-    button[aria-pressed=true]{background:#2563eb;color:white}
+    button,input,textarea,select{font:inherit;color:inherit}
+    button{height:28px;border:0;border-radius:7px;background:transparent;padding:0 9px;cursor:pointer;white-space:nowrap;transition:transform 120ms cubic-bezier(.23,1,.32,1),background-color 120ms ease}
+    button:active:not(:disabled){transform:scale(.97)}
+    button[aria-pressed=true]{background:light-dark(#e9e9e9,#353535);color:light-dark(#111,#fff)}
     button:disabled{opacity:.35;cursor:default}
-    .toolbar,.inspector{pointer-events:auto;position:fixed;border:1px solid light-dark(#d9d9d9,#3d3d3d);background:light-dark(rgba(255,255,255,.96),rgba(24,24,24,.96));box-shadow:0 10px 30px rgba(0,0,0,.18);backdrop-filter:blur(18px)}
-    .toolbar{top:10px;left:50%;transform:translateX(-50%);display:flex;flex-wrap:wrap;justify-content:center;gap:2px;max-width:calc(100vw - 20px);padding:5px;border-radius:10px}
-    .sep{width:1px;margin:4px 2px;background:light-dark(#ddd,#444)}
-    .selection{display:none;pointer-events:none;position:fixed;z-index:1;border:2px solid #2563eb;box-shadow:0 0 0 1px white;border-radius:3px}
-    .tag{position:absolute;left:-2px;bottom:calc(100% + 5px);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;background:#2563eb;color:white;padding:3px 6px}
+    .panel{pointer-events:auto;position:fixed;top:8px;right:8px;bottom:8px;display:flex;width:min(300px,calc(100vw - 16px));flex-direction:column;overflow:hidden;border:1px solid light-dark(#deddd9,#3b3b3b);border-radius:13px;background:light-dark(rgba(250,249,246,.97),rgba(25,25,25,.97));box-shadow:0 16px 42px rgba(0,0,0,.2);backdrop-filter:blur(20px)}
+    .panel-header,.tabs,.tools,.actions{display:flex;align-items:center;gap:4px;padding:7px 9px;border-bottom:1px solid light-dark(#e5e3df,#353535)}
+    .panel-header{justify-content:space-between;font-weight:650}.panel-header button{height:26px;border:1px solid light-dark(#d8d6d1,#454545);background:light-dark(#fff,#292929)}
+    .tabs{padding:5px 9px}.tabs button{height:26px;padding:0 10px}.tabs button[aria-pressed=true]{background:#2563eb;color:#fff}
+    .tab-panel{min-height:0;flex:1;overflow:auto}.tab-panel[hidden]{display:none}.tools{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:0;padding:8px}.tools button{height:34px;padding:0 4px;border:1px solid light-dark(#e1dfdb,#3d3d3d);background:light-dark(#fff,#242424)}
+    .section{border-top:1px solid light-dark(#e5e3df,#353535);padding:10px}.section-title{display:flex;align-items:center;justify-content:space-between;margin:0 0 7px;font-size:12px;font-weight:650}.layers{max-height:170px;overflow:auto}.layer{display:block;width:100%;height:25px;overflow:hidden;text-align:left;text-overflow:ellipsis;color:light-dark(#555,#bbb)}.layer[aria-selected=true]{background:light-dark(#e9e7e2,#383838);color:inherit}
+    .selection{display:none;pointer-events:none;position:fixed;z-index:1;border:2px solid #e5486d;box-shadow:0 0 0 1px white;border-radius:2px}
+    .tag{position:absolute;left:-2px;bottom:calc(100% + 5px);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:4px;background:#e5486d;color:white;padding:3px 6px}
     .attach{pointer-events:auto;position:absolute;left:50%;top:-14px;width:26px;height:26px;transform:translateX(-50%);border:2px solid white;border-radius:999px;background:#22c55e;color:white;padding:0;font-size:18px;line-height:20px;box-shadow:0 2px 8px rgba(0,0,0,.22)}
-    .handle{pointer-events:auto;position:absolute;width:10px;height:10px;border:2px solid white;border-radius:3px;background:#2563eb;padding:0}
+    .handle{pointer-events:auto;position:absolute;width:10px;height:10px;border:2px solid white;border-radius:2px;background:#e5486d;padding:0}
     .nw{left:-6px;top:-6px;cursor:nwse-resize}.ne{right:-6px;top:-6px;cursor:nesw-resize}.sw{left:-6px;bottom:-6px;cursor:nesw-resize}.se{right:-6px;bottom:-6px;cursor:nwse-resize}
-    .inspector{display:none;right:10px;top:54px;width:220px;padding:10px;border-radius:11px}
-    .inspector h2{margin:0 0 8px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .field{display:grid;grid-template-columns:62px minmax(0,1fr);align-items:center;gap:7px;margin-top:6px;color:light-dark(#666,#aaa)}
-    .field input,.field textarea{min-width:0;width:100%;border:1px solid light-dark(#ddd,#444);border-radius:6px;background:light-dark(#fff,#222);padding:5px 7px;outline:none}
-    .field input{height:28px}.field input[type=color]{padding:3px}.field textarea{height:54px;resize:vertical}
-    .hint{margin-top:8px;color:light-dark(#777,#999)}
+    .inspector{display:none}.inspector h2{margin:0;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
+    .field{display:grid;grid-template-columns:78px minmax(0,1fr);align-items:center;gap:7px;margin-top:6px;color:light-dark(#686764,#aaa)}
+    .field input,.field textarea,.field select{min-width:0;width:100%;border:1px solid light-dark(#dedcd7,#444);border-radius:7px;background:light-dark(#fff,#242424);padding:5px 7px;outline:none}
+    .field input,.field select{height:29px}.field input[type=color]{width:30px;padding:3px}.field textarea{height:56px;resize:vertical}.color-control{display:grid;grid-template-columns:30px minmax(0,1fr);gap:5px}
+    .hint{padding:10px;color:light-dark(#777,#999)}.actions{margin-top:auto;border-top:1px solid light-dark(#e5e3df,#353535);border-bottom:0}.actions button{flex:1;border:1px solid light-dark(#dfddd8,#414141)}
+    .text-toolbar{pointer-events:auto;position:fixed;display:none;gap:2px;padding:4px;border:1px solid light-dark(#d9d7d2,#414141);border-radius:9px;background:light-dark(#fff,#222);box-shadow:0 10px 28px rgba(0,0,0,.2)}.text-toolbar button{min-width:28px;padding:0 7px;font-size:13px}
+    @media (hover:hover) and (pointer:fine){button:hover:not(:disabled){background:light-dark(#eceae6,#363636)}}
   `;
   root.appendChild(style);
 
   const toolbar = document.createElement("div");
-  toolbar.className = "toolbar";
+  toolbar.className = "panel";
+  const panelHeader = document.createElement("div");
+  panelHeader.className = "panel-header";
+  const panelTitle = document.createElement("span");
+  panelTitle.textContent = "Design";
+  const saveNow = document.createElement("button");
+  saveNow.type = "button";
+  saveNow.textContent = "Save";
+  panelHeader.append(panelTitle, saveNow);
+  const tabs = document.createElement("div");
+  tabs.className = "tabs";
+  const editTabButton = document.createElement("button");
+  editTabButton.type = "button";
+  editTabButton.textContent = "Edit";
+  const tweaksTabButton = document.createElement("button");
+  tweaksTabButton.type = "button";
+  tweaksTabButton.textContent = "Tweaks";
+  tabs.append(editTabButton, tweaksTabButton);
+  const editPanel = document.createElement("div");
+  editPanel.className = "tab-panel";
+  const editTools = document.createElement("div");
+  editTools.className = "tools";
+  const layersSection = document.createElement("section");
+  layersSection.className = "section";
+  const layersTitle = document.createElement("h2");
+  layersTitle.className = "section-title";
+  layersTitle.textContent = "Layers";
+  const layers = document.createElement("div");
+  layers.className = "layers";
+  layersSection.append(layersTitle, layers);
   const selection = document.createElement("div");
   selection.className = "selection";
   const tag = document.createElement("div");
@@ -195,8 +228,25 @@ function startDesignEditor(): void {
   const inspector = document.createElement("div");
   inspector.className = "inspector";
   const inspectorTitle = document.createElement("h2");
-  inspector.appendChild(inspectorTitle);
-  root.append(toolbar, selection, inspector);
+  const selectionSection = document.createElement("section");
+  selectionSection.className = "section";
+  selectionSection.appendChild(inspectorTitle);
+  inspector.appendChild(selectionSection);
+  editPanel.append(editTools, layersSection, inspector);
+  const tweaksPanel = document.createElement("div");
+  tweaksPanel.className = "tab-panel";
+  const tweakTools = document.createElement("div");
+  tweakTools.className = "tools";
+  const tweakHint = document.createElement("div");
+  tweakHint.className = "hint";
+  tweakHint.textContent = "Draw feedback on the design, then attach any selected item with +.";
+  tweaksPanel.append(tweakTools, tweakHint);
+  const actions = document.createElement("div");
+  actions.className = "actions";
+  const textToolbar = document.createElement("div");
+  textToolbar.className = "text-toolbar";
+  toolbar.append(panelHeader, tabs, editPanel, tweaksPanel, actions);
+  root.append(toolbar, selection, textToolbar);
 
   const toolButtons = new Map<Tool, HTMLButtonElement>();
   let tool: Tool = "select";
@@ -226,6 +276,15 @@ function startDesignEditor(): void {
     save();
   };
 
+  saveNow.addEventListener("click", () => {
+    if (saveTimer !== null) window.clearTimeout(saveTimer);
+    save();
+    saveNow.textContent = "Saved";
+    window.setTimeout(() => {
+      saveNow.textContent = "Save";
+    }, 900);
+  });
+
   const refreshHistoryButtons = (): void => {
     undo.disabled = historyIndex === 0;
     redo.disabled = historyIndex === history.length;
@@ -237,7 +296,10 @@ function startDesignEditor(): void {
     refreshHistoryButtons();
   };
 
-  const setFieldValue = (field: HTMLInputElement | HTMLTextAreaElement, value: string): void => {
+  const setFieldValue = (
+    field: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
+    value: string,
+  ): void => {
     if (root.activeElement !== field) field.value = value;
   };
 
@@ -246,6 +308,7 @@ function startDesignEditor(): void {
       selected = null;
       selection.style.display = "none";
       inspector.style.display = "none";
+      textToolbar.style.display = "none";
       remove.disabled = true;
       choose.disabled = true;
       return;
@@ -264,30 +327,92 @@ function startDesignEditor(): void {
     remove.disabled = false;
     choose.disabled = false;
     const computed = getComputedStyle(selected);
+    const position = positionOf(selected);
     textValue.disabled = selected.childElementCount > 0;
     setFieldValue(textValue, selected.childElementCount === 0 ? (selected.textContent ?? "") : "");
-    setFieldValue(fill, rgbToHex(computed.backgroundColor, "#ffffff"));
-    setFieldValue(color, rgbToHex(computed.color, "#111111"));
+    const fillValue = rgbToHex(computed.backgroundColor, "#ffffff");
+    const colorValue = rgbToHex(computed.color, "#111111");
+    const borderColorValue = rgbToHex(computed.borderColor, "#000000");
+    setFieldValue(fill, fillValue);
+    setFieldValue(fillText, fillValue);
+    setFieldValue(color, colorValue);
+    setFieldValue(colorText, colorValue);
     setFieldValue(fontSize, String(Math.round(Number.parseFloat(computed.fontSize) || 16)));
-    setFieldValue(radius, String(Math.round(Number.parseFloat(computed.borderRadius) || 0)));
-    setFieldValue(opacity, computed.opacity);
     setFieldValue(width, String(Math.round(rect.width)));
     setFieldValue(height, String(Math.round(rect.height)));
+    setFieldValue(xValue, String(Math.round(position.x)));
+    setFieldValue(yValue, String(Math.round(position.y)));
+    setFieldValue(positionMode, computed.position);
+    setFieldValue(zIndex, computed.zIndex === "auto" ? "0" : computed.zIndex);
+    setFieldValue(displayMode, computed.display);
+    setFieldValue(direction, computed.flexDirection);
+    setFieldValue(gap, String(Math.round(Number.parseFloat(computed.gap) || 0)));
+    setFieldValue(align, computed.alignItems === "normal" ? "stretch" : computed.alignItems);
+    setFieldValue(
+      justify,
+      computed.justifyContent === "normal" ? "start" : computed.justifyContent,
+    );
+    setFieldValue(wrap, computed.flexWrap);
+    setFieldValue(padding, computed.padding);
+    setFieldValue(margin, computed.margin);
+    setFieldValue(radius, String(Math.round(Number.parseFloat(computed.borderRadius) || 0)));
+    setFieldValue(overflow, computed.overflow);
+    setFieldValue(opacity, String(Math.round(Number(computed.opacity) * 100)));
+    setFieldValue(borderWidth, String(Math.round(Number.parseFloat(computed.borderWidth) || 0)));
+    setFieldValue(borderStyle, computed.borderStyle);
+    setFieldValue(borderColor, borderColorValue);
+    setFieldValue(borderColorText, borderColorValue);
+    setFieldValue(boxShadow, computed.boxShadow === "none" ? "" : computed.boxShadow);
     choose.textContent = findArtboard(selected)?.hasAttribute(SELECTED_ATTRIBUTE)
       ? "Chosen"
       : "Choose";
   };
+
+  function refreshLayers(): void {
+    layers.replaceChildren();
+    let count = 0;
+    const append = (element: Element, depth: number): void => {
+      if (count >= 160 || ["SCRIPT", "STYLE", "LINK", "META"].includes(element.tagName)) return;
+      if (element.getAttribute(OBJECT_ATTRIBUTE) === "layer") {
+        for (const child of element.children) append(child, depth);
+        return;
+      }
+      count += 1;
+      const row = document.createElement("button");
+      row.type = "button";
+      row.className = "layer";
+      row.style.paddingLeft = `${8 + Math.min(depth, 6) * 12}px`;
+      const id =
+        element.getAttribute("data-t3-design-artboard") ??
+        element.getAttribute("data-t3-design-id") ??
+        element.id;
+      const text = element.textContent?.trim().replace(/\s+/g, " ").slice(0, 28);
+      row.textContent = id || text || element.tagName.toLowerCase();
+      row.title = `${element.tagName.toLowerCase()}${id ? ` · ${id}` : ""}`;
+      row.setAttribute("aria-selected", String(element === selected));
+      row.addEventListener("click", () => selectElement(element));
+      layers.appendChild(row);
+      for (const child of element.children) append(child, depth + 1);
+    };
+    for (const element of document.body.children) append(element, 0);
+  }
 
   const selectElement = (element: Element | null, persist = true): void => {
     document
       .querySelectorAll(`[${FOCUS_ATTRIBUTE}]`)
       .forEach((candidate) => candidate.removeAttribute(FOCUS_ATTRIBUTE));
     selected = element instanceof HTMLElement || element instanceof SVGElement ? element : null;
-    if (selected && !selected.hasAttribute("data-t3-design-id")) {
+    const existingId = selected?.getAttribute("data-t3-design-id");
+    if (
+      selected &&
+      (!existingId ||
+        document.querySelectorAll(`[data-t3-design-id="${CSS.escape(existingId)}"]`).length > 1)
+    ) {
       selected.setAttribute("data-t3-design-id", nextId());
     }
     selected?.setAttribute(FOCUS_ATTRIBUTE, "true");
     refreshSelection();
+    refreshLayers();
     if (persist) scheduleSave();
   };
 
@@ -307,7 +432,7 @@ function startDesignEditor(): void {
         htmlPreview: selected.outerHTML.slice(0, 4_000),
         styles: selected.getAttribute("style") ?? "",
         rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
-        createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
+        createdAt: new Date().toISOString(),
       }),
     );
     attach.textContent = "✓";
@@ -325,6 +450,7 @@ function startDesignEditor(): void {
       undo: () => applyState(element, before),
       redo: () => applyState(element, after),
     });
+    refreshLayers();
     scheduleSave();
   };
 
@@ -340,23 +466,28 @@ function startDesignEditor(): void {
     }
     refreshHistoryButtons();
     refreshSelection();
+    refreshLayers();
     scheduleSave();
   };
 
-  const button = (label: string, action: () => void): HTMLButtonElement => {
+  const button = (label: string, action: () => void, parent: HTMLElement): HTMLButtonElement => {
     const element = document.createElement("button");
     element.type = "button";
     element.textContent = label;
     element.addEventListener("click", action);
-    toolbar.appendChild(element);
+    parent.appendChild(element);
     return element;
   };
 
-  const separator = (): void => {
-    const element = document.createElement("span");
-    element.className = "sep";
-    toolbar.appendChild(element);
+  const setTab = (tab: "edit" | "tweaks"): void => {
+    const editing = tab === "edit";
+    editTabButton.setAttribute("aria-pressed", String(editing));
+    tweaksTabButton.setAttribute("aria-pressed", String(!editing));
+    editPanel.hidden = !editing;
+    tweaksPanel.hidden = editing;
   };
+  editTabButton.addEventListener("click", () => setTab("edit"));
+  tweaksTabButton.addEventListener("click", () => setTab("tweaks"));
 
   const setTool = (next: Tool): void => {
     tool = next;
@@ -366,23 +497,21 @@ function startDesignEditor(): void {
     document.documentElement.style.cursor = tool === "select" ? "default" : "crosshair";
   };
 
-  for (const [value, label] of [
-    ["select", "Select"],
-    ["draw", "Draw"],
-    ["arrow", "Arrow"],
-    ["box", "Box"],
-    ["circle", "Circle"],
-    ["highlight", "Highlight"],
+  for (const [value, label, parent] of [
+    ["select", "Select", editTools],
+    ["draw", "Draw", tweakTools],
+    ["arrow", "Arrow", tweakTools],
+    ["box", "Box", tweakTools],
+    ["circle", "Circle", tweakTools],
+    ["highlight", "Highlight", tweakTools],
   ] as const) {
-    const element = button(label, () => setTool(value));
+    const element = button(label, () => setTool(value), parent);
     element.setAttribute("aria-pressed", "false");
     toolButtons.set(value, element);
   }
 
-  separator();
-  const undo = button("Undo", () => runHistory(-1));
-  const redo = button("Redo", () => runHistory(1));
-  separator();
+  const undo = button("Undo", () => runHistory(-1), actions);
+  const redo = button("Redo", () => runHistory(1), actions);
 
   const designLayer = (): HTMLDivElement => {
     let layer = document.querySelector<HTMLDivElement>(`[${OBJECT_ATTRIBUTE}="layer"]`);
@@ -427,8 +556,8 @@ function startDesignEditor(): void {
     addObject(element);
   };
 
-  button("Text", () => addText());
-  button("Note", () => addText(true));
+  button("Text", () => addText(), editTools);
+  button("Note", () => addText(true), tweakTools);
 
   const findArtboard = (element: Element): Element | null => {
     const marked = element.closest(ARTBOARD_SELECTOR);
@@ -440,79 +569,176 @@ function startDesignEditor(): void {
     return candidate.hasAttribute(OBJECT_ATTRIBUTE) ? null : candidate;
   };
 
-  const choose = button("Choose", () => {
-    if (!selected) return;
-    const artboard = findArtboard(selected);
-    if (!artboard) return;
-    const previous = document.querySelector(`[${SELECTED_ATTRIBUTE}]`);
-    if (previous === artboard) return;
-    const apply = (choice: Element | null): void => {
-      document
-        .querySelectorAll(`[${SELECTED_ATTRIBUTE}]`)
-        .forEach((element) => element.removeAttribute(SELECTED_ATTRIBUTE));
-      choice?.setAttribute(SELECTED_ATTRIBUTE, "true");
-    };
-    apply(artboard);
-    pushHistory({ undo: () => apply(previous), redo: () => apply(artboard) });
-    refreshSelection();
-    scheduleSave();
-  });
+  const choose = button(
+    "Choose",
+    () => {
+      if (!selected) return;
+      const artboard = findArtboard(selected);
+      if (!artboard) return;
+      const previous = document.querySelector(`[${SELECTED_ATTRIBUTE}]`);
+      if (previous === artboard) return;
+      const apply = (choice: Element | null): void => {
+        document
+          .querySelectorAll(`[${SELECTED_ATTRIBUTE}]`)
+          .forEach((element) => element.removeAttribute(SELECTED_ATTRIBUTE));
+        choice?.setAttribute(SELECTED_ATTRIBUTE, "true");
+      };
+      apply(artboard);
+      pushHistory({ undo: () => apply(previous), redo: () => apply(artboard) });
+      refreshSelection();
+      scheduleSave();
+    },
+    actions,
+  );
 
-  const remove = button("Delete", () => {
-    const element = selected;
-    const parent = element?.parentNode;
-    if (!element || !parent) return;
-    const next = element.nextSibling;
-    const detach = (): void => {
-      if (selected === element) selectElement(null);
-      element.removeAttribute(FOCUS_ATTRIBUTE);
-      element.remove();
-    };
-    detach();
-    pushHistory({
-      undo: () => parent.insertBefore(element, next?.parentNode === parent ? next : null),
-      redo: detach,
-    });
-    scheduleSave();
-  });
+  const remove = button(
+    "Delete",
+    () => {
+      const element = selected;
+      const parent = element?.parentNode;
+      if (!element || !parent) return;
+      const next = element.nextSibling;
+      const detach = (): void => {
+        if (selected === element) selectElement(null);
+        element.removeAttribute(FOCUS_ATTRIBUTE);
+        element.remove();
+        refreshLayers();
+      };
+      detach();
+      pushHistory({
+        undo: () => parent.insertBefore(element, next?.parentNode === parent ? next : null),
+        redo: detach,
+      });
+      scheduleSave();
+    },
+    actions,
+  );
 
-  function field(label: string, input: HTMLInputElement | HTMLTextAreaElement): void {
+  const section = (title: string): HTMLElement => {
+    const element = document.createElement("section");
+    element.className = "section";
+    const heading = document.createElement("h2");
+    heading.className = "section-title";
+    heading.textContent = title;
+    element.appendChild(heading);
+    inspector.appendChild(element);
+    return element;
+  };
+
+  function field(label: string, input: HTMLElement, parent: HTMLElement): void {
     const wrapper = document.createElement("label");
     wrapper.className = "field";
     const name = document.createElement("span");
     name.textContent = label;
     wrapper.append(name, input);
-    inspector.appendChild(wrapper);
+    parent.appendChild(wrapper);
   }
+
+  const select = (values: ReadonlyArray<string>): HTMLSelectElement => {
+    const input = document.createElement("select");
+    for (const value of values) {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = value;
+      input.appendChild(option);
+    }
+    return input;
+  };
+
+  const colorControl = (picker: HTMLInputElement, text: HTMLInputElement): HTMLDivElement => {
+    const control = document.createElement("div");
+    control.className = "color-control";
+    picker.type = "color";
+    text.type = "text";
+    control.append(picker, text);
+    return control;
+  };
 
   const textValue = document.createElement("textarea");
   const fill = document.createElement("input");
+  const fillText = document.createElement("input");
   const color = document.createElement("input");
+  const colorText = document.createElement("input");
   const fontSize = document.createElement("input");
-  const radius = document.createElement("input");
-  const opacity = document.createElement("input");
   const width = document.createElement("input");
   const height = document.createElement("input");
-  fill.type = color.type = "color";
-  for (const input of [fontSize, radius, opacity, width, height]) input.type = "number";
+  const xValue = document.createElement("input");
+  const yValue = document.createElement("input");
+  const positionMode = select(["static", "relative", "absolute", "fixed"]);
+  const zIndex = document.createElement("input");
+  const displayMode = select(["block", "flex", "grid", "inline-flex", "inline", "none"]);
+  const direction = select(["row", "column", "row-reverse", "column-reverse"]);
+  const gap = document.createElement("input");
+  const align = select(["stretch", "start", "center", "end", "baseline"]);
+  const justify = select(["start", "center", "end", "space-between", "space-around"]);
+  const wrap = select(["nowrap", "wrap", "wrap-reverse"]);
+  const padding = document.createElement("input");
+  const margin = document.createElement("input");
+  const radius = document.createElement("input");
+  const overflow = select(["visible", "hidden", "clip", "auto", "scroll"]);
+  const opacity = document.createElement("input");
+  const borderWidth = document.createElement("input");
+  const borderStyle = select(["none", "solid", "dashed", "dotted"]);
+  const borderColor = document.createElement("input");
+  const borderColorText = document.createElement("input");
+  const boxShadow = document.createElement("input");
+  for (const input of [
+    fontSize,
+    width,
+    height,
+    xValue,
+    yValue,
+    zIndex,
+    gap,
+    radius,
+    opacity,
+    borderWidth,
+  ])
+    input.type = "number";
   opacity.min = "0";
-  opacity.max = "1";
-  opacity.step = "0.05";
-  field("Text", textValue);
-  field("Fill", fill);
-  field("Color", color);
-  field("Size", fontSize);
-  field("Radius", radius);
-  field("Opacity", opacity);
-  field("Width", width);
-  field("Height", height);
-  const hint = document.createElement("div");
-  hint.className = "hint";
-  hint.textContent = "Drag selected items. Double-click text to edit.";
-  inspector.appendChild(hint);
+  opacity.max = "100";
+  opacity.step = "1";
+  const contentSection = section("Content");
+  field("Text", textValue, contentSection);
+  field("Text color", colorControl(color, colorText), contentSection);
+  field("Font size", fontSize, contentSection);
+  const sizingSection = section("Sizing");
+  field("Width", width, sizingSection);
+  field("Height", height, sizingSection);
+  const positionSection = section("Position");
+  field("Mode", positionMode, positionSection);
+  field("X", xValue, positionSection);
+  field("Y", yValue, positionSection);
+  field("Z-index", zIndex, positionSection);
+  const layoutSection = section("Content layout");
+  field("Layout", displayMode, layoutSection);
+  field("Direction", direction, layoutSection);
+  field("Gap", gap, layoutSection);
+  field("Align", align, layoutSection);
+  field("Justify", justify, layoutSection);
+  field("Wrap", wrap, layoutSection);
+  field("Padding", padding, layoutSection);
+  field("Margin", margin, layoutSection);
+  const appearanceSection = section("Appearance");
+  field("Background", colorControl(fill, fillText), appearanceSection);
+  field("Radius", radius, appearanceSection);
+  field("Overflow", overflow, appearanceSection);
+  field("Opacity %", opacity, appearanceSection);
+  const borderSection = section("Border");
+  field("Width", borderWidth, borderSection);
+  field("Style", borderStyle, borderSection);
+  field("Color", colorControl(borderColor, borderColorText), borderSection);
+  const advancedSection = section("Advanced");
+  boxShadow.type = "text";
+  field("Shadow", boxShadow, advancedSection);
+  const exportSection = section("Export selection");
+  const exportSelection = document.createElement("button");
+  exportSelection.type = "button";
+  exportSelection.textContent = "Copy HTML";
+  exportSection.appendChild(exportSelection);
 
   const bindField = (
-    input: HTMLInputElement | HTMLTextAreaElement,
+    input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
     update: (element: HTMLElement | SVGElement, value: string) => void,
   ): void => {
     let target: HTMLElement | SVGElement | null = null;
@@ -537,13 +763,115 @@ function startDesignEditor(): void {
   bindField(textValue, (element, value) => {
     if (element.childElementCount === 0) element.textContent = value;
   });
-  bindField(fill, (element, value) => element.style.setProperty("background-color", value));
-  bindField(color, (element, value) => element.style.setProperty("color", value));
+  bindField(fill, (element, value) => {
+    fillText.value = value;
+    element.style.setProperty("background-color", value);
+  });
+  bindField(fillText, (element, value) => {
+    if (/^#[0-9a-f]{6}$/i.test(value)) fill.value = value;
+    element.style.setProperty("background-color", value);
+  });
+  bindField(color, (element, value) => {
+    colorText.value = value;
+    element.style.setProperty("color", value);
+  });
+  bindField(colorText, (element, value) => {
+    if (/^#[0-9a-f]{6}$/i.test(value)) color.value = value;
+    element.style.setProperty("color", value);
+  });
   bindField(fontSize, (element, value) => element.style.setProperty("font-size", `${value}px`));
+  bindField(width, (element, value) => {
+    element.style.setProperty("min-width", "0");
+    element.style.setProperty("max-width", "none");
+    element.style.setProperty("width", `${value}px`);
+  });
+  bindField(height, (element, value) => {
+    element.style.setProperty("min-height", "0");
+    element.style.setProperty("max-height", "none");
+    element.style.setProperty("height", `${value}px`);
+  });
+  bindField(xValue, (element, value) => {
+    const y = positionOf(element).y;
+    element.style.translate = `${value}px ${y}px`;
+    element.setAttribute("data-t3-design-x", value);
+  });
+  bindField(yValue, (element, value) => {
+    const x = positionOf(element).x;
+    element.style.translate = `${x}px ${value}px`;
+    element.setAttribute("data-t3-design-y", value);
+  });
+  bindField(positionMode, (element, value) => element.style.setProperty("position", value));
+  bindField(zIndex, (element, value) => element.style.setProperty("z-index", value));
+  bindField(displayMode, (element, value) => element.style.setProperty("display", value));
+  bindField(direction, (element, value) => element.style.setProperty("flex-direction", value));
+  bindField(gap, (element, value) => element.style.setProperty("gap", `${value}px`));
+  bindField(align, (element, value) => element.style.setProperty("align-items", value));
+  bindField(justify, (element, value) => element.style.setProperty("justify-content", value));
+  bindField(wrap, (element, value) => element.style.setProperty("flex-wrap", value));
+  bindField(padding, (element, value) => element.style.setProperty("padding", value));
+  bindField(margin, (element, value) => element.style.setProperty("margin", value));
   bindField(radius, (element, value) => element.style.setProperty("border-radius", `${value}px`));
-  bindField(opacity, (element, value) => element.style.setProperty("opacity", value));
-  bindField(width, (element, value) => element.style.setProperty("width", `${value}px`));
-  bindField(height, (element, value) => element.style.setProperty("height", `${value}px`));
+  bindField(overflow, (element, value) => element.style.setProperty("overflow", value));
+  bindField(opacity, (element, value) =>
+    element.style.setProperty("opacity", String(Number(value) / 100)),
+  );
+  bindField(borderWidth, (element, value) =>
+    element.style.setProperty("border-width", `${value}px`),
+  );
+  bindField(borderStyle, (element, value) => element.style.setProperty("border-style", value));
+  bindField(borderColor, (element, value) => {
+    borderColorText.value = value;
+    element.style.setProperty("border-color", value);
+  });
+  bindField(borderColorText, (element, value) => {
+    if (/^#[0-9a-f]{6}$/i.test(value)) borderColor.value = value;
+    element.style.setProperty("border-color", value);
+  });
+  bindField(boxShadow, (element, value) => element.style.setProperty("box-shadow", value));
+  exportSelection.addEventListener("click", () => {
+    if (!selected) return;
+    void navigator.clipboard.writeText(selected.outerHTML).then(
+      () => {
+        exportSelection.textContent = "Copied";
+        window.setTimeout(() => {
+          exportSelection.textContent = "Copy HTML";
+        }, 900);
+      },
+      () => {
+        exportSelection.textContent = "Copy failed";
+      },
+    );
+  });
+
+  let editingText: HTMLElement | null = null;
+  let finishEditingText: (() => void) | null = null;
+  const formatButton = (label: string, title: string, command: string): void => {
+    const control = document.createElement("button");
+    control.type = "button";
+    control.textContent = label;
+    control.title = title;
+    control.setAttribute("aria-label", title);
+    control.addEventListener("pointerdown", (event) => event.preventDefault());
+    control.addEventListener("click", () => {
+      if (!editingText) return;
+      editingText.focus();
+      const value = command === "createLink" ? window.prompt("Link URL") : null;
+      if (command !== "createLink" || value)
+        document.execCommand(command, false, value ?? undefined);
+      refreshSelection();
+      scheduleSave();
+    });
+    textToolbar.appendChild(control);
+  };
+  for (const [label, title, command] of [
+    ["B", "Bold", "bold"],
+    ["I", "Italic", "italic"],
+    ["U", "Underline", "underline"],
+    ["•", "Bulleted list", "insertUnorderedList"],
+    ["1.", "Numbered list", "insertOrderedList"],
+    ["Link", "Add link", "createLink"],
+  ] as const)
+    formatButton(label, title, command);
 
   for (const direction of ["nw", "ne", "sw", "se"]) {
     const handle = document.createElement("button");
@@ -631,8 +959,13 @@ function startDesignEditor(): void {
     drag = { kind: "create", tool: creationTool, start, element, points: [start] };
   };
 
+  const annotationActive = (): boolean =>
+    document.documentElement.hasAttribute(ANNOTATION_TOOL_ATTRIBUTE);
+
   const onPointerDown = (event: PointerEvent): void => {
-    if (event.button !== 0 || isUiElement(event.target)) return;
+    if (annotationActive() || event.button !== 0 || isUiElement(event.target)) return;
+    if (editingText && event.target instanceof Node && !editingText.contains(event.target))
+      finishEditingText?.();
     if (event.target instanceof Element) event.target.setPointerCapture(event.pointerId);
     if (tool !== "select") {
       beginCreation(event, tool);
@@ -659,7 +992,7 @@ function startDesignEditor(): void {
   };
 
   const onPointerMove = (event: PointerEvent): void => {
-    if (!drag) return;
+    if (annotationActive() || !drag) return;
     if (drag.kind === "move") {
       const x = drag.x + event.clientX - drag.start.x;
       const y = drag.y + event.clientY - drag.start.y;
@@ -676,6 +1009,10 @@ function startDesignEditor(): void {
       );
       const x = west ? drag.x + drag.width - nextWidth : drag.x;
       const y = north ? drag.y + drag.height - nextHeight : drag.y;
+      drag.element.style.minWidth = "0";
+      drag.element.style.maxWidth = "none";
+      drag.element.style.minHeight = "0";
+      drag.element.style.maxHeight = "none";
       drag.element.style.width = `${nextWidth}px`;
       drag.element.style.height = `${nextHeight}px`;
       drag.element.style.translate = `${x}px ${y}px`;
@@ -697,7 +1034,7 @@ function startDesignEditor(): void {
   };
 
   const onPointerUp = (event: PointerEvent): void => {
-    if (!drag) return;
+    if (annotationActive() || !drag) return;
     const completed = drag;
     drag = null;
     if (completed.kind === "move" || completed.kind === "resize") {
@@ -719,25 +1056,46 @@ function startDesignEditor(): void {
   };
 
   const editText = (event: MouseEvent): void => {
-    if (tool !== "select" || isUiElement(event.target)) return;
+    if (annotationActive() || tool !== "select" || isUiElement(event.target)) return;
     const target = targetFromPoint(event.clientX, event.clientY);
-    if (!(target instanceof HTMLElement) || target.childElementCount > 0) return;
+    if (!(target instanceof HTMLElement)) return;
+    selectElement(target);
     const before = stateOf(target);
+    editingText = target;
     target.setAttribute(DESIGN_EDITING_ATTRIBUTE, "");
     target.contentEditable = "true";
     target.focus();
+    const rect = target.getBoundingClientRect();
+    textToolbar.style.display = "flex";
+    textToolbar.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 300))}px`;
+    textToolbar.style.top = `${Math.max(8, rect.top - 40)}px`;
+    const onInput = (): void => {
+      refreshSelection();
+      scheduleSave();
+    };
     const finish = (): void => {
+      target.removeEventListener("input", onInput);
+      target.removeEventListener("blur", finish);
+      target.blur();
       target.removeAttribute(DESIGN_EDITING_ATTRIBUTE);
       target.removeAttribute("contenteditable");
+      if (editingText === target) {
+        editingText = null;
+        finishEditingText = null;
+      }
+      textToolbar.style.display = "none";
       commitElementState(target, before);
       refreshSelection();
     };
+    target.addEventListener("input", onInput);
+    finishEditingText = finish;
     target.addEventListener("blur", finish, { once: true });
     event.preventDefault();
     event.stopPropagation();
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
+    if (annotationActive()) return;
     const typing =
       event.target instanceof HTMLInputElement ||
       event.target instanceof HTMLTextAreaElement ||
@@ -763,7 +1121,7 @@ function startDesignEditor(): void {
   };
 
   const preventNavigation = (event: MouseEvent): void => {
-    if (tool === "select" && !isUiElement(event.target)) {
+    if (!annotationActive() && tool === "select" && !isUiElement(event.target)) {
       event.preventDefault();
       event.stopPropagation();
     }
@@ -780,6 +1138,20 @@ function startDesignEditor(): void {
   window.addEventListener("scroll", refreshSelection, { capture: true, passive: true });
   window.addEventListener("resize", refreshSelection, { passive: true });
   document.documentElement.appendChild(host);
+  const annotationObserver = new MutationObserver(() => {
+    const active = annotationActive();
+    host.style.display = active ? "none" : "";
+    if (active) {
+      drag = null;
+      finishEditingText?.();
+    }
+  });
+  annotationObserver.observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: [ANNOTATION_TOOL_ATTRIBUTE],
+  });
+  window.addEventListener("pagehide", () => annotationObserver.disconnect(), { once: true });
+  setTab("edit");
   setTool("select");
   refreshHistoryButtons();
   selectElement(document.querySelector(`[${FOCUS_ATTRIBUTE}]`), false);
