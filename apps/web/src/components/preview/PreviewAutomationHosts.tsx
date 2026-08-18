@@ -448,6 +448,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             );
             if (activeSnapshot) {
               const defaultViewport = previewAutomationDefaultViewport(
+                request.operation,
                 reusedExistingTab,
                 activeSnapshot,
               );
