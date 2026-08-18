@@ -666,7 +666,7 @@ function deriveTimelineMinimapItems(
     items.push({
       id: row.id,
       rowIndex: index,
-      userText: compactMinimapPreview(row.message.text),
+      userText: compactMinimapPreview(visibleDesignCommand(row.message.text)),
       assistantText: compactMinimapPreview(resolveFinalAssistantTextForTurn(rows, index)),
     });
   }

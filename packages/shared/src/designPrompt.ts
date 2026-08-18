@@ -4,7 +4,7 @@ interface ExpandDesignCommandInput {
 }
 
 const DESIGN_REQUEST_PATTERN =
-  /^<t3_design_request>\n\n<original>([\s\S]*?)<\/original>\n\n[\s\S]*?\n\n<\/t3_design_request>([\s\S]*)$/;
+  /^([\s\S]*?)<t3_design_request>\n\n<original>([\s\S]*?)<\/original>\n\n[\s\S]*?\n\n<\/t3_design_request>([\s\S]*)$/;
 
 const escapeXml = (value: string): string =>
   value.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
@@ -34,5 +34,5 @@ export function expandDesignCommand({ prompt, threadId }: ExpandDesignCommandInp
 
 export function visibleDesignCommand(prompt: string): string {
   const match = DESIGN_REQUEST_PATTERN.exec(prompt);
-  return match ? `${unescapeXml(match[1] ?? "")}${match[2] ?? ""}` : prompt;
+  return match ? `${match[1] ?? ""}${unescapeXml(match[2] ?? "")}${match[3] ?? ""}` : prompt;
 }

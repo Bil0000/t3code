@@ -15,6 +15,9 @@ describe("expandDesignCommand", () => {
     expect(visibleDesignCommand(`${result}\n\n<terminal_context>hidden</terminal_context>`)).toBe(
       "/design a billing dashboard\n\n<terminal_context>hidden</terminal_context>",
     );
+    expect(visibleDesignCommand(`Ultrathink:\n${result}`)).toBe(
+      "Ultrathink:\n/design a billing dashboard",
+    );
   });
 
   it("preserves internal marker text from the user and later context", () => {
