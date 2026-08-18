@@ -945,7 +945,7 @@ export interface DesktopPreviewDesignChangePayload {
 
 export const DesktopPreviewDesignChangePayloadSchema: Schema.Codec<DesktopPreviewDesignChangePayload> =
   Schema.Struct({
-    html: Schema.String.check(Schema.isMaxLength(5_000_000)),
+    html: Schema.String,
     annotation: Schema.optionalKey(PreviewAnnotationPayloadSchema),
   });
 

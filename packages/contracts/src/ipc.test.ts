@@ -79,4 +79,10 @@ describe("DesktopPreviewDesignChangePayloadSchema", () => {
       annotation,
     });
   });
+
+  it("accepts large generated designs", () => {
+    const html = "x".repeat(5_000_001);
+
+    expect(decode({ html }).html).toHaveLength(html.length);
+  });
 });
