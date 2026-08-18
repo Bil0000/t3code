@@ -57,6 +57,12 @@ describe("expandDesignCommand", () => {
         "http://127.0.0.1:3773",
       ),
     ).toBeNull();
+    expect(
+      designPathFromUrl(
+        "http://127.0.0.1:3773/api/assets/token?t3-design=request-1&t3-design-path=index.html",
+        "http://127.0.0.1:3773",
+      ),
+    ).toBeNull();
   });
 
   it("leaves ordinary message display unchanged", () => {

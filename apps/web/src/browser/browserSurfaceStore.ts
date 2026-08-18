@@ -47,6 +47,11 @@ export interface BrowserSurfaceLease {
   readonly release: () => void;
 }
 
+export interface BrowserSurfaceReadyReceipt {
+  readonly tabId: string;
+  readonly rect: BrowserSurfaceRect;
+}
+
 export function resolveBrowserSurfacePanelRect(
   byTabId: Readonly<Record<string, BrowserSurfacePresentation>>,
   tabId: string,
@@ -170,6 +175,35 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
       };
     }),
 }));
+
+const browserSurfaceReadyReceipt = (tabId: string): BrowserSurfaceReadyReceipt | null => {
+  const surface = useBrowserSurfaceStore.getState().byTabId[tabId];
+  return surface?.visible && surface.rect ? { tabId, rect: surface.rect } : null;
+};
+
+export function waitForBrowserSurfaceReady(
+  tabId: string,
+  timeoutMs: number,
+): Promise<BrowserSurfaceReadyReceipt | null> {
+  const current = browserSurfaceReadyReceipt(tabId);
+  if (current) return Promise.resolve(current);
+  return new Promise((resolve) => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let unsubscribe = (): void => {};
+    const finish = (receipt: BrowserSurfaceReadyReceipt | null): void => {
+      if (timer !== null) clearTimeout(timer);
+      unsubscribe();
+      resolve(receipt);
+    };
+    unsubscribe = useBrowserSurfaceStore.subscribe(() => {
+      const receipt = browserSurfaceReadyReceipt(tabId);
+      if (receipt) finish(receipt);
+    });
+    timer = setTimeout(() => finish(null), timeoutMs);
+    const receipt = browserSurfaceReadyReceipt(tabId);
+    if (receipt) finish(receipt);
+  });
+}
 
 export function acquireBrowserSurface(
   tabId: string,

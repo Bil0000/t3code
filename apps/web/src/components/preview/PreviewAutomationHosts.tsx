@@ -22,6 +22,7 @@ import {
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
+import { useParams } from "@tanstack/react-router";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -39,7 +40,7 @@ import {
   stopBrowserRecording,
 } from "~/browser/browserRecording";
 import { resolveBrowserRecordingStopTarget } from "~/browser/browserRecordingScope";
-import { useBrowserSurfaceStore } from "~/browser/browserSurfaceStore";
+import { useBrowserSurfaceStore, waitForBrowserSurfaceReady } from "~/browser/browserSurfaceStore";
 import { browserDefaultOpenViewport, resolveBrowserDefaults } from "~/browser/browserDefaults";
 import { runBrowserViewportMutation } from "~/browser/browserViewportActions";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
@@ -49,6 +50,7 @@ import { assetEnvironment } from "~/state/assets";
 import { useEnvironments } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { readPreparedConnection } from "~/state/session";
+import { resolveThreadRouteTarget } from "~/threadRoutes";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -79,16 +81,6 @@ import {
 } from "./previewAutomationTarget";
 import { isPreviewViewportReady } from "./previewViewportReadiness";
 import { shouldRollbackPreviewViewport } from "./previewViewportRollback";
-
-const PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS = 500;
-
-const waitForPreviewPresentation = async (runtimeTabId: string): Promise<void> => {
-  const deadline = Date.now() + PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS;
-  while (Date.now() <= deadline) {
-    if (useBrowserSurfaceStore.getState().byTabId[runtimeTabId]?.visible) return;
-    await new Promise<void>((resolve) => window.setTimeout(resolve, 16));
-  }
-};
 
 const waitForDesktopOverlay = async (
   threadRef: ScopedThreadRef,
@@ -252,6 +244,11 @@ const raisePreviewAutomationHostError = (
 
 export function PreviewAutomationHosts() {
   const { environments } = useEnvironments();
+  const routeTarget = useParams({
+    strict: false,
+    select: (params) => resolveThreadRouteTarget(params),
+  });
+  const activeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
   if (!isElectron || !previewBridge?.automation) return null;
   return (
     <>
@@ -264,14 +261,22 @@ export function PreviewAutomationHosts() {
         <PreviewAutomationHost
           key={environment.environmentId}
           environmentId={environment.environmentId}
+          activeThreadId={
+            activeThreadRef?.environmentId === environment.environmentId
+              ? activeThreadRef.threadId
+              : null
+          }
         />
       ))}
     </>
   );
 }
 
-function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId }) {
-  const { environmentId } = props;
+function PreviewAutomationHost(props: {
+  readonly environmentId: EnvironmentId;
+  readonly activeThreadId: ScopedThreadRef["threadId"] | null;
+}) {
+  const { environmentId, activeThreadId } = props;
   const registry = useContext(RegistryContext);
   const [automationClientId] = useState(createPreviewAutomationClientId);
   const initialAutomationHost = useMemo<PreviewAutomationHostState>(
@@ -503,12 +508,20 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
                 request.timeoutMs,
               );
             }
-            if (shouldPresentPreview) {
-              // React commits the thread-bound surface asynchronously. Settle
-              // briefly so active-thread opens report visible=true, without
-              // turning a background thread's offscreen mini player into an
-              // operation failure.
-              await waitForPreviewPresentation(activeRuntimeTabId);
+            if (shouldPresentPreview && activeThreadId === request.threadId) {
+              const receipt = await waitForBrowserSurfaceReady(
+                activeRuntimeTabId,
+                request.timeoutMs,
+              );
+              if (!receipt) {
+                throw new PreviewAutomationViewportTimeoutError({
+                  requestId: request.requestId,
+                  environmentId,
+                  threadId: request.threadId,
+                  tabId: activeTabId,
+                  timeoutMs: request.timeoutMs,
+                });
+              }
             }
             if (reusedExistingTab && resolvedInputUrl && previewBridge) {
               assertPreviewRuntimeCurrent(threadRef, activeTabId, activeRuntimeTabId, request);
@@ -734,7 +747,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
         });
       }
     },
-    [createAssetUrl, environmentId, listPreviews, open, registry, resize],
+    [activeThreadId, createAssetUrl, environmentId, listPreviews, open, registry, resize],
   );
   const [requestHandlerAtom] = useState(() => Atom.make({ handle: handleRequest }));
   const setRequestHandler = useAtomSet(requestHandlerAtom);

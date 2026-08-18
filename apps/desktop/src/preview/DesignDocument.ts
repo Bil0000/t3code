@@ -12,6 +12,9 @@ export function designPathFromUrl(url: string): string | null {
       path === path.trim() &&
       path.length > 0 &&
       path.length <= 1024 &&
+      segments[0] === ".t3" &&
+      segments[1] === "designs" &&
+      segments.length > 2 &&
       !path.startsWith("/") &&
       !path.startsWith("\\") &&
       !/^[a-z]:[\\/]/i.test(path) &&

@@ -1,14 +1,39 @@
-import { beforeEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import {
   acquireBrowserSurface,
   resolveBrowserSurfacePanelRect,
   useBrowserSurfaceStore,
+  waitForBrowserSurfaceReady,
 } from "./browserSurfaceStore";
 
 describe("browserSurfaceStore", () => {
   beforeEach(() => {
     useBrowserSurfaceStore.setState({ byTabId: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns a receipt when the requested surface becomes visible", async () => {
+    const ready = waitForBrowserSurfaceReady("ready-surface", 1_000);
+    const lease = acquireBrowserSurface("ready-surface");
+    const rect = { x: 10, y: 20, width: 900, height: 640 };
+
+    lease.present(rect, true);
+
+    await expect(ready).resolves.toEqual({ tabId: "ready-surface", rect });
+    lease.release();
+  });
+
+  it("returns no receipt when presentation times out", async () => {
+    vi.useFakeTimers();
+    const ready = waitForBrowserSurfaceReady("missing-surface", 100);
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expect(ready).resolves.toBeNull();
   });
 
   it("freezes the source content dimensions for a fitted presentation", () => {

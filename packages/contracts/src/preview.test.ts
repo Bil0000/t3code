@@ -52,12 +52,16 @@ describe("PreviewAutomationOpenFileInput", () => {
     });
   });
 
-  it.each(["/tmp/thread.html", "C:\\temp\\thread.html", "../thread.html", ".t3/designs/thread.js"])(
-    "rejects unsafe or non-HTML path %s",
-    (path) => {
-      expect(() => decodeOpenFileInput({ path })).toThrow();
-    },
-  );
+  it.each([
+    "/tmp/thread.html",
+    "C:\\temp\\thread.html",
+    "../thread.html",
+    "index.html",
+    ".t3/other/thread.html",
+    ".t3/designs/thread.js",
+  ])("rejects unsafe or non-HTML path %s", (path) => {
+    expect(() => decodeOpenFileInput({ path })).toThrow();
+  });
 });
 
 describe("PreviewNavStatus", () => {

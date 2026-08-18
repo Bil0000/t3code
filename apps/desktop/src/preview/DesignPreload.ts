@@ -220,6 +220,10 @@ function startDesignEditor(): void {
     refreshHistoryButtons();
   };
 
+  const setFieldValue = (field: HTMLInputElement | HTMLTextAreaElement, value: string): void => {
+    if (root.activeElement !== field) field.value = value;
+  };
+
   const refreshSelection = (): void => {
     if (!selected?.isConnected) {
       selected = null;
@@ -244,14 +248,14 @@ function startDesignEditor(): void {
     choose.disabled = false;
     const computed = getComputedStyle(selected);
     textValue.disabled = selected.childElementCount > 0;
-    textValue.value = selected.childElementCount === 0 ? (selected.textContent ?? "") : "";
-    fill.value = rgbToHex(computed.backgroundColor, "#ffffff");
-    color.value = rgbToHex(computed.color, "#111111");
-    fontSize.value = String(Math.round(Number.parseFloat(computed.fontSize) || 16));
-    radius.value = String(Math.round(Number.parseFloat(computed.borderRadius) || 0));
-    opacity.value = computed.opacity;
-    width.value = String(Math.round(rect.width));
-    height.value = String(Math.round(rect.height));
+    setFieldValue(textValue, selected.childElementCount === 0 ? (selected.textContent ?? "") : "");
+    setFieldValue(fill, rgbToHex(computed.backgroundColor, "#ffffff"));
+    setFieldValue(color, rgbToHex(computed.color, "#111111"));
+    setFieldValue(fontSize, String(Math.round(Number.parseFloat(computed.fontSize) || 16)));
+    setFieldValue(radius, String(Math.round(Number.parseFloat(computed.borderRadius) || 0)));
+    setFieldValue(opacity, computed.opacity);
+    setFieldValue(width, String(Math.round(rect.width)));
+    setFieldValue(height, String(Math.round(rect.height)));
     choose.textContent = findArtboard(selected)?.hasAttribute(SELECTED_ATTRIBUTE)
       ? "Chosen"
       : "Choose";

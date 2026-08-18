@@ -125,6 +125,9 @@ export const WorkspaceHtmlPath = Schema.String.annotate({
     Schema.makeFilter((path) => {
       const segments = path.split(/[\\/]/);
       return (
+        segments[0] === ".t3" &&
+        segments[1] === "designs" &&
+        segments.length > 2 &&
         !path.startsWith("/") &&
         !path.startsWith("\\") &&
         !/^[a-z]:[\\/]/i.test(path) &&

@@ -15,6 +15,7 @@ describe("designPathFromUrl", () => {
     "http://127.0.0.1:3773/api/assets/token?t3-design-path=.t3%2Fdesigns%2Fthread-1.html",
     "http://127.0.0.1:3773/api/assets/token?t3-design=request-1&t3-design-path=..%2Fsecret.html",
     "http://127.0.0.1:3773/api/assets/token?t3-design=request-1&t3-design-path=%2Ftmp%2Fdesign.html",
+    "http://127.0.0.1:3773/api/assets/token?t3-design=request-1&t3-design-path=index.html",
     "http://127.0.0.1:3773/api/assets/token?t3-design=request-1&t3-design-path=.t3%2Fdesigns%2Fthread-1.svg",
   ])("rejects a URL that cannot own a workspace design", (url) => {
     expect(designPathFromUrl(url)).toBeNull();
