@@ -16,7 +16,6 @@ type Tool = "select" | "draw" | "arrow" | "box" | "circle" | "highlight";
 type Point = { x: number; y: number };
 type ElementState = {
   style: string;
-  html: string;
   x: string | null;
   y: string | null;
 };
@@ -86,7 +85,6 @@ function targetFromPoint(x: number, y: number): Element | null {
 function stateOf(element: HTMLElement | SVGElement): ElementState {
   return {
     style: element.style.cssText,
-    html: element.innerHTML,
     x: element.getAttribute("data-t3-design-x"),
     y: element.getAttribute("data-t3-design-y"),
   };
@@ -94,7 +92,6 @@ function stateOf(element: HTMLElement | SVGElement): ElementState {
 
 function applyState(element: HTMLElement | SVGElement, state: ElementState): void {
   element.style.cssText = state.style;
-  if (element.innerHTML !== state.html) element.innerHTML = state.html;
   for (const [name, value] of [
     ["data-t3-design-x", state.x],
     ["data-t3-design-y", state.y],
@@ -105,12 +102,7 @@ function applyState(element: HTMLElement | SVGElement, state: ElementState): voi
 }
 
 function statesMatch(left: ElementState, right: ElementState): boolean {
-  return (
-    left.style === right.style &&
-    left.html === right.html &&
-    left.x === right.x &&
-    left.y === right.y
-  );
+  return left.style === right.style && left.x === right.x && left.y === right.y;
 }
 
 function pagePoint(event: PointerEvent): Point {
@@ -1057,10 +1049,10 @@ function startDesignEditor(): void {
 
   const editText = (event: MouseEvent): void => {
     if (annotationActive() || tool !== "select" || isUiElement(event.target)) return;
-    const target = targetFromPoint(event.clientX, event.clientY);
-    if (!(target instanceof HTMLElement)) return;
+    const target = event.target;
+    if (!(target instanceof HTMLElement) || target.childElementCount > 0) return;
     selectElement(target);
-    const before = stateOf(target);
+    const before = target.innerHTML;
     editingText = target;
     target.setAttribute(DESIGN_EDITING_ATTRIBUTE, "");
     target.contentEditable = "true";
@@ -1084,7 +1076,18 @@ function startDesignEditor(): void {
         finishEditingText = null;
       }
       textToolbar.style.display = "none";
-      commitElementState(target, before);
+      const after = target.innerHTML;
+      if (before !== after) {
+        pushHistory({
+          undo: () => {
+            target.innerHTML = before;
+          },
+          redo: () => {
+            target.innerHTML = after;
+          },
+        });
+        refreshLayers();
+      }
       refreshSelection();
     };
     target.addEventListener("input", onInput);
