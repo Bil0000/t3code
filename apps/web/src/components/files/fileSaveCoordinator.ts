@@ -1,5 +1,7 @@
 import type { AtomCommandResult } from "@t3tools/client-runtime/state/runtime";
 
+const MIN_RETRY_DELAY_MS = 250;
+
 export interface FileSaveCoordinatorOptions<A, E> {
   readonly debounceMs: number;
   readonly persist: (contents: string) => Promise<AtomCommandResult<A, E>>;
@@ -66,7 +68,7 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
         this.options.onPendingChange(false);
       } else if (this.canRetry) {
         this.canRetry = false;
-        this.schedule(this.options.debounceMs);
+        this.schedule(Math.max(this.options.debounceMs, MIN_RETRY_DELAY_MS));
       }
       return;
     }

@@ -110,6 +110,8 @@ const waitForDesktopOverlay = async (
   });
 };
 
+const PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS = 500;
+
 interface ExecutablePreviewWebview extends Element {
   readonly executeJavaScript: (code: string, userGesture?: boolean) => Promise<unknown>;
 }
@@ -505,9 +507,12 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             ) {
               const receipt = await waitForBrowserSurfaceReady(
                 activeRuntimeTabId,
-                request.timeoutMs,
+                opensDesign
+                  ? request.timeoutMs
+                  : Math.min(request.timeoutMs, PREVIEW_PRESENTATION_SETTLE_TIMEOUT_MS),
+                opensDesign ? "right-panel" : "mini-player",
               );
-              if (!receipt) {
+              if (!receipt && opensDesign) {
                 throw new PreviewAutomationViewportTimeoutError({
                   requestId: request.requestId,
                   environmentId,

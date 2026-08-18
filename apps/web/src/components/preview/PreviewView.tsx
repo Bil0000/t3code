@@ -744,6 +744,7 @@ export function PreviewView({
           <BrowserSurfaceSlot
             key={runtimeTabId}
             tabId={runtimeTabId}
+            surface="right-panel"
             visible={visible && !isUnreachable}
             className="absolute inset-0 h-full w-full"
           />
