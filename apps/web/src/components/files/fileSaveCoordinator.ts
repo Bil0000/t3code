@@ -59,7 +59,12 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
 
     this.saving = false;
     if (revision === this.latestRevision) {
-      if (succeeded) this.options.onPendingChange(false);
+      if (succeeded) {
+        this.latestRevision = 0;
+        this.options.onPendingChange(false);
+      } else {
+        this.schedule(this.options.debounceMs);
+      }
       return;
     }
 
