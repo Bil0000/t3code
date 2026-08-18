@@ -621,6 +621,19 @@ export const DesktopPreviewPointerEventSchema: Schema.Codec<DesktopPreviewPointe
     createdAt: Schema.String,
   });
 
+export interface DesktopPreviewDesignChangePayload {
+  html: string;
+}
+
+export const DesktopPreviewDesignChangePayloadSchema: Schema.Codec<DesktopPreviewDesignChangePayload> =
+  Schema.Struct({
+    html: Schema.String.check(Schema.isMaxLength(5_000_000)),
+  });
+
+export interface DesktopPreviewDesignChange extends DesktopPreviewDesignChangePayload {
+  tabId: string;
+}
+
 /**
  * Static config a renderer needs to mount a preview `<webview>`. Returned
  * atomically by `DesktopPreviewBridge.getPreviewConfig()` so the renderer
@@ -1196,6 +1209,7 @@ export interface DesktopPreviewBridge {
   };
   onStateChange: (listener: (tabId: string, state: DesktopPreviewTabState) => void) => () => void;
   onPointerEvent: (listener: (event: DesktopPreviewPointerEvent) => void) => () => void;
+  onDesignChange: (listener: (event: DesktopPreviewDesignChange) => void) => () => void;
 }
 
 export type ConfirmDialogVariant = "default" | "destructive";

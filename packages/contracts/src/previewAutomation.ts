@@ -115,7 +115,7 @@ export const PreviewAutomationOpenInput = Schema.Struct({
   });
 export type PreviewAutomationOpenInput = typeof PreviewAutomationOpenInput.Type;
 
-const WorkspaceHtmlPath = Schema.String.annotate({
+export const WorkspaceHtmlPath = Schema.String.annotate({
   description: "Workspace-relative path to the generated HTML design document.",
 })
   .check(Schema.isTrimmed())
@@ -133,6 +133,8 @@ const WorkspaceHtmlPath = Schema.String.annotate({
       );
     }),
   );
+
+export const isWorkspaceHtmlPath = Schema.is(WorkspaceHtmlPath);
 
 export const PreviewAutomationOpenFileInput = Schema.Struct({
   ...PreviewAutomationTabTargetFields,

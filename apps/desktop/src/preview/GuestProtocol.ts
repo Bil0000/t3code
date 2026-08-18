@@ -5,3 +5,4 @@ export const ANNOTATION_CAPTURED_CHANNEL = "preview:annotation-captured";
 export const ANNOTATION_THEME_CHANNEL = "preview:annotation-theme";
 export const HUMAN_INPUT_CHANNEL = "preview:human-input";
 export const MOUSE_NAVIGATE_CHANNEL = "preview:mouse-navigate";
+export const DESIGN_CHANGED_CHANNEL = "preview:design-changed";

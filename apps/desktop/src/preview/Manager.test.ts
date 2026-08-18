@@ -1,5 +1,5 @@
 import { it as effectIt } from "@effect/vitest";
-import type { DesktopPreviewRecordingFrame } from "@t3tools/contracts";
+import type { DesktopPreviewDesignChange, DesktopPreviewRecordingFrame } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
@@ -349,6 +349,40 @@ describe("PreviewManager", () => {
           loading: false,
         });
         expect(fromId).not.toHaveBeenCalled();
+      }),
+    ),
+  );
+
+  effectIt.effect("forwards valid design document changes from the registered webview", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const ipcListeners = new Map<string, (_event: unknown, payload: unknown) => void>();
+        fromId.mockReturnValue({
+          ...(makeTestPreviewWebContents(async () => ({
+            toJPEG: () => Buffer.from("preview"),
+            getSize: () => ({ width: 800, height: 600 }),
+          })) as unknown as Record<string, unknown>),
+          ipc: {
+            on: vi.fn((channel: string, listener: (_event: unknown, payload: unknown) => void) => {
+              ipcListeners.set(channel, listener);
+            }),
+            off: vi.fn(),
+          },
+        } as never);
+        const changes: DesktopPreviewDesignChange[] = [];
+        yield* manager.subscribeDesignChanges((change) =>
+          Effect.sync(() => {
+            changes.push(change);
+          }),
+        );
+        yield* manager.createTab("tab_design");
+        yield* manager.registerWebview("tab_design", 42);
+
+        ipcListeners.get("preview:design-changed")?.({}, { html: "<!doctype html><p>Saved</p>" });
+        ipcListeners.get("preview:design-changed")?.({}, { html: 42 });
+        yield* settle(() => changes.length === 1);
+
+        expect(changes).toEqual([{ tabId: "tab_design", html: "<!doctype html><p>Saved</p>" }]);
       }),
     ),
   );

@@ -1,6 +1,20 @@
+import { isWorkspaceHtmlPath } from "@t3tools/contracts";
+
 interface ExpandDesignCommandInput {
   prompt: string;
   threadId: string;
+}
+
+export function designPathFromUrl(url: string): string | null {
+  try {
+    const parsed = new URL(url);
+    if (!parsed.pathname.startsWith("/api/assets/") || !parsed.searchParams.has("t3-design"))
+      return null;
+    const path = parsed.searchParams.get("t3-design-path");
+    return path && isWorkspaceHtmlPath(path) ? path : null;
+  } catch {
+    return null;
+  }
 }
 
 const DESIGN_REQUEST_PATTERN =
@@ -25,8 +39,8 @@ export function expandDesignCommand({ prompt, threadId }: ExpandDesignCommandInp
     `Build them as one self-contained HTML document at ${path}.`,
     "Use the product's existing visual language when the workspace has one. Make every artboard polished, responsive, accessible, and meaningfully different.",
     "Write the document early, call design_open with its workspace-relative path, then keep updating the same file and call design_open after each meaningful visual pass so the user can watch it develop.",
-    "Give important elements stable data-t3-design-id attributes.",
-    "Treat preview selections, drawings, comments, and style changes as edits to this document. On a later implementation request, reread it and use the selected direction without asking for an attachment.",
+    "Give each artboard a stable data-t3-design-artboard and data-t3-design-id attribute. Give important child elements stable data-t3-design-id attributes.",
+    "Treat data-t3-design-selected as the preferred artboard, data-t3-design-focus as the current element, and persistent manual objects, notes, drawings, text, and inline styles as user edits. Reread this file before every design or implementation change without asking for an attachment.",
     "Do not start implementation until the user selects a direction.",
     "</t3_design_request>",
   ].join("\n\n");

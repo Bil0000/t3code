@@ -401,6 +401,7 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
               }
               const url = new URL(assetUrl);
               url.searchParams.set("t3-design", request.requestId);
+              url.searchParams.set("t3-design-path", fileInput.path);
               input = { url: url.toString(), open: true, reuseExistingTab: true };
             } else {
               input = request.input as PreviewAutomationOpenInput;

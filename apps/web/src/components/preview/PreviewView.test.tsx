@@ -43,6 +43,15 @@ vi.mock("~/browserHistoryStore", () => ({
   useThreadRecentHistory: () => EMPTY_HISTORY,
 }));
 
+vi.mock("~/state/entities", () => ({
+  useThread: () => ({ projectId: "project-1", worktreePath: "/workspace" }),
+  useProject: () => ({ workspaceRoot: "/workspace" }),
+}));
+
+vi.mock("~/state/projects", () => ({
+  projectEnvironment: { writeFile: {} },
+}));
+
 vi.mock("~/state/session", () => ({
   readPreparedConnection: mocks.readPreparedConnection,
 }));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { expandDesignCommand, visibleDesignCommand } from "./designPrompt.ts";
+import { designPathFromUrl, expandDesignCommand, visibleDesignCommand } from "./designPrompt.ts";
 
 describe("expandDesignCommand", () => {
   it("turns a design command into a thread-scoped visual design brief", () => {
@@ -43,6 +43,20 @@ describe("expandDesignCommand", () => {
       expandDesignCommand({ prompt: "/Design a billing dashboard", threadId: "thread-42" }),
     ).toMatch(/^<t3_design_request>/);
   });
+
+  it("reads design context only from marked asset URLs", () => {
+    expect(
+      designPathFromUrl(
+        "http://127.0.0.1:3773/api/assets/token?t3-design=request-1&t3-design-path=.t3%2Fdesigns%2Fthread-1.html",
+      ),
+    ).toBe(".t3/designs/thread-1.html");
+    expect(
+      designPathFromUrl(
+        "https://example.com/design.html?t3-design=request-1&t3-design-path=.t3%2Fdesigns%2Fthread-1.html",
+      ),
+    ).toBeNull();
+  });
+
   it("leaves ordinary message display unchanged", () => {
     expect(visibleDesignCommand("Fix the billing dashboard")).toBe("Fix the billing dashboard");
   });
