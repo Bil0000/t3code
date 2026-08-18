@@ -193,7 +193,12 @@ export function IssueSummaryTab({
   const aiMatches = useWorkItemMatches({
     environmentId,
     projectId: reference.projectId,
-    source: { kind: "issue", repository: reference.repository, number: reference.number },
+    source: {
+      kind: "issue",
+      ...(reference.provider === undefined ? {} : { provider: reference.provider }),
+      repository: reference.repository,
+      number: reference.number,
+    },
     version: detail.updatedAt,
   });
   const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;

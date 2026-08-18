@@ -120,7 +120,12 @@ export function WorkItemSelectionBar() {
           input: {
             projectId: first.projectId,
             mode,
-            items: items.map(({ kind, repository, number }) => ({ kind, repository, number })),
+            items: items.map(({ kind, provider, repository, number }) => ({
+              kind,
+              provider,
+              repository,
+              number,
+            })),
           },
         }),
       getPrompt: (draftId) => useComposerDraftStore.getState().getComposerDraft(draftId)?.prompt,
@@ -157,6 +162,7 @@ export function WorkItemSelectionBar() {
         <Button
           size="xs"
           variant={mode === "compound" ? "secondary" : "ghost"}
+          aria-pressed={mode === "compound"}
           onClick={() => setMode("compound")}
         >
           Compound
@@ -164,6 +170,7 @@ export function WorkItemSelectionBar() {
         <Button
           size="xs"
           variant={mode === "subtasks" ? "secondary" : "ghost"}
+          aria-pressed={mode === "subtasks"}
           onClick={() => setMode("subtasks")}
         >
           Subtasks

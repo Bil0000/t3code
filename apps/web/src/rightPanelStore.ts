@@ -74,6 +74,7 @@ export type RightPanelSurface =
       /** The server that owns the issue when it came from a multi-server list. */
       environmentId?: string;
       projectId: string;
+      provider?: string;
       repository: string;
       number: number;
     }
@@ -84,7 +85,7 @@ export type RightPanelSurface =
        */
       id: "issues";
       kind: "issues";
-      selected: { projectId: string; repository: string; number: number } | null;
+      selected: { projectId: string; provider?: string; repository: string; number: number } | null;
     }
   | { id: "agents"; kind: "agents" };
 
@@ -125,13 +126,19 @@ interface RightPanelStoreState {
   ) => void;
   openIssue: (
     ref: ScopedThreadRef,
-    target: { environmentId?: string; projectId: string; repository: string; number: number },
+    target: {
+      environmentId?: string;
+      projectId: string;
+      provider?: string;
+      repository: string;
+      number: number;
+    },
   ) => void;
   openIssues: (ref: ScopedThreadRef) => void;
   /** What the issue browser is showing: an issue, or null for the list it was picked from. */
   selectIssueInPanel: (
     ref: ScopedThreadRef,
-    target: { projectId: string; repository: string; number: number } | null,
+    target: { projectId: string; provider?: string; repository: string; number: number } | null,
   ) => void;
   openTerminal: (ref: ScopedThreadRef, terminalId: string) => void;
   splitTerminal: (
@@ -242,17 +249,20 @@ export type IssueSurface = Extract<RightPanelSurface, { kind: "issue" }>;
 export function issueSurfaceId(target: {
   environmentId?: string;
   projectId: string;
+  provider?: string;
   repository: string;
   number: number;
 }): IssueSurface["id"] {
   const scope =
     target.environmentId === undefined ? "" : `${encodeURIComponent(target.environmentId)}:`;
-  return `issue:${scope}${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
+  const provider = target.provider === undefined ? "" : `${encodeURIComponent(target.provider)}:`;
+  return `issue:${scope}${provider}${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
 }
 
 export function issueSurface(target: {
   environmentId?: string;
   projectId: string;
+  provider?: string;
   repository: string;
   number: number;
 }): IssueSurface {
@@ -260,6 +270,7 @@ export function issueSurface(target: {
     id: issueSurfaceId(target),
     kind: "issue",
     ...(target.environmentId === undefined ? {} : { environmentId: target.environmentId }),
+    ...(target.provider === undefined ? {} : { provider: target.provider }),
     projectId: target.projectId,
     repository: target.repository,
     number: target.number,
@@ -271,7 +282,7 @@ export type IssuesSurface = Extract<RightPanelSurface, { kind: "issues" }>;
 /** A persisted selection is only usable if it still names an issue, so a broken one reads as none. */
 function normalizeIssueSelection(value: unknown): IssuesSurface["selected"] {
   if (!value || typeof value !== "object") return null;
-  const { projectId, repository, number } = value as Record<string, unknown>;
+  const { projectId, provider, repository, number } = value as Record<string, unknown>;
   if (
     typeof projectId !== "string" ||
     typeof repository !== "string" ||
@@ -281,7 +292,12 @@ function normalizeIssueSelection(value: unknown): IssuesSurface["selected"] {
   ) {
     return null;
   }
-  return { projectId, repository, number };
+  return {
+    projectId,
+    ...(typeof provider === "string" ? { provider } : {}),
+    repository,
+    number,
+  };
 }
 
 /**
@@ -400,11 +416,12 @@ export function migratePersistedRightPanelState(persistedState: unknown): {
                       ) {
                         return [];
                       }
-                      const { environmentId, ...rest } = surface;
+                      const { environmentId, provider, ...rest } = surface;
                       return [
                         issueSurface({
                           ...rest,
                           ...(typeof environmentId === "string" ? { environmentId } : {}),
+                          ...(typeof provider === "string" ? { provider } : {}),
                         }),
                       ];
                     }

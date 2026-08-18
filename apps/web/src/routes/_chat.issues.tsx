@@ -111,6 +111,7 @@ export interface IssuesSearch {
   readonly repository?: string;
   readonly number?: number;
   readonly selectedProjectId?: ProjectId;
+  readonly selectedProvider?: string;
   /**
    * One label name every row must wear. Narrowed here rather than on the hosts: a label is a
    * word the rows already carry, and asking four hosts about it would cost a round trip to
@@ -136,9 +137,16 @@ export function stabilizeLinearProviderSummary(
   providers: IssueListResult["providers"],
   projectIds: ReadonlyArray<ProjectId>,
   projectBindings: Readonly<Record<ProjectId, LinearProjectBinding | null>>,
+  hasLinearSource = false,
+  projectTeams: Readonly<Record<string, string>> = {},
 ): IssueListResult["providers"] {
-  const projectCount = projectIds.filter((projectId) => projectBindings[projectId] != null).length;
-  if (projectCount === 0) return providers;
+  const projectCount = projectIds.filter(
+    (projectId) =>
+      projectBindings[projectId] != null ||
+      (projectBindings[projectId] === undefined && projectTeams[projectId] !== undefined),
+  ).length;
+  if (projectCount === 0)
+    return hasLinearSource ? providers : providers.filter((provider) => provider.kind !== "linear");
   const linear = providers.find((provider) => provider.kind === "linear");
   const connected = {
     kind: "linear" as const,
@@ -159,12 +167,21 @@ export function hasLinearManagementState(
     readonly projectBindings: Readonly<Record<string, LinearProjectBinding | null>>;
     readonly projectTeams: Readonly<Record<string, string>>;
   },
+  projectIds?: ReadonlyArray<ProjectId>,
 ) {
+  const isCurrentProject = (projectId: string) =>
+    projectIds === undefined || projectIds.includes(projectId as ProjectId);
   return (
     connection?.status === "authenticated" ||
     connection?.hasStoredToken === true ||
-    Object.values(settings.projectBindings).some(Boolean) ||
-    Object.keys(settings.projectTeams).length > 0
+    Object.entries(settings.projectBindings).some(
+      ([projectId, binding]) => isCurrentProject(projectId) && binding != null,
+    ) ||
+    Object.keys(settings.projectTeams).some(
+      (projectId) =>
+        isCurrentProject(projectId) &&
+        settings.projectBindings[projectId as ProjectId] === undefined,
+    )
   );
 }
 
@@ -251,6 +268,9 @@ export const Route = createFileRoute("/_chat/issues")({
       ...(typeof raw.selectedProjectId === "string" && raw.selectedProjectId
         ? { selectedProjectId: raw.selectedProjectId as ProjectId }
         : {}),
+      ...(typeof raw.selectedProvider === "string" && raw.selectedProvider
+        ? { selectedProvider: raw.selectedProvider.slice(0, 100) }
+        : {}),
       ...(typeof raw.label === "string" && raw.label ? { label: raw.label.slice(0, 200) } : {}),
       ...(sort === undefined ? {} : { sort }),
       ...(raw.order === "asc" || raw.order === "desc" ? { order: raw.order } : {}),
@@ -296,9 +316,21 @@ function IssuesRouteView() {
   );
   const currentProjectIds = projects.map((project) => project.id);
   const linearProjectCount = currentProjectIds.filter(
-    (projectId) => linearSettings.projectBindings[projectId] != null,
+    (projectId) =>
+      linearSettings.projectBindings[projectId] != null ||
+      (linearSettings.projectBindings[projectId] === undefined &&
+        linearSettings.projectTeams[projectId] !== undefined),
   ).length;
-  const linearManaged = hasLinearManagementState(linearConnection.data, linearSettings);
+  const linearManaged = hasLinearManagementState(
+    linearConnection.data,
+    linearSettings,
+    currentProjectIds,
+  );
+  const hasCurrentLinearSource = hasLinearManagementState(
+    undefined,
+    linearSettings,
+    currentProjectIds,
+  );
   const scopedProjects = useMemo(
     () =>
       projects
@@ -372,6 +404,7 @@ function IssuesRouteView() {
             ...(next.projectId ? { projectId: next.projectId } : {}),
             ...(next.host ? { host: next.host } : {}),
             ...(next.selectedProjectId ? { selectedProjectId: next.selectedProjectId } : {}),
+            ...(next.selectedProvider ? { selectedProvider: next.selectedProvider } : {}),
             ...(next.q ? { q: next.q } : {}),
             ...(next.sort ? { sort: next.sort } : {}),
             ...(next.order ? { order: next.order } : {}),
@@ -388,6 +421,7 @@ function IssuesRouteView() {
     repository: undefined,
     number: undefined,
     selectedProjectId: undefined,
+    selectedProvider: undefined,
   };
   const updateListScope = (patch: {
     [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
@@ -955,13 +989,23 @@ function IssuesRouteView() {
   // whose identity the inference above cannot match, and refusing to open it because of the
   // weaker signal would ignore the stronger one the URL spelled out.
   const selectedProjectId = linkedProjectId ?? projectIdForRepository ?? scopedProjectId;
-  const linkedSelection = useMemo(
-    () =>
-      search.repository && search.number && selectedProjectId
-        ? { repository: search.repository, number: search.number, projectId: selectedProjectId }
-        : null,
-    [search.number, search.repository, selectedProjectId],
-  );
+  const linkedSelection = useMemo(() => {
+    if (!search.repository || !search.number || !selectedProjectId) return null;
+    const provider =
+      search.selectedProvider ??
+      entries.find(
+        (entry) =>
+          entry.projectId === selectedProjectId &&
+          entry.repository === search.repository &&
+          entry.number === search.number,
+      )?.provider;
+    return {
+      repository: search.repository,
+      number: search.number,
+      projectId: selectedProjectId,
+      ...(provider === undefined ? {} : { provider }),
+    };
+  }, [entries, search.number, search.repository, search.selectedProvider, selectedProjectId]);
   useEffect(() => {
     if (!issuesSupported || rightPanelRef === null || linkedSelection === null) return;
     useRightPanelStore.getState().openIssue(rightPanelRef, linkedSelection);
@@ -973,6 +1017,9 @@ function IssuesRouteView() {
           repository: activeIssueSurface.repository,
           number: activeIssueSurface.number,
           projectId: activeIssueSurface.projectId as ProjectId,
+          ...(activeIssueSurface.provider === undefined
+            ? {}
+            : { provider: activeIssueSurface.provider }),
         }
       : null;
 
@@ -985,6 +1032,7 @@ function IssuesRouteView() {
             repository: surface.repository,
             number: surface.number,
             selectedProjectId: surface.projectId as ProjectId,
+            ...(surface.provider === undefined ? {} : { selectedProvider: surface.provider }),
           }
         : clearedSelection,
     );
@@ -1017,6 +1065,8 @@ function IssuesRouteView() {
     hosts,
     currentProjectIds,
     linearSettings.projectBindings,
+    hasCurrentLinearSource,
+    linearSettings.projectTeams,
   ).filter((entry) => entry.configured);
   const showProvider = activeHosts.length > 1;
 
@@ -1035,6 +1085,7 @@ function IssuesRouteView() {
         repository: entry.repository,
         number: entry.number,
         selectedProjectId: entry.projectId,
+        selectedProvider: entry.provider,
       });
     },
     [rightPanelRef, updateSearch],
@@ -1045,6 +1096,7 @@ function IssuesRouteView() {
       if (!selectingWorkItems || issueEnvironmentId === null) return selectEntry(entry);
       const error = toggleWorkItem({
         kind: "issue",
+        provider: entry.provider,
         environmentId: issueEnvironmentId,
         projectId: entry.projectId,
         repository: entry.repository,
@@ -1153,6 +1205,7 @@ function IssuesRouteView() {
                     selectingWorkItems && issueEnvironmentId !== null
                       ? isWorkItemSelected(selectedWorkItems, {
                           kind: "issue",
+                          provider: entry.provider,
                           environmentId: issueEnvironmentId,
                           projectId: entry.projectId,
                           repository: entry.repository,
@@ -1161,6 +1214,8 @@ function IssuesRouteView() {
                           url: entry.url,
                         })
                       : selected?.repository === entry.repository &&
+                        selected.projectId === entry.projectId &&
+                        (selected.provider === undefined || selected.provider === entry.provider) &&
                         selected.number === entry.number
                   }
                   onSelect={selectOrToggleEntry}
@@ -1388,6 +1443,7 @@ function IssuesRouteView() {
                   if (rightPanelRef === null) return;
                   const target = {
                     projectId: activeSurface.projectId,
+                    provider: link.provider,
                     repository: link.repository,
                     number: link.number,
                   };
@@ -1396,6 +1452,7 @@ function IssuesRouteView() {
                     repository: target.repository,
                     number: target.number,
                     selectedProjectId: target.projectId as ProjectId,
+                    selectedProvider: target.provider,
                   });
                 }}
                 chromeVariant="collapse"
@@ -1406,6 +1463,9 @@ function IssuesRouteView() {
                 environmentId={issueEnvironmentId}
                 reference={{
                   projectId: activeSurface.projectId as ProjectId,
+                  ...(activeSurface.provider === undefined
+                    ? {}
+                    : { provider: activeSurface.provider }),
                   repository: activeSurface.repository,
                   number: activeSurface.number,
                 }}

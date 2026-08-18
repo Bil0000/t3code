@@ -57,6 +57,9 @@ export function LinearConnectionDialog({
   const disconnect = useAtomCommand(issueTrackingEnvironment.linearDisconnect, {
     reportFailure: false,
   });
+  const saveProjectBinding = useAtomCommand(issueTrackingEnvironment.linearSetProjectBinding, {
+    reportFailure: false,
+  });
   const updateSettings = useAtomCommand(serverEnvironment.updateSettings, { reportFailure: false });
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState(false);
@@ -67,8 +70,23 @@ export function LinearConnectionDialog({
   } | null>(null);
   const linear = connection.data;
   const accounts = linear?.accounts ?? [];
-  const legacyKeyNeedsRemoval = linear?.hasStoredToken === true && accounts.length === 0;
-  const hasCurrentProjectBinding = projects.some((project) => projectBindings[project.id] != null);
+  const legacyServerConnected =
+    linear?.status === "authenticated" && linear.hasStoredToken === true && accounts.length === 0;
+  const legacyKeyNeedsRemoval =
+    linear?.hasStoredToken === true && accounts.length === 0 && !legacyServerConnected;
+  const environmentTokenConnected =
+    linear?.environmentAccount?.status === "authenticated" ||
+    (linear?.status === "authenticated" &&
+      linear.hasStoredToken === false &&
+      accounts.length === 0);
+  const singleKeyTeamMode =
+    linear?.environmentAccount !== undefined || environmentTokenConnected || legacyServerConnected;
+  const hasCurrentProjectBinding = projects.some(
+    (project) =>
+      projectBindings[project.id] != null ||
+      (projectBindings[project.id] === undefined &&
+        linearSettings.projectTeams[project.id] !== undefined),
+  );
   const teamOptions = accounts.flatMap((account) =>
     account.teams.map((team) => ({
       value: JSON.stringify([account.credentialId, team.key]),
@@ -76,9 +94,19 @@ export function LinearConnectionDialog({
       binding: { credentialId: account.credentialId, teamKey: team.key },
     })),
   );
+  const environmentTeamOptions = (
+    singleKeyTeamMode ? (linear?.environmentAccount?.teams ?? linear?.teams ?? []) : []
+  ).map((team) => ({
+    value: team.key,
+    label: `${linear?.environmentAccount?.accountName ?? linear?.accountName ?? "Linear"} — ${team.name} (${team.key})`,
+  }));
+  const projectHasSource = (projectId: (typeof projects)[number]["id"]) =>
+    projectBindings[projectId] != null ||
+    (projectBindings[projectId] === undefined &&
+      linearSettings.projectTeams[projectId] !== undefined);
 
-  async function runCommand<A, E>(
-    action: () => Promise<AtomCommandResult<A, E>>,
+  async function runCommand(
+    action: () => Promise<AtomCommandResult<unknown, unknown>>,
     after: () => void,
   ) {
     setBusy(true);
@@ -99,16 +127,54 @@ export function LinearConnectionDialog({
     if (environmentId === null) return;
     void runCommand(
       () =>
-        updateSettings({
+        saveProjectBinding({
           environmentId,
-          input: {
-            patch: { issueTracking: { linear: { projectBindings: { [projectId]: binding } } } },
-          },
+          input: { projectId, binding },
         }),
       () => {
-        const wasAvailable = projects.some((project) => projectBindings[project.id] != null);
+        const wasAvailable = projects.some((project) => projectHasSource(project.id));
         const isAvailable = projects.some((project) =>
-          project.id === projectId ? binding !== null : projectBindings[project.id] != null,
+          project.id === projectId ? binding !== null : projectHasSource(project.id),
+        );
+        onProviderChanged(
+          wasAvailable === isAvailable ? "updated" : isAvailable ? "available" : "unavailable",
+        );
+      },
+    );
+  };
+
+  const setProjectTeam = (projectId: (typeof projects)[number]["id"], teamKey: string | null) => {
+    if (environmentId === null) return;
+    void runCommand(
+      () =>
+        linear?.environmentAccount === undefined
+          ? updateSettings({
+              environmentId,
+              input: {
+                patch: {
+                  issueTracking: {
+                    linear:
+                      teamKey === null
+                        ? { projectTeamsToDelete: [projectId] }
+                        : {
+                            projectBindingsToDelete: [projectId],
+                            projectTeams: { [projectId]: teamKey },
+                          },
+                  },
+                },
+              },
+            })
+          : saveProjectBinding({
+              environmentId,
+              input: {
+                projectId,
+                binding: teamKey === null ? null : { teamKey },
+              },
+            }),
+      () => {
+        const wasAvailable = projects.some((project) => projectHasSource(project.id));
+        const isAvailable = projects.some((project) =>
+          project.id === projectId ? teamKey !== null : projectHasSource(project.id),
         );
         onProviderChanged(
           wasAvailable === isAvailable ? "updated" : isAvailable ? "available" : "unavailable",
@@ -151,7 +217,7 @@ export function LinearConnectionDialog({
                 if (environmentId === null || token.trim().length === 0 || legacyKeyNeedsRemoval)
                   return;
                 void runCommand(
-                  () => connect({ environmentId, input: { token: token.trim() } }),
+                  () => connect({ environmentId, input: { token: token.trim(), mode: "add" } }),
                   () => {
                     setToken("");
                     connection.refresh();
@@ -172,6 +238,7 @@ export function LinearConnectionDialog({
                   placeholder="lin_api_…"
                   aria-label="Linear API key"
                   autoComplete="off"
+                  disabled={busy || legacyKeyNeedsRemoval}
                 />
                 <Button
                   type="submit"
@@ -197,6 +264,31 @@ export function LinearConnectionDialog({
                   aria-label="Disconnect saved Linear API key"
                   onClick={() =>
                     setPendingDisconnect({ credentialId: null, accountName: "saved API key" })
+                  }
+                >
+                  Disconnect
+                </Button>
+              </div>
+            ) : null}
+
+            {legacyServerConnected ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border p-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium">
+                    {linear.accountName ?? "Linear account"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">Connected with one saved key.</p>
+                </div>
+                <Button
+                  size="xs"
+                  variant="destructive-outline"
+                  disabled={busy}
+                  aria-label="Disconnect saved Linear API key"
+                  onClick={() =>
+                    setPendingDisconnect({
+                      credentialId: null,
+                      accountName: linear.accountName ?? "saved API key",
+                    })
                   }
                 >
                   Disconnect
@@ -252,7 +344,7 @@ export function LinearConnectionDialog({
               </div>
             ) : null}
 
-            {accounts.length > 0 || hasCurrentProjectBinding ? (
+            {accounts.length > 0 || hasCurrentProjectBinding || singleKeyTeamMode ? (
               <div className="space-y-2">
                 <div>
                   <h3 className="text-sm font-medium">Project connections</h3>
@@ -263,11 +355,14 @@ export function LinearConnectionDialog({
                 <div className="divide-y divide-border/50">
                   {projects.map((project) => {
                     const binding = projectBindings[project.id];
+                    const options = [...environmentTeamOptions, ...teamOptions];
                     const value = binding
                       ? JSON.stringify([binding.credentialId, binding.teamKey])
-                      : UNMAPPED;
-                    const selectedOption = teamOptions.find((option) => option.value === value);
-                    const bindingUnavailable = binding != null && selectedOption === undefined;
+                      : binding === undefined && singleKeyTeamMode
+                        ? (linearSettings.projectTeams[project.id] ?? UNMAPPED)
+                        : UNMAPPED;
+                    const selectedOption = options.find((option) => option.value === value);
+                    const bindingUnavailable = value !== UNMAPPED && selectedOption === undefined;
                     const selectedLabel = bindingUnavailable
                       ? "Needs attention"
                       : (selectedOption?.label ?? "Not connected");
@@ -282,12 +377,18 @@ export function LinearConnectionDialog({
                           disabled={busy}
                           onValueChange={(next) => {
                             if (!next) return;
+                            if (next === UNMAPPED) {
+                              if (binding) setProjectBinding(project.id, null);
+                              else setProjectTeam(project.id, null);
+                              return;
+                            }
+                            if (environmentTeamOptions.some((option) => option.value === next)) {
+                              setProjectTeam(project.id, next);
+                              return;
+                            }
                             setProjectBinding(
                               project.id,
-                              next === UNMAPPED
-                                ? null
-                                : (teamOptions.find((option) => option.value === next)?.binding ??
-                                    null),
+                              teamOptions.find((option) => option.value === next)?.binding ?? null,
                             );
                           }}
                         >
@@ -306,7 +407,7 @@ export function LinearConnectionDialog({
                                 Unavailable account or team
                               </SelectItem>
                             ) : null}
-                            {teamOptions.map((option) => (
+                            {options.map((option) => (
                               <SelectItem key={option.value} value={option.value}>
                                 {option.label}
                               </SelectItem>
@@ -375,14 +476,14 @@ export function LinearConnectionDialog({
                     setToken("");
                     setPendingDisconnect(null);
                     connection.refresh();
-                    const wasAvailable = projects.some(
-                      (project) => projectBindings[project.id] != null,
-                    );
+                    const wasAvailable = projects.some((project) => projectHasSource(project.id));
                     const isAvailable =
                       credentialId !== null &&
                       projects.some((project) => {
                         const binding = projectBindings[project.id];
-                        return binding !== null && binding?.credentialId !== credentialId;
+                        return binding?.credentialId === credentialId
+                          ? false
+                          : projectHasSource(project.id);
                       });
                     onProviderChanged(wasAvailable && !isAvailable ? "unavailable" : "updated");
                   },

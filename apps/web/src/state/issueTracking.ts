@@ -20,4 +20,8 @@ export const issueTrackingEnvironment = {
     label: "environment-data:issue-tracking:linear-disconnect",
     tag: WS_METHODS.linearDisconnect,
   }),
+  linearSetProjectBinding: createEnvironmentRpcCommand(connectionAtomRuntime, {
+    label: "environment-data:issue-tracking:linear-set-project-binding",
+    tag: WS_METHODS.linearSetProjectBinding,
+  }),
 };

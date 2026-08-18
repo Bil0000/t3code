@@ -152,6 +152,48 @@ describe("IssuesColumn", () => {
     ]);
   });
 
+  it("drops a cached Linear provider after another client disconnects it", () => {
+    const github = {
+      kind: "github",
+      host: "github.com",
+      configured: true,
+      searchesOnHost: true,
+      projectCount: 1,
+      detail: null,
+    } as const;
+    const staleLinear = {
+      kind: "linear",
+      host: "linear.app",
+      configured: true,
+      searchesOnHost: false,
+      projectCount: 1,
+      detail: null,
+    } as const;
+    const projectId = "project_1" as ProjectId;
+
+    expect(stabilizeLinearProviderSummary([github, staleLinear], [projectId], {})).toEqual([
+      github,
+    ]);
+  });
+
+  it("keeps a cached Linear provider for a current legacy environment-token team", () => {
+    const linear = {
+      kind: "linear",
+      host: "linear.app",
+      configured: true,
+      searchesOnHost: false,
+      projectCount: 1,
+      detail: null,
+    } as const;
+    const projectId = "project_1" as ProjectId;
+    const legacyTeam = hasLinearManagementState(
+      { status: "unauthenticated", hasStoredToken: false },
+      { projectBindings: {}, projectTeams: { [projectId]: "ENG" } },
+    );
+
+    expect(stabilizeLinearProviderSummary([linear], [projectId], {}, legacyTeam)).toEqual([linear]);
+  });
+
   it("recognizes legacy teams and authenticated environment tokens as Linear management state", () => {
     expect(
       hasLinearManagementState(
@@ -165,5 +207,12 @@ describe("IssuesColumn", () => {
         { projectBindings: {}, projectTeams: {} },
       ),
     ).toBe(true);
+    expect(
+      hasLinearManagementState(
+        { status: "unauthenticated", hasStoredToken: false },
+        { projectBindings: { project_1: null }, projectTeams: { project_1: "ENG" } },
+        ["project_1" as ProjectId],
+      ),
+    ).toBe(false);
   });
 });

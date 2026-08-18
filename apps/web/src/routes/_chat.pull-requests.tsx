@@ -1322,6 +1322,7 @@ function PullRequestsRouteView() {
       if (!selectingWorkItems) return selectEntry(entry);
       const error = toggleWorkItem({
         kind: "pull-request",
+        provider: entry.provider,
         environmentId: entry.environmentId,
         projectId: entry.projectId,
         repository: entry.repository,
@@ -1445,6 +1446,7 @@ function PullRequestsRouteView() {
                     selectingWorkItems
                       ? isWorkItemSelected(selectedWorkItems, {
                           kind: "pull-request",
+                          provider: entry.provider,
                           environmentId: entry.environmentId,
                           projectId: entry.projectId,
                           repository: entry.repository,
@@ -1660,6 +1662,9 @@ function PullRequestsRouteView() {
                 environmentId={panelEnvironmentId}
                 reference={{
                   projectId: activeSurface.projectId as ProjectId,
+                  ...(activeSurface.provider === undefined
+                    ? {}
+                    : { provider: activeSurface.provider }),
                   repository: activeSurface.repository,
                   number: activeSurface.number,
                 }}
@@ -1737,6 +1742,7 @@ function PullRequestsRouteView() {
                   useRightPanelStore.getState().openIssue(rightPanelRef, {
                     environmentId: panelEnvironmentId,
                     projectId: project.id,
+                    provider: link.provider,
                     repository: link.repository,
                     number: link.number,
                   });

@@ -393,7 +393,7 @@ export function PullRequestDetailPanel({
    * Opens one of the issues this pull request references, as a peer tab beside it. Supplied by
    * whoever mounted the panel, because only they know which panel the tab belongs in.
    */
-  onOpenLinkedIssue?: (link: IssueLink) => void;
+  onOpenLinkedIssue?: (link: IssueLink & { readonly provider: string }) => void;
   /**
    * Beside a thread, the checkout affordance disappears: the panel is showing that thread's
    * own pull request, so the branch is already under the reader's feet — and checking it out

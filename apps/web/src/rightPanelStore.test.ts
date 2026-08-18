@@ -484,8 +484,32 @@ describe("rightPanelStore", () => {
     ]);
   });
 
+  it("keeps equal issue references from two providers as two tabs", () => {
+    const linear = {
+      projectId: "project-a",
+      repository: "ENG",
+      number: 12,
+      provider: "linear",
+    };
+    const github = { ...linear, provider: "github" };
+
+    useRightPanelStore.getState().openIssue(refA, linear);
+    useRightPanelStore.getState().openIssue(refA, github);
+
+    const state = selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA);
+    expect(state.surfaces.map((surface) => surface.id)).toEqual([
+      issueSurfaceId(linear),
+      issueSurfaceId(github),
+    ]);
+  });
+
   it("keeps the issue browser one tab while the issue it shows changes", () => {
-    const target = { projectId: "project-a", repository: "pingdotgg/t3code", number: 4909 };
+    const target = {
+      projectId: "project-a",
+      provider: "github",
+      repository: "pingdotgg/t3code",
+      number: 4909,
+    };
     useRightPanelStore.getState().openIssues(refA);
     expect(selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, refA)).toEqual({
       isOpen: true,

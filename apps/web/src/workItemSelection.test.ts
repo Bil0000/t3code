@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { addWorkItem, type SelectedWorkItem } from "./workItemSelection";
+import { addWorkItem, isWorkItemSelected, type SelectedWorkItem } from "./workItemSelection";
 
 const issue: SelectedWorkItem = {
   kind: "issue",
+  provider: "linear",
   environmentId: "env-1" as SelectedWorkItem["environmentId"],
   projectId: "project-1" as SelectedWorkItem["projectId"],
   repository: "acme/app",
@@ -14,12 +15,23 @@ const issue: SelectedWorkItem = {
 
 describe("addWorkItem", () => {
   it("mixes issues and pull requests from one project", () => {
-    const pullRequest = { ...issue, kind: "pull-request" as const, number: 34 };
+    const pullRequest = {
+      ...issue,
+      kind: "pull-request" as const,
+      provider: "github",
+      number: 34,
+    };
 
     expect(addWorkItem([issue], pullRequest)).toEqual({
       items: [issue, pullRequest],
       error: null,
     });
+  });
+
+  it("keeps equal issue references from two providers", () => {
+    const github = { ...issue, provider: "github" };
+
+    expect(isWorkItemSelected([issue], github)).toBe(false);
   });
 
   it("rejects work from another project", () => {

@@ -3363,7 +3363,10 @@ function ChatViewContent(props: ChatViewProps) {
    * same number would be worse than not opening it at all.
    */
   const openLinkedItem = useCallback(
-    (kind: "issue" | "pull-request", link: { repository: string; number: number; url: string }) => {
+    (
+      kind: "issue" | "pull-request",
+      link: { provider?: string; repository: string; number: number; url: string },
+    ) => {
       const supported = kind === "issue" ? supportsIssues : supportsPullRequests;
       const project =
         activeThreadEnvironmentId === null
@@ -3380,6 +3383,7 @@ function ChatViewContent(props: ChatViewProps) {
       }
       const reference = {
         projectId: project.id,
+        ...(kind === "issue" && link.provider !== undefined ? { provider: link.provider } : {}),
         repository: repositoryForProjectLink(project, link.repository),
         number: link.number,
       };
@@ -3393,7 +3397,8 @@ function ChatViewContent(props: ChatViewProps) {
     [activeThreadEnvironmentId, activeThreadRef, allProjects, supportsIssues, supportsPullRequests],
   );
   const openLinkedIssue = useCallback(
-    (link: { repository: string; number: number; url: string }) => openLinkedItem("issue", link),
+    (link: { provider?: string; repository: string; number: number; url: string }) =>
+      openLinkedItem("issue", link),
     [openLinkedItem],
   );
   const openLinkedPullRequest = useCallback(
@@ -4223,7 +4228,9 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().openIssues(activeThreadRef);
   }, [activeThreadRef]);
   const selectIssueInPanel = useCallback(
-    (target: { projectId: string; repository: string; number: number } | null) => {
+    (
+      target: { projectId: string; provider?: string; repository: string; number: number } | null,
+    ) => {
       if (!activeThreadRef) return;
       useRightPanelStore.getState().selectIssueInPanel(activeThreadRef, target);
     },
@@ -6269,10 +6276,13 @@ function ChatViewContent(props: ChatViewProps) {
       // into the thread this panel is open beside, so reading an issue and acting on it stay one
       // conversation instead of stranding the reader in a thread they did not ask for.
       <IssueDetailPanel
-        key={`${activeRightPanelSurface.repository}#${activeRightPanelSurface.number}`}
+        key={activeRightPanelSurface.id}
         environmentId={activeThread.environmentId}
         reference={{
           projectId: activeRightPanelSurface.projectId as ProjectId,
+          ...(activeRightPanelSurface.provider === undefined
+            ? {}
+            : { provider: activeRightPanelSurface.provider }),
           repository: activeRightPanelSurface.repository,
           number: activeRightPanelSurface.number,
         }}

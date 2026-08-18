@@ -333,7 +333,7 @@ export function PullRequestSummaryTab({
    * because only they know which thread's panel a peer tab belongs beside; without one the row
    * opens the issue on its host instead, which is never a dead control.
    */
-  onOpenLinkedIssue?: (link: IssueLink) => void;
+  onOpenLinkedIssue?: (link: IssueLink & { readonly provider: string }) => void;
   onRefresh: () => void;
 }) {
   // Keyed by the pull request, so opening another one starts at the end of its conversation
@@ -342,7 +342,12 @@ export function PullRequestSummaryTab({
   const aiMatches = useWorkItemMatches({
     environmentId,
     projectId: reference.projectId,
-    source: { kind: "pull-request", repository: reference.repository, number: reference.number },
+    source: {
+      kind: "pull-request",
+      provider: detail.provider,
+      repository: reference.repository,
+      number: reference.number,
+    },
     version: detail.updatedAt,
   });
   const openAiMatch = (match: { readonly url: string }) => {
@@ -663,7 +668,7 @@ export function PullRequestSummaryTab({
                 onClick={() =>
                   onOpenLinkedIssue === undefined
                     ? void readLocalApi()?.shell.openExternal(link.url)
-                    : onOpenLinkedIssue(link)
+                    : onOpenLinkedIssue({ ...link, provider: detail.provider })
                 }
                 className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60"
               >

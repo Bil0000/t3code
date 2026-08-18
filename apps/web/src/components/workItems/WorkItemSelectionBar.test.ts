@@ -23,6 +23,7 @@ function deferred<T>(): Deferred<T> {
 
 const item: SelectedWorkItem = {
   kind: "issue",
+  provider: "github",
   environmentId: "environment-1" as SelectedWorkItem["environmentId"],
   projectId: "project-1" as SelectedWorkItem["projectId"],
   repository: "acme/app",

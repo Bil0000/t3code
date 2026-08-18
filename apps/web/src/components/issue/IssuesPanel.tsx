@@ -147,10 +147,11 @@ function ProjectIssues({
           {/* Hand-offs land in the thread this panel sits beside, so reading an issue and acting
               on it stay one conversation. */}
           <IssueDetailPanel
-            key={`${selected.repository}#${selected.number}`}
+            key={`${selected.provider ?? ""}:${selected.repository}#${selected.number}`}
             environmentId={environmentId}
             reference={{
               projectId: selected.projectId as ProjectId,
+              ...(selected.provider === undefined ? {} : { provider: selected.provider }),
               repository: selected.repository,
               number: selected.number,
             }}
@@ -369,7 +370,12 @@ function IssueBrowserList({
   // Stable, because the rows are memoized on it.
   const select = useCallback(
     (entry: IssueListEntry) =>
-      onSelect({ projectId, repository: entry.repository, number: entry.number }),
+      onSelect({
+        projectId,
+        provider: entry.provider,
+        repository: entry.repository,
+        number: entry.number,
+      }),
     [onSelect, projectId],
   );
 

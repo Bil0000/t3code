@@ -20,10 +20,30 @@ const connectionState = vi.hoisted(() => ({
       accountEmail: string | null;
       teams: ReadonlyArray<{ id: string; key: string; name: string }>;
     }>,
+  } as {
+    status: "authenticated" | "unauthenticated" | "unverified";
+    hasStoredToken: boolean;
+    accountName: string | null;
+    accountEmail: string | null;
+    teams: ReadonlyArray<{ id: string; key: string; name: string }>;
+    accounts: ReadonlyArray<{
+      credentialId: string;
+      status: "authenticated" | "unauthenticated" | "unverified";
+      accountName: string;
+      accountEmail: string | null;
+      teams: ReadonlyArray<{ id: string; key: string; name: string }>;
+    }>;
+    environmentAccount?: {
+      status: "authenticated" | "unauthenticated" | "unverified";
+      accountName: string;
+      accountEmail: string | null;
+      teams: ReadonlyArray<{ id: string; key: string; name: string }>;
+    };
   },
   error: "Linear status failed" as string | null,
 }));
 const commands = vi.hoisted(() => ({
+  binding: vi.fn(),
   connect: vi.fn(),
   disconnect: vi.fn(),
   settings: vi.fn(),
@@ -69,6 +89,7 @@ vi.mock("../../state/issueTracking", () => ({
     linearStatus: vi.fn(),
     linearConnect: "connect",
     linearDisconnect: "disconnect",
+    linearSetProjectBinding: "binding",
   },
 }));
 vi.mock("../../state/query", async (importOriginal) => {
@@ -239,6 +260,10 @@ describe("Linear connection dialog", () => {
     await commands.connect.mock.results[0]?.value;
     await Promise.resolve();
 
+    expect(commands.connect).toHaveBeenCalledWith({
+      environmentId: "primary",
+      input: { token: "new-key", mode: "add" },
+    });
     expect(onProviderChanged).toHaveBeenCalledWith("updated");
   });
 
@@ -326,7 +351,7 @@ describe("Linear connection dialog", () => {
       project_1: { credentialId: "user-1", teamKey: "ENG" },
       deleted_project: { credentialId: "user-2", teamKey: "OPS" },
     };
-    commands.settings.mockResolvedValue(AsyncResult.success(undefined));
+    commands.binding.mockResolvedValue(AsyncResult.success(undefined));
     const onProviderChanged = vi.fn();
     const props = { open: true, onOpenChange: vi.fn(), onProviderChanged };
 
@@ -343,20 +368,13 @@ describe("Linear connection dialog", () => {
     (projectSelect?.props.onValueChange as ((value: string) => void) | undefined)?.(
       operations?.props.value as string,
     );
-    await commands.settings.mock.results[0]?.value;
+    await commands.binding.mock.results[0]?.value;
     await Promise.resolve();
-    expect(commands.settings).toHaveBeenLastCalledWith({
+    expect(commands.binding).toHaveBeenLastCalledWith({
       environmentId: "primary",
       input: {
-        patch: {
-          issueTracking: {
-            linear: {
-              projectBindings: {
-                project_1: { credentialId: "user-2", teamKey: "OPS" },
-              },
-            },
-          },
-        },
+        projectId: "project_1",
+        binding: { credentialId: "user-2", teamKey: "OPS" },
       },
     });
 
@@ -373,15 +391,11 @@ describe("Linear connection dialog", () => {
     (rerenderedSelect?.props.onValueChange as ((value: string) => void) | undefined)?.(
       unbound?.props.value as string,
     );
-    await commands.settings.mock.results[1]?.value;
+    await commands.binding.mock.results[1]?.value;
     await Promise.resolve();
-    expect(commands.settings).toHaveBeenLastCalledWith({
+    expect(commands.binding).toHaveBeenLastCalledWith({
       environmentId: "primary",
-      input: {
-        patch: {
-          issueTracking: { linear: { projectBindings: { project_1: null } } },
-        },
-      },
+      input: { projectId: "project_1", binding: null },
     });
     expect(onProviderChanged).toHaveBeenLastCalledWith("unavailable");
   });
@@ -431,7 +445,7 @@ describe("Linear connection dialog", () => {
     settingsState.projectBindings = {
       project_1: { credentialId: "missing-user", teamKey: "GONE" },
     };
-    commands.settings.mockResolvedValue(AsyncResult.success(undefined));
+    commands.binding.mockResolvedValue(AsyncResult.success(undefined));
     const onProviderChanged = vi.fn();
     const props = { open: true, onOpenChange: vi.fn(), onProviderChanged };
 
@@ -450,16 +464,196 @@ describe("Linear connection dialog", () => {
     (projectSelect?.props.onValueChange as ((value: string) => void) | undefined)?.(
       unbound?.props.value as string,
     );
-    await commands.settings.mock.results[0]?.value;
+    await commands.binding.mock.results[0]?.value;
     await Promise.resolve();
 
-    expect(commands.settings).toHaveBeenCalledWith({
+    expect(commands.binding).toHaveBeenCalledWith({
       environmentId: "primary",
-      input: {
-        patch: { issueTracking: { linear: { projectBindings: { project_1: null } } } },
-      },
+      input: { projectId: "project_1", binding: null },
     });
     expect(onProviderChanged).toHaveBeenCalledWith("unavailable");
+  });
+
+  it("keeps project team editing available for an environment API token", async () => {
+    connectionState.data = {
+      status: "authenticated",
+      hasStoredToken: false,
+      accountName: "Environment account",
+      accountEmail: null,
+      teams: [
+        { id: "team-1", key: "ENG", name: "Engineering" },
+        { id: "team-2", key: "OPS", name: "Operations" },
+      ],
+      accounts: [],
+    };
+    connectionState.error = null;
+    projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
+    settingsState.projectBindings = { project_1: null };
+    settingsState.projectTeams = { project_1: "ENG" };
+    commands.settings.mockResolvedValue(AsyncResult.success(undefined));
+    const props = { open: true, onOpenChange: vi.fn(), onProviderChanged: vi.fn() };
+
+    hooks.beginRender();
+    let dialog = LinearConnectionDialog(props);
+    expect(textContent(dialog)).toContain("Project connections");
+    expect(textContent(dialog)).toContain("Engineering (ENG)");
+    const operations = visitElements(
+      dialog,
+      (element) => element.type === SelectItem && textContent(element).includes("Operations (OPS)"),
+    );
+    const projectSelect = visitElements(
+      dialog,
+      (element) => element.type === Select && element.props.value !== undefined,
+    );
+    expect(projectSelect?.props.value).toBe("__unmapped__");
+    (projectSelect?.props.onValueChange as ((value: string) => void) | undefined)?.(
+      operations?.props.value as string,
+    );
+    await commands.settings.mock.results[0]?.value;
+
+    expect(commands.settings).toHaveBeenLastCalledWith({
+      environmentId: "primary",
+      input: {
+        patch: {
+          issueTracking: {
+            linear: {
+              projectBindingsToDelete: ["project_1"],
+              projectTeams: { project_1: "OPS" },
+            },
+          },
+        },
+      },
+    });
+
+    hooks.beginRender();
+    dialog = LinearConnectionDialog(props);
+    const unbound = visitElements(
+      dialog,
+      (element) => element.type === SelectItem && element.props.children === "Not connected",
+    );
+    const rerenderedSelect = visitElements(
+      dialog,
+      (element) => element.type === Select && element.props.value !== undefined,
+    );
+    (rerenderedSelect?.props.onValueChange as ((value: string) => void) | undefined)?.(
+      unbound?.props.value as string,
+    );
+    await commands.settings.mock.results[1]?.value;
+
+    expect(commands.settings).toHaveBeenLastCalledWith({
+      environmentId: "primary",
+      input: {
+        patch: { issueTracking: { linear: { projectTeamsToDelete: ["project_1"] } } },
+      },
+    });
+  });
+
+  it("keeps a healthy single-key response from an older server usable", () => {
+    connectionState.data = {
+      status: "authenticated",
+      hasStoredToken: true,
+      accountName: "Legacy account",
+      accountEmail: null,
+      teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
+      accounts: [],
+    };
+    connectionState.error = null;
+    projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
+    settingsState.projectTeams = { project_1: "ENG" };
+
+    hooks.beginRender();
+    const dialog = LinearConnectionDialog({
+      open: true,
+      onOpenChange: vi.fn(),
+      onProviderChanged: vi.fn(),
+    });
+
+    expect(textContent(dialog)).toContain("Project connections");
+    expect(textContent(dialog)).toContain("Engineering (ENG)");
+    expect(textContent(dialog)).not.toContain("Saved API key needs attention");
+  });
+
+  it("offers environment and saved teams together", () => {
+    connectionState.data = {
+      status: "authenticated",
+      hasStoredToken: true,
+      accountName: "Saved account",
+      accountEmail: null,
+      teams: [],
+      accounts: [
+        {
+          credentialId: "saved-user",
+          status: "authenticated",
+          accountName: "Saved account",
+          accountEmail: null,
+          teams: [{ id: "team-saved", key: "SAVED", name: "Saved" }],
+        },
+      ],
+      environmentAccount: {
+        status: "authenticated",
+        accountName: "Environment account",
+        accountEmail: null,
+        teams: [{ id: "team-env", key: "ENV", name: "Environment" }],
+      },
+    };
+    connectionState.error = null;
+    projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
+
+    hooks.beginRender();
+    const dialog = LinearConnectionDialog({
+      open: true,
+      onOpenChange: vi.fn(),
+      onProviderChanged: vi.fn(),
+    });
+
+    expect(textContent(dialog)).toContain("Environment (ENV)");
+    expect(textContent(dialog)).toContain("Saved (SAVED)");
+  });
+
+  it("shows and clears a project linked to an invalid environment token", async () => {
+    connectionState.data = {
+      status: "unverified",
+      hasStoredToken: false,
+      accountName: null,
+      accountEmail: null,
+      teams: [],
+      accounts: [],
+      environmentAccount: {
+        status: "unverified",
+        accountName: "Environment account",
+        accountEmail: null,
+        teams: [],
+      },
+    };
+    connectionState.error = null;
+    projectsState.projects = [{ id: "project_1", title: "T3 Code", environmentId: "primary" }];
+    settingsState.projectTeams = { project_1: "ENG" };
+    commands.binding.mockResolvedValue(AsyncResult.success(undefined));
+
+    hooks.beginRender();
+    const dialog = LinearConnectionDialog({
+      open: true,
+      onOpenChange: vi.fn(),
+      onProviderChanged: vi.fn(),
+    });
+    expect(textContent(dialog)).toContain("Needs attention");
+    const unbound = visitElements(
+      dialog,
+      (element) => element.type === SelectItem && element.props.children === "Not connected",
+    );
+    const projectSelect = visitElements(
+      dialog,
+      (element) => element.type === Select && element.props.value !== undefined,
+    );
+    (projectSelect?.props.onValueChange as ((value: string) => void) | undefined)?.(
+      unbound?.props.value as string,
+    );
+    await commands.binding.mock.results[0]?.value;
+
+    expect(commands.binding).toHaveBeenCalledWith({
+      environmentId: "primary",
+      input: { projectId: "project_1", binding: null },
+    });
   });
 
   it("removes an invalid legacy key before another key can be added", async () => {

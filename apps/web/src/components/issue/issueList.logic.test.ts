@@ -1,4 +1,4 @@
-import { issueSourceKey, type IssueListEntry } from "@t3tools/contracts";
+import { issueProjectSourceKey, issueSourceKey, type IssueListEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -135,6 +135,37 @@ describe("issue involvement filtering", () => {
     expect(
       filterIssuesByInvolvement(mixed, viewers, "authored").map((item) => item.number),
     ).toEqual([1, 2]);
+  });
+
+  it("uses each Linear project's viewer before the shared account fallback", () => {
+    const firstProjectId = "linear-one" as IssueListEntry["projectId"];
+    const secondProjectId = "linear-two" as IssueListEntry["projectId"];
+    const first = entry({
+      number: 1,
+      provider: "linear",
+      host: "linear.app",
+      projectId: firstProjectId,
+      repository: "T3",
+      author: actor("Alice"),
+      assignees: [actor("Carol")],
+    });
+    const second = entry({
+      number: 2,
+      provider: "linear",
+      host: "linear.app",
+      projectId: secondProjectId,
+      repository: "T3",
+      author: actor("Carol"),
+      assignees: [actor("Bob")],
+    });
+    const viewers = {
+      [issueProjectSourceKey("linear", "linear.app", firstProjectId)]: "Alice",
+      [issueProjectSourceKey("linear", "linear.app", secondProjectId)]: "Bob",
+      [issueSourceKey("linear", "linear.app")]: "Fallback",
+    };
+
+    expect(filterIssuesByInvolvement([first, second], viewers, "authored")).toEqual([first]);
+    expect(filterIssuesByInvolvement([first, second], viewers, "assigned")).toEqual([second]);
   });
 });
 
@@ -313,6 +344,31 @@ describe("issue row keys", () => {
     expect(issueEntryKey(entry({ number: 7 }))).not.toBe(
       issueEntryKey(entry({ number: 7, host: "github.acme.dev" })),
     );
+  });
+
+  it("tells the same Linear team issue from two projects apart", () => {
+    const firstProjectId = "linear-one" as IssueListEntry["projectId"];
+    const secondProjectId = "linear-two" as IssueListEntry["projectId"];
+    const first = entry({
+      number: 7,
+      provider: "linear",
+      host: "linear.app",
+      projectId: firstProjectId,
+      repository: "T3",
+    });
+    const second = entry({
+      number: 7,
+      provider: "linear",
+      host: "linear.app",
+      projectId: secondProjectId,
+      repository: "T3",
+    });
+
+    expect(issueEntryKey(first)).not.toBe(issueEntryKey(second));
+    expect(partitionIssuesWithPriority([first, second], [], [first], () => true)).toEqual([
+      { key: "assigned", label: "Assigned to you", entries: [first] },
+      { key: "others", label: "Others", entries: [second] },
+    ]);
   });
 });
 

@@ -1,10 +1,11 @@
-import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
+import type { EnvironmentId, IssueProviderKind, ProjectId } from "@t3tools/contracts";
 import { create } from "zustand";
 
 export const MAX_SELECTED_WORK_ITEMS = 20;
 
 export interface SelectedWorkItem {
   readonly kind: "issue" | "pull-request";
+  readonly provider: IssueProviderKind;
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly repository: string;
@@ -16,7 +17,7 @@ export interface SelectedWorkItem {
 type SelectionError = "project" | "limit" | null;
 
 const keyOf = (item: SelectedWorkItem) =>
-  `${item.kind}:${item.environmentId}:${item.projectId}:${item.repository}:${item.number}`;
+  `${item.kind}:${item.provider}:${item.environmentId}:${item.projectId}:${item.repository}:${item.number}`;
 
 export function addWorkItem(
   items: ReadonlyArray<SelectedWorkItem>,
