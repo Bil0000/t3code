@@ -10,7 +10,11 @@ import {
   resolveDesignPosition,
   serializeDesignDocument,
 } from "./DesignDocument.ts";
-import { ANNOTATION_TOOL_ATTRIBUTE, DESIGN_CHANGED_CHANNEL } from "./GuestProtocol.ts";
+import {
+  ANNOTATION_TOOL_ATTRIBUTE,
+  DESIGN_CHANGED_CHANNEL,
+  DESIGN_EDITING_CHANNEL,
+} from "./GuestProtocol.ts";
 
 type Tool = "select" | "draw" | "arrow" | "box" | "circle" | "highlight";
 type Point = { x: number; y: number };
@@ -154,22 +158,21 @@ function startDesignEditor(): void {
     button:active:not(:disabled){transform:scale(.97)}
     button[aria-pressed=true]{background:light-dark(#e9e9e9,#353535);color:light-dark(#111,#fff)}
     button:disabled{opacity:.35;cursor:default}
-    .panel{pointer-events:auto;position:fixed;top:8px;right:8px;bottom:8px;display:flex;width:min(300px,calc(100vw - 16px));flex-direction:column;overflow:hidden;border:1px solid light-dark(#deddd9,#3b3b3b);border-radius:13px;background:light-dark(rgba(250,249,246,.97),rgba(25,25,25,.97));box-shadow:0 16px 42px rgba(0,0,0,.2);backdrop-filter:blur(20px)}
-    .panel-header,.tabs,.tools,.actions{display:flex;align-items:center;gap:4px;padding:7px 9px;border-bottom:1px solid light-dark(#e5e3df,#353535)}
+    .panel{pointer-events:auto;position:fixed;top:8px;right:8px;display:flex;width:min(280px,calc(100vw - 16px));max-height:calc(100vh - 16px);flex-direction:column;overflow:hidden;border:1px solid light-dark(#deddd9,#3b3b3b);border-radius:13px;background:light-dark(rgba(250,249,246,.97),rgba(25,25,25,.97));box-shadow:0 16px 42px rgba(0,0,0,.2);backdrop-filter:blur(20px)}
+    .panel[hidden]{display:none}.panel-header,.tools,.actions{display:flex;align-items:center;gap:4px;padding:7px 9px;border-bottom:1px solid light-dark(#e5e3df,#353535)}
     .panel-header{justify-content:space-between;font-weight:650}.panel-header button{height:26px;border:1px solid light-dark(#d8d6d1,#454545);background:light-dark(#fff,#292929)}
-    .tabs{padding:5px 9px}.tabs button{height:26px;padding:0 10px}.tabs button[aria-pressed=true]{background:#2563eb;color:#fff}
-    .tab-panel{min-height:0;flex:1;overflow:auto}.tab-panel[hidden]{display:none}.tools{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:0;padding:8px}.tools button{height:34px;padding:0 4px;border:1px solid light-dark(#e1dfdb,#3d3d3d);background:light-dark(#fff,#242424)}
-    .section{border-top:1px solid light-dark(#e5e3df,#353535);padding:10px}.section-title{display:flex;align-items:center;justify-content:space-between;margin:0 0 7px;font-size:12px;font-weight:650}.layers{max-height:170px;overflow:auto}.layer{display:block;width:100%;height:25px;overflow:hidden;text-align:left;text-overflow:ellipsis;color:light-dark(#555,#bbb)}.layer[aria-selected=true]{background:light-dark(#e9e7e2,#383838);color:inherit}
+    .editor-body{min-height:0;overflow:auto}.tools{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:8px}.tools button{height:32px;padding:0 4px;border:1px solid light-dark(#e1dfdb,#3d3d3d);background:light-dark(#fff,#242424)}
+    .section{border-top:1px solid light-dark(#e5e3df,#353535);padding:10px}.section-title{display:flex;align-items:center;justify-content:space-between;margin:0 0 7px;font-size:12px;font-weight:650}.layers{max-height:128px;overflow:auto}.layer{display:block;width:100%;height:25px;overflow:hidden;text-align:left;text-overflow:ellipsis;color:light-dark(#555,#bbb)}.layer[aria-selected=true]{background:light-dark(#e9e7e2,#383838);color:inherit}
+    .hover{display:none;pointer-events:none;position:fixed;z-index:0;border:2px solid #2563eb;background:rgba(37,99,235,.08);border-radius:3px}
     .selection{display:none;pointer-events:none;position:fixed;z-index:1;border:2px solid #e5486d;box-shadow:0 0 0 1px white;border-radius:2px}
     .tag{position:absolute;left:-2px;bottom:calc(100% + 5px);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:4px;background:#e5486d;color:white;padding:3px 6px}
-    .attach{pointer-events:auto;position:absolute;left:50%;top:-14px;width:26px;height:26px;transform:translateX(-50%);border:2px solid white;border-radius:999px;background:#22c55e;color:white;padding:0;font-size:18px;line-height:20px;box-shadow:0 2px 8px rgba(0,0,0,.22)}
     .handle{pointer-events:auto;position:absolute;width:10px;height:10px;border:2px solid white;border-radius:2px;background:#e5486d;padding:0}
     .nw{left:-6px;top:-6px;cursor:nwse-resize}.ne{right:-6px;top:-6px;cursor:nesw-resize}.sw{left:-6px;bottom:-6px;cursor:nesw-resize}.se{right:-6px;bottom:-6px;cursor:nwse-resize}
     .inspector{display:none}.inspector h2{margin:0;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
     .field{display:grid;grid-template-columns:78px minmax(0,1fr);align-items:center;gap:7px;margin-top:6px;color:light-dark(#686764,#aaa)}
     .field input,.field textarea,.field select{min-width:0;width:100%;border:1px solid light-dark(#dedcd7,#444);border-radius:7px;background:light-dark(#fff,#242424);padding:5px 7px;outline:none}
     .field input,.field select{height:29px}.field input[type=color]{width:30px;padding:3px}.field textarea{height:56px;resize:vertical}.color-control{display:grid;grid-template-columns:30px minmax(0,1fr);gap:5px}
-    .hint{padding:10px;color:light-dark(#777,#999)}.actions{margin-top:auto;border-top:1px solid light-dark(#e5e3df,#353535);border-bottom:0}.actions button{flex:1;border:1px solid light-dark(#dfddd8,#414141)}
+    .actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid light-dark(#e5e3df,#353535);border-bottom:0}.actions button{padding:0 4px;border:1px solid light-dark(#dfddd8,#414141)}.actions .attach{grid-column:1/-1;background:#2563eb;color:white;border-color:#2563eb}
     .text-toolbar{pointer-events:auto;position:fixed;display:none;gap:2px;padding:4px;border:1px solid light-dark(#d9d7d2,#414141);border-radius:9px;background:light-dark(#fff,#222);box-shadow:0 10px 28px rgba(0,0,0,.2)}.text-toolbar button{min-width:28px;padding:0 7px;font-size:13px}
     @media (hover:hover) and (pointer:fine){button:hover:not(:disabled){background:light-dark(#eceae6,#363636)}}
   `;
@@ -185,17 +188,8 @@ function startDesignEditor(): void {
   saveNow.type = "button";
   saveNow.textContent = "Save";
   panelHeader.append(panelTitle, saveNow);
-  const tabs = document.createElement("div");
-  tabs.className = "tabs";
-  const editTabButton = document.createElement("button");
-  editTabButton.type = "button";
-  editTabButton.textContent = "Edit";
-  const tweaksTabButton = document.createElement("button");
-  tweaksTabButton.type = "button";
-  tweaksTabButton.textContent = "Tweaks";
-  tabs.append(editTabButton, tweaksTabButton);
   const editPanel = document.createElement("div");
-  editPanel.className = "tab-panel";
+  editPanel.className = "editor-body";
   const editTools = document.createElement("div");
   editTools.className = "tools";
   const layersSection = document.createElement("section");
@@ -206,17 +200,13 @@ function startDesignEditor(): void {
   const layers = document.createElement("div");
   layers.className = "layers";
   layersSection.append(layersTitle, layers);
+  const hover = document.createElement("div");
+  hover.className = "hover";
   const selection = document.createElement("div");
   selection.className = "selection";
   const tag = document.createElement("div");
   tag.className = "tag";
-  const attach = document.createElement("button");
-  attach.type = "button";
-  attach.className = "attach";
-  attach.textContent = "+";
-  attach.title = "Attach selection to chat";
-  attach.setAttribute("aria-label", "Attach selection to chat");
-  selection.append(tag, attach);
+  selection.appendChild(tag);
   const inspector = document.createElement("div");
   inspector.className = "inspector";
   const inspectorTitle = document.createElement("h2");
@@ -225,20 +215,13 @@ function startDesignEditor(): void {
   selectionSection.appendChild(inspectorTitle);
   inspector.appendChild(selectionSection);
   editPanel.append(editTools, layersSection, inspector);
-  const tweaksPanel = document.createElement("div");
-  tweaksPanel.className = "tab-panel";
-  const tweakTools = document.createElement("div");
-  tweakTools.className = "tools";
-  const tweakHint = document.createElement("div");
-  tweakHint.className = "hint";
-  tweakHint.textContent = "Draw feedback on the design, then attach any selected item with +.";
-  tweaksPanel.append(tweakTools, tweakHint);
   const actions = document.createElement("div");
   actions.className = "actions";
   const textToolbar = document.createElement("div");
   textToolbar.className = "text-toolbar";
-  toolbar.append(panelHeader, tabs, editPanel, tweaksPanel, actions);
-  root.append(toolbar, selection, textToolbar);
+  toolbar.append(panelHeader, editPanel, actions);
+  toolbar.hidden = true;
+  root.append(toolbar, hover, selection, textToolbar);
 
   const toolButtons = new Map<Tool, HTMLButtonElement>();
   let tool: Tool = "select";
@@ -247,6 +230,7 @@ function startDesignEditor(): void {
   let history: HistoryEntry[] = [];
   let historyIndex = 0;
   let saveTimer: number | null = null;
+  let editorOpen = false;
 
   const save = (annotation?: DesktopPreviewDesignChangePayload["annotation"]): void => {
     saveTimer = null;
@@ -304,11 +288,17 @@ function startDesignEditor(): void {
   };
 
   const refreshSelection = (): void => {
+    if (!editorOpen) {
+      selection.style.display = "none";
+      textToolbar.style.display = "none";
+      return;
+    }
     if (!selected?.isConnected) {
       selected = null;
       selection.style.display = "none";
       inspector.style.display = "none";
       textToolbar.style.display = "none";
+      attach.disabled = true;
       remove.disabled = true;
       choose.disabled = true;
       return;
@@ -326,6 +316,7 @@ function startDesignEditor(): void {
     inspectorTitle.textContent = tag.textContent;
     remove.disabled = false;
     choose.disabled = false;
+    attach.disabled = false;
     const computed = getComputedStyle(selected);
     const position = positionOf(selected);
     textValue.disabled = selected.childElementCount > 0;
@@ -382,12 +373,17 @@ function startDesignEditor(): void {
       row.type = "button";
       row.className = "layer";
       row.style.paddingLeft = `${8 + Math.min(depth, 6) * 12}px`;
-      const id =
-        element.getAttribute("data-t3-design-artboard") ??
-        element.getAttribute("data-t3-design-id") ??
-        element.id;
-      const text = element.textContent?.trim().replace(/\s+/g, " ").slice(0, 28);
-      row.textContent = id || text || element.tagName.toLowerCase();
+      const artboard = element.getAttribute("data-t3-design-artboard");
+      const id = element.getAttribute("data-t3-design-id") || element.id;
+      const text =
+        element.childElementCount === 0
+          ? element.textContent?.trim().replace(/\s+/g, " ").slice(0, 28)
+          : null;
+      row.textContent =
+        artboard ||
+        id ||
+        (element.hasAttribute("data-t3-design-artboard") ? "Artboard" : text) ||
+        element.tagName.toLowerCase();
       row.title = `${element.tagName.toLowerCase()}${id ? ` · ${id}` : ""}`;
       row.setAttribute("aria-selected", String(element === selected));
       row.addEventListener("click", () => selectElement(element));
@@ -416,7 +412,7 @@ function startDesignEditor(): void {
     if (persist) scheduleSave();
   };
 
-  attach.addEventListener("click", (event) => {
+  const attachSelection = (): void => {
     if (!selected) return;
     const id = selected.getAttribute("data-t3-design-id");
     if (!id) return;
@@ -435,13 +431,11 @@ function startDesignEditor(): void {
         createdAt: new Date().toISOString(),
       }),
     );
-    attach.textContent = "✓";
+    attach.textContent = "Attached";
     window.setTimeout(() => {
-      attach.textContent = "+";
+      attach.textContent = "Attach selection";
     }, 900);
-    event.preventDefault();
-    event.stopPropagation();
-  });
+  };
 
   const commitElementState = (element: HTMLElement | SVGElement, before: ElementState): void => {
     const after = stateOf(element);
@@ -479,37 +473,30 @@ function startDesignEditor(): void {
     return element;
   };
 
-  const setTab = (tab: "edit" | "tweaks"): void => {
-    const editing = tab === "edit";
-    editTabButton.setAttribute("aria-pressed", String(editing));
-    tweaksTabButton.setAttribute("aria-pressed", String(!editing));
-    editPanel.hidden = !editing;
-    tweaksPanel.hidden = editing;
-  };
-  editTabButton.addEventListener("click", () => setTab("edit"));
-  tweaksTabButton.addEventListener("click", () => setTab("tweaks"));
-
   const setTool = (next: Tool): void => {
     tool = next;
     for (const [candidate, element] of toolButtons) {
       element.setAttribute("aria-pressed", String(candidate === tool));
     }
-    document.documentElement.style.cursor = tool === "select" ? "default" : "crosshair";
+    document.documentElement.style.cursor = editorOpen && tool !== "select" ? "crosshair" : "";
+    if (tool !== "select") hover.style.display = "none";
   };
 
-  for (const [value, label, parent] of [
-    ["select", "Select", editTools],
-    ["draw", "Draw", tweakTools],
-    ["arrow", "Arrow", tweakTools],
-    ["box", "Box", tweakTools],
-    ["circle", "Circle", tweakTools],
-    ["highlight", "Highlight", tweakTools],
+  for (const [value, label] of [
+    ["select", "Select"],
+    ["draw", "Draw"],
+    ["arrow", "Arrow"],
+    ["box", "Box"],
+    ["circle", "Circle"],
+    ["highlight", "Highlight"],
   ] as const) {
-    const element = button(label, () => setTool(value), parent);
+    const element = button(label, () => setTool(value), editTools);
     element.setAttribute("aria-pressed", "false");
     toolButtons.set(value, element);
   }
 
+  const attach = button("Attach selection", attachSelection, actions);
+  attach.className = "attach";
   const undo = button("Undo", () => runHistory(-1), actions);
   const redo = button("Redo", () => runHistory(1), actions);
 
@@ -557,7 +544,7 @@ function startDesignEditor(): void {
   };
 
   button("Text", () => addText(), editTools);
-  button("Note", () => addText(true), tweakTools);
+  button("Note", () => addText(true), editTools);
 
   const findArtboard = (element: Element): Element | null => {
     const marked = element.closest(ARTBOARD_SELECTOR);
@@ -962,8 +949,31 @@ function startDesignEditor(): void {
   const annotationActive = (): boolean =>
     document.documentElement.hasAttribute(ANNOTATION_TOOL_ATTRIBUTE);
 
+  const hideHover = (): void => {
+    hover.style.display = "none";
+  };
+
+  const updateHover = (event: PointerEvent): void => {
+    if (tool !== "select" || drag || isUiElement(event.target)) {
+      hideHover();
+      return;
+    }
+    const target = targetFromPoint(event.clientX, event.clientY);
+    if (!target || target === selected) {
+      hideHover();
+      return;
+    }
+    const rect = target.getBoundingClientRect();
+    hover.style.display = "block";
+    hover.style.transform = `translate(${rect.left}px,${rect.top}px)`;
+    hover.style.width = `${rect.width}px`;
+    hover.style.height = `${rect.height}px`;
+  };
+
   const onPointerDown = (event: PointerEvent): void => {
-    if (annotationActive() || event.button !== 0 || isUiElement(event.target)) return;
+    if (!editorOpen || annotationActive() || event.button !== 0 || isUiElement(event.target))
+      return;
+    hideHover();
     if (editingText && event.target instanceof Node && !editingText.contains(event.target))
       finishEditingText?.();
     if (event.target instanceof Element) event.target.setPointerCapture(event.pointerId);
@@ -992,7 +1002,12 @@ function startDesignEditor(): void {
   };
 
   const onPointerMove = (event: PointerEvent): void => {
-    if (annotationActive() || !drag) return;
+    if (!editorOpen || annotationActive()) return;
+    if (!drag) {
+      updateHover(event);
+      return;
+    }
+    hideHover();
     if (drag.kind === "move") {
       const x = drag.x + event.clientX - drag.start.x;
       const y = drag.y + event.clientY - drag.start.y;
@@ -1034,7 +1049,7 @@ function startDesignEditor(): void {
   };
 
   const onPointerUp = (event: PointerEvent): void => {
-    if (annotationActive() || !drag) return;
+    if (!editorOpen || annotationActive() || !drag) return;
     const completed = drag;
     drag = null;
     if (completed.kind === "move" || completed.kind === "resize") {
@@ -1056,7 +1071,7 @@ function startDesignEditor(): void {
   };
 
   const editText = (event: MouseEvent): void => {
-    if (annotationActive() || tool !== "select" || isUiElement(event.target)) return;
+    if (!editorOpen || annotationActive() || tool !== "select" || isUiElement(event.target)) return;
     const target = event.target;
     if (!(target instanceof HTMLElement) || target.childElementCount > 0) return;
     selectElement(target);
@@ -1106,7 +1121,7 @@ function startDesignEditor(): void {
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
-    if (annotationActive()) return;
+    if (!editorOpen || annotationActive()) return;
     const typing =
       event.target instanceof HTMLInputElement ||
       event.target instanceof HTMLTextAreaElement ||
@@ -1132,10 +1147,30 @@ function startDesignEditor(): void {
   };
 
   const preventNavigation = (event: MouseEvent): void => {
-    if (!annotationActive() && tool === "select" && !isUiElement(event.target)) {
+    if (editorOpen && !annotationActive() && tool === "select" && !isUiElement(event.target)) {
       event.preventDefault();
       event.stopPropagation();
     }
+  };
+
+  const setEditorOpen = (active: boolean): void => {
+    editorOpen = active;
+    toolbar.hidden = !active;
+    drag = null;
+    finishEditingText?.();
+    hideHover();
+    setTool("select");
+    if (!active) {
+      selection.style.display = "none";
+      textToolbar.style.display = "none";
+      return;
+    }
+    refreshLayers();
+    refreshSelection();
+  };
+
+  const onDesignEditing = (_event: Electron.IpcRendererEvent, active: unknown): void => {
+    if (typeof active === "boolean") setEditorOpen(active);
   };
 
   window.addEventListener("pointerdown", onPointerDown, true);
@@ -1146,24 +1181,39 @@ function startDesignEditor(): void {
   window.addEventListener("dblclick", editText, true);
   window.addEventListener("keydown", onKeyDown, true);
   window.addEventListener("pagehide", flushSave, { once: true });
-  window.addEventListener("scroll", refreshSelection, { capture: true, passive: true });
+  window.addEventListener(
+    "scroll",
+    () => {
+      refreshSelection();
+      hideHover();
+    },
+    { capture: true, passive: true },
+  );
   window.addEventListener("resize", refreshSelection, { passive: true });
   document.documentElement.appendChild(host);
+  ipcRenderer.on(DESIGN_EDITING_CHANNEL, onDesignEditing);
   const annotationObserver = new MutationObserver(() => {
     const active = annotationActive();
     host.style.display = active ? "none" : "";
     if (active) {
       drag = null;
       finishEditingText?.();
+      hideHover();
     }
   });
   annotationObserver.observe(document.documentElement, {
     attributes: true,
     attributeFilter: [ANNOTATION_TOOL_ATTRIBUTE],
   });
-  window.addEventListener("pagehide", () => annotationObserver.disconnect(), { once: true });
-  setTab("edit");
-  setTool("select");
+  window.addEventListener(
+    "pagehide",
+    () => {
+      annotationObserver.disconnect();
+      ipcRenderer.removeListener(DESIGN_EDITING_CHANNEL, onDesignEditing);
+    },
+    { once: true },
+  );
+  setEditorOpen(false);
   refreshHistoryButtons();
   selectElement(document.querySelector(`[${FOCUS_ATTRIBUTE}]`), false);
 }

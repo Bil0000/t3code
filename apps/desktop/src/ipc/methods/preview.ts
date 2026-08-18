@@ -14,6 +14,7 @@ import {
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
   DesktopPreviewSetColorSchemeInputSchema,
+  DesktopPreviewSetDesignEditingInputSchema,
   DesktopPreviewCreateTabInputSchema,
   DesktopPreviewTabInputSchema,
   DesktopPreviewWebviewConfigSchema,
@@ -154,6 +155,15 @@ export const setColorScheme = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.setColorScheme")(function* ({ tabId, colorScheme }) {
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.setColorScheme(tabId, colorScheme);
+  }),
+});
+export const setDesignEditing = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_DESIGN_EDITING_CHANNEL,
+  payload: DesktopPreviewSetDesignEditingInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setDesignEditing")(function* ({ tabId, editing }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setDesignEditing(tabId, editing);
   }),
 });
 export const openDevTools = tabMethod(
@@ -375,6 +385,7 @@ export const methods = [
   resetZoom,
   hardReload,
   setColorScheme,
+  setDesignEditing,
   openDevTools,
   clearCookies,
   clearCache,

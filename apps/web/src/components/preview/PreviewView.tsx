@@ -104,6 +104,7 @@ export function PreviewView({
 }: Props) {
   const [focusUrlNonce, setFocusUrlNonce] = useState<number | undefined>(undefined);
   const [pickActive, setPickActive] = useState(false);
+  const [designEditing, setDesignEditing] = useState(false);
   const activeRecordingTabIds = useActiveBrowserRecordingTabIds();
   const pickActiveRef = useRef(false);
   const isMountedRef = useRef(true);
@@ -201,6 +202,15 @@ export function PreviewView({
       );
     });
   }, [addPreviewAnnotation, designSaver, runtimeTabId]);
+
+  useEffect(() => {
+    setDesignEditing(false);
+  }, [designPath, runtimeTabId]);
+
+  useEffect(() => {
+    if (!previewBridge || !runtimeTabId || !designPath || loading) return;
+    void previewBridge.setDesignEditing(runtimeTabId, designEditing);
+  }, [designEditing, designPath, loading, runtimeTabId]);
 
   const navUrl = navStatus._tag === "Success" ? navStatus.url : null;
   const navTitle = navStatus._tag === "Success" ? navStatus.title : null;
@@ -727,6 +737,12 @@ export function PreviewView({
         onCapture={previewBridge && tabId ? handleCapture : undefined}
         captureDisabled={!desktopOverlay || isUnreachable}
         recording={recordingRuntimeTabId !== null}
+        onToggleDesignEditing={
+          previewBridge && runtimeTabId && designPath
+            ? () => setDesignEditing((active) => !active)
+            : undefined
+        }
+        designEditing={designEditing}
         onPictureInPicture={previewBridge && tabId ? handlePictureInPicture : undefined}
         pictureInPicture={miniPlayer?.tabId === tabId}
         pictureInPictureDisabled={!desktopOverlay?.hasWebContents || isUnreachable}

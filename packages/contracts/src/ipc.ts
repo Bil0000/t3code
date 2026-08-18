@@ -1008,6 +1008,11 @@ export const DesktopPreviewSetColorSchemeInputSchema = Schema.Struct({
   colorScheme: DesktopPreviewColorSchemeSchema,
 });
 
+export const DesktopPreviewSetDesignEditingInputSchema = Schema.Struct({
+  tabId: DesktopPreviewTabIdSchema,
+  editing: Schema.Boolean,
+});
+
 export const DesktopPreviewAnnotationThemeInputSchema = Schema.Struct({
   theme: DesktopPreviewAnnotationThemeSchema,
 });
@@ -1159,6 +1164,7 @@ export interface DesktopPreviewBridge {
    * override). Persists per tab and is re-applied across webview swaps.
    */
   setColorScheme: (tabId: string, colorScheme: DesktopPreviewColorScheme) => Promise<void>;
+  setDesignEditing: (tabId: string, editing: boolean) => Promise<void>;
   /** Open the guest webview's DevTools (detached). */
   openDevTools: (tabId: string) => Promise<void>;
   /** Drop cookies + storage data for the preview partition (all tabs). */

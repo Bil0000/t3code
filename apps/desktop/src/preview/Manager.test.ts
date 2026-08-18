@@ -326,6 +326,25 @@ describe("PreviewManager", () => {
     webviewSend.mockClear();
   });
 
+  effectIt.effect("sends design editing state to the active guest", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        fromId.mockReturnValue(
+          makeTestPreviewWebContents(async () => ({
+            toJPEG: () => Buffer.alloc(0),
+            getSize: () => ({ width: 1, height: 1 }),
+          })),
+        );
+        yield* manager.createTab("tab_design");
+        yield* manager.registerWebview("tab_design", 42);
+
+        yield* manager.setDesignEditing("tab_design", true);
+
+        expect(webviewSend).toHaveBeenCalledWith("preview:set-design-editing", true);
+      }),
+    ),
+  );
+
   effectIt.effect("reports an unregistered webview as temporarily unavailable", () =>
     withManager((manager) =>
       Effect.gen(function* () {

@@ -60,6 +60,7 @@ import {
   ANNOTATION_THEME_CHANNEL,
   CANCEL_PICK_CHANNEL,
   DESIGN_CHANGED_CHANNEL,
+  DESIGN_EDITING_CHANNEL,
   ELEMENT_PICKED_CHANNEL,
   HUMAN_INPUT_CHANNEL,
   MOUSE_NAVIGATE_CHANNEL,
@@ -2018,6 +2019,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
   const refresh = (tabId: string) => withWebContents("refresh", tabId, (wc) => wc.reload());
   const hardReload = (tabId: string) =>
     withWebContents("hardReload", tabId, (wc) => wc.reloadIgnoringCache());
+  const setDesignEditing = (tabId: string, editing: boolean) =>
+    withWebContents("setDesignEditing", tabId, (wc) => wc.send(DESIGN_EDITING_CHANNEL, editing));
 
   const openDevTools = Effect.fn("PreviewManager.openDevTools")(function* (tabId: string) {
     const wc = yield* requireWebContents(tabId);
@@ -3569,6 +3572,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
     saveRecording,
     setAnnotationTheme,
     setColorScheme,
+    setDesignEditing,
     setMainWindow,
     startRecording,
     closePictureInPicture,
@@ -3873,6 +3877,10 @@ export class PreviewManager extends Context.Service<
       tabId: string,
       colorScheme: DesktopPreviewColorScheme,
     ) => Effect.Effect<void, PreviewManagerError>;
+    readonly setDesignEditing: (
+      tabId: string,
+      editing: boolean,
+    ) => Effect.Effect<void, PreviewManagerError>;
     readonly openDevTools: (tabId: string) => Effect.Effect<void, PreviewManagerError>;
     readonly clearCookies: () => Effect.Effect<void, PreviewManagerError>;
     readonly clearCache: () => Effect.Effect<void, PreviewManagerError>;
@@ -3974,6 +3982,7 @@ export const make = Effect.gen(function* PreviewManagerMake() {
     reapplyZoom: operations.reapplyZoom,
     hardReload: operations.hardReload,
     setColorScheme: operations.setColorScheme,
+    setDesignEditing: operations.setDesignEditing,
     openDevTools: operations.openDevTools,
     clearCookies: Effect.fn("PreviewManager.clearCookies")(function* () {
       yield* browserSession
