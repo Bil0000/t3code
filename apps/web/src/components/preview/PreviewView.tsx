@@ -208,9 +208,13 @@ export function PreviewView({
   }, [designPath, runtimeTabId]);
 
   useEffect(() => {
-    if (!previewBridge || !runtimeTabId || !designPath || loading) return;
-    void previewBridge.setDesignEditing(runtimeTabId, designEditing);
-  }, [designEditing, designPath, loading, runtimeTabId]);
+    const bridge = previewBridge;
+    if (!bridge || !runtimeTabId || !designPath || loading || !visible || !designEditing) return;
+    void bridge.setDesignEditing(runtimeTabId, true);
+    return () => {
+      void bridge.setDesignEditing(runtimeTabId, false);
+    };
+  }, [designEditing, designPath, loading, runtimeTabId, visible]);
 
   const navUrl = navStatus._tag === "Success" ? navStatus.url : null;
   const navTitle = navStatus._tag === "Success" ? navStatus.title : null;
@@ -738,7 +742,7 @@ export function PreviewView({
         captureDisabled={!desktopOverlay || isUnreachable}
         recording={recordingRuntimeTabId !== null}
         onToggleDesignEditing={
-          previewBridge && runtimeTabId && designPath
+          visible && previewBridge && runtimeTabId && designPath
             ? () => setDesignEditing((active) => !active)
             : undefined
         }

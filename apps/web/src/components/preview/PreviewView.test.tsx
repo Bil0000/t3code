@@ -28,7 +28,9 @@ const mocks = vi.hoisted(() => ({
   addPreviewAnnotation: vi.fn(),
   addImage: vi.fn(),
   toggleAnnotation: null as (() => void) | null,
+  toggleDesignEditing: null as (() => void) | null,
   pictureInPicture: false,
+  previewUrl: "http://example.com/",
   showEmptyState: false,
   recordVisitForThread: vi.fn(),
 }));
@@ -128,7 +130,7 @@ vi.mock("~/previewStateStore", () => ({
             tabId: "tab-1",
             navStatus: {
               _tag: "Success",
-              url: "http://example.com/",
+              url: mocks.previewUrl,
               title: "Example",
             },
             canGoBack: false,
@@ -208,6 +210,7 @@ vi.mock("./previewBridge", () => ({
   previewBridge: {
     navigate: mocks.navigate,
     pickElement: mocks.pickElement,
+    setDesignEditing: vi.fn(async () => undefined),
     pictureInPicture: {
       open: mocks.openPictureInPicture,
       close: mocks.closePictureInPicture,
@@ -219,6 +222,7 @@ vi.mock("./PreviewChromeRow", () => ({
   PreviewChromeRow: (props: {
     onSubmit: (url: string) => void;
     onPickElement?: () => void;
+    onToggleDesignEditing?: () => void;
     onPictureInPicture?: () => void;
     pictureInPicture?: boolean;
     trailingActions?: {
@@ -227,6 +231,7 @@ vi.mock("./PreviewChromeRow", () => ({
   }) => {
     mocks.submittedUrl = props.onSubmit;
     mocks.toggleAnnotation = props.onPickElement ?? null;
+    mocks.toggleDesignEditing = props.onToggleDesignEditing ?? null;
     mocks.togglePictureInPicture = props.onPictureInPicture ?? null;
     mocks.toggleNativePictureInPicture =
       props.trailingActions?.props.onNativePictureInPicture ?? null;
@@ -284,7 +289,9 @@ describe("PreviewView navigation", () => {
     mocks.addPreviewAnnotation.mockClear();
     mocks.addImage.mockClear();
     mocks.toggleAnnotation = null;
+    mocks.toggleDesignEditing = null;
     mocks.pictureInPicture = false;
+    mocks.previewUrl = "http://example.com/";
     mocks.showEmptyState = false;
     mocks.recordVisitForThread.mockClear();
   });
@@ -425,6 +432,15 @@ describe("PreviewView navigation", () => {
     await vi.waitFor(() =>
       expect(mocks.closePictureInPicture).toHaveBeenCalledWith(TEST_RUNTIME_TAB_ID),
     );
+  });
+
+  it("hides design editing controls outside the visible preview", () => {
+    mocks.previewUrl =
+      "http://172.25.85.75:3773/api/assets/design?t3-design=1&t3-design-path=.t3%2Fdesigns%2Fthread-1.html";
+
+    renderToStaticMarkup(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible={false} />);
+
+    expect(mocks.toggleDesignEditing).toBeNull();
   });
 
   it("forwards Cmd/Ctrl+Enter annotations to the composer send path", async () => {
