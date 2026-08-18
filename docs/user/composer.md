@@ -10,9 +10,9 @@ In the desktop app, start a message with `/design` and describe the interface. T
 four visual directions before it changes production code. The design opens in the right panel and
 refreshes as the agent develops it.
 
-Use **Annotate preview** to select elements, mark regions, draw, or adjust visual styles. Choose
-**Attach** to keep the feedback with your next message, or press Command+Enter on macOS or
-Control+Enter on Windows and Linux to send it immediately.
+Use the design toolbar to select, move, resize, add, edit, style, draw on, or delete elements. You
+can also add notes, undo or redo edits, and choose the artboard to implement. Changes save to the
+design automatically.
 
-The design stays linked to its thread. You can name an option and ask the agent to implement it
-without attaching it again.
+The design stays linked to its thread. The agent sees the chosen artboard, focused element, manual
+edits, notes, and drawings. Ask it to revise or implement the design without attaching it again.
