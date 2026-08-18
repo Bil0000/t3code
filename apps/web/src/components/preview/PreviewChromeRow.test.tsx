@@ -43,5 +43,6 @@ describe("PreviewChromeRow", () => {
 
     expect(markup).toContain(">Edit</button>");
     expect(markup).toContain('aria-pressed="true"');
+    expect(markup).not.toContain('aria-label="Close design editor"');
   });
 });

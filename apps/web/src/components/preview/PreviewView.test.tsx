@@ -31,6 +31,7 @@ const mocks = vi.hoisted(() => ({
   toggleDesignEditing: null as (() => void) | null,
   pictureInPicture: false,
   previewUrl: "http://example.com/",
+  loadFailed: false,
   showEmptyState: false,
   recordVisitForThread: vi.fn(),
 }));
@@ -128,11 +129,19 @@ vi.mock("~/previewStateStore", () => ({
           "tab-1": {
             threadId: "thread-1",
             tabId: "tab-1",
-            navStatus: {
-              _tag: "Success",
-              url: mocks.previewUrl,
-              title: "Example",
-            },
+            navStatus: mocks.loadFailed
+              ? {
+                  _tag: "LoadFailed",
+                  url: mocks.previewUrl,
+                  title: "Example",
+                  code: -105,
+                  description: "ERR_NAME_NOT_RESOLVED",
+                }
+              : {
+                  _tag: "Success",
+                  url: mocks.previewUrl,
+                  title: "Example",
+                },
             canGoBack: false,
             canGoForward: false,
             updatedAt: "2026-07-13T00:00:00.000Z",
@@ -291,6 +300,7 @@ describe("PreviewView navigation", () => {
     mocks.toggleAnnotation = null;
     mocks.toggleDesignEditing = null;
     mocks.pictureInPicture = false;
+    mocks.loadFailed = false;
     mocks.previewUrl = "http://example.com/";
     mocks.showEmptyState = false;
     mocks.recordVisitForThread.mockClear();
@@ -434,11 +444,17 @@ describe("PreviewView navigation", () => {
     );
   });
 
-  it("hides design editing controls outside the visible preview", () => {
+  it.each([
+    ["outside the visible preview", false, false],
+    ["after the design fails to load", true, true],
+  ])("hides design editing controls %s", (_scenario, visible, loadFailed) => {
+    mocks.loadFailed = loadFailed;
     mocks.previewUrl =
       "http://172.25.85.75:3773/api/assets/design?t3-design=1&t3-design-path=.t3%2Fdesigns%2Fthread-1.html";
 
-    renderToStaticMarkup(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible={false} />);
+    renderToStaticMarkup(
+      <PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible={visible} />,
+    );
 
     expect(mocks.toggleDesignEditing).toBeNull();
   });

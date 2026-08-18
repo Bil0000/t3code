@@ -241,7 +241,6 @@ export function PreviewChromeRow({
             variant={designEditing ? "secondary" : "ghost"}
             size="xs"
             onClick={onToggleDesignEditing}
-            aria-label={designEditing ? "Close design editor" : "Edit design"}
             aria-pressed={designEditing ? "true" : "false"}
             type="button"
           >
