@@ -1,6 +1,29 @@
 export const DESIGN_UI_ATTRIBUTE = "data-t3code-design-ui";
 export const DESIGN_EDITING_ATTRIBUTE = "data-t3code-design-editing";
 
+const designLength = (value: string | undefined, relativeTo: number): number => {
+  const number = Number.parseFloat(value ?? "");
+  if (!Number.isFinite(number)) return 0;
+  return value?.endsWith("%") ? (number * relativeTo) / 100 : number;
+};
+
+export function resolveDesignPosition(
+  storedX: string | null,
+  storedY: string | null,
+  translate: string,
+  width: number,
+  height: number,
+): { x: number; y: number } {
+  if (storedX !== null || storedY !== null) {
+    return {
+      x: designLength(storedX ?? undefined, width),
+      y: designLength(storedY ?? undefined, height),
+    };
+  }
+  const [x, y] = translate === "none" ? [] : translate.split(/\s+/);
+  return { x: designLength(x, width), y: designLength(y, height) };
+}
+
 export function designPathFromUrl(url: string): string | null {
   try {
     const parsed = new URL(url);

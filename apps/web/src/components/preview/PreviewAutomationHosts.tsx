@@ -22,7 +22,7 @@ import {
   type ScopedThreadRef,
 } from "@t3tools/contracts";
 import { resolvePreviewViewport } from "@t3tools/shared/previewViewport";
-import { useParams } from "@tanstack/react-router";
+import { useRouter } from "@tanstack/react-router";
 import { useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { Atom } from "effect/unstable/reactivity";
 
@@ -50,7 +50,7 @@ import { assetEnvironment } from "~/state/assets";
 import { useEnvironments } from "~/state/environments";
 import { previewEnvironment } from "~/state/preview";
 import { readPreparedConnection } from "~/state/session";
-import { resolveThreadRouteTarget } from "~/threadRoutes";
+import { resolveThreadRouteRef } from "~/threadRoutes";
 import { useAtomQueryRunner } from "~/state/use-atom-query-runner";
 import { useAtomCommand } from "~/state/use-atom-command";
 
@@ -244,11 +244,6 @@ const raisePreviewAutomationHostError = (
 
 export function PreviewAutomationHosts() {
   const { environments } = useEnvironments();
-  const routeTarget = useParams({
-    strict: false,
-    select: (params) => resolveThreadRouteTarget(params),
-  });
-  const activeThreadRef = routeTarget?.kind === "server" ? routeTarget.threadRef : null;
   if (!isElectron || !previewBridge?.automation) return null;
   return (
     <>
@@ -261,22 +256,15 @@ export function PreviewAutomationHosts() {
         <PreviewAutomationHost
           key={environment.environmentId}
           environmentId={environment.environmentId}
-          activeThreadId={
-            activeThreadRef?.environmentId === environment.environmentId
-              ? activeThreadRef.threadId
-              : null
-          }
         />
       ))}
     </>
   );
 }
 
-function PreviewAutomationHost(props: {
-  readonly environmentId: EnvironmentId;
-  readonly activeThreadId: ScopedThreadRef["threadId"] | null;
-}) {
-  const { environmentId, activeThreadId } = props;
+function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId }) {
+  const { environmentId } = props;
+  const router = useRouter();
   const registry = useContext(RegistryContext);
   const [automationClientId] = useState(createPreviewAutomationClientId);
   const initialAutomationHost = useMemo<PreviewAutomationHostState>(
@@ -508,7 +496,13 @@ function PreviewAutomationHost(props: {
                 request.timeoutMs,
               );
             }
-            if (shouldPresentPreview && activeThreadId === request.threadId) {
+            const routeParams = router.state.matches.at(-1)?.params ?? {};
+            const activeThreadRef = resolveThreadRouteRef(routeParams);
+            if (
+              shouldPresentPreview &&
+              activeThreadRef?.environmentId === environmentId &&
+              activeThreadRef.threadId === request.threadId
+            ) {
               const receipt = await waitForBrowserSurfaceReady(
                 activeRuntimeTabId,
                 request.timeoutMs,
@@ -747,7 +741,7 @@ function PreviewAutomationHost(props: {
         });
       }
     },
-    [activeThreadId, createAssetUrl, environmentId, listPreviews, open, registry, resize],
+    [createAssetUrl, environmentId, listPreviews, open, registry, resize, router],
   );
   const [requestHandlerAtom] = useState(() => Atom.make({ handle: handleRequest }));
   const setRequestHandler = useAtomSet(requestHandlerAtom);

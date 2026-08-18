@@ -5,6 +5,7 @@ import {
   DESIGN_EDITING_ATTRIBUTE,
   DESIGN_UI_ATTRIBUTE,
   designPathFromUrl,
+  resolveDesignPosition,
   serializeDesignDocument,
 } from "./DesignDocument.ts";
 import { DESIGN_CHANGED_CHANNEL } from "./GuestProtocol.ts";
@@ -114,9 +115,15 @@ function pagePoint(event: PointerEvent): Point {
   return { x: event.clientX + window.scrollX, y: event.clientY + window.scrollY };
 }
 
-function numberAttribute(element: Element, name: string): number {
-  const value = Number(element.getAttribute(name));
-  return Number.isFinite(value) ? value : 0;
+function positionOf(element: Element): Point {
+  const rect = element.getBoundingClientRect();
+  return resolveDesignPosition(
+    element.getAttribute("data-t3-design-x"),
+    element.getAttribute("data-t3-design-y"),
+    getComputedStyle(element).translate,
+    rect.width,
+    rect.height,
+  );
 }
 
 function rgbToHex(value: string, fallback: string): string {
@@ -416,11 +423,15 @@ function startDesignEditor(): void {
     const parent = element?.parentNode;
     if (!element || !parent) return;
     const next = element.nextSibling;
-    element.remove();
-    selectElement(null);
+    const detach = (): void => {
+      if (selected === element) selectElement(null);
+      element.removeAttribute(FOCUS_ATTRIBUTE);
+      element.remove();
+    };
+    detach();
     pushHistory({
       undo: () => parent.insertBefore(element, next?.parentNode === parent ? next : null),
-      redo: () => element.remove(),
+      redo: detach,
     });
     scheduleSave();
   });
@@ -503,14 +514,15 @@ function startDesignEditor(): void {
       if (!selected || event.button !== 0) return;
       handle.setPointerCapture(event.pointerId);
       const rect = selected.getBoundingClientRect();
+      const position = positionOf(selected);
       drag = {
         kind: "resize",
         element: selected,
         start: { x: event.clientX, y: event.clientY },
         width: rect.width,
         height: rect.height,
-        x: numberAttribute(selected, "data-t3-design-x"),
-        y: numberAttribute(selected, "data-t3-design-y"),
+        x: position.x,
+        y: position.y,
         direction,
         before: stateOf(selected),
       };
@@ -590,12 +602,13 @@ function startDesignEditor(): void {
     }
     const target = targetFromPoint(event.clientX, event.clientY);
     if (target && target === selected) {
+      const position = positionOf(selected);
       drag = {
         kind: "move",
         element: selected,
         start: { x: event.clientX, y: event.clientY },
-        x: numberAttribute(selected, "data-t3-design-x"),
-        y: numberAttribute(selected, "data-t3-design-y"),
+        x: position.x,
+        y: position.y,
         before: stateOf(selected),
       };
     } else {
