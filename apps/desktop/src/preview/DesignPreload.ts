@@ -292,7 +292,15 @@ function startDesignEditor(): void {
     field: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
     value: string,
   ): void => {
-    if (root.activeElement !== field) field.value = value;
+    if (root.activeElement === field) return;
+    if (
+      field instanceof HTMLSelectElement &&
+      value &&
+      !Array.from(field.options).some((option) => option.value === value)
+    ) {
+      field.add(new Option(value, value));
+    }
+    field.value = value;
   };
 
   const refreshSelection = (): void => {
