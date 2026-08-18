@@ -4,6 +4,7 @@ import { scopeProjectRef, scopedThreadKey } from "@t3tools/client-runtime/enviro
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import {
   FILL_PREVIEW_VIEWPORT,
+  type DesktopPreviewDesignChange,
   type PreviewAnnotationPayload,
   type PreviewViewportSetting,
   type ScopedThreadRef,
@@ -78,6 +79,17 @@ interface Props {
 }
 
 const localApi = typeof window === "undefined" ? null : ensureLocalApi();
+
+export function applyDesignChange(
+  change: DesktopPreviewDesignChange,
+  tabId: string,
+  save: (html: string) => void,
+  attach: (annotation: PreviewAnnotationPayload) => void,
+): void {
+  if (change.tabId !== tabId) return;
+  save(change.html);
+  if (change.annotation) attach(change.annotation);
+}
 
 /**
  * Single-tab preview surface: chrome row on top, one webview below, empty
@@ -181,10 +193,14 @@ export function PreviewView({
   useEffect(() => {
     if (!previewBridge || !runtimeTabId || !designSaver) return;
     return previewBridge.onDesignChange((change) => {
-      if (change.tabId !== runtimeTabId) return;
-      designSaver.change(change.html);
+      applyDesignChange(
+        change,
+        runtimeTabId,
+        (html) => designSaver.change(html),
+        (annotation) => addPreviewAnnotation(threadRefRef.current, annotation),
+      );
     });
-  }, [designSaver, runtimeTabId]);
+  }, [addPreviewAnnotation, designSaver, runtimeTabId]);
 
   const navUrl = navStatus._tag === "Success" ? navStatus.url : null;
   const navTitle = navStatus._tag === "Success" ? navStatus.title : null;

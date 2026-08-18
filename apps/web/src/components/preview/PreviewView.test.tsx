@@ -254,7 +254,7 @@ vi.mock("~/browser/BrowserSurfaceSlot", () => ({ BrowserSurfaceSlot: () => null 
 vi.mock("./useLoadingProgress", () => ({ useLoadingProgress: () => 0 }));
 vi.mock("./usePreviewSession", () => ({ usePreviewSession: vi.fn() }));
 
-import { PreviewView } from "./PreviewView";
+import { applyDesignChange, PreviewView } from "./PreviewView";
 import { previewRuntimeTabId } from "~/browser/previewRuntimeTabId";
 
 const TEST_THREAD_REF = {
@@ -491,5 +491,40 @@ describe("PreviewView navigation", () => {
 
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(annotation, null));
     expect(mocks.addImage).not.toHaveBeenCalled();
+  });
+
+  it("saves and attaches a design selection only for the active tab", () => {
+    const save = vi.fn();
+    const attach = vi.fn();
+    const annotation = {
+      id: "design-cta",
+      pageUrl: "http://127.0.0.1/design",
+      pageTitle: "Design",
+      comment: "Selected design element",
+      elements: [],
+      regions: [],
+      strokes: [],
+      styleChanges: [],
+      screenshot: null,
+      createdAt: "2026-08-18T00:00:00.000Z",
+    };
+
+    applyDesignChange(
+      { tabId: "tab_design", html: "<!doctype html><p>Saved</p>", annotation },
+      "tab_design",
+      save,
+      attach,
+    );
+    applyDesignChange(
+      { tabId: "other", html: "<!doctype html><p>Wrong</p>", annotation },
+      "tab_design",
+      save,
+      attach,
+    );
+
+    expect(save).toHaveBeenCalledOnce();
+    expect(save).toHaveBeenCalledWith("<!doctype html><p>Saved</p>");
+    expect(attach).toHaveBeenCalledOnce();
+    expect(attach).toHaveBeenCalledWith(annotation);
   });
 });

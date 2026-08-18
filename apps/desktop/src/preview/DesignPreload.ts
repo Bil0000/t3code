@@ -1,7 +1,9 @@
 import { ipcRenderer } from "electron";
 import type { DesktopPreviewDesignChangePayload } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 
 import {
+  createDesignSelectionAnnotation,
   DESIGN_EDITING_ATTRIBUTE,
   DESIGN_UI_ATTRIBUTE,
   designPathFromUrl,
@@ -165,6 +167,7 @@ function startDesignEditor(): void {
     .sep{width:1px;margin:4px 2px;background:light-dark(#ddd,#444)}
     .selection{display:none;pointer-events:none;position:fixed;z-index:1;border:2px solid #2563eb;box-shadow:0 0 0 1px white;border-radius:3px}
     .tag{position:absolute;left:-2px;bottom:calc(100% + 5px);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:5px;background:#2563eb;color:white;padding:3px 6px}
+    .attach{pointer-events:auto;position:absolute;left:50%;top:-14px;width:26px;height:26px;transform:translateX(-50%);border:2px solid white;border-radius:999px;background:#22c55e;color:white;padding:0;font-size:18px;line-height:20px;box-shadow:0 2px 8px rgba(0,0,0,.22)}
     .handle{pointer-events:auto;position:absolute;width:10px;height:10px;border:2px solid white;border-radius:3px;background:#2563eb;padding:0}
     .nw{left:-6px;top:-6px;cursor:nwse-resize}.ne{right:-6px;top:-6px;cursor:nesw-resize}.sw{left:-6px;bottom:-6px;cursor:nesw-resize}.se{right:-6px;bottom:-6px;cursor:nwse-resize}
     .inspector{display:none;right:10px;top:54px;width:220px;padding:10px;border-radius:11px}
@@ -182,7 +185,13 @@ function startDesignEditor(): void {
   selection.className = "selection";
   const tag = document.createElement("div");
   tag.className = "tag";
-  selection.appendChild(tag);
+  const attach = document.createElement("button");
+  attach.type = "button";
+  attach.className = "attach";
+  attach.textContent = "+";
+  attach.title = "Attach selection to chat";
+  attach.setAttribute("aria-label", "Attach selection to chat");
+  selection.append(tag, attach);
   const inspector = document.createElement("div");
   inspector.className = "inspector";
   const inspectorTitle = document.createElement("h2");
@@ -197,10 +206,11 @@ function startDesignEditor(): void {
   let historyIndex = 0;
   let saveTimer: number | null = null;
 
-  const save = (): void => {
+  const save = (annotation?: DesktopPreviewDesignChangePayload["annotation"]): void => {
     saveTimer = null;
     const payload: DesktopPreviewDesignChangePayload = {
       html: serializeDesignDocument(document),
+      ...(annotation ? { annotation } : {}),
     };
     ipcRenderer.send(DESIGN_CHANGED_CHANNEL, payload);
   };
@@ -273,10 +283,40 @@ function startDesignEditor(): void {
       .querySelectorAll(`[${FOCUS_ATTRIBUTE}]`)
       .forEach((candidate) => candidate.removeAttribute(FOCUS_ATTRIBUTE));
     selected = element instanceof HTMLElement || element instanceof SVGElement ? element : null;
+    if (selected && !selected.hasAttribute("data-t3-design-id")) {
+      selected.setAttribute("data-t3-design-id", nextId());
+    }
     selected?.setAttribute(FOCUS_ATTRIBUTE, "true");
     refreshSelection();
     if (persist) scheduleSave();
   };
+
+  attach.addEventListener("click", (event) => {
+    if (!selected) return;
+    const id = selected.getAttribute("data-t3-design-id");
+    if (!id) return;
+    const rect = selected.getBoundingClientRect();
+    if (saveTimer !== null) window.clearTimeout(saveTimer);
+    save(
+      createDesignSelectionAnnotation({
+        id,
+        pageUrl: location.href,
+        pageTitle: document.title?.trim() || null,
+        tagName: selected.tagName.toLowerCase(),
+        selector: `[data-t3-design-id="${CSS.escape(id)}"]`,
+        htmlPreview: selected.outerHTML.slice(0, 4_000),
+        styles: selected.getAttribute("style") ?? "",
+        rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+        createdAt: DateTime.formatIso(DateTime.nowUnsafe()),
+      }),
+    );
+    attach.textContent = "✓";
+    window.setTimeout(() => {
+      attach.textContent = "+";
+    }, 900);
+    event.preventDefault();
+    event.stopPropagation();
+  });
 
   const commitElementState = (element: HTMLElement | SVGElement, before: ElementState): void => {
     const after = stateOf(element);

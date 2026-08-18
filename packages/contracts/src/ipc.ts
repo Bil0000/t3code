@@ -621,19 +621,6 @@ export const DesktopPreviewPointerEventSchema: Schema.Codec<DesktopPreviewPointe
     createdAt: Schema.String,
   });
 
-export interface DesktopPreviewDesignChangePayload {
-  html: string;
-}
-
-export const DesktopPreviewDesignChangePayloadSchema: Schema.Codec<DesktopPreviewDesignChangePayload> =
-  Schema.Struct({
-    html: Schema.String.check(Schema.isMaxLength(5_000_000)),
-  });
-
-export interface DesktopPreviewDesignChange extends DesktopPreviewDesignChangePayload {
-  tabId: string;
-}
-
 /**
  * Static config a renderer needs to mount a preview `<webview>`. Returned
  * atomically by `DesktopPreviewBridge.getPreviewConfig()` so the renderer
@@ -950,6 +937,21 @@ export const PreviewAnnotationPayloadSchema: Schema.Codec<PreviewAnnotationPaylo
     createdAt: Schema.String,
   },
 );
+
+export interface DesktopPreviewDesignChangePayload {
+  html: string;
+  annotation?: PreviewAnnotationPayload;
+}
+
+export const DesktopPreviewDesignChangePayloadSchema: Schema.Codec<DesktopPreviewDesignChangePayload> =
+  Schema.Struct({
+    html: Schema.String.check(Schema.isMaxLength(5_000_000)),
+    annotation: Schema.optionalKey(PreviewAnnotationPayloadSchema),
+  });
+
+export interface DesktopPreviewDesignChange extends DesktopPreviewDesignChangePayload {
+  tabId: string;
+}
 
 export type PreviewAnnotationSubmission = "attach" | "send";
 export const PreviewAnnotationSubmissionSchema: Schema.Codec<PreviewAnnotationSubmission> =

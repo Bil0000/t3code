@@ -378,11 +378,28 @@ describe("PreviewManager", () => {
         yield* manager.createTab("tab_design");
         yield* manager.registerWebview("tab_design", 42);
 
-        ipcListeners.get("preview:design-changed")?.({}, { html: "<!doctype html><p>Saved</p>" });
+        const annotation = {
+          id: "design-title",
+          pageUrl: "http://127.0.0.1/design",
+          pageTitle: "Design",
+          comment: "Selected design element",
+          elements: [],
+          regions: [{ id: "title", rect: { x: 10, y: 20, width: 100, height: 30 } }],
+          strokes: [],
+          styleChanges: [],
+          screenshot: null,
+          createdAt: "2026-08-18T00:00:00.000Z",
+        };
+        ipcListeners.get("preview:design-changed")?.(
+          {},
+          { html: "<!doctype html><p>Saved</p>", annotation },
+        );
         ipcListeners.get("preview:design-changed")?.({}, { html: 42 });
         yield* settle(() => changes.length === 1);
 
-        expect(changes).toEqual([{ tabId: "tab_design", html: "<!doctype html><p>Saved</p>" }]);
+        expect(changes).toEqual([
+          { tabId: "tab_design", html: "<!doctype html><p>Saved</p>", annotation },
+        ]);
       }),
     ),
   );

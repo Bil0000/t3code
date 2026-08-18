@@ -1,5 +1,48 @@
+import type { PreviewAnnotationPayload } from "@t3tools/contracts";
+
 export const DESIGN_UI_ATTRIBUTE = "data-t3code-design-ui";
 export const DESIGN_EDITING_ATTRIBUTE = "data-t3code-design-editing";
+
+export interface DesignSelectionInput {
+  id: string;
+  pageUrl: string;
+  pageTitle: string | null;
+  tagName: string;
+  selector: string;
+  htmlPreview: string;
+  styles: string;
+  rect: PreviewAnnotationPayload["elements"][number]["rect"];
+  createdAt: string;
+}
+
+export function createDesignSelectionAnnotation(
+  input: DesignSelectionInput,
+): PreviewAnnotationPayload {
+  const element = {
+    pageUrl: input.pageUrl,
+    pageTitle: input.pageTitle,
+    tagName: input.tagName,
+    selector: input.selector,
+    htmlPreview: input.htmlPreview,
+    componentName: null,
+    source: null,
+    stack: [],
+    styles: input.styles,
+    pickedAt: input.createdAt,
+  };
+  return {
+    id: `design-${input.id}`,
+    pageUrl: input.pageUrl,
+    pageTitle: input.pageTitle,
+    comment: "Selected design element",
+    elements: [{ id: input.id, element, rect: input.rect }],
+    regions: [],
+    strokes: [],
+    styleChanges: [],
+    screenshot: null,
+    createdAt: input.createdAt,
+  };
+}
 
 const designLength = (value: string | undefined, relativeTo: number): number => {
   const number = Number.parseFloat(value ?? "");

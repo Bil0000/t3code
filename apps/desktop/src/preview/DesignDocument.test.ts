@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { designPathFromUrl, resolveDesignPosition } from "./DesignDocument.ts";
+import {
+  createDesignSelectionAnnotation,
+  designPathFromUrl,
+  resolveDesignPosition,
+} from "./DesignDocument.ts";
 
 describe("designPathFromUrl", () => {
   it("accepts the marked workspace HTML design URL", () => {
@@ -38,6 +42,52 @@ describe("resolveDesignPosition", () => {
     expect(resolveDesignPosition("8", "16", "24px 32px", 200, 100)).toEqual({
       x: 8,
       y: 16,
+    });
+  });
+});
+
+describe("createDesignSelectionAnnotation", () => {
+  it("builds stable composer context for one design element", () => {
+    expect(
+      createDesignSelectionAnnotation({
+        id: "cta",
+        pageUrl: "http://127.0.0.1:3773/api/assets/design",
+        pageTitle: "Landing page",
+        tagName: "button",
+        selector: '[data-t3-design-id="cta"]',
+        htmlPreview: '<button data-t3-design-id="cta">Start</button>',
+        styles: "background-color: #111111;",
+        rect: { x: 20, y: 30, width: 120, height: 40 },
+        createdAt: "2026-08-18T00:00:00.000Z",
+      }),
+    ).toEqual({
+      id: "design-cta",
+      pageUrl: "http://127.0.0.1:3773/api/assets/design",
+      pageTitle: "Landing page",
+      comment: "Selected design element",
+      elements: [
+        {
+          id: "cta",
+          element: {
+            pageUrl: "http://127.0.0.1:3773/api/assets/design",
+            pageTitle: "Landing page",
+            tagName: "button",
+            selector: '[data-t3-design-id="cta"]',
+            htmlPreview: '<button data-t3-design-id="cta">Start</button>',
+            componentName: null,
+            source: null,
+            stack: [],
+            styles: "background-color: #111111;",
+            pickedAt: "2026-08-18T00:00:00.000Z",
+          },
+          rect: { x: 20, y: 30, width: 120, height: 40 },
+        },
+      ],
+      regions: [],
+      strokes: [],
+      styleChanges: [],
+      screenshot: null,
+      createdAt: "2026-08-18T00:00:00.000Z",
     });
   });
 });
