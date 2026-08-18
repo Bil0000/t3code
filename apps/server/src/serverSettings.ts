@@ -584,10 +584,10 @@ const make = Effect.gen(function* () {
             applyServerSettingsPatch(current, patch),
           );
           const next = yield* normalizeServerSettings(nextPersisted);
+          const materialized = yield* materializeProviderEnvironmentSecrets(next);
           yield* writeSettingsAtomically(next);
           yield* Cache.set(settingsCache, cacheKey, next);
           yield* emitChange(next);
-          const materialized = yield* materializeProviderEnvironmentSecrets(next);
           return resolveTextGenerationProvider(materialized);
         }),
       ),
