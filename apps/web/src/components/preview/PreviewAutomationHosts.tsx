@@ -54,6 +54,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 
 import { previewBridge } from "./previewBridge";
 import {
+  PreviewAutomationAssetUrlInvalidError,
   PreviewAutomationOperationError,
   PreviewAutomationOverlayTimeoutError,
   PreviewAutomationRecordingNotActiveError,
@@ -371,7 +372,9 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
             if (request.operation === "openFile") {
               const fileInput = request.input as PreviewAutomationOpenFileInput;
               const connection = readPreparedConnection(environmentId);
-              if (!connection) throw new Error("Environment connection is unavailable.");
+              if (!connection) {
+                throw new PreviewAutomationTargetUnavailableError(unavailableTarget);
+              }
               const assetResult = await createAssetUrl({
                 environmentId,
                 input: {
@@ -387,7 +390,15 @@ function PreviewAutomationHost(props: { readonly environmentId: EnvironmentId })
                 connection.httpBaseUrl,
                 assetResult.value.relativeUrl,
               );
-              if (!assetUrl) throw new Error("Environment returned an invalid design URL.");
+              if (!assetUrl) {
+                throw new PreviewAutomationAssetUrlInvalidError({
+                  requestId: request.requestId,
+                  operation: request.operation,
+                  environmentId,
+                  threadId: request.threadId,
+                  path: fileInput.path,
+                });
+              }
               const url = new URL(assetUrl);
               url.searchParams.set("t3-design", request.requestId);
               input = { url: url.toString(), open: true, reuseExistingTab: true };
