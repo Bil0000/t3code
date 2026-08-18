@@ -117,6 +117,26 @@ describe("FileSaveCoordinator", () => {
     expect(onPendingChange.mock.calls.at(-1)).toEqual([false]);
   });
 
+  it("stops after one automatic retry when writes keep failing", async () => {
+    vi.useFakeTimers();
+    const persist = vi
+      .fn()
+      .mockResolvedValue(AsyncResult.failure(Cause.fail(new Error("write failed"))));
+    const onPendingChange = vi.fn();
+    const coordinator = new FileSaveCoordinator({
+      debounceMs: 500,
+      persist,
+      onPendingChange,
+      onConfirmed: vi.fn(),
+    });
+
+    coordinator.change("latest");
+    await vi.advanceTimersByTimeAsync(1_500);
+
+    expect(persist).toHaveBeenCalledTimes(2);
+    expect(onPendingChange).not.toHaveBeenCalledWith(false);
+  });
+
   it("retries an in-flight failure after disposal", async () => {
     vi.useFakeTimers();
     const firstWrite = deferred<Error>();

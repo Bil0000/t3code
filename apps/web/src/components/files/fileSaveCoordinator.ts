@@ -14,6 +14,7 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
   private lastChangeAt = 0;
   private saving = false;
   private disposed = false;
+  private canRetry = true;
 
   constructor(private readonly options: FileSaveCoordinatorOptions<A, E>) {}
 
@@ -21,6 +22,7 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
     this.latestContents = contents;
     this.latestRevision += 1;
     this.lastChangeAt = Date.now();
+    this.canRetry = true;
     this.options.onPendingChange(true);
     this.schedule(this.options.debounceMs);
   }
@@ -62,7 +64,8 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
       if (succeeded) {
         this.latestRevision = 0;
         this.options.onPendingChange(false);
-      } else {
+      } else if (this.canRetry) {
+        this.canRetry = false;
         this.schedule(this.options.debounceMs);
       }
       return;
