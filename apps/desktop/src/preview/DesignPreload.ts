@@ -497,6 +497,7 @@ function startDesignEditor(): void {
     handle.setAttribute("aria-label", `Resize ${direction}`);
     handle.addEventListener("pointerdown", (event) => {
       if (!selected || event.button !== 0) return;
+      handle.setPointerCapture(event.pointerId);
       const rect = selected.getBoundingClientRect();
       drag = {
         kind: "resize",
@@ -576,6 +577,7 @@ function startDesignEditor(): void {
 
   const onPointerDown = (event: PointerEvent): void => {
     if (event.button !== 0 || isUiElement(event.target)) return;
+    if (event.target instanceof Element) event.target.setPointerCapture(event.pointerId);
     if (tool !== "select") {
       beginCreation(event, tool);
       event.preventDefault();
@@ -713,6 +715,7 @@ function startDesignEditor(): void {
   window.addEventListener("pointerdown", onPointerDown, true);
   window.addEventListener("pointermove", onPointerMove, true);
   window.addEventListener("pointerup", onPointerUp, true);
+  window.addEventListener("pointercancel", onPointerUp, true);
   window.addEventListener("click", preventNavigation, true);
   window.addEventListener("dblclick", editText, true);
   window.addEventListener("keydown", onKeyDown, true);

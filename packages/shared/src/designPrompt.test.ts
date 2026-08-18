@@ -48,11 +48,13 @@ describe("expandDesignCommand", () => {
     expect(
       designPathFromUrl(
         "http://127.0.0.1:3773/api/assets/token?t3-design=request-1&t3-design-path=.t3%2Fdesigns%2Fthread-1.html",
+        "http://127.0.0.1:3773",
       ),
     ).toBe(".t3/designs/thread-1.html");
     expect(
       designPathFromUrl(
-        "https://example.com/design.html?t3-design=request-1&t3-design-path=.t3%2Fdesigns%2Fthread-1.html",
+        "https://example.com/api/assets/token?t3-design=request-1&t3-design-path=.t3%2Fdesigns%2Fthread-1.html",
+        "http://127.0.0.1:3773",
       ),
     ).toBeNull();
   });

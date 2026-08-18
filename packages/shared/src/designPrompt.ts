@@ -5,10 +5,14 @@ interface ExpandDesignCommandInput {
   threadId: string;
 }
 
-export function designPathFromUrl(url: string): string | null {
+export function designPathFromUrl(url: string, assetBaseUrl: string): string | null {
   try {
     const parsed = new URL(url);
-    if (!parsed.pathname.startsWith("/api/assets/") || !parsed.searchParams.has("t3-design"))
+    if (
+      parsed.origin !== new URL(assetBaseUrl).origin ||
+      !parsed.pathname.startsWith("/api/assets/") ||
+      !parsed.searchParams.has("t3-design")
+    )
       return null;
     const path = parsed.searchParams.get("t3-design-path");
     return path && isWorkspaceHtmlPath(path) ? path : null;

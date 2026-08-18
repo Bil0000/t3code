@@ -144,7 +144,7 @@ export function PreviewView({
   const desktopOverlay = tabId ? (previewState.desktopByTabId[tabId] ?? null) : null;
   const navStatus = snapshot?.navStatus ?? { _tag: "Idle" as const };
   const url = navStatus._tag === "Idle" ? "" : navStatus.url;
-  const designPath = designPathFromUrl(url);
+  const designPath = environmentHttpBaseUrl ? designPathFromUrl(url, environmentHttpBaseUrl) : null;
   const designCwd = thread?.worktreePath ?? project?.workspaceRoot ?? null;
   const designSaver = useMemo(
     () =>
