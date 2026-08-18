@@ -120,6 +120,7 @@ import { fallbackWorkItemTaskPrompt } from "./textGeneration/TextGenerationPromp
 import {
   resolveWorkItemMatches,
   shortlistWorkItemCandidates,
+  workItemIdentityKey,
 } from "./workItems/WorkItemMatching.ts";
 import * as PullRequestService from "./pullRequest/PullRequestService.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
@@ -1547,9 +1548,10 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUpdateSettings]: ({ patch }) =>
           observeRpcEffect(
             WS_METHODS.serverUpdateSettings,
-            serverSettings
-              .updateSettings(patch)
-              .pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
+            (patch.issueTracking?.linear?.projectTeams === undefined
+              ? serverSettings.updateSettings(patch)
+              : LinearConnection.updateLegacyLinearProjectTeams(patch)
+            ).pipe(Effect.map(ServerSettings.redactServerSettingsForClient)),
             {
               "rpc.aggregate": "server",
             },
@@ -1826,10 +1828,10 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "issues" },
           ),
-        [WS_METHODS.linearConnect]: ({ token }) =>
+        [WS_METHODS.linearConnect]: ({ token, mode }) =>
           observeRpcEffect(
             WS_METHODS.linearConnect,
-            LinearConnection.connectLinearAccount(token).pipe(
+            LinearConnection.connectLinearAccount(token, mode).pipe(
               Effect.mapError(
                 issueTrackingError("connect", "Could not migrate the Linear project bindings."),
               ),
@@ -1846,6 +1848,16 @@ const makeWsRpcLayer = (
             ),
             { "rpc.aggregate": "issues" },
           ),
+        [WS_METHODS.linearSetProjectBinding]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.linearSetProjectBinding,
+            LinearConnection.setLinearProjectBinding(input).pipe(
+              Effect.mapError(
+                issueTrackingError("bind", "Could not save the Linear project binding."),
+              ),
+            ),
+            { "rpc.aggregate": "issues" },
+          ),
         [WS_METHODS.workItemsGenerateTask]: (input) =>
           observeRpcEffect(
             WS_METHODS.workItemsGenerateTask,
@@ -1856,6 +1868,7 @@ const makeWsRpcLayer = (
                   Effect.gen(function* () {
                     const reference = {
                       projectId: input.projectId,
+                      ...(item.provider === undefined ? {} : { provider: item.provider }),
                       repository: item.repository,
                       number: item.number,
                     };
@@ -1924,6 +1937,7 @@ const makeWsRpcLayer = (
             Effect.gen(function* () {
               const reference = {
                 projectId: input.projectId,
+                ...(input.source.provider === undefined ? {} : { provider: input.source.provider }),
                 repository: input.source.repository,
                 number: input.source.number,
               };
@@ -1934,8 +1948,13 @@ const makeWsRpcLayer = (
                         detail,
                         known:
                           input.relationship === "related"
-                            ? detail.linkedPullRequests.map(
-                                (link) => link.repository.toLocaleLowerCase() + "#" + link.number,
+                            ? detail.linkedPullRequests.map((link) =>
+                                workItemIdentityKey({
+                                  kind: "pull-request",
+                                  provider: detail.provider,
+                                  repository: link.repository,
+                                  number: link.number,
+                                }),
                               )
                             : [],
                       })),
@@ -1945,8 +1964,13 @@ const makeWsRpcLayer = (
                         detail,
                         known:
                           input.relationship === "related"
-                            ? (detail.linkedIssues ?? []).map(
-                                (link) => link.repository.toLocaleLowerCase() + "#" + link.number,
+                            ? (detail.linkedIssues ?? []).map((link) =>
+                                workItemIdentityKey({
+                                  kind: "issue",
+                                  provider: detail.provider,
+                                  repository: link.repository,
+                                  number: link.number,
+                                }),
                               )
                             : [],
                       })),
@@ -1986,7 +2010,7 @@ const makeWsRpcLayer = (
                   .slice(0, 50)
                   .filter(
                     (entry) =>
-                      !knownItems.has(entry.repository.toLocaleLowerCase() + "#" + entry.number),
+                      !knownItems.has(workItemIdentityKey({ ...entry, kind: candidateKind })),
                   )
                   .map((entry) => ({ ...entry, kind: candidateKind })),
               );
@@ -1996,6 +2020,7 @@ const makeWsRpcLayer = (
                   Effect.gen(function* () {
                     const candidateReference = {
                       projectId: candidate.projectId,
+                      provider: candidate.provider,
                       repository: candidate.repository,
                       number: candidate.number,
                     };

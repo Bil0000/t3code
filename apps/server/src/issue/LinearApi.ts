@@ -99,7 +99,12 @@ const ConnectionEnvelope = Schema.Struct({
 const ViewerEnvelope = Schema.Struct({ ...Errors, data: Schema.Struct({ viewer: User }) });
 const ListEnvelope = Schema.Struct({
   ...Errors,
-  data: Schema.Struct({ issues: Schema.Struct({ nodes: Schema.Array(Issue) }) }),
+  data: Schema.Struct({
+    issues: Schema.Struct({
+      nodes: Schema.Array(Issue),
+      pageInfo: Schema.Struct({ hasNextPage: Schema.Boolean }),
+    }),
+  }),
 });
 const IssueEnvelope = Schema.Struct({
   ...Errors,
@@ -138,7 +143,10 @@ const CONNECTION_QUERY = `query T3LinearConnection {
 }`;
 const VIEWER_QUERY = `query T3LinearViewer { viewer { ${USER_FIELDS} } }`;
 const LIST_QUERY = `query T3LinearIssues($first: Int!, $filter: IssueFilter!) {
-  issues(first: $first, filter: $filter, orderBy: updatedAt) { nodes { ${ISSUE_FIELDS} } }
+  issues(first: $first, filter: $filter, orderBy: updatedAt) {
+    nodes { ${ISSUE_FIELDS} }
+    pageInfo { hasNextPage }
+  }
 }`;
 const ISSUE_QUERY = `query T3LinearIssue($id: String!) {
   issue(id: $id) { ${ISSUE_FIELDS} }
@@ -182,12 +190,20 @@ export type LinearUser = typeof User.Type;
 export type LinearIssue = typeof Issue.Type;
 export type LinearComment = typeof Comment.Type;
 export type LinearReaction = typeof Reaction.Type;
+export type LinearConnectResult = LinearConnection & {
+  readonly connectedCredentialId: string;
+};
+export type LinearConnectionResult = LinearConnection & {
+  readonly migratedCredentialId?: string;
+};
 
 export class LinearApi extends Context.Service<
   LinearApi,
   {
-    readonly connection: Effect.Effect<LinearConnection, LinearApiError>;
-    readonly connect: (token: string) => Effect.Effect<LinearConnection, LinearApiError>;
+    readonly environmentTokenConfigured: boolean;
+    readonly connection: Effect.Effect<LinearConnectionResult, LinearApiError>;
+    readonly completeLegacyMigration: Effect.Effect<void, LinearApiError>;
+    readonly connect: (token: string) => Effect.Effect<LinearConnectResult, LinearApiError>;
     readonly disconnect: (input?: {
       readonly credentialId: string;
     }) => Effect.Effect<LinearConnection, LinearApiError>;
@@ -375,35 +391,32 @@ export const make = Effect.gen(function* () {
   const credentialToken = (credentialId?: string) =>
     storedCredentials.pipe(
       Effect.flatMap((credentials) => {
-        const credential =
-          credentialId === undefined
-            ? credentials.length === 1
-              ? credentials[0]
-              : undefined
-            : credentials.find((candidate) => candidate.credentialId === credentialId);
-        if (credential !== undefined) return Effect.succeed(credential.token);
-        if (credentials.length > 0) {
-          return Effect.fail(
-            new LinearApiError({
-              reason: "unauthenticated",
-              detail: "The selected Linear account is not connected.",
+        if (credentialId === undefined) {
+          return storedToken.pipe(
+            Effect.flatMap((legacy) => {
+              if (Option.isSome(legacy)) return Effect.succeed(legacy.value);
+              if (Option.isSome(config.envToken)) return Effect.succeed(config.envToken.value);
+              const onlyCredential = credentials.length === 1 ? credentials[0] : undefined;
+              if (onlyCredential !== undefined) return Effect.succeed(onlyCredential.token);
+              return Effect.fail(
+                new LinearApiError({
+                  reason: "unauthenticated",
+                  detail:
+                    credentials.length > 0
+                      ? "The selected Linear account is not connected."
+                      : "Connect Linear in Settings.",
+                }),
+              );
             }),
           );
         }
-        return storedToken.pipe(
-          Effect.map((legacy) => Option.orElse(legacy, () => config.envToken)),
-          Effect.flatMap(
-            Option.match({
-              onNone: () =>
-                Effect.fail(
-                  new LinearApiError({
-                    reason: "unauthenticated",
-                    detail: "Connect Linear in Settings.",
-                  }),
-                ),
-              onSome: Effect.succeed,
-            }),
-          ),
+        const credential = credentials.find((candidate) => candidate.credentialId === credentialId);
+        if (credential !== undefined) return Effect.succeed(credential.token);
+        return Effect.fail(
+          new LinearApiError({
+            reason: "unauthenticated",
+            detail: "The selected Linear account is not connected.",
+          }),
         );
       }),
     );
@@ -456,11 +469,21 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const inspectToken = (token: string) =>
+    probeToken(token).pipe(
+      Effect.map((account) => ({ _tag: "Success" as const, account })),
+      Effect.catch((error) => Effect.succeed({ _tag: "Failure" as const, error })),
+    );
+
   const connectionOf = (
     accounts: ReadonlyArray<LinearAccount>,
     hasStoredToken: boolean,
+    environmentAccount?: LinearConnection["environmentAccount"],
   ): LinearConnection => {
-    const primary = accounts.find((account) => account.status === "authenticated") ?? accounts[0];
+    const primary =
+      environmentAccount ??
+      accounts.find((account) => account.status === "authenticated") ??
+      accounts[0];
     return {
       status: primary?.status ?? "unauthenticated",
       hasStoredToken,
@@ -468,6 +491,7 @@ export const make = Effect.gen(function* () {
       accountEmail: primary?.accountEmail ?? null,
       teams: primary?.teams ?? [],
       accounts,
+      ...(environmentAccount === undefined ? {} : { environmentAccount }),
     };
   };
   const failedConnection = (error: LinearApiError): LinearConnection => ({
@@ -479,30 +503,61 @@ export const make = Effect.gen(function* () {
     accounts: [],
   });
 
+  const inspectEnvironmentAccount = Option.match(config.envToken, {
+    onNone: () => Effect.succeed<LinearConnection["environmentAccount"]>(undefined),
+    onSome: (token) =>
+      inspectToken(token).pipe(
+        Effect.map((inspected) => {
+          if (inspected._tag === "Failure") {
+            return {
+              status:
+                inspected.error.reason === "unauthenticated"
+                  ? ("unauthenticated" as const)
+                  : ("unverified" as const),
+              accountName: "Environment account",
+              accountEmail: null,
+              teams: [],
+            };
+          }
+          return {
+            status: inspected.account.status,
+            accountName: inspected.account.accountName,
+            accountEmail: inspected.account.accountEmail,
+            teams: inspected.account.teams,
+          };
+        }),
+      ),
+  });
+
   const connectionUnlocked = Effect.gen(function* () {
     const credentials = yield* storedCredentials;
     if (credentials.length > 0) {
       const legacy = yield* storedToken;
-      if (Option.isSome(legacy)) yield* removeLegacyToken.pipe(Effect.ignore);
       const accounts = yield* Effect.forEach(credentials, inspectCredential);
-      return connectionOf(accounts, true);
+      const migratedCredentialId = Option.isSome(legacy)
+        ? credentials.find(({ token }) => token === legacy.value)?.credentialId
+        : undefined;
+      return {
+        ...connectionOf(accounts, true, yield* inspectEnvironmentAccount),
+        ...(migratedCredentialId === undefined ? {} : { migratedCredentialId }),
+      };
     }
     const legacy = yield* storedToken;
     if (Option.isSome(legacy)) {
-      const inspected = yield* probeToken(legacy.value).pipe(
-        Effect.map((account) => ({ _tag: "Success" as const, account })),
-        Effect.catch((error) => Effect.succeed({ _tag: "Failure" as const, error })),
-      );
+      const inspected = yield* inspectToken(legacy.value);
       if (inspected._tag === "Failure") {
         return { ...failedConnection(inspected.error), hasStoredToken: true };
       }
       const account = inspected.account;
       yield* writeCredentials([{ credentialId: account.credentialId, token: legacy.value }]);
-      yield* removeLegacyToken.pipe(Effect.ignore);
-      return connectionOf([account], true);
+      return {
+        ...connectionOf([account], true, yield* inspectEnvironmentAccount),
+        migratedCredentialId: account.credentialId,
+      };
     }
     if (Option.isSome(config.envToken)) {
-      const account = yield* probeToken(config.envToken.value);
+      const account = yield* inspectEnvironmentAccount;
+      if (account === undefined) return connectionOf([], false);
       return {
         status: account.status,
         hasStoredToken: false,
@@ -510,10 +565,11 @@ export const make = Effect.gen(function* () {
         accountEmail: account.accountEmail,
         teams: account.teams,
         accounts: [],
+        environmentAccount: account,
       };
     }
     return connectionOf([], false);
-  }).pipe(Effect.catch((error) => Effect.succeed(failedConnection(error))));
+  });
   const connection = credentialPoolMutex.withPermits(1)(connectionUnlocked);
 
   const getViewer = ({ credentialId }: { readonly credentialId?: string }) =>
@@ -548,7 +604,9 @@ export const make = Effect.gen(function* () {
     );
 
   return LinearApi.of({
+    environmentTokenConfigured: Option.isSome(config.envToken),
     connection,
+    completeLegacyMigration: credentialPoolMutex.withPermits(1)(removeLegacyToken),
     connect: (value) =>
       credentialPoolMutex.withPermits(1)(
         Effect.gen(function* () {
@@ -569,7 +627,10 @@ export const make = Effect.gen(function* () {
           else credentials[index] = credential;
           yield* writeCredentials(credentials);
           if (Option.isSome(legacy)) yield* removeLegacyToken.pipe(Effect.ignore);
-          return yield* connectionUnlocked;
+          return {
+            ...(yield* connectionUnlocked),
+            connectedCredentialId: account.credentialId,
+          };
         }),
       ),
     disconnect: (input) =>
@@ -599,10 +660,13 @@ export const make = Effect.gen(function* () {
               yield* removeLegacyToken;
             }
           }
-          yield* writeCredentials(
-            credentials.filter((credential) => credential.credentialId !== credentialId),
+          const remaining = credentials.filter(
+            (credential) => credential.credentialId !== credentialId,
           );
-          return yield* connectionUnlocked;
+          const accounts = yield* Effect.forEach(remaining, inspectCredential);
+          const environmentAccount = yield* inspectEnvironmentAccount;
+          yield* writeCredentials(remaining);
+          return connectionOf(accounts, remaining.length > 0, environmentAccount);
         }),
       ),
     getViewer,
@@ -641,7 +705,7 @@ export const make = Effect.gen(function* () {
       ).pipe(
         Effect.map(({ data }) => ({
           issues: data.issues.nodes.slice(0, input.limit),
-          truncated: data.issues.nodes.length > input.limit,
+          truncated: data.issues.nodes.length > input.limit || data.issues.pageInfo.hasNextPage,
         })),
       );
     },
@@ -662,7 +726,9 @@ export const make = Effect.gen(function* () {
             const issue = yield* issueOrFail(identifier, data.issue);
             return {
               viewerId: data.viewer.id,
-              comments: issue.comments?.nodes ?? [],
+              comments: (issue.comments?.nodes ?? []).toSorted((left, right) =>
+                left.createdAt.localeCompare(right.createdAt),
+              ),
               reactions: issue.reactions ?? [],
               commentsTruncated: issue.comments?.pageInfo?.hasNextPage ?? false,
             };

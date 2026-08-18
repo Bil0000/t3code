@@ -222,6 +222,20 @@ describe("ServerSettings issue tracking", () => {
       project_2: null,
     });
   });
+
+  it("accepts Linear project mapping deletions", () => {
+    const patch = decodeServerSettingsPatch({
+      issueTracking: {
+        linear: {
+          projectBindingsToDelete: [" project_1 "],
+          projectTeamsToDelete: [" project_2 "],
+        },
+      },
+    });
+
+    expect(patch.issueTracking?.linear?.projectBindingsToDelete).toEqual(["project_1"]);
+    expect(patch.issueTracking?.linear?.projectTeamsToDelete).toEqual(["project_2"]);
+  });
 });
 
 describe("ServerSettings.sourceControlWritingStyle", () => {

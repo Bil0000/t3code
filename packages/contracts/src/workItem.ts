@@ -7,6 +7,7 @@ export type WorkItemTaskMode = typeof WorkItemTaskMode.Type;
 
 export const WorkItemTaskSourceRef = Schema.Struct({
   kind: Schema.Literals(["issue", "pull-request"]),
+  provider: Schema.optionalKey(TrimmedNonEmptyString),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
 });

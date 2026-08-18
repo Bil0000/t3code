@@ -1,7 +1,7 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { WorkItemMatchInput, WorkItemMatchResult } from "./workItem.ts";
+import { WorkItemMatchInput, WorkItemMatchResult, WorkItemTaskInput } from "./workItem.ts";
 
 const match = {
   kind: "issue" as const,
@@ -15,6 +15,16 @@ const match = {
 };
 
 describe("work item matches", () => {
+  it("keeps a source provider when equal references need disambiguation", () => {
+    const decoded = Schema.decodeUnknownSync(WorkItemTaskInput)({
+      projectId: "project-1",
+      mode: "compound",
+      items: [{ kind: "issue", provider: "linear", repository: "ENG", number: 12 }],
+    });
+
+    expect(decoded.items[0]?.provider).toBe("linear");
+  });
+
   it("decodes a related-item request", () => {
     const decoded = Schema.decodeUnknownSync(WorkItemMatchInput)({
       projectId: "project-1",

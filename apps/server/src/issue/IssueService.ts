@@ -8,6 +8,7 @@ import * as Layer from "effect/Layer";
 import {
   IssueOperationError,
   IssueUnavailableError,
+  issueProjectSourceKey,
   issueRepositoryKey,
   issueSourceKey,
   issueProviderRequirement,
@@ -165,6 +166,7 @@ const ASSIGNEE_ACCESS_REFUSAL =
   "You need write access on this repository to change who an issue is assigned to.";
 
 interface RepositoryBatch {
+  readonly projectId: IssueListEntry["projectId"];
   /** Which repository this slice came from, which is what a cursor for it is filed under. */
   readonly key: string;
   readonly entries: ReadonlyArray<IssueListEntry>;
@@ -357,15 +359,20 @@ export const make = Effect.gen(function* () {
    * remote: that field travels through the client, so it is never handed to a provider verbatim.
    */
   const requireProject = (
-    ref: Pick<IssueRef, "projectId" | "repository">,
+    ref: Pick<IssueRef, "projectId" | "provider" | "repository">,
   ): Effect.Effect<IssueProjectSource, IssueError> =>
     listWorkspaceProjects({ projectId: ref.projectId }).pipe(
       Effect.flatMap(({ supported }): Effect.Effect<IssueProjectSource, IssueError> => {
-        const match = supported[0];
-        if (!match) {
+        if (supported.length === 0) {
           return Effect.fail(new IssueUnavailableError({ reason: "provider-unsupported" }));
         }
-        if (match.repository.toLowerCase() !== ref.repository.trim().toLowerCase()) {
+        const repository = ref.repository.trim().toLowerCase();
+        const match = supported.find(
+          (project) =>
+            project.repository.toLowerCase() === repository &&
+            (ref.provider === undefined || project.adapter.kind === ref.provider),
+        );
+        if (match === undefined) {
           return Effect.fail(
             new IssueOperationError({
               operation: "resolveRepository",
@@ -431,6 +438,7 @@ export const make = Effect.gen(function* () {
     readonly key: string;
     readonly host: string;
     readonly kind: IssueProviderKind;
+    readonly projectIds: ReadonlyArray<IssueProjectSource["project"]["id"]>;
     readonly viewer: string | null;
     readonly error: IssueProviderError | null;
   };
@@ -469,6 +477,7 @@ export const make = Effect.gen(function* () {
               key,
               host: first.host,
               kind: adapter.kind,
+              projectIds: forSource.map(({ project }) => project.id),
               viewer: viewer as string | null,
               error: null as IssueProviderError | null,
             })),
@@ -476,7 +485,14 @@ export const make = Effect.gen(function* () {
               Effect.map(Clock.currentTimeMillis, (at) => viewersBySource.set(key, { at, result })),
             ),
             Effect.catch((error) =>
-              Effect.succeed({ key, host: first.host, kind: adapter.kind, viewer: null, error }),
+              Effect.succeed({
+                key,
+                host: first.host,
+                kind: adapter.kind,
+                projectIds: forSource.map(({ project }) => project.id),
+                viewer: null,
+                error,
+              }),
             ),
           );
         }),
@@ -592,6 +608,9 @@ export const make = Effect.gen(function* () {
       for (const result of viewerResults) {
         if (result.viewer === null) continue;
         viewers[result.key] = result.viewer;
+        for (const projectId of result.projectIds) {
+          viewers[issueProjectSourceKey(result.kind, result.host, projectId)] = result.viewer;
+        }
         viewers[issueSourceKey(result.kind, result.host)] ??= result.viewer;
         // Older clients read the host-only key. New clients prefer the adapter-safe key above.
         viewers[result.host] ??= result.viewer;
@@ -724,6 +743,7 @@ export const make = Effect.gen(function* () {
                         !cursor.seenAt.includes(item.number),
                     );
               return {
+                projectId: project.project.id,
                 key,
                 entries: items.map((item) => toEntry({ project, item })),
                 errors: [],
@@ -739,6 +759,7 @@ export const make = Effect.gen(function* () {
             // give rather than a host that cannot be read.
             Effect.catch((error) =>
               Effect.succeed<RepositoryBatch>({
+                projectId: project.project.id,
                 key,
                 entries: [],
                 errors: [repositoryFailure(project, error)],
@@ -820,6 +841,7 @@ export const make = Effect.gen(function* () {
                           !cursorHere.seenAt.includes(item.number),
                       );
                 return Effect.succeed({
+                  projectId: project.project.id,
                   key: listCursorKey(project),
                   entries: items.map((item) => toEntry({ project, item })),
                   errors: [],
@@ -861,6 +883,12 @@ export const make = Effect.gen(function* () {
         }
       }
       const batches = (yield* Effect.all(reads, { concurrency: REPOSITORY_CONCURRENCY })).flat();
+      const readableProjectIds = new Set(
+        batches.filter((batch) => batch.errors.length === 0).map((batch) => batch.projectId),
+      );
+      const errors = [...unreadable, ...batches.flatMap((batch) => batch.errors)].filter(
+        (error) => !readableProjectIds.has(error.projectId),
+      );
 
       const nextCursors: Record<string, string> = {};
       for (const batch of batches) {
@@ -875,7 +903,7 @@ export const make = Effect.gen(function* () {
           sort,
           order,
         ),
-        errors: [...unreadable, ...batches.flatMap((batch) => batch.errors)],
+        errors,
         truncated: batches.some((batch) => batch.truncated),
         nextCursors,
       };
@@ -1448,6 +1476,7 @@ export const make = Effect.gen(function* () {
   // `refEpochs` after eviction can never mint a key an old entry still has.
   let epochCounter = 0;
   let listingsEpoch = 0;
+  let allRefsEpoch = 0;
   // Its own epoch rather than the listings': what a repository offers a new issue is changed by a
   // commit to that repository, so every close, comment and label would otherwise throw away an
   // answer nothing had invalidated.
@@ -1455,7 +1484,7 @@ export const make = Effect.gen(function* () {
   const refEpochs = new Map<string, number>();
   const REF_EPOCH_CAPACITY = 2_048;
   const refScope = (ref: IssueRef) => `${ref.projectId} ${ref.repository} ${ref.number}`;
-  const refEpoch = (ref: IssueRef) => refEpochs.get(refScope(ref)) ?? 0;
+  const refEpoch = (ref: IssueRef) => refEpochs.get(refScope(ref)) ?? allRefsEpoch;
   const bumpRefEpoch = (ref: IssueRef) => {
     const scope = refScope(ref);
     if (!refEpochs.has(scope) && refEpochs.size >= REF_EPOCH_CAPACITY) {
@@ -1524,8 +1553,19 @@ export const make = Effect.gen(function* () {
 
   const detailCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, repository, number] = JSON.parse(key) as [number, string, string, number];
-      return detailUncached({ projectId, repository, number } as IssueRef);
+      const [, projectId, provider, repository, number] = JSON.parse(key) as [
+        number,
+        string,
+        string | null,
+        string,
+        number,
+      ];
+      return detailUncached({
+        projectId,
+        ...(provider === null ? {} : { provider }),
+        repository,
+        number,
+      } as IssueRef);
     },
     {
       capacity: DETAIL_CACHE_CAPACITY,
@@ -1534,14 +1574,31 @@ export const make = Effect.gen(function* () {
   );
   const staleDetail = staleWhileRevalidate<IssueDetail>(DETAIL_STALE_WINDOW, DETAIL_CACHE_CAPACITY);
   const detail: IssueService["Service"]["detail"] = (input) => {
-    const key = JSON.stringify([refEpoch(input), input.projectId, input.repository, input.number]);
+    const key = JSON.stringify([
+      refEpoch(input),
+      input.projectId,
+      input.provider ?? null,
+      input.repository,
+      input.number,
+    ]);
     return staleDetail(key, Cache.get(detailCache, key));
   };
 
   const activityCache = yield* Cache.makeWith(
     (key: string) => {
-      const [, projectId, repository, number] = JSON.parse(key) as [number, string, string, number];
-      return activityUncached({ projectId, repository, number } as IssueRef);
+      const [, projectId, provider, repository, number] = JSON.parse(key) as [
+        number,
+        string,
+        string | null,
+        string,
+        number,
+      ];
+      return activityUncached({
+        projectId,
+        ...(provider === null ? {} : { provider }),
+        repository,
+        number,
+      } as IssueRef);
     },
     {
       capacity: DETAIL_CACHE_CAPACITY,
@@ -1553,7 +1610,13 @@ export const make = Effect.gen(function* () {
     DETAIL_CACHE_CAPACITY,
   );
   const activity: IssueService["Service"]["activity"] = (input) => {
-    const key = JSON.stringify([refEpoch(input), input.projectId, input.repository, input.number]);
+    const key = JSON.stringify([
+      refEpoch(input),
+      input.projectId,
+      input.provider ?? null,
+      input.repository,
+      input.number,
+    ]);
     return staleActivity(key, Cache.get(activityCache, key));
   };
 
@@ -1575,6 +1638,8 @@ export const make = Effect.gen(function* () {
       if (input.reference === undefined) {
         listingsEpoch = ++epochCounter;
         templatesEpoch = ++epochCounter;
+        allRefsEpoch = ++epochCounter;
+        refEpochs.clear();
         // A whole-workspace refresh is the reader asking to be re-answered from the hosts, and
         // that includes who the hosts say they are.
         viewersBySource.clear();

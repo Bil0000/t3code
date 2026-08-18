@@ -21,20 +21,37 @@ const pool = (...credentials: ReadonlyArray<readonly [credentialId: string, toke
 
 function memorySecrets(
   initial: Readonly<Record<string, string>> = {},
-  options: { readonly legacyRemoveFailures?: number } = {},
+  options: {
+    readonly failCredentialReadsAfterWrite?: boolean;
+    readonly legacyRemoveFailures?: number;
+  } = {},
 ) {
   const values = new Map<string, Uint8Array>();
+  let credentialsWritten = false;
   let legacyRemoveFailures = options.legacyRemoveFailures ?? 0;
   let legacyRemoveAttempts = 0;
   for (const [name, value] of Object.entries(initial)) values.set(name, bytes(value));
   const service = ServerSecretStore.ServerSecretStore.of({
     get: (name) => {
+      if (
+        name === "linear.credentials" &&
+        credentialsWritten &&
+        options.failCredentialReadsAfterWrite === true
+      ) {
+        return Effect.fail(
+          new ServerSecretStore.SecretStoreReadError({ resource: name, cause: "test" }),
+        );
+      }
       return Effect.sync(() => {
         const value = values.get(name);
         return value === undefined ? Option.none() : Option.some(value);
       });
     },
-    set: (name, value) => Effect.sync(() => void values.set(name, value)),
+    set: (name, value) =>
+      Effect.sync(() => {
+        if (name === "linear.credentials") credentialsWritten = true;
+        values.set(name, value);
+      }),
     create: (name, value) => Effect.sync(() => void values.set(name, value)),
     getOrCreateRandom: (name, size) =>
       Effect.sync(() => {
@@ -61,7 +78,9 @@ function memorySecrets(
 
 function makeLayer(input: {
   readonly token?: string;
+  readonly envToken?: string;
   readonly credentials?: string;
+  readonly failCredentialReadsAfterWrite?: boolean;
   readonly legacyRemoveFailures?: number;
   readonly response: (body: Record<string, unknown>, authorization: string | undefined) => unknown;
 }) {
@@ -71,9 +90,14 @@ function makeLayer(input: {
       ...(input.token === undefined ? {} : { [LinearApi.LINEAR_API_TOKEN_SECRET]: input.token }),
       ...(input.credentials === undefined ? {} : { "linear.credentials": input.credentials }),
     },
-    input.legacyRemoveFailures === undefined
-      ? {}
-      : { legacyRemoveFailures: input.legacyRemoveFailures },
+    {
+      ...(input.failCredentialReadsAfterWrite === undefined
+        ? {}
+        : { failCredentialReadsAfterWrite: input.failCredentialReadsAfterWrite }),
+      ...(input.legacyRemoveFailures === undefined
+        ? {}
+        : { legacyRemoveFailures: input.legacyRemoveFailures }),
+    },
   );
   const client = HttpClient.make((request: HttpClientRequest.HttpClientRequest) => {
     const raw = (request.body as { readonly body?: Uint8Array }).body;
@@ -89,7 +113,12 @@ function makeLayer(input: {
     Layer.provide(Layer.succeed(ServerSecretStore.ServerSecretStore, secrets.service)),
     Layer.provide(
       ConfigProvider.layer(
-        ConfigProvider.fromEnv({ env: { T3CODE_LINEAR_API_BASE_URL: "https://linear.test" } }),
+        ConfigProvider.fromEnv({
+          env: {
+            T3CODE_LINEAR_API_BASE_URL: "https://linear.test",
+            ...(input.envToken === undefined ? {} : { T3CODE_LINEAR_API_TOKEN: input.envToken }),
+          },
+        }),
       ),
     ),
   );
@@ -115,6 +144,125 @@ it.effect("reports a disconnected Linear account without making a request", () =
       accounts: [],
     });
     assert.strictEqual(response.mock.calls.length, 0);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("uses the environment token for unbound legacy teams beside saved accounts", () => {
+  const { layer, requests } = makeLayer({
+    envToken: "lin_api_env",
+    credentials: pool(["user-1", "lin_api_saved"]),
+    response: () => ({ data: { viewer: { id: "viewer" } } }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* api.getViewer({});
+    yield* api.getViewer({ credentialId: "user-1" });
+
+    assert.deepStrictEqual(
+      requests.map(({ authorization }) => authorization),
+      ["lin_api_env", "lin_api_saved"],
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps unbound legacy teams on the saved token until migration completes", () => {
+  const { layer, requests } = makeLayer({
+    token: "lin_api_legacy",
+    envToken: "lin_api_env",
+    response: () => ({ data: { viewer: { id: "viewer" } } }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    yield* api.getViewer({});
+
+    assert.deepStrictEqual(
+      requests.map(({ authorization }) => authorization),
+      ["lin_api_legacy"],
+    );
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("reports the environment account beside saved accounts", () => {
+  const { layer } = makeLayer({
+    envToken: "lin_api_env",
+    credentials: pool(["user-1", "lin_api_saved"]),
+    response: (_body, authorization) => ({
+      data: {
+        viewer: {
+          id: authorization === "lin_api_env" ? "env-user" : "user-1",
+          name: authorization === "lin_api_env" ? "Environment account" : "Saved account",
+          email: null,
+        },
+        teams: {
+          nodes: [
+            authorization === "lin_api_env"
+              ? { id: "team-env", key: "ENV", name: "Environment" }
+              : { id: "team-saved", key: "SAVED", name: "Saved" },
+          ],
+        },
+      },
+    }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const connection = yield* api.connection;
+
+    assert.strictEqual(connection.accounts[0]?.teams[0]?.key, "SAVED");
+    assert.strictEqual(connection.environmentAccount?.teams[0]?.key, "ENV");
+    assert.strictEqual(connection.teams[0]?.key, "ENV");
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps Linear list continuation when the API page cap is reached", () => {
+  const { layer } = makeLayer({
+    token: "lin_api_test",
+    response: () => ({
+      data: {
+        issues: {
+          nodes: [
+            {
+              id: "issue-1",
+              identifier: "ENG-1",
+              number: 1,
+              title: "First issue",
+              url: "https://linear.app/acme/issue/ENG-1",
+              description: null,
+              createdAt: "2026-08-17T00:00:00.000Z",
+              updatedAt: "2026-08-17T00:00:00.000Z",
+              completedAt: null,
+              canceledAt: null,
+              state: { name: "Open", type: "started" },
+              creator: null,
+              assignee: null,
+              labels: { nodes: [] },
+            },
+          ],
+          pageInfo: { hasNextPage: true },
+        },
+      },
+    }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const page = yield* api.listIssues({
+      teamKey: "ENG",
+      state: "open",
+      involvement: "all",
+      viewer: "user-1",
+      limit: 500,
+    });
+
+    assert.isTrue(page.truncated);
+  }).pipe(Effect.provide(layer));
+});
+
+it.effect("surfaces malformed saved credential storage", () => {
+  const { layer } = makeLayer({ credentials: "not-json", response: () => ({}) });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const error = yield* Effect.flip(api.connection);
+
+    assert.strictEqual(error.reason, "failed");
   }).pipe(Effect.provide(layer));
 });
 
@@ -163,11 +311,14 @@ it.effect("migrates the legacy token after it has been verified", () => {
           teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
         },
       ],
+      migratedCredentialId: "user-1",
     });
     assert.deepStrictEqual(
       decodeJson(new TextDecoder().decode(values.get("linear.credentials"))),
       decodeJson(pool(["user-1", "lin_api_test"])),
     );
+    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), true);
+    yield* api.completeLegacyMigration;
     assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), false);
   }).pipe(Effect.provide(layer));
 });
@@ -203,6 +354,7 @@ it.effect("probes a new key before appending a second saved account", () => {
     const api = yield* LinearApi.LinearApi;
     const result = yield* api.connect("lin_api_two");
 
+    assert.strictEqual(result.connectedCredentialId, "user-2");
     assert.deepStrictEqual(
       result.accounts.map(({ credentialId }) => credentialId),
       ["user-1", "user-2"],
@@ -298,7 +450,7 @@ it.effect("replaces a reconnected account without changing account order", () =>
   }).pipe(Effect.provide(layer));
 });
 
-it.effect("returns a migrated pool when legacy cleanup fails and retries cleanup", () => {
+it.effect("keeps a migrated pool until legacy cleanup succeeds", () => {
   const { layer, values, legacyRemoveAttempts } = makeLayer({
     token: "lin_api_test",
     legacyRemoveFailures: 1,
@@ -318,10 +470,9 @@ it.effect("returns a migrated pool when legacy cleanup fails and retries cleanup
     );
     assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), true);
 
-    assert.deepStrictEqual(
-      (yield* api.connection).accounts.map(({ credentialId }) => credentialId),
-      ["user-1"],
-    );
+    yield* Effect.flip(api.completeLegacyMigration);
+    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), true);
+    yield* api.completeLegacyMigration;
     assert.strictEqual(legacyRemoveAttempts(), 2);
     assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), false);
   }).pipe(Effect.provide(layer));
@@ -355,6 +506,27 @@ it.effect(
     }).pipe(Effect.provide(layer));
   },
 );
+
+it.effect("does not reread credential storage after disconnect commits", () => {
+  const { layer, values } = makeLayer({
+    credentials: pool(["user-1", "lin_api_one"]),
+    failCredentialReadsAfterWrite: true,
+    response: () => ({
+      data: {
+        viewer: { id: "user-1", name: "Ada", email: null },
+        teams: { nodes: [] },
+      },
+    }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    assert.strictEqual((yield* api.disconnect({ credentialId: "user-1" })).accounts.length, 0);
+    assert.deepStrictEqual(
+      decodeJson(new TextDecoder().decode(values.get("linear.credentials"))),
+      decodeJson(pool()),
+    );
+  }).pipe(Effect.provide(layer));
+});
 
 it.effect("routes requests through the selected saved account", () => {
   const { layer, requests } = makeLayer({
@@ -439,6 +611,12 @@ it.effect("loads Linear activity reactions from API arrays", () => {
             comments: {
               nodes: [
                 {
+                  id: "comment-2",
+                  body: "Newest",
+                  createdAt: "2026-08-18T00:00:00.000Z",
+                  reactions: [],
+                },
+                {
                   id: "comment-1",
                   body: "Looks good",
                   createdAt: "2026-08-17T00:00:00.000Z",
@@ -463,6 +641,12 @@ it.effect("loads Linear activity reactions from API arrays", () => {
           body: "Looks good",
           createdAt: "2026-08-17T00:00:00.000Z",
           reactions: [{ id: "reaction-1", emoji: "👍", user: { id: "user-1" } }],
+        },
+        {
+          id: "comment-2",
+          body: "Newest",
+          createdAt: "2026-08-18T00:00:00.000Z",
+          reactions: [],
         },
       ],
       reactions: [{ id: "reaction-2", emoji: "🎉", user: { id: "user-2" } }],

@@ -3,11 +3,13 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   buildIssueTemplateBody,
+  issueProjectSourceKey,
   issueSourceKey,
   IssueCreateInput,
   IssueDetail,
   IssueListInput,
   IssueListResult,
+  IssueRef,
   IssueTemplateList,
   issueTemplateAnswersComplete,
   IssueUpdateInput,
@@ -97,6 +99,15 @@ describe("IssueListResult", () => {
     expect(decoded.viewers[jira]).toBe("jira-user");
   });
 
+  it("keys a viewer by project source when one host has several accounts", () => {
+    const projectId = "project-1" as IssueListResult["entries"][number]["projectId"];
+    const linear = issueProjectSourceKey("linear", "linear.app", projectId);
+    const github = issueProjectSourceKey("github", "github.com", projectId);
+
+    expect(linear).not.toBe(github);
+    expect(linear).toBe('["linear","linear.app","project-1"]');
+  });
+
   it("keeps why an issue was closed, which is not the same as that it was closed", () => {
     const entry = { ...LIST_RESULT.entries[0], state: "closed", stateReason: "not-planned" };
 
@@ -114,6 +125,19 @@ describe("IssueListResult", () => {
 
     expect(decoded.providers[0]?.kind).toBe("jira");
     expect(decoded.entries[0]?.provider).toBe("jira");
+  });
+});
+
+describe("IssueRef", () => {
+  it("keeps an optional provider to disambiguate equal repository names", () => {
+    expect(
+      Schema.decodeUnknownSync(IssueRef)({
+        projectId: "project-1",
+        repository: "ENG",
+        number: 7,
+        provider: "linear",
+      }),
+    ).toMatchObject({ provider: "linear" });
   });
 });
 

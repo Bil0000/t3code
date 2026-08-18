@@ -58,19 +58,23 @@ export function linearReactions(
   reactions: ReadonlyArray<LinearApi.LinearReaction>,
   viewerId: string,
 ): ReadonlyArray<IssueReaction> {
-  const grouped = new Map<IssueReactionContent, { actors: string[]; viewerHasReacted: boolean }>();
+  const grouped = new Map<
+    IssueReactionContent,
+    { actors: string[]; count: number; viewerHasReacted: boolean }
+  >();
   for (const reaction of reactions) {
     const content = CONTENT.get(reaction.emoji) as IssueReactionContent | undefined;
     const actor = reaction.user?.id;
-    if (content === undefined || actor === undefined) continue;
-    const group = grouped.get(content) ?? { actors: [], viewerHasReacted: false };
-    if (!group.actors.includes(actor)) group.actors.push(actor);
+    if (content === undefined) continue;
+    const group = grouped.get(content) ?? { actors: [], count: 0, viewerHasReacted: false };
+    group.count += 1;
+    if (actor !== undefined && !group.actors.includes(actor)) group.actors.push(actor);
     if (actor === viewerId) group.viewerHasReacted = true;
     grouped.set(content, group);
   }
   return [...grouped].map(([content, group]) => ({
     content,
-    count: group.actors.length,
+    count: group.count,
     actors: group.actors,
     viewerHasReacted: group.viewerHasReacted,
   }));
@@ -80,7 +84,7 @@ function actor(user: LinearApi.LinearUser | null | undefined) {
   return user === null || user === undefined
     ? null
     : {
-        login: user.email?.trim() || user.id,
+        login: user.id,
         name: user.name?.trim() || null,
         avatarUrl: user.avatarUrl?.trim() || null,
       };

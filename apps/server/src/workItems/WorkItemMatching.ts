@@ -20,10 +20,13 @@ interface GeneratedMatch {
 const words = (text: string) =>
   new Set(text.toLocaleLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}-]{2,}/gu) ?? []);
 
+export const workItemIdentityKey = (
+  item: Pick<WorkItemIdentity, "kind" | "provider" | "repository" | "number">,
+) =>
+  `${item.kind}:${item.provider.toLocaleLowerCase()}:${item.repository.toLocaleLowerCase()}#${item.number}`;
+
 const sameWorkItem = (left: WorkItemIdentity, right: WorkItemIdentity) =>
-  left.kind === right.kind &&
-  left.repository.toLocaleLowerCase() === right.repository.toLocaleLowerCase() &&
-  left.number === right.number;
+  workItemIdentityKey(left) === workItemIdentityKey(right);
 
 export function shortlistWorkItemCandidates<T extends WorkItemIdentity>(
   source: WorkItemSource,

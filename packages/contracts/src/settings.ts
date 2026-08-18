@@ -801,7 +801,9 @@ export const ServerSettingsPatch = Schema.Struct({
           projectBindings: Schema.optionalKey(
             Schema.Record(ProjectId, Schema.NullOr(LinearProjectBinding)),
           ),
+          projectBindingsToDelete: Schema.optionalKey(Schema.Array(ProjectId)),
           projectTeams: Schema.optionalKey(Schema.Record(ProjectId, TrimmedNonEmptyString)),
+          projectTeamsToDelete: Schema.optionalKey(Schema.Array(ProjectId)),
         }),
       ),
     }),

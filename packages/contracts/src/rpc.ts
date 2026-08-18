@@ -96,6 +96,7 @@ import {
   LinearConnectInput,
   LinearConnection,
   LinearDisconnectInput,
+  LinearSetProjectBindingInput,
 } from "./issueTracking.ts";
 import {
   WorkItemMatchError,
@@ -358,6 +359,7 @@ export const WS_METHODS = {
   linearConnectionStatus: "linear.connectionStatus",
   linearConnect: "linear.connect",
   linearDisconnect: "linear.disconnect",
+  linearSetProjectBinding: "linear.setProjectBinding",
   workItemsGenerateTask: "workItems.generateTask",
   workItemsFindMatches: "workItems.findMatches",
 
@@ -784,6 +786,12 @@ export const WsLinearConnectRpc = Rpc.make(WS_METHODS.linearConnect, {
 export const WsLinearDisconnectRpc = Rpc.make(WS_METHODS.linearDisconnect, {
   payload: LinearDisconnectInput,
   success: LinearConnection,
+  error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
+});
+
+export const WsLinearSetProjectBindingRpc = Rpc.make(WS_METHODS.linearSetProjectBinding, {
+  payload: LinearSetProjectBindingInput,
+  success: Schema.Void,
   error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
 
@@ -1247,6 +1255,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsLinearConnectionStatusRpc,
   WsLinearConnectRpc,
   WsLinearDisconnectRpc,
+  WsLinearSetProjectBindingRpc,
   WsWorkItemsGenerateTaskRpc,
   WsWorkItemsFindMatchesRpc,
   WsSourceControlLookupRepositoryRpc,

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { resolveWorkItemMatches, shortlistWorkItemCandidates } from "./WorkItemMatching.ts";
+import {
+  resolveWorkItemMatches,
+  shortlistWorkItemCandidates,
+  workItemIdentityKey,
+} from "./WorkItemMatching.ts";
 
 const source = {
   kind: "issue" as const,
@@ -35,6 +39,13 @@ describe("shortlistWorkItemCandidates", () => {
     expect(shortlisted).toHaveLength(12);
     expect(shortlisted[0]?.number).toBe(99);
     expect(shortlisted.some((entry) => entry.number === 12 && entry.kind === "issue")).toBe(false);
+  });
+
+  it("keeps equal references from different providers", () => {
+    const otherProvider = { ...source, provider: "linear" };
+
+    expect(shortlistWorkItemCandidates(source, [otherProvider])).toEqual([otherProvider]);
+    expect(workItemIdentityKey(source)).not.toBe(workItemIdentityKey(otherProvider));
   });
 });
 

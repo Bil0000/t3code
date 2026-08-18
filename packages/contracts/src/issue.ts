@@ -20,6 +20,15 @@ export function issueSourceKey(provider: IssueProviderKind, host: string): strin
   return JSON.stringify([provider, host.toLowerCase()]);
 }
 
+/** Stable viewer identity for one adapter source inside one T3 project. */
+export function issueProjectSourceKey(
+  provider: IssueProviderKind,
+  host: string,
+  projectId: ProjectId,
+): string {
+  return JSON.stringify([provider, host.toLowerCase(), projectId]);
+}
+
 /** Stable identity for one repository inside an adapter account. */
 export function issueRepositoryKey(
   provider: IssueProviderKind,
@@ -316,7 +325,7 @@ export const IssueListProjectError = Schema.Struct({
 export type IssueListProjectError = typeof IssueListProjectError.Type;
 
 export const IssueListResult = Schema.Struct({
-  /** The signed-in account per adapter and host, keyed with `issueSourceKey`. */
+  /** Signed-in accounts keyed per project source, with old source and host keys retained. */
   viewers: Schema.Record(TrimmedNonEmptyString, TrimmedNonEmptyString),
   providers: Schema.Array(IssueProviderSummary),
   /** By update, newest first, across every repository this answer covers. */
@@ -331,6 +340,7 @@ export type IssueListResult = typeof IssueListResult.Type;
 
 export const IssueRef = Schema.Struct({
   projectId: ProjectId,
+  provider: Schema.optionalKey(IssueProviderKind),
   repository: TrimmedNonEmptyString,
   number: PositiveInt,
 });

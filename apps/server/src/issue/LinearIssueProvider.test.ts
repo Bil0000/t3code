@@ -42,6 +42,54 @@ it("groups supported Linear emoji reactions and marks the viewer", () => {
   );
 });
 
+it.effect("uses Linear user ids for viewer-comparable issue actors", () => {
+  const api = {
+    listIssues: () =>
+      Effect.succeed({
+        issues: [
+          {
+            id: "issue-1",
+            identifier: "ENG-7",
+            number: 7,
+            title: "Keep viewer identity stable",
+            url: "https://linear.app/acme/issue/ENG-7",
+            description: "",
+            createdAt: "2026-08-17T00:00:00.000Z",
+            updatedAt: "2026-08-17T00:00:00.000Z",
+            state: { name: "Open", type: "started" },
+            creator: { id: "user-1", name: "Ada", email: "ada@example.com" },
+            assignee: { id: "user-2", name: "Grace", email: "grace@example.com" },
+            labels: { nodes: [] },
+          },
+        ],
+        truncated: false,
+      }),
+  } as unknown as LinearApi.LinearApi["Service"];
+
+  return Effect.gen(function* () {
+    const adapter = yield* make;
+    const page = yield* adapter.listIssues({
+      cwd: PROJECT.workspaceRoot,
+      host: "linear.app",
+      repository: "ENG",
+      state: "open",
+      involvement: "all",
+      viewer: "user-1",
+      limit: 99,
+    });
+
+    assert.strictEqual(page.items[0]?.author?.login, "user-1");
+    assert.strictEqual(page.items[0]?.assignees[0]?.login, "user-2");
+  }).pipe(
+    Effect.provide(
+      Layer.mergeAll(
+        Layer.succeed(LinearApi.LinearApi, api),
+        ServerSettings.layerTest({ issueTracking: { linear: {} } } as never),
+      ),
+    ),
+  );
+});
+
 it.effect("maps Linear comment reaction arrays into issue activity", () => {
   const api = {
     getActivity: () =>
@@ -55,7 +103,10 @@ it.effect("maps Linear comment reaction arrays into issue activity", () => {
             reactions: [{ id: "reaction-1", emoji: "👍", user: { id: "user-1" } }],
           },
         ],
-        reactions: [{ id: "reaction-2", emoji: "🎉", user: { id: "user-2" } }],
+        reactions: [
+          { id: "reaction-2", emoji: "🎉", user: { id: "user-2" } },
+          { id: "reaction-3", emoji: "🎉", user: null },
+        ],
         commentsTruncated: false,
       }),
   } as unknown as LinearApi.LinearApi["Service"];
@@ -84,7 +135,7 @@ it.effect("maps Linear comment reaction arrays into issue activity", () => {
       commentCount: 1,
       commentsTruncated: false,
       events: [],
-      reactions: [{ content: "hooray", count: 1, actors: ["user-2"], viewerHasReacted: false }],
+      reactions: [{ content: "hooray", count: 2, actors: ["user-2"], viewerHasReacted: false }],
     });
   }).pipe(
     Effect.provide(
