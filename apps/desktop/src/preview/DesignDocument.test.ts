@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createDesignSelectionAnnotation,
   designPathFromUrl,
+  discardPendingDesignObject,
   resolveDesignPosition,
   serializeDesignDocument,
 } from "./DesignDocument.ts";
@@ -67,6 +68,19 @@ describe("serializeDesignDocument", () => {
     } as unknown as Document;
 
     expect(serializeDesignDocument(document)).toBe("<!doctype html>\n<html></html>");
+  });
+});
+
+describe("discardPendingDesignObject", () => {
+  it("removes an unfinished object", () => {
+    let removed = false;
+
+    discardPendingDesignObject({
+      kind: "create",
+      element: { remove: () => (removed = true) },
+    });
+
+    expect(removed).toBe(true);
   });
 });
 

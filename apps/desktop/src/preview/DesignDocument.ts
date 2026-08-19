@@ -4,6 +4,12 @@ export const DESIGN_UI_ATTRIBUTE = "data-t3code-design-ui";
 export const DESIGN_EDITING_ATTRIBUTE = "data-t3code-design-editing";
 export const DESIGN_OPEN_ATTRIBUTE = "data-t3code-design-open";
 
+export function discardPendingDesignObject(
+  interaction: { readonly kind: string; readonly element: Pick<Element, "remove"> } | null,
+): void {
+  if (interaction?.kind === "create") interaction.element.remove();
+}
+
 export interface DesignSelectionInput {
   id: string;
   pageUrl: string;

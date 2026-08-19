@@ -8,6 +8,7 @@ import {
   DESIGN_OPEN_ATTRIBUTE,
   DESIGN_UI_ATTRIBUTE,
   designPathFromUrl,
+  discardPendingDesignObject,
   resolveDesignPosition,
   serializeDesignDocument,
 } from "./DesignDocument.ts";
@@ -1174,6 +1175,7 @@ function startDesignEditor(): void {
     editorOpen = active;
     toolbar.hidden = !active;
     document.documentElement.toggleAttribute(DESIGN_OPEN_ATTRIBUTE, active && !annotationActive());
+    if (!active) discardPendingDesignObject(drag);
     drag = null;
     finishEditingText?.();
     hideHover();
@@ -1215,6 +1217,7 @@ function startDesignEditor(): void {
     host.style.display = active ? "none" : "";
     document.documentElement.toggleAttribute(DESIGN_OPEN_ATTRIBUTE, editorOpen && !active);
     if (active) {
+      discardPendingDesignObject(drag);
       drag = null;
       finishEditingText?.();
       hideHover();
