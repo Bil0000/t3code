@@ -26,6 +26,7 @@ import {
   isBranchMismatchDismissedForSession,
   reconcileMountedTerminalThreadIds,
   reconcileRetainedMountedThreadIds,
+  resolveProviderPromptForSend,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   scheduleEnvironmentReconnectWarning,
@@ -292,6 +293,26 @@ describe("deriveComposerSendState", () => {
         elementContextCount: 0,
       }).hasSendableContent,
     ).toBe(false);
+  });
+});
+
+describe("resolveProviderPromptForSend", () => {
+  it("expands a desktop design command after composer placeholders are removed", () => {
+    const prompt = `/design a billing dashboard \uFFFC`;
+    const { trimmedPrompt } = deriveComposerSendState({
+      prompt,
+      imageCount: 0,
+      terminalContexts: [],
+    });
+
+    expect(
+      resolveProviderPromptForSend({
+        isElectron: true,
+        prompt,
+        trimmedPrompt,
+        threadId,
+      }),
+    ).toMatch(/^<t3_design_request>/);
   });
 });
 

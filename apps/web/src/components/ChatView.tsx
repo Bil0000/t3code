@@ -221,7 +221,6 @@ import {
   formatElementContextLabel,
 } from "../lib/elementContext";
 import { appendPreviewAnnotationPrompt } from "../lib/previewAnnotation";
-import { expandDesignCommand } from "@t3tools/shared/designPrompt";
 import { appendReviewCommentsToPrompt, type ReviewCommentContext } from "../reviewCommentContext";
 import { environmentCatalog } from "../connection/catalog";
 import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../terminalUiStateStore";
@@ -317,6 +316,7 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   reconcileMountedTerminalThreadIds,
+  resolveProviderPromptForSend,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
   revokeBlobPreviewUrl,
@@ -5123,9 +5123,12 @@ function ChatViewContent(props: ChatViewProps) {
     const composerElementContextsSnapshot = [...composerElementContexts];
     const composerPreviewAnnotationsSnapshot = [...composerPreviewAnnotations];
     const composerReviewCommentsSnapshot: ReviewCommentContext[] = [...composerReviewComments];
-    const providerPrompt = isElectron
-      ? expandDesignCommand({ prompt: promptForSend, threadId: threadIdForSend })
-      : promptForSend;
+    const providerPrompt = resolveProviderPromptForSend({
+      isElectron,
+      prompt: promptForSend,
+      trimmedPrompt: trimmed,
+      threadId: threadIdForSend,
+    });
     const messageTextWithContexts = appendElementContextsToPrompt(
       appendTerminalContextsToPrompt(providerPrompt, composerTerminalContextsSnapshot),
       composerElementContextsSnapshot,
