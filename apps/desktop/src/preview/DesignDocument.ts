@@ -2,6 +2,7 @@ import type { PreviewAnnotationPayload } from "@t3tools/contracts";
 
 export const DESIGN_UI_ATTRIBUTE = "data-t3code-design-ui";
 export const DESIGN_EDITING_ATTRIBUTE = "data-t3code-design-editing";
+export const DESIGN_OPEN_ATTRIBUTE = "data-t3code-design-open";
 
 export interface DesignSelectionInput {
   id: string;
@@ -95,6 +96,7 @@ export function designPathFromUrl(url: string): string | null {
 
 export function serializeDesignDocument(document: Document): string {
   const root = document.documentElement.cloneNode(true) as HTMLElement;
+  root.removeAttribute(DESIGN_OPEN_ATTRIBUTE);
   root.querySelectorAll(`[${DESIGN_UI_ATTRIBUTE}]`).forEach((element) => element.remove());
   root.querySelectorAll(`[${DESIGN_EDITING_ATTRIBUTE}]`).forEach((element) => {
     element.removeAttribute(DESIGN_EDITING_ATTRIBUTE);

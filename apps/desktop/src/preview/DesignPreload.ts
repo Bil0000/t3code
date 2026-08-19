@@ -5,6 +5,7 @@ import type { DesktopPreviewDesignChangePayload } from "@t3tools/contracts";
 import {
   createDesignSelectionAnnotation,
   DESIGN_EDITING_ATTRIBUTE,
+  DESIGN_OPEN_ATTRIBUTE,
   DESIGN_UI_ATTRIBUTE,
   designPathFromUrl,
   resolveDesignPosition,
@@ -58,6 +59,7 @@ const SELECTED_ATTRIBUTE = "data-t3-design-selected";
 const ARTBOARD_SELECTOR = "[data-t3-design-artboard]";
 const SAVE_DELAY_MS = 200;
 const MIN_SHAPE_SIZE = 5;
+const PANEL_WIDTH = "min(292px,45vw)";
 let idSequence = 0;
 
 function nextId(): string {
@@ -149,6 +151,10 @@ function startDesignEditor(): void {
   host.setAttribute(DESIGN_UI_ATTRIBUTE, "");
   host.style.cssText = "position:fixed;inset:0;z-index:2147483647;pointer-events:none";
   const root = host.attachShadow({ mode: "closed" });
+  const pageStyle = document.createElement("style");
+  pageStyle.setAttribute(DESIGN_UI_ATTRIBUTE, "");
+  pageStyle.textContent = `html[${DESIGN_OPEN_ATTRIBUTE}]{width:calc(100% - ${PANEL_WIDTH})!important;min-width:0!important}html[${DESIGN_OPEN_ATTRIBUTE}] body{min-width:0!important;contain:paint}`;
+  document.head.appendChild(pageStyle);
   const style = document.createElement("style");
   style.textContent = `
     :host{color-scheme:light dark;font:12px/1.35 ui-sans-serif,system-ui,sans-serif;color:light-dark(#202020,#f3f3f3)}
@@ -158,21 +164,22 @@ function startDesignEditor(): void {
     button:active:not(:disabled){transform:scale(.97)}
     button[aria-pressed=true]{background:light-dark(#e9e9e9,#353535);color:light-dark(#111,#fff)}
     button:disabled{opacity:.35;cursor:default}
-    .panel{pointer-events:auto;position:fixed;top:8px;right:8px;display:flex;width:min(280px,calc(100vw - 16px));max-height:calc(100vh - 16px);flex-direction:column;overflow:hidden;border:1px solid light-dark(#deddd9,#3b3b3b);border-radius:13px;background:light-dark(rgba(250,249,246,.97),rgba(25,25,25,.97));box-shadow:0 16px 42px rgba(0,0,0,.2);backdrop-filter:blur(20px)}
-    .panel[hidden]{display:none}.panel-header,.tools,.actions{display:flex;align-items:center;gap:4px;padding:7px 9px;border-bottom:1px solid light-dark(#e5e3df,#353535)}
-    .panel-header{justify-content:space-between;font-weight:650}.panel-header button{height:26px;border:1px solid light-dark(#d8d6d1,#454545);background:light-dark(#fff,#292929)}
-    .editor-body{min-height:0;overflow:auto}.tools{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:8px}.tools button{height:32px;padding:0 4px;border:1px solid light-dark(#e1dfdb,#3d3d3d);background:light-dark(#fff,#242424)}
-    .section{border-top:1px solid light-dark(#e5e3df,#353535);padding:10px}.section-title{display:flex;align-items:center;justify-content:space-between;margin:0 0 7px;font-size:12px;font-weight:650}.layers{max-height:128px;overflow:auto}.layer{display:block;width:100%;height:25px;overflow:hidden;text-align:left;text-overflow:ellipsis;color:light-dark(#555,#bbb)}.layer[aria-selected=true]{background:light-dark(#e9e7e2,#383838);color:inherit}
+    .panel{pointer-events:auto;position:fixed;inset:0 0 0 auto;display:flex;width:${PANEL_WIDTH};flex-direction:column;overflow:hidden;border-left:1px solid light-dark(#deddd9,#353535);background:light-dark(#faf9f6,#191919)}
+    .panel[hidden]{display:none}.panel-header,.tools,.actions{display:flex;align-items:center;gap:4px;border-bottom:1px solid light-dark(#e5e3df,#353535)}
+    .panel-header{min-height:44px;justify-content:space-between;padding:8px 12px;font-weight:650}.panel-header button{height:28px;background:light-dark(#242422,#f0efec);color:light-dark(#f8f7f4,#242422)}
+    .editor-body{min-height:0;overflow:auto;overscroll-behavior:contain}.tools{display:grid;grid-template-columns:repeat(8,minmax(0,1fr));gap:2px;padding:7px 8px}.tools button{display:grid;height:32px;place-items:center;padding:0}.tools svg{width:16px;height:16px}
+    .section{border-top:1px solid light-dark(#e5e3df,#353535);padding:11px 12px}.editor-body>.section:first-of-type{border-top:0}.section-title{display:flex;align-items:center;justify-content:space-between;margin:0 0 8px;font-size:12px;font-weight:650}.layers{max-height:152px;overflow:auto}.layer{display:block;width:100%;height:25px;overflow:hidden;text-align:left;text-overflow:ellipsis;color:light-dark(#575653,#b9b8b4)}.layer[aria-selected=true]{background:light-dark(#e8e7e3,#373737);color:inherit}
     .hover{display:none;pointer-events:none;position:fixed;z-index:0;border:2px solid #2563eb;background:rgba(37,99,235,.08);border-radius:3px}
     .selection{display:none;pointer-events:none;position:fixed;z-index:1;border:2px solid #e5486d;box-shadow:0 0 0 1px white;border-radius:2px}
     .tag{position:absolute;left:-2px;bottom:calc(100% + 5px);max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;border-radius:4px;background:#e5486d;color:white;padding:3px 6px}
     .handle{pointer-events:auto;position:absolute;width:10px;height:10px;border:2px solid white;border-radius:2px;background:#e5486d;padding:0}
     .nw{left:-6px;top:-6px;cursor:nwse-resize}.ne{right:-6px;top:-6px;cursor:nesw-resize}.sw{left:-6px;bottom:-6px;cursor:nesw-resize}.se{right:-6px;bottom:-6px;cursor:nwse-resize}
     .inspector{display:none}.inspector h2{margin:0;overflow:hidden;font-size:12px;text-overflow:ellipsis;white-space:nowrap}
-    .field{display:grid;grid-template-columns:78px minmax(0,1fr);align-items:center;gap:7px;margin-top:6px;color:light-dark(#686764,#aaa)}
-    .field input,.field textarea,.field select{min-width:0;width:100%;border:1px solid light-dark(#dedcd7,#444);border-radius:7px;background:light-dark(#fff,#242424);padding:5px 7px;outline:none}
+    .field{display:grid;grid-template-columns:74px minmax(0,1fr);align-items:center;gap:8px;margin-top:7px;color:light-dark(#686764,#aaa)}
+    .field input,.field textarea,.field select{min-width:0;width:100%;border:1px solid light-dark(#dedcd7,#414141);border-radius:7px;background:light-dark(#fefdfa,#242424);padding:5px 7px;outline:none}
+    .field input:focus,.field textarea:focus,.field select:focus{border-color:light-dark(#8f8d87,#737373);box-shadow:0 0 0 2px light-dark(rgba(0,0,0,.06),rgba(255,255,255,.08))}
     .field input,.field select{height:29px}.field input[type=color]{width:30px;padding:3px}.field textarea{height:56px;resize:vertical}.color-control{display:grid;grid-template-columns:30px minmax(0,1fr);gap:5px}
-    .actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border-top:1px solid light-dark(#e5e3df,#353535);border-bottom:0}.actions button{padding:0 4px;border:1px solid light-dark(#dfddd8,#414141)}.actions .attach{grid-column:1/-1;background:#2563eb;color:white;border-color:#2563eb}
+    .actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));padding:8px;border-top:1px solid light-dark(#e5e3df,#353535);border-bottom:0}.actions button{padding:0 4px;border:1px solid light-dark(#dfddd8,#414141)}.actions .attach{grid-column:1/-1;background:#2563eb;color:white;border-color:#2563eb}
     .text-toolbar{pointer-events:auto;position:fixed;display:none;gap:2px;padding:4px;border:1px solid light-dark(#d9d7d2,#414141);border-radius:9px;background:light-dark(#fff,#222);box-shadow:0 10px 28px rgba(0,0,0,.2)}.text-toolbar button{min-width:28px;padding:0 7px;font-size:13px}
     @media (hover:hover) and (pointer:fine){button:hover:not(:disabled){background:light-dark(#eceae6,#363636)}}
   `;
@@ -183,7 +190,7 @@ function startDesignEditor(): void {
   const panelHeader = document.createElement("div");
   panelHeader.className = "panel-header";
   const panelTitle = document.createElement("span");
-  panelTitle.textContent = "Design";
+  panelTitle.textContent = "Edit";
   const saveNow = document.createElement("button");
   saveNow.type = "button";
   saveNow.textContent = "Save";
@@ -433,7 +440,7 @@ function startDesignEditor(): void {
     );
     attach.textContent = "Attached";
     window.setTimeout(() => {
-      attach.textContent = "Attach selection";
+      attach.textContent = "Attach element";
     }, 900);
   };
 
@@ -473,6 +480,14 @@ function startDesignEditor(): void {
     return element;
   };
 
+  const iconButton = (label: string, icon: string, action: () => void): HTMLButtonElement => {
+    const element = button("", action, editTools);
+    element.title = label;
+    element.setAttribute("aria-label", label);
+    element.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon}</svg>`;
+    return element;
+  };
+
   const setTool = (next: Tool): void => {
     tool = next;
     for (const [candidate, element] of toolButtons) {
@@ -482,20 +497,20 @@ function startDesignEditor(): void {
     if (tool !== "select") hover.style.display = "none";
   };
 
-  for (const [value, label] of [
-    ["select", "Select"],
-    ["draw", "Draw"],
-    ["arrow", "Arrow"],
-    ["box", "Box"],
-    ["circle", "Circle"],
-    ["highlight", "Highlight"],
+  for (const [value, label, icon] of [
+    ["select", "Select", '<path d="m5 3 12 8-5.5 1.5L9 18 5 3Z"/>'],
+    ["draw", "Draw", '<path d="M4 18c4-9 8-3 16-12"/>'],
+    ["arrow", "Arrow", '<path d="M5 19 19 5M10 5h9v9"/>'],
+    ["box", "Box", '<rect x="4" y="4" width="16" height="16" rx="2"/>'],
+    ["circle", "Circle", '<circle cx="12" cy="12" r="8"/>'],
+    ["highlight", "Highlight", '<path d="m5 15 8-8 4 4-8 8H5v-4ZM15 5l4 4"/>'],
   ] as const) {
-    const element = button(label, () => setTool(value), editTools);
+    const element = iconButton(label, icon, () => setTool(value));
     element.setAttribute("aria-pressed", "false");
     toolButtons.set(value, element);
   }
 
-  const attach = button("Attach selection", attachSelection, actions);
+  const attach = button("Attach element", attachSelection, actions);
   attach.className = "attach";
   const undo = button("Undo", () => runHistory(-1), actions);
   const redo = button("Redo", () => runHistory(1), actions);
@@ -533,7 +548,9 @@ function startDesignEditor(): void {
   };
 
   const addText = (note = false): void => {
-    const x = window.scrollX + Math.max(24, window.innerWidth / 2 - 90);
+    const x =
+      window.scrollX +
+      Math.max(24, document.documentElement.getBoundingClientRect().width / 2 - 90);
     const y = window.scrollY + Math.max(70, window.innerHeight / 2 - 40);
     const element = baseObject(note ? "note" : "text", x, y);
     element.textContent = note ? "Add a note" : "Edit text";
@@ -543,8 +560,8 @@ function startDesignEditor(): void {
     addObject(element);
   };
 
-  button("Text", () => addText(), editTools);
-  button("Note", () => addText(true), editTools);
+  iconButton("Text", '<path d="M5 5h14M12 5v14M8 19h8"/>', () => addText());
+  iconButton("Note", '<path d="M5 5h14v11H9l-4 4V5Z"/>', () => addText(true));
 
   const findArtboard = (element: Element): Element | null => {
     const marked = element.closest(ARTBOARD_SELECTOR);
@@ -1082,7 +1099,7 @@ function startDesignEditor(): void {
     target.focus();
     const rect = target.getBoundingClientRect();
     textToolbar.style.display = "flex";
-    textToolbar.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 300))}px`;
+    textToolbar.style.left = `${Math.max(8, Math.min(rect.left, document.documentElement.getBoundingClientRect().width - 300))}px`;
     textToolbar.style.top = `${Math.max(8, rect.top - 40)}px`;
     const onInput = (): void => {
       refreshSelection();
@@ -1156,6 +1173,7 @@ function startDesignEditor(): void {
   const setEditorOpen = (active: boolean): void => {
     editorOpen = active;
     toolbar.hidden = !active;
+    document.documentElement.toggleAttribute(DESIGN_OPEN_ATTRIBUTE, active && !annotationActive());
     drag = null;
     finishEditingText?.();
     hideHover();
@@ -1195,6 +1213,7 @@ function startDesignEditor(): void {
   const annotationObserver = new MutationObserver(() => {
     const active = annotationActive();
     host.style.display = active ? "none" : "";
+    document.documentElement.toggleAttribute(DESIGN_OPEN_ATTRIBUTE, editorOpen && !active);
     if (active) {
       drag = null;
       finishEditingText?.();

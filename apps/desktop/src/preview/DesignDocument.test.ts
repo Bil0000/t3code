@@ -4,6 +4,7 @@ import {
   createDesignSelectionAnnotation,
   designPathFromUrl,
   resolveDesignPosition,
+  serializeDesignDocument,
 } from "./DesignDocument.ts";
 
 describe("designPathFromUrl", () => {
@@ -43,6 +44,29 @@ describe("resolveDesignPosition", () => {
       x: 8,
       y: 16,
     });
+  });
+});
+
+describe("serializeDesignDocument", () => {
+  it("does not persist the editor dock state", () => {
+    const document = {
+      documentElement: {
+        cloneNode: () => {
+          let editorOpen = true;
+          return {
+            querySelectorAll: () => [],
+            removeAttribute: (name: string) => {
+              if (name === "data-t3code-design-open") editorOpen = false;
+            },
+            get outerHTML() {
+              return `<html${editorOpen ? " data-t3code-design-open" : ""}></html>`;
+            },
+          };
+        },
+      },
+    } as unknown as Document;
+
+    expect(serializeDesignDocument(document)).toBe("<!doctype html>\n<html></html>");
   });
 });
 
