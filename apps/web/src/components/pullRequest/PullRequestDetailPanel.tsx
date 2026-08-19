@@ -91,6 +91,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
+import { usePullRequestActionState } from "./usePullRequestActionState";
 import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
@@ -574,10 +575,17 @@ export function PullRequestDetailPanel({
     void refreshFromHost();
   }, [forcedRefreshToken, refreshFromHost]);
   const runAction = useAtomCommand(pullRequestEnvironment.runAction, { reportFailure: false });
-  // Which action is in flight, not merely that one is: every control here is disabled while any
-  // of them runs, but only the button that was pressed may say what it is doing.
-  const [pendingAction, setPendingAction] = useState<PullRequestAction | null>(null);
-  const actionPending = pendingAction !== null;
+  const {
+    pendingAction: activePendingAction,
+    mergeHold,
+    beginAction,
+    completeAction,
+    failAction,
+  } = usePullRequestActionState(pullRequestKey, {
+    state: coreDetail?.state ?? null,
+    isPending: detailQuery.isPending,
+  });
+  const actionPending = activePendingAction !== null;
   const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
   // Scoped to the pull request it was typed against, since this one panel shows a different one
   // every time it is opened and a half-written title must not follow it there.
@@ -626,8 +634,8 @@ export function PullRequestDetailPanel({
     method?: PullRequestMergeMethod,
     updateMethod?: PullRequestUpdateMethod,
   ) => {
-    if (pendingAction !== null) return;
-    setPendingAction(action);
+    if (actionPending) return;
+    beginAction(action);
     const result = await runAction({
       environmentId,
       input: {
@@ -637,8 +645,8 @@ export function PullRequestDetailPanel({
         ...(updateMethod ? { updateMethod } : {}),
       },
     });
-    setPendingAction(null);
     if (result._tag === "Failure") {
+      failAction();
       // The host's own sentence, because it is the only thing that says why. A merge strategy a
       // branch policy forbids is refused at completion and nowhere earlier — Azure DevOps
       // publishes no per-strategy availability to hide the control with — so "action failed"
@@ -657,6 +665,7 @@ export function PullRequestDetailPanel({
       });
       return;
     }
+    completeAction(action);
     toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
     // A branch update moves the head commit, which leaves the diff atom pointed at a comparison
     // that no longer exists — the same staleness the manual refresh button fixes, so it goes
@@ -1302,10 +1311,12 @@ export function PullRequestDetailPanel({
               ) : primaryAction === "merge" ? (
                 <Button
                   size="xs"
-                  disabled={actionPending}
+                  disabled={actionPending || mergeHold}
                   onClick={() => setConfirmation({ open: true, action: "merge" })}
                 >
-                  {pendingAction === "merge" ? "Merging..." : selectedMergeMethodLabel}
+                  {activePendingAction === "merge" || mergeHold
+                    ? "Merging..."
+                    : selectedMergeMethodLabel}
                 </Button>
               ) : null}
               <Menu>
