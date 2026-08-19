@@ -314,6 +314,19 @@ describe("resolveProviderPromptForSend", () => {
       }),
     ).toMatch(/^<t3_design_request>/);
   });
+
+  it("preserves placeholders for normal desktop prompts", () => {
+    const prompt = `inspect \uFFFC now`;
+
+    expect(
+      resolveProviderPromptForSend({
+        isElectron: true,
+        prompt,
+        trimmedPrompt: "inspect  now",
+        threadId,
+      }),
+    ).toBe(prompt);
+  });
 });
 
 describe("buildExpiredTerminalContextToastCopy", () => {

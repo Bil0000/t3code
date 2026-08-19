@@ -313,9 +313,12 @@ export function resolveProviderPromptForSend(options: {
   trimmedPrompt: string;
   threadId: string;
 }): string {
-  return options.isElectron
-    ? expandDesignCommand({ prompt: options.trimmedPrompt, threadId: options.threadId })
-    : options.prompt;
+  if (!options.isElectron) return options.prompt;
+  const expanded = expandDesignCommand({
+    prompt: options.trimmedPrompt,
+    threadId: options.threadId,
+  });
+  return expanded === options.trimmedPrompt ? options.prompt : expanded;
 }
 
 export function buildExpiredTerminalContextToastCopy(
