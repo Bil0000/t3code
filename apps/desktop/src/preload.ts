@@ -186,6 +186,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_COLOR_SCHEME_CHANNEL, { tabId, colorScheme }),
     setDesignEditing: (tabId, editing) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_SET_DESIGN_EDITING_CHANNEL, { tabId, editing }),
+    setAudioMuted: (tabId, audioMuted) =>
+      ipcRenderer.invoke(IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL, { tabId, audioMuted }),
     openDevTools: (tabId) =>
       ipcRenderer.invoke(IpcChannels.PREVIEW_OPEN_DEVTOOLS_CHANNEL, { tabId }),
     clearCookies: () => ipcRenderer.invoke(IpcChannels.PREVIEW_CLEAR_COOKIES_CHANNEL),

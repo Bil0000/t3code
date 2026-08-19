@@ -8,14 +8,15 @@ import {
   DesktopPreviewAutomationTypeInputSchema,
   DesktopPreviewAutomationWaitForInputSchema,
   DesktopPreviewConfigInputSchema,
+  DesktopPreviewCreateTabInputSchema,
   DesktopPreviewNavigateInputSchema,
   DesktopPreviewRecordingArtifactSchema,
   DesktopPreviewRecordingSaveInputSchema,
   DesktopPreviewRegisterWebviewInputSchema,
   DesktopPreviewScreenshotArtifactSchema,
+  DesktopPreviewSetAudioMutedInputSchema,
   DesktopPreviewSetColorSchemeInputSchema,
   DesktopPreviewSetDesignEditingInputSchema,
-  DesktopPreviewCreateTabInputSchema,
   DesktopPreviewTabInputSchema,
   DesktopPreviewWebviewConfigSchema,
   PreviewAnnotationSubmissionResultSchema,
@@ -164,6 +165,15 @@ export const setDesignEditing = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.preview.setDesignEditing")(function* ({ tabId, editing }) {
     const manager = yield* PreviewManager.PreviewManager;
     yield* manager.setDesignEditing(tabId, editing);
+  }),
+});
+export const setAudioMuted = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_SET_AUDIO_MUTED_CHANNEL,
+  payload: DesktopPreviewSetAudioMutedInputSchema,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.preview.setAudioMuted")(function* ({ tabId, audioMuted }) {
+    const manager = yield* PreviewManager.PreviewManager;
+    yield* manager.setAudioMuted(tabId, audioMuted);
   }),
 });
 export const openDevTools = tabMethod(
@@ -386,6 +396,7 @@ export const methods = [
   hardReload,
   setColorScheme,
   setDesignEditing,
+  setAudioMuted,
   openDevTools,
   clearCookies,
   clearCache,
