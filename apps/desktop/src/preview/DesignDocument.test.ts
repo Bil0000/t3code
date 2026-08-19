@@ -1,12 +1,28 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  applyDesignElementState,
+  captureDesignElementState,
   createDesignSelectionAnnotation,
+  designElementStatesMatch,
   designPathFromUrl,
   discardPendingDesignObject,
   resolveDesignPosition,
   serializeDesignDocument,
 } from "./DesignDocument.ts";
+
+function textElement(textContent: string) {
+  const attributes = new Map<string, string>();
+  return {
+    attributes,
+    childElementCount: 0,
+    getAttribute: (name: string) => attributes.get(name) ?? null,
+    removeAttribute: (name: string) => attributes.delete(name),
+    setAttribute: (name: string, value: string) => attributes.set(name, value),
+    style: { cssText: "" },
+    textContent,
+  };
+}
 
 describe("designPathFromUrl", () => {
   it("accepts the marked workspace HTML design URL", () => {
@@ -81,6 +97,19 @@ describe("discardPendingDesignObject", () => {
     });
 
     expect(removed).toBe(true);
+  });
+});
+
+describe("design element state", () => {
+  it("captures and restores leaf text for undo", () => {
+    const element = textElement("Before");
+    const before = captureDesignElementState(element as unknown as HTMLElement);
+    element.textContent = "After";
+    const after = captureDesignElementState(element as unknown as HTMLElement);
+
+    expect(designElementStatesMatch(before, after)).toBe(false);
+    applyDesignElementState(element as unknown as HTMLElement, before);
+    expect(element.textContent).toBe("Before");
   });
 });
 

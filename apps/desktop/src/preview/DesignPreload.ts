@@ -3,14 +3,18 @@ import { ipcRenderer } from "electron";
 import type { DesktopPreviewDesignChangePayload } from "@t3tools/contracts";
 
 import {
+  applyDesignElementState as applyState,
+  captureDesignElementState as stateOf,
   createDesignSelectionAnnotation,
   DESIGN_EDITING_ATTRIBUTE,
   DESIGN_OPEN_ATTRIBUTE,
   DESIGN_UI_ATTRIBUTE,
+  designElementStatesMatch as statesMatch,
   designPathFromUrl,
   discardPendingDesignObject,
   resolveDesignPosition,
   serializeDesignDocument,
+  type DesignElementState as ElementState,
 } from "./DesignDocument.ts";
 import {
   ANNOTATION_TOOL_ATTRIBUTE,
@@ -20,11 +24,6 @@ import {
 
 type Tool = "select" | "draw" | "arrow" | "box" | "circle" | "highlight";
 type Point = { x: number; y: number };
-type ElementState = {
-  style: string;
-  x: string | null;
-  y: string | null;
-};
 type HistoryEntry = { undo: () => void; redo: () => void };
 type DragState =
   | {
@@ -87,29 +86,6 @@ function targetFromPoint(x: number, y: number): Element | null {
         !["SCRIPT", "STYLE", "LINK", "META"].includes(element.tagName),
     );
   return target?.closest(`[${OBJECT_ATTRIBUTE}]`) ?? target ?? null;
-}
-
-function stateOf(element: HTMLElement | SVGElement): ElementState {
-  return {
-    style: element.style.cssText,
-    x: element.getAttribute("data-t3-design-x"),
-    y: element.getAttribute("data-t3-design-y"),
-  };
-}
-
-function applyState(element: HTMLElement | SVGElement, state: ElementState): void {
-  element.style.cssText = state.style;
-  for (const [name, value] of [
-    ["data-t3-design-x", state.x],
-    ["data-t3-design-y", state.y],
-  ] as const) {
-    if (value === null) element.removeAttribute(name);
-    else element.setAttribute(name, value);
-  }
-}
-
-function statesMatch(left: ElementState, right: ElementState): boolean {
-  return left.style === right.style && left.x === right.x && left.y === right.y;
 }
 
 function pagePoint(event: PointerEvent): Point {

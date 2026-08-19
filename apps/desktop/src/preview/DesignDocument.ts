@@ -4,6 +4,49 @@ export const DESIGN_UI_ATTRIBUTE = "data-t3code-design-ui";
 export const DESIGN_EDITING_ATTRIBUTE = "data-t3code-design-editing";
 export const DESIGN_OPEN_ATTRIBUTE = "data-t3code-design-open";
 
+export interface DesignElementState {
+  style: string;
+  text: string | null;
+  x: string | null;
+  y: string | null;
+}
+
+export function captureDesignElementState(element: HTMLElement | SVGElement): DesignElementState {
+  return {
+    style: element.style.cssText,
+    text: element.childElementCount === 0 ? element.textContent : null,
+    x: element.getAttribute("data-t3-design-x"),
+    y: element.getAttribute("data-t3-design-y"),
+  };
+}
+
+export function applyDesignElementState(
+  element: HTMLElement | SVGElement,
+  state: DesignElementState,
+): void {
+  element.style.cssText = state.style;
+  if (state.text !== null) element.textContent = state.text;
+  for (const [name, value] of [
+    ["data-t3-design-x", state.x],
+    ["data-t3-design-y", state.y],
+  ] as const) {
+    if (value === null) element.removeAttribute(name);
+    else element.setAttribute(name, value);
+  }
+}
+
+export function designElementStatesMatch(
+  left: DesignElementState,
+  right: DesignElementState,
+): boolean {
+  return (
+    left.style === right.style &&
+    left.text === right.text &&
+    left.x === right.x &&
+    left.y === right.y
+  );
+}
+
 export function discardPendingDesignObject(
   interaction: { readonly kind: string; readonly element: Pick<Element, "remove"> } | null,
 ): void {
