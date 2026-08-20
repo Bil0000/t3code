@@ -1,4 +1,4 @@
-import { ChevronDownIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -8,10 +8,36 @@ import {
   type SetStateAction,
 } from "react";
 
+import { cn } from "~/lib/utils";
+
 import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import type { ListFilterOption } from "./ListFilterMenu";
+
+export function ListRefreshControl({
+  label,
+  compact = false,
+  refreshing,
+  onRefresh,
+}: {
+  label: string;
+  compact?: boolean;
+  refreshing: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <Button
+      size={compact ? "icon-sm" : "icon"}
+      variant={compact ? "ghost" : "outline"}
+      aria-label={label}
+      onClick={onRefresh}
+      disabled={refreshing}
+    >
+      <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
+    </Button>
+  );
+}
 
 export function CompactFilterMenu<Value extends string>({
   label,

@@ -22,7 +22,6 @@ import {
   LayersIcon,
   PenLineIcon,
   LoaderIcon,
-  RefreshCwIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -71,6 +70,7 @@ import { ListGhost } from "../components/sourceControl/ListGhosts";
 import {
   CompactFilterMenu,
   ExpandableSearch,
+  ListRefreshControl,
   useListSearchShortcut,
 } from "../components/sourceControl/ListTitlebarControls";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
@@ -115,9 +115,7 @@ import {
   type EnvironmentQueryTarget,
 } from "../state/pullRequests";
 import { useAtomCommand } from "../state/use-atom-command";
-import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
-import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { toastManager } from "../components/ui/toast";
 import { isWorkItemSelected, useWorkItemSelection } from "../workItemSelection";
 
@@ -1904,7 +1902,12 @@ function PullRequestsColumn({
                 topbarSearchFocusedRef.current = focused;
               }}
             />
-            <PullRequestRefreshControl compact refreshing={refreshing} onRefresh={onRefresh} />
+            <ListRefreshControl
+              compact
+              label="Refresh pull requests"
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+            />
           </div>
         ) : null}
         {rightPanelControl}
@@ -1923,7 +1926,11 @@ function PullRequestsColumn({
               {searchInput}
               {filtersMenu}
               {!condensed ? (
-                <PullRequestRefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+                <ListRefreshControl
+                  label="Refresh pull requests"
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                />
               ) : null}
             </div>
             {/* Scrolled past this marker, the controls are gone and the title takes over. */}
@@ -1934,27 +1941,5 @@ function PullRequestsColumn({
         </WorkspacePageContainer>
       </div>
     </div>
-  );
-}
-
-function PullRequestRefreshControl({
-  compact = false,
-  refreshing,
-  onRefresh,
-}: {
-  compact?: boolean;
-  refreshing: boolean;
-  onRefresh: () => void;
-}) {
-  return (
-    <Button
-      size={compact ? "icon-sm" : "icon"}
-      variant={compact ? "ghost" : "outline"}
-      aria-label="Refresh pull requests"
-      onClick={onRefresh}
-      disabled={refreshing}
-    >
-      <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
-    </Button>
   );
 }

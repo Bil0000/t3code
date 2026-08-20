@@ -1,11 +1,20 @@
 import type { ProjectId } from "@t3tools/contracts";
 import { CircleIcon } from "lucide-react";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { CondensedDetailTabStrip, DetailTabStrip } from "./DetailTabStrip";
 import { EntityPicker } from "./EntityPicker";
-import { ListFilterRadioGroup, ListProjectFilterGroup, ListSearchInput } from "./ListFilterMenu";
+import {
+  ListFilterMenu,
+  ListFilterRadioGroup,
+  ListProjectFilterGroup,
+  ListSearchInput,
+} from "./ListFilterMenu";
+import { DetailGhost } from "./ListGhosts";
+import { SummaryMetaRow } from "./SummaryMetaRow";
+import { Button } from "../ui/button";
 import { Toggle, ToggleGroup } from "../ui/toggle-group";
 
 function findValueChange(
@@ -32,6 +41,38 @@ function findValueChange(
 }
 
 describe("list filter menu", () => {
+  it("uses the shared outline button for list filters", () => {
+    const menu = ListFilterMenu({ label: "Filter issues", filtered: true, children: null });
+    const trigger = Children.toArray(menu.props.children)[0] as ReactElement<{
+      readonly render: ReactElement<{ readonly className?: string; size: string; variant: string }>;
+    }>;
+
+    expect(trigger.props.render).toBeDefined();
+    const button = trigger.props.render;
+    if (!button) return;
+    expect(button.type).toBe(Button);
+    expect(button.props).toMatchObject({ size: "icon", variant: "outline" });
+    expect(button.props.className).toContain("--control-icon-color");
+  });
+
+  it("keeps summary values aligned in a fixed label grid", () => {
+    const markup = renderToStaticMarkup(
+      <SummaryMetaRow icon={<CircleIcon />} label="Assignees">
+        Nobody
+      </SummaryMetaRow>,
+    );
+
+    expect(markup).toContain("grid-cols-[6rem_minmax(0,1fr)]");
+  });
+
+  it("loads issue details in the same full panel shape", () => {
+    const markup = renderToStaticMarkup(<DetailGhost label="Loading issue" />);
+
+    expect(markup).toContain("flex h-full min-h-0 flex-col");
+    expect(markup).toContain("border-b border-border/60");
+    expect(markup).toContain("grid-cols-[6rem_minmax(0,1fr)]");
+  });
+
   it("keeps the accessible search label separate from its hint", () => {
     const input = ListSearchInput({
       label: "Search pull requests",

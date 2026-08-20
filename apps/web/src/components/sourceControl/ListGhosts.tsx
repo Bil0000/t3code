@@ -60,29 +60,7 @@ export function ListGhost({
 
 /** The detail's own shape: a title, a byline, the facts rows, the description. */
 export function DetailGhost({ label }: { label: string }) {
-  return (
-    <div role="status" aria-label={label} className="animate-ghost-pulse space-y-6 px-4 py-5">
-      <div className="space-y-2">
-        <GhostBar className="h-5 w-4/5" />
-        <GhostBar className="w-2/5 bg-muted-foreground/10" />
-      </div>
-      <div className="space-y-3">
-        {Array.from({ length: 4 }, (_, index) => (
-          <div key={index} className="flex items-center gap-3">
-            <GhostBar className="size-3.5 rounded-full" />
-            <GhostBar className="w-20 bg-muted-foreground/10" />
-            <GhostBar className={TITLE_WIDTHS[(index + 1) % TITLE_WIDTHS.length]} />
-          </div>
-        ))}
-      </div>
-      <div className="space-y-2 pt-1">
-        <GhostBar className="w-full bg-muted-foreground/10" />
-        <GhostBar className="w-11/12 bg-muted-foreground/10" />
-        <GhostBar className="w-4/5 bg-muted-foreground/10" />
-        <GhostBar className="w-2/3 bg-muted-foreground/10" />
-      </div>
-    </div>
-  );
+  return <WorkItemDetailGhost label={label} />;
 }
 
 /**
@@ -90,11 +68,11 @@ export function DetailGhost({ label }: { label: string }) {
  * boundaries in the ghost prevents the loaded pull request from replacing one layout with
  * another a moment later.
  */
-export function PullRequestDetailGhost() {
+function WorkItemDetailGhost({ label }: { label: string }) {
   return (
     <div
       role="status"
-      aria-label="Loading pull request"
+      aria-label={label}
       className="animate-ghost-pulse flex h-full min-h-0 flex-col overflow-hidden bg-background"
     >
       <div className="shrink-0 border-b border-border/60">
@@ -183,6 +161,10 @@ export function PullRequestDetailGhost() {
       </div>
     </div>
   );
+}
+
+export function PullRequestDetailGhost() {
+  return <WorkItemDetailGhost label="Loading pull request" />;
 }
 
 /** People-shaped: an avatar and a name, in the reviewer picker's own row height. */
