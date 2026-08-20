@@ -28,7 +28,6 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
 import {
   filterPullRequestsByInvolvement,
-  decoratePullRequestEntries,
   findScopedProject,
   groupPullRequestsByInvolvement,
   matchesPullRequestFilters,
@@ -39,15 +38,13 @@ import {
   partitionPullRequestsWithPriority,
   pullRequestEntryKey,
   pullRequestEntryViewer,
-  pullRequestStatsTargetsForSettledResults,
-  pullRequestVisibleEntries,
-  prunePullRequestDiffStats,
   rankPullRequestMatches,
   pullRequestEnvironmentSetKey,
   readPullRequestListSnapshot,
   resolveProjectScope,
   resolveQueryEnvironmentIds,
   resolveSelectedEnvironmentId,
+  withDiffStat,
   writePullRequestListSnapshot,
   scorePullRequestMatch,
   type EnvironmentPullRequestEntry,
@@ -1125,12 +1122,10 @@ function PullRequestsRouteView() {
    * The line counts, asked for once the rows are on screen. On GitHub they are forty per cent of
    * the read that answers the whole page, for two small numbers at the end of a row — so the
    * listing leaves them out and they arrive a moment later, into rows that already draw without
-   * them. Keyed by the rows being shown, so a refresh cannot replay old filter or page batches.
+   * them. Keyed by the rows being shown, so scrolling further asks only about what is new.
    */
-  const visibleGroups = useMemo(() => {
-    if (search.involvement !== "all") {
-      return [{ key: "others" as const, label: "", entries }];
-    }
+  const groups = useMemo(() => {
+    if (search.involvement !== "all") return [{ key: "others" as const, label: "", entries }];
     // Until both partitions have answered, the snapshot's stand in — they are yesterday's
     // groups, but whole ones, where grouping the feed's first page locally loses every
     // authored row older than it. Once the live reads land they take over; with neither,
@@ -1171,39 +1166,41 @@ function PullRequestsRouteView() {
     search.involvement,
     viewers,
   ]);
-  const visibleEntries = useMemo(() => pullRequestVisibleEntries(visibleGroups), [visibleGroups]);
-  const [statsByRow, setStatsByRow] = useState<PullRequestDiffStats>(() => new Map());
-  const statsTargets = useMemo(
-    () => pullRequestStatsTargetsForSettledResults(visibleEntries, querySettled, showingCarried),
-    [querySettled, showingCarried, visibleEntries],
-  );
-  useEffect(() => {
-    setStatsByRow((previous) => prunePullRequestDiffStats(previous, visibleEntries));
-  }, [visibleEntries]);
+
+  // Keyed by every row being shown — the partitions can hold rows the feed has not paged to —
+  // so scrolling further asks only about what is new. One read per environment, each asking only
+  // about its own rows: a reference names a project, and a project belongs to one machine.
+  const statsTargets = useMemo(() => {
+    const refsByEnvironment = new Map<
+      EnvironmentId,
+      Array<{ projectId: ProjectId; repository: string; number: number }>
+    >();
+    for (const group of groups) {
+      for (const entry of group.entries) {
+        const refs = refsByEnvironment.get(entry.environmentId) ?? [];
+        refs.push({
+          projectId: entry.projectId,
+          repository: entry.repository,
+          number: entry.number,
+        });
+        refsByEnvironment.set(entry.environmentId, refs);
+      }
+    }
+    return [...refsByEnvironment].map(([environmentId, refs]) => ({
+      environmentId,
+      input: { refs },
+    }));
+  }, [groups]);
   const statsQuery = usePullRequestListStats(statsTargets);
+  // Adding or removing one row keys a fresh stats query with nothing in it yet, so the counts
+  // are merged into what is already held rather than rebuilt: every count on screen stays until
+  // its replacement arrives.
+  const [statsByRow, setStatsByRow] = useState<PullRequestDiffStats>(() => new Map());
   useEffect(() => {
     const stats = statsQuery.stats;
     if (stats === null) return;
     setStatsByRow((previous) => mergePullRequestDiffStats(previous, stats));
   }, [statsQuery.stats]);
-  const decorationCache = useRef<
-    ReadonlyMap<EnvironmentPullRequestEntry, EnvironmentPullRequestEntry>
-  >(new Map());
-  const decoration = useMemo(
-    () => decoratePullRequestEntries(visibleEntries, statsByRow, decorationCache.current),
-    [statsByRow, visibleEntries],
-  );
-  useEffect(() => {
-    decorationCache.current = decoration.bySource;
-  }, [decoration]);
-  const groups = useMemo(
-    () =>
-      visibleGroups.map((group) => ({
-        ...group,
-        entries: group.entries.map((entry) => decoration.bySource.get(entry) ?? entry),
-      })),
-    [decoration.bySource, visibleGroups],
-  );
 
   const linkedSelection = useMemo(
     () =>
@@ -1429,7 +1426,10 @@ function PullRequestsRouteView() {
               {group.entries.map((entry) => (
                 <PullRequestRow
                   key={pullRequestEntryKey(entry)}
-                  entry={entry}
+                  // A row whose host reported its line counts keeps them; one whose host left
+                  // them for later takes whatever has arrived since, and draws without them
+                  // until it does.
+                  entry={withDiffStat(entry, statsByRow)}
                   showProjectTitle
                   showProvider={showProvider}
                   {...(capableEnvironments.length > 1 &&
@@ -1643,7 +1643,6 @@ function PullRequestsRouteView() {
             onAddBrowser={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
-            onAddRepository={() => undefined}
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
             onAddIssue={() => undefined}
@@ -1651,7 +1650,6 @@ function PullRequestsRouteView() {
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
-            repositoryAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
             issueAvailable={false}
@@ -1683,7 +1681,6 @@ function PullRequestsRouteView() {
                   baselineQuery.refresh();
                   authoredQuery.refresh();
                   reviewingQuery.refresh();
-                  statsQuery.refresh();
                 }}
                 onStateChange={handleIssueTabStatusChange}
                 onOpenLinkedPullRequest={(link) => {
@@ -1727,9 +1724,7 @@ function PullRequestsRouteView() {
                   baselineQuery.refresh();
                   authoredQuery.refresh();
                   reviewingQuery.refresh();
-                  statsQuery.refresh();
                 }}
-                onTitleSaved={refreshList}
                 onStateChange={handlePullRequestTabStatusChange}
                 // The issue a change request closes is read beside it, as a peer tab in this
                 // page's own panel: leaving for the issues page would take the change request

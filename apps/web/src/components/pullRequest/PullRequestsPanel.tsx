@@ -6,10 +6,13 @@ import type {
   PullRequestListCursors,
   PullRequestListEntry,
   PullRequestListFilters,
+  PullRequestListStatsResult,
   PullRequestListState,
   PullRequestState,
   ScopedThreadRef,
 } from "@t3tools/contracts";
+import * as Option from "effect/Option";
+import { AsyncResult } from "effect/unstable/reactivity";
 import {
   ArrowLeftIcon,
   EyeIcon,
@@ -31,7 +34,8 @@ import {
   type SetStateAction,
 } from "react";
 
-import { pullRequestEnvironment, usePullRequestListStats } from "~/state/pullRequests";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
+import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useDebouncedValue } from "~/state/queries";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -51,10 +55,11 @@ import {
   parsePullRequestQuery,
   pullRequestEntryKey,
   pullRequestEntryViewer,
-  pullRequestStatsTargetsForSettledResults,
+  pullRequestStatsTargets,
   prunePullRequestDiffStats,
   rankPullRequestMatches,
   type EnvironmentPullRequestEntry,
+  type EnvironmentPullRequestStat,
   type PullRequestDiffStats,
 } from "./pullRequestList.logic";
 import { PullRequestDetailPanel } from "./PullRequestDetailPanel";
@@ -106,6 +111,50 @@ interface PanelPage {
   readonly cursors: PullRequestListCursors | null;
 }
 
+function usePanelPullRequestListStats(
+  targets: ReadonlyArray<Parameters<typeof pullRequestEnvironment.listStats>[0]>,
+) {
+  const [results, setResults] = useState<
+    ReadonlyMap<number, readonly [EnvironmentId, PullRequestListStatsResult]>
+  >(() => new Map());
+  useEffect(() => {
+    setResults(new Map());
+    const subscriptions = targets.map((target, index) => {
+      const atom = pullRequestEnvironment.listStats(target);
+      const update = (result: AsyncResult.AsyncResult<PullRequestListStatsResult, unknown>) => {
+        const value = Option.getOrNull(AsyncResult.value(result));
+        if (value === null) return;
+        setResults((previous) => {
+          const next = new Map(previous);
+          next.set(index, [target.environmentId, value]);
+          return next;
+        });
+      };
+      const unsubscribe = appAtomRegistry.subscribe(atom, update);
+      update(appAtomRegistry.get(atom));
+      return unsubscribe;
+    });
+    return () => {
+      for (const unsubscribe of subscriptions) unsubscribe();
+    };
+  }, [targets]);
+  const stats = useMemo<ReadonlyArray<EnvironmentPullRequestStat> | null>(
+    () =>
+      results.size === 0
+        ? null
+        : [...results.values()].flatMap(([environmentId, result]) =>
+            result.stats.map((stat) => ({ ...stat, environmentId })),
+          ),
+    [results],
+  );
+  const refresh = useCallback(() => {
+    for (const target of targets) {
+      appAtomRegistry.refresh(pullRequestEnvironment.listStats(target));
+    }
+  }, [targets]);
+  return { stats, refresh };
+}
+
 export function PullRequestsPanel(props: PullRequestsPanelProps) {
   return <ProjectPullRequests key={`${props.environmentId}:${props.projectId}`} {...props} />;
 }
@@ -147,9 +196,7 @@ function ProjectPullRequests(props: PullRequestsPanelProps) {
               environmentId={props.environmentId}
               reference={props.selected}
               context="page"
-              chromeVariant="collapse"
               onActed={() => setRefreshPending(true)}
-              onTitleSaved={() => setRefreshPending(true)}
               {...(props.onStateChange ? { onStateChange: props.onStateChange } : {})}
               {...(props.onOpenLinkedIssue ? { onOpenLinkedIssue: props.onOpenLinkedIssue } : {})}
               {...(props.composerDraftTarget
@@ -235,11 +282,8 @@ function PullRequestBrowserList({
   refreshPending: boolean;
   onRefreshConsumed: () => void;
 }) {
-  const [statsRefreshGeneration, setStatsRefreshGeneration] = useState(0);
-  const handledStatsRefreshGeneration = useRef(0);
   const typed = query.trim().slice(0, 200);
   const sent = useDebouncedValue(typed, SEARCH_DEBOUNCE_MS);
-  const querySettled = typed === sent;
   const typedParsed = useMemo(() => parsePullRequestQuery(typed), [typed]);
   const sentParsed = useMemo(() => parsePullRequestQuery(sent), [sent]);
   const requestFilters = useMemo(
@@ -330,24 +374,15 @@ function PullRequestBrowserList({
     typedParsed.text,
   ]);
 
-  const statsTargets = useMemo(
-    () => pullRequestStatsTargetsForSettledResults(entries, querySettled, false),
-    [entries, querySettled],
-  );
-  const statsQuery = usePullRequestListStats(statsTargets);
+  const statsTargets = useMemo(() => pullRequestStatsTargets(entries), [entries]);
   useEffect(() => {
     onStatsByRow((previous) => prunePullRequestDiffStats(previous, entries));
   }, [entries, onStatsByRow]);
+  const statsQuery = usePanelPullRequestListStats(statsTargets);
   useEffect(() => {
-    const stats = statsQuery.stats;
-    if (stats === null) return;
-    onStatsByRow((previous) => mergePullRequestDiffStats(previous, stats));
+    if (statsQuery.stats === null) return;
+    onStatsByRow((previous) => mergePullRequestDiffStats(previous, statsQuery.stats ?? []));
   }, [onStatsByRow, statsQuery.stats]);
-  useEffect(() => {
-    if (handledStatsRefreshGeneration.current === statsRefreshGeneration) return;
-    handledStatsRefreshGeneration.current = statsRefreshGeneration;
-    statsQuery.refresh();
-  }, [handledStatsRefreshGeneration, statsQuery, statsRefreshGeneration]);
   const decorationCache = useRef<
     ReadonlyMap<EnvironmentPullRequestEntry, EnvironmentPullRequestEntry>
   >(new Map());
@@ -401,9 +436,9 @@ function PullRequestBrowserList({
     if (consumedRefresh.current) return;
     consumedRefresh.current = true;
     refreshList();
-    setStatsRefreshGeneration((generation) => generation + 1);
+    statsQuery.refresh();
     onRefreshConsumed();
-  }, [onRefreshConsumed, refreshList, refreshPending]);
+  }, [onRefreshConsumed, refreshList, refreshPending, statsQuery.refresh]);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -453,8 +488,8 @@ function PullRequestBrowserList({
       setInvalidating(false);
     }
     refreshList();
-    setStatsRefreshGeneration((generation) => generation + 1);
-  }, [environmentId, invalidate, refreshList]);
+    statsQuery.refresh();
+  }, [environmentId, invalidate, refreshList, statsQuery.refresh]);
   const refreshing = invalidating || listQuery.isPending;
 
   return (
@@ -462,7 +497,6 @@ function PullRequestBrowserList({
       <div className="flex items-center gap-2 px-2 py-2">
         <Input
           value={query}
-          maxLength={200}
           aria-label="Search pull requests"
           placeholder="Search pull requests, or label:bug"
           onChange={(event) => onQuery(event.target.value)}

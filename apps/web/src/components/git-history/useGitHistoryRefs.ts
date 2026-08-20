@@ -1,5 +1,5 @@
 import type { EnvironmentId, VcsHistoryRef } from "@t3tools/contracts";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { buildGitRefTree, filterGitRefTree } from "../../lib/gitRefTree";
 import { useDebouncedValue, usePaginatedHistoryRefs } from "../../state/queries";
@@ -68,15 +68,31 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     () => filterGitRefTree(buildGitRefTree(tagRefs), normalizedRefFilter),
     [normalizedRefFilter, tagRefs],
   );
-  const currentRef = refs.data?.currentRef;
+  const currentRefResult = refs.data?.currentRef;
+  const currentRefTargetKey = `${environmentId}:${cwd}`;
+  const lastResolvedCurrentRef = useRef<
+    | {
+        readonly targetKey: string;
+        currentRef: VcsHistoryRef | null | undefined;
+      }
+    | undefined
+  >(undefined);
+  if (lastResolvedCurrentRef.current?.targetKey !== currentRefTargetKey) {
+    lastResolvedCurrentRef.current = { targetKey: currentRefTargetKey, currentRef: undefined };
+  }
+  if (currentRefResult !== undefined) lastResolvedCurrentRef.current.currentRef = currentRefResult;
+  const currentRef =
+    currentRefResult === undefined ? lastResolvedCurrentRef.current.currentRef : currentRefResult;
   const defaultSelectedRevision = useMemo(
     () =>
       currentRef === undefined
-        ? undefined
+        ? refs.error
+          ? null
+          : undefined
         : currentRef === null
           ? null
           : { label: currentRef.name, revision: `refs/heads/${currentRef.name}` },
-    [currentRef],
+    [currentRef, refs.error],
   );
   const selectedRefWasRemoved = useMemo(() => {
     if (selectedRevisionState === undefined || selectedRevisionState === null) return false;

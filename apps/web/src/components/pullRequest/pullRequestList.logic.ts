@@ -312,8 +312,8 @@ export function matchesPullRequestFilters(
   filters: PullRequestListFilters,
   viewer?: string | null,
 ): boolean {
-  const labels = new Set(entry.labels.map((label) => label.name.trim().toLowerCase()));
-  const holds = (label: string) => labels.has(label.trim().toLowerCase());
+  const labels = entry.labels.map((label) => label.name.trim().toLowerCase());
+  const holds = (label: string) => labels.includes(label.trim().toLowerCase());
   return (
     (filters.draft === undefined || entry.isDraft === (filters.draft === "only")) &&
     (filters.review === undefined ||
@@ -432,15 +432,11 @@ export function mergePullRequestDiffStats(
   }>,
 ): PullRequestDiffStats {
   if (stats.length === 0) return previous;
-  let next: Map<string, { readonly additions: number; readonly deletions: number }> | undefined;
+  const next = new Map(previous);
   for (const stat of stats) {
-    const key = diffStatKey(stat);
-    const existing = (next ?? previous).get(key);
-    if (existing?.additions === stat.additions && existing.deletions === stat.deletions) continue;
-    next ??= new Map(previous);
-    next.set(key, { additions: stat.additions, deletions: stat.deletions });
+    next.set(diffStatKey(stat), { additions: stat.additions, deletions: stat.deletions });
   }
-  return next ?? previous;
+  return next;
 }
 
 /** A project id only names a project within its own environment, so the key carries both. */
@@ -459,13 +455,6 @@ export function prunePullRequestDiffStats(
   const visible = new Set(entries.map(diffStatKey));
   if ([...previous.keys()].every((key) => visible.has(key))) return previous;
   return new Map([...previous].filter(([key]) => visible.has(key)));
-}
-
-/** Returns the raw rows rendered across every priority group. */
-export function pullRequestVisibleEntries(
-  groups: ReadonlyArray<PullRequestGroup<EnvironmentPullRequestEntry>>,
-): ReadonlyArray<EnvironmentPullRequestEntry> {
-  return groups.flatMap((group) => group.entries);
 }
 
 /** The bounded line-count batches for the rows currently visible in the list. */
@@ -499,14 +488,6 @@ export function pullRequestStatsTargets(
       },
     })),
   );
-}
-
-export function pullRequestStatsTargetsForSettledResults(
-  entries: ReadonlyArray<EnvironmentPullRequestEntry>,
-  querySettled: boolean,
-  showingCarried: boolean,
-) {
-  return querySettled && !showingCarried ? pullRequestStatsTargets(entries) : [];
 }
 
 /**

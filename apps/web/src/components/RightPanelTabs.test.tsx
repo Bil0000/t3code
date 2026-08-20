@@ -131,7 +131,6 @@ function renderTabs(
       onAddBrowser={() => undefined}
       onAddTerminal={() => undefined}
       onAddPullRequest={() => undefined}
-      onAddRepository={() => undefined}
       onAddIssue={() => undefined}
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
@@ -142,7 +141,6 @@ function renderTabs(
       diffAvailable={false}
       filesAvailable={false}
       pullRequestAvailable={false}
-      repositoryAvailable={false}
       issueAvailable={false}
       agentsAvailable={false}
     >
@@ -183,8 +181,45 @@ describe("RightPanelTabs preview favicon", () => {
     expect(html).toContain("text-violet-600");
   });
 
-  it("offers the combined Repository surface independently of Git History", () => {
+  it("offers the combined Repository surface only when its capability is enabled", () => {
     const html = renderToStaticMarkup(
+      <RightPanelTabs
+        mode="inline"
+        surfaces={[]}
+        activeSurfaceId={null}
+        pendingSurfaceIds={new Set()}
+        previewSessions={{}}
+        desktopByTabId={{}}
+        terminalLabelsById={new Map()}
+        onActivate={() => undefined}
+        onCloseSurface={() => undefined}
+        onCloseOtherSurfaces={() => undefined}
+        onCloseSurfacesToRight={() => undefined}
+        onCloseAllSurfaces={() => undefined}
+        onCopyFilePath={() => undefined}
+        onAddBrowser={() => undefined}
+        onAddTerminal={() => undefined}
+        onAddPullRequest={() => undefined}
+        onAddIssue={() => undefined}
+        onAddDiff={() => undefined}
+        onAddFiles={() => undefined}
+        onAddAgents={() => undefined}
+        liveAgentCount={0}
+        browserAvailable={false}
+        terminalAvailable={false}
+        diffAvailable={false}
+        filesAvailable={false}
+        pullRequestAvailable={false}
+        issueAvailable={false}
+        agentsAvailable={false}
+      >
+        <div />
+      </RightPanelTabs>,
+    );
+
+    expect(html).not.toContain(">Repository</span>");
+
+    const enabledHtml = renderToStaticMarkup(
       <RightPanelTabs
         mode="inline"
         surfaces={[]}
@@ -221,8 +256,8 @@ describe("RightPanelTabs preview favicon", () => {
       </RightPanelTabs>,
     );
 
-    expect(html).toContain(">Repository</span>");
-    expect(html).toContain("Browse history, issues, and pull requests.");
+    expect(enabledHtml).toContain(">Repository</span>");
+    expect(enabledHtml).toContain("Browse history, issues, and pull requests.");
   });
 });
 

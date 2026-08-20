@@ -6,17 +6,12 @@ import {
   SettingsIcon,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { memo, useCallback, useMemo } from "react";
-import { Link, useCanGoBack, useLocation, useNavigate, useParams } from "@tanstack/react-router";
-import { scopeThreadRef } from "@t3tools/client-runtime/environment";
+import { memo, useCallback } from "react";
+import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-router";
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
-import { useComposerDraftStore } from "../../composerDraftStore";
 import { cn } from "../../lib/utils";
 import { useEnvironments } from "../../state/environments";
-import { useProjects, useThreadShell } from "../../state/entities";
-import { useRightPanelStore } from "../../rightPanelStore";
-import { resolveActiveThreadRouteRef, resolveThreadRouteTarget } from "../../threadRoutes";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -166,19 +161,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
               : null,
   });
   const { environments } = useEnvironments();
-  const routeTarget = useParams({
-    strict: false,
-    select: (params) => resolveThreadRouteTarget(params),
-  });
-  const routeDraftThread = useComposerDraftStore((store) =>
-    routeTarget?.kind === "draft" ? store.getDraftSession(routeTarget.draftId) : null,
-  );
-  const routeThreadRef = useMemo(
-    () => resolveActiveThreadRouteRef(routeTarget, routeDraftThread),
-    [routeDraftThread, routeTarget],
-  );
-  const routeThread = useThreadShell(routeThreadRef);
-  const projects = useProjects();
   // The pages read every connected server, so one of them offering a surface is enough for
   // its link to lead somewhere.
   const pullRequestsSupported = environments.some(
@@ -187,53 +169,6 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   const issuesSupported = environments.some(
     (environment) => environment.serverConfig?.environment.capabilities.issues === true,
   );
-  const routeRepositoryContext = useMemo(() => {
-    if (routeThreadRef !== null && routeThread !== null) {
-      return {
-        environmentId: routeThread.environmentId,
-        projectId: routeThread.projectId,
-        threadRef: routeThreadRef,
-      };
-    }
-    if (
-      routeTarget?.kind === "draft" &&
-      routeDraftThread !== null &&
-      !routeDraftThread.promotedTo
-    ) {
-      return {
-        environmentId: routeDraftThread.environmentId,
-        projectId: routeDraftThread.projectId,
-        threadRef: scopeThreadRef(routeDraftThread.environmentId, routeDraftThread.threadId),
-      };
-    }
-    return null;
-  }, [routeDraftThread, routeTarget, routeThread, routeThreadRef]);
-  const routeEnvironment = useMemo(
-    () =>
-      environments.find(
-        (environment) => environment.environmentId === routeRepositoryContext?.environmentId,
-      ),
-    [environments, routeRepositoryContext?.environmentId],
-  );
-  const routeProject = useMemo(
-    () =>
-      routeRepositoryContext === null
-        ? null
-        : (projects.find(
-            (project) =>
-              project.environmentId === routeRepositoryContext.environmentId &&
-              project.id === routeRepositoryContext.projectId,
-          ) ?? null),
-    [projects, routeRepositoryContext],
-  );
-  const routeHasRepositoryIdentity =
-    routeProject !== null && routeProject.repositoryIdentity !== null;
-  const routePullRequestsSupported =
-    routeHasRepositoryIdentity &&
-    routeEnvironment?.serverConfig?.environment.capabilities.pullRequests === true;
-  const routeIssuesSupported =
-    routeHasRepositoryIdentity &&
-    routeEnvironment?.serverConfig?.environment.capabilities.issues === true;
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
@@ -241,22 +176,12 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
   }, [isMobile, setOpenMobile]);
   const handlePullRequestsClick = useCallback(() => {
     closeMobileSidebar();
-    if (routeRepositoryContext !== null && routePullRequestsSupported) {
-      useRightPanelStore
-        .getState()
-        .openRepository(routeRepositoryContext.threadRef, "pull-requests");
-      return;
-    }
     void navigate({ to: "/pull-requests", search: { involvement: "all", state: "open" } });
-  }, [closeMobileSidebar, navigate, routePullRequestsSupported, routeRepositoryContext]);
+  }, [closeMobileSidebar, navigate]);
   const handleIssuesClick = useCallback(() => {
     closeMobileSidebar();
-    if (routeRepositoryContext !== null && routeIssuesSupported) {
-      useRightPanelStore.getState().openRepository(routeRepositoryContext.threadRef, "issues");
-      return;
-    }
     void navigate({ to: "/issues", search: { involvement: "all", state: "open" } });
-  }, [closeMobileSidebar, navigate, routeIssuesSupported, routeRepositoryContext]);
+  }, [closeMobileSidebar, navigate]);
   const handleSettingsClick = useCallback(() => {
     closeMobileSidebar();
     void navigate({ to: "/settings" });

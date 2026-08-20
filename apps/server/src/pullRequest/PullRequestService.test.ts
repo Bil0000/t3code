@@ -2625,31 +2625,6 @@ it.effect("asks on its own for a repository a search answered nothing for", () =
     );
   }),
 );
-it.effect("does not read repositories on their own when a free-text search answers nothing", () =>
-  Effect.gen(function* () {
-    const separately: string[] = [];
-    const service = yield* makeService({
-      projects: [
-        project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" }),
-        project({ id: "p2", title: "docs", workspaceRoot: "/b", repository: "acme/docs" }),
-      ],
-      providers: [
-        fakeProvider("github", {
-          listChangeRequests: ({ repository }) => {
-            separately.push(repository);
-            return Effect.succeed({ items: [], truncated: false, continues: false });
-          },
-          listChangeRequestsAcross: () => Effect.succeed({ items: [], truncated: false }),
-        }),
-      ],
-    });
-
-    const result = yield* service.list({ state: "open", query: "sprocket" });
-
-    assert.deepStrictEqual(separately, []);
-    assert.deepStrictEqual(result.entries, []);
-  }),
-);
 it.effect("reads the repositories one at a time when the search itself fails", () =>
   Effect.gen(function* () {
     const separately: string[] = [];

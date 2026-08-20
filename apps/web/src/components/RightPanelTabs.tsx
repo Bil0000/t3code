@@ -80,7 +80,7 @@ interface RightPanelTabsProps {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
-  onAddRepository: () => void;
+  onAddRepository?: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
@@ -93,7 +93,7 @@ interface RightPanelTabsProps {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
-  repositoryAvailable: boolean;
+  repositoryAvailable?: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
@@ -125,7 +125,6 @@ const SURFACE_DISABLED_REASONS = {
   terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
-  repository: "Repository views are unavailable for this project.",
   pullRequest: "This thread's branch has no pull request yet.",
   issue: "Issues are only available from a project checked out from a host.",
   agents: "Agents are only available from a thread.",
@@ -232,7 +231,7 @@ function DisabledReasonTooltip(props: { reason: string; trigger: ReactElement })
 
 function SurfaceMenuItem(props: {
   available: boolean;
-  disabledReason?: string;
+  disabledReason: string | undefined;
   shortcut: string;
   onClick: () => void;
   children: ReactNode;
@@ -263,7 +262,7 @@ function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
-  onAddRepository: () => void;
+  onAddRepository: (() => void) | undefined;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddIssue: () => void;
@@ -271,7 +270,7 @@ function RightPanelEmptyState(props: {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
-  repositoryAvailable: boolean;
+  repositoryAvailable: boolean | undefined;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   issueAvailable: boolean;
@@ -322,16 +321,20 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddDiff,
       badgeCount: 0,
     },
-    {
-      label: "Repository",
-      description: "Browse history, issues, and pull requests.",
-      icon: GitGraph,
-      shortcut: "G",
-      available: props.repositoryAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.repository,
-      onClick: props.onAddRepository,
-      badgeCount: 0,
-    },
+    ...(props.repositoryAvailable && props.onAddRepository
+      ? [
+          {
+            label: "Repository",
+            description: "Browse history, issues, and pull requests.",
+            icon: GitGraph,
+            shortcut: "G",
+            available: true,
+            disabledReason: undefined,
+            onClick: props.onAddRepository,
+            badgeCount: 0,
+          },
+        ]
+      : []),
     {
       label: "Pull request",
       description: "Open this branch's pull request.",
@@ -709,14 +712,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.diff,
       onClick: props.onAddDiff,
     },
-    {
-      label: "Repository",
-      icon: GitGraph,
-      shortcut: "G",
-      available: props.repositoryAvailable,
-      disabledReason: SURFACE_DISABLED_REASONS.repository,
-      onClick: props.onAddRepository,
-    },
+    ...(props.repositoryAvailable && props.onAddRepository
+      ? [
+          {
+            label: "Repository",
+            icon: GitGraph,
+            shortcut: "G",
+            available: true,
+            disabledReason: undefined,
+            onClick: props.onAddRepository,
+          },
+        ]
+      : []),
     {
       label: "Pull request",
       icon: GitPullRequest,

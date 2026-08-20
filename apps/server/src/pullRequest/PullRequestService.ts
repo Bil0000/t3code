@@ -758,8 +758,8 @@ export const make = Effect.gen(function* () {
     viewer: string,
   ): boolean => {
     if (filters === undefined) return true;
-    const labels = new Set(item.labels.map((label) => label.name.trim().toLowerCase()));
-    const holds = (label: string) => labels.has(label.trim().toLowerCase());
+    const labels = item.labels.map((label) => label.name.trim().toLowerCase());
+    const holds = (label: string) => labels.includes(label.trim().toLowerCase());
     return (
       (filters.draft === undefined || item.isDraft === (filters.draft === "only")) &&
       // Judged on the provider row rather than the entry, because the two absences mean
@@ -1054,11 +1054,7 @@ export const make = Effect.gen(function* () {
                 // keeps a search-invisible repository from disappearing on a busy host, at the
                 // price of one request per repository with nothing in the first slice — which
                 // run together, and only there.
-                if (
-                  input.query === undefined &&
-                  fetched.length === 0 &&
-                  cursorOf(project) === undefined
-                ) {
+                if (fetched.length === 0 && cursorOf(project) === undefined) {
                   return readRepository(project);
                 }
                 const cursorHere = cursorOf(project);

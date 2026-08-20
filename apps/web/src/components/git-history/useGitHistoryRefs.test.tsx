@@ -8,6 +8,7 @@ import { visitElements } from "../../test/reactElementTree";
 const refState = vi.hoisted(() => ({
   currentRefResolved: true,
   currentRef: null as VcsHistoryRef | null,
+  localError: null as string | null,
   debouncedRefFilter: "",
   local: [] as ReadonlyArray<VcsHistoryRef>,
   remote: [] as ReadonlyArray<VcsHistoryRef>,
@@ -35,6 +36,7 @@ vi.mock("react", async (importOriginal) => {
     useDeferredValue: <Value,>(value: Value) => value,
     useEffect: () => undefined,
     useMemo: reactHookHarness.useMemo,
+    useRef: reactHookHarness.useRef,
     useState: reactHookHarness.useState,
   };
 });
@@ -76,7 +78,7 @@ vi.mock("../../state/queries", () => ({
               isComplete: refState.isComplete,
             },
       refs,
-      error: null,
+      error: options.namespace === "local" ? refState.localError : null,
       isFetchingNextPage: false,
       loadNext: vi.fn(),
       refresh:
@@ -137,6 +139,7 @@ describe("useGitHistoryRefs", () => {
     hooks.reset();
     refState.currentRefResolved = true;
     refState.currentRef = null;
+    refState.localError = null;
     refState.debouncedRefFilter = "";
     refState.local = [];
     refState.remote = [];
@@ -225,6 +228,38 @@ describe("useGitHistoryRefs", () => {
 
     expect(rendered.historyRefs.currentRef).toBeUndefined();
     expect(rendered.historyRefs.selectedRevision).toBeUndefined();
+  });
+
+  it("falls back to all history when an unresolved local ref request fails after rendering", () => {
+    refState.currentRefResolved = false;
+
+    expect(renderRefs().historyRefs.selectedRevision).toBeUndefined();
+
+    refState.localError = "Could not load refs.";
+
+    expect(renderRefs().historyRefs.selectedRevision).toBeNull();
+  });
+
+  it("keeps the resolved current branch selected while a ref filter refresh is pending", () => {
+    refState.currentRef = ref("main");
+
+    renderRefs();
+    refState.currentRefResolved = false;
+
+    expect(renderRefs().historyRefs.selectedRevision).toEqual({
+      label: "main",
+      revision: "refs/heads/main",
+    });
+  });
+
+  it("falls back to all history when the initial local ref request fails", () => {
+    refState.currentRefResolved = false;
+    refState.localError = "Could not load refs.";
+
+    const rendered = renderRefs();
+
+    expect(rendered.historyRefs.selectedRevision).toBeNull();
+    expect(rendered.historyRefs.refPaginationError).toBe("Could not load refs.");
   });
 
   it("keeps the current local branch loaded after collapsing Local", () => {

@@ -282,6 +282,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const lastPage = values.at(-1) ?? null;
   const nextCursor = lastPage?.nextCursor ?? null;
   const hasMoreFromServer = lastPage?.hasMore === true && nextCursor !== null;
+  const historyCapped = values.some((value) => value.capped === true);
   const historyLimitReached = cursors.length >= MAX_HISTORY_PAGES;
   const hasMore = hasMoreFromServer && !historyLimitReached;
   const isFetchingNextPage = results.at(-1)?.waiting === true && values.length > 0;
@@ -618,6 +619,13 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             Retry
           </Button>
         </div>
+      ) : refPaginationError && history.length === 0 ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+          <p className="text-xs text-destructive">{refPaginationError}</p>
+          <Button size="sm" variant="outline" onClick={onRetryRefs}>
+            Retry refs
+          </Button>
+        </div>
       ) : !isRepo ? (
         <div className="flex min-h-0 flex-1 items-center justify-center px-6 text-center text-xs text-muted-foreground">
           This folder is not a Git repository.
@@ -773,10 +781,17 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
                   </Button>
                 </div>
               ) : null}
-              {filteredRows.length > 0 && historyLimitReached && hasMoreFromServer ? (
+              {filteredRows.length > 0 &&
+              (historyCapped || (historyLimitReached && hasMoreFromServer)) ? (
                 <div className="shrink-0 border-t border-border/50 px-3 py-2 text-center text-[0.6875rem] text-muted-foreground">
-                  Showing the first {HISTORY_PAGE_SIZE * MAX_HISTORY_PAGES} commits. Choose a branch
-                  or refine the search to keep history responsive.
+                  {historyCapped ? (
+                    <span>History results were capped by the server.</span>
+                  ) : (
+                    <>
+                      Showing the first {HISTORY_PAGE_SIZE * MAX_HISTORY_PAGES} commits. Choose a
+                      branch or refine the search to keep history responsive.
+                    </>
+                  )}
                 </div>
               ) : null}
             </div>
@@ -833,7 +848,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
               }
             />
           ) : null}
-          {!isWideLayout && mobilePane === "refs" ? (
+          {!isWideLayout ? (
             <Sheet
               open={mobilePane === "refs"}
               onOpenChange={(open) => !open && setMobilePane(null)}
@@ -849,7 +864,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
               </SheetPopup>
             </Sheet>
           ) : null}
-          {!isWideLayout && mobilePane === "details" ? (
+          {!isWideLayout ? (
             <Sheet
               open={mobilePane === "details"}
               onOpenChange={(open) => !open && setMobilePane(null)}

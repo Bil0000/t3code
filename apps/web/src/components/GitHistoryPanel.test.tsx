@@ -57,6 +57,8 @@ const historyState = vi.hoisted(() => ({
   toastAdd: vi.fn(),
   refs: [] as ReadonlyArray<VcsHistoryRef>,
   refsResolved: true,
+  refsError: null as string | null,
+  retryRefs: vi.fn(),
   tags: [] as ReadonlyArray<VcsHistoryRef>,
   status: { aheadCount: 0, behindCount: 0 },
 }));
@@ -179,11 +181,11 @@ vi.mock("../state/queries", () => ({
           }
         : null,
       refs,
-      error: null,
+      error: options?.namespace === "local" ? historyState.refsError : null,
       isPending: false,
       isFetchingNextPage: false,
       loadNext: vi.fn(),
-      retry: vi.fn(),
+      retry: historyState.retryRefs,
       refresh:
         options?.namespace === "tag"
           ? historyState.refreshTags
@@ -274,7 +276,11 @@ function commit(hash: string, subject: string, authorName = "Ada Lovelace"): Git
 
 function page(
   commits: ReadonlyArray<GitHistoryCommit>,
-  options?: { readonly hasMore?: boolean; readonly nextCursor?: string | null },
+  options?: {
+    readonly capped?: boolean;
+    readonly hasMore?: boolean;
+    readonly nextCursor?: string | null;
+  },
 ): PageResult {
   return {
     _tag: "Success",
@@ -284,6 +290,7 @@ function page(
       isRepo: true,
       hasMore: options?.hasMore ?? false,
       nextCursor: options?.nextCursor ?? null,
+      capped: options?.capped,
     },
   };
 }
@@ -472,6 +479,8 @@ describe("GitHistoryPanel", () => {
     historyState.toastAdd.mockReset();
     historyState.refs = [];
     historyState.refsResolved = true;
+    historyState.refsError = null;
+    historyState.retryRefs.mockReset();
     historyState.tags = [];
     historyState.status = { aheadCount: 0, behindCount: 0 };
   });
@@ -482,6 +491,40 @@ describe("GitHistoryPanel", () => {
     renderPanel();
 
     expect(historyState.getHistory).not.toHaveBeenCalled();
+  });
+
+  it("shows an initial ref failure with a reachable retry while loading all history", () => {
+    historyState.refsResolved = false;
+    historyState.refsError = "Could not load refs.";
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
+
+    const panel = renderPanel();
+    const refsPane = componentElement(panel, "GitRefsPane");
+
+    expect(historyState.getHistory).toHaveBeenCalledWith({
+      cacheKey: 0,
+      environmentId,
+      input: { cwd: workspacePath, limit: historyPageSize },
+    });
+    expect(refsPane.props.refPaginationError).toBe("Could not load refs.");
+    (refsPane.props.onRetryRefs as () => void)();
+    expect(historyState.retryRefs).toHaveBeenCalledOnce();
+  });
+
+  it("notices a server-capped history result before the client page limit", () => {
+    historyState.pages.set(
+      undefined,
+      page([commit(primaryCommitHash, "Initial")], { capped: true }),
+    );
+
+    const panel = renderPanel();
+
+    expect(
+      visitElements(
+        panel,
+        (element) => element.props.children === "History results were capped by the server.",
+      ),
+    ).not.toBeNull();
   });
 
   it("restarts history after the environment connection generation changes", () => {
@@ -514,16 +557,22 @@ describe("GitHistoryPanel", () => {
     (branches?.props.onClick as (() => void) | undefined)?.();
 
     expect(
-      visitElements(renderPanel(), (element) => element.props.id === "git-history-refs-panel"),
-    ).not.toBeNull();
+      visitElements(
+        renderPanel(),
+        (element) => element.props["aria-controls"] === "git-history-refs-panel",
+      )?.props["aria-expanded"],
+    ).toBe(true);
 
     historyState.connection = { phase: "connected", generation: 2 };
     renderPanel();
     flushEffects();
 
     expect(
-      visitElements(renderPanel(), (element) => element.props.id === "git-history-refs-panel"),
-    ).not.toBeNull();
+      visitElements(
+        renderPanel(),
+        (element) => element.props["aria-controls"] === "git-history-refs-panel",
+      )?.props["aria-expanded"],
+    ).toBe(true);
   });
 
   it("closes the narrow details sheet when the history target rekeys", () => {
@@ -548,16 +597,22 @@ describe("GitHistoryPanel", () => {
     (details?.props.onClick as (() => void) | undefined)?.();
 
     expect(
-      visitElements(renderPanel(), (element) => element.props.id === "git-history-details-panel"),
-    ).not.toBeNull();
+      visitElements(
+        renderPanel(),
+        (element) => element.props["aria-controls"] === "git-history-details-panel",
+      )?.props["aria-expanded"],
+    ).toBe(true);
 
     historyState.connection = { phase: "connected", generation: 2 };
     renderPanel();
     flushEffects();
 
     expect(
-      visitElements(renderPanel(), (element) => element.props.id === "git-history-details-panel"),
-    ).toBeNull();
+      visitElements(
+        renderPanel(),
+        (element) => element.props["aria-controls"] === "git-history-details-panel",
+      )?.props["aria-expanded"],
+    ).toBe(false);
   });
 
   it("restarts the first history page after a typed continuation expiry", () => {

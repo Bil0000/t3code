@@ -49,7 +49,6 @@ export interface ListFilterHost<Kind extends string = SourceControlProviderKind>
 export const ALL_HOSTS_VALUE = "";
 const ALL_PROJECTS_VALUE = "all";
 
-const MAX_SEARCH_QUERY_LENGTH = 200;
 /**
  * What to call a host in the row. The provider's own name reads best — "GitHub" over
  * "github.com" — but it stops naming anything once a workspace has two hosts of one kind, so
@@ -90,8 +89,7 @@ export function ListSearchInput({
       <InputGroupInput
         type="search"
         value={value}
-        maxLength={MAX_SEARCH_QUERY_LENGTH}
-        onChange={(event) => onChange(event.currentTarget.value.slice(0, MAX_SEARCH_QUERY_LENGTH))}
+        onChange={(event) => onChange(event.currentTarget.value)}
         placeholder={placeholder}
         aria-label={label}
       />

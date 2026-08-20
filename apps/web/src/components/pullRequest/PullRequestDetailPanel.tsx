@@ -76,7 +76,6 @@ import {
   AlertDialogPopup,
   AlertDialogTitle,
 } from "../ui/alert-dialog";
-import { Alert, AlertAction, AlertDescription, AlertTitle } from "../ui/alert";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
@@ -371,10 +370,8 @@ export function PullRequestDetailPanel({
   reference,
   refreshToken: forcedRefreshToken = 0,
   onActed,
-  onTitleSaved,
   onClose,
   onStateChange,
-  onRefreshPendingChange,
   onOpenLinkedIssue,
   context = "page",
   composerDraftTarget,
@@ -392,7 +389,6 @@ export function PullRequestDetailPanel({
    * Told rather than assumed: only the page knows whether it is showing one.
    */
   onActed?: () => void;
-  onTitleSaved?: () => void;
   /** Page-owned detail columns use this to clear the selected pull request. */
   onClose?: () => void;
   /** Keeps compact chrome, such as the right-panel tab, in step with refreshed host state. */
@@ -403,7 +399,6 @@ export function PullRequestDetailPanel({
     state: PullRequestState;
     isDraft: boolean;
   }) => void;
-  onRefreshPendingChange?: (pending: boolean) => void;
   /**
    * Opens one of the issues this pull request references, as a peer tab beside it. Supplied by
    * whoever mounted the panel, because only they know which panel the tab belongs in.
@@ -489,7 +484,6 @@ export function PullRequestDetailPanel({
   const _diffWarmUpQuery = useEnvironmentQuery(
     pullRequestEnvironment.diff({ environmentId, input: { ...reference } }),
   );
-  const [invalidating, setInvalidating] = useState(false);
   const coreDetail = detailQuery.data;
   const activity = activityQuery.data;
   const detail = useMemo(
@@ -528,18 +522,6 @@ export function PullRequestDetailPanel({
     isStackedPullRequestBase(detail.baseBranch, branchRefsQuery.data?.refs ?? []);
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
-  const retainedActivityError = activity === null ? null : activityQuery.error;
-  const refreshPending =
-    invalidating || detailQuery.isPending || activityQuery.isPending || _diffWarmUpQuery.isPending;
-  useEffect(() => {
-    onRefreshPendingChange?.(refreshPending);
-  }, [onRefreshPendingChange, refreshPending]);
-  useEffect(
-    () => () => {
-      onRefreshPendingChange?.(false);
-    },
-    [onRefreshPendingChange],
-  );
   const refreshDetail = useCallback(() => {
     detailQuery.refresh();
     activityQuery.refresh();
@@ -579,14 +561,9 @@ export function PullRequestDetailPanel({
   const invalidate = useAtomCommand(pullRequestEnvironment.invalidate, { reportFailure: false });
   const [refreshToken, setRefreshToken] = useState(0);
   const refreshFromHost = useCallback(async () => {
-    setInvalidating(true);
-    try {
-      await invalidate({ environmentId, input: { reference } });
-      refreshDetail();
-      setRefreshToken((token) => token + 1);
-    } finally {
-      setInvalidating(false);
-    }
+    await invalidate({ environmentId, input: { reference } });
+    refreshDetail();
+    setRefreshToken((token) => token + 1);
   }, [environmentId, invalidate, reference, refreshDetail]);
   // A refresh asked for by the page: the detail, and through the token below, the diff with it.
   const appliedForcedToken = useRef(forcedRefreshToken);
@@ -718,7 +695,6 @@ export function PullRequestDetailPanel({
     }
     setTitleScope(null);
     refreshDetail();
-    onTitleSaved?.();
   };
 
   type ThreadTask = {
@@ -1978,22 +1954,6 @@ export function PullRequestDetailPanel({
           <PullRequestsUnavailableState error={detailQuery.error} onRetry={refreshDetail} />
         ) : detail ? (
           <>
-            {(coreDetail !== null && detailQuery.error !== null) ||
-            (activity !== null && retainedActivityError !== null) ? (
-              <div className="absolute inset-x-4 top-4 z-10">
-                <Alert variant="warning" controlAlignment="first-line">
-                  <TriangleAlertIcon aria-hidden />
-                  <AlertTitle>Showing stale pull request data</AlertTitle>
-                  <AlertDescription>{detailQuery.error ?? retainedActivityError}</AlertDescription>
-                  <AlertAction>
-                    <Button size="xs" variant="outline" onClick={refreshDetail}>
-                      <RefreshCwIcon aria-hidden className="size-3.5" />
-                      Retry
-                    </Button>
-                  </AlertAction>
-                </Alert>
-              </div>
-            ) : null}
             {mountedTabs.has("summary") ? (
               <div
                 data-tab-scroller

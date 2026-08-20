@@ -96,28 +96,6 @@ describe("list filter menu", () => {
     expect(field.props.type).toBe("search");
   });
 
-  it("caps full-page search input and reports the capped value", () => {
-    const onChange = vi.fn();
-    const input = ListSearchInput({
-      label: "Search issues",
-      value: "",
-      onChange,
-    });
-    const field = Children.toArray(input.props.children).find(
-      (child) =>
-        isValidElement(child) &&
-        (child.props as { readonly "aria-label"?: string })["aria-label"] === "Search issues",
-    ) as ReactElement<{
-      readonly maxLength: number;
-      readonly onChange: (event: { readonly currentTarget: { readonly value: string } }) => void;
-    }>;
-
-    field.props.onChange({ currentTarget: { value: "x".repeat(201) } });
-
-    expect(field.props.maxLength).toBe(200);
-    expect(onChange).toHaveBeenCalledWith("x".repeat(200));
-  });
-
   it("uses the compact input primitive in entity pickers", () => {
     const picker = EntityPicker({
       icon: null,

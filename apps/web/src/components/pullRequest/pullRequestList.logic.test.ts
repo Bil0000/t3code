@@ -16,8 +16,6 @@ import {
   narrowPullRequestsToFilters,
   partitionPullRequestsWithPriority,
   pullRequestStatsTargets,
-  pullRequestStatsTargetsForSettledResults,
-  pullRequestVisibleEntries,
   prunePullRequestDiffStats,
   readPullRequestListSnapshot,
   writePullRequestListSnapshot,
@@ -509,20 +507,6 @@ describe("line counts that arrive after the rows", () => {
 });
 
 describe("line-count query targets", () => {
-  it("does not retarget line counts while the visible search is ahead of the sent query", () => {
-    const previousTargets = pullRequestStatsTargetsForSettledResults(
-      [entry({ number: 1 })],
-      true,
-      false,
-    );
-    const rapidTypingTargets = ["a", "ad", "add"].map((query) =>
-      pullRequestStatsTargetsForSettledResults([entry({ number: query.length + 1 })], false, false),
-    );
-
-    expect(previousTargets[0]?.input.refs.map((ref) => ref.number)).toEqual([1]);
-    expect(rapidTypingTargets).toEqual([[], [], []]);
-  });
-
   it("drops prior filter and page batches before a refresh", () => {
     const firstPage = pullRequestStatsTargets([entry({ number: 1 }), entry({ number: 2 })]);
     const currentFilter = pullRequestStatsTargets([
@@ -547,17 +531,6 @@ describe("line-count query targets", () => {
         environmentId: "env-2",
         input: { refs: [{ projectId: "project-2", repository: "acme/api", number: 7 }] },
       },
-    ]);
-  });
-
-  it("includes priority rows rendered outside the feed", () => {
-    const visible = pullRequestVisibleEntries([
-      { key: "others", label: "Others", entries: [entry({ number: 1 })] },
-      { key: "authored", label: "Authored", entries: [entry({ number: 2 })] },
-    ]);
-
-    expect(pullRequestStatsTargets(visible)[0]?.input.refs.map((ref) => ref.number)).toEqual([
-      1, 2,
     ]);
   });
 });
@@ -592,16 +565,6 @@ describe("merging line counts across keyed stats queries", () => {
       { environmentId: "env-1", projectId: "project-1", number: 1, additions: 2, deletions: 2 },
     ]);
     expect(held.get("env-1 project-1 1")).toEqual({ additions: 1, deletions: 1 });
-  });
-
-  it("keeps the same map when fresh results repeat every stored count", () => {
-    const held = new Map([["env-1 project-1 1", { additions: 1, deletions: 1 }]]);
-
-    expect(
-      mergePullRequestDiffStats(held, [
-        { environmentId: "env-1", projectId: "project-1", number: 1, additions: 1, deletions: 1 },
-      ]),
-    ).toBe(held);
   });
 });
 

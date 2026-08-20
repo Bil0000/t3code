@@ -27,7 +27,7 @@ vi.mock("react", async (importOriginal) => {
   };
 });
 
-import { repositoryViewsAfterActivation, repositoryViewFromTabKey } from "./RepositoryPanel";
+import { repositoryViewFromTabKey } from "./RepositoryPanel";
 import RepositoryPanel from "./RepositoryPanel";
 
 vi.mock("./GitHistoryPanel", () => ({
@@ -148,16 +148,6 @@ describe("RepositoryPanel", () => {
 
     expect(markup).toContain('data-activity-mode="visible"><div id="repository-panel-history"');
     expect(markup).not.toContain('data-activity-mode="hidden"');
-  });
-
-  it("retains each repository view after it is activated", () => {
-    const historyViews = repositoryViewsAfterActivation(new Set(), "history");
-    const issueViews = repositoryViewsAfterActivation(historyViews, "issues");
-    const pullRequestViews = repositoryViewsAfterActivation(issueViews, "pull-requests");
-
-    expect([...historyViews]).toEqual(["history"]);
-    expect([...issueViews]).toEqual(["history", "issues"]);
-    expect([...pullRequestViews]).toEqual(["history", "issues", "pull-requests"]);
   });
 
   it("exposes Issues beside History in the repository pane", () => {

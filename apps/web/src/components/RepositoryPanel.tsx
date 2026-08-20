@@ -67,14 +67,6 @@ export function repositoryViewFromTabKey(view: RepositoryView, key: string): Rep
   return null;
 }
 
-export function repositoryViewsAfterActivation(
-  activatedViews: ReadonlySet<RepositoryView>,
-  view: RepositoryView,
-): ReadonlySet<RepositoryView> {
-  if (activatedViews.has(view)) return activatedViews;
-  return new Set([...activatedViews, view]);
-}
-
 function repositoryTabId(view: RepositoryView): string {
   return `repository-tab-${view}`;
 }
@@ -94,17 +86,14 @@ function RepositoryPanelLoadingFallback(props: { readonly children: string }) {
 export default function RepositoryPanel(props: RepositoryPanelProps) {
   const mode = props.view;
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const [activatedViews, setActivatedViews] = useState<ReadonlySet<RepositoryView>>(
-    () => new Set([mode]),
-  );
-  const mountedViews = repositoryViewsAfterActivation(activatedViews, mode);
+  const [historyActivated, setHistoryActivated] = useState(mode === "history");
 
   useEffect(() => {
-    setActivatedViews((views) => repositoryViewsAfterActivation(views, mode));
+    if (mode === "history") setHistoryActivated(true);
   }, [mode]);
 
   const activateView = (view: RepositoryView) => {
-    setActivatedViews((views) => repositoryViewsAfterActivation(views, view));
+    if (view === "history") setHistoryActivated(true);
     props.onViewChange(view);
   };
 
@@ -177,7 +166,7 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
         </Button>
       </div>
 
-      {mountedViews.has("history") && (
+      {historyActivated && (
         <Activity mode={mode === "history" ? "visible" : "hidden"}>
           <div
             id={repositoryPanelId("history")}
@@ -209,87 +198,83 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
         </Activity>
       )}
 
-      {mountedViews.has("issues") && (
-        <Activity mode={mode === "issues" ? "visible" : "hidden"}>
-          <div
-            id={repositoryPanelId("issues")}
-            role="tabpanel"
-            aria-labelledby={repositoryTabId("issues")}
-            className="min-h-0 flex-1"
-          >
-            {props.issuesCapabilityState === "loading" ? (
-              <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-                Loading issues…
-              </div>
-            ) : props.issuesCapabilityState === "unavailable" ? (
-              <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-                Update the environment server to browse issues.
-              </div>
-            ) : (
-              <Suspense
-                fallback={
-                  <RepositoryPanelLoadingFallback>Loading issues…</RepositoryPanelLoadingFallback>
-                }
-              >
-                <IssuesPanel
-                  environmentId={props.environmentId}
-                  projectId={props.projectId}
-                  selected={props.selectedIssue}
-                  onSelect={props.onSelectIssue}
-                  handoffTarget={props.handoffTarget}
-                  onStateChange={props.onIssueStateChange}
-                  onOpenLinkedPullRequest={props.onOpenLinkedPullRequest}
-                />
-              </Suspense>
-            )}
-          </div>
-        </Activity>
+      {mode === "issues" && (
+        <div
+          id={repositoryPanelId("issues")}
+          role="tabpanel"
+          aria-labelledby={repositoryTabId("issues")}
+          className="min-h-0 flex-1"
+        >
+          {props.issuesCapabilityState === "loading" ? (
+            <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+              Loading issues…
+            </div>
+          ) : props.issuesCapabilityState === "unavailable" ? (
+            <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+              Update the environment server to browse issues.
+            </div>
+          ) : (
+            <Suspense
+              fallback={
+                <RepositoryPanelLoadingFallback>Loading issues…</RepositoryPanelLoadingFallback>
+              }
+            >
+              <IssuesPanel
+                environmentId={props.environmentId}
+                projectId={props.projectId}
+                selected={props.selectedIssue}
+                onSelect={props.onSelectIssue}
+                handoffTarget={props.handoffTarget}
+                onStateChange={props.onIssueStateChange}
+                onOpenLinkedPullRequest={props.onOpenLinkedPullRequest}
+              />
+            </Suspense>
+          )}
+        </div>
       )}
 
-      {mountedViews.has("pull-requests") && (
-        <Activity mode={mode === "pull-requests" ? "visible" : "hidden"}>
-          <div
-            id={repositoryPanelId("pull-requests")}
-            role="tabpanel"
-            aria-labelledby={repositoryTabId("pull-requests")}
-            className="min-h-0 flex-1"
-          >
-            {props.pullRequestsCapabilityState === "loading" ? (
-              <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-                Loading pull requests…
-              </div>
-            ) : props.pullRequestsCapabilityState === "unavailable" ? (
-              <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
-                Update the environment server to browse pull requests.
-              </div>
-            ) : (
-              <Suspense
-                fallback={
-                  <RepositoryPanelLoadingFallback>
-                    Loading pull requests…
-                  </RepositoryPanelLoadingFallback>
+      {mode === "pull-requests" && (
+        <div
+          id={repositoryPanelId("pull-requests")}
+          role="tabpanel"
+          aria-labelledby={repositoryTabId("pull-requests")}
+          className="min-h-0 flex-1"
+        >
+          {props.pullRequestsCapabilityState === "loading" ? (
+            <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+              Loading pull requests…
+            </div>
+          ) : props.pullRequestsCapabilityState === "unavailable" ? (
+            <div className="flex size-full items-center justify-center p-6 text-center text-sm text-muted-foreground">
+              Update the environment server to browse pull requests.
+            </div>
+          ) : (
+            <Suspense
+              fallback={
+                <RepositoryPanelLoadingFallback>
+                  Loading pull requests…
+                </RepositoryPanelLoadingFallback>
+              }
+            >
+              <PullRequestsPanel
+                environmentId={props.environmentId}
+                projectId={props.projectId}
+                selected={
+                  props.selectedPullRequest === null
+                    ? null
+                    : {
+                        ...props.selectedPullRequest,
+                        projectId: props.selectedPullRequest.projectId as ProjectId,
+                      }
                 }
-              >
-                <PullRequestsPanel
-                  environmentId={props.environmentId}
-                  projectId={props.projectId}
-                  selected={
-                    props.selectedPullRequest === null
-                      ? null
-                      : {
-                          ...props.selectedPullRequest,
-                          projectId: props.selectedPullRequest.projectId as ProjectId,
-                        }
-                  }
-                  onSelect={props.onSelectPullRequest}
-                  composerDraftTarget={props.composerDraftTarget}
-                  onStateChange={props.onPullRequestStateChange}
-                  onOpenLinkedIssue={props.onOpenLinkedIssue}
-                />
-              </Suspense>
-            )}
-          </div>
-        </Activity>
+                onSelect={props.onSelectPullRequest}
+                composerDraftTarget={props.composerDraftTarget}
+                onStateChange={props.onPullRequestStateChange}
+                onOpenLinkedIssue={props.onOpenLinkedIssue}
+              />
+            </Suspense>
+          )}
+        </div>
       )}
     </section>
   );
