@@ -3,9 +3,10 @@ import { CircleIcon } from "lucide-react";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { DetailTabStrip } from "./DetailTabStrip";
+import { CondensedDetailTabStrip, DetailTabStrip } from "./DetailTabStrip";
 import { EntityPicker } from "./EntityPicker";
 import { ListFilterRadioGroup, ListProjectFilterGroup, ListSearchInput } from "./ListFilterMenu";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 
 function findValueChange(
   node: ReactNode,
@@ -88,15 +89,51 @@ describe("list filter menu", () => {
   });
 
   it("hides the native scrollbar on detail tabs", () => {
+    const onSelect = vi.fn();
     const strip = DetailTabStrip({
       label: "Pull request tabs",
-      tabs: [{ value: "summary", label: "Summary" }],
+      tabs: [
+        { value: "summary", label: "Summary" },
+        { value: "timeline", label: "Timeline" },
+      ],
       active: "summary",
-      onSelect: vi.fn(),
+      onSelect,
     });
+    const group = Children.toArray(strip.props.children)[0] as ReactElement<{
+      readonly children: ReactNode;
+      readonly onValueChange: (value: ReadonlyArray<string>) => void;
+      readonly size: string;
+      readonly variant: string;
+    }>;
+    const toggles = Children.toArray(group.props.children) as ReadonlyArray<ReactElement>;
 
     expect(strip.props.className).toContain("[scrollbar-width:none]");
     expect(strip.props.className).toContain("[&::-webkit-scrollbar]:hidden");
+    expect(group.type).toBe(ToggleGroup);
+    expect(group.props).toMatchObject({ size: "segmented", variant: "segmented" });
+    expect(toggles.every((toggle) => toggle.type === Toggle)).toBe(true);
+    group.props.onValueChange(["timeline"]);
+    expect(onSelect).toHaveBeenCalledWith("timeline");
+  });
+
+  it("uses the toggle primitive for condensed detail tabs", () => {
+    const strip = CondensedDetailTabStrip({
+      label: "Issue tabs",
+      tabs: [{ value: "summary", label: "Summary" }],
+      active: "summary",
+      onSelect: vi.fn(),
+      focusable: false,
+    });
+    const group = Children.toArray(strip.props.children)[0] as ReactElement<{
+      readonly children: ReactNode;
+    }>;
+    const toggle = Children.toArray(group.props.children)[0] as ReactElement<{
+      readonly tabIndex: number;
+    }>;
+
+    expect(group.type).toBe(ToggleGroup);
+    expect(toggle.type).toBe(Toggle);
+    expect(toggle.props.tabIndex).toBe(-1);
   });
   it("does not emit a change when the selected option is chosen again", () => {
     const onChange = vi.fn();

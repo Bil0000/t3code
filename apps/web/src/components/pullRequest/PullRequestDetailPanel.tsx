@@ -79,7 +79,6 @@ import {
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   Menu,
   MenuItem,
@@ -93,6 +92,7 @@ import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestDetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
+import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { useMountedTabs } from "../sourceControl/useMountedTabs";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
@@ -1820,25 +1820,12 @@ export function PullRequestDetailPanel({
         </div>
 
         {detail ? (
-          <nav
-            className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-border/60 px-4 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-            aria-label="Pull request tabs"
+          <DetailTabStrip
+            label="Pull request tabs"
+            tabs={visibleTabs}
+            active={tab}
+            onSelect={setTab}
           >
-            <ToggleGroup
-              size="segmented"
-              variant="segmented"
-              value={[tab]}
-              onValueChange={(next) => {
-                const nextTab = visibleTabs.find((item) => item.value === next[0])?.value;
-                if (nextTab) setTab(nextTab);
-              }}
-            >
-              {visibleTabs.map((item) => (
-                <Toggle key={item.value} value={item.value}>
-                  {item.label}
-                </Toggle>
-              ))}
-            </ToggleGroup>
             {tab === "summary" ? (
               <span
                 className="ml-auto inline-flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground"
@@ -1926,7 +1913,7 @@ export function PullRequestDetailPanel({
                 </Button>
               </div>
             ) : null}
-          </nav>
+          </DetailTabStrip>
         ) : null}
       </div>
 
