@@ -25,6 +25,7 @@ type PageAtom = {
   readonly input: {
     readonly cursor?: string;
     readonly queryGeneration: number;
+    readonly refresh?: true;
   };
   readonly result: PageResult;
 };
@@ -146,9 +147,9 @@ function page(nextCursor: string | null): PageResult {
   };
 }
 
-function render(revision = 0) {
+function render(revision = 0, queryTarget = target) {
   hooks.beginRender();
-  return usePaginatedHistoryRefs(target, { revision });
+  return usePaginatedHistoryRefs(queryTarget, { revision });
 }
 
 function renderBranches() {
@@ -167,18 +168,56 @@ describe("usePaginatedHistoryRefs", () => {
     refsState.results.clear();
   });
 
-  it("uses a new page generation when refreshed", () => {
+  it("uses refresh only for the first page of a refreshed ref snapshot", () => {
     refsState.results.set("0:first", page("cursor-4"));
-    refsState.results.set("1:first", page(null));
+    refsState.results.set("1:first", page("cursor-8"));
+    refsState.results.set("1:cursor-8", page(null));
 
     const initial = render();
     initial.refresh();
+    const refreshed = render();
+    refreshed.loadNext();
+    render();
+    render(0, { ...target, query: "later" });
     render();
 
     expect(refsState.atoms.map((atom) => atom.input)).toEqual([
       { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 0 },
       { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 1, refresh: true },
+      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 1, refresh: true },
+      {
+        cwd: "C:/workspace",
+        cursor: "cursor-8",
+        limit: 100,
+        namespace: "local",
+        queryGeneration: 1,
+      },
+      {
+        cwd: "C:/workspace",
+        limit: 100,
+        namespace: "local",
+        query: "later",
+        queryGeneration: 1,
+      },
+      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 1 },
+      {
+        cwd: "C:/workspace",
+        cursor: "cursor-8",
+        limit: 100,
+        namespace: "local",
+        queryGeneration: 1,
+      },
     ]);
+    expect(
+      new Set(
+        refsState.atoms
+          .filter((atom) => atom.input.refresh === true)
+          .map(
+            (atom) =>
+              `${atom.input.cwd}:${atom.input.query ?? ""}:${atom.input.cursor ?? ""}:${atom.input.queryGeneration}`,
+          ),
+      ),
+    ).toEqual(new Set(["C:/workspace:::1"]));
   });
 
   it("discards history cursor pages when the root reconnects", () => {

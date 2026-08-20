@@ -17,6 +17,9 @@ export function CommitDiffView(props: {
   hash: string;
   filePath?: string;
   files: ReadonlyArray<GitCommitChangedFile>;
+  filesError: boolean;
+  filesHasMore: boolean;
+  filesLoading: boolean;
   diff: string | null;
   truncated: boolean;
   isPending: boolean;
@@ -24,6 +27,8 @@ export function CommitDiffView(props: {
   onBack: () => void;
   onSelectFile: (filePath?: string) => void;
   onRetry: () => void;
+  onLoadMoreFiles: () => void;
+  onRetryFiles: () => void;
 }) {
   const { resolvedTheme } = useTheme();
   const renderable = useMemo(
@@ -68,6 +73,25 @@ export function CommitDiffView(props: {
           </Select>
         </label>
         {props.truncated ? <span className="text-[0.625rem] text-amber-400">truncated</span> : null}
+        {!props.filesError && (props.filesHasMore || props.filesLoading) ? (
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={props.onLoadMoreFiles}
+            disabled={props.filesLoading}
+          >
+            {props.filesLoading
+              ? props.files.length === 0
+                ? "Loading files…"
+                : "Loading more files…"
+              : "Load more files"}
+          </Button>
+        ) : null}
+        {props.filesError ? (
+          <Button size="xs" variant="outline" onClick={props.onRetryFiles}>
+            Retry loading files
+          </Button>
+        ) : null}
       </div>
       <div className="min-h-0 flex-1 overflow-auto p-2">
         {props.isPending ? (

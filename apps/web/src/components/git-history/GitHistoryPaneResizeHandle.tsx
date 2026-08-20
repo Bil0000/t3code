@@ -19,7 +19,7 @@ export function PaneResizeHandle(props: {
       aria-valuemax={props.max}
       aria-valuenow={props.value}
       tabIndex={0}
-      className="group relative z-10 hidden w-2 shrink-0 cursor-col-resize touch-none bg-background/70 outline-none @min-[1380px]/history-list:block"
+      className="group relative z-10 block w-2 shrink-0 cursor-col-resize touch-none bg-background/70 outline-none"
       onPointerDown={(event) => {
         lastClientX.current = event.clientX;
         event.currentTarget.setPointerCapture(event.pointerId);

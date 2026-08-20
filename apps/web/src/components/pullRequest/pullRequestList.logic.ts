@@ -501,6 +501,14 @@ export function pullRequestStatsTargets(
   );
 }
 
+export function pullRequestStatsTargetsForSettledResults(
+  entries: ReadonlyArray<EnvironmentPullRequestEntry>,
+  querySettled: boolean,
+  showingCarried: boolean,
+) {
+  return querySettled && !showingCarried ? pullRequestStatsTargets(entries) : [];
+}
+
 /**
  * Every connected environment's listing, read as one list.
  *

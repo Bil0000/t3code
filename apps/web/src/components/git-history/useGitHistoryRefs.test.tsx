@@ -13,6 +13,7 @@ const refState = vi.hoisted(() => ({
   remote: [] as ReadonlyArray<VcsHistoryRef>,
   tags: [] as ReadonlyArray<VcsHistoryRef>,
   isComplete: true,
+  nextCursor: null as string | null,
   refreshLocal: vi.fn(),
   refreshRemote: vi.fn(),
   refreshTags: vi.fn(),
@@ -58,11 +59,17 @@ vi.mock("../../state/queries", () => ({
         : options.namespace === "remote"
           ? refState.remote
           : refState.tags;
+    const target = _target as { readonly environmentId: EnvironmentId | null };
     return {
       data:
-        options.namespace === "local" && !refState.currentRefResolved
+        target.environmentId === null ||
+        (options.namespace === "local" && !refState.currentRefResolved)
           ? null
-          : { currentRef: refState.currentRef, nextCursor: null, isComplete: refState.isComplete },
+          : {
+              currentRef: refState.currentRef,
+              nextCursor: refState.nextCursor,
+              isComplete: refState.isComplete,
+            },
       refs,
       error: null,
       isFetchingNextPage: false,
@@ -133,6 +140,7 @@ describe("useGitHistoryRefs", () => {
     refState.remote = Array.from({ length: 5_000 }, (_, index) => ref(`origin-${index}`, true));
     refState.tags = [];
     refState.isComplete = true;
+    refState.nextCursor = null;
     refState.refreshLocal.mockReset();
     refState.refreshRemote.mockReset();
     refState.refreshTags.mockReset();
@@ -180,6 +188,27 @@ describe("useGitHistoryRefs", () => {
     expect(rendered.historyRefs.selectedRevision).toBeUndefined();
   });
 
+  it("keeps the current local branch loaded after collapsing Local", () => {
+    refState.currentRef = ref("main");
+
+    const initial = renderRefs();
+    initial.historyRefs.toggleRefKey("section:local");
+    refState.targets = [];
+
+    const collapsed = renderRefs();
+
+    expect(refState.targets).toContainEqual({
+      namespace: "local",
+      revision: 0,
+      target: { environmentId, cwd: "C:/workspace", query: "" },
+    });
+    expect(collapsed.historyRefs.currentRef?.name).toBe("main");
+    expect(collapsed.historyRefs.selectedRevision).toEqual({
+      label: "main",
+      revision: "refs/heads/main",
+    });
+  });
+
   it("keeps the default selected revision stable across unchanged rerenders", () => {
     refState.currentRef = ref("main");
 
@@ -187,6 +216,68 @@ describe("useGitHistoryRefs", () => {
     const second = renderRefs();
 
     expect(second.historyRefs.selectedRevision).toBe(first.historyRefs.selectedRevision);
+  });
+
+  it("falls back to the current branch when a completed snapshot removes the selected local ref", () => {
+    refState.currentRef = ref("main");
+    refState.local = [ref("main"), ref("feature/renamed")];
+
+    const initial = renderRefs();
+    initial.historyRefs.selectRef("feature/renamed", "refs/heads/feature/renamed");
+    expect(renderRefs().historyRefs.selectedRevision).toEqual({
+      label: "feature/renamed",
+      revision: "refs/heads/feature/renamed",
+    });
+
+    initial.historyRefs.setRefFilter("main");
+    refState.local = [ref("main")];
+    refState.debouncedRefFilter = "main";
+
+    expect(renderRefs(1).historyRefs.selectedRevision).toEqual({
+      label: "feature/renamed",
+      revision: "refs/heads/feature/renamed",
+    });
+
+    initial.historyRefs.setRefFilter("");
+    refState.debouncedRefFilter = "";
+    refState.nextCursor = "cursor-2";
+
+    expect(renderRefs(1).historyRefs.selectedRevision).toEqual({
+      label: "feature/renamed",
+      revision: "refs/heads/feature/renamed",
+    });
+
+    refState.nextCursor = null;
+
+    expect(renderRefs(1).historyRefs.selectedRevision).toEqual({
+      label: "main",
+      revision: "refs/heads/main",
+    });
+  });
+
+  it("keeps the selected remote or tag namespace loaded while its section is collapsed", () => {
+    const initial = renderRefs();
+    initial.historyRefs.selectRef("origin/feature", "refs/remotes/origin/feature");
+    refState.targets = [];
+
+    renderRefs();
+
+    expect(refState.targets).toContainEqual({
+      namespace: "remote",
+      revision: 0,
+      target: { environmentId, cwd: "C:/workspace", query: "" },
+    });
+
+    initial.historyRefs.selectRef("v1.0.0", "refs/tags/v1.0.0");
+    refState.targets = [];
+
+    renderRefs();
+
+    expect(refState.targets).toContainEqual({
+      namespace: "tag",
+      revision: 0,
+      target: { environmentId, cwd: "C:/workspace", query: "" },
+    });
   });
 
   it("passes a repository revision to every history ref namespace", () => {

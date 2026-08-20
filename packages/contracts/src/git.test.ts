@@ -8,11 +8,13 @@ import {
   GitRunStackedActionInput,
   GitResolvePullRequestResult,
   VcsGetHistoryResult,
+  VcsGetHistoryInput,
   VcsGetCommitDiffInput,
   VcsGetCommitDetailsInput,
   VcsListCommitFilesResult,
   VcsStatusResult,
   VcsListHistoryRefsInput,
+  VcsListHistoryRefsResult,
   VcsListRefsInput,
   VcsListRefsResult,
 } from "./git.ts";
@@ -32,6 +34,8 @@ const decodeCommitDiffInput = Schema.decodeUnknownSync(VcsGetCommitDiffInput);
 const decodeListCommitFilesResult = Schema.decodeUnknownSync(VcsListCommitFilesResult);
 const decodeStatusResult = Schema.decodeUnknownSync(VcsStatusResult);
 const decodeGetHistoryResult = Schema.decodeUnknownSync(VcsGetHistoryResult);
+const decodeGetHistoryInput = Schema.decodeUnknownSync(VcsGetHistoryInput);
+const decodeListHistoryRefsResult = Schema.decodeUnknownSync(VcsListHistoryRefsResult);
 
 describe("VCS ref contracts", () => {
   it("preserves the numeric cursor and result shape of vcs.listRefs", () => {
@@ -126,6 +130,31 @@ describe("Git file path contracts", () => {
 });
 
 describe("Git history results", () => {
+  it("round-trips a listed ref name into a bounded history revision", () => {
+    const refName = `refs/heads/${"nested/".repeat(180)}feature`;
+    const listed = decodeListHistoryRefsResult({
+      refs: [
+        {
+          name: refName,
+          current: false,
+          isDefault: false,
+          worktreePath: null,
+        },
+      ],
+      currentRef: null,
+      hasMore: false,
+      hasPrimaryRemote: false,
+      isRepo: true,
+      isComplete: true,
+      nextCursor: null,
+    });
+
+    expect(decodeGetHistoryInput({ cwd: "/repo", revision: listed.refs[0]!.name }).revision).toBe(
+      refName,
+    );
+    expect(() => decodeGetHistoryInput({ cwd: "/repo", revision: "r".repeat(4097) })).toThrow();
+  });
+
   it("preserves an explicit capped signal for incomplete history snapshots", () => {
     expect(
       decodeGetHistoryResult({

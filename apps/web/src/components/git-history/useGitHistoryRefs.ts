@@ -21,9 +21,15 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
   );
   const deferredRefFilter = useDebouncedValue(refFilter.trim(), REF_FILTER_DEBOUNCE_MS);
   const normalizedRefFilter = refFilter.trim().toLocaleLowerCase();
-  const shouldLoadLocal = deferredRefFilter.length > 0 || expandedRefKeys.has("section:local");
-  const shouldLoadRemote = deferredRefFilter.length > 0 || expandedRefKeys.has("section:remote");
-  const shouldLoadTags = deferredRefFilter.length > 0 || expandedRefKeys.has("section:tags");
+  const shouldLoadLocal = true;
+  const shouldLoadRemote =
+    deferredRefFilter.length > 0 ||
+    expandedRefKeys.has("section:remote") ||
+    selectedRevisionState?.revision.startsWith("refs/remotes/") === true;
+  const shouldLoadTags =
+    deferredRefFilter.length > 0 ||
+    expandedRefKeys.has("section:tags") ||
+    selectedRevisionState?.revision.startsWith("refs/tags/") === true;
   const refs = usePaginatedHistoryRefs(
     shouldLoadLocal
       ? { environmentId, cwd, query: deferredRefFilter }
@@ -66,17 +72,58 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     [normalizedRefFilter, tagRefs],
   );
   const currentRef = refs.data?.currentRef;
-  const selectedRevision = useMemo(
+  const defaultSelectedRevision = useMemo(
     () =>
-      selectedRevisionState === undefined
-        ? currentRef === undefined
-          ? undefined
-          : currentRef === null
-            ? null
-            : { label: currentRef.name, revision: `refs/heads/${currentRef.name}` }
-        : selectedRevisionState,
-    [currentRef, selectedRevisionState],
+      currentRef === undefined
+        ? undefined
+        : currentRef === null
+          ? null
+          : { label: currentRef.name, revision: `refs/heads/${currentRef.name}` },
+    [currentRef],
   );
+  const selectedRefWasRemoved = useMemo(() => {
+    if (selectedRevisionState === undefined || selectedRevisionState === null) return false;
+    if (deferredRefFilter.length > 0) return false;
+    const selectedRef = selectedRevisionState.revision;
+    if (selectedRef.startsWith("refs/heads/")) {
+      return (
+        refs.data?.isComplete === true &&
+        refs.data.nextCursor === null &&
+        !localRefs.some((ref) => selectedRef === `refs/heads/${ref.name}`)
+      );
+    }
+    if (selectedRef.startsWith("refs/remotes/")) {
+      return (
+        remote.data?.isComplete === true &&
+        remote.data.nextCursor === null &&
+        !remoteRefs.some((ref) => selectedRef === `refs/remotes/${ref.name}`)
+      );
+    }
+    if (selectedRef.startsWith("refs/tags/")) {
+      return (
+        tags.data?.isComplete === true &&
+        tags.data.nextCursor === null &&
+        !tagRefs.some((ref) => selectedRef === `refs/tags/${ref.name}`)
+      );
+    }
+    return false;
+  }, [
+    localRefs,
+    deferredRefFilter,
+    refs.data?.isComplete,
+    refs.data?.nextCursor,
+    remote.data?.isComplete,
+    remote.data?.nextCursor,
+    remoteRefs,
+    selectedRevisionState,
+    tagRefs,
+    tags.data?.isComplete,
+    tags.data?.nextCursor,
+  ]);
+  const selectedRevision =
+    selectedRevisionState === undefined || selectedRefWasRemoved
+      ? defaultSelectedRevision
+      : selectedRevisionState;
   const toggleRefKey = useCallback((key: string) => {
     setExpandedRefKeys((current) => {
       const next = new Set(current);
@@ -97,6 +144,10 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     setRefFilter("");
     setExpandedRefKeys(new Set(["section:local"]));
   }, [cwd, environmentId]);
+
+  useEffect(() => {
+    if (selectedRefWasRemoved) setSelectedRevision(undefined);
+  }, [selectedRefWasRemoved]);
 
   return {
     currentRef,

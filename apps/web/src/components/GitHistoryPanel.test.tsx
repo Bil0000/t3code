@@ -10,7 +10,7 @@ import {
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
 import type { ReactElement } from "react";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../test/reactHookHarness";
 import { visitElements } from "../test/reactElementTree";
@@ -25,6 +25,7 @@ const effectQueue = vi.hoisted(() => ({
   cursor: 0,
   dependencies: [] as Array<ReadonlyArray<unknown> | undefined>,
   effects: [] as Array<() => void>,
+  stateUpdates: 0,
 }));
 
 const historyState = vi.hoisted(() => ({
@@ -103,7 +104,16 @@ vi.mock("react", async (importOriginal) => {
     },
     useMemo: reactHookHarness.useMemo,
     useRef: reactHookHarness.useRef,
-    useState: reactHookHarness.useState,
+    useState: <Value,>(initialValue: Value | (() => Value)) => {
+      const [value, setValue] = reactHookHarness.useState(initialValue);
+      return [
+        value,
+        (nextValue: Value | ((previous: Value) => Value)) => {
+          effectQueue.stateUpdates += 1;
+          setValue(nextValue);
+        },
+      ] as const;
+    },
   };
 });
 
@@ -254,6 +264,7 @@ import {
   isWideHistoryLayout,
 } from "./GitHistoryPanel";
 import GitHistoryPanel from "./GitHistoryPanel";
+import { CommitDiffView } from "./git-history/GitHistoryCommitDiff";
 
 const environmentId = EnvironmentId.make("environment-local");
 
@@ -414,12 +425,17 @@ function componentElement(
 }
 
 describe("GitHistoryPanel", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   beforeEach(() => {
     hooks.reset();
     fontState.interfaceSize = 16;
     effectQueue.cursor = 0;
     effectQueue.dependencies.length = 0;
     effectQueue.effects.length = 0;
+    effectQueue.stateUpdates = 0;
     historyState.commitDetails = null;
     historyState.diff = { diff: "", isRepo: true, truncated: false };
     historyState.getCommitDetails.mockReset();
@@ -455,6 +471,117 @@ describe("GitHistoryPanel", () => {
     renderPanel();
 
     expect(historyState.getHistory).not.toHaveBeenCalled();
+  });
+
+  it("restarts history after the environment connection generation changes", () => {
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
+    );
+
+    renderPanel();
+    historyState.getHistory.mockClear();
+    historyState.connection = { phase: "connected", generation: 2 };
+
+    renderPanel();
+
+    expect(historyState.getHistory).toHaveBeenCalledWith({
+      environmentId,
+      input: { cwd: "C:/workspace", limit: 100, queryGeneration: 0 },
+    });
+  });
+
+  it("keeps the narrow branches sheet open when the history target rekeys", () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(
+          private readonly callback: (
+            entries: ReadonlyArray<{ contentRect: { width: number } }>,
+          ) => void,
+        ) {}
+
+        disconnect() {}
+
+        observe() {
+          this.callback([{ contentRect: { width: 539 } }]);
+        }
+      },
+    );
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
+    );
+
+    const initial = renderPanel();
+    (initial.props.ref as { current: object | null }).current = {};
+    flushEffects();
+    const branches = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-controls"] === "git-history-refs-panel",
+    );
+    (branches?.props.onClick as (() => void) | undefined)?.();
+
+    expect(
+      visitElements(renderPanel(), (element) => element.props.id === "git-history-refs-panel"),
+    ).not.toBeNull();
+
+    historyState.connection = { phase: "connected", generation: 2 };
+    renderPanel();
+    flushEffects();
+
+    expect(
+      visitElements(renderPanel(), (element) => element.props.id === "git-history-refs-panel"),
+    ).not.toBeNull();
+  });
+
+  it("closes the narrow details sheet when the history target rekeys", () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(
+          private readonly callback: (
+            entries: ReadonlyArray<{ contentRect: { width: number } }>,
+          ) => void,
+        ) {}
+
+        disconnect() {}
+
+        observe() {
+          this.callback([{ contentRect: { width: 539 } }]);
+        }
+      },
+    );
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Initial");
+    historyState.pages.set(undefined, page([historyCommit]));
+
+    const initial = renderPanel();
+    (initial.props.ref as { current: object | null }).current = {};
+    flushEffects();
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const selectCommit = visitElements(
+      historyRow,
+      (element) => element.props["data-commit-hash"] === historyCommit.hash,
+    );
+    (selectCommit?.props.onClick as (() => void) | undefined)?.();
+    const details = visitElements(
+      renderPanel(),
+      (element) => element.props["aria-controls"] === "git-history-details-panel",
+    );
+    (details?.props.onClick as (() => void) | undefined)?.();
+
+    expect(
+      visitElements(renderPanel(), (element) => element.props.id === "git-history-details-panel"),
+    ).not.toBeNull();
+
+    historyState.connection = { phase: "connected", generation: 2 };
+    renderPanel();
+    flushEffects();
+
+    expect(
+      visitElements(renderPanel(), (element) => element.props.id === "git-history-details-panel"),
+    ).toBeNull();
   });
 
   it("restarts the first history page after a typed continuation expiry", () => {
@@ -787,6 +914,256 @@ describe("GitHistoryPanel", () => {
   it("keeps the desktop refs and details workflow available at ordinary desktop widths", () => {
     expect(isWideHistoryLayout(1119)).toBe(false);
     expect(isWideHistoryLayout(1120)).toBe(true);
+  });
+
+  it("does not rerender history children for repeated wide widths without pane clamping", () => {
+    let notify: ((width: number) => void) | undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(
+          private readonly callback: (
+            entries: ReadonlyArray<{ contentRect: { width: number } }>,
+          ) => void,
+        ) {
+          notify = (width) => this.callback([{ contentRect: { width } }]);
+        }
+
+        disconnect() {}
+
+        observe() {
+          notify?.(1400);
+        }
+      },
+    );
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
+    );
+
+    const initial = renderPanel();
+    (initial.props.ref as { current: object | null }).current = {};
+    flushEffects();
+    effectQueue.stateUpdates = 0;
+
+    notify?.(1399);
+    notify?.(1398);
+    notify?.(1397);
+
+    expect(effectQueue.stateUpdates).toBe(0);
+  });
+
+  it("constrains both side panes when widening branches at the minimum wide layout", () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(
+          private readonly callback: (
+            entries: ReadonlyArray<{ contentRect: { width: number } }>,
+          ) => void,
+        ) {}
+
+        disconnect() {}
+
+        observe() {
+          this.callback([{ contentRect: { width: 1120 } }]);
+        }
+      },
+    );
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
+    );
+
+    const initial = renderPanel();
+    (initial.props.ref as { current: object | null }).current = {};
+    flushEffects();
+    const branchHandle = visitElements(
+      renderPanel(),
+      (element) =>
+        typeof element.type === "function" &&
+        element.type.name === "PaneResizeHandle" &&
+        element.props.label === "Resize branches pane",
+    );
+    (branchHandle?.props.onMove as ((delta: number) => void) | undefined)?.(224);
+
+    const constrained = renderPanel();
+    const refsPane = componentElement(constrained, "GitRefsPane");
+    const detailsPane = componentElement(constrained, "CommitDetailsPane");
+
+    expect((refsPane.props.style as { width: number }).width).toBe(480);
+    expect((detailsPane.props.style as { width: number }).width).toBe(304);
+  });
+
+  it("constrains commit details when resetting at the minimum wide layout", () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(
+          private readonly callback: (
+            entries: ReadonlyArray<{ contentRect: { width: number } }>,
+          ) => void,
+        ) {}
+
+        disconnect() {}
+
+        observe() {
+          this.callback([{ contentRect: { width: 1120 } }]);
+        }
+      },
+    );
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
+    );
+
+    const initial = renderPanel();
+    (initial.props.ref as { current: object | null }).current = {};
+    flushEffects();
+    const branchHandle = visitElements(
+      renderPanel(),
+      (element) =>
+        typeof element.type === "function" &&
+        element.type.name === "PaneResizeHandle" &&
+        element.props.label === "Resize branches pane",
+    );
+    (branchHandle?.props.onMove as ((delta: number) => void) | undefined)?.(224);
+    const detailsHandle = visitElements(
+      renderPanel(),
+      (element) =>
+        typeof element.type === "function" &&
+        element.type.name === "PaneResizeHandle" &&
+        element.props.label === "Resize commit details pane",
+    );
+    (detailsHandle?.props.onReset as (() => void) | undefined)?.();
+
+    const constrained = renderPanel();
+    const refsPane = componentElement(constrained, "GitRefsPane");
+    const detailsPane = componentElement(constrained, "CommitDetailsPane");
+
+    expect((refsPane.props.style as { width: number }).width).toBe(480);
+    expect((detailsPane.props.style as { width: number }).width).toBe(304);
+  });
+
+  it("clamps expanded side panes when a wide history panel shrinks", () => {
+    let notify: ((width: number) => void) | undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(
+          private readonly callback: (
+            entries: ReadonlyArray<{ contentRect: { width: number } }>,
+          ) => void,
+        ) {
+          notify = (width) => this.callback([{ contentRect: { width } }]);
+        }
+
+        disconnect() {}
+
+        observe() {
+          notify?.(1400);
+        }
+      },
+    );
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
+    );
+
+    const initial = renderPanel();
+    (initial.props.ref as { current: object | null }).current = {};
+    flushEffects();
+    const expanded = renderPanel();
+    const branchHandle = visitElements(
+      expanded,
+      (element) =>
+        typeof element.type === "function" &&
+        element.type.name === "PaneResizeHandle" &&
+        element.props.label === "Resize branches pane",
+    );
+    const detailsHandle = visitElements(
+      expanded,
+      (element) =>
+        typeof element.type === "function" &&
+        element.type.name === "PaneResizeHandle" &&
+        element.props.label === "Resize commit details pane",
+    );
+    expect(branchHandle).not.toBeNull();
+    expect(detailsHandle).not.toBeNull();
+    expect(renderComponent(branchHandle!).props.className).not.toContain("hidden");
+    (branchHandle?.props.onMove as ((delta: number) => void) | undefined)?.(224);
+    (detailsHandle?.props.onMove as ((delta: number) => void) | undefined)?.(-336);
+
+    notify?.(1120);
+    renderPanel();
+    flushEffects();
+    const shrunken = renderPanel();
+    const refsPane = componentElement(shrunken, "GitRefsPane");
+    const detailsPane = componentElement(shrunken, "CommitDetailsPane");
+    const refsWidth = (refsPane.props.style as { width: number }).width;
+    const detailsWidth = (detailsPane.props.style as { width: number }).width;
+
+    expect(refsWidth + detailsWidth).toBeLessThanOrEqual(784);
+  });
+
+  it("preserves wide pane widths through a narrow layout transition", () => {
+    let notify: ((width: number) => void) | undefined;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(
+          private readonly callback: (
+            entries: ReadonlyArray<{ contentRect: { width: number } }>,
+          ) => void,
+        ) {
+          notify = (width) => this.callback([{ contentRect: { width } }]);
+        }
+
+        disconnect() {}
+
+        observe() {
+          notify?.(1600);
+        }
+      },
+    );
+    historyState.pages.set(
+      undefined,
+      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
+    );
+
+    const initial = renderPanel();
+    (initial.props.ref as { current: object | null }).current = {};
+    flushEffects();
+    const expanded = renderPanel();
+    const branchHandle = visitElements(
+      expanded,
+      (element) =>
+        typeof element.type === "function" &&
+        element.type.name === "PaneResizeHandle" &&
+        element.props.label === "Resize branches pane",
+    );
+    const detailsHandle = visitElements(
+      expanded,
+      (element) =>
+        typeof element.type === "function" &&
+        element.type.name === "PaneResizeHandle" &&
+        element.props.label === "Resize commit details pane",
+    );
+    (branchHandle?.props.onMove as ((delta: number) => void) | undefined)?.(224);
+    (detailsHandle?.props.onMove as ((delta: number) => void) | undefined)?.(-336);
+
+    notify?.(1119);
+    renderPanel();
+    flushEffects();
+    notify?.(1600);
+    renderPanel();
+    flushEffects();
+    const restored = renderPanel();
+    const refsPane = componentElement(restored, "GitRefsPane");
+    const detailsPane = componentElement(restored, "CommitDetailsPane");
+
+    expect((refsPane.props.style as { width: number }).width).toBe(480);
+    expect((detailsPane.props.style as { width: number }).width).toBe(720);
   });
 
   it("filters history by commit message", () => {
@@ -1350,6 +1727,69 @@ describe("GitHistoryPanel", () => {
       (element) => typeof element.type === "function" && element.type.name === "CommitDiffView",
     );
     expect(diffView?.props).toMatchObject({ hash: historyCommit.hash, filePath: "src/panel.tsx" });
+  });
+
+  it("lets the diff load changed files beyond the first page", () => {
+    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    historyState.pages.set(undefined, page([historyCommit]));
+    historyState.commitDetails = { ...historyCommit, body: "" };
+    historyState.commitFiles = {
+      files: [{ status: "A", path: "first.ts" }],
+      isRepo: true,
+      nextCursor: "files-page-2",
+      hasMore: true,
+      capped: false,
+    };
+
+    const list = historyList(renderPanel());
+    const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
+    const selectCommit = visitElements(
+      historyRow,
+      (element) => element.props["data-commit-hash"] === historyCommit.hash,
+    );
+    (selectCommit?.props.onClick as (() => void) | undefined)?.();
+    renderPanel();
+    flushEffects();
+    const detailsPane = componentElement(renderPanel(), "CommitDetailsPane");
+    (detailsPane.props.onShowDiff as ((hash: string, filePath?: string) => void) | undefined)?.(
+      historyCommit.hash,
+    );
+
+    const diffView = componentElement(renderPanel(), "CommitDiffView");
+    expect(diffView.props).toMatchObject({ filesHasMore: true, filesLoading: false });
+    const diff = renderComponent(diffView);
+    const loadMore = visitElements(diff, (element) => element.props.children === "Load more files");
+
+    expect(loadMore).not.toBeNull();
+    expect(loadMore?.props.onClick).toBe(diffView.props.onLoadMoreFiles);
+  });
+
+  it("lets the diff retry a failed changed-file continuation", () => {
+    const retryFiles = vi.fn();
+    hooks.beginRender();
+    const diff = CommitDiffView({
+      hash: "aaaaaaaa11111111111111111111111111111111",
+      files: [{ status: "A", path: "first.ts" }],
+      filesError: true,
+      filesHasMore: true,
+      filesLoading: false,
+      diff: null,
+      truncated: false,
+      isPending: false,
+      error: null,
+      onBack: vi.fn(),
+      onSelectFile: vi.fn(),
+      onRetry: vi.fn(),
+      onLoadMoreFiles: vi.fn(),
+      onRetryFiles: retryFiles,
+    });
+    const retry = visitElements(
+      diff,
+      (element) => element.props.children === "Retry loading files",
+    );
+
+    expect(retry).not.toBeNull();
+    expect(retry?.props.onClick).toBe(retryFiles);
   });
 
   it("uses the returned changed-file cursor and accumulates its page", () => {

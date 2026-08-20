@@ -214,7 +214,7 @@ function IssueBrowserList({
   refreshPending: boolean;
   onRefreshConsumed: () => void;
 }) {
-  const typed = query.trim().slice(0, MAX_QUERY_LENGTH);
+  const typed = query.trim();
   // Searching asks the host, which takes a round trip, so the text is held for a moment before it
   // is sent — the same bargain the issues page makes.
   const sent = useDebouncedValue(typed, SEARCH_DEBOUNCE_MS);
@@ -443,15 +443,17 @@ function IssueBrowserList({
       }),
     [onSelect, projectId],
   );
+  const retainedDataError = listQuery.error !== null && listQuery.data !== null;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 px-2 py-2">
         <Input
           value={query}
+          maxLength={MAX_QUERY_LENGTH}
           aria-label="Search issues"
           placeholder="Search issues"
-          onChange={(event) => onQuery(event.target.value)}
+          onChange={(event) => onQuery(event.target.value.slice(0, MAX_QUERY_LENGTH))}
         />
         <div className="flex shrink-0 items-center gap-1">
           <IssueFiltersMenu
@@ -480,7 +482,12 @@ function IssueBrowserList({
           {entries.length === 0 && listQuery.isPending ? (
             <ListGhost rows={7} label="Loading issues" />
           ) : listQuery.error !== null && listQuery.data === null ? (
-            <p className="px-2 text-sm text-muted-foreground">{listQuery.error}</p>
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
+              <span>{listQuery.error}</span>
+              <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+                Retry
+              </Button>
+            </div>
           ) : entries.length === 0 ? (
             <div className="space-y-2 px-2">
               <p className="text-sm text-muted-foreground">
@@ -529,6 +536,14 @@ function IssueBrowserList({
               ) : null}
             </>
           )}
+          {retainedDataError ? (
+            <div className="flex items-center justify-between gap-3 rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
+              <span>The latest request failed. Showing the last issues loaded.</span>
+              <Button size="xs" variant="outline" onClick={() => listQuery.refresh()}>
+                Retry
+              </Button>
+            </div>
+          ) : null}
         </div>
       </ScrollArea>
     </div>

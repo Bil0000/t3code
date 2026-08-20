@@ -51,7 +51,7 @@ import {
   parsePullRequestQuery,
   pullRequestEntryKey,
   pullRequestEntryViewer,
-  pullRequestStatsTargets,
+  pullRequestStatsTargetsForSettledResults,
   prunePullRequestDiffStats,
   rankPullRequestMatches,
   type EnvironmentPullRequestEntry,
@@ -149,6 +149,7 @@ function ProjectPullRequests(props: PullRequestsPanelProps) {
               context="page"
               chromeVariant="collapse"
               onActed={() => setRefreshPending(true)}
+              onTitleSaved={() => setRefreshPending(true)}
               {...(props.onStateChange ? { onStateChange: props.onStateChange } : {})}
               {...(props.onOpenLinkedIssue ? { onOpenLinkedIssue: props.onOpenLinkedIssue } : {})}
               {...(props.composerDraftTarget
@@ -234,8 +235,11 @@ function PullRequestBrowserList({
   refreshPending: boolean;
   onRefreshConsumed: () => void;
 }) {
+  const [statsRefreshGeneration, setStatsRefreshGeneration] = useState(0);
+  const handledStatsRefreshGeneration = useRef(0);
   const typed = query.trim().slice(0, 200);
   const sent = useDebouncedValue(typed, SEARCH_DEBOUNCE_MS);
+  const querySettled = typed === sent;
   const typedParsed = useMemo(() => parsePullRequestQuery(typed), [typed]);
   const sentParsed = useMemo(() => parsePullRequestQuery(sent), [sent]);
   const requestFilters = useMemo(
@@ -326,15 +330,24 @@ function PullRequestBrowserList({
     typedParsed.text,
   ]);
 
-  const statsTargets = useMemo(() => pullRequestStatsTargets(entries), [entries]);
+  const statsTargets = useMemo(
+    () => pullRequestStatsTargetsForSettledResults(entries, querySettled, false),
+    [entries, querySettled],
+  );
+  const statsQuery = usePullRequestListStats(statsTargets);
   useEffect(() => {
     onStatsByRow((previous) => prunePullRequestDiffStats(previous, entries));
   }, [entries, onStatsByRow]);
-  const statsQuery = usePullRequestListStats(statsTargets);
   useEffect(() => {
-    if (statsQuery.stats === null) return;
-    onStatsByRow((previous) => mergePullRequestDiffStats(previous, statsQuery.stats ?? []));
+    const stats = statsQuery.stats;
+    if (stats === null) return;
+    onStatsByRow((previous) => mergePullRequestDiffStats(previous, stats));
   }, [onStatsByRow, statsQuery.stats]);
+  useEffect(() => {
+    if (handledStatsRefreshGeneration.current === statsRefreshGeneration) return;
+    handledStatsRefreshGeneration.current = statsRefreshGeneration;
+    statsQuery.refresh();
+  }, [handledStatsRefreshGeneration, statsQuery, statsRefreshGeneration]);
   const decorationCache = useRef<
     ReadonlyMap<EnvironmentPullRequestEntry, EnvironmentPullRequestEntry>
   >(new Map());
@@ -388,9 +401,9 @@ function PullRequestBrowserList({
     if (consumedRefresh.current) return;
     consumedRefresh.current = true;
     refreshList();
-    statsQuery.refresh();
+    setStatsRefreshGeneration((generation) => generation + 1);
     onRefreshConsumed();
-  }, [onRefreshConsumed, refreshList, refreshPending, statsQuery.refresh]);
+  }, [onRefreshConsumed, refreshList, refreshPending]);
 
   const sentinelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -440,8 +453,8 @@ function PullRequestBrowserList({
       setInvalidating(false);
     }
     refreshList();
-    statsQuery.refresh();
-  }, [environmentId, invalidate, refreshList, statsQuery.refresh]);
+    setStatsRefreshGeneration((generation) => generation + 1);
+  }, [environmentId, invalidate, refreshList]);
   const refreshing = invalidating || listQuery.isPending;
 
   return (
@@ -449,6 +462,7 @@ function PullRequestBrowserList({
       <div className="flex items-center gap-2 px-2 py-2">
         <Input
           value={query}
+          maxLength={200}
           aria-label="Search pull requests"
           placeholder="Search pull requests, or label:bug"
           onChange={(event) => onQuery(event.target.value)}

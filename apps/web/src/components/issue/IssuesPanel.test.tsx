@@ -5,6 +5,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 
+let searchedError: string | null = null;
+let searchedDataAvailable = true;
+
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   const { reactHookHarness } = await import("../../test/reactHookHarness");
@@ -64,15 +67,17 @@ vi.mock("~/state/query", () => ({
             truncated: false,
             nextCursors: {},
           }
-        : {
-            viewers: {},
-            providers: [{ kind: "github", host: "github.com", searchesOnHost: false }],
-            entries: [],
-            errors: [],
-            truncated: false,
-            nextCursors: {},
-          },
-    error: null,
+        : searchedDataAvailable
+          ? {
+              viewers: {},
+              providers: [{ kind: "github", host: "github.com", searchesOnHost: false }],
+              entries: [],
+              errors: [],
+              truncated: false,
+              nextCursors: {},
+            }
+          : null,
+    error: query === "searched" ? searchedError : null,
     isPending: false,
     refresh: () => undefined,
   }),
@@ -104,5 +109,29 @@ function renderSearch(query: string): string {
 describe("IssuesPanel", () => {
   it("keeps a title match when a locally searched host returns no remote matches", () => {
     expect(renderSearch("pointer cursors")).toContain(matchingIssue.title);
+  });
+
+  it("limits the visible search input to the query sent to the host", () => {
+    expect(renderSearch("")).toContain('maxLength="200"');
+  });
+
+  it("keeps retained rows actionable when loading the next slice fails", () => {
+    searchedError = "The host stopped responding";
+    const markup = renderSearch("pointer cursors");
+    searchedError = null;
+
+    expect(markup).toContain("The latest request failed. Showing the last issues loaded.");
+    expect(markup).toContain("Retry");
+  });
+
+  it("keeps Retry visible when a null failed continuation is filtered to zero rows", () => {
+    searchedError = "The host stopped responding";
+    searchedDataAvailable = false;
+    const markup = renderSearch("unmatched query");
+    searchedError = null;
+    searchedDataAvailable = true;
+
+    expect(markup).toContain("The host stopped responding");
+    expect(markup).toContain("Retry");
   });
 });

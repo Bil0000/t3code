@@ -157,6 +157,7 @@ export function IssueDetailPanel({
   refreshToken: forcedRefreshToken = 0,
   onActed,
   onStateChange,
+  onRefreshPendingChange,
   onOpenLinkedPullRequest,
   chromeVariant = "full",
 }: {
@@ -183,6 +184,7 @@ export function IssueDetailPanel({
     state: IssueState;
     stateReason: IssueCloseReason | null;
   }) => void;
+  onRefreshPendingChange?: (pending: boolean) => void;
   /**
    * Opens one of the change requests that reference this issue, as a peer tab beside it. Supplied
    * by whoever mounted the panel, because only they know which panel the tab belongs in; without
@@ -292,6 +294,17 @@ export function IssueDetailPanel({
   );
   const activityPending = activityQuery.isPending && activity === null;
   const activityError = activity === null ? activityQuery.error : null;
+  const [invalidating, setInvalidating] = useState(false);
+  const refreshPending = invalidating || detailQuery.isPending || activityQuery.isPending;
+  useEffect(() => {
+    onRefreshPendingChange?.(refreshPending);
+  }, [onRefreshPendingChange, refreshPending]);
+  useEffect(
+    () => () => {
+      onRefreshPendingChange?.(false);
+    },
+    [onRefreshPendingChange],
+  );
   const refreshDetail = useCallback(() => {
     detailQuery.refresh();
     activityQuery.refresh();
@@ -358,8 +371,13 @@ export function IssueDetailPanel({
   // and at worst answer from it.
   const invalidate = useAtomCommand(issueEnvironment.invalidate, { reportFailure: false });
   const refreshFromHost = useCallback(async () => {
-    await invalidate({ environmentId, input: { reference } });
-    refreshDetail();
+    setInvalidating(true);
+    try {
+      await invalidate({ environmentId, input: { reference } });
+      refreshDetail();
+    } finally {
+      setInvalidating(false);
+    }
   }, [environmentId, invalidate, reference, refreshDetail]);
   // A refresh asked for by the page, rather than by the menu item below.
   const appliedForcedToken = useRef(forcedRefreshToken);

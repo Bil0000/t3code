@@ -264,6 +264,17 @@ export function usePaginatedHistoryRefs(
   const connectionGeneration = connection?.phase === "connected" ? connection.generation : null;
   const [queryGeneration, setQueryGeneration] = useState(0);
   const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const refSearchKey = JSON.stringify([
+    target.environmentId,
+    target.cwd,
+    query,
+    limit,
+    namespace,
+    revision,
+    connectionGeneration,
+  ]);
+  const [refreshSearchKey, setRefreshSearchKey] = useState<string | null>(null);
+  const isRefreshRequest = refreshSearchKey === refSearchKey;
   const targetKey =
     target.environmentId !== null && target.cwd !== null
       ? JSON.stringify([
@@ -298,7 +309,7 @@ export function usePaginatedHistoryRefs(
                 limit,
                 queryGeneration: queryGeneration + revision,
                 namespace,
-                ...(refreshGeneration > 0 ? { refresh: true } : {}),
+                ...(cursor === undefined && isRefreshRequest ? { refresh: true } : {}),
               },
             }),
           )
@@ -310,6 +321,9 @@ export function usePaginatedHistoryRefs(
       queryGeneration,
       namespace,
       refreshGeneration,
+      refreshSearchKey,
+      refSearchKey,
+      isRefreshRequest,
       revision,
       target.cwd,
       target.environmentId,
@@ -358,8 +372,12 @@ export function usePaginatedHistoryRefs(
     recoveredSnapshotGeneration.current = effectiveQueryGeneration;
     setQueryGeneration((generation) => generation + 1);
     setRefreshGeneration((generation) => generation + 1);
+    setRefreshSearchKey(refSearchKey);
     setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  }, [effectiveQueryGeneration, expiredPage, targetKey]);
+  }, [effectiveQueryGeneration, expiredPage, refSearchKey, targetKey]);
+  useEffect(() => {
+    if (refreshSearchKey !== null && !isRefreshRequest) setRefreshSearchKey(null);
+  }, [isRefreshRequest, refreshSearchKey]);
   const isFetchingNextPage = isPaginatedBranchesNextPagePending(results);
   const error =
     failed?._tag === "Failure"
@@ -373,8 +391,9 @@ export function usePaginatedHistoryRefs(
   const refresh = useCallback(() => {
     setQueryGeneration((generation) => generation + 1);
     setRefreshGeneration((generation) => generation + 1);
+    setRefreshSearchKey(refSearchKey);
     setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
-  }, [targetKey]);
+  }, [refSearchKey, targetKey]);
   const retry = useCallback(() => {
     const failedIndex = results.findIndex((result) => result._tag === "Failure");
     const failedPageAtom = failedIndex === -1 ? undefined : pageAtoms[failedIndex];

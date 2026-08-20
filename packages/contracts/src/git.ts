@@ -7,6 +7,7 @@ const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 const GitFilePath = Schema.String.check(Schema.isNonEmpty());
 const GIT_LIST_BRANCHES_MAX_LIMIT = 200;
 const GIT_HISTORY_MAX_LIMIT = 200;
+const GIT_HISTORY_REVISION_MAX_LENGTH = 4096;
 const GitCommitHash = Schema.String.check(Schema.isPattern(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i));
 
 // Domain Types
@@ -164,7 +165,9 @@ export type VcsListHistoryRefsInput = typeof VcsListHistoryRefsInput.Type;
 
 export const VcsGetHistoryInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
-  revision: Schema.optional(TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(1024))),
+  revision: Schema.optional(
+    TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(GIT_HISTORY_REVISION_MAX_LENGTH)),
+  ),
   cursor: Schema.optional(TrimmedNonEmptyStringSchema),
   queryGeneration: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_HISTORY_MAX_LIMIT))),

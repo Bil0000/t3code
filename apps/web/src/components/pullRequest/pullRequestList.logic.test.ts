@@ -16,6 +16,7 @@ import {
   narrowPullRequestsToFilters,
   partitionPullRequestsWithPriority,
   pullRequestStatsTargets,
+  pullRequestStatsTargetsForSettledResults,
   pullRequestVisibleEntries,
   prunePullRequestDiffStats,
   readPullRequestListSnapshot,
@@ -508,6 +509,20 @@ describe("line counts that arrive after the rows", () => {
 });
 
 describe("line-count query targets", () => {
+  it("does not retarget line counts while the visible search is ahead of the sent query", () => {
+    const previousTargets = pullRequestStatsTargetsForSettledResults(
+      [entry({ number: 1 })],
+      true,
+      false,
+    );
+    const rapidTypingTargets = ["a", "ad", "add"].map((query) =>
+      pullRequestStatsTargetsForSettledResults([entry({ number: query.length + 1 })], false, false),
+    );
+
+    expect(previousTargets[0]?.input.refs.map((ref) => ref.number)).toEqual([1]);
+    expect(rapidTypingTargets).toEqual([[], [], []]);
+  });
+
   it("drops prior filter and page batches before a refresh", () => {
     const firstPage = pullRequestStatsTargets([entry({ number: 1 }), entry({ number: 2 })]);
     const currentFilter = pullRequestStatsTargets([

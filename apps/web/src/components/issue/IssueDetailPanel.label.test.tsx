@@ -6,13 +6,15 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { visitElements } from "../../test/reactElementTree";
 
+const effects: Array<() => void> = [];
+
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
   const { reactHookHarness } = await import("../../test/reactHookHarness");
   return {
     ...actual,
     useCallback: reactHookHarness.useCallback,
-    useEffect: () => undefined,
+    useEffect: (effect: () => void) => effects.push(effect),
     useLayoutEffect: () => undefined,
     useMemo: reactHookHarness.useMemo,
     useRef: reactHookHarness.useRef,
@@ -198,6 +200,7 @@ describe("IssueDetailPanel provider labels", () => {
   });
 
   it("renders Linear labels in the header, tooltips, menu, and aria attributes", () => {
+    effects.length = 0;
     hooks.reset();
     const panel = renderPanel();
     const menu = visitElements(panel, (element) => element.type === Menu);
@@ -217,5 +220,30 @@ describe("IssueDetailPanel provider labels", () => {
     // Base UI portals do not emit popup contents during SSR; the real open root still renders
     // here, while the MenuItem assertion above checks the child mounted in that root.
     expect(markup).toContain('aria-haspopup="menu"');
+  });
+
+  it("reports refreshed tab status", () => {
+    effects.length = 0;
+    const onStateChange = vi.fn();
+
+    IssueDetailPanel({
+      environmentId: "environment-1" as EnvironmentId,
+      reference: {
+        projectId: "project-1" as IssueDetail["projectId"],
+        repository: "acme/project",
+        number: 42,
+      },
+      handoffTarget: { kind: "new-thread" },
+      onStateChange,
+    });
+    effects.forEach((effect) => effect());
+
+    expect(onStateChange).toHaveBeenCalledWith({
+      projectId: "project-1",
+      repository: "acme/project",
+      number: 42,
+      state: "open",
+      stateReason: null,
+    });
   });
 });

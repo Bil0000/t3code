@@ -53,6 +53,8 @@ const REFS_PANE_MIN_WIDTH = 176;
 const REFS_PANE_MAX_WIDTH = 480;
 const DETAILS_PANE_MIN_WIDTH = 256;
 const DETAILS_PANE_MAX_WIDTH = 720;
+const HISTORY_CONTENT_MIN_WIDTH = 320;
+const PANE_RESIZE_HANDLE_TOTAL_WIDTH = 16;
 
 function isHistorySnapshotExpired(cause: Cause.Cause<unknown>): boolean {
   const error = Option.getOrNull(Cause.findErrorOption(cause));
@@ -103,25 +105,59 @@ export function nextCommitFilesRecoveryGeneration(input: {
     : null;
 }
 
-export function useWideHistoryLayout(panelRef: RefObject<HTMLElement | null>): boolean {
+function clampHistoryPaneWidths(input: {
+  readonly panelWidth: number;
+  readonly refsPaneWidth: number;
+  readonly detailsPaneWidth: number;
+}): { readonly refsPaneWidth: number; readonly detailsPaneWidth: number } {
+  const maxSidePaneWidth = Math.max(
+    REFS_PANE_MIN_WIDTH + DETAILS_PANE_MIN_WIDTH,
+    input.panelWidth - HISTORY_CONTENT_MIN_WIDTH - PANE_RESIZE_HANDLE_TOTAL_WIDTH,
+  );
+  const refsPaneWidth = Math.min(
+    Math.min(REFS_PANE_MAX_WIDTH, maxSidePaneWidth - DETAILS_PANE_MIN_WIDTH),
+    Math.max(REFS_PANE_MIN_WIDTH, input.refsPaneWidth),
+  );
+  const detailsPaneWidth = Math.min(
+    Math.min(DETAILS_PANE_MAX_WIDTH, maxSidePaneWidth - refsPaneWidth),
+    Math.max(DETAILS_PANE_MIN_WIDTH, input.detailsPaneWidth),
+  );
+  return { refsPaneWidth, detailsPaneWidth };
+}
+
+function useHistoryPanelLayout(
+  panelRef: RefObject<HTMLElement | null>,
+  onResize: (width: number) => void,
+): {
+  readonly isWide: boolean;
+  readonly widthRef: RefObject<number>;
+} {
+  const widthRef = useRef(Number.POSITIVE_INFINITY);
+  const onResizeRef = useRef(onResize);
   const [isWide, setIsWide] = useState(true);
+  onResizeRef.current = onResize;
 
   useEffect(() => {
     const panel = panelRef.current;
     if (!panel || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(([entry]) => {
-      setIsWide(isWideHistoryLayout(entry?.contentRect.width ?? 0));
+      const width = entry?.contentRect.width ?? 0;
+      const nextIsWide = isWideHistoryLayout(width);
+      if (nextIsWide !== isWideHistoryLayout(widthRef.current)) setIsWide(nextIsWide);
+      widthRef.current = width;
+      onResizeRef.current(width);
     });
     observer.observe(panel);
     return () => observer.disconnect();
   }, [panelRef]);
 
-  return isWide;
+  return { isWide, widthRef };
 }
 
 export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const panelRef = useRef<HTMLElement | null>(null);
-  const isWideLayout = useWideHistoryLayout(panelRef);
+  const refsPaneWidthRef = useRef(256);
+  const detailsPaneWidthRef = useRef(384);
   const interfaceFontSize = useClientSettings((settings) => settings.fontSizeInterface);
   const rowHeight = gitHistoryRowHeight(interfaceFontSize);
   const baseTargetKey = `${props.environmentId}:${props.cwd}`;
@@ -129,6 +165,32 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const connectionGeneration = connection?.phase === "connected" ? connection.generation : null;
   const [refsPaneWidth, setRefsPaneWidth] = useState(256);
   const [detailsPaneWidth, setDetailsPaneWidth] = useState(384);
+  const applyPaneWidths = (widths: {
+    readonly refsPaneWidth: number;
+    readonly detailsPaneWidth: number;
+  }) => {
+    if (widths.refsPaneWidth !== refsPaneWidthRef.current) {
+      refsPaneWidthRef.current = widths.refsPaneWidth;
+      setRefsPaneWidth(widths.refsPaneWidth);
+    }
+    if (widths.detailsPaneWidth !== detailsPaneWidthRef.current) {
+      detailsPaneWidthRef.current = widths.detailsPaneWidth;
+      setDetailsPaneWidth(widths.detailsPaneWidth);
+    }
+  };
+  const { isWide: isWideLayout, widthRef: panelWidthRef } = useHistoryPanelLayout(
+    panelRef,
+    (panelWidth) => {
+      if (!isWideHistoryLayout(panelWidth)) return;
+      applyPaneWidths(
+        clampHistoryPaneWidths({
+          panelWidth,
+          refsPaneWidth: refsPaneWidthRef.current,
+          detailsPaneWidth: detailsPaneWidthRef.current,
+        }),
+      );
+    },
+  );
   const [historyQueryGeneration, setHistoryQueryGeneration] = useState(0);
   const vcsHistoryRevision = useAtomValue(
     vcsEnvironment.historyRevisionAtom({ environmentId: props.environmentId, cwd: props.cwd }),
@@ -158,6 +220,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             }),
           ),
     [
+      connectionGeneration,
       cursors,
       historyQueryGeneration,
       props.cwd,
@@ -402,7 +465,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     setFilter("");
     setSelectedHash(null);
     setCommitDiffRequest(null);
-    setMobilePane(null);
+    setMobilePane((pane) => (pane === "details" ? null : pane));
   }, [targetKey]);
 
   useEffect(() => {
@@ -540,6 +603,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           hash={commitDiffRequest.hash}
           {...(commitDiffRequest.filePath ? { filePath: commitDiffRequest.filePath } : {})}
           files={selectedCommitFiles}
+          filesError={commitFilesQuery.error !== null}
+          filesHasMore={commitFilesHasMore}
+          filesLoading={commitFilesQuery.isPending}
           diff={commitDiffQuery.data?.diff ?? null}
           truncated={commitDiffQuery.data?.truncated ?? false}
           isPending={commitDiffQuery.isPending}
@@ -553,6 +619,8 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
             )
           }
           onRetry={commitDiffQuery.refresh}
+          onLoadMoreFiles={loadMoreCommitFiles}
+          onRetryFiles={() => void commitFilesQuery.refresh()}
         />
       ) : isInitialLoad ? (
         <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-muted-foreground">
@@ -594,11 +662,23 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
               min={REFS_PANE_MIN_WIDTH}
               max={REFS_PANE_MAX_WIDTH}
               onMove={(delta) =>
-                setRefsPaneWidth((width) =>
-                  Math.min(REFS_PANE_MAX_WIDTH, Math.max(REFS_PANE_MIN_WIDTH, width + delta)),
+                applyPaneWidths(
+                  clampHistoryPaneWidths({
+                    panelWidth: panelWidthRef.current,
+                    refsPaneWidth: refsPaneWidthRef.current + delta,
+                    detailsPaneWidth: detailsPaneWidthRef.current,
+                  }),
                 )
               }
-              onReset={() => setRefsPaneWidth(256)}
+              onReset={() =>
+                applyPaneWidths(
+                  clampHistoryPaneWidths({
+                    panelWidth: panelWidthRef.current,
+                    refsPaneWidth: 256,
+                    detailsPaneWidth: detailsPaneWidthRef.current,
+                  }),
+                )
+              }
             />
           ) : null}
           <div
@@ -723,11 +803,23 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
               min={DETAILS_PANE_MIN_WIDTH}
               max={DETAILS_PANE_MAX_WIDTH}
               onMove={(delta) =>
-                setDetailsPaneWidth((width) =>
-                  Math.min(DETAILS_PANE_MAX_WIDTH, Math.max(DETAILS_PANE_MIN_WIDTH, width - delta)),
+                applyPaneWidths(
+                  clampHistoryPaneWidths({
+                    panelWidth: panelWidthRef.current,
+                    refsPaneWidth: refsPaneWidthRef.current,
+                    detailsPaneWidth: detailsPaneWidthRef.current - delta,
+                  }),
                 )
               }
-              onReset={() => setDetailsPaneWidth(384)}
+              onReset={() =>
+                applyPaneWidths(
+                  clampHistoryPaneWidths({
+                    panelWidth: panelWidthRef.current,
+                    refsPaneWidth: refsPaneWidthRef.current,
+                    detailsPaneWidth: 384,
+                  }),
+                )
+              }
             />
           ) : null}
           {isWideLayout ? (

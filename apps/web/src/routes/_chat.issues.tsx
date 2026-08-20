@@ -597,10 +597,13 @@ function IssuesRouteView() {
   // happens to be theirs: the list and whatever the panel is showing. The panel owns its own
   // reads, so it is told to redo them rather than reached into.
   const [detailRefreshToken, setDetailRefreshToken] = useState(0);
+  const [detailRefreshPending, setDetailRefreshPending] = useState(false);
+  const [refreshAwaiting, setRefreshAwaiting] = useState(false);
   // The queries only go pending once the invalidation has come back, so refreshing is tracked
   // from the first moment rather than the second: a button that stays live through the slow half
   // of its own work is a button that gets pressed again, and buys the whole cascade twice.
   const [invalidating, setInvalidating] = useState(false);
+  const refreshAwaitingRef = useRef(false);
   const invalidateHost = async () => {
     setInvalidating(true);
     try {
@@ -611,15 +614,37 @@ function IssuesRouteView() {
       setInvalidating(false);
     }
   };
-  const refreshFromHost = async () => {
-    await invalidateHost();
-    refreshList();
-    baselineQuery.refresh();
-    authoredQuery.refresh();
-    assignedQuery.refresh();
-    setDetailRefreshToken((token) => token + 1);
+  const refreshFromHost = () => {
+    if (refreshAwaitingRef.current) return Promise.resolve();
+    refreshAwaitingRef.current = true;
+    setRefreshAwaiting(true);
+    return invalidateHost().then(() => {
+      if (sentCursors === null) {
+        (baselineVisible ? baselineQuery : listQuery).refresh();
+        if (!baselineVisible) baselineQuery.refresh();
+      } else {
+        refreshList();
+        baselineQuery.refresh();
+      }
+      authoredQuery.refresh();
+      assignedQuery.refresh();
+      setDetailRefreshToken((token) => token + 1);
+    });
   };
-  const refreshing = invalidating || listQuery.isPending;
+  const refreshReadsPending =
+    invalidating ||
+    listQuery.isPending ||
+    baselineQuery.isPending ||
+    authoredQuery.isPending ||
+    assignedQuery.isPending ||
+    (activeSurface?.kind === "issue" && detailRefreshPending) ||
+    (activeSurface?.kind === "pull-request" && detailRefreshPending);
+  useEffect(() => {
+    if (!refreshAwaiting || refreshReadsPending) return;
+    refreshAwaitingRef.current = false;
+    setRefreshAwaiting(false);
+  }, [refreshAwaiting, refreshReadsPending]);
+  const refreshing = refreshAwaiting || refreshReadsPending;
 
   // Every page size and every search is its own query, and a new one starts empty. The last
   // answer for these filters is held so the page grows and narrows in place rather than blanking
@@ -1467,6 +1492,7 @@ function IssuesRouteView() {
                   number: activeSurface.number,
                 }}
                 refreshToken={detailRefreshToken}
+                onRefreshPendingChange={setDetailRefreshPending}
                 // Merging or closing one of these can close the issue it was opened from, so the
                 // list behind it is out of date the moment the host takes the action.
                 onActed={() => {
@@ -1510,6 +1536,7 @@ function IssuesRouteView() {
                   number: activeSurface.number,
                 }}
                 refreshToken={detailRefreshToken}
+                onRefreshPendingChange={setDetailRefreshPending}
                 // There is no thread behind this panel, so handing an issue to an agent starts
                 // one rather than continuing whatever the reader last had open.
                 handoffTarget={{ kind: "new-thread" }}

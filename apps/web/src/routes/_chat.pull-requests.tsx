@@ -39,7 +39,7 @@ import {
   partitionPullRequestsWithPriority,
   pullRequestEntryKey,
   pullRequestEntryViewer,
-  pullRequestStatsTargets,
+  pullRequestStatsTargetsForSettledResults,
   pullRequestVisibleEntries,
   prunePullRequestDiffStats,
   rankPullRequestMatches,
@@ -1173,7 +1173,10 @@ function PullRequestsRouteView() {
   ]);
   const visibleEntries = useMemo(() => pullRequestVisibleEntries(visibleGroups), [visibleGroups]);
   const [statsByRow, setStatsByRow] = useState<PullRequestDiffStats>(() => new Map());
-  const statsTargets = useMemo(() => pullRequestStatsTargets(visibleEntries), [visibleEntries]);
+  const statsTargets = useMemo(
+    () => pullRequestStatsTargetsForSettledResults(visibleEntries, querySettled, showingCarried),
+    [querySettled, showingCarried, visibleEntries],
+  );
   useEffect(() => {
     setStatsByRow((previous) => prunePullRequestDiffStats(previous, visibleEntries));
   }, [visibleEntries]);
@@ -1726,6 +1729,7 @@ function PullRequestsRouteView() {
                   reviewingQuery.refresh();
                   statsQuery.refresh();
                 }}
+                onTitleSaved={refreshList}
                 onStateChange={handlePullRequestTabStatusChange}
                 // The issue a change request closes is read beside it, as a peer tab in this
                 // page's own panel: leaving for the issues page would take the change request

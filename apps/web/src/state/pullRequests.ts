@@ -4,10 +4,11 @@ import type {
   EnvironmentId,
   PullRequestListInput,
   PullRequestListStatsInput,
+  PullRequestListStatsResult,
 } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { connectionAtomRuntime } from "../connection/runtime";
 import { appAtomRegistry } from "../rpc/atomRegistry";
@@ -87,11 +88,6 @@ const usePullRequestListsQuery = createMergedEnvironmentQuery(
   pullRequestEnvironment.list,
 );
 
-const usePullRequestStatsQuery = createMergedEnvironmentQuery(
-  "web-pull-requests:list-stats",
-  pullRequestEnvironment.listStats,
-);
-
 export interface MergedPullRequestListView {
   readonly data: MergedPullRequestList | null;
   readonly error: string | null;
@@ -115,15 +111,43 @@ export function usePullRequestListStats(
   readonly stats: ReadonlyArray<EnvironmentPullRequestStat> | null;
   readonly refresh: () => void;
 } {
-  const query = usePullRequestStatsQuery(targets);
+  const [results, setResults] = useState<
+    ReadonlyMap<number, readonly [EnvironmentId, PullRequestListStatsResult]>
+  >(() => new Map());
+  useEffect(() => {
+    setResults(new Map());
+    const subscriptions = targets.map((target, index) => {
+      const atom = pullRequestEnvironment.listStats(target);
+      const update = (result: AsyncResult.AsyncResult<PullRequestListStatsResult, unknown>) => {
+        const value = Option.getOrNull(AsyncResult.value(result));
+        if (value === null) return;
+        setResults((previous) => {
+          const next = new Map(previous);
+          next.set(index, [target.environmentId, value]);
+          return next;
+        });
+      };
+      const unsubscribe = appAtomRegistry.subscribe(atom, update);
+      update(appAtomRegistry.get(atom));
+      return unsubscribe;
+    });
+    return () => {
+      for (const unsubscribe of subscriptions) unsubscribe();
+    };
+  }, [targets]);
   const stats = useMemo(
     () =>
-      query.values.length === 0
+      results.size === 0
         ? null
-        : query.values.flatMap(([environmentId, result]) =>
+        : [...results.values()].flatMap(([environmentId, result]) =>
             result.stats.map((stat) => ({ ...stat, environmentId })),
           ),
-    [query.values],
+    [results],
   );
-  return { stats, refresh: query.refresh };
+  const refresh = useCallback(() => {
+    for (const target of targets) {
+      appAtomRegistry.refresh(pullRequestEnvironment.listStats(target));
+    }
+  }, [targets]);
+  return { stats, refresh };
 }
