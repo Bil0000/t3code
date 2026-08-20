@@ -122,7 +122,7 @@ export const make = Effect.gen(function* () {
     new IssueProviderError({
       provider: "linear",
       operation,
-      reason: error.reason === "account-required" ? "failed" : error.reason,
+      reason: error.reason,
       detail: error.detail,
       cause: error,
     });

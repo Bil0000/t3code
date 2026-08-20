@@ -225,8 +225,8 @@ it.effect("does not disconnect an environment token through an old empty request
   return Effect.gen(function* () {
     const error = yield* Effect.flip(disconnectLinearAccount(undefined));
 
-    assert.strictEqual(error._tag, "LinearApiError");
-    if (error._tag !== "LinearApiError") return;
+    assert.strictEqual(error._tag, "LinearAccountSelectionRequiredError");
+    if (error._tag !== "LinearAccountSelectionRequiredError") return;
     assert.strictEqual(error.detail, "Choose the Linear account to disconnect.");
     assert.isFalse(disconnected);
     const settings = yield* ServerSettings.ServerSettingsService;
@@ -512,8 +512,31 @@ it.effect("rejects project bindings outside the selected saved account", () => {
         binding: { credentialId: "user-1", teamKey: "OPS" },
       }),
     );
+    const unavailableAccount = yield* Effect.flip(
+      setLinearProjectBinding({
+        projectId: PROJECT_ID,
+        binding: { credentialId: "user-3", teamKey: "ENG" },
+      }).pipe(
+        Effect.provideService(
+          LinearApi.LinearApi,
+          LinearApi.LinearApi.of({
+            connection: Effect.succeed({
+              ...connection("user-3"),
+              accounts: [
+                {
+                  ...account("user-3"),
+                  status: "unverified",
+                  teams: [{ id: "team-1", key: "ENG", name: "Engineering" }],
+                },
+              ],
+            }),
+          } as unknown as LinearApi.LinearApi["Service"]),
+        ),
+      ),
+    );
     assert.strictEqual(invalidCredential._tag, "LinearApiError");
     assert.strictEqual(invalidTeam._tag, "LinearApiError");
+    assert.strictEqual(unavailableAccount._tag, "LinearApiError");
 
     const settings = yield* ServerSettings.ServerSettingsService;
     assert.deepStrictEqual((yield* settings.getSettings).issueTracking.linear.projectBindings, {});
@@ -1235,8 +1258,10 @@ it.effect("requires a credential for an old disconnect call when accounts are am
 
   return Effect.gen(function* () {
     const error = yield* Effect.flip(disconnectLinearAccount(undefined));
-    assert.strictEqual(error._tag, "LinearApiError");
-    if (error._tag === "LinearApiError") assert.match(error.detail, /choose.*account/i);
+    assert.strictEqual(error._tag, "LinearAccountSelectionRequiredError");
+    if (error._tag === "LinearAccountSelectionRequiredError") {
+      assert.match(error.detail, /choose.*account/i);
+    }
   }).pipe(
     Effect.provide(
       Layer.mergeAll(Layer.succeed(LinearApi.LinearApi, api), ServerSettings.layerTest()),

@@ -284,7 +284,7 @@ export const setLinearProjectBinding = (input: LinearSetProjectBindingInput) =>
         const account = connection.accounts.find(
           ({ credentialId }) => credentialId === binding.credentialId,
         );
-        if (account === undefined) {
+        if (account === undefined || account.status !== "authenticated") {
           return yield* new LinearApi.LinearApiError({
             operation: "setProjectBinding",
             reason: "failed",
@@ -384,10 +384,7 @@ export const disconnectLinearAccount = (input: LinearDisconnectInput) =>
         );
       }
       if (credentialId === undefined) {
-        return yield* new LinearApi.LinearApiError({
-          operation: "disconnect",
-          reason: "account-required",
-        });
+        return yield* new LinearApi.LinearAccountSelectionRequiredError();
       }
 
       const removals = clearCredentialBindings(

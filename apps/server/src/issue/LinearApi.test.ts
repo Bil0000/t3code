@@ -386,7 +386,7 @@ it.effect("probes a new key before appending a second saved account", () => {
   }).pipe(Effect.provide(test.layer));
 });
 
-it.effect("retains a legacy key and aborts connect when legacy verification fails", () => {
+it.effect("replaces an invalid legacy key with a valid submitted key", () => {
   const { layer, values, requests } = makeLayer({
     token: "lin_api_legacy",
     response: (_body, authorization) => ({
@@ -400,16 +400,17 @@ it.effect("retains a legacy key and aborts connect when legacy verification fail
   return Effect.gen(function* () {
     const api = yield* LinearApi.LinearApi;
 
-    yield* Effect.flip(api.connect("lin_api_two"));
+    const result = yield* api.connect("lin_api_two");
 
-    assert.strictEqual(
-      new TextDecoder().decode(values.get(LinearApi.LINEAR_API_TOKEN_SECRET)),
-      "lin_api_legacy",
-    );
-    assert.strictEqual(values.has(LinearApi.LINEAR_CREDENTIALS_SECRET), false);
+    assert.strictEqual(result.connectedCredentialId, "user-2");
+    assert.strictEqual(values.has(LinearApi.LINEAR_API_TOKEN_SECRET), false);
     assert.deepStrictEqual(
+      decodeJson(new TextDecoder().decode(values.get(LinearApi.LINEAR_CREDENTIALS_SECRET))),
+      decodeJson(pool(["user-2", "lin_api_two"])),
+    );
+    assert.include(
       requests.map(({ authorization }) => authorization),
-      ["lin_api_legacy"],
+      "lin_api_two",
     );
   }).pipe(Effect.provide(layer));
 });

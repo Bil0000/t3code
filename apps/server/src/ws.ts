@@ -437,10 +437,19 @@ const makeWsRpcLayer = (
       const relayClient = yield* RelayClient.RelayClient;
       const issueTrackingError =
         (operation: IssueTrackingError["operation"], settingsDetail: string) =>
-        (error: LinearApi.LinearApiError | ServerSettingsError) =>
+        (
+          error:
+            | LinearApi.LinearApiError
+            | LinearApi.LinearAccountSelectionRequiredError
+            | ServerSettingsError,
+        ) =>
           new IssueTrackingError({
             operation,
-            detail: LinearApi.isLinearApiError(error) ? error.detail : settingsDetail,
+            detail:
+              LinearApi.isLinearApiError(error) ||
+              LinearApi.isLinearAccountSelectionRequiredError(error)
+                ? error.detail
+                : settingsDetail,
             cause: error,
           });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>

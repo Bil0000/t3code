@@ -181,14 +181,19 @@ const COMMENT_REACTIONS_QUERY = `query T3LinearCommentReactions($id: String!) {
 
 export class LinearApiError extends Schema.TaggedErrorClass<LinearApiError>()("LinearApiError", {
   operation: Schema.String,
-  reason: Schema.Literals(["unauthenticated", "account-required", "failed"]),
+  reason: Schema.Literals(["unauthenticated", "failed"]),
+  status: Schema.optional(Schema.Int),
+  identifier: Schema.optional(Schema.String),
+  connectedAccounts: Schema.optional(Schema.Int),
   cause: Schema.optional(Schema.Defect()),
 }) {
   get detail(): string {
     if (this.reason === "unauthenticated") {
       return `Linear authentication failed during ${this.operation}.`;
     }
-    if (this.reason === "account-required") return "Choose the Linear account to disconnect.";
+    if (this.status !== undefined)
+      return `Linear ${this.operation} failed with HTTP ${this.status}.`;
+    if (this.identifier !== undefined) return `Linear issue ${this.identifier} was not found.`;
     return `Linear ${this.operation} failed.`;
   }
 
@@ -197,6 +202,18 @@ export class LinearApiError extends Schema.TaggedErrorClass<LinearApiError>()("L
   }
 }
 export const isLinearApiError = Schema.is(LinearApiError);
+
+export class LinearAccountSelectionRequiredError extends Schema.TaggedErrorClass<LinearAccountSelectionRequiredError>()(
+  "LinearAccountSelectionRequiredError",
+  {},
+) {
+  readonly detail = "Choose the Linear account to disconnect.";
+
+  override get message(): string {
+    return this.detail;
+  }
+}
+export const isLinearAccountSelectionRequiredError = Schema.is(LinearAccountSelectionRequiredError);
 
 export type LinearUser = typeof User.Type;
 export type LinearIssue = typeof Issue.Type;
@@ -218,7 +235,7 @@ export class LinearApi extends Context.Service<
     readonly connect: (token: string) => Effect.Effect<LinearConnectResult, LinearApiError>;
     readonly disconnect: (input?: {
       readonly credentialId: string;
-    }) => Effect.Effect<LinearConnection, LinearApiError>;
+    }) => Effect.Effect<LinearConnection, LinearApiError | LinearAccountSelectionRequiredError>;
     readonly getViewer: (input: {
       readonly credentialId?: string;
     }) => Effect.Effect<LinearUser, LinearApiError>;
@@ -373,7 +390,7 @@ export const make = Effect.gen(function* () {
                   new LinearApiError({
                     operation,
                     reason: "failed",
-                    cause: { status: response.status },
+                    status: response.status,
                   }),
                 )
               : HttpClientResponse.schemaBodyJson(schema)(response).pipe(
@@ -416,7 +433,7 @@ export const make = Effect.gen(function* () {
                 new LinearApiError({
                   operation: "select-account",
                   reason: "unauthenticated",
-                  cause: { connectedAccounts: credentials.length },
+                  connectedAccounts: credentials.length,
                 }),
               );
             }),
@@ -595,7 +612,7 @@ export const make = Effect.gen(function* () {
           new LinearApiError({
             operation: "getIssue",
             reason: "failed",
-            cause: { identifier },
+            identifier,
           }),
         )
       : Effect.succeed(issue);
@@ -624,8 +641,17 @@ export const make = Effect.gen(function* () {
           const credentials = [...(yield* storedCredentials)];
           const legacy = yield* storedToken;
           if (credentials.length === 0 && Option.isSome(legacy)) {
-            const account = yield* probeToken(legacy.value);
-            credentials.push({ credentialId: account.credentialId, token: legacy.value });
+            const account = yield* probeToken(legacy.value).pipe(
+              Effect.catchTags({
+                LinearApiError: (error) =>
+                  error.reason === "unauthenticated"
+                    ? Effect.succeed(undefined)
+                    : Effect.fail(error),
+              }),
+            );
+            if (account !== undefined) {
+              credentials.push({ credentialId: account.credentialId, token: legacy.value });
+            }
           }
 
           const token = value.trim();
@@ -649,10 +675,7 @@ export const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const credentials = yield* storedCredentials;
           if (input === undefined && credentials.length > 1) {
-            return yield* new LinearApiError({
-              operation: "disconnect",
-              reason: "account-required",
-            });
+            return yield* new LinearAccountSelectionRequiredError();
           }
           const credentialId =
             input?.credentialId ??
