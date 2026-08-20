@@ -11,6 +11,7 @@ import {
   VcsGetHistoryInput,
   VcsGetCommitDiffInput,
   VcsGetCommitDetailsInput,
+  VcsListCommitFilesInput,
   VcsListCommitFilesResult,
   VcsStatusResult,
   VcsListHistoryRefsInput,
@@ -32,6 +33,7 @@ const decodeListHistoryRefsInput = Schema.decodeUnknownSync(VcsListHistoryRefsIn
 const decodeCommitDetailsInput = Schema.decodeUnknownSync(VcsGetCommitDetailsInput);
 const decodeCommitDiffInput = Schema.decodeUnknownSync(VcsGetCommitDiffInput);
 const decodeListCommitFilesResult = Schema.decodeUnknownSync(VcsListCommitFilesResult);
+const decodeListCommitFilesInput = Schema.decodeUnknownSync(VcsListCommitFilesInput);
 const decodeStatusResult = Schema.decodeUnknownSync(VcsStatusResult);
 const decodeGetHistoryResult = Schema.decodeUnknownSync(VcsGetHistoryResult);
 const decodeGetHistoryInput = Schema.decodeUnknownSync(VcsGetHistoryInput);
@@ -130,6 +132,24 @@ describe("Git file path contracts", () => {
 });
 
 describe("Git history results", () => {
+  it("does not expose client cache generations in History RPC inputs", () => {
+    expect(decodeListHistoryRefsInput({ cwd: "/repo", queryGeneration: 1 })).not.toHaveProperty(
+      "queryGeneration",
+    );
+    expect(decodeGetHistoryInput({ cwd: "/repo", queryGeneration: 1 })).not.toHaveProperty(
+      "queryGeneration",
+    );
+    expect(
+      decodeCommitDetailsInput({ cwd: "/repo", hash: "a".repeat(40), queryGeneration: 1 }),
+    ).not.toHaveProperty("queryGeneration");
+    expect(
+      decodeListCommitFilesInput({ cwd: "/repo", hash: "a".repeat(40), queryGeneration: 1 }),
+    ).not.toHaveProperty("queryGeneration");
+    expect(
+      decodeCommitDiffInput({ cwd: "/repo", hash: "a".repeat(40), queryGeneration: 1 }),
+    ).not.toHaveProperty("queryGeneration");
+  });
+
   it("round-trips a listed ref name into a bounded history revision", () => {
     const refName = `refs/heads/${"nested/".repeat(180)}feature`;
     const listed = decodeListHistoryRefsResult({

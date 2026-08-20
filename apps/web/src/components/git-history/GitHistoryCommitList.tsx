@@ -10,10 +10,7 @@ import {
 import * as Cause from "effect/Cause";
 
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
-import {
-  MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW,
-  type GitHistoryGraphRow,
-} from "../../lib/gitHistoryGraph";
+import type { GitHistoryGraphRow } from "../../lib/gitHistoryGraph";
 import { cn } from "../../lib/utils";
 import { reportCommitHashCopyFailure } from "./gitHistoryClipboard";
 import type { CommitRefKind, GitHistoryRow } from "./GitHistoryVisualTypes";
@@ -191,7 +188,7 @@ function GraphCell(props: {
     (width - GRAPH_HORIZONTAL_PADDING * 2) / Math.max(props.laneCount, 1),
   );
   const x = (lane: number) => lane * laneWidth + GRAPH_HORIZONTAL_PADDING + laneWidth / 2;
-  const edges = props.graph.edges.slice(0, MAX_GIT_HISTORY_GRAPH_EDGES_PER_ROW);
+  const { edges } = props.graph;
   return (
     <div
       aria-hidden="true"

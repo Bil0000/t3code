@@ -156,7 +156,6 @@ export const VcsListHistoryRefsInput = Schema.Struct({
   cursor: Schema.optional(TrimmedNonEmptyStringSchema),
   namespace: Schema.optional(Schema.Literals(["local", "remote", "tag"])),
   refresh: Schema.optional(Schema.Boolean),
-  queryGeneration: Schema.optional(NonNegativeInt),
   limit: Schema.optional(
     PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_LIST_BRANCHES_MAX_LIMIT)),
   ),
@@ -169,7 +168,6 @@ export const VcsGetHistoryInput = Schema.Struct({
     TrimmedNonEmptyStringSchema.check(Schema.isMaxLength(GIT_HISTORY_REVISION_MAX_LENGTH)),
   ),
   cursor: Schema.optional(TrimmedNonEmptyStringSchema),
-  queryGeneration: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(GIT_HISTORY_MAX_LIMIT))),
 });
 export type VcsGetHistoryInput = typeof VcsGetHistoryInput.Type;
@@ -177,7 +175,6 @@ export type VcsGetHistoryInput = typeof VcsGetHistoryInput.Type;
 export const VcsGetCommitDetailsInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   hash: GitCommitHash,
-  queryGeneration: Schema.optional(NonNegativeInt),
 });
 export type VcsGetCommitDetailsInput = typeof VcsGetCommitDetailsInput.Type;
 
@@ -185,7 +182,6 @@ export const VcsListCommitFilesInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   hash: GitCommitHash,
   cursor: Schema.optional(TrimmedNonEmptyStringSchema),
-  queryGeneration: Schema.optional(NonNegativeInt),
   limit: Schema.optional(PositiveInt.check(Schema.isLessThanOrEqualTo(100))),
 });
 export type VcsListCommitFilesInput = typeof VcsListCommitFilesInput.Type;
@@ -194,7 +190,6 @@ export const VcsGetCommitDiffInput = Schema.Struct({
   cwd: TrimmedNonEmptyStringSchema,
   hash: GitCommitHash,
   filePath: Schema.optional(GitFilePath),
-  queryGeneration: Schema.optional(NonNegativeInt),
   ignoreWhitespace: Schema.optionalKey(Schema.Boolean),
 });
 export type VcsGetCommitDiffInput = typeof VcsGetCommitDiffInput.Type;

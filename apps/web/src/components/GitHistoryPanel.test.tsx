@@ -197,19 +197,6 @@ vi.mock("../state/queries", () => ({
 vi.mock("../state/query", () => ({
   useEnvironmentQuery: (target: { readonly kind?: string } | null) => {
     const base = { error: null, errorCause: null, isPending: false, refresh: vi.fn() };
-    if (target?.kind === "refs") {
-      return {
-        ...base,
-        data: {
-          refs: historyState.refs,
-          tags: historyState.tags,
-          isRepo: true,
-          hasPrimaryRemote: false,
-          nextCursor: null,
-          totalCount: historyState.refs.length,
-        },
-      };
-    }
     if (target?.kind === "status") return { ...base, data: historyState.status };
     if (target?.kind === "commit-details")
       return { ...base, data: { commit: historyState.commitDetails } };
@@ -252,7 +239,6 @@ vi.mock("../state/vcs", () => ({
       historyState.getCommitDiff(target);
       return { kind: "commit-diff" };
     },
-    listRefs: () => ({ kind: "refs" }),
     status: () => ({ kind: "status" }),
   },
 }));
@@ -265,8 +251,14 @@ import {
 } from "./GitHistoryPanel";
 import GitHistoryPanel from "./GitHistoryPanel";
 import { CommitDiffView } from "./git-history/GitHistoryCommitDiff";
+import { PaneResizeHandle } from "./git-history/GitHistoryPaneResizeHandle";
 
 const environmentId = EnvironmentId.make("environment-local");
+const workspacePath = "C:/workspace";
+const historyPageSize = 100;
+const primaryCommitHash = "aaaaaaaa11111111111111111111111111111111";
+const secondaryCommitHash = "bbbbbbbb22222222222222222222222222222222";
+const newestMatchingCommitHash = "cccccccc33333333333333333333333333333333";
 
 function commit(hash: string, subject: string, authorName = "Ada Lovelace"): GitHistoryCommit {
   return {
@@ -341,7 +333,7 @@ function renderPanel(issueUrlPrefix?: string): ReactElement<Record<string, unkno
   effectQueue.cursor = 0;
   return GitHistoryPanel({
     environmentId,
-    cwd: "C:/workspace",
+    cwd: workspacePath,
     ...(issueUrlPrefix ? { issueUrlPrefix } : {}),
   }) as ReactElement<Record<string, unknown>>;
 }
@@ -349,6 +341,25 @@ function renderPanel(issueUrlPrefix?: string): ReactElement<Record<string, unkno
 function flushEffects(): void {
   const effects = effectQueue.effects.splice(0);
   for (const effect of effects) effect();
+}
+
+function stubResizeObserver(initialWidth: number): (width: number) => void {
+  let notify: ((width: number) => void) | undefined;
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: (entries: ReadonlyArray<{ contentRect: { width: number } }>) => void) {
+        notify = (width) => callback([{ contentRect: { width } }]);
+      }
+
+      disconnect() {}
+
+      observe() {
+        notify?.(initialWidth);
+      }
+    },
+  );
+  return (width) => notify?.(width);
 }
 
 function historyList(panel: ReactElement<Record<string, unknown>>) {
@@ -474,10 +485,7 @@ describe("GitHistoryPanel", () => {
   });
 
   it("restarts history after the environment connection generation changes", () => {
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
-    );
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
 
     renderPanel();
     historyState.getHistory.mockClear();
@@ -486,32 +494,15 @@ describe("GitHistoryPanel", () => {
     renderPanel();
 
     expect(historyState.getHistory).toHaveBeenCalledWith({
+      cacheKey: 0,
       environmentId,
-      input: { cwd: "C:/workspace", limit: 100, queryGeneration: 0 },
+      input: { cwd: workspacePath, limit: historyPageSize },
     });
   });
 
   it("keeps the narrow branches sheet open when the history target rekeys", () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(
-          private readonly callback: (
-            entries: ReadonlyArray<{ contentRect: { width: number } }>,
-          ) => void,
-        ) {}
-
-        disconnect() {}
-
-        observe() {
-          this.callback([{ contentRect: { width: 539 } }]);
-        }
-      },
-    );
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
-    );
+    stubResizeObserver(539);
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
 
     const initial = renderPanel();
     (initial.props.ref as { current: object | null }).current = {};
@@ -536,23 +527,8 @@ describe("GitHistoryPanel", () => {
   });
 
   it("closes the narrow details sheet when the history target rekeys", () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(
-          private readonly callback: (
-            entries: ReadonlyArray<{ contentRect: { width: number } }>,
-          ) => void,
-        ) {}
-
-        disconnect() {}
-
-        observe() {
-          this.callback([{ contentRect: { width: 539 } }]);
-        }
-      },
-    );
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Initial");
+    stubResizeObserver(539);
+    const historyCommit = commit(primaryCommitHash, "Initial");
     historyState.pages.set(undefined, page([historyCommit]));
 
     const initial = renderPanel();
@@ -587,7 +563,7 @@ describe("GitHistoryPanel", () => {
   it("restarts the first history page after a typed continuation expiry", () => {
     historyState.pages.set(
       undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "First")], {
+      page([commit(primaryCommitHash, "First")], {
         hasMore: true,
         nextCursor: "history-page-2",
       }),
@@ -600,18 +576,21 @@ describe("GitHistoryPanel", () => {
     flushEffects();
     renderPanel();
 
-    const requests = historyState.getHistory.mock.calls.map(([target]) => target.input);
+    const requests = historyState.getHistory.mock.calls.map(([target]) => target);
     expect(requests).toContainEqual({
-      cwd: "C:/workspace",
-      cursor: "history-page-2",
-      limit: 100,
-      queryGeneration: 0,
+      cacheKey: 0,
+      environmentId,
+      input: { cwd: workspacePath, cursor: "history-page-2", limit: historyPageSize },
     });
-    expect(requests.at(-1)).toEqual({ cwd: "C:/workspace", limit: 100, queryGeneration: 1 });
+    expect(requests.at(-1)).toEqual({
+      cacheKey: 1,
+      environmentId,
+      input: { cwd: workspacePath, limit: historyPageSize },
+    });
   });
 
   it("recovers a second continuation expiry once after a successful recovery", () => {
-    const firstPage = page([commit("aaaaaaaa11111111111111111111111111111111", "First")], {
+    const firstPage = page([commit(primaryCommitHash, "First")], {
       hasMore: true,
       nextCursor: "history-page-2",
     });
@@ -634,16 +613,14 @@ describe("GitHistoryPanel", () => {
     renderPanel();
     flushEffects();
 
-    const generations = historyState.getHistory.mock.calls.map(
-      ([target]) => target.input.queryGeneration,
-    );
+    const generations = historyState.getHistory.mock.calls.map(([target]) => target.cacheKey);
     expect(generations).toContain(2);
     expect(generations).not.toContain(3);
     expect(generations.at(-1)).toBe(2);
   });
 
   it("rekeys open history reads when the shared VCS history revision changes", () => {
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    const historyCommit = commit(primaryCommitHash, "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
     historyState.commitDetails = { ...historyCommit, body: "" };
 
@@ -669,35 +646,36 @@ describe("GitHistoryPanel", () => {
     renderPanel();
 
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
+      cacheKey: 1,
       environmentId,
-      input: { cwd: "C:/workspace", limit: 100, queryGeneration: 1 },
+      input: { cwd: workspacePath, limit: historyPageSize },
     });
     expect(historyState.getCommitDetails).toHaveBeenLastCalledWith({
+      cacheKey: 1,
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 1 },
+      input: { cwd: workspacePath, hash: historyCommit.hash },
     });
     expect(historyState.listCommitFiles).toHaveBeenLastCalledWith({
+      cacheKey: 1,
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, limit: 100, queryGeneration: 1 },
+      input: { cwd: workspacePath, hash: historyCommit.hash, limit: 100 },
     });
     expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
+      cacheKey: 1,
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 1 },
+      input: { cwd: workspacePath, hash: historyCommit.hash },
     });
   });
 
   it("discards loaded history cursor pages when the environment reconnects", () => {
     historyState.pages.set(
       undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "First")], {
+      page([commit(primaryCommitHash, "First")], {
         hasMore: true,
         nextCursor: "history-page-2",
       }),
     );
-    historyState.pages.set(
-      "history-page-2",
-      page([commit("bbbbbbbb22222222222222222222222222222222", "Second")]),
-    );
+    historyState.pages.set("history-page-2", page([commit(secondaryCommitHash, "Second")]));
 
     const initial = renderPanel();
     loadMoreHistory(initial);
@@ -711,10 +689,7 @@ describe("GitHistoryPanel", () => {
   });
 
   it("keeps graph rows stable when history query results have not changed", () => {
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "First")]),
-    );
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "First")]));
 
     const first = historyList(renderPanel());
     const second = historyList(renderPanel());
@@ -723,7 +698,7 @@ describe("GitHistoryPanel", () => {
   });
 
   it("keeps row separators out of the graph column", () => {
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    const historyCommit = commit(primaryCommitHash, "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
 
     const list = historyList(renderPanel());
@@ -755,7 +730,7 @@ describe("GitHistoryPanel", () => {
 
   it("scales the list and graph geometry with the interface font size", () => {
     fontState.interfaceSize = 20;
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    const historyCommit = commit(primaryCommitHash, "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
 
     const list = historyList(renderPanel());
@@ -776,9 +751,9 @@ describe("GitHistoryPanel", () => {
 
   it("keeps graph paths within each paint-contained row while joining adjacent lanes", () => {
     fontState.interfaceSize = 20;
-    const parent = commit("bbbbbbbb22222222222222222222222222222222", "Parent");
+    const parent = commit(secondaryCommitHash, "Parent");
     const child = {
-      ...commit("aaaaaaaa11111111111111111111111111111111", "Child"),
+      ...commit(primaryCommitHash, "Child"),
       parentHashes: [parent.hash],
     };
     historyState.pages.set(undefined, page([child, parent]));
@@ -817,8 +792,8 @@ describe("GitHistoryPanel", () => {
 
   it("keeps missing-parent graph paths dashed without boundary overlays", () => {
     const child = {
-      ...commit("aaaaaaaa11111111111111111111111111111111", "Child"),
-      parentHashes: ["bbbbbbbb22222222222222222222222222222222"],
+      ...commit(primaryCommitHash, "Child"),
+      parentHashes: [secondaryCommitHash],
     };
     historyState.pages.set(undefined, page([child]));
 
@@ -842,7 +817,7 @@ describe("GitHistoryPanel", () => {
 
   it("creates a fresh changed-file first-page generation after each recovered snapshot expiry", () => {
     const errorCause = expiredSnapshotCause();
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    const historyCommit = commit(primaryCommitHash, "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
     historyState.commitDetails = { ...historyCommit, body: "" };
     historyState.commitFiles = {
@@ -892,8 +867,8 @@ describe("GitHistoryPanel", () => {
     historyState.pages.set(
       undefined,
       page([
-        commit("aaaaaaaa11111111111111111111111111111111", "Add Git history panel"),
-        commit("bbbbbbbb22222222222222222222222222222222", "Expose commit graph", "Grace Hopper"),
+        commit(primaryCommitHash, "Add Git history panel"),
+        commit(secondaryCommitHash, "Expose commit graph", "Grace Hopper"),
       ]),
     );
 
@@ -906,8 +881,9 @@ describe("GitHistoryPanel", () => {
     ]);
     expect(list.props.recycleItems).toBe(false);
     expect(historyState.getHistory).toHaveBeenCalledWith({
+      cacheKey: 0,
       environmentId,
-      input: { cwd: "C:/workspace", limit: 100, queryGeneration: 0 },
+      input: { cwd: workspacePath, limit: historyPageSize },
     });
   });
 
@@ -916,64 +892,126 @@ describe("GitHistoryPanel", () => {
     expect(isWideHistoryLayout(1120)).toBe(true);
   });
 
+  it("coalesces pane pointer moves per frame and flushes the final move on pointer up", () => {
+    const onMove = vi.fn();
+    const frames = new Map<number, FrameRequestCallback>();
+    const cancelAnimationFrame = vi.fn((id: number) => frames.delete(id));
+    let nextFrameId = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      const frameId = ++nextFrameId;
+      frames.set(frameId, callback);
+      return frameId;
+    });
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+    hooks.beginRender();
+    const handle = PaneResizeHandle({
+      label: "Resize branches pane",
+      value: 320,
+      min: 240,
+      max: 480,
+      onMove,
+      onReset: vi.fn(),
+    }) as ReactElement<Record<string, unknown>>;
+    const target = { releasePointerCapture: vi.fn(), setPointerCapture: vi.fn() };
+    const onPointerDown = handle.props.onPointerDown as (event: {
+      readonly clientX: number;
+      readonly currentTarget: typeof target;
+      readonly pointerId: number;
+    }) => void;
+    const onPointerMove = handle.props.onPointerMove as (event: {
+      readonly clientX: number;
+      readonly pointerId: number;
+    }) => void;
+    const onPointerUp = handle.props.onPointerUp as (event: {
+      readonly clientX: number;
+      readonly currentTarget: typeof target;
+      readonly pointerId: number;
+    }) => void;
+
+    onPointerDown({ clientX: 100, currentTarget: target, pointerId: 1 });
+    onPointerMove({ clientX: 104, pointerId: 1 });
+    onPointerMove({ clientX: 110, pointerId: 1 });
+
+    expect(onMove).not.toHaveBeenCalled();
+    expect(frames).toHaveLength(1);
+    const firstFrame = frames.get(1);
+    expect(firstFrame).toBeDefined();
+    frames.delete(1);
+    firstFrame?.(0);
+    expect(onMove).toHaveBeenCalledOnce();
+    expect(onMove).toHaveBeenLastCalledWith(10);
+
+    onPointerMove({ clientX: 114, pointerId: 1 });
+    onPointerUp({ clientX: 120, currentTarget: target, pointerId: 1 });
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(2);
+    expect(onMove).toHaveBeenCalledTimes(2);
+    expect(onMove).toHaveBeenLastCalledWith(10);
+    expect(frames).toHaveLength(0);
+  });
+
+  it("flushes pending pane movement once when pointer capture is lost before its frame", () => {
+    const onMove = vi.fn();
+    const frames = new Map<number, FrameRequestCallback>();
+    const cancelAnimationFrame = vi.fn((id: number) => frames.delete(id));
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frames.set(1, callback);
+      return 1;
+    });
+    vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
+    hooks.beginRender();
+    const handle = PaneResizeHandle({
+      label: "Resize branches pane",
+      value: 320,
+      min: 240,
+      max: 480,
+      onMove,
+      onReset: vi.fn(),
+    }) as ReactElement<Record<string, unknown>>;
+    const target = { setPointerCapture: vi.fn() };
+    const onPointerDown = handle.props.onPointerDown as (event: {
+      readonly clientX: number;
+      readonly currentTarget: typeof target;
+      readonly pointerId: number;
+    }) => void;
+    const onPointerMove = handle.props.onPointerMove as (event: {
+      readonly clientX: number;
+      readonly pointerId: number;
+    }) => void;
+    const onLostPointerCapture = handle.props.onLostPointerCapture as (event: {
+      readonly pointerId: number;
+    }) => void;
+
+    onPointerDown({ clientX: 100, currentTarget: target, pointerId: 1 });
+    onPointerMove({ clientX: 110, pointerId: 1 });
+    const pendingFrame = frames.get(1);
+    onLostPointerCapture({ pointerId: 1 });
+    pendingFrame?.(0);
+
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(1);
+    expect(onMove).toHaveBeenCalledTimes(1);
+    expect(onMove).toHaveBeenLastCalledWith(10);
+  });
+
   it("does not rerender history children for repeated wide widths without pane clamping", () => {
-    let notify: ((width: number) => void) | undefined;
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(
-          private readonly callback: (
-            entries: ReadonlyArray<{ contentRect: { width: number } }>,
-          ) => void,
-        ) {
-          notify = (width) => this.callback([{ contentRect: { width } }]);
-        }
-
-        disconnect() {}
-
-        observe() {
-          notify?.(1400);
-        }
-      },
-    );
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
-    );
+    const notify = stubResizeObserver(1400);
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
 
     const initial = renderPanel();
     (initial.props.ref as { current: object | null }).current = {};
     flushEffects();
     effectQueue.stateUpdates = 0;
 
-    notify?.(1399);
-    notify?.(1398);
-    notify?.(1397);
+    notify(1399);
+    notify(1398);
+    notify(1397);
 
     expect(effectQueue.stateUpdates).toBe(0);
   });
 
   it("constrains both side panes when widening branches at the minimum wide layout", () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(
-          private readonly callback: (
-            entries: ReadonlyArray<{ contentRect: { width: number } }>,
-          ) => void,
-        ) {}
-
-        disconnect() {}
-
-        observe() {
-          this.callback([{ contentRect: { width: 1120 } }]);
-        }
-      },
-    );
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
-    );
+    stubResizeObserver(1120);
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
 
     const initial = renderPanel();
     (initial.props.ref as { current: object | null }).current = {};
@@ -996,26 +1034,8 @@ describe("GitHistoryPanel", () => {
   });
 
   it("constrains commit details when resetting at the minimum wide layout", () => {
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(
-          private readonly callback: (
-            entries: ReadonlyArray<{ contentRect: { width: number } }>,
-          ) => void,
-        ) {}
-
-        disconnect() {}
-
-        observe() {
-          this.callback([{ contentRect: { width: 1120 } }]);
-        }
-      },
-    );
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
-    );
+    stubResizeObserver(1120);
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
 
     const initial = renderPanel();
     (initial.props.ref as { current: object | null }).current = {};
@@ -1046,29 +1066,8 @@ describe("GitHistoryPanel", () => {
   });
 
   it("clamps expanded side panes when a wide history panel shrinks", () => {
-    let notify: ((width: number) => void) | undefined;
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(
-          private readonly callback: (
-            entries: ReadonlyArray<{ contentRect: { width: number } }>,
-          ) => void,
-        ) {
-          notify = (width) => this.callback([{ contentRect: { width } }]);
-        }
-
-        disconnect() {}
-
-        observe() {
-          notify?.(1400);
-        }
-      },
-    );
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
-    );
+    const notify = stubResizeObserver(1400);
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
 
     const initial = renderPanel();
     (initial.props.ref as { current: object | null }).current = {};
@@ -1094,7 +1093,7 @@ describe("GitHistoryPanel", () => {
     (branchHandle?.props.onMove as ((delta: number) => void) | undefined)?.(224);
     (detailsHandle?.props.onMove as ((delta: number) => void) | undefined)?.(-336);
 
-    notify?.(1120);
+    notify(1120);
     renderPanel();
     flushEffects();
     const shrunken = renderPanel();
@@ -1107,29 +1106,8 @@ describe("GitHistoryPanel", () => {
   });
 
   it("preserves wide pane widths through a narrow layout transition", () => {
-    let notify: ((width: number) => void) | undefined;
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        constructor(
-          private readonly callback: (
-            entries: ReadonlyArray<{ contentRect: { width: number } }>,
-          ) => void,
-        ) {
-          notify = (width) => this.callback([{ contentRect: { width } }]);
-        }
-
-        disconnect() {}
-
-        observe() {
-          notify?.(1600);
-        }
-      },
-    );
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
-    );
+    const notify = stubResizeObserver(1600);
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
 
     const initial = renderPanel();
     (initial.props.ref as { current: object | null }).current = {};
@@ -1152,10 +1130,10 @@ describe("GitHistoryPanel", () => {
     (branchHandle?.props.onMove as ((delta: number) => void) | undefined)?.(224);
     (detailsHandle?.props.onMove as ((delta: number) => void) | undefined)?.(-336);
 
-    notify?.(1119);
+    notify(1119);
     renderPanel();
     flushEffects();
-    notify?.(1600);
+    notify(1600);
     renderPanel();
     flushEffects();
     const restored = renderPanel();
@@ -1170,8 +1148,8 @@ describe("GitHistoryPanel", () => {
     historyState.pages.set(
       undefined,
       page([
-        commit("aaaaaaaa11111111111111111111111111111111", "Prepare release"),
-        commit("bbbbbbbb22222222222222222222222222222222", "Fix graph layout"),
+        commit(primaryCommitHash, "Prepare release"),
+        commit(secondaryCommitHash, "Fix graph layout"),
       ]),
     );
 
@@ -1196,15 +1174,12 @@ describe("GitHistoryPanel", () => {
   it("keeps a history search to the loaded page until the user requests older commits", () => {
     historyState.pages.set(
       undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Fix graph layout")], {
+      page([commit(primaryCommitHash, "Fix graph layout")], {
         hasMore: true,
         nextCursor: "history-page-2",
       }),
     );
-    historyState.pages.set(
-      "history-page-2",
-      page([commit("bbbbbbbb22222222222222222222222222222222", "Release notes")]),
-    );
+    historyState.pages.set("history-page-2", page([commit(secondaryCommitHash, "Release notes")]));
 
     const initialPanel = renderPanel();
     flushEffects();
@@ -1223,12 +1198,12 @@ describe("GitHistoryPanel", () => {
 
     expect(historyState.getHistory).toHaveBeenCalledTimes(1);
     expect(historyState.getHistory).not.toHaveBeenCalledWith({
+      cacheKey: 0,
       environmentId,
       input: {
-        cwd: "C:/workspace",
+        cwd: workspacePath,
         cursor: "history-page-2",
-        limit: 100,
-        queryGeneration: 0,
+        limit: historyPageSize,
       },
     });
     const searchOlder = visitElements(
@@ -1239,11 +1214,12 @@ describe("GitHistoryPanel", () => {
   });
 
   it("clears a hash search from the clear button or Escape key", () => {
+    const matchingCommitHash = "0acf007c21111111111111111111111111111111";
     historyState.pages.set(
       undefined,
       page([
-        commit("0acf007c21111111111111111111111111111111", "Matching commit"),
-        commit("bbbbbbbb22222222222222222222222222222222", "Other commit"),
+        commit(matchingCommitHash, "Matching commit"),
+        commit(secondaryCommitHash, "Other commit"),
       ]),
     );
 
@@ -1280,10 +1256,7 @@ describe("GitHistoryPanel", () => {
   });
 
   it("keeps a trailing-space search visible, literal, and clearable", () => {
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Add Git history panel")]),
-    );
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Add Git history panel")]));
 
     const search = visitElements(
       renderPanel(),
@@ -1317,14 +1290,14 @@ describe("GitHistoryPanel", () => {
       undefined,
       page([
         {
-          ...commit("cccccccc33333333333333333333333333333333", "Match newest"),
+          ...commit(newestMatchingCommitHash, "Match newest"),
           parentHashes: ["b"],
         },
         {
-          ...commit("bbbbbbbb22222222222222222222222222222222", "Hidden parent"),
+          ...commit(secondaryCommitHash, "Hidden parent"),
           parentHashes: ["a"],
         },
-        commit("aaaaaaaa11111111111111111111111111111111", "Match oldest"),
+        commit(primaryCommitHash, "Match oldest"),
       ]),
     );
 
@@ -1340,8 +1313,8 @@ describe("GitHistoryPanel", () => {
 
     const filtered = historyList(renderPanel());
     expect(filtered.props.data.map((row) => row.commit.hash)).toEqual([
-      "cccccccc33333333333333333333333333333333",
-      "aaaaaaaa11111111111111111111111111111111",
+      newestMatchingCommitHash,
+      primaryCommitHash,
     ]);
     expect(filtered.props.data.flatMap((row) => row.graph.edges)).not.toContainEqual(
       expect.objectContaining({ kind: "parent" }),
@@ -1349,14 +1322,14 @@ describe("GitHistoryPanel", () => {
   });
 
   it("deduplicates overlapping pages and keeps Load more in the scrolling column footer", () => {
-    const duplicate = commit("aaaaaaaa11111111111111111111111111111111", "Initial commit");
+    const duplicate = commit(primaryCommitHash, "Initial commit");
     historyState.pages.set(
       undefined,
       page([duplicate], { hasMore: true, nextCursor: "next-page" }),
     );
     historyState.pages.set(
       "next-page",
-      page([duplicate, commit("bbbbbbbb22222222222222222222222222222222", "Second page commit")]),
+      page([duplicate, commit(secondaryCommitHash, "Second page commit")]),
     );
 
     const panel = renderPanel();
@@ -1377,20 +1350,22 @@ describe("GitHistoryPanel", () => {
 
     const expanded = historyList(renderPanel());
     expect(expanded.props.data.map((row) => row.commit.hash)).toEqual([
-      "aaaaaaaa11111111111111111111111111111111",
-      "bbbbbbbb22222222222222222222222222222222",
+      primaryCommitHash,
+      secondaryCommitHash,
     ]);
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
+      cacheKey: 0,
       environmentId,
-      input: { cwd: "C:/workspace", cursor: "next-page", limit: 100, queryGeneration: 0 },
+      input: {
+        cwd: workspacePath,
+        cursor: "next-page",
+        limit: historyPageSize,
+      },
     });
   });
 
   it("filters, expands, and selects nested branches while showing the branch commit count", () => {
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
-    );
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
     historyState.refs = [
       gitRef("feature/api"),
       gitRef("feature/ui", {
@@ -1409,11 +1384,11 @@ describe("GitHistoryPanel", () => {
 
     const initial = renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
+      cacheKey: 0,
       environmentId,
       input: {
-        cwd: "C:/workspace",
-        limit: 100,
-        queryGeneration: 0,
+        cwd: workspacePath,
+        limit: historyPageSize,
         revision: "refs/heads/feature/ui",
       },
     });
@@ -1487,11 +1462,11 @@ describe("GitHistoryPanel", () => {
 
     renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
+      cacheKey: 0,
       environmentId,
       input: {
-        cwd: "C:/workspace",
-        limit: 100,
-        queryGeneration: 0,
+        cwd: workspacePath,
+        limit: historyPageSize,
         revision: "refs/heads/feature/ui",
       },
     });
@@ -1516,10 +1491,7 @@ describe("GitHistoryPanel", () => {
   });
 
   it("lists and selects tags from the refs snapshot even when history has no tag decorations", () => {
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
-    );
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
     historyState.tags = [gitRef("v1.2.3", { isTag: true })];
 
     const initial = renderPanel();
@@ -1554,13 +1526,18 @@ describe("GitHistoryPanel", () => {
 
     renderPanel();
     expect(historyState.getHistory).toHaveBeenLastCalledWith({
+      cacheKey: 0,
       environmentId,
-      input: { cwd: "C:/workspace", limit: 100, queryGeneration: 0, revision: "refs/tags/v1.2.3" },
+      input: {
+        cwd: workspacePath,
+        limit: historyPageSize,
+        revision: "refs/tags/v1.2.3",
+      },
     });
   });
 
   it("opens the full commit diff from selected commit details", () => {
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    const historyCommit = commit(primaryCommitHash, "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
     historyState.commitDetails = { ...historyCommit, body: "" };
 
@@ -1584,18 +1561,22 @@ describe("GitHistoryPanel", () => {
 
     renderPanel();
     expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
+      cacheKey: 0,
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 0 },
+      input: { cwd: workspacePath, hash: historyCommit.hash },
     });
   });
 
   it("shows the short commit hash in every history row", () => {
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    const historyCommit = commit(primaryCommitHash, "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
 
     const list = historyList(renderPanel());
     const historyRow = renderComponent(list.props.renderItem({ item: list.props.data[0]! }));
-    const shortHash = visitElements(historyRow, (element) => element.props.children === "aaaaaaaa");
+    const shortHash = visitElements(
+      historyRow,
+      (element) => element.props.children === historyCommit.hash.slice(0, 8),
+    );
     const shortHashTooltip = visitElements(
       historyRow,
       (element) => element.props.children === `Copy full commit hash ${historyCommit.hash}`,
@@ -1607,7 +1588,7 @@ describe("GitHistoryPanel", () => {
   });
 
   it("shows an error toast when copying a history hash is rejected", () => {
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    const historyCommit = commit(primaryCommitHash, "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
 
     const list = historyList(renderPanel());
@@ -1627,7 +1608,7 @@ describe("GitHistoryPanel", () => {
 
   it("gives every selectable commit its author, date, and parent topology", () => {
     const historyCommit = {
-      ...commit("aaaaaaaa11111111111111111111111111111111", "Merge release", "Grace Hopper"),
+      ...commit(primaryCommitHash, "Merge release", "Grace Hopper"),
       parentHashes: ["parent-one", "parent-two"],
     };
     historyState.pages.set(undefined, page([historyCommit]));
@@ -1643,11 +1624,8 @@ describe("GitHistoryPanel", () => {
     expect(selectableRow?.props["aria-label"]).toContain("2-parent merge commit");
   });
 
-  it("refreshes history and local refs", () => {
-    historyState.pages.set(
-      undefined,
-      page([commit("aaaaaaaa11111111111111111111111111111111", "Initial")]),
-    );
+  it("refreshes history and every ref namespace", () => {
+    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
 
     const refresh = visitElements(
       renderPanel(),
@@ -1656,15 +1634,12 @@ describe("GitHistoryPanel", () => {
     (refresh?.props.onClick as (() => void) | undefined)?.();
 
     expect(historyState.refreshRefs).toHaveBeenCalledOnce();
-    expect(historyState.refreshRemoteRefs).not.toHaveBeenCalled();
-    expect(historyState.refreshTags).not.toHaveBeenCalled();
+    expect(historyState.refreshRemoteRefs).toHaveBeenCalledOnce();
+    expect(historyState.refreshTags).toHaveBeenCalledOnce();
   });
 
   it("links issue references to the active GitHub repository", () => {
-    const historyCommit = commit(
-      "aaaaaaaa11111111111111111111111111111111",
-      "fix(repository): view (#602)",
-    );
+    const historyCommit = commit(primaryCommitHash, "fix(repository): view (#602)");
     historyState.pages.set(undefined, page([historyCommit]));
 
     const list = historyList(renderPanel("https://github.com/VladsCoffeApp1/Argus/issues/"));
@@ -1677,7 +1652,7 @@ describe("GitHistoryPanel", () => {
   });
 
   it("opens a changed file diff from selected commit details", () => {
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    const historyCommit = commit(primaryCommitHash, "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
     historyState.commitDetails = {
       ...historyCommit,
@@ -1710,16 +1685,17 @@ describe("GitHistoryPanel", () => {
 
     const diff = renderPanel();
     expect(historyState.getCommitDetails).toHaveBeenLastCalledWith({
+      cacheKey: 0,
       environmentId,
-      input: { cwd: "C:/workspace", hash: historyCommit.hash, queryGeneration: 0 },
+      input: { cwd: workspacePath, hash: historyCommit.hash },
     });
     expect(historyState.getCommitDiff).toHaveBeenLastCalledWith({
+      cacheKey: 0,
       environmentId,
       input: {
-        cwd: "C:/workspace",
+        cwd: workspacePath,
         hash: historyCommit.hash,
         filePath: "src/panel.tsx",
-        queryGeneration: 0,
       },
     });
     const diffView = visitElements(
@@ -1730,7 +1706,7 @@ describe("GitHistoryPanel", () => {
   });
 
   it("lets the diff load changed files beyond the first page", () => {
-    const historyCommit = commit("aaaaaaaa11111111111111111111111111111111", "Add panel");
+    const historyCommit = commit(primaryCommitHash, "Add panel");
     historyState.pages.set(undefined, page([historyCommit]));
     historyState.commitDetails = { ...historyCommit, body: "" };
     historyState.commitFiles = {
@@ -1768,7 +1744,7 @@ describe("GitHistoryPanel", () => {
     const retryFiles = vi.fn();
     hooks.beginRender();
     const diff = CommitDiffView({
-      hash: "aaaaaaaa11111111111111111111111111111111",
+      hash: primaryCommitHash,
       files: [{ status: "A", path: "first.ts" }],
       filesError: true,
       filesHasMore: true,

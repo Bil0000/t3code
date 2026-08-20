@@ -35,7 +35,6 @@ export interface GitHistoryGraphLayout {
 interface Lane {
   hash: string;
   colorIndex: number;
-  primary: boolean;
   started: boolean;
 }
 
@@ -149,7 +148,6 @@ export function layoutGitHistoryGraph(
       beforeLanes[nodeLane] = {
         hash: commit.hash,
         colorIndex: nodeColorIndex,
-        primary: isPrimary,
         started: false,
       };
     }
@@ -194,7 +192,6 @@ export function layoutGitHistoryGraph(
       afterLanes[parentLane] = {
         hash: parentHash,
         colorIndex,
-        primary: parentIsPrimary,
         started: true,
       };
       parentEdges.push({

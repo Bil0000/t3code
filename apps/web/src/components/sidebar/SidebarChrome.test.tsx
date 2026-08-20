@@ -33,6 +33,7 @@ vi.mock("react/compiler-runtime", async () => {
 
 vi.mock("@tanstack/react-router", () => ({
   Link: "a",
+  useCanGoBack: () => false,
   useLocation: (options: { select: (location: { pathname: string }) => unknown }) =>
     options.select({ pathname: "/" }),
   useNavigate: () => navigation,
@@ -80,12 +81,19 @@ vi.mock("../ui/tooltip", () => ({
   TooltipTrigger: "tooltip-trigger",
 }));
 
-import { SidebarChromeFooter } from "./SidebarChrome";
+import { SidebarUtilityMenu } from "./SidebarChrome";
 
 function footerAction(label: "Issues" | "Pull Requests"): () => void {
   hooks.beginRender();
-  const footer = SidebarChromeFooter.type();
-  const button = visitElements(footer, (element) => element.props["aria-label"] === label);
+  const utilityMenu = SidebarUtilityMenu.type();
+  const utilityItem = visitElements(utilityMenu, (element) => element.props.label === label);
+  if (utilityItem === null || typeof utilityItem.type !== "function") {
+    throw new Error(`Could not find the ${label} footer action.`);
+  }
+  const button = visitElements(
+    utilityItem.type(utilityItem.props),
+    (element) => element.props["aria-label"] === label,
+  );
   if (button === null || typeof button.props.onClick !== "function") {
     throw new Error(`Could not find the ${label} footer action.`);
   }

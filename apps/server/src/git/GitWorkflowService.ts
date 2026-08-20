@@ -160,7 +160,7 @@ function nonRepositoryListRefs(): VcsListRefsResult {
   };
 }
 
-function nonRepositoryListHistoryRefs(): VcsListHistoryRefsResult {
+function nonRepositoryHistoryRefs(): VcsListHistoryRefsResult {
   return {
     refs: [],
     currentRef: null,
@@ -277,7 +277,7 @@ export const make = Effect.gen(function* () {
 
   const detectGitRepositoryForCommand = Effect.fn(
     "GitWorkflowService.detectGitRepositoryForCommand",
-  )(function* (operation: string, cwd: string) {
+  )(function* (operation: string, cwd: string, nonGitIsNotRepository = false) {
     const handle = yield* registry.detect({ cwd }).pipe(
       Effect.mapError(
         (cause) =>
@@ -294,6 +294,9 @@ export const make = Effect.gen(function* () {
       return false;
     }
     if (handle.kind !== "git") {
+      if (nonGitIsNotRepository) {
+        return false;
+      }
       return yield* new GitCommandError({
         operation,
         command: "vcs-route",
@@ -359,21 +362,19 @@ export const make = Effect.gen(function* () {
         ),
       ),
     listHistoryRefs: (input) =>
-      detectGitRepositoryForCommand("GitWorkflowService.listHistoryRefs", input.cwd).pipe(
+      detectGitRepositoryForCommand("GitWorkflowService.listHistoryRefs", input.cwd, true).pipe(
         Effect.flatMap((isGitRepository) =>
-          isGitRepository
-            ? git.listHistoryRefs(input)
-            : Effect.succeed(nonRepositoryListHistoryRefs()),
+          isGitRepository ? git.listHistoryRefs(input) : Effect.succeed(nonRepositoryHistoryRefs()),
         ),
       ),
     getHistory: (input) =>
-      detectGitRepositoryForCommand("GitWorkflowService.getHistory", input.cwd).pipe(
+      detectGitRepositoryForCommand("GitWorkflowService.getHistory", input.cwd, true).pipe(
         Effect.flatMap((isGitRepository) =>
           isGitRepository ? git.getHistory(input) : Effect.succeed(nonRepositoryHistory()),
         ),
       ),
     getCommitDetails: (input) =>
-      detectGitRepositoryForCommand("GitWorkflowService.getCommitDetails", input.cwd).pipe(
+      detectGitRepositoryForCommand("GitWorkflowService.getCommitDetails", input.cwd, true).pipe(
         Effect.flatMap((isGitRepository) =>
           isGitRepository
             ? git.getCommitDetails(input)
@@ -381,13 +382,13 @@ export const make = Effect.gen(function* () {
         ),
       ),
     listCommitFiles: (input) =>
-      detectGitRepositoryForCommand("GitWorkflowService.listCommitFiles", input.cwd).pipe(
+      detectGitRepositoryForCommand("GitWorkflowService.listCommitFiles", input.cwd, true).pipe(
         Effect.flatMap((isGitRepository) =>
           isGitRepository ? git.listCommitFiles(input) : Effect.succeed(nonRepositoryCommitFiles()),
         ),
       ),
     getCommitDiff: (input) =>
-      detectGitRepositoryForCommand("GitWorkflowService.getCommitDiff", input.cwd).pipe(
+      detectGitRepositoryForCommand("GitWorkflowService.getCommitDiff", input.cwd, true).pipe(
         Effect.flatMap((isGitRepository) =>
           isGitRepository ? git.getCommitDiff(input) : Effect.succeed(nonRepositoryCommitDiff()),
         ),

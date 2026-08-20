@@ -21,7 +21,6 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
   );
   const deferredRefFilter = useDebouncedValue(refFilter.trim(), REF_FILTER_DEBOUNCE_MS);
   const normalizedRefFilter = refFilter.trim().toLocaleLowerCase();
-  const shouldLoadLocal = true;
   const shouldLoadRemote =
     deferredRefFilter.length > 0 ||
     expandedRefKeys.has("section:remote") ||
@@ -31,9 +30,7 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     expandedRefKeys.has("section:tags") ||
     selectedRevisionState?.revision.startsWith("refs/tags/") === true;
   const refs = usePaginatedHistoryRefs(
-    shouldLoadLocal
-      ? { environmentId, cwd, query: deferredRefFilter }
-      : { environmentId: null, cwd: null },
+    { environmentId, cwd, query: deferredRefFilter },
     { limit: 200, namespace: "local", revision },
   );
   const remote = usePaginatedHistoryRefs(
@@ -153,37 +150,39 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     currentRef,
     expandedRefKeys,
     hasMoreRefs:
-      (shouldLoadLocal && refs.data?.nextCursor !== null && refs.data?.nextCursor !== undefined) ||
+      (refs.data?.nextCursor !== null && refs.data?.nextCursor !== undefined) ||
       (shouldLoadRemote &&
         remote.data?.nextCursor !== null &&
         remote.data?.nextCursor !== undefined) ||
       (shouldLoadTags && tags.data?.nextCursor !== null && tags.data?.nextCursor !== undefined),
     isFetchingMoreRefs:
-      (shouldLoadLocal && refs.isFetchingNextPage) ||
+      refs.isFetchingNextPage ||
       (shouldLoadRemote && remote.isFetchingNextPage) ||
       (shouldLoadTags && tags.isFetchingNextPage),
     isRefSnapshotComplete:
-      (!shouldLoadLocal || refs.data?.isComplete !== false) &&
+      refs.data?.isComplete !== false &&
       (!shouldLoadRemote || remote.data?.isComplete !== false) &&
       (!shouldLoadTags || tags.data?.isComplete !== false),
     localRefTree,
     localRefs,
     normalizedRefFilter,
     onLoadMoreRefs: () => {
-      if (shouldLoadLocal) refs.loadNext();
+      refs.loadNext();
       if (shouldLoadRemote) remote.loadNext();
       if (shouldLoadTags) tags.loadNext();
     },
     refreshRefs: () => {
       refs.refresh();
+      remote.refresh();
+      tags.refresh();
     },
     onRetryRefs: () => {
-      if (shouldLoadLocal && refs.error) refs.retry();
+      if (refs.error) refs.retry();
       if (shouldLoadRemote && remote.error) remote.retry();
       if (shouldLoadTags && tags.error) tags.retry();
     },
     refPaginationError:
-      (shouldLoadLocal ? refs.error : null) ??
+      refs.error ??
       (shouldLoadRemote ? remote.error : null) ??
       (shouldLoadTags ? tags.error : null),
     refFilter,

@@ -24,9 +24,9 @@ type PageResult =
 type PageAtom = {
   readonly input: {
     readonly cursor?: string;
-    readonly queryGeneration: number;
     readonly refresh?: true;
   };
+  readonly cacheKey?: number;
   readonly result: PageResult;
 };
 
@@ -104,11 +104,17 @@ vi.mock("./threads", () => ({ useEnvironmentThread: () => ({}) }));
 
 vi.mock("./vcs", () => ({
   vcsEnvironment: {
-    listHistoryRefs: ({ input }: { readonly input: PageAtom["input"] }) => {
-      const result = refsState.results.get(`${input.queryGeneration}:${input.cursor ?? "first"}`);
+    listHistoryRefs: ({
+      cacheKey,
+      input,
+    }: {
+      readonly cacheKey?: number;
+      readonly input: PageAtom["input"];
+    }) => {
+      const result = refsState.results.get(`${cacheKey ?? 0}:${input.cursor ?? "first"}`);
       if (result === undefined)
-        throw new Error(`Missing result for ${input.queryGeneration}:${input.cursor ?? "first"}`);
-      const atom = { input, result };
+        throw new Error(`Missing result for ${cacheKey ?? 0}:${input.cursor ?? "first"}`);
+      const atom = { cacheKey, input, result };
       refsState.atoms.push(atom);
       return atom;
     },
@@ -181,31 +187,31 @@ describe("usePaginatedHistoryRefs", () => {
     render(0, { ...target, query: "later" });
     render();
 
-    expect(refsState.atoms.map((atom) => atom.input)).toEqual([
-      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 0 },
-      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 1, refresh: true },
-      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 1, refresh: true },
+    expect(refsState.atoms.map((atom) => ({ ...atom.input, cacheKey: atom.cacheKey }))).toEqual([
+      { cacheKey: 0, cwd: "C:/workspace", limit: 100, namespace: "local" },
+      { cacheKey: 1, cwd: "C:/workspace", limit: 100, namespace: "local", refresh: true },
+      { cacheKey: 1, cwd: "C:/workspace", limit: 100, namespace: "local", refresh: true },
       {
+        cacheKey: 1,
         cwd: "C:/workspace",
         cursor: "cursor-8",
         limit: 100,
         namespace: "local",
-        queryGeneration: 1,
       },
       {
+        cacheKey: 1,
         cwd: "C:/workspace",
         limit: 100,
         namespace: "local",
         query: "later",
-        queryGeneration: 1,
       },
-      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 1 },
+      { cacheKey: 1, cwd: "C:/workspace", limit: 100, namespace: "local" },
       {
+        cacheKey: 1,
         cwd: "C:/workspace",
         cursor: "cursor-8",
         limit: 100,
         namespace: "local",
-        queryGeneration: 1,
       },
     ]);
     expect(
@@ -214,7 +220,7 @@ describe("usePaginatedHistoryRefs", () => {
           .filter((atom) => atom.input.refresh === true)
           .map(
             (atom) =>
-              `${atom.input.cwd}:${atom.input.query ?? ""}:${atom.input.cursor ?? ""}:${atom.input.queryGeneration}`,
+              `${atom.input.cwd}:${atom.input.query ?? ""}:${atom.input.cursor ?? ""}:${atom.cacheKey}`,
           ),
       ),
     ).toEqual(new Set(["C:/workspace:::1"]));
@@ -249,17 +255,17 @@ describe("usePaginatedHistoryRefs", () => {
     render();
     render(1);
 
-    expect(refsState.atoms.map((atom) => atom.input)).toEqual([
-      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 0 },
-      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 0 },
+    expect(refsState.atoms.map((atom) => ({ ...atom.input, cacheKey: atom.cacheKey }))).toEqual([
+      { cacheKey: 0, cwd: "C:/workspace", limit: 100, namespace: "local" },
+      { cacheKey: 0, cwd: "C:/workspace", limit: 100, namespace: "local" },
       {
+        cacheKey: 0,
         cwd: "C:/workspace",
         cursor: "cursor-4",
         limit: 100,
         namespace: "local",
-        queryGeneration: 0,
       },
-      { cwd: "C:/workspace", limit: 100, namespace: "local", queryGeneration: 1 },
+      { cacheKey: 1, cwd: "C:/workspace", limit: 100, namespace: "local" },
     ]);
   });
 
@@ -326,7 +332,7 @@ describe("usePaginatedHistoryRefs", () => {
     render();
     render();
 
-    expect(refsState.atoms.map((atom) => atom.input.queryGeneration)).toEqual([0, 1]);
+    expect(refsState.atoms.map((atom) => atom.cacheKey)).toEqual([0, 1]);
 
     const recovered = render();
     recovered.refresh();
@@ -335,6 +341,6 @@ describe("usePaginatedHistoryRefs", () => {
     render();
     render();
 
-    expect(refsState.atoms.map((atom) => atom.input.queryGeneration)).toEqual([0, 1, 2, 3]);
+    expect(refsState.atoms.map((atom) => atom.cacheKey)).toEqual([0, 1, 2, 3]);
   });
 });

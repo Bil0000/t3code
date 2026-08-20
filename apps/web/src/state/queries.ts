@@ -302,12 +302,12 @@ export function usePaginatedHistoryRefs(
         ? cursors.map((cursor) =>
             vcsEnvironment.listHistoryRefs({
               environmentId: target.environmentId!,
+              cacheKey: queryGeneration + revision,
               input: {
                 cwd: target.cwd!,
                 ...(query.length > 0 ? { query } : {}),
                 ...(cursor === undefined ? {} : { cursor }),
                 limit,
-                queryGeneration: queryGeneration + revision,
                 namespace,
                 ...(cursor === undefined && isRefreshRequest ? { refresh: true } : {}),
               },

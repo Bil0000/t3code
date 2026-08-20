@@ -896,10 +896,17 @@ const collectOutput = Effect.fnUntraced(function* (
     }),
   );
 
-  const remainder = truncated ? "" : decoder.decode();
-  if (captureText) text += remainder;
-  lineBuffer += remainder;
-  yield* emitCompleteLines(true);
+  if (truncated) {
+    if (captureText && recordSeparator === "\0") {
+      const lastCompleteRecord = text.lastIndexOf(recordSeparator);
+      text = lastCompleteRecord < 0 ? "" : text.slice(0, lastCompleteRecord + 1);
+    }
+  } else {
+    const remainder = decoder.decode();
+    if (captureText) text += remainder;
+    lineBuffer += remainder;
+    yield* emitCompleteLines(true);
+  }
   return {
     text,
     truncated,
@@ -919,10 +926,15 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     string,
     { readonly snapshotId: string; readonly offset: number }
   >();
+  const commitFilesCursorIdsBySnapshotOffset = new Map<string, Map<number, string>>();
   const deleteCommitFilesSnapshot = (snapshotId: string): void => {
     commitFilesSnapshots.delete(snapshotId);
-    for (const [cursor, value] of commitFilesCursors) {
-      if (value.snapshotId === snapshotId) commitFilesCursors.delete(cursor);
+    const cursorIdsByOffset = commitFilesCursorIdsBySnapshotOffset.get(snapshotId);
+    if (cursorIdsByOffset !== undefined) {
+      for (const cursor of cursorIdsByOffset.values()) {
+        commitFilesCursors.delete(cursor);
+      }
+      commitFilesCursorIdsBySnapshotOffset.delete(snapshotId);
     }
   };
   const pruneExpiredCommitFilesSnapshots = (now: number): void => {
@@ -931,8 +943,14 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
   };
   const newCommitFilesCursor = (snapshotId: string, offset: number): string => {
+    const cursorIdsByOffset =
+      commitFilesCursorIdsBySnapshotOffset.get(snapshotId) ?? new Map<number, string>();
+    const existingCursor = cursorIdsByOffset.get(offset);
+    if (existingCursor !== undefined) return existingCursor;
     const cursor = NodeCrypto.randomBytes(18).toString("base64url");
     commitFilesCursors.set(cursor, { snapshotId, offset });
+    cursorIdsByOffset.set(offset, cursor);
+    commitFilesCursorIdsBySnapshotOffset.set(snapshotId, cursorIdsByOffset);
     return cursor;
   };
   const storeCommitFilesSnapshot = (snapshot: GitCommitFilesSnapshot, now: number): string => {
@@ -3211,7 +3229,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           parsedRefs.push({ fullName, ref });
           return parsedRefs.length <= GIT_REF_SNAPSHOT_MAX_REFS;
         });
-      yield* executeGitWithStableDiagnostics(
+      const refOutput = yield* executeGitWithStableDiagnostics(
         "GitVcsDriver.listHistoryRefs.snapshot",
         input.cwd,
         [
@@ -3225,10 +3243,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           stdoutRecordSeparator: "\0",
           onStdoutRecord: processRecord,
           maxOutputBytes: GIT_REF_SNAPSHOT_MAX_OUTPUT_BYTES,
+          appendTruncationMarker: true,
           fallbackErrorDetail: "Git ref snapshot enumeration failed.",
         },
       );
-      const isComplete = parsedRefs.length <= GIT_REF_SNAPSHOT_MAX_REFS;
+      const isComplete =
+        !refOutput.stdoutTruncated && parsedRefs.length <= GIT_REF_SNAPSHOT_MAX_REFS;
       const refs = parsedRefs.slice(0, GIT_REF_SNAPSHOT_MAX_REFS).map(({ fullName, ref }) => ({
         ...ref,
         isDefault: namespace === "remote" && defaultRemoteRefs.has(fullName),
@@ -3345,6 +3365,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           {
             allowNonZeroExit: true,
             maxOutputBytes: GIT_HISTORY_MAX_OUTPUT_BYTES,
+            appendTruncationMarker: true,
+            stdoutRecordSeparator: "\0",
             fallbackErrorDetail: "git log failed",
           },
         );
@@ -3385,7 +3407,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           worktreePath,
           revision,
           commits: commits.slice(0, GIT_HISTORY_SNAPSHOT_MAX_COMMITS),
-          capped: commits.length > GIT_HISTORY_SNAPSHOT_MAX_COMMITS,
+          capped: output.stdoutTruncated || commits.length > GIT_HISTORY_SNAPSHOT_MAX_COMMITS,
           expiresAt: snapshotNow + GIT_HISTORY_SNAPSHOT_TTL_MS,
         };
         snapshotId = storeHistorySnapshot(snapshot, snapshotNow);
@@ -3488,8 +3510,12 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           cursor: input.cursor,
         });
       }
-      commitFilesCursors.delete(input.cursor);
-      snapshot = existing;
+      commitFilesSnapshots.delete(continuation.snapshotId);
+      snapshot = {
+        ...existing,
+        expiresAt: now + GIT_COMMIT_FILES_SNAPSHOT_TTL_MS,
+      };
+      commitFilesSnapshots.set(continuation.snapshotId, snapshot);
       snapshotId = continuation.snapshotId;
       offset = continuation.offset;
     } else {
@@ -3512,6 +3538,8 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         ],
         {
           maxOutputBytes: GIT_COMMIT_FILES_MAX_OUTPUT_BYTES,
+          appendTruncationMarker: true,
+          stdoutRecordSeparator: "\0",
           fallbackErrorDetail: "git diff-tree failed",
         },
       );
@@ -3530,7 +3558,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
     }
     const files = snapshot.files.slice(offset, offset + limit);
     const hasMore = offset + files.length < snapshot.files.length;
-    if (!hasMore) deleteCommitFilesSnapshot(snapshotId);
+    if (!hasMore && input.cursor === undefined) deleteCommitFilesSnapshot(snapshotId);
     return {
       files,
       isRepo: true,
@@ -3958,32 +3986,42 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       }),
     );
 
-  const invalidateRefSnapshots = Effect.fn("invalidateRefSnapshots")(function* (cwd: string) {
-    const repositoryPaths = yield* resolveRepositoryPaths(cwd).pipe(
-      Effect.catchTag("GitCommandError", () => Effect.succeed(null)),
-    );
-    if (repositoryPaths === null) return;
-    const snapshotIds = refSnapshotIdsByGitCommonDir.get(repositoryPaths.gitCommonDir);
-    if (snapshotIds !== undefined) {
+  const invalidateRefSnapshots = (gitCommonDir: string | null): Effect.Effect<void> =>
+    Effect.sync(() => {
+      if (gitCommonDir === null) return;
+      const snapshotIds = refSnapshotIdsByGitCommonDir.get(gitCommonDir);
+      if (snapshotIds === undefined) return;
       for (const snapshotId of snapshotIds) {
         deleteRefSnapshot(snapshotId);
       }
-    }
-  });
+    });
+
+  const captureRefSnapshotRepository = (cwd: string) =>
+    resolveRepositoryPaths(cwd).pipe(
+      Effect.map((repositoryPaths) => repositoryPaths?.gitCommonDir ?? null),
+      Effect.catchTag("GitCommandError", (error) =>
+        Effect.logWarning(
+          `GitVcsDriver: unable to resolve repository identity before ref mutation invalidation for ${cwd}: ${error.detail}`,
+        ).pipe(Effect.as(null)),
+      ),
+    );
 
   const withListRefsInvalidation = <A, E>(
     cwd: string,
     effect: Effect.Effect<A, E>,
   ): Effect.Effect<A, E> =>
-    effect.pipe(
-      Effect.ensuring(
-        Effect.all([
-          invalidateListRefsSnapshot(cwd).pipe(Effect.ignore),
-          invalidateRefSnapshots(cwd).pipe(Effect.ignore),
-          invalidateStatusStaticCaches(cwd).pipe(Effect.ignore),
-        ]),
-      ),
-    );
+    Effect.gen(function* () {
+      const refSnapshotGitCommonDir = yield* captureRefSnapshotRepository(cwd);
+      return yield* effect.pipe(
+        Effect.ensuring(
+          Effect.all([
+            invalidateListRefsSnapshot(cwd).pipe(Effect.ignore),
+            invalidateRefSnapshots(refSnapshotGitCommonDir),
+            invalidateStatusStaticCaches(cwd).pipe(Effect.ignore),
+          ]),
+        ),
+      );
+    });
   const initRepoWithListRefsInvalidation: GitVcsDriver.GitVcsDriver["Service"]["initRepo"] = (
     input,
   ) =>

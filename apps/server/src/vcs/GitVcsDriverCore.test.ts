@@ -745,13 +745,15 @@ it.effect("rejects a history cursor from another linked worktree", () =>
   }).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("fails history output larger than its dedicated retained-byte ceiling", () =>
+it.effect("caps history output at complete NUL records", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
       const spawner = ChildProcessSpawner.make((command) =>
         ChildProcess.isStandardCommand(command) && command.args[0] === "log"
-          ? Effect.succeed(makeSuccessfulHandle("x".repeat(512 * 1024 + 1)))
+          ? Effect.succeed(
+              makeSuccessfulHandle(`${makeGitHistoryOutput(1)}${"x".repeat(512 * 1024 + 1)}`),
+            )
           : delegate.spawn(command),
       );
       const driver = yield* makeGitVcsDriverCore().pipe(
@@ -760,12 +762,12 @@ it.effect("fails history output larger than its dedicated retained-byte ceiling"
       const cwd = yield* makeTmpDir();
       yield* driver.initRepo({ cwd });
 
-      const error = yield* driver.getHistory({ cwd }).pipe(Effect.flip);
-      assert.deepInclude(error, {
-        _tag: "GitCommandError",
-        operation: "GitVcsDriver.getHistory.log",
-        outputLength: 512 * 1024 + 1,
-      });
+      const history = yield* driver.getHistory({ cwd });
+      assert.deepEqual(
+        history.commits.map((commit) => commit.subject),
+        ["commit 0"],
+      );
+      assert.equal(history.capped, true);
     }),
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
@@ -971,7 +973,7 @@ it.effect("treats commit diff file paths containing pathspec magic as literals",
   }).pipe(Effect.provide(TestLayer)),
 );
 
-it.effect("pages commit files once, rejects replay, and cleans up after the final page", () =>
+it.effect("pages commit files idempotently and retains the snapshot through its TTL", () =>
   Effect.gen(function* () {
     const cwd = yield* makeTmpDir();
     yield* initRepoWithCommit(cwd);
@@ -988,10 +990,8 @@ it.effect("pages commit files once, rejects replay, and cleans up after the fina
     const second = yield* driver.listCommitFiles({ cwd, hash, cursor: first.nextCursor, limit: 1 });
     assert.equal(second.hasMore, false);
     assert.equal(second.nextCursor, null);
-    const replay = yield* driver
-      .listCommitFiles({ cwd, hash, cursor: first.nextCursor })
-      .pipe(Effect.flip);
-    assert.equal(replay._tag, "VcsSnapshotExpiredError");
+    const replay = yield* driver.listCommitFiles({ cwd, hash, cursor: first.nextCursor, limit: 1 });
+    assert.deepEqual(replay, second);
   }).pipe(Effect.provide(TestLayer)),
 );
 
@@ -1029,6 +1029,12 @@ it.effect(
       assert.equal(wrongHash._tag, "VcsSnapshotExpiredError");
       const third = yield* driver.listCommitFiles({ cwd, hash, limit: 1 });
       assert.ok(third.nextCursor);
+      yield* TestClock.adjust("1 minute");
+      const refreshed = yield* driver.listCommitFiles({ cwd, hash, cursor: third.nextCursor });
+      assert.equal(refreshed.hasMore, false);
+      yield* TestClock.adjust("90 seconds");
+      const replayed = yield* driver.listCommitFiles({ cwd, hash, cursor: third.nextCursor });
+      assert.deepEqual(replayed, refreshed);
       yield* TestClock.adjust("2 minutes");
       const expired = yield* driver
         .listCommitFiles({ cwd, hash, cursor: third.nextCursor })
@@ -1075,13 +1081,15 @@ it.effect(
     ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
-it.effect("rejects synthetic commit-file output above the 512 KiB retained-byte cap", () =>
+it.effect("caps commit-file output at complete NUL records", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
       const spawner = ChildProcessSpawner.make((command) =>
         ChildProcess.isStandardCommand(command) && command.args[0] === "diff-tree"
-          ? Effect.succeed(makeSuccessfulHandle("x".repeat(512 * 1024 + 1)))
+          ? Effect.succeed(
+              makeSuccessfulHandle(`A\x00complete.ts\x00${"x".repeat(512 * 1024 + 1)}`),
+            )
           : delegate.spawn(command),
       );
       const driver = yield* makeGitVcsDriverCore().pipe(
@@ -1089,12 +1097,9 @@ it.effect("rejects synthetic commit-file output above the 512 KiB retained-byte 
       );
       const cwd = yield* makeTmpDir();
       yield* driver.initRepo({ cwd });
-      const error = yield* driver.listCommitFiles({ cwd, hash: "a".repeat(40) }).pipe(Effect.flip);
-      assert.deepInclude(error, {
-        _tag: "GitCommandError",
-        operation: "GitVcsDriver.listCommitFiles.diffTree",
-        outputLength: 512 * 1024 + 1,
-      });
+      const files = yield* driver.listCommitFiles({ cwd, hash: "a".repeat(40) });
+      assert.deepEqual(files.files, [{ status: "A", path: "complete.ts" }]);
+      assert.equal(files.capped, true);
     }),
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
@@ -1380,7 +1385,7 @@ it.effect(
     ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
-it.effect("rejects streamed ref output above its two-megabyte ceiling after the ref cap", () =>
+it.effect("caps ref output at complete NUL records", () =>
   Effect.scoped(
     Effect.gen(function* () {
       const delegate = yield* ChildProcessSpawner.ChildProcessSpawner;
@@ -1402,14 +1407,10 @@ it.effect("rejects streamed ref output above its two-megabyte ceiling after the 
       const cwd = yield* makeTmpDir();
       yield* driver.initRepo({ cwd });
 
-      const error = yield* driver.listHistoryRefs({ cwd, refresh: true }).pipe(Effect.flip);
+      const refs = yield* driver.listHistoryRefs({ cwd, refresh: true });
 
-      assert.deepInclude(error, {
-        _tag: "GitCommandError",
-        operation: "GitVcsDriver.listHistoryRefs.snapshot",
-      });
-      if (error._tag !== "GitCommandError") return assert.fail("expected a Git command error");
-      assert.ok((error.outputLength ?? 0) > 2 * 1024 * 1024);
+      assert.equal(refs.refs.length, 100);
+      assert.equal(refs.isComplete, false);
     }),
   ).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );

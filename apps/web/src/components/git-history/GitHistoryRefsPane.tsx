@@ -20,7 +20,8 @@ import type { GitRefTreeNode } from "../../lib/gitRefTree";
 import { cn } from "../../lib/utils";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import type { RefTreeProps } from "./GitHistoryVisualTypes";
+
+type RefNamespace = "heads" | "remotes" | "tags";
 
 type RefPaneRow =
   | { readonly kind: "all"; readonly key: "all" }
@@ -44,7 +45,7 @@ type RefPaneRow =
       readonly kind: "ref";
       readonly key: string;
       readonly node: Extract<GitRefTreeNode, { readonly kind: "ref" }>;
-      readonly namespace: RefTreeProps["namespace"];
+      readonly namespace: RefNamespace;
       readonly depth: number;
     }
   | { readonly kind: "empty"; readonly key: "empty" }
@@ -55,7 +56,7 @@ function appendRefTreeRows(
   rows: RefPaneRow[],
   nodes: ReadonlyArray<GitRefTreeNode>,
   section: string,
-  namespace: RefTreeProps["namespace"],
+  namespace: RefNamespace,
   expanded: ReadonlySet<string>,
   filterActive: boolean,
   depth = 0,
@@ -163,7 +164,6 @@ export function GitRefsPane(props: {
   tagRefTree: ReadonlyArray<GitRefTreeNode>;
   expandedRefKeys: ReadonlySet<string>;
   onToggleRefKey: (key: string) => void;
-  sharedRefTreeProps: Omit<RefTreeProps, "nodes" | "namespace" | "section">;
   hasMoreRefs: boolean;
   isFetchingMoreRefs: boolean;
   isRefSnapshotComplete: boolean;
@@ -325,7 +325,7 @@ export function GitRefsPane(props: {
               );
             if (row.kind === "ref") {
               const revision = `refs/${row.namespace}/${row.node.ref.name}`;
-              const selected = props.sharedRefTreeProps.selectedRevision === revision;
+              const selected = props.selectedRevision?.revision === revision;
               const aheadCount = row.node.ref.aheadCount ?? 0;
               const behindCount = row.node.ref.behindCount ?? 0;
               const upstreamName = row.node.ref.upstreamName ?? "the configured upstream";
@@ -346,9 +346,7 @@ export function GitRefsPane(props: {
                           selected && "bg-accent/70 font-medium text-foreground",
                         )}
                         style={{ paddingLeft: `${row.depth * 14 + 20}px` }}
-                        onClick={() =>
-                          props.sharedRefTreeProps.onSelect(row.node.ref.name, revision)
-                        }
+                        onClick={() => props.onSelectRef(row.node.ref.name, revision)}
                         aria-pressed={selected}
                         aria-label={
                           syncDescription

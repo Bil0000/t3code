@@ -1,5 +1,5 @@
 import { GripVerticalIcon } from "lucide-react";
-import { useRef } from "react";
+import { useEffect, useRef } from "react";
 
 export function PaneResizeHandle(props: {
   label: string;
@@ -9,7 +9,23 @@ export function PaneResizeHandle(props: {
   onMove: (delta: number) => void;
   onReset: () => void;
 }) {
-  const lastClientX = useRef<number | null>(null);
+  const onMoveRef = useRef(props.onMove);
+  const dragStateRef = useRef<{
+    pointerId: number;
+    lastClientX: number;
+    pendingDelta: number;
+    rafId: number | null;
+  } | null>(null);
+  onMoveRef.current = props.onMove;
+
+  useEffect(() => {
+    return () => {
+      const state = dragStateRef.current;
+      if (state && state.rafId !== null) cancelAnimationFrame(state.rafId);
+      dragStateRef.current = null;
+    };
+  }, []);
+
   return (
     <div
       role="separator"
@@ -21,21 +37,46 @@ export function PaneResizeHandle(props: {
       tabIndex={0}
       className="group relative z-10 block w-2 shrink-0 cursor-col-resize touch-none bg-background/70 outline-none"
       onPointerDown={(event) => {
-        lastClientX.current = event.clientX;
+        dragStateRef.current = {
+          pointerId: event.pointerId,
+          lastClientX: event.clientX,
+          pendingDelta: 0,
+          rafId: null,
+        };
         event.currentTarget.setPointerCapture(event.pointerId);
       }}
       onPointerMove={(event) => {
-        if (lastClientX.current === null) return;
-        const delta = event.clientX - lastClientX.current;
-        lastClientX.current = event.clientX;
-        props.onMove(delta);
+        const state = dragStateRef.current;
+        if (!state || state.pointerId !== event.pointerId) return;
+        state.pendingDelta += event.clientX - state.lastClientX;
+        state.lastClientX = event.clientX;
+        if (state.rafId !== null) return;
+        state.rafId = requestAnimationFrame(() => {
+          const active = dragStateRef.current;
+          if (!active) return;
+          active.rafId = null;
+          const delta = active.pendingDelta;
+          active.pendingDelta = 0;
+          if (delta !== 0) onMoveRef.current(delta);
+        });
       }}
       onPointerUp={(event) => {
-        lastClientX.current = null;
+        const state = dragStateRef.current;
+        if (!state || state.pointerId !== event.pointerId) return;
+        state.pendingDelta += event.clientX - state.lastClientX;
+        if (state.rafId !== null) cancelAnimationFrame(state.rafId);
+        const delta = state.pendingDelta;
+        dragStateRef.current = null;
         event.currentTarget.releasePointerCapture(event.pointerId);
+        if (delta !== 0) onMoveRef.current(delta);
       }}
-      onLostPointerCapture={() => {
-        lastClientX.current = null;
+      onLostPointerCapture={(event) => {
+        const state = dragStateRef.current;
+        if (!state || state.pointerId !== event.pointerId) return;
+        if (state.rafId !== null) cancelAnimationFrame(state.rafId);
+        const delta = state.pendingDelta;
+        dragStateRef.current = null;
+        if (delta !== 0) onMoveRef.current(delta);
       }}
       onDoubleClick={props.onReset}
       onKeyDown={(event) => {

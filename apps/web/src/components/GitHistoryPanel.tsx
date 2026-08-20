@@ -35,11 +35,7 @@ import {
 } from "./git-history/GitHistoryCommitList";
 import { PaneResizeHandle } from "./git-history/GitHistoryPaneResizeHandle";
 import { GitRefsPane } from "./git-history/GitHistoryRefsPane";
-import type {
-  CommitRefKind,
-  GitHistoryRow,
-  RefTreeProps,
-} from "./git-history/GitHistoryVisualTypes";
+import type { CommitRefKind, GitHistoryRow } from "./git-history/GitHistoryVisualTypes";
 import { useGitHistoryRefs } from "./git-history/useGitHistoryRefs";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -210,9 +206,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
         : cursors.map((cursor) =>
             vcsEnvironment.getHistory({
               environmentId: props.environmentId,
+              cacheKey: historyQueryGeneration + vcsHistoryRevision,
               input: {
                 cwd: props.cwd,
-                queryGeneration: historyQueryGeneration + vcsHistoryRevision,
                 ...(selectedRevision === null ? {} : { revision: selectedRevision.revision }),
                 ...(cursor === undefined ? {} : { cursor }),
                 limit: HISTORY_PAGE_SIZE,
@@ -308,7 +304,8 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       ? null
       : vcsEnvironment.getCommitDetails({
           environmentId: props.environmentId,
-          input: { cwd: props.cwd, hash: selectedHash, queryGeneration: vcsHistoryRevision },
+          cacheKey: vcsHistoryRevision,
+          input: { cwd: props.cwd, hash: selectedHash },
         }),
   );
   const selectedCommitDetails = commitDetailsQuery.data?.commit ?? null;
@@ -334,11 +331,11 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       ? null
       : vcsEnvironment.listCommitFiles({
           environmentId: props.environmentId,
+          cacheKey: commitFilesQueryGeneration + vcsHistoryRevision,
           input: {
             cwd: props.cwd,
             hash: selectedHash,
             limit: 100,
-            queryGeneration: commitFilesQueryGeneration + vcsHistoryRevision,
             ...(commitFilesCursor ? { cursor: commitFilesCursor } : {}),
           },
         }),
@@ -382,10 +379,10 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       ? null
       : vcsEnvironment.getCommitDiff({
           environmentId: props.environmentId,
+          cacheKey: vcsHistoryRevision,
           input: {
             cwd: props.cwd,
             hash: commitDiffRequest.hash,
-            queryGeneration: vcsHistoryRevision,
             ...(commitDiffRequest.filePath ? { filePath: commitDiffRequest.filePath } : {}),
           },
         }),
@@ -431,13 +428,6 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     selectAllHistoryRefs();
     setMobilePane(null);
   }, [selectAllHistoryRefs]);
-  const sharedRefTreeProps = {
-    filterActive: normalizedRefFilter.length > 0,
-    expanded: expandedRefKeys,
-    selectedRevision: selectedRevision?.revision ?? null,
-    onToggle: toggleRefKey,
-    onSelect: selectRef,
-  } satisfies Omit<RefTreeProps, "nodes" | "namespace" | "section">;
   const refPaneProps = {
     refFilter,
     onRefFilterChange: setRefFilter,
@@ -451,7 +441,6 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     tagRefTree,
     expandedRefKeys,
     onToggleRefKey: toggleRefKey,
-    sharedRefTreeProps,
     hasMoreRefs,
     isFetchingMoreRefs,
     isRefSnapshotComplete,
@@ -493,13 +482,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       }),
     [activeFilter, filteredHistory, headHash, primaryHashes],
   );
-  const graphByHash = useMemo(() => new Map(graphRows.map((row) => [row.hash, row])), [graphRows]);
   const filteredRows = useMemo(() => {
-    return filteredHistory.flatMap((commit) => {
-      const graph = graphByHash.get(commit.hash);
-      return graph ? [{ commit, graph }] : [];
-    });
-  }, [filteredHistory, graphByHash]);
+    return filteredHistory.map((commit, index) => ({ commit, graph: graphRows[index]! }));
+  }, [filteredHistory, graphRows]);
 
   useEffect(() => {
     if (selectedHash !== null && !history.some((commit) => commit.hash === selectedHash)) {

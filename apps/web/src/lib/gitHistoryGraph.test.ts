@@ -181,20 +181,6 @@ describe("layoutGitHistoryGraph", () => {
     ]);
   });
 
-  it("never moves a continuation lane sideways without a commit", () => {
-    const layout = layoutGitHistoryGraph([
-      { hash: "merge", parentHashes: ["main", "side"] },
-      { hash: "main", parentHashes: ["base"] },
-      { hash: "side", parentHashes: ["base"] },
-      { hash: "base", parentHashes: [] },
-    ]);
-
-    const continuations = layout.rows.flatMap((row) =>
-      row.edges.filter((edge) => edge.kind === "continuation"),
-    );
-    expect(continuations.every((edge) => edge.fromLane === edge.toLane)).toBe(true);
-  });
-
   it("keeps the first-parent history in one straight primary lane", () => {
     const layout = layoutGitHistoryGraph([
       { hash: "head", parentHashes: ["merge"] },
@@ -227,26 +213,6 @@ describe("layoutGitHistoryGraph", () => {
     ]);
     expect(layout.rows[0]?.edges.some((edge) => edge.fromLane === 0)).toBe(false);
     expect(layout.rows[1]?.hasIncoming).toBe(false);
-  });
-
-  it("does not create a branch edge from a continuation lane", () => {
-    const layout = layoutGitHistoryGraph([
-      { hash: "merge", parentHashes: ["main", "side"] },
-      { hash: "main", parentHashes: ["base"] },
-      { hash: "side", parentHashes: ["base"] },
-      { hash: "base", parentHashes: [] },
-    ]);
-
-    expect(
-      layout.rows.flatMap((row) =>
-        row.edges.filter((edge) => edge.kind === "parent").map((edge) => [row.lane, edge.fromLane]),
-      ),
-    ).toEqual([
-      [0, 0],
-      [0, 0],
-      [0, 0],
-      [1, 1],
-    ]);
   });
 
   it("keeps missing page-boundary parents visible and starts unrelated commits in a new lane", () => {
