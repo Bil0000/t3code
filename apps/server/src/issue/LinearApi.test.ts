@@ -266,6 +266,26 @@ it.effect("surfaces malformed saved credential storage", () => {
   }).pipe(Effect.provide(layer));
 });
 
+it.effect("keeps Linear GraphQL error text out of caller-visible failures", () => {
+  const errors = [{ message: "private upstream diagnostic" }];
+  const { layer } = makeLayer({
+    token: "lin_api_test",
+    response: () => ({
+      data: { viewer: { id: "user-1", name: null, email: null, avatarUrl: null } },
+      errors,
+    }),
+  });
+  return Effect.gen(function* () {
+    const api = yield* LinearApi.LinearApi;
+    const error = yield* Effect.flip(api.getViewer({}));
+
+    assert.strictEqual(error.operation, "viewer");
+    assert.strictEqual(error.reason, "failed");
+    assert.notInclude(error.detail, errors[0]!.message);
+    assert.deepStrictEqual(error.cause, errors);
+  }).pipe(Effect.provide(layer));
+});
+
 it.effect("reports an invalid legacy key as stored so old clients can disconnect it", () => {
   const { layer } = makeLayer({
     token: "lin_api_invalid",

@@ -127,6 +127,70 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(settingsLayer));
   });
 
+  it.effect("does not write a new provider secret before materialization succeeds", () => {
+    const cause = new ServerSecretStore.SecretStoreReadError({
+      resource: "provider environment secret",
+      cause: "test",
+    });
+    let secretWrites = 0;
+    const settingsLayer = ServerSettingsModule.layer.pipe(
+      Layer.provide(
+        Layer.succeed(
+          ServerSecretStore.ServerSecretStore,
+          ServerSecretStore.ServerSecretStore.of({
+            get: () => Effect.fail(cause),
+            set: () =>
+              Effect.sync(() => {
+                secretWrites += 1;
+              }),
+            create: () => Effect.void,
+            getOrCreateRandom: () => Effect.succeed(new Uint8Array()),
+            remove: () => Effect.void,
+          }),
+        ),
+      ),
+      Layer.provideMerge(
+        Layer.fresh(
+          ServerConfig.layerTest(process.cwd(), {
+            prefix: "t3code-server-settings-secret-order-test-",
+          }),
+        ),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const serverConfig = yield* ServerConfig.ServerConfig;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+      yield* fileSystem.writeFileString(
+        serverConfig.settingsPath,
+        '{"providerInstances":{"codex_personal":{"driver":"codex","environment":[{"name":"OPENROUTER_API_KEY","value":"","sensitive":true,"valueRedacted":true}],"config":{}}}}',
+      );
+
+      yield* Effect.flip(
+        serverSettings.updateSettings({
+          providerInstances: {
+            [ProviderInstanceId.make("codex_personal")]: {
+              driver: ProviderDriverKind.make("codex"),
+              environment: [
+                {
+                  name: "OPENROUTER_API_KEY",
+                  value: "",
+                  sensitive: true,
+                  valueRedacted: true,
+                },
+                { name: "NEW_SECRET", value: "new-secret", sensitive: true },
+              ],
+              config: {},
+            },
+          },
+        }),
+      );
+
+      assert.strictEqual(secretWrites, 0);
+    }).pipe(Effect.provide(settingsLayer));
+  });
+
   it.effect("decodes nested settings patches", () =>
     Effect.gen(function* () {
       assert.deepEqual(

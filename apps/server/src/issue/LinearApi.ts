@@ -1,6 +1,5 @@
 import * as Config from "effect/Config";
 import * as Context from "effect/Context";
-import * as Data from "effect/Data";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -180,11 +179,24 @@ const COMMENT_REACTIONS_QUERY = `query T3LinearCommentReactions($id: String!) {
   comment(id: $id) { reactions { ${REACTION_FIELDS} } }
 }`;
 
-export class LinearApiError extends Data.TaggedError("LinearApiError")<{
-  readonly reason: "unauthenticated" | "failed";
-  readonly detail: string;
-  readonly cause?: unknown;
-}> {}
+export class LinearApiError extends Schema.TaggedErrorClass<LinearApiError>()("LinearApiError", {
+  operation: Schema.String,
+  reason: Schema.Literals(["unauthenticated", "account-required", "failed"]),
+  cause: Schema.optional(Schema.Defect()),
+}) {
+  get detail(): string {
+    if (this.reason === "unauthenticated") {
+      return `Linear authentication failed during ${this.operation}.`;
+    }
+    if (this.reason === "account-required") return "Choose the Linear account to disconnect.";
+    return `Linear ${this.operation} failed.`;
+  }
+
+  override get message(): string {
+    return `Linear failed in ${this.operation}: ${this.detail}`;
+  }
+}
+export const isLinearApiError = Schema.is(LinearApiError);
 
 export type LinearUser = typeof User.Type;
 export type LinearIssue = typeof Issue.Type;
@@ -263,20 +275,20 @@ export const make = Effect.gen(function* () {
   const secrets = yield* ServerSecretStore.ServerSecretStore;
   const credentialPoolMutex = yield* Semaphore.make(1);
 
-  const readSecret = (name: string) =>
+  const readSecret = (name: string, operation: string) =>
     secrets.get(name).pipe(
       Effect.mapError(
         (cause) =>
           new LinearApiError({
+            operation,
             reason: "failed",
-            detail: "Could not read the saved Linear token.",
             cause,
           }),
       ),
       Effect.map((value) => Option.map(value, (bytes) => new TextDecoder().decode(bytes).trim())),
     );
-  const storedToken = readSecret(LINEAR_API_TOKEN_SECRET);
-  const storedCredentials = readSecret(LINEAR_CREDENTIALS_SECRET).pipe(
+  const storedToken = readSecret(LINEAR_API_TOKEN_SECRET, "read-token");
+  const storedCredentials = readSecret(LINEAR_CREDENTIALS_SECRET, "read-accounts").pipe(
     Effect.flatMap(
       Option.match({
         onNone: () => Effect.succeed<ReadonlyArray<Credential>>([]),
@@ -284,11 +296,11 @@ export const make = Effect.gen(function* () {
           decodeCredentialPool(value).pipe(
             Effect.map((pool) => pool.credentials),
             Effect.mapError((cause) =>
-              cause instanceof LinearApiError
+              isLinearApiError(cause)
                 ? cause
                 : new LinearApiError({
+                    operation: "read-accounts",
                     reason: "failed",
-                    detail: "Could not read the saved Linear accounts.",
                     cause,
                   }),
             ),
@@ -306,8 +318,8 @@ export const make = Effect.gen(function* () {
         Effect.mapError(
           (cause) =>
             new LinearApiError({
+              operation: "save-accounts",
               reason: "failed",
-              detail: "Could not save the Linear accounts.",
               cause,
             }),
         ),
@@ -316,8 +328,8 @@ export const make = Effect.gen(function* () {
     Effect.mapError(
       (cause) =>
         new LinearApiError({
+          operation: "remove-token",
           reason: "failed",
-          detail: "Could not remove the legacy Linear token.",
           cause,
         }),
     ),
@@ -340,11 +352,11 @@ export const make = Effect.gen(function* () {
       )
       .pipe(
         Effect.mapError((cause) =>
-          cause instanceof LinearApiError
+          isLinearApiError(cause)
             ? cause
             : new LinearApiError({
+                operation,
                 reason: "failed",
-                detail: `Linear ${operation} request failed.`,
                 cause,
               }),
         ),
@@ -352,23 +364,24 @@ export const make = Effect.gen(function* () {
           response.status === 401 || response.status === 403
             ? Effect.fail(
                 new LinearApiError({
+                  operation,
                   reason: "unauthenticated",
-                  detail: "Linear rejected the API token.",
                 }),
               )
             : response.status < 200 || response.status >= 300
               ? Effect.fail(
                   new LinearApiError({
+                    operation,
                     reason: "failed",
-                    detail: `Linear returned HTTP ${response.status}.`,
+                    cause: { status: response.status },
                   }),
                 )
               : HttpClientResponse.schemaBodyJson(schema)(response).pipe(
                   Effect.mapError(
                     (cause) =>
                       new LinearApiError({
+                        operation,
                         reason: "failed",
-                        detail: "Linear returned an invalid response.",
                         cause,
                       }),
                   ),
@@ -381,8 +394,9 @@ export const make = Effect.gen(function* () {
             ? Effect.succeed(envelope)
             : Effect.fail(
                 new LinearApiError({
+                  operation,
                   reason: isAuthError(message) ? "unauthenticated" : "failed",
-                  detail: message,
+                  cause: errors,
                 }),
               );
         }),
@@ -400,11 +414,9 @@ export const make = Effect.gen(function* () {
               if (onlyCredential !== undefined) return Effect.succeed(onlyCredential.token);
               return Effect.fail(
                 new LinearApiError({
+                  operation: "select-account",
                   reason: "unauthenticated",
-                  detail:
-                    credentials.length > 0
-                      ? "The selected Linear account is not connected."
-                      : "Connect Linear in Settings.",
+                  cause: { connectedAccounts: credentials.length },
                 }),
               );
             }),
@@ -414,8 +426,8 @@ export const make = Effect.gen(function* () {
         if (credential !== undefined) return Effect.succeed(credential.token);
         return Effect.fail(
           new LinearApiError({
+            operation: "select-account",
             reason: "unauthenticated",
-            detail: "The selected Linear account is not connected.",
           }),
         );
       }),
@@ -438,8 +450,8 @@ export const make = Effect.gen(function* () {
         data.viewer === null
           ? Effect.fail(
               new LinearApiError({
+                operation: "connection",
                 reason: "unauthenticated",
-                detail: "Linear rejected the API token.",
               }),
             )
           : Effect.succeed({
@@ -581,8 +593,9 @@ export const make = Effect.gen(function* () {
     issue === null
       ? Effect.fail(
           new LinearApiError({
+            operation: "getIssue",
             reason: "failed",
-            detail: `Linear issue ${identifier} was not found.`,
+            cause: { identifier },
           }),
         )
       : Effect.succeed(issue);
@@ -597,9 +610,7 @@ export const make = Effect.gen(function* () {
       Effect.flatMap(({ data }) =>
         Object.values(data).some((payload) => payload.success)
           ? Effect.void
-          : Effect.fail(
-              new LinearApiError({ reason: "failed", detail: `Linear ${operation} failed.` }),
-            ),
+          : Effect.fail(new LinearApiError({ operation, reason: "failed" })),
       ),
     );
 
@@ -639,8 +650,8 @@ export const make = Effect.gen(function* () {
           const credentials = yield* storedCredentials;
           if (input === undefined && credentials.length > 1) {
             return yield* new LinearApiError({
-              reason: "failed",
-              detail: "Choose the Linear account to disconnect.",
+              operation: "disconnect",
+              reason: "account-required",
             });
           }
           const credentialId =

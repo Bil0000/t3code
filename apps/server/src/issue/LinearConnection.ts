@@ -103,7 +103,7 @@ export const updateLegacyLinearProjectTeams = (patch: ServerSettingsPatch) =>
         ),
       );
       yield* syncLegacyBindings(connection).pipe(
-        Effect.catchTag("LinearApiError", () => Effect.void),
+        Effect.catchTags({ LinearApiError: () => Effect.void }),
       );
 
       const current = yield* settings.getSettings;
@@ -200,8 +200,8 @@ export const connectLinearAccount = (token: string, mode?: LinearConnectInput["m
             : undefined);
       if (replacement === undefined) {
         return yield* new LinearApi.LinearApiError({
+          operation: "connect",
           reason: "failed",
-          detail: "Could not identify the Linear account added by this token.",
         });
       }
 
@@ -286,14 +286,14 @@ export const setLinearProjectBinding = (input: LinearSetProjectBindingInput) =>
         );
         if (account === undefined) {
           return yield* new LinearApi.LinearApiError({
+            operation: "setProjectBinding",
             reason: "failed",
-            detail: "The selected Linear account is not connected.",
           });
         }
         if (!account.teams.some(({ key }) => key === binding.teamKey)) {
           return yield* new LinearApi.LinearApiError({
+            operation: "setProjectBinding",
             reason: "failed",
-            detail: "The selected Linear team is not available to this account.",
           });
         }
       } else if (binding !== null) {
@@ -303,8 +303,8 @@ export const setLinearProjectBinding = (input: LinearSetProjectBindingInput) =>
           !environmentAccount.teams.some(({ key }) => key === binding.teamKey)
         ) {
           return yield* new LinearApi.LinearApiError({
+            operation: "setProjectBinding",
             reason: "failed",
-            detail: "The selected Linear environment team is not available.",
           });
         }
       }
@@ -385,8 +385,8 @@ export const disconnectLinearAccount = (input: LinearDisconnectInput) =>
       }
       if (credentialId === undefined) {
         return yield* new LinearApi.LinearApiError({
-          reason: "failed",
-          detail: "Choose the Linear account to disconnect.",
+          operation: "disconnect",
+          reason: "account-required",
         });
       }
 

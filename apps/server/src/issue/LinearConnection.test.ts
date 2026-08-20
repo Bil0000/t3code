@@ -356,8 +356,8 @@ it.effect("keeps replacement bindings usable when removing the old key fails", (
     disconnect: () =>
       Effect.fail(
         new LinearApi.LinearApiError({
+          operation: "disconnect",
           reason: "failed",
-          detail: "Could not delete the old Linear account.",
         }),
       ),
   } as unknown as LinearApi.LinearApi["Service"]);
@@ -408,8 +408,8 @@ it.effect("restores unavailable bindings when legacy replacement removal fails",
     disconnect: () =>
       Effect.fail(
         new LinearApi.LinearApiError({
+          operation: "disconnect",
           reason: "failed",
-          detail: "Could not delete the old Linear account.",
         }),
       ),
   } as unknown as LinearApi.LinearApi["Service"]);
@@ -614,8 +614,8 @@ it.effect("keeps bindings when legacy connection inspection fails", () => {
   const api = LinearApi.LinearApi.of({
     connection: Effect.fail(
       new LinearApi.LinearApiError({
+        operation: "connection",
         reason: "failed",
-        detail: "Could not read Linear credentials.",
       }),
     ),
   } as unknown as LinearApi.LinearApi["Service"]);
@@ -850,8 +850,8 @@ it.effect("keeps legacy fallback active when deleting the legacy key fails", () 
     disconnect: () =>
       Effect.fail(
         new LinearApi.LinearApiError({
+          operation: "disconnect",
           reason: "failed",
-          detail: "Could not delete the saved Linear account.",
         }),
       ),
   } as unknown as LinearApi.LinearApi["Service"]);
@@ -1023,8 +1023,8 @@ it.effect("restores project bindings when credential deletion fails", () => {
     disconnect: () =>
       Effect.fail(
         new LinearApi.LinearApiError({
+          operation: "disconnect",
           reason: "failed",
-          detail: "Could not delete the saved Linear account.",
         }),
       ),
   } as unknown as LinearApi.LinearApi["Service"]);

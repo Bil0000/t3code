@@ -440,7 +440,7 @@ const makeWsRpcLayer = (
         (error: LinearApi.LinearApiError | ServerSettingsError) =>
           new IssueTrackingError({
             operation,
-            detail: error instanceof LinearApi.LinearApiError ? error.detail : settingsDetail,
+            detail: LinearApi.isLinearApiError(error) ? error.detail : settingsDetail,
             cause: error,
           });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
