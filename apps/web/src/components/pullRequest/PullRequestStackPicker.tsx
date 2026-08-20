@@ -136,7 +136,7 @@ export function PullRequestStackPicker(props: PullRequestStackPickerProps) {
       <MenuTrigger
         render={
           <Button
-            aria-label={`Open pull request stack. Step ${model.currentPosition} of ${model.steps.length}.`}
+            aria-label={`Open pull request stack. Step ${model.currentPosition} of ${model.steps.length}.${staleCount > 0 ? ` ${staleCount} step${staleCount === 1 ? "" : "s"} need refresh.` : ""}`}
             className="gap-1 px-2"
             size="xs"
             variant="outline"

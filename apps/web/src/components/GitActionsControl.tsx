@@ -46,6 +46,8 @@ import {
   buildGitActionProgressStages,
   buildMenuItems,
   canUsePullRequestStackActions,
+  disableStackSensitiveMenuItems,
+  disableStackSensitiveQuickAction,
   adaptMenuItemsForStack,
   adaptQuickActionForStack,
   type GitActionIconName,
@@ -292,14 +294,22 @@ function getMenuActionDisabledReason({
   gitStatus,
   isBusy,
   hasPrimaryRemote,
+  stackMembershipUnknown,
 }: {
   item: GitActionMenuItem;
   gitStatus: VcsStatusResult | null;
   isBusy: boolean;
   hasPrimaryRemote: boolean;
+  stackMembershipUnknown: boolean;
 }): string | null {
   if (!item.disabled) return null;
   if (isBusy) return "Git action in progress.";
+  if (
+    stackMembershipUnknown &&
+    (item.id === "push" || (item.id === "pr" && item.kind === "open_dialog"))
+  ) {
+    return "Stack status is unavailable.";
+  }
   if (!gitStatus) return "Git status is unavailable.";
 
   const hasBranch = gitStatus.refName !== null;
@@ -1139,6 +1149,7 @@ export default function GitActionsControl({
   );
   const queriedStack = stackQuery.data?.stack ?? null;
   const currentStack = queriedStack?.currentBranch === gitStatus?.refName ? queriedStack : null;
+  const stackMembershipUnknown = stackQuery.error !== null && stackQuery.data === null;
   useEffect(
     () =>
       onAddStackStep((target) => {
@@ -1181,7 +1192,7 @@ export default function GitActionsControl({
     gitActionRunning: isGitActionRunning,
     stackActionPending,
     stackQueryPending: stackQuery.isPending,
-    stackQueryFailed: stackQuery.error !== null && stackQuery.data === null,
+    stackQueryFailed: stackMembershipUnknown,
   });
   const isSelectingWorktreeBase =
     !activeServerThread &&
@@ -1220,18 +1231,32 @@ export default function GitActionsControl({
   }, [gitStatusForActions?.isDefaultRef]);
 
   const gitActionMenuItems = useMemo(() => {
-    const items = buildMenuItems(gitStatusForActions, gitControlsBusy, hasPrimaryRemote);
+    const items = disableStackSensitiveMenuItems(
+      buildMenuItems(gitStatusForActions, gitControlsBusy, hasPrimaryRemote),
+      stackMembershipUnknown,
+    );
     return currentStack === null ? items : adaptMenuItemsForStack(items);
-  }, [currentStack, gitControlsBusy, gitStatusForActions, hasPrimaryRemote]);
+  }, [
+    currentStack,
+    gitControlsBusy,
+    gitStatusForActions,
+    hasPrimaryRemote,
+    stackMembershipUnknown,
+  ]);
   const quickAction = useMemo(() => {
-    const action = resolveQuickAction(
-      gitStatusForActions,
-      gitControlsBusy,
-      isDefaultRef,
-      hasPrimaryRemote,
+    const action = disableStackSensitiveQuickAction(
+      resolveQuickAction(gitStatusForActions, gitControlsBusy, isDefaultRef, hasPrimaryRemote),
+      stackMembershipUnknown,
     );
     return currentStack === null ? action : adaptQuickActionForStack(action);
-  }, [currentStack, gitControlsBusy, gitStatusForActions, hasPrimaryRemote, isDefaultRef]);
+  }, [
+    currentStack,
+    gitControlsBusy,
+    gitStatusForActions,
+    hasPrimaryRemote,
+    isDefaultRef,
+    stackMembershipUnknown,
+  ]);
   const quickActionDisabledReason = quickAction.disabled
     ? (quickAction.hint ?? "This action is currently unavailable.")
     : null;
@@ -1930,6 +1955,7 @@ export default function GitActionsControl({
                   gitStatus: gitStatusForActions,
                   isBusy: gitControlsBusy,
                   hasPrimaryRemote,
+                  stackMembershipUnknown,
                 });
                 if (item.disabled && disabledReason) {
                   return (
