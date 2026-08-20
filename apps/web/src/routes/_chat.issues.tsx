@@ -73,6 +73,9 @@ import {
   WorkspaceBreadcrumbItem,
   WorkspaceBreadcrumbSeparator,
 } from "../components/WorkspaceBreadcrumb";
+import { WorkspacePageContainer } from "../components/WorkspacePageContainer";
+import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
+import { isElectron } from "../env";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
 import { MenuItem, MenuSeparator } from "../components/ui/menu";
@@ -97,7 +100,6 @@ import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { getIssueProviderPresentation } from "../components/issue/issuePresentation";
-import { COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS } from "~/workspaceTitlebar";
 import { toastManager } from "../components/ui/toast";
 import { isWorkItemSelected, useWorkItemSelection } from "../workItemSelection";
 
@@ -124,6 +126,20 @@ export interface IssuesSearch {
   readonly q?: string;
   readonly sort?: IssueListSort;
   readonly order?: IssueListOrder;
+}
+
+export function issueSelectionSearchPatch(target: {
+  readonly projectId: ProjectId;
+  readonly repository: string;
+  readonly number: number;
+  readonly provider?: string;
+}) {
+  return {
+    repository: target.repository,
+    number: target.number,
+    selectedProjectId: target.projectId,
+    selectedProvider: target.provider,
+  };
 }
 
 export function mergeIssueProviderSummaries(
@@ -1031,12 +1047,10 @@ function IssuesRouteView() {
   const selectSurfaceInUrl = (surface: RightPanelSurface | null) =>
     updateSearch(
       surface?.kind === "issue"
-        ? {
-            repository: surface.repository,
-            number: surface.number,
-            selectedProjectId: surface.projectId as ProjectId,
-            ...(surface.provider === undefined ? {} : { selectedProvider: surface.provider }),
-          }
+        ? issueSelectionSearchPatch({
+            ...surface,
+            projectId: surface.projectId as ProjectId,
+          })
         : clearedSelection,
     );
 
@@ -1517,11 +1531,7 @@ function IssuesRouteView() {
               if (rightPanelRef !== null) {
                 useRightPanelStore.getState().openIssue(rightPanelRef, created);
               }
-              updateSearch({
-                repository: created.repository,
-                number: created.number,
-                selectedProjectId: created.projectId,
-              });
+              updateSearch(issueSelectionSearchPatch(created));
               refreshList();
               baselineQuery.refresh();
               authoredQuery.refresh();
@@ -1684,18 +1694,7 @@ export function IssuesColumn({
     // Painted flat like the chat column: the inset underneath carries the chrome grain, and a
     // content surface that lets it show reads as a different background than every thread.
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-      <header
-        className={cn(
-          "drag-region flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center gap-1.5 px-3 sm:px-5",
-          // A closed right panel leaves this column full-width, so its header runs
-          // underneath the native window controls on Windows; reserve the inset the
-          // way Settings and the chat view do. While the panel is open the column
-          // ends at the panel's left edge and the absolute controls strip (already
-          // WCO-aware) owns the top-right corner.
-          !rightPanelOpen && "wco:pr-[var(--workspace-native-controls-inset)]",
-          COLLAPSED_SIDEBAR_TITLEBAR_INSET_CLASS,
-        )}
-      >
+      <WorkspacePageHeader electron={isElectron} reserveNativeControls={!rightPanelOpen}>
         {condensed ? (
           <WorkspaceBreadcrumb ariaLabel="Issue scope">
             {/* The page name remains the foreground anchor in both states; the live filters are
@@ -1755,7 +1754,7 @@ export function IssuesColumn({
           <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
         </Button>
         {rightPanelControl}
-      </header>
+      </WorkspacePageHeader>
 
       <div
         ref={scrollRef}
@@ -1764,7 +1763,7 @@ export function IssuesColumn({
         {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
             settings page makes: at rest the controls sit fully below the mask, and only
             content actually passing under the chrome fades. */}
-        <div className="mx-auto flex w-full max-w-4xl flex-col gap-4 px-5 pt-6 pb-12">
+        <WorkspacePageContainer className="gap-4">
           <div className="flex flex-col gap-3">
             <div ref={inFlowSearchRef} className="flex items-center gap-2">
               {searchInput}
@@ -1775,7 +1774,7 @@ export function IssuesColumn({
           </div>
 
           {listBody}
-        </div>
+        </WorkspacePageContainer>
       </div>
     </div>
   );

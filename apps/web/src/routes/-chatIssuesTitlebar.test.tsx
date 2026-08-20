@@ -9,12 +9,23 @@ import { MenuItem, MenuRadioItem } from "../components/ui/menu";
 import {
   CompactFilterMenu,
   hasLinearManagementState,
+  issueSelectionSearchPatch,
   IssuesColumn,
   mergeIssueProviderSummaries,
   stabilizeLinearProviderSummary,
 } from "./_chat.issues";
 
 describe("IssuesColumn", () => {
+  it("clears a stale provider when the next issue has none", () => {
+    expect(
+      issueSelectionSearchPatch({
+        projectId: "project_1" as ProjectId,
+        repository: "pingdotgg/t3code",
+        number: 1,
+      }),
+    ).toMatchObject({ selectedProvider: undefined });
+  });
+
   it("keeps issue actions in the fixed titlebar", () => {
     const markup = renderToStaticMarkup(
       <IssuesColumn
@@ -38,12 +49,16 @@ describe("IssuesColumn", () => {
       />,
     );
 
-    expect(markup).toContain(
-      "drag-region flex h-[var(--workspace-topbar-height)] min-h-[var(--workspace-topbar-height)] shrink-0 items-center",
-    );
+    expect(markup).toContain("<header");
     const header = markup.slice(markup.indexOf("<header"), markup.indexOf("</header>"));
     expect(header).toContain(">Select</button>");
     expect(header).not.toContain(">Filters</button>");
+  });
+
+  it("uses the shared workspace header and content frame", () => {
+    const source = NodeFS.readFileSync(new URL("./_chat.issues.tsx", import.meta.url), "utf8");
+    expect(source).toContain("<WorkspacePageHeader");
+    expect(source).toContain('<WorkspacePageContainer className="gap-4">');
   });
 
   it("keeps provider management in the compact menu", () => {
@@ -216,3 +231,5 @@ describe("IssuesColumn", () => {
     ).toBe(false);
   });
 });
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";

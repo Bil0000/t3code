@@ -60,6 +60,8 @@ export function SummarySection({
           sectionTop: section.getBoundingClientRect().top,
           headingTop: heading.getBoundingClientRect().top,
         });
+        // Synchronous with the press: React commits the collapsed height before the browser
+        // paints, so the reader sees the heading they pressed stay put rather than a jump first.
         if (target !== null) scroller.scrollTop = target;
       }
     }
@@ -69,6 +71,7 @@ export function SummarySection({
     <Collapsible open={open} onOpenChange={setOpenWithScrollAnchor} data-summary-section>
       <div
         ref={headingRef}
+        // The heading stays reachable while its body scrolls, like a diff file header.
         className="sticky top-0 z-10 flex w-full items-center border-t border-border/60 bg-background pr-4"
       >
         {/* Title first, chevron riding to its right, count last: the row reads as a heading
