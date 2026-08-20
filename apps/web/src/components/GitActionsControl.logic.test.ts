@@ -6,8 +6,6 @@ import {
   buildGitActionProgressStages,
   buildMenuItems,
   canUsePullRequestStackActions,
-  disableStackSensitiveMenuItems,
-  disableStackSensitiveQuickAction,
   prepareGitActionForStackSubmit,
   requiresDefaultBranchConfirmation,
   resolveAutoFeatureBranchName,
@@ -52,39 +50,6 @@ describe("stack-aware Git actions", () => {
         stackQueryFailed: true,
       }),
       { gitControlsBusy: false, stackControlsBusy: true },
-    );
-  });
-
-  it("blocks only push and create-PR actions while stack membership is unknown", () => {
-    const commitItems = disableStackSensitiveMenuItems(
-      buildMenuItems(status({ hasWorkingTreeChanges: true }), false),
-      true,
-    );
-    const pushItems = disableStackSensitiveMenuItems(
-      buildMenuItems(status({ aheadCount: 1 }), false),
-      true,
-    );
-
-    assert.equal(commitItems[0]?.disabled, false);
-    assert.deepEqual(
-      pushItems.slice(1).map((item) => item.disabled),
-      [true, true],
-    );
-    assert.equal(
-      disableStackSensitiveQuickAction(
-        resolveQuickAction(
-          status({ hasWorkingTreeChanges: true, hasUpstream: false }),
-          false,
-          false,
-          false,
-        ),
-        true,
-      ).disabled,
-      false,
-    );
-    assert.deepInclude(
-      disableStackSensitiveQuickAction(resolveQuickAction(status({ aheadCount: 1 }), false), true),
-      { disabled: true, hint: "Stack status is unavailable." },
     );
   });
 

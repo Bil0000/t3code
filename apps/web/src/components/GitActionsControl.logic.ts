@@ -50,33 +50,6 @@ export function resolveGitControlBusyStates(input: {
   };
 }
 
-export function disableStackSensitiveMenuItems(
-  items: ReadonlyArray<GitActionMenuItem>,
-  stackMembershipUnknown: boolean,
-): ReadonlyArray<GitActionMenuItem> {
-  if (!stackMembershipUnknown) return items;
-  return items.map((item) =>
-    item.id === "push" || (item.id === "pr" && item.kind === "open_dialog")
-      ? { ...item, disabled: true }
-      : item,
-  );
-}
-
-export function disableStackSensitiveQuickAction(
-  action: GitQuickAction,
-  stackMembershipUnknown: boolean,
-): GitQuickAction {
-  if (
-    !stackMembershipUnknown ||
-    action.kind !== "run_action" ||
-    action.action === undefined ||
-    action.action === "commit"
-  ) {
-    return action;
-  }
-  return { ...action, disabled: true, hint: "Stack status is unavailable." };
-}
-
 export function canUsePullRequestStackActions(
   availability: PullRequestStackCurrentResult["availability"] | undefined,
 ): boolean {

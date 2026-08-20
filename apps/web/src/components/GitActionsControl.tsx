@@ -46,8 +46,6 @@ import {
   buildGitActionProgressStages,
   buildMenuItems,
   canUsePullRequestStackActions,
-  disableStackSensitiveMenuItems,
-  disableStackSensitiveQuickAction,
   adaptMenuItemsForStack,
   adaptQuickActionForStack,
   type GitActionIconName,
@@ -64,6 +62,7 @@ import {
   runWithPendingState,
   shouldSubmitStackAfterGitAction,
 } from "./GitActionsControl.logic";
+import { sanitizeNewRefName } from "./BranchToolbar.logic";
 import { AnimatedHeight } from "./AnimatedHeight";
 import { StartTruncatedPath } from "./StartTruncatedPath";
 import { Button } from "~/components/ui/button";
@@ -294,22 +293,14 @@ function getMenuActionDisabledReason({
   gitStatus,
   isBusy,
   hasPrimaryRemote,
-  stackMembershipUnknown,
 }: {
   item: GitActionMenuItem;
   gitStatus: VcsStatusResult | null;
   isBusy: boolean;
   hasPrimaryRemote: boolean;
-  stackMembershipUnknown: boolean;
 }): string | null {
   if (!item.disabled) return null;
   if (isBusy) return "Git action in progress.";
-  if (
-    stackMembershipUnknown &&
-    (item.id === "push" || (item.id === "pr" && item.kind === "open_dialog"))
-  ) {
-    return "Stack status is unavailable.";
-  }
   if (!gitStatus) return "Git status is unavailable.";
 
   const hasBranch = gitStatus.refName !== null;
@@ -1047,6 +1038,7 @@ export default function GitActionsControl({
   const [isPublishDialogOpen, setIsPublishDialogOpen] = useState(false);
   const [stackDialog, setStackDialog] = useState<"add" | "unstack" | null>(null);
   const [stackBranch, setStackBranch] = useState("");
+  const sanitizedStackBranch = sanitizeNewRefName(stackBranch);
   const [stackActionPending, setStackActionPending] = useState(false);
   const [pendingDefaultBranchAction, setPendingDefaultBranchAction] =
     useState<PendingDefaultBranchAction | null>(null);
@@ -1149,7 +1141,6 @@ export default function GitActionsControl({
   );
   const queriedStack = stackQuery.data?.stack ?? null;
   const currentStack = queriedStack?.currentBranch === gitStatus?.refName ? queriedStack : null;
-  const stackMembershipUnknown = stackQuery.error !== null && stackQuery.data === null;
   useEffect(
     () =>
       onAddStackStep((target) => {
@@ -1192,7 +1183,7 @@ export default function GitActionsControl({
     gitActionRunning: isGitActionRunning,
     stackActionPending,
     stackQueryPending: stackQuery.isPending,
-    stackQueryFailed: stackMembershipUnknown,
+    stackQueryFailed: stackQuery.error !== null && stackQuery.data === null,
   });
   const isSelectingWorktreeBase =
     !activeServerThread &&
@@ -1231,32 +1222,18 @@ export default function GitActionsControl({
   }, [gitStatusForActions?.isDefaultRef]);
 
   const gitActionMenuItems = useMemo(() => {
-    const items = disableStackSensitiveMenuItems(
-      buildMenuItems(gitStatusForActions, gitControlsBusy, hasPrimaryRemote),
-      stackMembershipUnknown,
-    );
+    const items = buildMenuItems(gitStatusForActions, gitControlsBusy, hasPrimaryRemote);
     return currentStack === null ? items : adaptMenuItemsForStack(items);
-  }, [
-    currentStack,
-    gitControlsBusy,
-    gitStatusForActions,
-    hasPrimaryRemote,
-    stackMembershipUnknown,
-  ]);
+  }, [currentStack, gitControlsBusy, gitStatusForActions, hasPrimaryRemote]);
   const quickAction = useMemo(() => {
-    const action = disableStackSensitiveQuickAction(
-      resolveQuickAction(gitStatusForActions, gitControlsBusy, isDefaultRef, hasPrimaryRemote),
-      stackMembershipUnknown,
+    const action = resolveQuickAction(
+      gitStatusForActions,
+      gitControlsBusy,
+      isDefaultRef,
+      hasPrimaryRemote,
     );
     return currentStack === null ? action : adaptQuickActionForStack(action);
-  }, [
-    currentStack,
-    gitControlsBusy,
-    gitStatusForActions,
-    hasPrimaryRemote,
-    isDefaultRef,
-    stackMembershipUnknown,
-  ]);
+  }, [currentStack, gitControlsBusy, gitStatusForActions, hasPrimaryRemote, isDefaultRef]);
   const quickActionDisabledReason = quickAction.disabled
     ? (quickAction.hint ?? "This action is currently unavailable.")
     : null;
@@ -1955,7 +1932,6 @@ export default function GitActionsControl({
                   gitStatus: gitStatusForActions,
                   isBusy: gitControlsBusy,
                   hasPrimaryRemote,
-                  stackMembershipUnknown,
                 });
                 if (item.disabled && disabledReason) {
                   return (
@@ -2286,10 +2262,9 @@ export default function GitActionsControl({
               aria-label="New stack branch"
               onChange={(event) => setStackBranch(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key !== "Enter" || stackBranch.trim().length === 0) return;
-                const branch = stackBranch.trim();
+                if (event.key !== "Enter" || sanitizedStackBranch.length === 0) return;
                 setStackDialog(null);
-                void performStackAction("add_step", branch);
+                void performStackAction("add_step", sanitizedStackBranch);
               }}
             />
           </DialogPanel>
@@ -2299,11 +2274,10 @@ export default function GitActionsControl({
             </Button>
             <Button
               size="sm"
-              disabled={stackBranch.trim().length === 0 || stackActionPending}
+              disabled={sanitizedStackBranch.length === 0 || stackActionPending}
               onClick={() => {
-                const branch = stackBranch.trim();
                 setStackDialog(null);
-                void performStackAction("add_step", branch);
+                void performStackAction("add_step", sanitizedStackBranch);
               }}
             >
               Add step

@@ -69,6 +69,7 @@ function PullRequestRowImpl({
           {stackPosition ? (
             <Badge size="sm" variant="success">
               <LayersIcon aria-hidden />
+              <span className="sr-only">Stack step </span>
               {stackPosition.position}/{stackPosition.total}
             </Badge>
           ) : null}
