@@ -92,6 +92,7 @@ import {
   type RightPanelSurface,
 } from "../rightPanelStore";
 import { useDebouncedValue } from "../state/queries";
+import { findProjectForLink, openLinkInBrowser } from "../lib/openIssueLink";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
 import { usePrimaryEnvironment } from "../state/environments";
 import { issueEnvironment } from "../state/issues";
@@ -1457,9 +1458,13 @@ function IssuesRouteView() {
                 }}
                 onStateChange={handlePullRequestTabStatusChange}
                 onOpenLinkedIssue={(link) => {
-                  if (rightPanelRef === null) return;
+                  const project = findProjectForLink(projects, link);
+                  if (rightPanelRef === null || project === undefined) {
+                    openLinkInBrowser(link.url);
+                    return;
+                  }
                   const target = {
-                    projectId: activeSurface.projectId,
+                    projectId: project.id,
                     provider: link.provider,
                     repository: link.repository,
                     number: link.number,
@@ -1493,9 +1498,13 @@ function IssuesRouteView() {
                 // this page's own panel: leaving for the pull requests page would take the issue
                 // it answers off the screen.
                 onOpenLinkedPullRequest={(link) => {
-                  if (rightPanelRef === null) return;
+                  const project = findProjectForLink(projects, link);
+                  if (rightPanelRef === null || project === undefined) {
+                    openLinkInBrowser(link.url);
+                    return;
+                  }
                   useRightPanelStore.getState().openPullRequest(rightPanelRef, {
-                    projectId: activeSurface.projectId,
+                    projectId: project.id,
                     repository: link.repository,
                     number: link.number,
                   });

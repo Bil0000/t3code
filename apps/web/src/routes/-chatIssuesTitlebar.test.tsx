@@ -61,6 +61,11 @@ describe("IssuesColumn", () => {
     expect(source).toContain('<WorkspacePageContainer className="gap-4">');
   });
 
+  it("resolves both linked item kinds from their own repository", () => {
+    const source = NodeFS.readFileSync(new URL("./_chat.issues.tsx", import.meta.url), "utf8");
+    expect(source.match(/findProjectForLink\(projects, link\)/gu)).toHaveLength(2);
+  });
+
   it("keeps provider management in the compact menu", () => {
     const onClick = vi.fn();
     const menu = CompactFilterMenu({
