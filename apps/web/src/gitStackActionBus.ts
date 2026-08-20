@@ -7,12 +7,19 @@ interface AddStackStepTarget {
   readonly cwd: string;
 }
 
-export function requestAddStackStep(target: AddStackStepTarget): void {
-  window.dispatchEvent(new CustomEvent(ADD_STACK_STEP_EVENT, { detail: target }));
+export function requestAddStackStep(target: AddStackStepTarget): boolean {
+  return !window.dispatchEvent(
+    new CustomEvent(ADD_STACK_STEP_EVENT, {
+      cancelable: true,
+      detail: target,
+    }),
+  );
 }
 
-export function onAddStackStep(listener: (target: AddStackStepTarget) => void): () => void {
-  const handler = (event: Event) => listener((event as CustomEvent<AddStackStepTarget>).detail);
+export function onAddStackStep(listener: (target: AddStackStepTarget) => boolean): () => void {
+  const handler = (event: Event) => {
+    if (listener((event as CustomEvent<AddStackStepTarget>).detail)) event.preventDefault();
+  };
   window.addEventListener(ADD_STACK_STEP_EVENT, handler);
   return () => window.removeEventListener(ADD_STACK_STEP_EVENT, handler);
 }

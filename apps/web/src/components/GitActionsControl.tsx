@@ -1145,7 +1145,9 @@ export default function GitActionsControl({
         if (currentStack && target.environmentId === activeEnvironmentId && target.cwd === gitCwd) {
           setStackBranch("");
           setStackDialog("add");
+          return true;
         }
+        return false;
       }),
     [activeEnvironmentId, currentStack, gitCwd],
   );
@@ -1179,6 +1181,7 @@ export default function GitActionsControl({
     gitActionRunning: isGitActionRunning,
     stackActionPending,
     stackQueryPending: stackQuery.isPending,
+    stackQueryFailed: stackQuery.error !== null && stackQuery.data === null,
   });
   const isSelectingWorktreeBase =
     !activeServerThread &&
@@ -1856,7 +1859,7 @@ export default function GitActionsControl({
         </Button>
       ) : (
         <Group aria-label="Git actions" className="shrink-0">
-          {currentStack && repository ? (
+          {currentStack && repository && currentStack.steps.some((step) => step.isCurrent) ? (
             <>
               <PullRequestStackPicker
                 kind="local"

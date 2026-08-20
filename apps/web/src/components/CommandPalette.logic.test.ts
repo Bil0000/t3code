@@ -181,11 +181,27 @@ describe("resolveCurrentStackContext", () => {
       environmentId: remoteEnvironmentId,
       projectId: PROJECT_ID,
       threadWorktreePath: null,
-      draftWorktreePath: null,
     });
 
     expect(context.cwd).toBe("/remote/repo");
     expect(context.project?.environmentId).toBe(remoteEnvironmentId);
+  });
+
+  it("uses the project root when the chat header has no active worktree", () => {
+    const context = resolveCurrentStackContext({
+      projects: [
+        {
+          environmentId: LOCAL_ENVIRONMENT_ID,
+          id: PROJECT_ID,
+          workspaceRoot: "/local/repo",
+        },
+      ],
+      environmentId: LOCAL_ENVIRONMENT_ID,
+      projectId: PROJECT_ID,
+      threadWorktreePath: null,
+    });
+
+    expect(context.cwd).toBe("/local/repo");
   });
 });
 

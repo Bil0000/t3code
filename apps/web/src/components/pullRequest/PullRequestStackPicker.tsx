@@ -31,6 +31,7 @@ interface PickerStep {
   readonly branch: string;
   readonly pullRequestNumber: number | null;
   readonly state: PickerStepState;
+  readonly isDraft: boolean;
   readonly current: boolean;
   readonly needsRebase: boolean;
   readonly detail: string;
@@ -47,13 +48,12 @@ const STATE_LABELS: Record<PickerStepState, string> = {
 function stackStepDetail(
   pullRequestNumber: number | null,
   state: PickerStepState,
+  isDraft: boolean,
   repository: string,
   needsRebase: boolean,
 ) {
-  const pullRequest =
-    pullRequestNumber === null
-      ? STATE_LABELS[state]
-      : `#${pullRequestNumber} · ${STATE_LABELS[state]}`;
+  const label = isDraft && state === "open" ? "Draft" : STATE_LABELS[state];
+  const pullRequest = pullRequestNumber === null ? label : `#${pullRequestNumber} · ${label}`;
   return `${pullRequest} · ${repository}${needsRebase ? " · Needs refresh" : ""}`;
 }
 
@@ -68,8 +68,9 @@ function buildLocalPickerModel(stack: PullRequestLocalStack, repository: string)
       pullRequestNumber,
       state,
       current: step.isCurrent,
+      isDraft: false,
       needsRebase: step.needsRebase,
-      detail: stackStepDetail(pullRequestNumber, state, repository, step.needsRebase),
+      detail: stackStepDetail(pullRequestNumber, state, false, repository, step.needsRebase),
     };
   });
   return { baseBranch: stack.trunk, currentPosition, steps };
@@ -90,7 +91,8 @@ function buildRemotePickerModel(
       state: step.state,
       current: step.pullRequestNumber === pullRequestNumber,
       needsRebase: false,
-      detail: stackStepDetail(step.pullRequestNumber, step.state, repository, false),
+      isDraft: step.draft,
+      detail: stackStepDetail(step.pullRequestNumber, step.state, step.draft, repository, false),
     }),
   );
   return { baseBranch: stack.baseBranch, currentPosition, steps };
@@ -105,17 +107,17 @@ export function buildPullRequestStackPickerModel(input: PullRequestStackPickerIn
 function StepIcon({ step }: { step: PickerStep }) {
   const className = "size-3.5 shrink-0";
   if (step.needsRebase) {
-    return <TriangleAlertIcon aria-hidden className={cn(className, "text-amber-500")} />;
+    return <TriangleAlertIcon aria-hidden className={cn(className, "text-warning")} />;
   }
   if (step.state === "queued") {
-    return <Clock3Icon aria-hidden className={cn(className, "text-blue-500")} />;
+    return <Clock3Icon aria-hidden className={cn(className, "text-info")} />;
   }
   if (step.state === "unsubmitted") {
     return <span aria-hidden className={cn(className, "rounded-full border border-border")} />;
   }
   const presentation = resolvePullRequestState({
     state: step.state,
-    isDraft: false,
+    isDraft: step.isDraft,
   });
   return <presentation.Icon aria-hidden className={cn(className, presentation.toneClassName)} />;
 }
@@ -145,14 +147,12 @@ export function PullRequestStackPicker(props: PullRequestStackPickerProps) {
         <span className="tabular-nums">
           {model.currentPosition}/{model.steps.length}
         </span>
-        {staleCount > 0 ? (
-          <TriangleAlertIcon aria-hidden className="size-3 text-amber-500" />
-        ) : null}
+        {staleCount > 0 ? <TriangleAlertIcon aria-hidden className="size-3 text-warning" /> : null}
         <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground" />
       </MenuTrigger>
       <MenuPopup align="end" className="w-80 max-w-[calc(100vw-1rem)]" side="bottom">
         <div className="flex items-center gap-2 px-2 py-1.5">
-          <LayersIcon aria-hidden className="size-4 text-emerald-500" />
+          <LayersIcon aria-hidden className="size-4" />
           <div className="min-w-0">
             <p className="text-sm font-medium">Pull request stack</p>
             <p className="truncate text-xs text-muted-foreground">

@@ -41,8 +41,10 @@ export function resolveGitControlBusyStates(input: {
   readonly gitActionRunning: boolean;
   readonly stackActionPending: boolean;
   readonly stackQueryPending: boolean;
+  readonly stackQueryFailed: boolean;
 }) {
-  const gitControlsBusy = input.gitActionRunning || input.stackActionPending;
+  const gitControlsBusy =
+    input.gitActionRunning || input.stackActionPending || input.stackQueryFailed;
   return {
     gitControlsBusy,
     stackControlsBusy: gitControlsBusy || input.stackQueryPending,

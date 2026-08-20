@@ -48,14 +48,14 @@ const remoteStack: PullRequestStackSummary = {
       pullRequestNumber: 3,
       branch: "feature/one",
       state: "open",
-      draft: true,
+      draft: false,
     },
     {
       position: 2,
       pullRequestNumber: 4,
       branch: "feature/two",
       state: "open",
-      draft: true,
+      draft: false,
     },
   ],
 };
@@ -69,6 +69,7 @@ const expectedModel = {
       branch: "feature/one",
       pullRequestNumber: 3,
       state: "open",
+      isDraft: false,
       current: false,
       needsRebase: false,
       detail: "#3 · Open · bil0000/t3code",
@@ -78,6 +79,7 @@ const expectedModel = {
       branch: "feature/two",
       pullRequestNumber: 4,
       state: "open",
+      isDraft: false,
       current: true,
       needsRebase: false,
       detail: "#4 · Open · bil0000/t3code",
@@ -102,6 +104,23 @@ describe("pull request stack picker model", () => {
         pullRequestNumber: 4,
       }),
     ).toEqual(expectedModel);
+  });
+
+  it("preserves draft state for remote stack steps", () => {
+    const model = buildPullRequestStackPickerModel({
+      kind: "remote",
+      repository: "bil0000/t3code",
+      stack: {
+        ...remoteStack,
+        steps: remoteStack.steps.map((step) => ({ ...step, draft: true })),
+      },
+      pullRequestNumber: 4,
+    });
+
+    expect(model.steps[0]).toMatchObject({
+      isDraft: true,
+      detail: "#3 · Draft · bil0000/t3code",
+    });
   });
 
   it("keeps an unsubmitted local step visible but unavailable", () => {
@@ -132,6 +151,7 @@ describe("pull request stack picker model", () => {
       branch: "feature/three",
       pullRequestNumber: null,
       state: "unsubmitted",
+      isDraft: false,
       current: true,
       needsRebase: false,
       detail: "Not submitted · bil0000/t3code",

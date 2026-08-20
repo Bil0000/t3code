@@ -23,7 +23,6 @@ export function resolveCurrentStackContext<
   readonly environmentId: Project["environmentId"] | null;
   readonly projectId: Project["id"] | null;
   readonly threadWorktreePath: string | null;
-  readonly draftWorktreePath: string | null;
 }): { readonly project: TProject | null; readonly cwd: string | null } {
   const project =
     input.projects.find(
@@ -32,7 +31,7 @@ export function resolveCurrentStackContext<
     ) ?? null;
   return {
     project,
-    cwd: input.threadWorktreePath ?? input.draftWorktreePath ?? project?.workspaceRoot ?? null,
+    cwd: input.threadWorktreePath ?? project?.workspaceRoot ?? null,
   };
 }
 

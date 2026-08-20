@@ -902,7 +902,6 @@ function OpenCommandPaletteDialog(props: {
     environmentId: currentProjectEnvironmentId,
     projectId: currentProjectId,
     threadWorktreePath: activeThread?.worktreePath ?? null,
-    draftWorktreePath: activeDraftThread?.worktreePath ?? null,
   });
   const currentServerConfig = useAtomValue(
     serverEnvironment.configValueAtom(currentProjectEnvironmentId),
@@ -1537,7 +1536,7 @@ function OpenCommandPaletteDialog(props: {
       currentStackQuery.refresh();
       toastManager.add({
         type: "success",
-        title: action === "submit" ? "Stack shared" : "Stack refreshed",
+        title: action === "submit" ? "Stack submitted" : "Stack synced",
       });
     };
     const repositoryIdentity = currentProject.repositoryIdentity;
@@ -1571,19 +1570,27 @@ function OpenCommandPaletteDialog(props: {
         kind: "action",
         value: "action:add-stack-step",
         searchTerms: ["next", "add", "pull request", "stack", "step", "branch"],
-        title: "Start next stack step...",
+        title: "Add next stack step...",
         icon: <PlusIcon className={ITEM_ICON_CLASS} />,
-        run: async () =>
-          requestAddStackStep({
+        run: async () => {
+          const handled = requestAddStackStep({
             environmentId: currentProjectEnvironmentId,
             cwd: currentStackCwd,
-          }),
+          });
+          if (!handled) {
+            toastManager.add({
+              type: "error",
+              title: "Unable to add stack step",
+              description: "Open this stack in chat and try again.",
+            });
+          }
+        },
       },
       {
         kind: "action",
         value: "action:submit-stack",
         searchTerms: ["share", "submit", "push", "pull request", "stack"],
-        title: "Share pull request stack",
+        title: "Submit stack",
         icon: <CloudUploadIcon className={ITEM_ICON_CLASS} />,
         run: () => runCurrentStackAction("submit"),
       },
@@ -1591,7 +1598,7 @@ function OpenCommandPaletteDialog(props: {
         kind: "action",
         value: "action:sync-stack",
         searchTerms: ["refresh", "sync", "update", "pull request", "stack"],
-        title: "Refresh pull request stack",
+        title: "Sync stack",
         icon: <RefreshCwIcon className={ITEM_ICON_CLASS} />,
         run: () => runCurrentStackAction("sync"),
       },

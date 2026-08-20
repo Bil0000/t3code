@@ -35,8 +35,21 @@ describe("stack-aware Git actions", () => {
         gitActionRunning: false,
         stackActionPending: false,
         stackQueryPending: true,
+        stackQueryFailed: false,
       }),
       { gitControlsBusy: false, stackControlsBusy: true },
+    );
+  });
+
+  it("disables Git actions when stack membership fails to load", () => {
+    assert.deepEqual(
+      resolveGitControlBusyStates({
+        gitActionRunning: false,
+        stackActionPending: false,
+        stackQueryPending: false,
+        stackQueryFailed: true,
+      }),
+      { gitControlsBusy: true, stackControlsBusy: true },
     );
   });
 
