@@ -92,7 +92,11 @@ import {
   type RightPanelSurface,
 } from "../rightPanelStore";
 import { useDebouncedValue } from "../state/queries";
-import { findProjectForLink, openLinkInBrowser } from "../lib/openIssueLink";
+import {
+  findProjectForLink,
+  openLinkInBrowser,
+  repositoryForProjectLink,
+} from "../lib/openIssueLink";
 import { useAllEnvironmentShellsBootstrapped, useProjects } from "../state/entities";
 import { usePrimaryEnvironment } from "../state/environments";
 import { issueEnvironment } from "../state/issues";
@@ -1466,7 +1470,7 @@ function IssuesRouteView() {
                   const target = {
                     projectId: project.id,
                     provider: link.provider,
-                    repository: link.repository,
+                    repository: repositoryForProjectLink(project, link.repository),
                     number: link.number,
                   };
                   useRightPanelStore.getState().openIssue(rightPanelRef, target);
@@ -1505,7 +1509,7 @@ function IssuesRouteView() {
                   }
                   useRightPanelStore.getState().openPullRequest(rightPanelRef, {
                     projectId: project.id,
-                    repository: link.repository,
+                    repository: repositoryForProjectLink(project, link.repository),
                     number: link.number,
                   });
                   selectSurfaceInUrl(null);

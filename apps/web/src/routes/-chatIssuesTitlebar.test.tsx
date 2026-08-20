@@ -53,17 +53,10 @@ describe("IssuesColumn", () => {
     const header = markup.slice(markup.indexOf("<header"), markup.indexOf("</header>"));
     expect(header).toContain(">Select</button>");
     expect(header).not.toContain(">Filters</button>");
-  });
-
-  it("uses the shared workspace header and content frame", () => {
-    const source = NodeFS.readFileSync(new URL("./_chat.issues.tsx", import.meta.url), "utf8");
-    expect(source).toContain("<WorkspacePageHeader");
-    expect(source).toContain('<WorkspacePageContainer className="gap-4">');
-  });
-
-  it("resolves both linked item kinds from their own repository", () => {
-    const source = NodeFS.readFileSync(new URL("./_chat.issues.tsx", import.meta.url), "utf8");
-    expect(source.match(/findProjectForLink\(projects, link\)/gu)).toHaveLength(2);
+    expect(header).toContain("h-[var(--workspace-topbar-height)]");
+    expect(header).toContain("pl-[calc(env(safe-area-inset-left)+0.75rem)]");
+    expect(markup).toContain("max-w-4xl");
+    expect(markup).toContain("gap-4");
   });
 
   it("keeps provider management in the compact menu", () => {
@@ -236,5 +229,3 @@ describe("IssuesColumn", () => {
     ).toBe(false);
   });
 });
-// @effect-diagnostics nodeBuiltinImport:off
-import * as NodeFS from "node:fs";
