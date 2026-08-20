@@ -5,6 +5,7 @@ import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { Badge } from "../ui/badge";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import type { EnvironmentPullRequestEntry } from "./pullRequestList.logic";
@@ -66,10 +67,10 @@ function PullRequestRowImpl({
         <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
           <span className="truncate">{entry.title}</span>
           {stackPosition ? (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-emerald-500/25 bg-emerald-500/5 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
-              <LayersIcon aria-hidden className="size-3" />
+            <Badge size="sm" variant="success" className="gap-1 text-[10px]">
+              <LayersIcon aria-hidden />
               {stackPosition.position}/{stackPosition.total}
-            </span>
+            </Badge>
           ) : null}
         </span>
         <PullRequestMetaLine className="mt-0.5 text-xs text-muted-foreground/70">

@@ -37,12 +37,16 @@ export interface GitQuickAction {
   hint?: string;
 }
 
-export function areGitControlsBusy(input: {
+export function resolveGitControlBusyStates(input: {
   readonly gitActionRunning: boolean;
   readonly stackActionPending: boolean;
   readonly stackQueryPending: boolean;
-}): boolean {
-  return input.gitActionRunning || input.stackActionPending || input.stackQueryPending;
+}) {
+  const gitControlsBusy = input.gitActionRunning || input.stackActionPending;
+  return {
+    gitControlsBusy,
+    stackControlsBusy: gitControlsBusy || input.stackQueryPending,
+  };
 }
 
 export function canUsePullRequestStackActions(

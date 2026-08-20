@@ -42,7 +42,7 @@ import { RadioGroup } from "~/components/ui/radio-group";
 import { Spinner } from "~/components/ui/spinner";
 import { cn } from "~/lib/utils";
 import {
-  areGitControlsBusy,
+  resolveGitControlBusyStates,
   buildGitActionProgressStages,
   buildMenuItems,
   canUsePullRequestStackActions,
@@ -1175,7 +1175,7 @@ export default function GitActionsControl({
     sourceControlScope,
     RUNNING_SOURCE_CONTROL_ACTIONS,
   );
-  const gitControlsBusy = areGitControlsBusy({
+  const { gitControlsBusy, stackControlsBusy } = resolveGitControlBusyStates({
     gitActionRunning: isGitActionRunning,
     stackActionPending,
     stackQueryPending: stackQuery.isPending,
@@ -1979,47 +1979,47 @@ export default function GitActionsControl({
                   {currentStack === null ? (
                     <MenuItem
                       disabled={
-                        stackActionPending || gitStatusForActions.refName === null || isDefaultRef
+                        stackControlsBusy || gitStatusForActions.refName === null || isDefaultRef
                       }
                       onClick={() => {
                         const branch = gitStatusForActions.refName;
                         if (branch !== null) void performStackAction("start", branch);
                       }}
                     >
-                      <LayersIcon className="size-3.5" />
+                      <LayersIcon />
                       Start stack with this branch
                     </MenuItem>
                   ) : (
                     <>
                       <MenuItem
-                        disabled={stackActionPending}
+                        disabled={stackControlsBusy}
                         onClick={() => void performStackAction("submit")}
                       >
-                        <CloudUploadIcon className="size-3.5" />
+                        <CloudUploadIcon />
                         Submit stack
                       </MenuItem>
                       <MenuItem
-                        disabled={stackActionPending}
+                        disabled={stackControlsBusy}
                         onClick={() => void performStackAction("sync")}
                       >
-                        <RefreshCwIcon className="size-3.5" />
+                        <RefreshCwIcon />
                         Sync stack
                       </MenuItem>
                       <MenuItem
-                        disabled={stackActionPending}
+                        disabled={stackControlsBusy}
                         onClick={() => {
                           setStackBranch("");
                           setStackDialog("add");
                         }}
                       >
-                        <PlusIcon className="size-3.5" />
+                        <PlusIcon />
                         Add next stack step...
                       </MenuItem>
                       <MenuItem
-                        disabled={stackActionPending}
+                        disabled={stackControlsBusy}
                         onClick={() => setStackDialog("unstack")}
                       >
-                        <UnlinkIcon className="size-3.5" />
+                        <UnlinkIcon />
                         Unstack pull requests...
                       </MenuItem>
                     </>

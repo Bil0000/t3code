@@ -170,9 +170,12 @@ export function PullRequestStackPicker(props: PullRequestStackPickerProps) {
           </div>
         </div>
         <MenuSeparator />
-        <ol className="relative space-y-1 before:absolute before:bottom-4 before:left-[15px] before:top-4 before:w-px before:bg-border">
+        <ol
+          role="none"
+          className="relative space-y-1 before:absolute before:bottom-4 before:left-[15px] before:top-4 before:w-px before:bg-border"
+        >
           {model.steps.toReversed().map((step) => (
-            <li key={step.position} className="relative">
+            <li role="none" key={step.position} className="relative">
               <MenuItem
                 aria-current={step.current ? "step" : undefined}
                 disabled={step.pullRequestNumber === null || props.onSelect === undefined}

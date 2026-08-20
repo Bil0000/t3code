@@ -3,7 +3,6 @@ import { assert, describe, it } from "vite-plus/test";
 import {
   adaptMenuItemsForStack,
   adaptQuickActionForStack,
-  areGitControlsBusy,
   buildGitActionProgressStages,
   buildMenuItems,
   canUsePullRequestStackActions,
@@ -14,6 +13,7 @@ import {
   resolveLiveThreadBranchUpdate,
   resolveQuickAction,
   resolveThreadBranchUpdate,
+  resolveGitControlBusyStates,
   resolveThreadBranchMetadataPatch,
   runWithPendingState,
   shouldSubmitStackAfterGitAction,
@@ -29,13 +29,14 @@ describe("stack-aware Git actions", () => {
     assert.equal(canUsePullRequestStackActions(availability), expected);
   });
 
-  it("keeps Git actions disabled while stack membership loads", () => {
-    assert.isTrue(
-      areGitControlsBusy({
+  it("keeps ordinary Git actions available while stack membership loads", () => {
+    assert.deepEqual(
+      resolveGitControlBusyStates({
         gitActionRunning: false,
         stackActionPending: false,
         stackQueryPending: true,
       }),
+      { gitControlsBusy: false, stackControlsBusy: true },
     );
   });
 
