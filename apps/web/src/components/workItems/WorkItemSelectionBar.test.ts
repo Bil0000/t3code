@@ -34,11 +34,13 @@ const item: SelectedWorkItem = {
 };
 
 describe("work item task draft", () => {
-  it("anchors selected-item actions to the bottom of the viewport", () => {
-    expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).toContain("fixed");
+  it("centers selected-item actions inside the list column", () => {
+    expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).toContain("absolute");
     expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).toContain(
       "bottom-[calc(env(safe-area-inset-bottom)+1rem)]",
     );
+    expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).toContain("w-[min(calc(100%-2rem),48rem)]");
+    expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).not.toContain("100vw");
   });
 
   it("shows the exact help for each task shape", () => {

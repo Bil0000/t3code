@@ -56,7 +56,7 @@ import {
 } from "../components/issue/IssueListFilters";
 import { ListSearchInput, type ListFilterOption } from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
-import { WorkItemSelectionBar } from "../components/workItems/WorkItemSelectionBar";
+import { WorkItemSelectionBarHost } from "../components/workItems/WorkItemSelectionBar";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import { resolveProjectScope } from "../components/sourceControl/projectScope";
@@ -1188,7 +1188,6 @@ function IssuesRouteView() {
     showingCarried && listQuery.isPending && entries.length === 0 && typedQuery.length === 0;
   const listBody = (
     <>
-      <WorkItemSelectionBar />
       {!capabilityKnown ? (
         <ListGhost rows={7} label="Loading issues" />
       ) : !issuesSupported ? (
@@ -1414,7 +1413,9 @@ function IssuesRouteView() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="relative flex min-h-0 flex-1">
         {issuesSupported && rightPanelState.isOpen ? openPanelControls : null}
-        <IssuesColumn {...columnProps} />
+        <WorkItemSelectionBarHost>
+          <IssuesColumn {...columnProps} />
+        </WorkItemSelectionBarHost>
 
         {rightPanelState.isOpen && activeSurface && issueEnvironmentId !== null ? (
           <RightPanelTabs

@@ -76,7 +76,7 @@ import {
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import {
   WorkItemSelectButton,
-  WorkItemSelectionBar,
+  WorkItemSelectionBarHost,
 } from "../components/workItems/WorkItemSelectionBar";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import {
@@ -1386,7 +1386,6 @@ function PullRequestsRouteView() {
     showingCarried && listQuery.isPending && entries.length === 0 && typedQuery.length === 0;
   const listBody = (
     <>
-      <WorkItemSelectionBar />
       {!capabilityKnown ? (
         <ListGhost rows={7} label="Loading pull requests" />
       ) : !pullRequestsSupported ? (
@@ -1620,7 +1619,9 @@ function PullRequestsRouteView() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="relative flex min-h-0 flex-1">
         {pullRequestsSupported ? openPanelControls : null}
-        <PullRequestsColumn {...columnProps} />
+        <WorkItemSelectionBarHost>
+          <PullRequestsColumn {...columnProps} />
+        </WorkItemSelectionBarHost>
 
         {rightPanelState.isOpen && activeSurface && panelEnvironmentId !== null ? (
           <RightPanelTabs

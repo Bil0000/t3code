@@ -1,6 +1,6 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
 import { ListChecksIcon, LoaderIcon, SparklesIcon, XIcon } from "lucide-react";
-import { useState } from "react";
+import { type PropsWithChildren, useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
@@ -17,7 +17,7 @@ export const WORK_ITEM_MODE_HELP = {
 } as const;
 
 export const WORK_ITEM_SELECTION_BAR_CLASS_NAME =
-  "fixed bottom-[calc(env(safe-area-inset-bottom)+1rem)] left-1/2 z-50 flex w-[min(calc(100vw-2rem),48rem)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-xl border bg-background/95 p-2 shadow-lg backdrop-blur";
+  "absolute bottom-[calc(env(safe-area-inset-bottom)+1rem)] left-1/2 z-50 flex w-[min(calc(100%-2rem),48rem)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-xl border bg-background/95 p-2 shadow-lg backdrop-blur";
 
 export function workItemGeneratingDraft(
   mode: "compound" | "subtasks",
@@ -193,6 +193,15 @@ export function WorkItemSelectionBar() {
       <Button size="icon-xs" variant="ghost" aria-label="Clear selection" onClick={clear}>
         <XIcon aria-hidden className="size-3.5" />
       </Button>
+    </div>
+  );
+}
+
+export function WorkItemSelectionBarHost({ children }: PropsWithChildren) {
+  return (
+    <div className="relative flex min-w-0 flex-1">
+      {children}
+      <WorkItemSelectionBar />
     </div>
   );
 }
