@@ -407,8 +407,7 @@ export type ClaudeSettings = typeof ClaudeSettings.Type;
 
 export const CursorSettings = makeProviderSettingsSchema(
   {
-    // Off by default (like Grok and OpenCode): the binding is not yet
-    // stable enough to probe on every install. Users opt in from Settings.
+    // On by default so installed Cursor agents appear without a hidden opt-in.
     enabled: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),

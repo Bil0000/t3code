@@ -136,14 +136,6 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     expect(decoded.providers.codex.enabled).toBe(true);
   });
 
-  it("enables every built-in provider by default", () => {
-    const decoded = decodeServerSettings({});
-    expect(decoded.providers.cursor.enabled).toBe(true);
-    expect(decoded.providers.claudeAgent.enabled).toBe(true);
-    expect(decoded.providers.grok.enabled).toBe(true);
-    expect(decoded.providers.opencode.enabled).toBe(true);
-  });
-
   it("decodes a multi-instance map mixing first-party and fork drivers", () => {
     const decoded = decodeServerSettings({
       providerInstances: {
@@ -188,11 +180,11 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
 });
 
 describe("provider enabled defaults", () => {
-  it("enables only the stable bindings by default", () => {
+  it("enables supported bindings by default", () => {
     const decoded = decodeServerSettings({});
     expect(decoded.providers.codex.enabled).toBe(true);
     expect(decoded.providers.claudeAgent.enabled).toBe(true);
-    expect(decoded.providers.cursor.enabled).toBe(false);
+    expect(decoded.providers.cursor.enabled).toBe(true);
     expect(decoded.providers.grok.enabled).toBe(false);
     expect(decoded.providers.opencode.enabled).toBe(false);
   });
