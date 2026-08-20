@@ -100,6 +100,7 @@ import {
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
+  updateIssueTabStatus,
   updatePullRequestTabStatus,
   useRightPanelStore,
   type RightPanelSurface,
@@ -430,11 +431,7 @@ function PullRequestsRouteView() {
     (status: IssueTabStatus) => {
       const id = activeIssueSurfaceId;
       if (id === undefined) return;
-      setIssueTabStatuses((current) =>
-        current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
-          ? current
-          : { ...current, [id]: status },
-      );
+      setIssueTabStatuses((current) => updateIssueTabStatus(current, id, status));
     },
     [activeIssueSurfaceId],
   );

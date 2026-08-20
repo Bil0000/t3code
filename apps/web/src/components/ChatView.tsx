@@ -133,6 +133,7 @@ import {
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
   type RightPanelSurface,
+  updateIssueTabStatus,
   updatePullRequestTabStatus,
   useRightPanelStore,
 } from "../rightPanelStore";
@@ -1644,14 +1645,19 @@ function ChatViewContent(props: ChatViewProps) {
     Record<string, PullRequestTabStatus>
   >({});
   const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
-  const handleIssueTabStatusChange = useCallback((status: IssueTabStatus) => {
-    const id = issueSurfaceId(status);
-    setIssueTabStatuses((current) =>
-      current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
-        ? current
-        : { ...current, [id]: status },
-    );
-  }, []);
+  const activeIssueSurfaceId =
+    activeRightPanelSurface?.kind === "issue"
+      ? activeRightPanelSurface.id
+      : activeRightPanelSurface?.kind === "issues" && activeRightPanelSurface.selected
+        ? issueSurfaceId(activeRightPanelSurface.selected)
+        : undefined;
+  const handleIssueTabStatusChange = useCallback(
+    (status: IssueTabStatus) => {
+      if (activeIssueSurfaceId === undefined) return;
+      setIssueTabStatuses((current) => updateIssueTabStatus(current, activeIssueSurfaceId, status));
+    },
+    [activeIssueSurfaceId],
+  );
   // Keyed by the surface the panel is showing rather than by a key rebuilt from the status, so
   // the tab is found again whether or not that surface was opened with an environment on it.
   const activePullRequestSurfaceId =

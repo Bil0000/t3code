@@ -322,6 +322,17 @@ export function updatePullRequestTabStatus<Status extends { state: unknown; isDr
     : { ...statuses, [surfaceId]: status };
 }
 
+export function updateIssueTabStatus<Status extends { state: unknown; stateReason: unknown }>(
+  statuses: Readonly<Record<string, Status>>,
+  surfaceId: string,
+  status: Status,
+): Readonly<Record<string, Status>> {
+  return statuses[surfaceId]?.state === status.state &&
+    statuses[surfaceId]?.stateReason === status.stateReason
+    ? statuses
+    : { ...statuses, [surfaceId]: status };
+}
+
 const upsertSurface = (
   current: ThreadRightPanelState,
   surface: RightPanelSurface,

@@ -10,6 +10,7 @@ import {
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
+  updateIssueTabStatus,
   updatePullRequestTabStatus,
   useRightPanelStore,
 } from "./rightPanelStore";
@@ -710,6 +711,31 @@ describe("rightPanelStore", () => {
       expect(second).not.toBe(first);
       expect(second["pull-request:1"]).toEqual(status(true));
     });
+  });
+
+  it("keys issue status by the provider-specific surface id", () => {
+    const target = {
+      projectId: "project-a",
+      provider: "linear",
+      repository: "ENG",
+      number: 12,
+    };
+    useRightPanelStore.getState().openIssue(refA, target);
+    const surface = selectSelectedRightPanelSurface(
+      useRightPanelStore.getState().byThreadKey,
+      refA,
+    );
+    expect(surface).not.toBeNull();
+
+    const status = {
+      projectId: target.projectId,
+      repository: target.repository,
+      number: target.number,
+      state: "closed" as const,
+      stateReason: "completed" as const,
+    };
+    const statuses = updateIssueTabStatus({}, surface!.id, status);
+    expect(statuses[surface!.id]).toEqual(status);
   });
 
   it("tracks one surface per terminal session", () => {

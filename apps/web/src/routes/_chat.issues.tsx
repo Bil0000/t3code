@@ -80,11 +80,11 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import { usePrimarySettings } from "../hooks/useSettings";
 import {
-  issueSurfaceId,
   pullRequestSurfaceId,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
+  updateIssueTabStatus,
   useRightPanelStore,
   type RightPanelSurface,
 } from "../rightPanelStore";
@@ -403,14 +403,14 @@ function IssuesRouteView() {
       : null;
   const activeIssueSurface = activeSurface?.kind === "issue" ? activeSurface : null;
   const [issueTabStatuses, setIssueTabStatuses] = useState<Record<string, IssueTabStatus>>({});
-  const handleIssueTabStatusChange = useCallback((status: IssueTabStatus) => {
-    const id = issueSurfaceId(status);
-    setIssueTabStatuses((current) =>
-      current[id]?.state === status.state && current[id]?.stateReason === status.stateReason
-        ? current
-        : { ...current, [id]: status },
-    );
-  }, []);
+  const activeIssueSurfaceId = activeIssueSurface?.id;
+  const handleIssueTabStatusChange = useCallback(
+    (status: IssueTabStatus) => {
+      if (activeIssueSurfaceId === undefined) return;
+      setIssueTabStatuses((current) => updateIssueTabStatus(current, activeIssueSurfaceId, status));
+    },
+    [activeIssueSurfaceId],
+  );
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});
