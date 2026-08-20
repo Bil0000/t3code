@@ -1,5 +1,5 @@
 import type { EnvironmentId, IssueActivity, IssueDetail } from "@t3tools/contracts";
-import { cloneElement, isValidElement, type ReactNode } from "react";
+import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
@@ -58,8 +58,9 @@ vi.mock("../sourceControl/actorPresentation", () => ({
   SourceControlMetaLine: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../sourceControl/DetailTabStrip", () => ({
-  CondensedDetailTabStrip: () => null,
-  DetailTabStrip: ({ children }: { children?: ReactNode }) => <div>{children}</div>,
+  DetailTabStrip: ({ children }: { children?: ReactNode }) => (
+    <div data-detail-tabs>{children}</div>
+  ),
 }));
 vi.mock("../sourceControl/ListGhosts", () => ({
   DetailGhost: () => null,
@@ -123,6 +124,7 @@ const activity: IssueActivity = {
 };
 
 import { IssueDetailPanel } from "./IssueDetailPanel";
+import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { Menu, MenuItem } from "../ui/menu";
 
 function textContent(node: unknown): string {
@@ -131,19 +133,73 @@ function textContent(node: unknown): string {
   return isValidElement<{ children?: ReactNode }>(node) ? textContent(node.props.children) : "";
 }
 
+function renderPanel(chromeVariant?: "full" | "collapse") {
+  hooks.beginRender();
+  return IssueDetailPanel({
+    environmentId: "environment-1" as EnvironmentId,
+    reference: {
+      projectId: "project-1" as IssueDetail["projectId"],
+      repository: "acme/project",
+      number: 42,
+    },
+    handoffTarget: { kind: "new-thread" },
+    ...(chromeVariant ? { chromeVariant } : {}),
+  });
+}
+
+function panelHeader(panel: ReturnType<typeof IssueDetailPanel>) {
+  return Children.toArray(panel.props.children)[0] as ReactElement<{
+    readonly children: ReactNode;
+  }>;
+}
+
 describe("IssueDetailPanel provider labels", () => {
+  it("matches the pull request header height and keeps the tab row stable", () => {
+    hooks.reset();
+    const panel = renderPanel("collapse");
+    const header = panelHeader(panel);
+    const headerChildren = Children.toArray(header.props.children);
+
+    expect(renderToStaticMarkup(header)).toContain("h-7");
+    expect(
+      headerChildren.some((child) => isValidElement(child) && child.type === DetailTabStrip),
+    ).toBe(true);
+  });
+
+  it("keeps the default full chrome expanded when content scrolls", () => {
+    hooks.reset();
+    const panel = renderPanel();
+    const header = panelHeader(panel);
+    const fold = visitElements(
+      header,
+      (element) =>
+        typeof element.props.ref === "object" &&
+        typeof element.props.className === "string" &&
+        element.props.className.includes("translate-y-0 opacity-100 delay-50"),
+    );
+    expect(fold).not.toBeNull();
+    (fold!.props.ref as { current: { scrollHeight: number } | null }).current = {
+      scrollHeight: 64,
+    };
+    const content = Children.toArray(panel.props.children)[1] as ReactElement<{
+      readonly onScrollCapture: (event: { target: HTMLElement }) => void;
+    }>;
+    content.props.onScrollCapture({
+      target: {
+        scrollTop: 128,
+        parentElement: { hasAttribute: () => true },
+      } as unknown as HTMLElement,
+    });
+
+    const markup = renderToStaticMarkup(panelHeader(renderPanel()));
+    expect(markup.indexOf('aria-hidden="false"')).toBeLessThan(
+      markup.indexOf('aria-hidden="true"'),
+    );
+  });
+
   it("renders Linear labels in the header, tooltips, menu, and aria attributes", () => {
     hooks.reset();
-    hooks.beginRender();
-    const panel = IssueDetailPanel({
-      environmentId: "environment-1" as EnvironmentId,
-      reference: {
-        projectId: "project-1" as IssueDetail["projectId"],
-        repository: "acme/project",
-        number: 42,
-      },
-      handoffTarget: { kind: "new-thread" },
-    });
+    const panel = renderPanel();
     const menu = visitElements(panel, (element) => element.type === Menu);
     expect(menu).not.toBeNull();
 
