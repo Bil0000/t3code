@@ -533,6 +533,10 @@ export function SourceControlSettingsPanel() {
       : null,
   );
   let stackSupportMessage = "Checking stack support...";
+  const stackInstallCommand =
+    localStack.data?.availability === "extension_missing"
+      ? "gh extension install github/gh-stack"
+      : null;
   if (githubProject === null) {
     stackSupportMessage = "Open a GitHub project to check stack support.";
   } else if (!stackCapabilityKnown) {
@@ -540,7 +544,7 @@ export function SourceControlSettingsPanel() {
   } else if (!canCheckStacks) {
     stackSupportMessage = "This T3 server does not support stacked pull requests.";
   } else if (localStack.data?.availability === "extension_missing") {
-    stackSupportMessage = "Install GitHub Stack: gh extension install github/gh-stack";
+    stackSupportMessage = "Install GitHub Stack:";
   } else if (
     localStack.data?.availability === "unsupported" ||
     remoteStacks.data?.availability === "unsupported"
@@ -624,7 +628,14 @@ export function SourceControlSettingsPanel() {
                   {item.kind === "github" ? (
                     <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs">
                       <p className="font-medium text-foreground">Stacked pull requests</p>
-                      <p className="mt-1 text-muted-foreground">{stackSupportMessage}</p>
+                      <p className="mt-1 text-muted-foreground">
+                        {stackSupportMessage}
+                        {stackInstallCommand ? (
+                          <code className="ml-1 rounded bg-muted px-1 py-px text-[11px]">
+                            {stackInstallCommand}
+                          </code>
+                        ) : null}
+                      </p>
                     </div>
                   ) : undefined}
                 </DiscoveryItemRow>
