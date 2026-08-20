@@ -31,9 +31,11 @@ describe("IssueRow", () => {
       <IssueRow
         entry={entry}
         selected={false}
+        selectionChecked={false}
         showProjectTitle={false}
         showProvider={false}
         onSelect={() => undefined}
+        onToggleSelection={() => undefined}
       />,
     );
 
@@ -41,6 +43,26 @@ describe("IssueRow", () => {
     expect(markup).toContain('class="flex min-w-0 items-center gap-1.5 max-w-40"');
     expect(markup).not.toContain(" title=");
   });
+
+  it("offers a checkbox without replacing the row action", () => {
+    const props = {
+      entry,
+      selected: false,
+      selectionChecked: false,
+      showProjectTitle: false,
+      showProvider: false,
+      onSelect: () => undefined,
+      onToggleSelection: () => undefined,
+    };
+    const markup = renderToStaticMarkup(<IssueRow {...props} />);
+
+    expect(markup).toContain('aria-label="Select pingdotgg/t3code issue #6368"');
+    expect(markup).toContain("group-hover/row:opacity-100");
+    expect(markup.indexOf('aria-label="Select pingdotgg/t3code issue #6368"')).toBeGreaterThan(
+      markup.indexOf("</button>"),
+    );
+  });
+
   it("shows the selected reaction count while sorting by reactions", () => {
     const markup = renderToStaticMarkup(
       <IssueRow
@@ -50,10 +72,12 @@ describe("IssueRow", () => {
           reactions: [{ content: "rocket", count: 3, actors: [], viewerHasReacted: false }],
         }}
         selected={false}
+        selectionChecked={false}
         showProjectTitle={false}
         showProvider={false}
         reactionSort="reactions-rocket"
         onSelect={() => undefined}
+        onToggleSelection={() => undefined}
       />,
     );
 

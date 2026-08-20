@@ -16,6 +16,9 @@ export const WORK_ITEM_MODE_HELP = {
   subtasks: "One parent task split into ordered child steps.",
 } as const;
 
+export const WORK_ITEM_SELECTION_BAR_CLASS_NAME =
+  "fixed bottom-[calc(env(safe-area-inset-bottom)+1rem)] left-1/2 z-50 flex w-[min(calc(100vw-2rem),48rem)] -translate-x-1/2 flex-wrap items-center gap-2 rounded-xl border bg-background/95 p-2 shadow-lg backdrop-blur";
+
 export function workItemGeneratingDraft(
   mode: "compound" | "subtasks",
   items: ReadonlyArray<SelectedWorkItem>,
@@ -95,7 +98,6 @@ export function WorkItemSelectButton() {
 }
 
 export function WorkItemSelectionBar() {
-  const selecting = useWorkItemSelection((state) => state.selecting);
   const items = useWorkItemSelection((state) => state.items);
   const mode = useWorkItemSelection((state) => state.mode);
   const setMode = useWorkItemSelection((state) => state.setMode);
@@ -104,7 +106,7 @@ export function WorkItemSelectionBar() {
   const newThread = useNewThreadHandler();
   const [busy, setBusy] = useState(false);
 
-  if (!selecting) return null;
+  if (items.length === 0) return null;
 
   const createTask = async () => {
     const first = items[0];
@@ -154,11 +156,15 @@ export function WorkItemSelectionBar() {
   };
 
   return (
-    <div className="sticky top-0 z-10 mb-3 flex flex-wrap items-center gap-2 rounded-lg border bg-background/95 p-2 shadow-sm backdrop-blur">
-      <span className="mr-auto text-xs text-muted-foreground">
-        {items.length === 0 ? "Select issues or pull requests" : `${items.length} selected`}
+    <div className={WORK_ITEM_SELECTION_BAR_CLASS_NAME}>
+      <span className="mr-auto whitespace-nowrap px-1 text-xs text-muted-foreground">
+        {items.length} selected
       </span>
-      <div className="flex rounded-md bg-muted p-0.5">
+      <div
+        role="group"
+        aria-label={WORK_ITEM_MODE_HELP[mode]}
+        className="flex rounded-md bg-muted p-0.5"
+      >
         <Button
           size="xs"
           variant={mode === "compound" ? "secondary" : "ghost"}
@@ -176,14 +182,16 @@ export function WorkItemSelectionBar() {
           Subtasks
         </Button>
       </div>
-      <span className="text-xs text-muted-foreground">{WORK_ITEM_MODE_HELP[mode]}</span>
-      <Button size="xs" disabled={items.length === 0 || busy} onClick={() => void createTask()}>
+      <Button size="xs" disabled={busy} onClick={() => void createTask()}>
         {busy ? (
           <LoaderIcon aria-hidden className="size-3.5 animate-spin" />
         ) : (
           <SparklesIcon aria-hidden className="size-3.5" />
         )}
         Create task
+      </Button>
+      <Button size="icon-xs" variant="ghost" aria-label="Clear selection" onClick={clear}>
+        <XIcon aria-hidden className="size-3.5" />
       </Button>
     </div>
   );

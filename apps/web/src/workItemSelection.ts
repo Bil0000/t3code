@@ -56,11 +56,12 @@ export const useWorkItemSelection = create<WorkItemSelectionState>((set, get) =>
     const items = get().items;
     const key = keyOf(item);
     if (items.some((selected) => keyOf(selected) === key)) {
-      set({ items: items.filter((selected) => keyOf(selected) !== key) });
+      const remaining = items.filter((selected) => keyOf(selected) !== key);
+      set({ selecting: remaining.length > 0, items: remaining });
       return null;
     }
     const next = addWorkItem(items, item);
-    if (next.error === null) set({ items: next.items });
+    if (next.error === null) set({ selecting: true, items: next.items });
     return next.error;
   },
 }));

@@ -56,10 +56,7 @@ import {
 } from "../components/issue/IssueListFilters";
 import { ListSearchInput, type ListFilterOption } from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
-import {
-  WorkItemSelectButton,
-  WorkItemSelectionBar,
-} from "../components/workItems/WorkItemSelectionBar";
+import { WorkItemSelectionBar } from "../components/workItems/WorkItemSelectionBar";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import { resolveProjectScope } from "../components/sourceControl/projectScope";
@@ -144,6 +141,23 @@ export function issueSelectionSearchPatch(target: {
     selectedProjectId: target.projectId,
     selectedProvider: target.provider,
   };
+}
+
+export function isIssueEntryOpen(
+  selected: {
+    readonly projectId: ProjectId;
+    readonly repository: string;
+    readonly provider?: string;
+    readonly number: number;
+  } | null,
+  entry: Pick<IssueListEntry, "projectId" | "repository" | "provider" | "number">,
+) {
+  return (
+    selected?.repository === entry.repository &&
+    selected.projectId === entry.projectId &&
+    (selected.provider === undefined || selected.provider === entry.provider) &&
+    selected.number === entry.number
+  );
 }
 
 export function mergeIssueProviderSummaries(
@@ -323,7 +337,6 @@ function IssuesRouteView() {
           input: undefined,
         }),
   );
-  const selectingWorkItems = useWorkItemSelection((state) => state.selecting);
   const selectedWorkItems = useWorkItemSelection((state) => state.items);
   const toggleWorkItem = useWorkItemSelection((state) => state.toggle);
   const allProjects = useProjects();
@@ -1112,9 +1125,9 @@ function IssuesRouteView() {
     [rightPanelRef, updateSearch],
   );
 
-  const selectOrToggleEntry = useCallback(
+  const toggleIssueSelection = useCallback(
     (entry: IssueListEntry) => {
-      if (!selectingWorkItems || issueEnvironmentId === null) return selectEntry(entry);
+      if (issueEnvironmentId === null) return;
       const error = toggleWorkItem({
         kind: "issue",
         provider: entry.provider,
@@ -1130,7 +1143,7 @@ function IssuesRouteView() {
       if (error === "limit")
         toastManager.add({ type: "warning", title: "You can select up to 20 items" });
     },
-    [issueEnvironmentId, selectEntry, selectingWorkItems, toggleWorkItem],
+    [issueEnvironmentId, toggleWorkItem],
   );
 
   const [creating, setCreating] = useState(false);
@@ -1216,33 +1229,33 @@ function IssuesRouteView() {
                   {group.label}
                 </h2>
               ) : null}
-              {group.entries.map((entry) => (
-                <IssueRow
-                  key={issueEntryKey(entry)}
-                  entry={entry}
-                  showProjectTitle
-                  showProvider={showProvider}
-                  reactionSort={sort}
-                  selected={
-                    selectingWorkItems && issueEnvironmentId !== null
-                      ? isWorkItemSelected(selectedWorkItems, {
-                          kind: "issue",
-                          provider: entry.provider,
-                          environmentId: issueEnvironmentId,
-                          projectId: entry.projectId,
-                          repository: entry.repository,
-                          number: entry.number,
-                          title: entry.title,
-                          url: entry.url,
-                        })
-                      : selected?.repository === entry.repository &&
-                        selected.projectId === entry.projectId &&
-                        (selected.provider === undefined || selected.provider === entry.provider) &&
-                        selected.number === entry.number
-                  }
-                  onSelect={selectOrToggleEntry}
-                />
-              ))}
+              {group.entries.map((entry) => {
+                const selectionChecked =
+                  issueEnvironmentId !== null &&
+                  isWorkItemSelected(selectedWorkItems, {
+                    kind: "issue",
+                    provider: entry.provider,
+                    environmentId: issueEnvironmentId,
+                    projectId: entry.projectId,
+                    repository: entry.repository,
+                    number: entry.number,
+                    title: entry.title,
+                    url: entry.url,
+                  });
+                return (
+                  <IssueRow
+                    key={issueEntryKey(entry)}
+                    entry={entry}
+                    showProjectTitle
+                    showProvider={showProvider}
+                    reactionSort={sort}
+                    selectionChecked={selectionChecked}
+                    selected={isIssueEntryOpen(selected, entry)}
+                    onSelect={selectEntry}
+                    onToggleSelection={toggleIssueSelection}
+                  />
+                );
+              })}
             </div>
           ))}
         </div>
@@ -1358,7 +1371,6 @@ function IssuesRouteView() {
       updateListScope({ host, sort: undefined, order: undefined }),
     searchInput,
     filtersMenu,
-    selectionControl: issuesSupported ? <WorkItemSelectButton /> : null,
     rightPanelControl: !issuesSupported || rightPanelState.isOpen ? null : panelToggleControls,
     rightPanelOpen: rightPanelState.isOpen,
     listBody,
@@ -1640,7 +1652,6 @@ export function IssuesColumn({
   onHost,
   searchInput,
   filtersMenu,
-  selectionControl,
   rightPanelControl,
   rightPanelOpen,
   listBody,
@@ -1658,7 +1669,6 @@ export function IssuesColumn({
   onHost: (host: string | undefined) => void;
   searchInput: ReactNode;
   filtersMenu: ReactNode;
-  selectionControl: ReactNode;
   rightPanelControl: ReactNode;
   rightPanelOpen: boolean;
   listBody: ReactNode;
@@ -1770,7 +1780,6 @@ export function IssuesColumn({
             />
           </div>
         ) : null}
-        {selectionControl}
         {rightPanelControl}
       </WorkspacePageHeader>
 

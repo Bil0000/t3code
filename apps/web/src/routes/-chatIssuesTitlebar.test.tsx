@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsIcon } from "lucide-react";
-import type { LinearProjectBinding, ProjectId } from "@t3tools/contracts";
+import type { IssueListEntry, LinearProjectBinding, ProjectId } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../test/reactElementTree";
@@ -12,12 +12,31 @@ import {
   CompactFilterMenu,
   hasLinearManagementState,
   issueSelectionSearchPatch,
+  isIssueEntryOpen,
   IssuesColumn,
   mergeIssueProviderSummaries,
   stabilizeLinearProviderSummary,
 } from "./_chat.issues";
 
 describe("IssuesColumn", () => {
+  it("marks only the opened issue as current", () => {
+    const opened = {
+      projectId: "project_1" as ProjectId,
+      repository: "pingdotgg/t3code",
+      provider: "github",
+      number: 12,
+    };
+    const entry = {
+      projectId: opened.projectId,
+      repository: opened.repository,
+      provider: opened.provider,
+      number: 13,
+    } as IssueListEntry;
+
+    expect(isIssueEntryOpen(opened, entry)).toBe(false);
+    expect(isIssueEntryOpen({ ...opened, number: 13 }, entry)).toBe(true);
+  });
+
   it("clears a stale provider when the next issue has none", () => {
     expect(
       issueSelectionSearchPatch({
@@ -28,7 +47,7 @@ describe("IssuesColumn", () => {
     ).toMatchObject({ selectedProvider: undefined });
   });
 
-  it("keeps issue actions fixed and refresh beside the list filters", () => {
+  it("keeps refresh beside list filters without a selection-mode control", () => {
     const column = (
       <IssuesColumn
         refreshing
@@ -44,7 +63,6 @@ describe("IssuesColumn", () => {
         onHost={() => undefined}
         searchInput={<input aria-label="Search issues" />}
         filtersMenu={<button type="button">Filters</button>}
-        selectionControl={<button type="button">Select</button>}
         rightPanelControl={null}
         rightPanelOpen={false}
         listBody={null}
@@ -59,7 +77,7 @@ describe("IssuesColumn", () => {
 
     expect(markup).toContain("<header");
     const header = markup.slice(markup.indexOf("<header"), markup.indexOf("</header>"));
-    expect(header).toContain(">Select</button>");
+    expect(header).not.toContain(">Select</button>");
     expect(header).not.toContain(">Filters</button>");
     expect(header).not.toContain('aria-label="Refresh issues"');
     expect(markup.match(/aria-label="Refresh issues"/g)).toHaveLength(1);

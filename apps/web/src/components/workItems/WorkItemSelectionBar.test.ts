@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   createGeneratedWorkItemDraft,
   WORK_ITEM_MODE_HELP,
+  WORK_ITEM_SELECTION_BAR_CLASS_NAME,
   workItemGeneratingDraft,
 } from "./WorkItemSelectionBar";
 type Deferred<T> = {
@@ -33,6 +34,13 @@ const item: SelectedWorkItem = {
 };
 
 describe("work item task draft", () => {
+  it("anchors selected-item actions to the bottom of the viewport", () => {
+    expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).toContain("fixed");
+    expect(WORK_ITEM_SELECTION_BAR_CLASS_NAME).toContain(
+      "bottom-[calc(env(safe-area-inset-bottom)+1rem)]",
+    );
+  });
+
   it("shows the exact help for each task shape", () => {
     expect(WORK_ITEM_MODE_HELP).toEqual({
       compound: "One task that merges overlap and orders dependencies.",
