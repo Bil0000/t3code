@@ -185,6 +185,17 @@ export class LinearApiError extends Schema.TaggedErrorClass<LinearApiError>()("L
   status: Schema.optional(Schema.Int),
   identifier: Schema.optional(Schema.String),
   connectedAccounts: Schema.optional(Schema.Int),
+  projectId: Schema.optional(Schema.String),
+  credentialId: Schema.optional(Schema.String),
+  teamKey: Schema.optional(Schema.String),
+  bindingRejection: Schema.optional(
+    Schema.Literals([
+      "unknown-credential",
+      "account-unavailable",
+      "team-unavailable",
+      "environment-account-unavailable",
+    ]),
+  ),
   cause: Schema.optional(Schema.Defect()),
 }) {
   get detail(): string {
@@ -194,6 +205,14 @@ export class LinearApiError extends Schema.TaggedErrorClass<LinearApiError>()("L
     if (this.status !== undefined)
       return `Linear ${this.operation} failed with HTTP ${this.status}.`;
     if (this.identifier !== undefined) return `Linear issue ${this.identifier} was not found.`;
+    if (this.bindingRejection === "unknown-credential")
+      return `Linear account ${this.credentialId} is not connected for project ${this.projectId}.`;
+    if (this.bindingRejection === "account-unavailable")
+      return `Linear account ${this.credentialId} is unavailable for project ${this.projectId}.`;
+    if (this.bindingRejection === "team-unavailable")
+      return `Linear team ${this.teamKey} is unavailable to account ${this.credentialId} for project ${this.projectId}.`;
+    if (this.bindingRejection === "environment-account-unavailable")
+      return `Linear environment account cannot use team ${this.teamKey} for project ${this.projectId}.`;
     return `Linear ${this.operation} failed.`;
   }
 

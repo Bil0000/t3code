@@ -284,16 +284,34 @@ export const setLinearProjectBinding = (input: LinearSetProjectBindingInput) =>
         const account = connection.accounts.find(
           ({ credentialId }) => credentialId === binding.credentialId,
         );
-        if (account === undefined || account.status !== "authenticated") {
+        if (account === undefined) {
           return yield* new LinearApi.LinearApiError({
             operation: "setProjectBinding",
             reason: "failed",
+            projectId: input.projectId,
+            credentialId: binding.credentialId,
+            teamKey: binding.teamKey,
+            bindingRejection: "unknown-credential",
+          });
+        }
+        if (account.status !== "authenticated") {
+          return yield* new LinearApi.LinearApiError({
+            operation: "setProjectBinding",
+            reason: "failed",
+            projectId: input.projectId,
+            credentialId: binding.credentialId,
+            teamKey: binding.teamKey,
+            bindingRejection: "account-unavailable",
           });
         }
         if (!account.teams.some(({ key }) => key === binding.teamKey)) {
           return yield* new LinearApi.LinearApiError({
             operation: "setProjectBinding",
             reason: "failed",
+            projectId: input.projectId,
+            credentialId: binding.credentialId,
+            teamKey: binding.teamKey,
+            bindingRejection: "team-unavailable",
           });
         }
       } else if (binding !== null) {
@@ -305,6 +323,9 @@ export const setLinearProjectBinding = (input: LinearSetProjectBindingInput) =>
           return yield* new LinearApi.LinearApiError({
             operation: "setProjectBinding",
             reason: "failed",
+            projectId: input.projectId,
+            teamKey: binding.teamKey,
+            bindingRejection: "environment-account-unavailable",
           });
         }
       }

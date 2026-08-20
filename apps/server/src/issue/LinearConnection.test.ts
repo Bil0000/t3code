@@ -534,9 +534,54 @@ it.effect("rejects project bindings outside the selected saved account", () => {
         ),
       ),
     );
-    assert.strictEqual(invalidCredential._tag, "LinearApiError");
-    assert.strictEqual(invalidTeam._tag, "LinearApiError");
-    assert.strictEqual(unavailableAccount._tag, "LinearApiError");
+    const unavailableEnvironment = yield* Effect.flip(
+      setLinearProjectBinding({
+        projectId: PROJECT_ID,
+        binding: { teamKey: "ENV" },
+      }),
+    );
+    assert.ok(LinearApi.isLinearApiError(invalidCredential));
+    assert.ok(LinearApi.isLinearApiError(invalidTeam));
+    assert.ok(LinearApi.isLinearApiError(unavailableAccount));
+    assert.ok(LinearApi.isLinearApiError(unavailableEnvironment));
+    assert.deepStrictEqual(
+      [invalidCredential, invalidTeam, unavailableAccount, unavailableEnvironment].map((error) => ({
+        projectId: error.projectId,
+        credentialId: error.credentialId,
+        teamKey: error.teamKey,
+        bindingRejection: error.bindingRejection,
+      })),
+      [
+        {
+          projectId: PROJECT_ID,
+          credentialId: "user-2",
+          teamKey: "ENG",
+          bindingRejection: "unknown-credential",
+        },
+        {
+          projectId: PROJECT_ID,
+          credentialId: "user-1",
+          teamKey: "OPS",
+          bindingRejection: "team-unavailable",
+        },
+        {
+          projectId: PROJECT_ID,
+          credentialId: "user-3",
+          teamKey: "ENG",
+          bindingRejection: "account-unavailable",
+        },
+        {
+          projectId: PROJECT_ID,
+          credentialId: undefined,
+          teamKey: "ENV",
+          bindingRejection: "environment-account-unavailable",
+        },
+      ],
+    );
+    assert.match(invalidCredential.detail, /user-2/u);
+    assert.match(invalidTeam.detail, /OPS/u);
+    assert.match(unavailableAccount.detail, /user-3/u);
+    assert.match(unavailableEnvironment.detail, /ENV/u);
 
     const settings = yield* ServerSettings.ServerSettingsService;
     assert.deepStrictEqual((yield* settings.getSettings).issueTracking.linear.projectBindings, {});
