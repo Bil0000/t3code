@@ -105,14 +105,28 @@ type MatchCache = {
   readonly duplicate?: ReadonlyArray<WorkItemMatch>;
 };
 
-export function useWorkItemMatches(input: {
+type WorkItemMatchCacheInput = {
   readonly environmentId: EnvironmentId;
   readonly projectId: ProjectId;
   readonly source: WorkItemMatchInput["source"];
   readonly version: string;
-}) {
+};
+
+export function workItemMatchCacheKey(input: WorkItemMatchCacheInput): string {
+  return JSON.stringify([
+    input.environmentId,
+    input.projectId,
+    input.source.kind,
+    input.source.provider ?? null,
+    input.source.repository,
+    input.source.number,
+    input.version,
+  ]);
+}
+
+export function useWorkItemMatches(input: WorkItemMatchCacheInput) {
   const run = useAtomCommand(findWorkItemMatches, { reportFailure: false });
-  const key = `${input.projectId}:${input.source.kind}:${input.source.repository}#${input.source.number}:${input.version}`;
+  const key = workItemMatchCacheKey(input);
   const [cache, setCache] = useState<MatchCache>({ key });
   const [pending, setPending] = useState<WorkItemMatchRelationship | null>(null);
   const find = useCallback(

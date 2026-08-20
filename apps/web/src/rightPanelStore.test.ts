@@ -503,6 +503,24 @@ describe("rightPanelStore", () => {
     ]);
   });
 
+  it("keeps environment and provider positions distinct in issue tab ids", () => {
+    expect(
+      issueSurfaceId({
+        environmentId: "github",
+        projectId: "project-a",
+        repository: "ENG",
+        number: 12,
+      }),
+    ).not.toBe(
+      issueSurfaceId({
+        projectId: "project-a",
+        provider: "github",
+        repository: "ENG",
+        number: 12,
+      }),
+    );
+  });
+
   it("keeps the issue browser one tab while the issue it shows changes", () => {
     const target = {
       projectId: "project-a",

@@ -2,7 +2,7 @@ import type { WorkItemMatch } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
-import { WorkItemMatchButton, WorkItemMatchRows } from "./WorkItemMatches";
+import { workItemMatchCacheKey, WorkItemMatchButton, WorkItemMatchRows } from "./WorkItemMatches";
 
 const match = {
   kind: "pull-request",
@@ -16,6 +16,38 @@ const match = {
 } satisfies WorkItemMatch;
 
 describe("work item matches", () => {
+  it("keeps equal references from different servers and providers in separate caches", () => {
+    const base = {
+      projectId: "project-a",
+      source: {
+        kind: "issue" as const,
+        repository: "ENG",
+        number: 12,
+      },
+      version: "2026-08-20T10:00:00Z",
+    };
+
+    expect(
+      new Set([
+        workItemMatchCacheKey({
+          ...base,
+          environmentId: "local",
+          source: { ...base.source, provider: "linear" },
+        }),
+        workItemMatchCacheKey({
+          ...base,
+          environmentId: "remote",
+          source: { ...base.source, provider: "linear" },
+        }),
+        workItemMatchCacheKey({
+          ...base,
+          environmentId: "local",
+          source: { ...base.source, provider: "github" },
+        }),
+      ]).size,
+    ).toBe(3);
+  });
+
   it("shows progress while AI is finding matches", () => {
     const markup = renderToStaticMarkup(
       <WorkItemMatchButton busy loaded={false} onClick={() => undefined} />,

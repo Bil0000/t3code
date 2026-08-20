@@ -30,6 +30,7 @@ import { IssueAssigneePicker } from "./IssueAssigneePicker";
 import {
   canEditIssueComment,
   issueCommentEditId,
+  nextIssueCommentCount,
   type IssueCommentEditScope,
   LINK_PULL_REQUESTS_HANDOFF_KIND,
 } from "./issueDetail.logic";
@@ -446,7 +447,13 @@ export function IssueSummaryTab({
                     variant="outline"
                     className="w-full"
                     disabled={loadingMoreComments}
-                    onClick={onLoadMoreComments}
+                    onClick={() => {
+                      setShown({
+                        url: detail.url,
+                        count: nextIssueCommentCount(shownComments, COMMENT_PAGE),
+                      });
+                      onLoadMoreComments();
+                    }}
                   >
                     {loadingMoreComments ? "Loading..." : "Load older comments"}
                   </Button>

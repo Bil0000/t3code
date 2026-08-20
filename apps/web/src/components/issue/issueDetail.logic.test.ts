@@ -14,6 +14,7 @@ import {
   issueHandoffReviewComments,
   issueCommentEditId,
   mergeEarlierIssueComments,
+  nextIssueCommentCount,
   shouldRefreshIssueActivity,
   type IssueHandoffSource,
 } from "./issueDetail.logic";
@@ -88,6 +89,10 @@ describe("issue comment pages", () => {
       ["c2", "updated"],
       ["c3", "third"],
     ]);
+  });
+
+  it("shows the older page as soon as it is requested", () => {
+    expect(nextIssueCommentCount(30, 30)).toBe(60);
   });
 });
 

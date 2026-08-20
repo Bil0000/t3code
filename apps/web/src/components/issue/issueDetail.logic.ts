@@ -25,6 +25,10 @@ export function mergeEarlierIssueComments(
   return [...earlier.filter((comment) => !currentIds.has(comment.id)), ...current];
 }
 
+export function nextIssueCommentCount(shown: number, pageSize: number): number {
+  return shown + pageSize;
+}
+
 export interface IssueTimelineEntry {
   readonly id: string;
   readonly at: string;

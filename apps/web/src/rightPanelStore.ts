@@ -253,10 +253,15 @@ export function issueSurfaceId(target: {
   repository: string;
   number: number;
 }): IssueSurface["id"] {
-  const scope =
-    target.environmentId === undefined ? "" : `${encodeURIComponent(target.environmentId)}:`;
-  const provider = target.provider === undefined ? "" : `${encodeURIComponent(target.provider)}:`;
-  return `issue:${scope}${provider}${encodeURIComponent(target.projectId)}:${encodeURIComponent(target.repository)}:${target.number}`;
+  return `issue:${encodeURIComponent(
+    JSON.stringify([
+      target.environmentId ?? null,
+      target.provider ?? null,
+      target.projectId,
+      target.repository,
+      target.number,
+    ]),
+  )}`;
 }
 
 export function issueSurface(target: {
