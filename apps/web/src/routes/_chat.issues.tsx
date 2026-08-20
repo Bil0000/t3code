@@ -1455,7 +1455,6 @@ function IssuesRouteView() {
                     selectedProvider: target.provider,
                   });
                 }}
-                chromeVariant="collapse"
               />
             ) : (
               <IssueDetailPanel
