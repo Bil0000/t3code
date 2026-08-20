@@ -163,17 +163,21 @@ export function IssueSortMenu({
             </MenuRadioGroup>
           </MenuSubPopup>
         </MenuSub>
-        <MenuSeparator />
-        <MenuRadioGroup
-          value={order}
-          onValueChange={(value) => {
-            if (value !== order) onOrder(value as IssueListOrder);
-          }}
-        >
-          <MenuGroupLabel>Order</MenuGroupLabel>
-          <MenuRadioItem value="asc">{ascendingLabel}</MenuRadioItem>
-          <MenuRadioItem value="desc">{descendingLabel}</MenuRadioItem>
-        </MenuRadioGroup>
+        {sort !== "best-match" ? (
+          <>
+            <MenuSeparator />
+            <MenuRadioGroup
+              value={order}
+              onValueChange={(value) => {
+                if (value !== order) onOrder(value as IssueListOrder);
+              }}
+            >
+              <MenuGroupLabel>Order</MenuGroupLabel>
+              <MenuRadioItem value="asc">{ascendingLabel}</MenuRadioItem>
+              <MenuRadioItem value="desc">{descendingLabel}</MenuRadioItem>
+            </MenuRadioGroup>
+          </>
+        ) : null}
       </MenuPopup>
     </Menu>
   );

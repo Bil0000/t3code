@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { ListFilterRadioGroup } from "../sourceControl/ListFilterMenu";
 import { LinearIcon } from "../Icons";
 import { Button } from "../ui/button";
-import { MenuItem, MenuRadioItem } from "../ui/menu";
+import { MenuItem, MenuRadioItem, MenuSeparator } from "../ui/menu";
 import { IssueFiltersMenu, IssueSortMenu } from "./IssueListFilters";
 
 function collect(
@@ -37,6 +37,21 @@ describe("issue filters", () => {
     if (!trigger.props.render) return;
     expect(trigger.props.render.type).toBe(Button);
     expect(trigger.props.render.props).toMatchObject({ size: "icon", variant: "outline" });
+  });
+
+  it("hides ineffective order choices for best-match sorting", () => {
+    const menu = IssueSortMenu({
+      sort: "best-match",
+      order: "desc",
+      onSort: vi.fn(),
+      onOrder: vi.fn(),
+    });
+    const orderChoices = collect(menu, MenuRadioItem).filter(
+      (item) => item.props.value === "asc" || item.props.value === "desc",
+    );
+
+    expect(orderChoices).toHaveLength(0);
+    expect(collect(menu, MenuSeparator)).toHaveLength(0);
   });
 
   it("shows only connected providers and keeps All providers selected by default", () => {
