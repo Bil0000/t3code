@@ -11,6 +11,7 @@ import {
   CircleDot,
   FileDiff,
   Files,
+  GitGraph,
   GitPullRequest,
   Globe2,
   Plus,
@@ -79,6 +80,7 @@ interface RightPanelTabsProps {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddRepository?: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
@@ -91,6 +93,7 @@ interface RightPanelTabsProps {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
+  repositoryAvailable?: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
@@ -228,7 +231,7 @@ function DisabledReasonTooltip(props: { reason: string; trigger: ReactElement })
 
 function SurfaceMenuItem(props: {
   available: boolean;
-  disabledReason?: string;
+  disabledReason: string | undefined;
   shortcut: string;
   onClick: () => void;
   children: ReactNode;
@@ -259,6 +262,7 @@ function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddRepository: (() => void) | undefined;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddIssue: () => void;
@@ -266,6 +270,7 @@ function RightPanelEmptyState(props: {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
+  repositoryAvailable: boolean | undefined;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   issueAvailable: boolean;
@@ -316,6 +321,20 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddDiff,
       badgeCount: 0,
     },
+    ...(props.repositoryAvailable && props.onAddRepository
+      ? [
+          {
+            label: "Repository",
+            description: "Browse history, issues, and pull requests.",
+            icon: GitGraph,
+            shortcut: "G",
+            available: true,
+            disabledReason: undefined,
+            onClick: props.onAddRepository,
+            badgeCount: 0,
+          },
+        ]
+      : []),
     {
       label: "Pull request",
       description: "Open this branch's pull request.",
@@ -523,6 +542,8 @@ function surfaceTitle(
   switch (surface.kind) {
     case "diff":
       return "Diff";
+    case "git-history":
+      return "Repository";
     case "files":
       return "Files";
     case "file":
@@ -598,6 +619,8 @@ function SurfaceIcon({
     }
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
+    case "git-history":
+      return <GitGraph className="size-3 shrink-0" />;
     case "files":
       return <Files className="size-3 shrink-0" />;
     case "file":
@@ -689,6 +712,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       disabledReason: SURFACE_DISABLED_REASONS.diff,
       onClick: props.onAddDiff,
     },
+    ...(props.repositoryAvailable && props.onAddRepository
+      ? [
+          {
+            label: "Repository",
+            icon: GitGraph,
+            shortcut: "G",
+            available: true,
+            disabledReason: undefined,
+            onClick: props.onAddRepository,
+          },
+        ]
+      : []),
     {
       label: "Pull request",
       icon: GitPullRequest,
@@ -1006,6 +1041,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddBrowser={props.onAddBrowser}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
+            onAddRepository={props.onAddRepository}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddIssue={props.onAddIssue}
@@ -1013,6 +1049,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
+            repositoryAvailable={props.repositoryAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             issueAvailable={props.issueAvailable}

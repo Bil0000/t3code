@@ -1,11 +1,10 @@
-import type { VcsListRefsResult } from "@t3tools/contracts";
 import * as Option from "effect/Option";
 import { AsyncResult } from "effect/unstable/reactivity";
 
 const DEFAULT_NEXT_PAGE_DISTANCE_PX = 96;
 
-export function isPaginatedBranchesNextPagePending<E>(
-  results: ReadonlyArray<AsyncResult.AsyncResult<VcsListRefsResult, E>>,
+export function isPaginatedBranchesNextPagePending<A, E>(
+  results: ReadonlyArray<AsyncResult.AsyncResult<A, E>>,
 ): boolean {
   const lastResult = results.at(-1);
   return (

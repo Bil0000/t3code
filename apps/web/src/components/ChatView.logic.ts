@@ -2,6 +2,7 @@ import {
   type EnvironmentId,
   isProviderDriverKind,
   ProjectId,
+  type RepositoryIdentity,
   type ModelSelection,
   type ProviderDriverKind,
   type ServerProvider,
@@ -10,6 +11,7 @@ import {
   type ThreadId,
   type TurnId,
 } from "@t3tools/contracts";
+import { detectSourceControlProviderFromRemoteUrl } from "@t3tools/shared/sourceControl";
 import { type ChatMessage, type SessionPhase, type Thread, type ThreadShell } from "../types";
 import { type ComposerImageAttachment, type DraftThreadState } from "../composerDraftStore";
 import * as Schema from "effect/Schema";
@@ -33,6 +35,25 @@ export function resolveSourceControlSurfaceCapability(input: {
 }) {
   if (!input.capabilityKnown) return "loading";
   return input.supported ? "ready" : "unavailable";
+}
+
+export function resolveGitHubIssueUrlPrefix(
+  repositoryIdentity: RepositoryIdentity | null | undefined,
+): string | undefined {
+  if (
+    repositoryIdentity?.provider !== "github" ||
+    !repositoryIdentity.owner ||
+    !repositoryIdentity.name
+  ) {
+    return undefined;
+  }
+
+  const origin = detectSourceControlProviderFromRemoteUrl(
+    repositoryIdentity.locator.remoteUrl,
+  )?.baseUrl;
+  return origin
+    ? `${origin}/${repositoryIdentity.owner}/${repositoryIdentity.name}/issues/`
+    : undefined;
 }
 
 export const LastInvokedScriptByProjectSchema = Schema.Record(ProjectId, Schema.String);

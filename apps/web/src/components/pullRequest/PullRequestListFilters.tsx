@@ -81,6 +81,7 @@ export function PullRequestFiltersMenu({
   projectEnvironmentId,
   unavailable,
   onProject,
+  showProjectScope = true,
 }: {
   state: PullRequestListState;
   stateOptions: ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
@@ -126,6 +127,8 @@ export function PullRequestFiltersMenu({
   unavailable: ReadonlyMap<string, string>;
   /** The environment comes with the project id, since picking a row picks a specific server's copy of it. */
   onProject: (projectId: ProjectId | undefined, environmentId: EnvironmentId | undefined) => void;
+  /** A repository-scoped panel already knows its project and does not repeat that choice. */
+  showProjectScope?: boolean;
 }) {
   const filtered =
     state !== "open" ||
@@ -199,80 +202,88 @@ export function PullRequestFiltersMenu({
           />
         </>
       ) : null}
-      <MenuSeparator />
-      <MenuRadioGroup
-        value={
-          projectId === undefined || projectEnvironmentId === undefined
-            ? ALL_PROJECTS_VALUE
-            : pullRequestProjectKey({ id: projectId, environmentId: projectEnvironmentId })
-        }
-        onValueChange={(next) => {
-          if (next === ALL_PROJECTS_VALUE) {
-            if (projectId !== undefined) onProject(undefined, undefined);
-            return;
-          }
-          // The value carries both halves, since the id alone cannot tell two servers' rows
-          // apart once they share one.
-          const project = projects.find((candidate) => pullRequestProjectKey(candidate) === next);
-          if (
-            project !== undefined &&
-            (project.id !== projectId || project.environmentId !== projectEnvironmentId)
-          ) {
-            onProject(project.id, project.environmentId);
-          }
-        }}
-      >
-        <MenuGroupLabel>Project</MenuGroupLabel>
-        <MenuRadioItem value={ALL_PROJECTS_VALUE}>
-          <span className="flex min-w-0 items-center gap-2">
-            <LayersIcon aria-hidden className="size-3.5" />
-            All projects
-          </span>
-        </MenuRadioItem>
-        {/* The ones that can be chosen first: a list that opens with three disabled rows reads
+      {showProjectScope ? (
+        <>
+          <MenuSeparator />
+          <MenuRadioGroup
+            value={
+              projectId === undefined || projectEnvironmentId === undefined
+                ? ALL_PROJECTS_VALUE
+                : pullRequestProjectKey({ id: projectId, environmentId: projectEnvironmentId })
+            }
+            onValueChange={(next) => {
+              if (next === ALL_PROJECTS_VALUE) {
+                if (projectId !== undefined) onProject(undefined, undefined);
+                return;
+              }
+              // The value carries both halves, since the id alone cannot tell two servers' rows
+              // apart once they share one.
+              const project = projects.find(
+                (candidate) => pullRequestProjectKey(candidate) === next,
+              );
+              if (
+                project !== undefined &&
+                (project.id !== projectId || project.environmentId !== projectEnvironmentId)
+              ) {
+                onProject(project.id, project.environmentId);
+              }
+            }}
+          >
+            <MenuGroupLabel>Project</MenuGroupLabel>
+            <MenuRadioItem value={ALL_PROJECTS_VALUE}>
+              <span className="flex min-w-0 items-center gap-2">
+                <LayersIcon aria-hidden className="size-3.5" />
+                All projects
+              </span>
+            </MenuRadioItem>
+            {/* The ones that can be chosen first: a list that opens with three disabled rows reads
               as a broken menu rather than as a workspace with three unreadable repositories. */}
-        {projects
-          .toSorted(
-            (left, right) =>
-              Number(unavailable.has(pullRequestProjectKey(left))) -
-              Number(unavailable.has(pullRequestProjectKey(right))),
-          )
-          .map((project) => {
-            const reason = unavailable.get(pullRequestProjectKey(project));
-            const item = (
-              <MenuRadioItem
-                key={pullRequestProjectKey(project)}
-                value={pullRequestProjectKey(project)}
-                className={reason !== undefined ? "data-disabled:pointer-events-auto" : undefined}
-                disabled={reason !== undefined}
-              >
-                <span className="flex min-w-0 flex-1 items-center gap-2">
-                  <ProjectFavicon
-                    environmentId={project.environmentId}
-                    cwd={project.workspaceRoot}
-                    fallbackIcon={FolderGit2Icon}
-                    className="size-3.5 shrink-0"
-                  />
-                  <span className="min-w-0 flex-1 truncate">{project.title}</span>
-                  {reason === undefined ? null : (
-                    <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
-                      Unavailable
+            {projects
+              .toSorted(
+                (left, right) =>
+                  Number(unavailable.has(pullRequestProjectKey(left))) -
+                  Number(unavailable.has(pullRequestProjectKey(right))),
+              )
+              .map((project) => {
+                const reason = unavailable.get(pullRequestProjectKey(project));
+                const item = (
+                  <MenuRadioItem
+                    key={pullRequestProjectKey(project)}
+                    value={pullRequestProjectKey(project)}
+                    className={
+                      reason !== undefined ? "data-disabled:pointer-events-auto" : undefined
+                    }
+                    disabled={reason !== undefined}
+                  >
+                    <span className="flex min-w-0 flex-1 items-center gap-2">
+                      <ProjectFavicon
+                        environmentId={project.environmentId}
+                        cwd={project.workspaceRoot}
+                        fallbackIcon={FolderGit2Icon}
+                        className="size-3.5 shrink-0"
+                      />
+                      <span className="min-w-0 flex-1 truncate">{project.title}</span>
+                      {reason === undefined ? null : (
+                        <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
+                          Unavailable
+                        </span>
+                      )}
                     </span>
-                  )}
-                </span>
-              </MenuRadioItem>
-            );
-            if (reason === undefined) return item;
-            return (
-              <Tooltip key={pullRequestProjectKey(project)}>
-                <TooltipTrigger render={item} />
-                <TooltipPopup side="top" className="max-w-80">
-                  {reason}
-                </TooltipPopup>
-              </Tooltip>
-            );
-          })}
-      </MenuRadioGroup>
+                  </MenuRadioItem>
+                );
+                if (reason === undefined) return item;
+                return (
+                  <Tooltip key={pullRequestProjectKey(project)}>
+                    <TooltipTrigger render={item} />
+                    <TooltipPopup side="top" className="max-w-80">
+                      {reason}
+                    </TooltipPopup>
+                  </Tooltip>
+                );
+              })}
+          </MenuRadioGroup>
+        </>
+      ) : null}
     </ListFilterMenu>
   );
 }

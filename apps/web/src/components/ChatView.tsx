@@ -3,6 +3,8 @@ import {
   DEFAULT_MODEL,
   defaultInstanceIdForDriver,
   type EnvironmentId,
+  type IssueLink,
+  type IssueLinkedPullRequest,
   type MessageId,
   type ModelSelection,
   type ProjectScript,
@@ -336,6 +338,7 @@ import {
   reconcileMountedTerminalThreadIds,
   resolveThreadMetadataUpdateForNextTurn,
   resolveSendEnvMode,
+  resolveGitHubIssueUrlPrefix,
   resolveSourceControlSurfaceCapability,
   revokeBlobPreviewUrl,
   revokeUserMessagePreviewUrls,
@@ -371,6 +374,7 @@ import {
   serverUpdateGuidance,
 } from "../versionSkew";
 import { useAssetUrls } from "../assets/assetUrls";
+import { hasGitHistoryCapability } from "../gitHistoryCapability";
 
 const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
@@ -454,6 +458,7 @@ const PreviewPanel = lazy(() =>
   import("./preview/PreviewPanel").then((module) => ({ default: module.PreviewPanel })),
 );
 const DiffPanel = lazy(() => import("./DiffPanel"));
+const RepositoryPanel = lazy(() => import("./RepositoryPanel"));
 const FilePreviewPanel = lazy(() => import("./files/FilePreviewPanel"));
 const EMPTY_PENDING_FILE_SURFACE_IDS: ReadonlySet<string> = new Set();
 const TYPE_TO_FOCUS_EDITABLE_SELECTOR = [
@@ -2074,6 +2079,7 @@ function ChatViewContent(props: ChatViewProps) {
     capabilityKnown: issuesCapabilityKnown,
     supported: supportsIssues,
   });
+  const supportsGitHistory = hasGitHistoryCapability(serverConfig?.environment.capabilities);
   const versionMismatch = resolveServerConfigVersionMismatch(serverConfig);
   const versionMismatchDismissKey =
     versionMismatch && activeThread
@@ -2686,6 +2692,7 @@ function ChatViewContent(props: ChatViewProps) {
         worktreePath: activeThread?.worktreePath ?? null,
       })
     : null;
+  const gitHistoryIssueUrlPrefix = resolveGitHubIssueUrlPrefix(activeProject?.repositoryIdentity);
   const gitStatusCwd = activeThread?.worktreePath ?? gitCwd;
   const gitStatusQuery = useEnvironmentQuery(
     gitStatusCwd === null
@@ -3344,6 +3351,27 @@ function ChatViewContent(props: ChatViewProps) {
     useRightPanelStore.getState().open(activeThreadRef, "diff");
     onDiffPanelOpen?.();
   }, [activeThreadRef, isGitRepo, isServerThread, onDiffPanelOpen]);
+  const addRepositorySurface = useCallback(() => {
+    if (!activeThreadRef || !activeProject) return;
+    const view =
+      supportsGitHistory && isGitRepo && gitCwd !== null
+        ? "history"
+        : supportsIssues && activeProject.repositoryIdentity !== null
+          ? "issues"
+          : supportsPullRequests && activeProject.repositoryIdentity !== null
+            ? "pull-requests"
+            : null;
+    if (view === null) return;
+    useRightPanelStore.getState().openRepository(activeThreadRef, view);
+  }, [
+    activeProject,
+    activeThreadRef,
+    gitCwd,
+    isGitRepo,
+    supportsGitHistory,
+    supportsIssues,
+    supportsPullRequests,
+  ]);
   const addFilesSurface = useCallback(() => {
     if (!activeThreadRef || !activeProject) return;
     useRightPanelStore.getState().open(activeThreadRef, "files");
@@ -3433,6 +3461,70 @@ function ChatViewContent(props: ChatViewProps) {
     (link: { repository: string; number: number; url: string }) =>
       openLinkedItem("pull-request", link),
     [openLinkedItem],
+  );
+  const selectRepositoryIssue = useCallback(
+    (target: { projectId: string; repository: string; number: number } | null) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().selectRepositoryIssue(activeThreadRef, target);
+    },
+    [activeThreadRef],
+  );
+  const selectRepositoryPullRequest = useCallback(
+    (target: { projectId: string; repository: string; number: number } | null) => {
+      if (!activeThreadRef) return;
+      useRightPanelStore.getState().selectRepositoryPullRequest(activeThreadRef, target);
+    },
+    [activeThreadRef],
+  );
+  const openLinkedItemInRepository = useCallback(
+    (
+      kind: "issue" | "pull-request",
+      link: { provider?: string; repository: string; number: number; url: string },
+    ) => {
+      const supported = kind === "issue" ? supportsIssues : supportsPullRequests;
+      const project =
+        activeThreadEnvironmentId === null
+          ? undefined
+          : findProjectForLink(
+              allProjects.filter(
+                (candidate) => candidate.environmentId === activeThreadEnvironmentId,
+              ),
+              link,
+            );
+      if (!supported || project === undefined || project.id !== activeProject?.id) {
+        openLinkedItem(kind, link);
+        return;
+      }
+      const target = {
+        projectId: project.id,
+        ...(kind === "issue" && link.provider !== undefined ? { provider: link.provider } : {}),
+        repository: repositoryForProjectLink(project, link.repository),
+        number: link.number,
+      };
+      if (kind === "issue") {
+        selectRepositoryIssue(target);
+      } else {
+        selectRepositoryPullRequest(target);
+      }
+    },
+    [
+      activeProject?.id,
+      activeThreadEnvironmentId,
+      allProjects,
+      openLinkedItem,
+      selectRepositoryIssue,
+      selectRepositoryPullRequest,
+      supportsIssues,
+      supportsPullRequests,
+    ],
+  );
+  const openLinkedIssueInRepository = useCallback(
+    (link: IssueLink) => openLinkedItemInRepository("issue", link),
+    [openLinkedItemInRepository],
+  );
+  const openLinkedPullRequestInRepository = useCallback(
+    (link: IssueLinkedPullRequest) => openLinkedItemInRepository("pull-request", link),
+    [openLinkedItemInRepository],
   );
   const togglePreviewPanel = useCallback(() => {
     if (!activeThreadRef || !isPreviewSupportedInRuntime()) return;
@@ -6321,6 +6413,45 @@ function ChatViewContent(props: ChatViewProps) {
           initialGitScope={initialDiffPanelGitScope}
         />
       </Suspense>
+    ) : activeRightPanelSurface?.kind === "git-history" && activeProject && activeProjectRef ? (
+      <Suspense fallback={null}>
+        <RepositoryPanel
+          key={`${activeThreadKey}:${activeProject.id}`}
+          environmentId={environmentId}
+          cwd={gitCwd ?? activeProject.workspaceRoot}
+          gitHistoryCapabilityState={
+            supportsGitHistory && isGitRepo && gitCwd !== null ? "ready" : "unavailable"
+          }
+          issuesCapabilityState={issuesSurfaceCapabilityState}
+          pullRequestsCapabilityState={
+            !pullRequestsCapabilityKnown
+              ? "loading"
+              : supportsPullRequests
+                ? "ready"
+                : "unavailable"
+          }
+          projectId={activeProject.id}
+          composerDraftTarget={composerDraftTarget}
+          view={activeRightPanelSurface.view}
+          onViewChange={(view) =>
+            useRightPanelStore.getState().selectRepositoryView(activeThreadRef, view)
+          }
+          selectedIssue={activeRightPanelSurface.selectedIssue}
+          onSelectIssue={selectRepositoryIssue}
+          selectedPullRequest={activeRightPanelSurface.selectedPullRequest}
+          onSelectPullRequest={selectRepositoryPullRequest}
+          handoffTarget={{
+            kind: "existing-thread",
+            projectRef: activeProjectRef,
+            draftId: composerDraftTarget,
+          }}
+          onIssueStateChange={handleIssueTabStatusChange}
+          onPullRequestStateChange={handlePullRequestTabStatusChange}
+          onOpenLinkedIssue={openLinkedIssueInRepository}
+          onOpenLinkedPullRequest={openLinkedPullRequestInRepository}
+          {...(gitHistoryIssueUrlPrefix ? { issueUrlPrefix: gitHistoryIssueUrlPrefix } : {})}
+        />
+      </Suspense>
     ) : activeRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
       <DetailGhost label="Loading pull request" />
     ) : activeRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (
@@ -6882,6 +7013,7 @@ function ChatViewContent(props: ChatViewProps) {
           onAddBrowser={createBrowserSurface}
           onAddTerminal={addTerminalSurface}
           onAddDiff={addDiffSurface}
+          onAddRepository={addRepositorySurface}
           onAddFiles={addFilesSurface}
           onAddPullRequest={addPullRequestSurface}
           onAddIssue={addIssueSurface}
@@ -6889,6 +7021,10 @@ function ChatViewContent(props: ChatViewProps) {
           browserAvailable={isPreviewSupportedInRuntime()}
           terminalAvailable={activeProject !== null}
           diffAvailable={isServerThread && isGitRepo}
+          repositoryAvailable={
+            (supportsGitHistory && isGitRepo && gitCwd !== null) ||
+            ((supportsIssues || supportsPullRequests) && threadRepository !== null)
+          }
           filesAvailable={activeProject !== null}
           pullRequestAvailable={pullRequestSurfaceAvailable}
           issueAvailable={issueSurfaceAvailable}
@@ -6925,6 +7061,7 @@ function ChatViewContent(props: ChatViewProps) {
             onAddBrowser={createBrowserSurface}
             onAddTerminal={addTerminalSurface}
             onAddDiff={addDiffSurface}
+            onAddRepository={addRepositorySurface}
             onAddFiles={addFilesSurface}
             onAddPullRequest={addPullRequestSurface}
             onAddIssue={addIssueSurface}
@@ -6932,6 +7069,10 @@ function ChatViewContent(props: ChatViewProps) {
             browserAvailable={isPreviewSupportedInRuntime()}
             terminalAvailable={activeProject !== null}
             diffAvailable={isServerThread && isGitRepo}
+            repositoryAvailable={
+              (supportsGitHistory && isGitRepo && gitCwd !== null) ||
+              ((supportsIssues || supportsPullRequests) && threadRepository !== null)
+            }
             filesAvailable={activeProject !== null}
             pullRequestAvailable={pullRequestSurfaceAvailable}
             issueAvailable={issueSurfaceAvailable}

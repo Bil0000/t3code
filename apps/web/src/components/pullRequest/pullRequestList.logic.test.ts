@@ -1,4 +1,4 @@
-import type { EnvironmentId, ProjectId, PullRequestListEntry } from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, type PullRequestListEntry } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -7,6 +7,7 @@ import {
   mergePullRequestLists,
   pullRequestEntryKey,
   pullRequestEnvironmentSetKey,
+  decoratePullRequestEntries,
   groupPullRequestsByInvolvement,
   matchesPullRequestFilters,
   matchesPullRequestQuery,
@@ -14,6 +15,8 @@ import {
   mergePullRequestDiffStats,
   narrowPullRequestsToFilters,
   partitionPullRequestsWithPriority,
+  pullRequestStatsTargets,
+  prunePullRequestDiffStats,
   readPullRequestListSnapshot,
   writePullRequestListSnapshot,
   rankPullRequestMatches,
@@ -32,10 +35,10 @@ function entry(
   overrides: Partial<EnvironmentPullRequestEntry> & Pick<PullRequestListEntry, "number">,
 ) {
   return {
-    environmentId: "env-1",
+    environmentId: EnvironmentId.make("env-1"),
     provider: "github",
     host: "github.com",
-    projectId: "project-1",
+    projectId: ProjectId.make("project-1"),
     projectTitle: "t3code",
     repository: "pingdotgg/t3code",
     title: "Add the pull requests page",
@@ -477,6 +480,59 @@ describe("line counts that arrive after the rows", () => {
     const row = entry({ number: 9, additions: 0, deletions: 0 });
     expect(withDiffStat(row, stats)).toBe(row);
   });
+
+  it("keeps an unchanged decorated row stable when another row's count changes", () => {
+    const first = entry({ number: 1, additions: 0, deletions: 0 });
+    const second = entry({ number: 2, additions: 0, deletions: 0 });
+    const initial = decoratePullRequestEntries(
+      [first, second],
+      new Map([
+        ["env-1 project-1 1", { additions: 1, deletions: 1 }],
+        ["env-1 project-1 2", { additions: 2, deletions: 2 }],
+      ]),
+      new Map(),
+    );
+    const updated = decoratePullRequestEntries(
+      [first, second],
+      new Map([
+        ["env-1 project-1 1", { additions: 1, deletions: 1 }],
+        ["env-1 project-1 2", { additions: 3, deletions: 2 }],
+      ]),
+      initial.bySource,
+    );
+
+    expect(updated.entries[0]).toBe(initial.entries[0]);
+    expect(updated.entries[1]).not.toBe(initial.entries[1]);
+  });
+});
+
+describe("line-count query targets", () => {
+  it("drops prior filter and page batches before a refresh", () => {
+    const firstPage = pullRequestStatsTargets([entry({ number: 1 }), entry({ number: 2 })]);
+    const currentFilter = pullRequestStatsTargets([
+      entry({ environmentId: EnvironmentId.make("env-1"), number: 31 }),
+      entry({
+        environmentId: EnvironmentId.make("env-2"),
+        projectId: ProjectId.make("project-2"),
+        repository: "acme/api",
+        number: 7,
+      }),
+    ]);
+
+    expect(firstPage.flatMap((target) => target.input.refs).map((ref) => ref.number)).toEqual([
+      1, 2,
+    ]);
+    expect(currentFilter).toEqual([
+      {
+        environmentId: "env-1",
+        input: { refs: [{ projectId: "project-1", repository: "pingdotgg/t3code", number: 31 }] },
+      },
+      {
+        environmentId: "env-2",
+        input: { refs: [{ projectId: "project-2", repository: "acme/api", number: 7 }] },
+      },
+    ]);
+  });
 });
 
 describe("merging line counts across keyed stats queries", () => {
@@ -509,6 +565,27 @@ describe("merging line counts across keyed stats queries", () => {
       { environmentId: "env-1", projectId: "project-1", number: 1, additions: 2, deletions: 2 },
     ]);
     expect(held.get("env-1 project-1 1")).toEqual({ additions: 1, deletions: 1 });
+  });
+});
+
+describe("retaining line counts for currently rendered rows", () => {
+  it("drops stale filters while preserving rows accumulated by pagination", () => {
+    const held = new Map([
+      ["env-1 project-1 1", { additions: 1, deletions: 1 }],
+      ["env-1 project-1 2", { additions: 2, deletions: 2 }],
+      ["env-1 project-1 3", { additions: 3, deletions: 3 }],
+    ]);
+
+    const paginated = prunePullRequestDiffStats(held, [entry({ number: 1 }), entry({ number: 2 })]);
+    expect(paginated).toEqual(
+      new Map([
+        ["env-1 project-1 1", { additions: 1, deletions: 1 }],
+        ["env-1 project-1 2", { additions: 2, deletions: 2 }],
+      ]),
+    );
+    expect(prunePullRequestDiffStats(paginated, [entry({ number: 2 })])).toEqual(
+      new Map([["env-1 project-1 2", { additions: 2, deletions: 2 }]]),
+    );
   });
 });
 

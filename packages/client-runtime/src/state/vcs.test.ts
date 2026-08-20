@@ -33,9 +33,11 @@ import {
   createVcsEnvironmentAtoms,
   makeCachedVcsRefsChanges,
 } from "./vcs.ts";
+import { executeAtomQuery } from "./runtime.ts";
 import {
   invalidateCachedVcsRefs,
   invalidateVcsRefs,
+  vcsHistoryRevisionAtom,
   vcsRefsCacheStateAtom,
 } from "./vcsRefInvalidation.ts";
 
@@ -114,13 +116,90 @@ function cacheWithRefs(
 }
 
 describe("cached VCS refs", () => {
-  it("invalidates all ref streams in the mutated environment", () => {
+  it.effect("waits for the initial connection before requesting a cursor history page", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const calls = yield* Ref.make(0);
+        const connectionState = yield* SubscriptionRef.make(AVAILABLE_CONNECTION_STATE);
+        const sessionState = yield* SubscriptionRef.make(Option.none<RpcSession>());
+        const client = {
+          [WS_METHODS.vcsListHistoryRefs]: () =>
+            Ref.update(calls, (count) => count + 1).pipe(
+              Effect.as({
+                refs: [],
+                currentRef: null,
+                isRepo: true,
+                hasPrimaryRemote: false,
+                nextCursor: null,
+                isComplete: true,
+              }),
+            ),
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: TARGET,
+          state: connectionState,
+          session: sessionState,
+          prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+        const run: EnvironmentRegistry.EnvironmentRegistry["Service"]["run"] = (
+          _environmentId,
+          effect,
+        ) => Effect.provideService(effect, EnvironmentSupervisor.EnvironmentSupervisor, supervisor);
+        const runtime = Atom.runtime(
+          Layer.merge(
+            Layer.succeed(
+              EnvironmentRegistry.EnvironmentRegistry,
+              EnvironmentRegistry.EnvironmentRegistry.of({
+                run,
+              } as EnvironmentRegistry.EnvironmentRegistry["Service"]),
+            ),
+            Layer.succeed(Persistence.EnvironmentCacheStore, cacheWithRefs(Option.none())),
+          ),
+        );
+        const atoms = createVcsEnvironmentAtoms(runtime);
+        const registry = yield* Effect.acquireRelease(Effect.sync(AtomRegistry.make), (registry) =>
+          Effect.sync(() => registry.dispose()),
+        );
+        const result = yield* Effect.forkChild(
+          Effect.promise(() =>
+            executeAtomQuery(
+              registry,
+              atoms.listHistoryRefs({
+                environmentId: TARGET.environmentId,
+                input: { cwd: "/repo", cursor: "next", limit: 100 },
+              }),
+            ),
+          ),
+        );
+
+        yield* Effect.yieldNow;
+        expect(yield* Ref.get(calls)).toBe(0);
+
+        yield* SubscriptionRef.set(sessionState, Option.some(session(client)));
+        yield* SubscriptionRef.set(connectionState, CONNECTED_CONNECTION_STATE);
+
+        expect(AsyncResult.isSuccess(yield* Fiber.join(result))).toBe(true);
+        expect(yield* Ref.get(calls)).toBe(1);
+      }),
+    ),
+  );
+
+  it("invalidates ref streams for an environment but history only for the mutated repository", () => {
     const registry = AtomRegistry.make();
     const environment = {
       environmentId: TARGET.environmentId,
+      cwd: "/repo-a",
+    };
+    const siblingRepository = {
+      environmentId: TARGET.environmentId,
+      cwd: "/repo-b",
     };
     const otherEnvironment = {
       environmentId: EnvironmentId.make("environment-2"),
+      cwd: "/repo-a",
     };
 
     expect(registry.get(vcsRefsCacheStateAtom(environment))).toEqual({
@@ -131,6 +210,9 @@ describe("cached VCS refs", () => {
       revision: 0,
       persistedCacheReadable: true,
     });
+    expect(registry.get(vcsHistoryRevisionAtom(environment))).toBe(0);
+    expect(registry.get(vcsHistoryRevisionAtom(siblingRepository))).toBe(0);
+    expect(registry.get(vcsHistoryRevisionAtom(otherEnvironment))).toBe(0);
 
     invalidateVcsRefs(registry, environment);
 
@@ -142,6 +224,9 @@ describe("cached VCS refs", () => {
       revision: 0,
       persistedCacheReadable: true,
     });
+    expect(registry.get(vcsHistoryRevisionAtom(environment))).toBe(1);
+    expect(registry.get(vcsHistoryRevisionAtom(siblingRepository))).toBe(0);
+    expect(registry.get(vcsHistoryRevisionAtom(otherEnvironment))).toBe(0);
     registry.dispose();
   });
 
@@ -569,6 +654,66 @@ describe("cached VCS refs", () => {
         });
         expect(Option.getOrThrow(yield* Fiber.join(fiber))).toEqual(LIVE_REFS);
         expect(yield* Ref.get(calls)).toBe(2);
+      }),
+    ),
+  );
+
+  it.effect("refreshes only the root ref page when reconnecting after cursor pages loaded", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const requests = yield* Ref.make<ReadonlyArray<VcsListRefsInput>>([]);
+        const connectionState = yield* SubscriptionRef.make(CONNECTED_CONNECTION_STATE);
+        const client = {
+          [WS_METHODS.vcsListRefs]: (input: VcsListRefsInput) =>
+            Ref.update(requests, (current) => [...current, input]).pipe(Effect.as(LIVE_REFS)),
+        } as unknown as WsRpcProtocolClient;
+        const supervisor = EnvironmentSupervisor.EnvironmentSupervisor.of({
+          target: TARGET,
+          state: connectionState,
+          session: yield* SubscriptionRef.make(Option.some(session(client))),
+          prepared: yield* SubscriptionRef.make(Option.none<PreparedConnection>()),
+          connect: Effect.void,
+          disconnect: Effect.void,
+          retryNow: Effect.void,
+        } satisfies EnvironmentSupervisor.EnvironmentSupervisor["Service"]);
+        const cache = cacheWithRefs(Option.none());
+        const inputs: ReadonlyArray<VcsListRefsInput> = [
+          { cwd: "/repo", limit: 100 },
+          { cwd: "/repo", limit: 100, cursor: 100 },
+          { cwd: "/repo", limit: 100, cursor: 200 },
+        ];
+        const fibers = yield* Effect.forEach(inputs, (input) =>
+          Stream.unwrap(
+            makeCachedVcsRefsChanges(input).pipe(
+              Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+              Effect.provideService(Persistence.EnvironmentCacheStore, cache),
+            ),
+          ).pipe(Stream.runDrain, Effect.forkChild),
+        );
+
+        for (
+          let attempt = 0;
+          attempt < 100 && (yield* Ref.get(requests)).length < 3;
+          attempt += 1
+        ) {
+          yield* Effect.yieldNow;
+        }
+        expect(yield* Ref.get(requests)).toEqual(inputs);
+
+        yield* SubscriptionRef.set(connectionState, {
+          ...CONNECTED_CONNECTION_STATE,
+          generation: 2,
+        });
+        for (
+          let attempt = 0;
+          attempt < 100 && (yield* Ref.get(requests)).length < 4;
+          attempt += 1
+        ) {
+          yield* Effect.yieldNow;
+        }
+
+        expect(yield* Ref.get(requests)).toEqual([...inputs, inputs[0]!]);
+        yield* Effect.forEach(fibers, Fiber.interrupt);
       }),
     ),
   );

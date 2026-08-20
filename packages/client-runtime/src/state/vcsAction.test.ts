@@ -41,7 +41,7 @@ import {
   VcsActionTargetKeyParseError,
   VcsActionUnavailableError,
 } from "./vcsAction.ts";
-import { vcsRefsCacheStateAtom } from "./vcsRefInvalidation.ts";
+import { vcsHistoryRevisionAtom, vcsRefsCacheStateAtom } from "./vcsRefInvalidation.ts";
 
 const actionId = "action-123";
 const action = "commit_push" as const;
@@ -649,8 +649,10 @@ describe("vcsActionState", () => {
           Effect.sync(() => registry.dispose()),
         );
         const state = vcsRefsCacheStateAtom({ environmentId });
+        const historyRevision = vcsHistoryRevisionAtom({ environmentId, cwd });
 
         expect(registry.get(state).revision).toBe(0);
+        expect(registry.get(historyRevision)).toBe(0);
         const successfulResult = yield* Effect.promise(() =>
           manager.runStackedAction(targetKey).run(registry, {
             actionId: successfulActionId,
@@ -660,6 +662,7 @@ describe("vcsActionState", () => {
 
         expect(AsyncResult.isSuccess(successfulResult)).toBe(true);
         expect(registry.get(state).revision).toBe(1);
+        expect(registry.get(historyRevision)).toBe(1);
         expect(removed).toEqual([`${environmentId}:*`]);
 
         const failedResult = yield* Effect.promise(() =>
@@ -671,6 +674,7 @@ describe("vcsActionState", () => {
 
         expect(AsyncResult.isFailure(failedResult)).toBe(true);
         expect(registry.get(state).revision).toBe(2);
+        expect(registry.get(historyRevision)).toBe(2);
         expect(removed).toEqual([`${environmentId}:*`, `${environmentId}:*`]);
       }),
     ),

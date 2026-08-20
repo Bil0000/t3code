@@ -7,6 +7,17 @@ import {
   GitRunStackedActionResult,
   GitRunStackedActionInput,
   GitResolvePullRequestResult,
+  VcsGetHistoryResult,
+  VcsGetHistoryInput,
+  VcsGetCommitDiffInput,
+  VcsGetCommitDetailsInput,
+  VcsListCommitFilesInput,
+  VcsListCommitFilesResult,
+  VcsStatusResult,
+  VcsListHistoryRefsInput,
+  VcsListHistoryRefsResult,
+  VcsListRefsInput,
+  VcsListRefsResult,
 } from "./git.ts";
 
 const decodeCreateWorktreeInput = Schema.decodeUnknownSync(VcsCreateWorktreeInput);
@@ -16,6 +27,188 @@ const decodePreparePullRequestThreadInput = Schema.decodeUnknownSync(
 const decodeRunStackedActionInput = Schema.decodeUnknownSync(GitRunStackedActionInput);
 const decodeRunStackedActionResult = Schema.decodeUnknownSync(GitRunStackedActionResult);
 const decodeResolvePullRequestResult = Schema.decodeUnknownSync(GitResolvePullRequestResult);
+const decodeListRefsInput = Schema.decodeUnknownSync(VcsListRefsInput);
+const decodeListRefsResult = Schema.decodeUnknownSync(VcsListRefsResult);
+const decodeListHistoryRefsInput = Schema.decodeUnknownSync(VcsListHistoryRefsInput);
+const decodeCommitDetailsInput = Schema.decodeUnknownSync(VcsGetCommitDetailsInput);
+const decodeCommitDiffInput = Schema.decodeUnknownSync(VcsGetCommitDiffInput);
+const decodeListCommitFilesResult = Schema.decodeUnknownSync(VcsListCommitFilesResult);
+const decodeListCommitFilesInput = Schema.decodeUnknownSync(VcsListCommitFilesInput);
+const decodeStatusResult = Schema.decodeUnknownSync(VcsStatusResult);
+const decodeGetHistoryResult = Schema.decodeUnknownSync(VcsGetHistoryResult);
+const decodeGetHistoryInput = Schema.decodeUnknownSync(VcsGetHistoryInput);
+const decodeListHistoryRefsResult = Schema.decodeUnknownSync(VcsListHistoryRefsResult);
+
+describe("VCS ref contracts", () => {
+  it("preserves the numeric cursor and result shape of vcs.listRefs", () => {
+    expect(decodeListRefsInput({ cwd: "/repo", cursor: 20, query: "release" })).toEqual({
+      cwd: "/repo",
+      cursor: 20,
+      query: "release",
+    });
+    expect(
+      decodeListRefsResult({
+        refs: [],
+        isRepo: true,
+        hasPrimaryRemote: false,
+        nextCursor: 20,
+        totalCount: 25,
+      }).totalCount,
+    ).toBe(25);
+  });
+
+  it("uses an opaque cursor only for vcs.listHistoryRefs", () => {
+    expect(
+      decodeListHistoryRefsInput({
+        cwd: "/repo",
+        cursor: "opaque-cursor",
+        query: "Release",
+        namespace: "tag",
+      }),
+    ).toEqual({
+      cwd: "/repo",
+      cursor: "opaque-cursor",
+      query: "Release",
+      namespace: "tag",
+    });
+    expect(() => decodeListRefsInput({ cwd: "/repo", cursor: "opaque-cursor" })).toThrow();
+  });
+});
+
+describe("Git commit hashes", () => {
+  it("accepts SHA-1 and SHA-256 object hashes", () => {
+    expect(decodeCommitDetailsInput({ cwd: "/repo", hash: "a".repeat(40) }).hash).toHaveLength(40);
+    expect(decodeCommitDetailsInput({ cwd: "/repo", hash: "b".repeat(64) }).hash).toHaveLength(64);
+  });
+});
+
+describe("Git file path contracts", () => {
+  it("preserves leading and trailing whitespace in file-path requests and results", () => {
+    const filePath = " leading-and-trailing.txt ";
+
+    expect(
+      decodeRunStackedActionInput({
+        actionId: "action-1",
+        cwd: "/repo",
+        action: "commit",
+        filePaths: [filePath],
+      }).filePaths,
+    ).toEqual([filePath]);
+    expect(
+      decodeCommitDiffInput({
+        cwd: "/repo",
+        hash: "a".repeat(40),
+        filePath,
+      }).filePath,
+    ).toBe(filePath);
+    expect(
+      decodeListCommitFilesResult({
+        files: [{ status: "M", path: filePath }],
+        isRepo: true,
+        nextCursor: null,
+        hasMore: false,
+        capped: false,
+      }).files[0]?.path,
+    ).toBe(filePath);
+    expect(
+      decodeStatusResult({
+        isRepo: true,
+        hasPrimaryRemote: false,
+        isDefaultRef: false,
+        refName: "main",
+        hasWorkingTreeChanges: true,
+        workingTree: {
+          files: [{ path: filePath, insertions: 1, deletions: 0 }],
+          insertions: 1,
+          deletions: 0,
+        },
+        hasUpstream: false,
+        aheadCount: 0,
+        behindCount: 0,
+        pr: null,
+      }).workingTree.files[0]?.path,
+    ).toBe(filePath);
+  });
+});
+
+describe("Git history results", () => {
+  it("does not expose client cache generations in History RPC inputs", () => {
+    expect(decodeListHistoryRefsInput({ cwd: "/repo", queryGeneration: 1 })).not.toHaveProperty(
+      "queryGeneration",
+    );
+    expect(decodeGetHistoryInput({ cwd: "/repo", queryGeneration: 1 })).not.toHaveProperty(
+      "queryGeneration",
+    );
+    expect(
+      decodeCommitDetailsInput({ cwd: "/repo", hash: "a".repeat(40), queryGeneration: 1 }),
+    ).not.toHaveProperty("queryGeneration");
+    expect(
+      decodeListCommitFilesInput({ cwd: "/repo", hash: "a".repeat(40), queryGeneration: 1 }),
+    ).not.toHaveProperty("queryGeneration");
+    expect(
+      decodeCommitDiffInput({ cwd: "/repo", hash: "a".repeat(40), queryGeneration: 1 }),
+    ).not.toHaveProperty("queryGeneration");
+  });
+
+  it("round-trips a listed ref name into a bounded history revision", () => {
+    const refName = `refs/heads/${"nested/".repeat(180)}feature`;
+    const listed = decodeListHistoryRefsResult({
+      refs: [
+        {
+          name: refName,
+          current: false,
+          isDefault: false,
+          worktreePath: null,
+        },
+      ],
+      currentRef: null,
+      hasMore: false,
+      hasPrimaryRemote: false,
+      isRepo: true,
+      isComplete: true,
+      nextCursor: null,
+    });
+
+    expect(decodeGetHistoryInput({ cwd: "/repo", revision: listed.refs[0]!.name }).revision).toBe(
+      refName,
+    );
+    expect(() => decodeGetHistoryInput({ cwd: "/repo", revision: "r".repeat(4097) })).toThrow();
+  });
+
+  it("preserves an explicit capped signal for incomplete history snapshots", () => {
+    expect(
+      decodeGetHistoryResult({
+        commits: [],
+        isRepo: true,
+        nextCursor: null,
+        hasMore: false,
+        capped: true,
+      }).capped,
+    ).toBe(true);
+  });
+
+  it("preserves commits whose Git identity fields are empty", () => {
+    const result = decodeGetHistoryResult({
+      commits: [
+        {
+          hash: "a".repeat(40),
+          parentHashes: [],
+          subject: "identity-less commit",
+          authorName: "",
+          authorEmail: "",
+          authoredAt: "2026-08-19T00:00:00Z",
+          refs: [],
+        },
+      ],
+      isRepo: true,
+      nextCursor: null,
+      hasMore: false,
+    });
+
+    expect(result.commits[0]?.authorName).toBe("");
+    expect(result.commits[0]?.authorEmail).toBe("");
+  });
+});
 
 describe("VcsCreateWorktreeInput", () => {
   it("accepts omitted newRefName for existing-refName worktrees", () => {

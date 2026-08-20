@@ -52,6 +52,7 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends EnvironmentAtomOpt
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
+  readonly revalidateOnReconnect?: (input: Input) => boolean;
 }
 
 interface EnvironmentSubscriptionAtomOptions<Input, A, E, R> {
@@ -425,8 +426,9 @@ export async function settlePromise<A>(
 export function environmentRpcKey<Input>(target: {
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
+  readonly cacheKey?: string | number;
 }): string {
-  return JSON.stringify([target.environmentId, target.input]);
+  return JSON.stringify([target.environmentId, target.input, target.cacheKey]);
 }
 
 function parseEnvironmentRpcKey<Input>(key: string): {
@@ -483,6 +485,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
 ): (target: {
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
+  readonly cacheKey?: string | number;
 }) => Atom.Atom<AsyncResult.AsyncResult<A, E | ER | Error>> {
   const rpcGenerationAtom = Atom.family((environmentId: EnvironmentIdType) =>
     runtime.atom(
@@ -510,13 +513,36 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
     const idleTtlMs = options.idleTtlMs ?? 5 * 60_000;
     const queryAtom = runtime
       .atom((get) => {
-        const generation = Option.getOrNull(
-          AsyncResult.value(get(rpcGenerationAtom(target.environmentId))),
-        );
-        if (generation === null) {
-          return Effect.never;
+        if (options.revalidateOnReconnect?.(target.input) ?? true) {
+          const generation = Option.getOrNull(
+            AsyncResult.value(get(rpcGenerationAtom(target.environmentId))),
+          );
+          if (generation === null) {
+            return Effect.never;
+          }
+          return runInEnvironment(target.environmentId, options.execute(target.input));
         }
-        return runInEnvironment(target.environmentId, options.execute(target.input));
+        return runInEnvironment(
+          target.environmentId,
+          EnvironmentSupervisor.pipe(
+            Effect.flatMap((supervisor) =>
+              Stream.concat(
+                Stream.fromEffect(SubscriptionRef.get(supervisor.state)),
+                SubscriptionRef.changes(supervisor.state),
+              ).pipe(
+                Stream.filter((state) => state.phase === "connected"),
+                Stream.take(1),
+                Stream.runHead,
+                Effect.flatMap(
+                  Option.match({
+                    onNone: () => Effect.never,
+                    onSome: () => options.execute(target.input),
+                  }),
+                ),
+              ),
+            ),
+          ),
+        );
       })
       .pipe(
         Atom.swr({
@@ -598,6 +624,7 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     readonly staleTimeMs?: number;
     readonly idleTtlMs?: number;
     readonly refreshIntervalMs?: number;
+    readonly revalidateOnReconnect?: (input: EnvironmentRpcInput<TTag>) => boolean;
   },
 ) {
   return createEnvironmentQueryAtomFamily(runtime, {
@@ -607,6 +634,9 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     ...(options.refreshIntervalMs === undefined
       ? {}
       : { refreshIntervalMs: options.refreshIntervalMs }),
+    ...(options.revalidateOnReconnect === undefined
+      ? {}
+      : { revalidateOnReconnect: options.revalidateOnReconnect }),
     execute: (input: EnvironmentRpcInput<TTag>) => request(options.tag, input),
   });
 }

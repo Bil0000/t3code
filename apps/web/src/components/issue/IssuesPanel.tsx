@@ -1,6 +1,7 @@
 import type {
   EnvironmentId,
   IssueInvolvement,
+  IssueLinkedPullRequest,
   IssueListOrder,
   IssueListSort,
   IssueListEntry,
@@ -94,6 +95,7 @@ interface IssuesPanelProps {
   onSelect: (target: NonNullable<IssuesSurface["selected"]> | null) => void;
   handoffTarget: IssueHandoffTarget;
   onStateChange: (status: IssueTabStatus) => void;
+  onOpenLinkedPullRequest?: (link: IssueLinkedPullRequest) => void;
 }
 
 /**
@@ -116,6 +118,7 @@ function ProjectIssues({
   onSelect,
   handoffTarget,
   onStateChange,
+  onOpenLinkedPullRequest,
 }: IssuesPanelProps) {
   // Held here rather than in the list, so reading an issue and coming back does not throw away
   // the search that found it — the list is unmounted while the issue is open.
@@ -157,6 +160,7 @@ function ProjectIssues({
             }}
             handoffTarget={handoffTarget}
             onStateChange={onStateChange}
+            {...(onOpenLinkedPullRequest ? { onOpenLinkedPullRequest } : {})}
             // The panel is the narrowest place this reads, so the metadata folds into the top row
             // once the content scrolls — the same bargain the issues page makes.
             chromeVariant="collapse"

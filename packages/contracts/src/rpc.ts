@@ -24,13 +24,24 @@ import {
   VcsSwitchRefInput,
   VcsSwitchRefResult,
   GitCommandError,
+  VcsSnapshotExpiredError,
   VcsCreateRefInput,
   VcsCreateRefResult,
   VcsCreateWorktreeInput,
   VcsCreateWorktreeResult,
+  VcsGetHistoryInput,
+  VcsGetHistoryResult,
+  VcsGetCommitDetailsInput,
+  VcsGetCommitDetailsResult,
+  VcsListCommitFilesInput,
+  VcsListCommitFilesResult,
+  VcsGetCommitDiffInput,
+  VcsGetCommitDiffResult,
   VcsInitInput,
   VcsListRefsInput,
   VcsListRefsResult,
+  VcsListHistoryRefsInput,
+  VcsListHistoryRefsResult,
   GitManagerServiceError,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -255,6 +266,11 @@ export const WS_METHODS = {
   vcsPull: "vcs.pull",
   vcsRefreshStatus: "vcs.refreshStatus",
   vcsListRefs: "vcs.listRefs",
+  vcsListHistoryRefs: "vcs.listHistoryRefs",
+  vcsGetHistory: "vcs.getHistory",
+  vcsGetCommitDetails: "vcs.getCommitDetails",
+  vcsListCommitFiles: "vcs.listCommitFiles",
+  vcsGetCommitDiff: "vcs.getCommitDiff",
   vcsCreateWorktree: "vcs.createWorktree",
   vcsRemoveWorktree: "vcs.removeWorktree",
   vcsCreateRef: "vcs.createRef",
@@ -922,6 +938,36 @@ export const WsVcsListRefsRpc = Rpc.make(WS_METHODS.vcsListRefs, {
   error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
 });
 
+export const WsVcsListHistoryRefsRpc = Rpc.make(WS_METHODS.vcsListHistoryRefs, {
+  payload: VcsListHistoryRefsInput,
+  success: VcsListHistoryRefsResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetHistoryRpc = Rpc.make(WS_METHODS.vcsGetHistory, {
+  payload: VcsGetHistoryInput,
+  success: VcsGetHistoryResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetCommitDetailsRpc = Rpc.make(WS_METHODS.vcsGetCommitDetails, {
+  payload: VcsGetCommitDetailsInput,
+  success: VcsGetCommitDetailsResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsListCommitFilesRpc = Rpc.make(WS_METHODS.vcsListCommitFiles, {
+  payload: VcsListCommitFilesInput,
+  success: VcsListCommitFilesResult,
+  error: Schema.Union([GitCommandError, VcsSnapshotExpiredError, EnvironmentAuthorizationError]),
+});
+
+export const WsVcsGetCommitDiffRpc = Rpc.make(WS_METHODS.vcsGetCommitDiff, {
+  payload: VcsGetCommitDiffInput,
+  success: VcsGetCommitDiffResult,
+  error: Schema.Union([GitCommandError, EnvironmentAuthorizationError]),
+});
+
 export const WsVcsCreateWorktreeRpc = Rpc.make(WS_METHODS.vcsCreateWorktree, {
   payload: VcsCreateWorktreeInput,
   success: VcsCreateWorktreeResult,
@@ -1276,6 +1322,11 @@ export const WsRpcGroup = RpcGroup.make(
   WsGitResolvePullRequestRpc,
   WsGitPreparePullRequestThreadRpc,
   WsVcsListRefsRpc,
+  WsVcsListHistoryRefsRpc,
+  WsVcsGetHistoryRpc,
+  WsVcsGetCommitDetailsRpc,
+  WsVcsListCommitFilesRpc,
+  WsVcsGetCommitDiffRpc,
   WsVcsCreateWorktreeRpc,
   WsVcsRemoveWorktreeRpc,
   WsVcsCreateRefRpc,

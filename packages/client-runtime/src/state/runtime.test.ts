@@ -154,6 +154,12 @@ describe("environmentRpcKey", () => {
 
     expect(environmentRpcKey(originalTarget)).not.toBe(environmentRpcKey(nextTarget));
     expect(environmentRpcKey(originalTarget)).toBe(environmentRpcKey({ ...originalTarget }));
+    expect(environmentRpcKey({ ...originalTarget, cacheKey: 1 })).not.toBe(
+      environmentRpcKey(originalTarget),
+    );
+    expect(environmentRpcKey({ ...originalTarget, cacheKey: 1 })).not.toBe(
+      environmentRpcKey({ ...originalTarget, cacheKey: 2 }),
+    );
     expect(
       environmentRpcKey({
         environmentId: EnvironmentId.make("environment-2"),
