@@ -21,7 +21,6 @@ import {
   LayersIcon,
   LoaderIcon,
   PenLineIcon,
-  RefreshCwIcon,
   UserCheckIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -46,6 +45,7 @@ import { ListGhost } from "../components/sourceControl/ListGhosts";
 import {
   CompactFilterMenu as SharedCompactFilterMenu,
   ExpandableSearch,
+  ListRefreshControl,
   useListSearchShortcut,
 } from "../components/sourceControl/ListTitlebarControls";
 import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
@@ -103,7 +103,6 @@ import { issueEnvironment } from "../state/issues";
 import { issueTrackingEnvironment } from "../state/issueTracking";
 import { useEnvironmentQuery } from "../state/query";
 import { useAtomCommand } from "../state/use-atom-command";
-import { cn } from "~/lib/utils";
 import { getIssueProviderPresentation } from "../components/issue/issuePresentation";
 import { toastManager } from "../components/ui/toast";
 import { isWorkItemSelected, useWorkItemSelection } from "../workItemSelection";
@@ -1150,9 +1149,10 @@ function IssuesRouteView() {
       terminalAvailable={false}
       terminalOpen={false}
       terminalShortcutLabel={null}
-      rightPanelAvailable={rightPanelState.surfaces.length > 0}
+      rightPanelAvailable={selectedRightPanelSurface !== null}
       rightPanelOpen={rightPanelState.isOpen}
       rightPanelShortcutLabel={null}
+      rightPanelUnavailableLabel="Select an issue first"
       liveAgentCount={0}
       onToggleTerminal={() => undefined}
       onToggleRightPanel={toggleRightPanel}
@@ -1750,22 +1750,27 @@ export function IssuesColumn({
         )}
         <div className="min-w-0 flex-1" />
         {condensed ? (
-          <ExpandableSearch
-            label="Search issues"
-            searchInput={searchInput}
-            searchValue={searchValue}
-            open={searchOpen}
-            onOpenChange={setSearchOpen}
-            focusToken={searchFocusToken}
-            onFocusWithin={(focused) => {
-              topbarSearchFocusedRef.current = focused;
-            }}
-          />
+          <div className="flex shrink-0 items-center gap-1.5">
+            <ExpandableSearch
+              label="Search issues"
+              searchInput={searchInput}
+              searchValue={searchValue}
+              open={searchOpen}
+              onOpenChange={setSearchOpen}
+              focusToken={searchFocusToken}
+              onFocusWithin={(focused) => {
+                topbarSearchFocusedRef.current = focused;
+              }}
+            />
+            <ListRefreshControl
+              compact
+              label="Refresh issues"
+              refreshing={refreshing}
+              onRefresh={onRefresh}
+            />
+          </div>
         ) : null}
         {selectionControl}
-        <Button size="icon-sm" variant="ghost" aria-label="Refresh issues" onClick={onRefresh}>
-          <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
-        </Button>
         {rightPanelControl}
       </WorkspacePageHeader>
 
@@ -1781,6 +1786,13 @@ export function IssuesColumn({
             <div ref={inFlowSearchRef} className="flex items-center gap-2">
               {searchInput}
               {filtersMenu}
+              {!condensed ? (
+                <ListRefreshControl
+                  label="Refresh issues"
+                  refreshing={refreshing}
+                  onRefresh={onRefresh}
+                />
+              ) : null}
             </div>
             {/* Scrolled past this marker, the controls are gone and the title takes over. */}
             <div ref={markerRef} aria-hidden className="-mt-3 h-px w-full" />

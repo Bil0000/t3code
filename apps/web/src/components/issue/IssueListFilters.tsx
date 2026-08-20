@@ -10,13 +10,13 @@ import { ArrowDownUpIcon, SettingsIcon, TagIcon, TagsIcon } from "lucide-react";
 
 import {
   ALL_HOSTS_VALUE,
-  LIST_MENU_TRIGGER_CLASS_NAME,
   ListFilterMenu,
   ListFilterRadioGroup,
   ListProjectFilterGroup,
   type ListFilterOption,
 } from "../sourceControl/ListFilterMenu";
 import { LinearIcon } from "../Icons";
+import { Button } from "../ui/button";
 import {
   Menu,
   MenuGroupLabel,
@@ -122,9 +122,15 @@ export function IssueSortMenu({
   return (
     <Menu>
       <MenuTrigger
-        className={LIST_MENU_TRIGGER_CLASS_NAME}
-        aria-label="Sort issues"
-        title="Sort issues"
+        render={
+          <Button
+            className="relative"
+            size="icon"
+            variant="outline"
+            aria-label="Sort issues"
+            title="Sort issues"
+          />
+        }
       >
         <ArrowDownUpIcon className="size-4" />
         {sort !== "updated" || order !== "desc" ? (

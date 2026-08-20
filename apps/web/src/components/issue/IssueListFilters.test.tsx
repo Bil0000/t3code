@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ListFilterRadioGroup } from "../sourceControl/ListFilterMenu";
 import { LinearIcon } from "../Icons";
+import { Button } from "../ui/button";
 import { MenuItem, MenuRadioItem } from "../ui/menu";
-import { IssueFiltersMenu } from "./IssueListFilters";
+import { IssueFiltersMenu, IssueSortMenu } from "./IssueListFilters";
 
 function collect(
   node: ReactNode,
@@ -21,6 +22,23 @@ function collect(
 }
 
 describe("issue filters", () => {
+  it("uses the shared outline button for sorting", () => {
+    const menu = IssueSortMenu({
+      sort: "updated",
+      order: "desc",
+      onSort: vi.fn(),
+      onOrder: vi.fn(),
+    });
+    const trigger = Children.toArray(menu.props.children)[0] as ReactElement<{
+      readonly render?: ReactElement<{ readonly size: string; readonly variant: string }>;
+    }>;
+
+    expect(trigger.props.render).toBeDefined();
+    if (!trigger.props.render) return;
+    expect(trigger.props.render.type).toBe(Button);
+    expect(trigger.props.render.props).toMatchObject({ size: "icon", variant: "outline" });
+  });
+
   it("shows only connected providers and keeps All providers selected by default", () => {
     const menu = IssueFiltersMenu({
       state: "open",

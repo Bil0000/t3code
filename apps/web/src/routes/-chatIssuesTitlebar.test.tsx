@@ -5,6 +5,8 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../test/reactElementTree";
 import { LinearIcon } from "../components/Icons";
+import { ListRefreshControl } from "../components/sourceControl/ListTitlebarControls";
+import { Button } from "../components/ui/button";
 import { MenuItem, MenuRadioItem } from "../components/ui/menu";
 import {
   CompactFilterMenu,
@@ -26,10 +28,10 @@ describe("IssuesColumn", () => {
     ).toMatchObject({ selectedProvider: undefined });
   });
 
-  it("keeps issue actions in the fixed titlebar", () => {
-    const markup = renderToStaticMarkup(
+  it("keeps issue actions fixed and refresh beside the list filters", () => {
+    const column = (
       <IssuesColumn
-        refreshing={false}
+        refreshing
         onRefresh={() => undefined}
         searchValue=""
         involvement="all"
@@ -46,13 +48,27 @@ describe("IssuesColumn", () => {
         rightPanelControl={null}
         rightPanelOpen={false}
         listBody={null}
-      />,
+      />
     );
+    const markup = renderToStaticMarkup(column);
+    const refreshButton = ListRefreshControl({
+      label: "Refresh issues",
+      refreshing: true,
+      onRefresh: () => undefined,
+    });
 
     expect(markup).toContain("<header");
     const header = markup.slice(markup.indexOf("<header"), markup.indexOf("</header>"));
     expect(header).toContain(">Select</button>");
     expect(header).not.toContain(">Filters</button>");
+    expect(header).not.toContain('aria-label="Refresh issues"');
+    expect(markup.match(/aria-label="Refresh issues"/g)).toHaveLength(1);
+    expect(refreshButton?.type).toBe(Button);
+    expect(refreshButton?.props).toMatchObject({
+      size: "icon",
+      variant: "outline",
+      disabled: true,
+    });
     expect(header).toContain("h-[var(--workspace-topbar-height)]");
     expect(header).toContain("pl-[calc(env(safe-area-inset-left)+0.75rem)]");
     expect(markup).toContain("max-w-4xl");
