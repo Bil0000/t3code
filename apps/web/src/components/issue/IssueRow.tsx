@@ -74,7 +74,7 @@ function IssueRowImpl({
       : 0;
   const { Icon, providerName } = getIssueProviderPresentation(entry.provider);
   return (
-    <div className="group/row relative">
+    <div className={cn("group/row relative", onToggleSelection && "[&>button]:pl-10")}>
       <ListRow
         glyph={<IssueStateGlyph state={entry.state} stateReason={entry.stateReason} />}
         title={entry.title}
