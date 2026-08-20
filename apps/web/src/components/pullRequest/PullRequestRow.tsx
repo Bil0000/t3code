@@ -67,7 +67,7 @@ function PullRequestRowImpl({
         <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-foreground">
           <span className="truncate">{entry.title}</span>
           {stackPosition ? (
-            <Badge size="sm" variant="success">
+            <Badge size="sm" variant="outline">
               <LayersIcon aria-hidden />
               <span className="sr-only">Stack step </span>
               {stackPosition.position}/{stackPosition.total}
