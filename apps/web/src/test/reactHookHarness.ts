@@ -51,9 +51,24 @@ export function createReactHookHarness() {
       nextIndex();
       return callback;
     },
-    useMemo<T>(factory: () => T): T {
-      nextIndex();
-      return factory();
+    useMemo<T>(factory: () => T, dependencies?: ReadonlyArray<unknown>): T {
+      const index = nextIndex();
+      const previous = slots[index] as
+        | { readonly dependencies: ReadonlyArray<unknown> | undefined; readonly value: T }
+        | undefined;
+      if (
+        previous !== undefined &&
+        dependencies !== undefined &&
+        previous.dependencies !== undefined &&
+        previous.dependencies.length === dependencies.length &&
+        previous.dependencies.every((value, dependencyIndex) =>
+          Object.is(value, dependencies[dependencyIndex]),
+        )
+      )
+        return previous.value;
+      const value = factory();
+      slots[index] = { dependencies, value };
+      return value;
     },
     useMemoCache(size: number): unknown[] {
       const index = nextIndex();

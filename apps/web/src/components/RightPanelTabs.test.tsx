@@ -101,6 +101,7 @@ function renderTabs(
       onAddBrowser={() => undefined}
       onAddTerminal={() => undefined}
       onAddPullRequest={() => undefined}
+      onAddRepository={() => undefined}
       onAddIssue={() => undefined}
       onAddDiff={() => undefined}
       onAddFiles={() => undefined}
@@ -111,6 +112,7 @@ function renderTabs(
       diffAvailable={false}
       filesAvailable={false}
       pullRequestAvailable={false}
+      repositoryAvailable={false}
       issueAvailable={false}
       agentsAvailable={false}
     >
@@ -139,6 +141,48 @@ describe("RightPanelTabs preview favicon", () => {
   it("hides a capture while the server session still describes another origin", () => {
     const html = renderTabs(favicon("data:image/png;base64,AAAA", "https://example.com/"));
     expect(html).not.toContain("data:image/png;base64,AAAA");
+  });
+
+  it("offers the combined Repository surface independently of Git History", () => {
+    const html = renderToStaticMarkup(
+      <RightPanelTabs
+        mode="inline"
+        surfaces={[]}
+        activeSurfaceId={null}
+        pendingSurfaceIds={new Set()}
+        previewSessions={{}}
+        desktopByTabId={{}}
+        terminalLabelsById={new Map()}
+        onActivate={() => undefined}
+        onCloseSurface={() => undefined}
+        onCloseOtherSurfaces={() => undefined}
+        onCloseSurfacesToRight={() => undefined}
+        onCloseAllSurfaces={() => undefined}
+        onCopyFilePath={() => undefined}
+        onAddBrowser={() => undefined}
+        onAddTerminal={() => undefined}
+        onAddPullRequest={() => undefined}
+        onAddRepository={() => undefined}
+        onAddIssue={() => undefined}
+        onAddDiff={() => undefined}
+        onAddFiles={() => undefined}
+        onAddAgents={() => undefined}
+        liveAgentCount={0}
+        browserAvailable={false}
+        terminalAvailable={false}
+        diffAvailable={false}
+        filesAvailable={false}
+        pullRequestAvailable={false}
+        repositoryAvailable
+        issueAvailable={false}
+        agentsAvailable={false}
+      >
+        <div />
+      </RightPanelTabs>,
+    );
+
+    expect(html).toContain(">Repository</span>");
+    expect(html).toContain("Browse history, issues, and pull requests.");
   });
 });
 

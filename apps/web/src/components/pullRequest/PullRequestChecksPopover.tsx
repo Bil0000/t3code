@@ -51,33 +51,37 @@ function ChecksBody({ checks }: { checks: ReadonlyArray<PullRequestCheck> }) {
   if (checks.length === 0) {
     return <p className="text-muted-foreground text-xs">No checks reported</p>;
   }
+  const keyOccurrences = new Map<string, number>();
   return (
     <ul className="flex flex-col gap-1">
-      {/* Keyed by position as well as by name: the host is the one that decides how many runs
-          share a name, and a repeated key is a rendering fault rather than a wrong list. */}
-      {checks.map((check, index) => (
-        <li key={`${index}:${check.name}`} className="flex items-center gap-2 text-xs">
-          <PullRequestCheckStatusIcon status={check.status} />
-          <Tooltip>
-            <TooltipTrigger
-              render={<span className="min-w-0 flex-1 truncate">{check.name}</span>}
-            />
-            <TooltipPopup side="top">{check.description ?? check.name}</TooltipPopup>
-          </Tooltip>
-          <span className="shrink-0 text-muted-foreground">
-            {pullRequestCheckStatusLabel(check.status)}
-          </span>
-          {check.url === null ? null : (
-            <button
-              type="button"
-              className="shrink-0 text-primary hover:underline"
-              onClick={() => void readLocalApi()?.shell.openExternal(check.url ?? "")}
-            >
-              Details
-            </button>
-          )}
-        </li>
-      ))}
+      {checks.map((check) => {
+        const baseKey = check.url ?? `${check.name}:${check.status}:${check.description ?? ""}`;
+        const occurrence = keyOccurrences.get(baseKey) ?? 0;
+        keyOccurrences.set(baseKey, occurrence + 1);
+        return (
+          <li key={`${baseKey}:${occurrence}`} className="flex items-center gap-2 text-xs">
+            <PullRequestCheckStatusIcon status={check.status} />
+            <Tooltip>
+              <TooltipTrigger
+                render={<span className="min-w-0 flex-1 truncate">{check.name}</span>}
+              />
+              <TooltipPopup side="top">{check.description ?? check.name}</TooltipPopup>
+            </Tooltip>
+            <span className="shrink-0 text-muted-foreground">
+              {pullRequestCheckStatusLabel(check.status)}
+            </span>
+            {check.url === null ? null : (
+              <button
+                type="button"
+                className="shrink-0 text-primary hover:underline"
+                onClick={() => void readLocalApi()?.shell.openExternal(check.url ?? "")}
+              >
+                Details
+              </button>
+            )}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -112,6 +116,7 @@ export function PullRequestChecksPopover({
           not valid inside one. The click is stopped here so opening the checks does not also
           select the row it sits on. */}
       <PopoverTrigger
+        nativeButton={false}
         render={
           <span
             role="button"

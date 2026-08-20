@@ -12,6 +12,7 @@ import type {
   PullRequestInvolvement,
   PullRequestListCursors,
   PullRequestListFilters,
+  PullRequestListStatsInput,
   PullRequestListState,
 } from "@t3tools/contracts";
 
@@ -311,8 +312,8 @@ export function matchesPullRequestFilters(
   filters: PullRequestListFilters,
   viewer?: string | null,
 ): boolean {
-  const labels = entry.labels.map((label) => label.name.trim().toLowerCase());
-  const holds = (label: string) => labels.includes(label.trim().toLowerCase());
+  const labels = new Set(entry.labels.map((label) => label.name.trim().toLowerCase()));
+  const holds = (label: string) => labels.has(label.trim().toLowerCase());
   return (
     (filters.draft === undefined || entry.isDraft === (filters.draft === "only")) &&
     (filters.review === undefined ||
@@ -431,11 +432,15 @@ export function mergePullRequestDiffStats(
   }>,
 ): PullRequestDiffStats {
   if (stats.length === 0) return previous;
-  const next = new Map(previous);
+  let next: Map<string, { readonly additions: number; readonly deletions: number }> | undefined;
   for (const stat of stats) {
-    next.set(diffStatKey(stat), { additions: stat.additions, deletions: stat.deletions });
+    const key = diffStatKey(stat);
+    const existing = (next ?? previous).get(key);
+    if (existing?.additions === stat.additions && existing.deletions === stat.deletions) continue;
+    next ??= new Map(previous);
+    next.set(key, { additions: stat.additions, deletions: stat.deletions });
   }
-  return next;
+  return next ?? previous;
 }
 
 /** A project id only names a project within its own environment, so the key carries both. */
@@ -444,6 +449,57 @@ const diffStatKey = (row: {
   readonly projectId: string;
   readonly number: number;
 }) => `${row.environmentId} ${row.projectId} ${row.number}`;
+const MAX_STATS_REFS_PER_BATCH = 500;
+
+/** Keeps the stats cache bounded to rows that remain visible after a filter or page change. */
+export function prunePullRequestDiffStats(
+  previous: PullRequestDiffStats,
+  entries: ReadonlyArray<EnvironmentPullRequestEntry>,
+): PullRequestDiffStats {
+  const visible = new Set(entries.map(diffStatKey));
+  if ([...previous.keys()].every((key) => visible.has(key))) return previous;
+  return new Map([...previous].filter(([key]) => visible.has(key)));
+}
+
+/** Returns the raw rows rendered across every priority group. */
+export function pullRequestVisibleEntries(
+  groups: ReadonlyArray<PullRequestGroup<EnvironmentPullRequestEntry>>,
+): ReadonlyArray<EnvironmentPullRequestEntry> {
+  return groups.flatMap((group) => group.entries);
+}
+
+/** The bounded line-count batches for the rows currently visible in the list. */
+export function pullRequestStatsTargets(
+  entries: ReadonlyArray<EnvironmentPullRequestEntry>,
+): ReadonlyArray<{
+  readonly environmentId: EnvironmentId;
+  readonly input: PullRequestListStatsInput;
+}> {
+  const refsByEnvironment = new Map<
+    EnvironmentId,
+    Array<PullRequestListStatsInput["refs"][number]>
+  >();
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const key = diffStatKey(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const refs = refsByEnvironment.get(entry.environmentId) ?? [];
+    refs.push({ projectId: entry.projectId, repository: entry.repository, number: entry.number });
+    refsByEnvironment.set(entry.environmentId, refs);
+  }
+  return [...refsByEnvironment].flatMap(([environmentId, refs]) =>
+    Array.from({ length: Math.ceil(refs.length / MAX_STATS_REFS_PER_BATCH) }, (_, batchIndex) => ({
+      environmentId,
+      input: {
+        refs: refs.slice(
+          batchIndex * MAX_STATS_REFS_PER_BATCH,
+          (batchIndex + 1) * MAX_STATS_REFS_PER_BATCH,
+        ),
+      },
+    })),
+  );
+}
 
 /**
  * Every connected environment's listing, read as one list.
@@ -770,4 +826,26 @@ export function withDiffStat<
   if (entry.additions !== 0 || entry.deletions !== 0) return entry;
   const stat = statsByRow.get(diffStatKey(entry));
   return stat === undefined ? entry : { ...entry, ...stat };
+}
+
+/** Reuses a row's decoration when the same source row keeps the same line counts. */
+export function decoratePullRequestEntries<
+  Entry extends PullRequestListEntry & { readonly environmentId: string },
+>(
+  entries: ReadonlyArray<Entry>,
+  statsByRow: ReadonlyMap<string, { readonly additions: number; readonly deletions: number }>,
+  previous: ReadonlyMap<Entry, Entry>,
+): { readonly entries: ReadonlyArray<Entry>; readonly bySource: ReadonlyMap<Entry, Entry> } {
+  const bySource = new Map<Entry, Entry>();
+  const decorated = entries.map((entry) => {
+    const next = withDiffStat(entry, statsByRow);
+    const held = previous.get(entry);
+    const value =
+      held !== undefined && held.additions === next.additions && held.deletions === next.deletions
+        ? held
+        : next;
+    bySource.set(entry, value);
+    return value;
+  });
+  return { entries: decorated, bySource };
 }

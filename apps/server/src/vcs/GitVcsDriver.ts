@@ -11,6 +11,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 
 import {
   GitCommandError,
+  VcsSnapshotExpiredError,
   VcsProcessExitError,
   type VcsSwitchRefInput,
   type VcsSwitchRefResult,
@@ -18,6 +19,16 @@ import {
   type VcsCreateRefResult,
   type VcsCreateWorktreeInput,
   type VcsCreateWorktreeResult,
+  type VcsGetHistoryInput,
+  type VcsGetHistoryResult,
+  type VcsGetCommitDetailsInput,
+  type VcsGetCommitDetailsResult,
+  type VcsListCommitFilesInput,
+  type VcsListCommitFilesResult,
+  type VcsGetCommitDiffInput,
+  type VcsGetCommitDiffResult,
+  type VcsListHistoryRefsInput,
+  type VcsListHistoryRefsResult,
   type ReviewDiffPreviewInput,
   type ReviewDiffPreviewResult,
   type ReviewDiffFileContentsInput,
@@ -269,6 +280,21 @@ export class GitVcsDriver extends Context.Service<
     readonly listRefs: (
       input: VcsListRefsInput,
     ) => Effect.Effect<VcsListRefsResult, GitCommandError>;
+    readonly listHistoryRefs: (
+      input: VcsListHistoryRefsInput,
+    ) => Effect.Effect<VcsListHistoryRefsResult, GitCommandError | VcsSnapshotExpiredError>;
+    readonly getHistory: (
+      input: VcsGetHistoryInput,
+    ) => Effect.Effect<VcsGetHistoryResult, GitCommandError | VcsSnapshotExpiredError>;
+    readonly getCommitDetails: (
+      input: VcsGetCommitDetailsInput,
+    ) => Effect.Effect<VcsGetCommitDetailsResult, GitCommandError>;
+    readonly listCommitFiles: (
+      input: VcsListCommitFilesInput,
+    ) => Effect.Effect<VcsListCommitFilesResult, GitCommandError | VcsSnapshotExpiredError>;
+    readonly getCommitDiff: (
+      input: VcsGetCommitDiffInput,
+    ) => Effect.Effect<VcsGetCommitDiffResult, GitCommandError>;
     readonly pullCurrentBranch: (cwd: string) => Effect.Effect<VcsPullResult, GitCommandError>;
     readonly createWorktree: (
       input: VcsCreateWorktreeInput,

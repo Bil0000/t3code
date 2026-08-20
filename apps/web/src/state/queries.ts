@@ -9,21 +9,26 @@ import {
   type EnvironmentThreadSearchMatch,
 } from "@t3tools/client-runtime/state/thread-search";
 import { type VcsRefTarget } from "@t3tools/client-runtime/state/vcs";
-import type {
-  EnvironmentId,
-  OrchestrationThread,
-  ProjectContentMatch,
-  ProjectEntryKind,
-  ThreadId,
-  VcsListRefsResult,
-  VcsRef,
+import {
+  VcsSnapshotExpiredError,
+  type EnvironmentId,
+  type OrchestrationThread,
+  type ProjectContentMatch,
+  type ProjectEntryKind,
+  type ThreadId,
+  type VcsHistoryRef,
+  type VcsListHistoryRefsResult,
+  type VcsListRefsResult,
+  type VcsRef,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import { AsyncResult, Atom } from "effect/unstable/reactivity";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { appAtomRegistry } from "../rpc/atomRegistry";
+import { environmentCatalog } from "../connection/catalog";
 import { orchestrationEnvironment } from "./orchestration";
 import { isPaginatedBranchesNextPagePending } from "./paginatedBranches";
 import { projectContentSearch, projectEnvironment } from "./projects";
@@ -38,9 +43,11 @@ const PROJECT_CONTENT_SEARCH_LIMIT = 500;
 const THREAD_SEARCH_DEBOUNCE_MS = 200;
 const VCS_REF_LIST_LIMIT = 100;
 const EMPTY_REFS: ReadonlyArray<VcsRef> = [];
+const EMPTY_HISTORY_REFS: ReadonlyArray<VcsHistoryRef> = [];
 const EMPTY_CONTENT_MATCHES: ReadonlyArray<ProjectContentMatch> = [];
 const INITIAL_BRANCH_CURSORS = [undefined] as const;
 const EMPTY_THREAD_SEARCH_MATCHES: ReadonlyArray<EnvironmentThreadSearchMatch> = Object.freeze([]);
+const isVcsSnapshotExpiredError = Schema.is(VcsSnapshotExpiredError);
 const EMPTY_THREAD_SEARCH_ATOM = Atom.make({
   matches: EMPTY_THREAD_SEARCH_MATCHES,
   isLoading: false,
@@ -134,9 +141,13 @@ export function useBranches(target: VcsRefTarget) {
 
 export function usePaginatedBranches(target: VcsRefTarget) {
   const query = target.query?.trim() ?? "";
+  const connection = useEnvironmentQuery(
+    target.environmentId === null ? null : environmentCatalog.stateAtom(target.environmentId),
+  ).data;
+  const connectionGeneration = connection?.phase === "connected" ? connection.generation : null;
   const targetKey =
     target.environmentId !== null && target.cwd !== null
-      ? JSON.stringify([target.environmentId, target.cwd, query])
+      ? JSON.stringify([target.environmentId, target.cwd, query, connectionGeneration])
       : null;
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;
@@ -231,6 +242,167 @@ export function usePaginatedBranches(target: VcsRefTarget) {
     isPending: results.some((result) => result.waiting),
     isFetchingNextPage,
     refresh,
+    loadNext,
+  };
+}
+
+export function usePaginatedHistoryRefs(
+  target: VcsRefTarget,
+  options?: {
+    readonly limit?: number;
+    readonly namespace?: "local" | "remote" | "tag";
+    readonly revision?: number;
+  },
+) {
+  const query = target.query?.trim() ?? "";
+  const limit = options?.limit ?? VCS_REF_LIST_LIMIT;
+  const namespace = options?.namespace ?? "local";
+  const revision = options?.revision ?? 0;
+  const connection = useEnvironmentQuery(
+    target.environmentId === null ? null : environmentCatalog.stateAtom(target.environmentId),
+  ).data;
+  const connectionGeneration = connection?.phase === "connected" ? connection.generation : null;
+  const [queryGeneration, setQueryGeneration] = useState(0);
+  const [refreshGeneration, setRefreshGeneration] = useState(0);
+  const targetKey =
+    target.environmentId !== null && target.cwd !== null
+      ? JSON.stringify([
+          target.environmentId,
+          target.cwd,
+          query,
+          limit,
+          namespace,
+          revision,
+          refreshGeneration,
+          connectionGeneration,
+        ])
+      : null;
+  const [pagination, setPagination] = useState<{
+    readonly targetKey: string | null;
+    readonly cursors: ReadonlyArray<string | undefined>;
+  }>({
+    targetKey,
+    cursors: INITIAL_BRANCH_CURSORS,
+  });
+  const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_BRANCH_CURSORS;
+  const pageAtoms = useMemo(
+    () =>
+      target.environmentId !== null && target.cwd !== null
+        ? cursors.map((cursor) =>
+            vcsEnvironment.listHistoryRefs({
+              environmentId: target.environmentId!,
+              input: {
+                cwd: target.cwd!,
+                ...(query.length > 0 ? { query } : {}),
+                ...(cursor === undefined ? {} : { cursor }),
+                limit,
+                queryGeneration: queryGeneration + revision,
+                namespace,
+                ...(refreshGeneration > 0 ? { refresh: true } : {}),
+              },
+            }),
+          )
+        : [],
+    [
+      cursors,
+      limit,
+      query,
+      queryGeneration,
+      namespace,
+      refreshGeneration,
+      revision,
+      target.cwd,
+      target.environmentId,
+    ],
+  );
+  const pagesAtom = useMemo(
+    () =>
+      Atom.make((get) => pageAtoms.map((atom) => get(atom))).pipe(
+        Atom.withLabel(`web:vcs-ref-pages:${targetKey ?? "empty"}`),
+      ),
+    [pageAtoms, targetKey],
+  );
+  const results = useAtomValue(pagesAtom);
+  const values = useMemo(
+    () =>
+      results.flatMap((result) => {
+        const value = Option.getOrNull(AsyncResult.value(result));
+        return value === null ? [] : [value];
+      }),
+    [results],
+  );
+  const data = useMemo<VcsListHistoryRefsResult | null>(() => {
+    const first = values[0] ?? null;
+    const last = values.at(-1) ?? null;
+    if (first === null || last === null) return null;
+    const refs = new Map<string, VcsHistoryRef>();
+    for (const value of values) {
+      for (const ref of value.refs) refs.set(ref.name, ref);
+    }
+    return {
+      refs: [...refs.values()],
+      currentRef: first.currentRef,
+      isRepo: first.isRepo,
+      hasPrimaryRemote: first.hasPrimaryRemote,
+      nextCursor: last.nextCursor,
+      isComplete: last.isComplete,
+    };
+  }, [values]);
+  const failed = results.find((result) => result._tag === "Failure");
+  const expiredPage =
+    failed?._tag === "Failure" && isVcsSnapshotExpiredError(Cause.squash(failed.cause));
+  const effectiveQueryGeneration = queryGeneration + revision;
+  const recoveredSnapshotGeneration = useRef<number | null>(null);
+  useEffect(() => {
+    if (!expiredPage || recoveredSnapshotGeneration.current === effectiveQueryGeneration) return;
+    recoveredSnapshotGeneration.current = effectiveQueryGeneration;
+    setQueryGeneration((generation) => generation + 1);
+    setRefreshGeneration((generation) => generation + 1);
+    setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
+  }, [effectiveQueryGeneration, expiredPage, targetKey]);
+  const isFetchingNextPage = isPaginatedBranchesNextPagePending(results);
+  const error =
+    failed?._tag === "Failure"
+      ? (() => {
+          const cause = Cause.squash(failed.cause);
+          return cause instanceof Error && cause.message.trim().length > 0
+            ? cause.message
+            : "Failed to load refs.";
+        })()
+      : null;
+  const refresh = useCallback(() => {
+    setQueryGeneration((generation) => generation + 1);
+    setRefreshGeneration((generation) => generation + 1);
+    setPagination({ targetKey, cursors: INITIAL_BRANCH_CURSORS });
+  }, [targetKey]);
+  const retry = useCallback(() => {
+    const failedIndex = results.findIndex((result) => result._tag === "Failure");
+    const failedPageAtom = failedIndex === -1 ? undefined : pageAtoms[failedIndex];
+    if (failedPageAtom !== undefined) {
+      appAtomRegistry.refresh(failedPageAtom);
+    }
+  }, [pageAtoms, results]);
+  const loadNext = useCallback(() => {
+    if (targetKey === null || data?.nextCursor === null || data?.nextCursor === undefined) {
+      return;
+    }
+    setPagination((current) => {
+      const currentCursors =
+        current.targetKey === targetKey ? current.cursors : INITIAL_BRANCH_CURSORS;
+      return currentCursors.includes(data.nextCursor!)
+        ? { targetKey, cursors: currentCursors }
+        : { targetKey, cursors: [...currentCursors, data.nextCursor!] };
+    });
+  }, [data?.nextCursor, targetKey]);
+
+  return {
+    data,
+    refs: data?.refs ?? EMPTY_HISTORY_REFS,
+    error,
+    isPending: results.some((result) => result.waiting),
+    isFetchingNextPage,
+    refresh,
+    retry,
     loadNext,
   };
 }

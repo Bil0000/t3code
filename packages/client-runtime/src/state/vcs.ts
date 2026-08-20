@@ -15,7 +15,11 @@ import * as Stream from "effect/Stream";
 import * as SubscriptionRef from "effect/SubscriptionRef";
 import { Atom, AtomRegistry } from "effect/unstable/reactivity";
 
-import { createEnvironmentRpcCommand, createEnvironmentSubscriptionAtomFamily } from "./runtime.ts";
+import {
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
+  createEnvironmentSubscriptionAtomFamily,
+} from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 import { EnvironmentSupervisor } from "../connection/supervisor.ts";
 import { safeErrorLogAttributes } from "../errors/safeLog.ts";
@@ -25,6 +29,7 @@ import { followStreamInEnvironment } from "./runtime.ts";
 import { vcsCommandConcurrency, vcsCommandScheduler } from "./vcsCommandScheduler.ts";
 import {
   invalidateCachedVcsRefs,
+  vcsHistoryRevisionAtom,
   vcsRefsCacheStateAtom,
   withVcsRefsPersistenceLock,
 } from "./vcsRefInvalidation.ts";
@@ -175,12 +180,23 @@ export const makeCachedVcsRefsChanges = Effect.fn("CachedVcsRefsState.makeChange
       }),
     ),
   );
-  const refreshedRefs = Stream.concat(
+  const connectionGenerations = Stream.concat(
     Stream.fromEffect(SubscriptionRef.get(supervisor.state)),
     SubscriptionRef.changes(supervisor.state),
   ).pipe(
     Stream.map((connection) => (connection.phase === "connected" ? connection.generation : null)),
     Stream.changes,
+  );
+  const refreshedRefs = (
+    input.cursor === undefined
+      ? connectionGenerations
+      : connectionGenerations.pipe(
+          Stream.filterMap((generation) =>
+            generation === null ? Result.failVoid : Result.succeed(generation),
+          ),
+          Stream.take(1),
+        )
+  ).pipe(
     Stream.switchMap((generation) =>
       generation === null
         ? Stream.empty
@@ -265,13 +281,41 @@ export function createVcsEnvironmentAtoms<R, E>(
   const invalidateRefs = (
     target: { readonly environmentId: EnvironmentId; readonly input: { readonly cwd: string } },
     registry: AtomRegistry.AtomRegistry,
+    invalidateHistory = true,
   ) =>
-    invalidateCachedVcsRefs(registry, {
-      environmentId: target.environmentId,
-      cwd: target.input.cwd,
-    });
+    invalidateCachedVcsRefs(
+      registry,
+      {
+        environmentId: target.environmentId,
+        cwd: target.input.cwd,
+      },
+      invalidateHistory,
+    );
 
   return {
+    historyRevisionAtom: vcsHistoryRevisionAtom,
+    listHistoryRefs: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:list-history-refs",
+      tag: WS_METHODS.vcsListHistoryRefs,
+      revalidateOnReconnect: (input) => input.cursor === undefined,
+    }),
+    getHistory: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:get-history",
+      tag: WS_METHODS.vcsGetHistory,
+      revalidateOnReconnect: (input) => input.cursor === undefined,
+    }),
+    getCommitDetails: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:get-commit-details",
+      tag: WS_METHODS.vcsGetCommitDetails,
+    }),
+    listCommitFiles: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:list-commit-files",
+      tag: WS_METHODS.vcsListCommitFiles,
+    }),
+    getCommitDiff: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:vcs:get-commit-diff",
+      tag: WS_METHODS.vcsGetCommitDiff,
+    }),
     listRefs,
     status: createEnvironmentSubscriptionAtomFamily(runtime, {
       label: "environment-data:vcs:status",
@@ -298,7 +342,7 @@ export function createVcsEnvironmentAtoms<R, E>(
       tag: WS_METHODS.vcsRefreshStatus,
       scheduler: vcsCommandScheduler,
       concurrency: vcsCommandConcurrency,
-      onSettled: invalidateRefs,
+      onSettled: (target, registry) => invalidateRefs(target, registry, false),
     }),
     createWorktree: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:vcs:create-worktree",

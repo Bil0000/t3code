@@ -11,6 +11,7 @@ import {
   CircleDot,
   FileDiff,
   Files,
+  GitGraph,
   GitPullRequest,
   Globe2,
   Plus,
@@ -79,6 +80,7 @@ interface RightPanelTabsProps {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddRepository: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddAgents: () => void;
@@ -91,6 +93,7 @@ interface RightPanelTabsProps {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
+  repositoryAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   agentsAvailable: boolean;
@@ -122,6 +125,7 @@ const SURFACE_DISABLED_REASONS = {
   terminal: "Terminal surfaces are only available from a project thread.",
   files: "Files are only available when a project is open.",
   diff: "Diff is only available for server threads in Git repositories.",
+  repository: "Repository views are unavailable for this project.",
   pullRequest: "This thread's branch has no pull request yet.",
   issue: "Issues are only available from a project checked out from a host.",
   agents: "Agents are only available from a thread.",
@@ -259,6 +263,7 @@ function RightPanelEmptyState(props: {
   onAddBrowser: () => void;
   onAddTerminal: () => void;
   onAddDiff: () => void;
+  onAddRepository: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddIssue: () => void;
@@ -266,6 +271,7 @@ function RightPanelEmptyState(props: {
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
+  repositoryAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   issueAvailable: boolean;
@@ -314,6 +320,16 @@ function RightPanelEmptyState(props: {
       available: props.diffAvailable,
       disabledReason: SURFACE_UNAVAILABLE_HINTS.diff,
       onClick: props.onAddDiff,
+      badgeCount: 0,
+    },
+    {
+      label: "Repository",
+      description: "Browse history, issues, and pull requests.",
+      icon: GitGraph,
+      shortcut: "G",
+      available: props.repositoryAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.repository,
+      onClick: props.onAddRepository,
       badgeCount: 0,
     },
     {
@@ -523,6 +539,8 @@ function surfaceTitle(
   switch (surface.kind) {
     case "diff":
       return "Diff";
+    case "git-history":
+      return "Repository";
     case "files":
       return "Files";
     case "file":
@@ -598,6 +616,8 @@ function SurfaceIcon({
     }
     case "diff":
       return <FileDiff className="size-3 shrink-0" />;
+    case "git-history":
+      return <GitGraph className="size-3 shrink-0" />;
     case "files":
       return <Files className="size-3 shrink-0" />;
     case "file":
@@ -688,6 +708,14 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       available: props.diffAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.diff,
       onClick: props.onAddDiff,
+    },
+    {
+      label: "Repository",
+      icon: GitGraph,
+      shortcut: "G",
+      available: props.repositoryAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.repository,
+      onClick: props.onAddRepository,
     },
     {
       label: "Pull request",
@@ -1006,6 +1034,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddBrowser={props.onAddBrowser}
             onAddTerminal={props.onAddTerminal}
             onAddDiff={props.onAddDiff}
+            onAddRepository={props.onAddRepository}
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddIssue={props.onAddIssue}
@@ -1013,6 +1042,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
+            repositoryAvailable={props.repositoryAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             issueAvailable={props.issueAvailable}

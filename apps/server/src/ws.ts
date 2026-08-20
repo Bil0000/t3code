@@ -2347,6 +2347,26 @@ const makeWsRpcLayer = (
           observeRpcEffect(WS_METHODS.vcsListRefs, gitWorkflow.listRefs(input), {
             "rpc.aggregate": "vcs",
           }),
+        [WS_METHODS.vcsListHistoryRefs]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsListHistoryRefs, gitWorkflow.listHistoryRefs(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.vcsGetHistory]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsGetHistory, gitWorkflow.getHistory(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.vcsGetCommitDetails]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsGetCommitDetails, gitWorkflow.getCommitDetails(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.vcsListCommitFiles]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsListCommitFiles, gitWorkflow.listCommitFiles(input), {
+            "rpc.aggregate": "vcs",
+          }),
+        [WS_METHODS.vcsGetCommitDiff]: (input) =>
+          observeRpcEffect(WS_METHODS.vcsGetCommitDiff, gitWorkflow.getCommitDiff(input), {
+            "rpc.aggregate": "vcs",
+          }),
         [WS_METHODS.vcsCreateWorktree]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsCreateWorktree,

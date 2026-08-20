@@ -26,4 +26,17 @@ describe("ExecutionEnvironmentDescriptor", () => {
       }).capabilities.pullRequests,
     ).toBe(true);
   });
+
+  it("treats a missing Git History capability as unsupported under version skew", () => {
+    expect(decodeDescriptor(descriptor).capabilities.gitHistory).toBeUndefined();
+  });
+
+  it("preserves an advertised Git History capability", () => {
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, gitHistory: true },
+      }).capabilities.gitHistory,
+    ).toBe(true);
+  });
 });
