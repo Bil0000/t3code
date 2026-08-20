@@ -228,7 +228,7 @@ export function IssueSummaryTab({
   };
 
   return (
-    <div className="h-full overflow-y-auto">
+    <div className="h-full overflow-y-auto" data-summary-scroll>
       <section className="px-4 py-3">
         <div>
           <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Assignees">

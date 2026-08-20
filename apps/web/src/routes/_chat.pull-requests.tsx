@@ -13,7 +13,6 @@ import type {
 } from "@t3tools/contracts";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
-  ChevronDownIcon,
   EyeIcon,
   MonitorIcon,
   ServerIcon,
@@ -24,7 +23,6 @@ import {
   PenLineIcon,
   LoaderIcon,
   RefreshCwIcon,
-  SearchIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
@@ -70,6 +68,11 @@ import {
 } from "../components/sourceControl/ListFilterMenu";
 import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
+import {
+  CompactFilterMenu,
+  ExpandableSearch,
+  useListSearchShortcut,
+} from "../components/sourceControl/ListTitlebarControls";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
 import {
   WorkItemSelectButton,
@@ -91,9 +94,7 @@ import { WorkspacePageHeader } from "../components/WorkspacePageHeader";
 import { isElectron } from "../env";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
-import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import {
   selectActiveRightPanelSurface,
@@ -1761,128 +1762,6 @@ function PullRequestsRouteView() {
   );
 }
 
-/** A compact stand-in for one pill group when the header is narrow. */
-function CompactFilterMenu<Value extends string>({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: Value;
-  options: ReadonlyArray<ListFilterOption<Value>>;
-  onChange: (value: Value) => void;
-}) {
-  const current = options.find((option) => option.value === value) ?? options[0];
-  if (!current) return null;
-  return (
-    <Menu>
-      <MenuTrigger
-        aria-label={label}
-        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        {current.label}
-        <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground/70" />
-      </MenuTrigger>
-      <MenuPopup align="start" side="bottom" className="min-w-40">
-        <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as Value)}>
-          {options.map((option) => {
-            const item = (
-              <MenuRadioItem
-                key={option.value}
-                value={option.value}
-                disabled={option.unavailable !== undefined}
-                className="data-disabled:pointer-events-auto"
-              >
-                <span className="flex min-w-0 items-center gap-2">
-                  <option.Icon aria-hidden className="size-3.5" />
-                  {option.label}
-                </span>
-              </MenuRadioItem>
-            );
-            return option.unavailable === undefined ? (
-              item
-            ) : (
-              <Tooltip key={option.value}>
-                <TooltipTrigger render={item} />
-                <TooltipPopup side="right" className="max-w-64 break-words">
-                  {option.unavailable}
-                </TooltipPopup>
-              </Tooltip>
-            );
-          })}
-        </MenuRadioGroup>
-      </MenuPopup>
-    </Menu>
-  );
-}
-
-/**
- * The search, folded to an icon until asked for. Opening moves focus into the input — the
- * whole point of pressing it is to type. It stays open while it holds a query, so an active
- * search is never invisible; empty and blurred, it folds back.
- */
-function ExpandableSearch({
-  searchInput,
-  searchValue,
-  open,
-  onOpenChange,
-  focusToken,
-  onFocusWithin,
-}: {
-  searchInput: ReactNode;
-  searchValue: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** Bumped to pull focus into the input while it is already showing — the Mod+F path. */
-  focusToken: number;
-  /**
-   * Focus entering and leaving the expanded input. An unmount fires no blur, which is the
-   * point: whoever unmounted this can still see the reader was mid-typing and move the
-   * focus somewhere that continues the sentence.
-   */
-  onFocusWithin?: (focused: boolean) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    containerRef.current?.querySelector("input")?.focus();
-  }, [open]);
-  const appliedFocusToken = useRef(focusToken);
-  useEffect(() => {
-    if (appliedFocusToken.current === focusToken) return;
-    appliedFocusToken.current = focusToken;
-    const input = containerRef.current?.querySelector("input");
-    input?.focus();
-    input?.select();
-  }, [focusToken]);
-  if (open || searchValue.length > 0) {
-    return (
-      <div
-        ref={containerRef}
-        className="w-56 shrink-0"
-        onFocus={() => onFocusWithin?.(true)}
-        onBlur={() => {
-          onFocusWithin?.(false);
-          if (searchValue.length === 0) onOpenChange(false);
-        }}
-      >
-        {searchInput}
-      </div>
-    );
-  }
-  return (
-    <Button
-      size="icon-sm"
-      variant="ghost"
-      aria-label="Search pull requests"
-      onClick={() => onOpenChange(true)}
-    >
-      <SearchIcon className="size-4" />
-    </Button>
-  );
-}
-
 /**
  * The pull request list column. The full controls live at the top of the scroll flow; once
  * they scroll away, the title transforms into the scope itself — "Pull Requests / Open ▾
@@ -1945,27 +1824,12 @@ function PullRequestsColumn({
   const inFlowSearchRef = useRef<HTMLDivElement | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFocusToken, setSearchFocusToken] = useState(0);
-  // Mod+F belongs to this page's own search: the desktop shell binds no find-in-page, so the
-  // shortcut would otherwise do nothing. Condensed, it unfolds the topbar search; at the top,
-  // it focuses the in-flow bar and selects the query the way a find field would.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
-      if (event.altKey || event.shiftKey) return;
-      event.preventDefault();
-      if (condensed) {
-        setSearchOpen(true);
-        setSearchFocusToken((token) => token + 1);
-        return;
-      }
-      const input = inFlowSearchRef.current?.querySelector("input");
-      input?.focus();
-      input?.select();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [condensed]);
+  useListSearchShortcut({
+    condensed,
+    inFlowSearchRef,
+    setSearchOpen,
+    setSearchFocusToken,
+  });
   useEffect(() => {
     if (condensed) return;
     // The fold-out is gone from the chrome; forgetting it open keeps the next condensing
@@ -2030,6 +1894,7 @@ function PullRequestsColumn({
         {condensed ? (
           <div className="flex shrink-0 items-center gap-1.5">
             <ExpandableSearch
+              label="Search pull requests"
               searchInput={searchInput}
               searchValue={searchValue}
               open={searchOpen}

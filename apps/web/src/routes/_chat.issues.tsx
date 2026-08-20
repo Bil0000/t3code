@@ -16,14 +16,12 @@ import type {
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import {
   AtSignIcon,
-  ChevronDownIcon,
   CircleCheckIcon,
   CircleDotIcon,
   LayersIcon,
   LoaderIcon,
   PenLineIcon,
   RefreshCwIcon,
-  SearchIcon,
   UserCheckIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -45,6 +43,11 @@ import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
 import { LinearConnectionDialog } from "../components/issue/LinearConnectionDialog";
 import { LinearIcon } from "../components/Icons";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
+import {
+  CompactFilterMenu as SharedCompactFilterMenu,
+  ExpandableSearch,
+  useListSearchShortcut,
+} from "../components/sourceControl/ListTitlebarControls";
 import { IssueListEmptyState } from "../components/issue/IssueListEmptyState";
 import {
   IssueFiltersMenu,
@@ -72,7 +75,7 @@ import {
 } from "../components/WorkspaceBreadcrumb";
 import { PanelLayoutControls } from "../components/chat/PanelLayoutControls";
 import { Button } from "../components/ui/button";
-import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../components/ui/menu";
+import { MenuItem, MenuSeparator } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import { usePrimarySettings } from "../hooks/useSettings";
@@ -1570,102 +1573,26 @@ export function CompactFilterMenu<Value extends string>({
   onChange: (value: Value) => void;
   action?: CompactFilterAction | undefined;
 }) {
-  const current = options.find((option) => option.value === value) ?? options[0]!;
   const inlineLinearSettings =
     action?.connected === true && options.some((option) => option.value === "linear.app");
   return (
-    <Menu>
-      <MenuTrigger
-        aria-label={label}
-        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
-      >
-        {current.label}
-        <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground/70" />
-      </MenuTrigger>
-      <MenuPopup align="start" side="bottom" className="min-w-40">
-        {renderIssueProviderMenuRadioGroup({
-          value,
-          options,
-          onChange: (next) => onChange(next as Value),
-          ...(inlineLinearSettings ? { onManageLinear: action.onClick } : {}),
-        })}
-        {action && !inlineLinearSettings ? (
-          <>
-            <MenuSeparator />
-            <MenuItem onClick={action.onClick}>
-              <LinearIcon aria-hidden className="size-3.5" />
-              {action.connected ? "Linear settings…" : "Connect Linear…"}
-            </MenuItem>
-          </>
-        ) : null}
-      </MenuPopup>
-    </Menu>
-  );
-}
-
-/**
- * The search, folded to an icon until asked for. Opening moves focus into the input — the
- * whole point of pressing it is to type. It stays open while it holds a query, so an active
- * search is never invisible; empty and blurred, it folds back.
- */
-function ExpandableSearch({
-  searchInput,
-  searchValue,
-  open,
-  onOpenChange,
-  focusToken,
-  onFocusWithin,
-}: {
-  searchInput: ReactNode;
-  searchValue: string;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** Bumped to pull focus into the input while it is already showing — the Mod+F path. */
-  focusToken: number;
-  /**
-   * Focus entering and leaving the expanded input. An unmount fires no blur, which is the
-   * point: whoever unmounted this can still see the reader was mid-typing and move the
-   * focus somewhere that continues the sentence.
-   */
-  onFocusWithin?: (focused: boolean) => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  useEffect(() => {
-    if (!open) return;
-    containerRef.current?.querySelector("input")?.focus();
-  }, [open]);
-  const appliedFocusToken = useRef(focusToken);
-  useEffect(() => {
-    if (appliedFocusToken.current === focusToken) return;
-    appliedFocusToken.current = focusToken;
-    const input = containerRef.current?.querySelector("input");
-    input?.focus();
-    input?.select();
-  }, [focusToken]);
-  if (open || searchValue.length > 0) {
-    return (
-      <div
-        ref={containerRef}
-        className="w-56 shrink-0"
-        onFocus={() => onFocusWithin?.(true)}
-        onBlur={() => {
-          onFocusWithin?.(false);
-          if (searchValue.length === 0) onOpenChange(false);
-        }}
-      >
-        {searchInput}
-      </div>
-    );
-  }
-  return (
-    <Button
-      size="icon-sm"
-      variant="ghost"
-      aria-label="Search issues"
-      onClick={() => onOpenChange(true)}
-    >
-      <SearchIcon className="size-4" />
-    </Button>
+    <SharedCompactFilterMenu label={label} value={value} options={options} onChange={onChange}>
+      {renderIssueProviderMenuRadioGroup({
+        value,
+        options,
+        onChange: (next) => onChange(next as Value),
+        ...(inlineLinearSettings ? { onManageLinear: action.onClick } : {}),
+      })}
+      {action && !inlineLinearSettings ? (
+        <>
+          <MenuSeparator />
+          <MenuItem onClick={action.onClick}>
+            <LinearIcon aria-hidden className="size-3.5" />
+            {action.connected ? "Linear settings…" : "Connect Linear…"}
+          </MenuItem>
+        </>
+      ) : null}
+    </SharedCompactFilterMenu>
   );
 }
 
@@ -1734,27 +1661,12 @@ export function IssuesColumn({
   const inFlowSearchRef = useRef<HTMLDivElement | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFocusToken, setSearchFocusToken] = useState(0);
-  // Mod+F belongs to this page's own search: the desktop shell binds no find-in-page, so the
-  // shortcut would otherwise do nothing. Condensed, it unfolds the topbar search; at the top,
-  // it focuses the in-flow bar and selects the query the way a find field would.
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
-      if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
-      if (event.altKey || event.shiftKey) return;
-      event.preventDefault();
-      if (condensed) {
-        setSearchOpen(true);
-        setSearchFocusToken((token) => token + 1);
-        return;
-      }
-      const input = inFlowSearchRef.current?.querySelector("input");
-      input?.focus();
-      input?.select();
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [condensed]);
+  useListSearchShortcut({
+    condensed,
+    inFlowSearchRef,
+    setSearchOpen,
+    setSearchFocusToken,
+  });
   useEffect(() => {
     if (condensed) return;
     // The fold-out is gone from the chrome; forgetting it open keeps the next condensing
@@ -1827,6 +1739,7 @@ export function IssuesColumn({
         <div className="min-w-0 flex-1" />
         {condensed ? (
           <ExpandableSearch
+            label="Search issues"
             searchInput={searchInput}
             searchValue={searchValue}
             open={searchOpen}

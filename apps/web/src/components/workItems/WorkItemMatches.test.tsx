@@ -1,4 +1,4 @@
-import type { WorkItemMatch } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId, WorkItemMatch } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
@@ -18,7 +18,7 @@ const match = {
 describe("work item matches", () => {
   it("keeps equal references from different servers and providers in separate caches", () => {
     const base = {
-      projectId: "project-a",
+      projectId: "project-a" as ProjectId,
       source: {
         kind: "issue" as const,
         repository: "ENG",
@@ -31,17 +31,17 @@ describe("work item matches", () => {
       new Set([
         workItemMatchCacheKey({
           ...base,
-          environmentId: "local",
+          environmentId: "local" as EnvironmentId,
           source: { ...base.source, provider: "linear" },
         }),
         workItemMatchCacheKey({
           ...base,
-          environmentId: "remote",
+          environmentId: "remote" as EnvironmentId,
           source: { ...base.source, provider: "linear" },
         }),
         workItemMatchCacheKey({
           ...base,
-          environmentId: "local",
+          environmentId: "local" as EnvironmentId,
           source: { ...base.source, provider: "github" },
         }),
       ]).size,

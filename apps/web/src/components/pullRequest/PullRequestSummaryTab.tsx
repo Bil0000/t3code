@@ -10,14 +10,13 @@ import type {
 import {
   ArrowDownUpIcon,
   ChevronDownIcon,
-  ChevronRightIcon,
   HammerIcon,
   MessageSquareIcon,
   PencilIcon,
   TagIcon,
   UsersIcon,
 } from "lucide-react";
-import { useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -43,7 +42,7 @@ import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { CommentComposer } from "../sourceControl/CommentComposer";
-import { SummaryMetaRow } from "../sourceControl/SummaryMetaRow";
+import { SummaryMetaRow, SummarySection } from "../sourceControl/SummaryMetaRow";
 import {
   LINK_ISSUES_HANDOFF_KIND,
   latestPullRequestReviewOutcomes,
@@ -61,7 +60,6 @@ import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
-import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
 import {
   useWorkItemMatches,
   WorkItemMatchButton,
@@ -215,79 +213,6 @@ function CollapsedComment({
           ) : null}
         </CollapsiblePanel>
       </article>
-    </Collapsible>
-  );
-}
-
-function Section({
-  title,
-  count,
-  defaultOpen = true,
-  actions,
-  children,
-}: {
-  title: string;
-  count?: number;
-  defaultOpen?: boolean;
-  /** Controls riding on the heading row itself. A sibling of the trigger, not a child of it —
-      a button cannot hold a button — and only while open, since they act on what is shown. */
-  actions?: ReactNode;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  const headingRef = useRef<HTMLDivElement>(null);
-  const setOpenWithScrollAnchor = (nextOpen: boolean) => {
-    if (!nextOpen) {
-      const heading = headingRef.current;
-      const section = heading?.closest<HTMLElement>("[data-pull-request-summary-section]");
-      const scroller = heading?.closest<HTMLElement>("[data-pull-request-summary-scroll]");
-      if (heading && section && scroller) {
-        const target = sectionCollapseAnchorScrollTop({
-          scrollTop: scroller.scrollTop,
-          viewportTop: scroller.getBoundingClientRect().top,
-          sectionTop: section.getBoundingClientRect().top,
-          headingTop: heading.getBoundingClientRect().top,
-        });
-        // Synchronous with the press: React commits the collapsed height before the browser
-        // paints, so the reader sees the heading they pressed stay put rather than a jump first.
-        if (target !== null) scroller.scrollTop = target;
-      }
-    }
-    setOpen(nextOpen);
-  };
-  return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpenWithScrollAnchor}
-      data-pull-request-summary-section
-    >
-      {/* The heading rides the top of the scroll box the way a diff's file header does, so a
-          section can be collapsed from wherever its body has been read to rather than only from
-          where it started. Opaque, because the rows it covers scroll beneath it. */}
-      <div
-        ref={headingRef}
-        className="sticky top-0 z-10 flex w-full items-center border-t border-border/60 bg-background pr-4"
-      >
-        {/* Title first, chevron riding to its right, count last: the row reads as a heading
-            with an affordance rather than a tree node. */}
-        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
-          <span>{title}</span>
-          <ChevronRightIcon
-            aria-hidden
-            className={cn(
-              "size-3.5 text-muted-foreground transition-transform",
-              open && "rotate-90",
-            )}
-          />
-          {count === undefined ? null : (
-            <span className="text-xs tabular-nums text-muted-foreground">{count}</span>
-          )}
-        </CollapsibleTrigger>
-        {open ? actions : null}
-      </div>
-      <CollapsiblePanel>
-        <div className="px-4 pb-4">{children}</div>
-      </CollapsiblePanel>
     </Collapsible>
   );
 }
@@ -469,7 +394,7 @@ export function PullRequestSummaryTab({
   };
 
   return (
-    <div className="h-full overflow-y-auto" data-pull-request-summary-scroll>
+    <div className="h-full overflow-y-auto" data-summary-scroll>
       <section className="px-4 py-3">
         <div>
           <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
@@ -596,7 +521,7 @@ export function PullRequestSummaryTab({
         </div>
       </section>
 
-      <Section title="Description">
+      <SummarySection title="Description">
         <div className="group">
           {bodyScope === detail.url ? (
             <PullRequestMarkdownEditor
@@ -639,9 +564,9 @@ export function PullRequestSummaryTab({
             onRefresh={onRefresh}
           />
         </div>
-      </Section>
+      </SummarySection>
 
-      <Section
+      <SummarySection
         title="Related issues"
         {...(detail.linkedIssues === undefined ? {} : { count: detail.linkedIssues.length })}
         actions={
@@ -704,9 +629,9 @@ export function PullRequestSummaryTab({
             />
           </div>
         )}
-      </Section>
+      </SummarySection>
 
-      <Section
+      <SummarySection
         title="Possible duplicate pull requests"
         {...(aiMatches.duplicate === undefined ? {} : { count: aiMatches.duplicate.length })}
         actions={
@@ -729,9 +654,9 @@ export function PullRequestSummaryTab({
             onOpen={openAiMatch}
           />
         )}
-      </Section>
+      </SummarySection>
 
-      <Section title="Checks" count={detail.checks.length}>
+      <SummarySection title="Checks" count={detail.checks.length}>
         {detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
@@ -782,9 +707,9 @@ export function PullRequestSummaryTab({
             })}
           </div>
         )}
-      </Section>
+      </SummarySection>
 
-      <Section
+      <SummarySection
         title="Comments"
         {...(activityPending || activityError ? {} : { count: detail.commentCount })}
         actions={
@@ -969,7 +894,7 @@ export function PullRequestSummaryTab({
             onCommented={onRefresh}
           />
         ) : null}
-      </Section>
+      </SummarySection>
     </div>
   );
 }

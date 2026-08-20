@@ -6,7 +6,7 @@
  * The state glyph and everything past the repository stay with the caller: open, closed, merged and
  * draft are not one vocabulary, and neither are the facts each surface thinks worth the meta line.
  */
-import type { ElementType, ReactNode } from "react";
+import type { ElementType, MouseEventHandler, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -21,6 +21,7 @@ export function ListRow({
   ProviderIcon,
   showProvider,
   number,
+  onNumberContextMenu,
   repository,
   meta,
   matchedElsewhere,
@@ -37,6 +38,7 @@ export function ListRow({
   /** Only when the list spans more than one host, where the repository alone is ambiguous. */
   showProvider: boolean;
   number: number;
+  onNumberContextMenu?: MouseEventHandler<HTMLSpanElement>;
   /** Null where every row on screen comes from the same repository and naming it says nothing. */
   repository: string | null;
   /**
@@ -83,7 +85,7 @@ export function ListRow({
                 <TooltipPopup>{providerName}</TooltipPopup>
               </Tooltip>
             ) : null}
-            #{number}
+            <span onContextMenu={onNumberContextMenu}>#{number}</span>
           </span>
           {repository === null ? null : <span className="truncate">{repository}</span>}
           {meta}

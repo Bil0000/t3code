@@ -4,11 +4,12 @@
  * own — reviewers and checks on one, assignees and labels on the other.
  */
 import { ChevronRightIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { sectionCollapseAnchorScrollTop } from "./summarySectionScroll.logic";
 
 export function SummaryMetaRow({
   icon,
@@ -46,9 +47,30 @@ export function SummarySection({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  const headingRef = useRef<HTMLDivElement>(null);
+  const setOpenWithScrollAnchor = (nextOpen: boolean) => {
+    if (!nextOpen) {
+      const heading = headingRef.current;
+      const section = heading?.closest<HTMLElement>("[data-summary-section]");
+      const scroller = heading?.closest<HTMLElement>("[data-summary-scroll]");
+      if (heading && section && scroller) {
+        const target = sectionCollapseAnchorScrollTop({
+          scrollTop: scroller.scrollTop,
+          viewportTop: scroller.getBoundingClientRect().top,
+          sectionTop: section.getBoundingClientRect().top,
+          headingTop: heading.getBoundingClientRect().top,
+        });
+        if (target !== null) scroller.scrollTop = target;
+      }
+    }
+    setOpen(nextOpen);
+  };
   return (
-    <Collapsible open={open} onOpenChange={setOpen}>
-      <div className="flex w-full items-center border-t border-border/60 pr-4">
+    <Collapsible open={open} onOpenChange={setOpenWithScrollAnchor} data-summary-section>
+      <div
+        ref={headingRef}
+        className="sticky top-0 z-10 flex w-full items-center border-t border-border/60 bg-background pr-4"
+      >
         {/* Title first, chevron riding to its right, count last: the row reads as a heading
             with an affordance rather than a tree node. */}
         <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 px-4 py-3 text-left text-sm font-medium">
