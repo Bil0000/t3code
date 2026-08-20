@@ -3,20 +3,13 @@ import type {
   PullRequestStackStepState,
   PullRequestStackSummary,
 } from "@t3tools/contracts";
-import {
-  CheckCircle2Icon,
-  ChevronDownIcon,
-  CircleDotIcon,
-  Clock3Icon,
-  GitPullRequestClosedIcon,
-  LayersIcon,
-  TriangleAlertIcon,
-} from "lucide-react";
+import { ChevronDownIcon, Clock3Icon, LayersIcon, TriangleAlertIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
 
 import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuSeparator, MenuTrigger } from "../ui/menu";
+import { resolvePullRequestState } from "./pullRequestPresentation";
 
 type PullRequestStackPickerInput =
   | {
@@ -114,19 +107,17 @@ function StepIcon({ step }: { step: PickerStep }) {
   if (step.needsRebase) {
     return <TriangleAlertIcon aria-hidden className={cn(className, "text-amber-500")} />;
   }
-  if (step.state === "merged") {
-    return <CheckCircle2Icon aria-hidden className={cn(className, "text-emerald-500")} />;
-  }
   if (step.state === "queued") {
     return <Clock3Icon aria-hidden className={cn(className, "text-blue-500")} />;
   }
-  if (step.state === "closed") {
-    return <GitPullRequestClosedIcon aria-hidden className={cn(className, "text-red-500")} />;
+  if (step.state === "unsubmitted") {
+    return <span aria-hidden className={cn(className, "rounded-full border border-border")} />;
   }
-  if (step.state === "open") {
-    return <CircleDotIcon aria-hidden className={cn(className, "text-emerald-500")} />;
-  }
-  return <span aria-hidden className={cn(className, "rounded-full border border-border")} />;
+  const presentation = resolvePullRequestState({
+    state: step.state,
+    isDraft: false,
+  });
+  return <presentation.Icon aria-hidden className={cn(className, presentation.toneClassName)} />;
 }
 
 type PullRequestStackPickerProps = PullRequestStackPickerInput & {
@@ -150,7 +141,7 @@ export function PullRequestStackPicker(props: PullRequestStackPickerProps) {
           />
         }
       >
-        <LayersIcon aria-hidden className="size-3.5 text-emerald-500" />
+        <LayersIcon aria-hidden className="size-3.5" />
         <span className="tabular-nums">
           {model.currentPosition}/{model.steps.length}
         </span>
@@ -170,12 +161,21 @@ export function PullRequestStackPicker(props: PullRequestStackPickerProps) {
           </div>
         </div>
         <MenuSeparator />
-        <ol
-          role="none"
-          className="relative space-y-1 before:absolute before:bottom-4 before:left-[15px] before:top-4 before:w-px before:bg-border"
-        >
-          {model.steps.toReversed().map((step) => (
+        <ol role="none" className="space-y-1">
+          {model.steps.toReversed().map((step, index, steps) => (
             <li role="none" key={step.position} className="relative">
+              {index > 0 ? (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute -top-1 bottom-[calc(50%+0.5rem)] left-[15px] z-10 w-px bg-border"
+                />
+              ) : null}
+              {index < steps.length - 1 ? (
+                <span
+                  aria-hidden
+                  className="pointer-events-none absolute -bottom-1 left-[15px] top-[calc(50%+0.5rem)] z-10 w-px bg-border"
+                />
+              ) : null}
               <MenuItem
                 aria-current={step.current ? "step" : undefined}
                 disabled={step.pullRequestNumber === null || props.onSelect === undefined}
@@ -187,7 +187,7 @@ export function PullRequestStackPicker(props: PullRequestStackPickerProps) {
                   step.current && "bg-accent/60",
                 )}
               >
-                <span className="relative z-10 grid size-4 shrink-0 place-items-center bg-popover">
+                <span className="relative z-20 grid size-4 shrink-0 place-items-center">
                   <StepIcon step={step} />
                 </span>
                 <span className="min-w-0 flex-1">

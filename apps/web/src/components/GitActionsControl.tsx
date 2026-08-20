@@ -1857,12 +1857,15 @@ export default function GitActionsControl({
       ) : (
         <Group aria-label="Git actions" className="shrink-0">
           {currentStack && repository ? (
-            <PullRequestStackPicker
-              kind="local"
-              repository={repository}
-              stack={currentStack}
-              {...(onOpenPullRequest === undefined ? {} : { onSelect: onOpenPullRequest })}
-            />
+            <>
+              <PullRequestStackPicker
+                kind="local"
+                repository={repository}
+                stack={currentStack}
+                {...(onOpenPullRequest === undefined ? {} : { onSelect: onOpenPullRequest })}
+              />
+              <GroupSeparator />
+            </>
           ) : null}
           {quickActionDisabledReason ? (
             <Popover>
