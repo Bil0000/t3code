@@ -511,7 +511,7 @@ export const ProviderRegistryLive = Layer.effect(
         return yield* new ProviderUnsupportedError({ provider: instance.driverKind });
       }
       const outcome = yield* consume(input);
-      yield* refreshInstance(instanceId);
+      yield* refreshInstance(instanceId).pipe(Effect.catchCause(recoverRefreshFailure));
       return outcome;
     });
 

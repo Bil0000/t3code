@@ -1982,6 +1982,7 @@ export const makeCodexAdapter = Effect.fn("makeCodexAdapter")(function* (
           Effect.scoped,
         )
     ).pipe(
+      Effect.timeout("30 seconds"),
       Effect.mapError(
         (cause) =>
           new ProviderAdapterRequestError({

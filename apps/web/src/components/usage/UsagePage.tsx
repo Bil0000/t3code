@@ -62,6 +62,13 @@ interface CodexLimitsTarget {
   readonly rateLimits: ProviderRateLimits;
 }
 
+const RESET_OUTCOME_TOAST = {
+  reset: { type: "success", title: "Codex limits reset" },
+  nothingToReset: { type: "warning", title: "Codex limits did not need a reset" },
+  noCredit: { type: "warning", title: "No banked reset is available" },
+  alreadyRedeemed: { type: "warning", title: "This banked reset was already used" },
+} as const;
+
 const WINDOW_OPTIONS = [
   { days: 1, label: "Past 24h" },
   { days: 7, label: "7 days" },
@@ -76,7 +83,9 @@ export function UsagePage() {
   }));
   const [metric, setMetric] = useState<UsageChartMetric>("cost");
   const [breakdown, setBreakdown] = useState<"model" | "time">("model");
-  const [resetTarget, setResetTarget] = useState<CodexLimitsTarget | null>(null);
+  const [resetTarget, setResetTarget] = useState<
+    (CodexLimitsTarget & { readonly idempotencyKey: string }) | null
+  >(null);
   const [usingReset, setUsingReset] = useState(false);
   const presentations = useAtomValue(environmentPresentations.presentationsAtom);
   const consumeReset = useAtomCommand(serverEnvironment.consumeProviderRateLimitReset, {
@@ -120,7 +129,7 @@ export function UsagePage() {
         targets.push({
           environmentId,
           instanceId: provider.instanceId,
-          label: provider.displayName ?? "Codex",
+          label: (provider.displayName ?? "Codex") + " · " + presentation.entry.target.label,
           ...(availableCredit ? { creditId: availableCredit.id } : {}),
           rateLimits: provider.rateLimits,
         });
@@ -136,7 +145,7 @@ export function UsagePage() {
       environmentId: resetTarget.environmentId,
       input: {
         instanceId: resetTarget.instanceId,
-        idempotencyKey: randomUUID(),
+        idempotencyKey: resetTarget.idempotencyKey,
         ...(resetTarget.creditId ? { creditId: resetTarget.creditId } : {}),
       },
     });
@@ -152,11 +161,7 @@ export function UsagePage() {
     }
 
     setResetTarget(null);
-    toastManager.add(
-      result.value.outcome === "reset"
-        ? { type: "success", title: "Codex limits reset" }
-        : { type: "warning", title: "Codex limits were not reset" },
-    );
+    toastManager.add(RESET_OUTCOME_TOAST[result.value.outcome]);
   }, [consumeReset, resetTarget, usingReset]);
 
   const selectWindow = (days: number) => {
@@ -299,7 +304,7 @@ export function UsagePage() {
                     key={target.environmentId + ":" + target.instanceId}
                     label={target.label}
                     rateLimits={target.rateLimits}
-                    onUseReset={() => setResetTarget(target)}
+                    onUseReset={() => setResetTarget({ ...target, idempotencyKey: randomUUID() })}
                   />
                 ))}
 
@@ -535,8 +540,8 @@ export function UsagePage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Use a banked reset?</AlertDialogTitle>
             <AlertDialogDescription>
-              This resets both your 5-hour and weekly Codex limits. Your weekly reset date will
-              move.
+              This uses one reset for {resetTarget?.label}. It resets both limits and moves your
+              weekly reset date.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
