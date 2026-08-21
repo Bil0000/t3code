@@ -777,10 +777,6 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     }
   }
 
-  [data-chat-composer-form="true"]:has(.chat-composer-shoulder-tab) {
-    padding-top: 1.75rem;
-  }
-
   .chat-composer-banner-stack-cap {
     --chat-composer-attached-surface: var(--chat-composer-glass-surface, var(--card));
     --chat-composer-attached-outline: var(
