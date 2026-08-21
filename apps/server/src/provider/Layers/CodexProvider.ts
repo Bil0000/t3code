@@ -17,6 +17,7 @@ import type {
   CodexSettings,
   ProviderRateLimitResetRequest,
   ProviderRateLimits,
+  ProviderRateLimitWindow,
   ServerProvider,
   ServerProviderState,
   ModelCapabilities,
@@ -297,6 +298,17 @@ function parseCodexSkillsListResponse(
   });
 }
 
+function mapCodexRateLimitWindow(
+  window: CodexSchema.V2GetAccountRateLimitsResponse["rateLimits"]["primary"],
+): ProviderRateLimitWindow | undefined {
+  if (!window) return undefined;
+  return {
+    usedPercent: window.usedPercent,
+    ...(window.resetsAt != null ? { resetsAt: window.resetsAt } : {}),
+    ...(window.windowDurationMins != null ? { windowDurationMins: window.windowDurationMins } : {}),
+  };
+}
+
 export function mapCodexRateLimits(
   response: CodexSchema.V2GetAccountRateLimitsResponse,
 ): ProviderRateLimits {
@@ -309,9 +321,12 @@ export function mapCodexRateLimits(
     ...(credit.description ? { description: credit.description } : {}),
   }));
 
+  const primary = mapCodexRateLimitWindow(response.rateLimits.primary);
+  const secondary = mapCodexRateLimitWindow(response.rateLimits.secondary);
+
   return {
-    ...(response.rateLimits.primary ? { primary: response.rateLimits.primary } : {}),
-    ...(response.rateLimits.secondary ? { secondary: response.rateLimits.secondary } : {}),
+    ...(primary ? { primary } : {}),
+    ...(secondary ? { secondary } : {}),
     ...(response.rateLimitResetCredits
       ? {
           resetCredits: {

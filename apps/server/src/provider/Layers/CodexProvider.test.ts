@@ -12,7 +12,7 @@ it("maps Codex windows and banked resets into the provider snapshot", () => {
     mapCodexRateLimits({
       rateLimits: {
         primary: { usedPercent: 72, resetsAt: 1_777_000_000, windowDurationMins: 300 },
-        secondary: { usedPercent: 46, resetsAt: 1_777_604_800, windowDurationMins: 10_080 },
+        secondary: { usedPercent: 46, resetsAt: null, windowDurationMins: null },
       },
       rateLimitResetCredits: {
         availableCount: 2,
@@ -30,7 +30,7 @@ it("maps Codex windows and banked resets into the provider snapshot", () => {
     }),
     {
       primary: { usedPercent: 72, resetsAt: 1_777_000_000, windowDurationMins: 300 },
-      secondary: { usedPercent: 46, resetsAt: 1_777_604_800, windowDurationMins: 10_080 },
+      secondary: { usedPercent: 46 },
       resetCredits: {
         availableCount: 2,
         credits: [

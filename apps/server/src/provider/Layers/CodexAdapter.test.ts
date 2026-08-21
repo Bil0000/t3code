@@ -261,7 +261,9 @@ rateLimitLayer("CodexAdapterLive rate-limit resets", (it) => {
   it.effect("redeems a banked reset through the Codex account API", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
-      const outcome = yield* adapter.consumeRateLimitResetCredit?.({
+      const consume = adapter.consumeRateLimitResetCredit;
+      NodeAssert.ok(consume);
+      const outcome = yield* consume({
         creditId: "reset-1",
         idempotencyKey: "attempt-1",
       });
