@@ -5,7 +5,7 @@ import { useMemo, useState } from "react";
 
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useTheme } from "~/hooks/useTheme";
-import { isMacPlatform, isWindowsPlatform } from "~/lib/utils";
+import { getLocalFileManagerName, isWindowsPlatform } from "~/lib/utils";
 import { CommandPaletteContent } from "../CommandPaletteContent";
 import type { CommandPaletteActionItem } from "../CommandPalette.logic";
 import { CommandPaletteResults } from "../CommandPaletteResults";
@@ -15,8 +15,7 @@ import {
   PROJECT_FILE_PICKER_RESULT_LIMIT,
 } from "../files/ProjectFilePicker.logic";
 import { useProjectFilePickerQuery } from "../files/projectFilesQueryState";
-import { Button } from "../ui/button";
-import { CommandDialog, CommandDialogPopup } from "../ui/command";
+import { CommandDialog, CommandDialogPopup, CommandFooterAction } from "../ui/command";
 import { toastManager } from "../ui/toast";
 
 function emptyMessage(query: string, error: string | null, isPending: boolean): string {
@@ -50,12 +49,9 @@ export function ProjectFaviconPickerDialog(props: {
   const { resolvedTheme } = useTheme();
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const pickExternal = props.onPickExternal;
-  const fileManagerName =
-    typeof navigator !== "undefined" && isMacPlatform(navigator.platform)
-      ? "Finder"
-      : typeof navigator !== "undefined" && isWindowsPlatform(navigator.platform)
-        ? "Explorer"
-        : "Files";
+  const fileManagerName = getLocalFileManagerName(
+    typeof navigator === "undefined" ? "" : navigator.platform,
+  );
   const items = useMemo<CommandPaletteActionItem[]>(
     () =>
       getProjectFilePickerMatches(result.entries, result.matchedQuery).map((match) => ({
@@ -85,10 +81,7 @@ export function ProjectFaviconPickerDialog(props: {
             footerActionLabel="Select icon"
             footerTrailing={
               pickExternal ? (
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="h-auto px-2 text-muted-foreground text-xs hover:bg-transparent hover:text-foreground"
+                <CommandFooterAction
                   disabled={isPickingExternal}
                   onClick={() => {
                     setIsPickingExternal(true);
@@ -110,7 +103,7 @@ export function ProjectFaviconPickerDialog(props: {
                   }}
                 >
                   {`Open in ${fileManagerName}`}
-                </Button>
+                </CommandFooterAction>
               ) : null
             }
             inputProps={{ placeholder: "Search image files…" }}
