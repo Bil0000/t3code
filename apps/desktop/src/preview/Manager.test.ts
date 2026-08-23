@@ -2507,6 +2507,37 @@ describe("PreviewManager", () => {
     ),
   );
 
+  effectIt.effect("retries an unchanged picture-in-picture frame after delivery fails", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const jpeg = Buffer.from("retry-preview-frame");
+        const capturePage = vi.fn(async () => ({
+          toJPEG: () => jpeg,
+          getSize: () => ({ width: 1280, height: 720 }),
+        }));
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
+        const { pictureInPictureWindow, send } = makeTestPictureInPictureWindow();
+        send.mockImplementationOnce(() => {
+          throw new Error("picture-in-picture delivery failed");
+        });
+        browserWindowConstructor.mockImplementation(function () {
+          return pictureInPictureWindow;
+        });
+
+        yield* manager.createTab("tab_pip_delivery_retry");
+        yield* manager.registerWebview("tab_pip_delivery_retry", 42);
+        yield* manager.openPictureInPicture("tab_pip_delivery_retry");
+        expect(send).toHaveBeenCalledOnce();
+
+        yield* TestClock.adjust(100);
+
+        expect(capturePage).toHaveBeenCalledTimes(2);
+        expect(send).toHaveBeenCalledTimes(2);
+        yield* manager.closePictureInPicture("tab_pip_delivery_retry");
+      }),
+    ),
+  );
+
   effectIt.effect("delivers recording frames only when pixels change", () =>
     withManager((manager) =>
       Effect.gen(function* () {

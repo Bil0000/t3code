@@ -2572,16 +2572,14 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (!recording && !pictureInPicture) {
         return [undefined, sessions] as const;
       }
-      const next = {
-        ...current,
-        lastPictureInPictureFrame: pictureInPicture ? encoded : current.lastPictureInPictureFrame,
-        lastRecordingFrame: recording ? encoded : current.lastRecordingFrame,
-      };
+      const next = recording ? { ...current, lastRecordingFrame: encoded } : current;
       return [
-        { pictureInPicture, recording },
-        replaceMap(sessions, (copy) => {
-          copy.set(tabId, next);
-        }),
+        { pictureInPicture, recording, session: next },
+        recording
+          ? replaceMap(sessions, (copy) => {
+              copy.set(tabId, next);
+            })
+          : sessions,
       ] as const;
     });
     if (!frameConsumers) return;
@@ -2654,6 +2652,15 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                 );
               },
             );
+            yield* SynchronizedRef.update(frameCaptureSessionsRef, (sessions) => {
+              if (sessions.get(tabId) !== frameConsumers.session) return sessions;
+              return replaceMap(sessions, (copy) => {
+                copy.set(tabId, {
+                  ...frameConsumers.session,
+                  lastPictureInPictureFrame: encoded,
+                });
+              });
+            });
           }).pipe(
             Effect.catch((error) =>
               Effect.logWarning("Picture-in-picture frame delivery failed.", {
