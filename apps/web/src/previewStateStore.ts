@@ -374,6 +374,27 @@ export function applyPreviewDesktopState(
   overlay: DesktopPreviewOverlay | null,
 ): void {
   updateThreadPreviewState(ref, (current) => {
+    const previous = current.desktopByTabId[tabId] ?? null;
+    if (
+      previous === overlay ||
+      (previous !== null &&
+        overlay !== null &&
+        previous.hasWebContents === overlay.hasWebContents &&
+        previous.canGoBack === overlay.canGoBack &&
+        previous.canGoForward === overlay.canGoForward &&
+        previous.loading === overlay.loading &&
+        previous.zoomFactor === overlay.zoomFactor &&
+        previous.pictureInPicture === overlay.pictureInPicture &&
+        previous.colorScheme === overlay.colorScheme &&
+        previous.audioMuted === overlay.audioMuted &&
+        previous.audible === overlay.audible &&
+        previous.controller === overlay.controller &&
+        previous.favicon?.dataUrl === overlay.favicon?.dataUrl &&
+        previous.favicon?.pageUrl === overlay.favicon?.pageUrl &&
+        previous.favicon?.capturedAt === overlay.favicon?.capturedAt)
+    ) {
+      return current;
+    }
     const desktopByTabId = { ...current.desktopByTabId };
     if (overlay) desktopByTabId[tabId] = overlay;
     else delete desktopByTabId[tabId];

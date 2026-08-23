@@ -2448,9 +2448,7 @@ describe("PreviewManager", () => {
         const framesBeforePictureInPictureOnlyTick = pictureInPictureSend.mock.calls.length;
         yield* TestClock.adjust(100);
         expect(capturePage).toHaveBeenCalledTimes(3);
-        expect(pictureInPictureSend.mock.calls.length).toBeGreaterThan(
-          framesBeforePictureInPictureOnlyTick,
-        );
+        expect(pictureInPictureSend.mock.calls.length).toBe(framesBeforePictureInPictureOnlyTick);
         expect(recordingFrames).toHaveLength(1);
 
         setBackgroundThrottling.mockImplementationOnce(() => {
@@ -2463,6 +2461,51 @@ describe("PreviewManager", () => {
         const capturesAfterClose = capturePage.mock.calls.length;
         yield* TestClock.adjust(200);
         expect(capturePage).toHaveBeenCalledTimes(capturesAfterClose);
+      }),
+    ),
+  );
+
+  effectIt.effect("delivers recording frames only when pixels change", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const unchanged = Buffer.from("unchanged-preview-frame");
+        const changed = Buffer.from("changed-preview-frame");
+        let captureIndex = 0;
+        const capturePage = vi.fn(async () => {
+          const jpeg = captureIndex < 2 ? unchanged : changed;
+          captureIndex += 1;
+          return {
+            toJPEG: () => jpeg,
+            getSize: () => ({ width: 1280, height: 720 }),
+          };
+        });
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
+        const frames: DesktopPreviewRecordingFrame[] = [];
+
+        yield* manager.subscribeRecordingFrames((frame) =>
+          Effect.sync(() => {
+            frames.push(frame);
+          }),
+        );
+        yield* manager.createTab("tab_unchanged_frame");
+        yield* manager.registerWebview("tab_unchanged_frame", 42);
+        yield* manager.startRecording("tab_unchanged_frame");
+
+        expect(frames.map((frame) => frame.data)).toEqual([unchanged.toString("base64")]);
+
+        yield* TestClock.adjust(100);
+
+        expect(capturePage).toHaveBeenCalledTimes(2);
+        expect(frames.map((frame) => frame.data)).toEqual([unchanged.toString("base64")]);
+
+        yield* TestClock.adjust(100);
+
+        expect(capturePage).toHaveBeenCalledTimes(3);
+        expect(frames.map((frame) => frame.data)).toEqual([
+          unchanged.toString("base64"),
+          changed.toString("base64"),
+        ]);
+        yield* manager.stopRecording("tab_unchanged_frame");
       }),
     ),
   );

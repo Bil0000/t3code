@@ -20,6 +20,7 @@ import {
   rememberPreviewUrl,
   removePreviewThread,
   resetPreviewStateForTests,
+  subscribeThreadPreviewState,
   setActivePreviewTab,
   updatePreviewServerSnapshot,
 } from "./previewStateStore";
@@ -329,6 +330,38 @@ describe("previewStateStore (single-tab)", () => {
     const state = readThreadPreviewState(ref);
     expect(state.desktopOverlay?.canGoBack).toBe(true);
     expect(state.snapshot?.canGoBack).toBe(false);
+  });
+
+  it("does not publish duplicate desktop browser state", () => {
+    const snapshot = makeSnapshot();
+    applyPreviewServerSnapshot(ref, snapshot);
+    const overlay = {
+      hasWebContents: true,
+      canGoBack: true,
+      canGoForward: false,
+      loading: false,
+      zoomFactor: 1,
+      pictureInPicture: false,
+      colorScheme: "system" as const,
+      audioMuted: false,
+      audible: false,
+      controller: "none" as const,
+      favicon: {
+        dataUrl: "data:image/png;base64,AA==",
+        pageUrl: "https://example.com",
+        capturedAt: 1,
+      },
+    };
+    const updates: unknown[] = [];
+    const unsubscribe = subscribeThreadPreviewState(ref, (state) => {
+      updates.push(state);
+    });
+
+    applyPreviewDesktopState(ref, snapshot.tabId, overlay);
+    applyPreviewDesktopState(ref, snapshot.tabId, { ...overlay, favicon: { ...overlay.favicon } });
+    unsubscribe();
+
+    expect(updates).toHaveLength(1);
   });
 
   it("retains multiple tabs and switches active desktop state", () => {
