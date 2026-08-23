@@ -2434,6 +2434,7 @@ describe("PreviewManager", () => {
         );
         expect(states.at(-1)?.pictureInPicture).toBe(true);
         expect(capturePage).toHaveBeenCalledOnce();
+        const pictureInPictureFramesBeforeRecording = pictureInPictureSend.mock.calls.length;
 
         yield* manager.startRecording("tab_pip");
         expect(capturePage).toHaveBeenCalledOnce();
@@ -2441,6 +2442,7 @@ describe("PreviewManager", () => {
 
         yield* TestClock.adjust(100);
         expect(capturePage).toHaveBeenCalledTimes(2);
+        expect(pictureInPictureSend).toHaveBeenCalledTimes(pictureInPictureFramesBeforeRecording);
         expect(recordingFrames).toHaveLength(1);
 
         yield* manager.stopRecording("tab_pip");
@@ -2461,6 +2463,46 @@ describe("PreviewManager", () => {
         const capturesAfterClose = capturePage.mock.calls.length;
         yield* TestClock.adjust(200);
         expect(capturePage).toHaveBeenCalledTimes(capturesAfterClose);
+      }),
+    ),
+  );
+
+  effectIt.effect("delivers unchanged frames only to a new picture-in-picture consumer", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const jpeg = Buffer.from("shared-preview-frame");
+        const capturePage = vi.fn(async () => ({
+          toJPEG: () => jpeg,
+          getSize: () => ({ width: 1280, height: 720 }),
+        }));
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
+        const { pictureInPictureWindow, send } = makeTestPictureInPictureWindow();
+        browserWindowConstructor.mockImplementation(function () {
+          return pictureInPictureWindow;
+        });
+        const recordingFrames: DesktopPreviewRecordingFrame[] = [];
+
+        yield* manager.subscribeRecordingFrames((frame) =>
+          Effect.sync(() => {
+            recordingFrames.push(frame);
+          }),
+        );
+        yield* manager.createTab("tab_recording_then_pip");
+        yield* manager.registerWebview("tab_recording_then_pip", 42);
+        yield* manager.startRecording("tab_recording_then_pip");
+
+        expect(recordingFrames).toHaveLength(1);
+        yield* manager.openPictureInPicture("tab_recording_then_pip");
+        expect(capturePage).toHaveBeenCalledOnce();
+        expect(send).not.toHaveBeenCalled();
+
+        yield* TestClock.adjust(100);
+
+        expect(capturePage).toHaveBeenCalledTimes(2);
+        expect(recordingFrames).toHaveLength(1);
+        expect(send).toHaveBeenCalledOnce();
+        yield* manager.closePictureInPicture("tab_recording_then_pip");
+        yield* manager.stopRecording("tab_recording_then_pip");
       }),
     ),
   );

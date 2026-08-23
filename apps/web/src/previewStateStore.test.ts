@@ -352,16 +352,16 @@ describe("previewStateStore (single-tab)", () => {
         capturedAt: 1,
       },
     };
-    const updates: unknown[] = [];
-    const unsubscribe = subscribeThreadPreviewState(ref, (state) => {
-      updates.push(state);
+    let updateCount = 0;
+    const unsubscribe = subscribeThreadPreviewState(ref, () => {
+      updateCount += 1;
     });
 
     applyPreviewDesktopState(ref, snapshot.tabId, overlay);
     applyPreviewDesktopState(ref, snapshot.tabId, { ...overlay, favicon: { ...overlay.favicon } });
     unsubscribe();
 
-    expect(updates).toHaveLength(1);
+    expect(updateCount).toBe(1);
   });
 
   it("retains multiple tabs and switches active desktop state", () => {

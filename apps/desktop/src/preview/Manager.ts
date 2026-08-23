@@ -381,7 +381,8 @@ type FrameCaptureConsumer = "picture-in-picture" | "recording";
 interface FrameCaptureSession {
   readonly scope: Scope.Closeable;
   readonly consumers: ReadonlySet<FrameCaptureConsumer>;
-  readonly lastFrame: Buffer | null;
+  readonly lastPictureInPictureFrame: Buffer | null;
+  readonly lastRecordingFrame: Buffer | null;
 }
 
 interface PictureInPictureSession {
@@ -617,7 +618,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
           return [
             undefined,
             replaceMap(sessions, (copy) => {
-              copy.set(tabId, { ...current, consumers });
+              copy.set(tabId, {
+                ...current,
+                consumers,
+                lastPictureInPictureFrame:
+                  consumer === "picture-in-picture" ? null : current.lastPictureInPictureFrame,
+                lastRecordingFrame: consumer === "recording" ? null : current.lastRecordingFrame,
+              });
             }),
           ] as const;
         }
@@ -2552,26 +2559,32 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       },
       () => image.toJPEG(RECORDING_JPEG_QUALITY),
     );
-    const deliveryCaptureSession = yield* SynchronizedRef.modify(
-      frameCaptureSessionsRef,
-      (sessions) => {
-        const current = sessions.get(tabId);
-        if (
-          current?.scope !== captureSession.scope ||
-          current.lastFrame?.equals(encoded) === true
-        ) {
-          return [undefined, sessions] as const;
-        }
-        const next = { ...current, lastFrame: encoded };
-        return [
-          next,
-          replaceMap(sessions, (copy) => {
-            copy.set(tabId, next);
-          }),
-        ] as const;
-      },
-    );
-    if (!deliveryCaptureSession) return;
+    const frameConsumers = yield* SynchronizedRef.modify(frameCaptureSessionsRef, (sessions) => {
+      const current = sessions.get(tabId);
+      if (current?.scope !== captureSession.scope) {
+        return [undefined, sessions] as const;
+      }
+      const recording =
+        current.consumers.has("recording") && current.lastRecordingFrame?.equals(encoded) !== true;
+      const pictureInPicture =
+        current.consumers.has("picture-in-picture") &&
+        current.lastPictureInPictureFrame?.equals(encoded) !== true;
+      if (!recording && !pictureInPicture) {
+        return [undefined, sessions] as const;
+      }
+      const next = {
+        ...current,
+        lastPictureInPictureFrame: pictureInPicture ? encoded : current.lastPictureInPictureFrame,
+        lastRecordingFrame: recording ? encoded : current.lastRecordingFrame,
+      };
+      return [
+        { pictureInPicture, recording },
+        replaceMap(sessions, (copy) => {
+          copy.set(tabId, next);
+        }),
+      ] as const;
+    });
+    if (!frameConsumers) return;
     const receivedAt = yield* currentIso;
     const frame: DesktopPreviewRecordingFrame = {
       tabId,
@@ -2581,7 +2594,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       receivedAt,
     };
     const deliveries: Array<Effect.Effect<void>> = [];
-    if (deliveryCaptureSession.consumers.has("recording")) {
+    if (frameConsumers.recording) {
       const listeners = yield* Ref.get(recordingFrameListenersRef);
       deliveries.push(
         Effect.forEach(
@@ -2591,7 +2604,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         ),
       );
     }
-    if (deliveryCaptureSession.consumers.has("picture-in-picture")) {
+    if (frameConsumers.pictureInPicture) {
       const pictureInPictureWindow = (yield* SynchronizedRef.get(pictureInPictureSessionsRef)).get(
         tabId,
       )?.window;
@@ -2693,7 +2706,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               copy.set(tabId, {
                 ...current,
                 consumers: new Set([...current.consumers, consumer]),
-                lastFrame: null,
               });
             }),
           ] as const;
@@ -2709,7 +2721,8 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             copy.set(tabId, {
               scope,
               consumers: new Set([consumer]),
-              lastFrame: null,
+              lastPictureInPictureFrame: null,
+              lastRecordingFrame: null,
             });
           }),
         ] as const;
