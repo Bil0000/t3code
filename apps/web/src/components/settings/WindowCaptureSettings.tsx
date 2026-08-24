@@ -128,8 +128,9 @@ export function WindowCaptureSettings() {
               <SettingResetButton
                 label="window capture shortcut"
                 disabled={
+                  !bridge ||
                   shortcutToKeybindingInput(settings.windowCaptureShortcut) ===
-                  shortcutToKeybindingInput(DEFAULT_WINDOW_CAPTURE_SHORTCUT)
+                    shortcutToKeybindingInput(DEFAULT_WINDOW_CAPTURE_SHORTCUT)
                 }
                 onClick={() =>
                   void save({ windowCaptureShortcut: DEFAULT_WINDOW_CAPTURE_SHORTCUT })

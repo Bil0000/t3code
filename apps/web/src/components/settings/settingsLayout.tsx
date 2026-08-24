@@ -147,6 +147,11 @@ export function SettingsSection({
   );
 }
 
+/**
+ * Keeps the unavailable reason readable while dimming the disabled settings as
+ * one group. Client-only settings stay visible but disabled because editing
+ * them from a browser would write another client's preferences.
+ */
 export function SettingsUnavailableGroup({
   children,
   message,
