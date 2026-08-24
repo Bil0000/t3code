@@ -544,6 +544,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("Terminal");
     expect(markup).toContain("t3code — Tests");
     expect(markup).toContain('src="data:image/png;base64,aWNvbg=="');
+    expect(markup).toContain("col-span-2 h-28 w-52 max-w-full");
     expect(onAnchorReady).toHaveBeenCalledOnce();
     expect(onAnchorReady).toHaveBeenCalledWith(firstEntry.message.id, 0);
   });
@@ -557,6 +558,7 @@ describe("MessagesTimeline", () => {
     expect(markup).not.toContain("Terminal");
     expect(markup).not.toContain("t3code — Tests");
     expect(markup).not.toContain('src="data:image/png;base64,aWNvbg=="');
+    expect(markup).not.toContain("col-span-2 h-28 w-52 max-w-full");
   });
 
   it("does not reserve end space for a follow-up user message", () => {
