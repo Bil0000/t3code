@@ -17,6 +17,7 @@ import {
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
   ProviderUploadFeedbackInput,
@@ -732,19 +733,27 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     // Adapters inline attachment pixels into the model prompt, but the model's
     // tools cannot dereference pixels. Appending the on-disk path is what lets
     // a turn like "include this screenshot in the PR" copy the actual file.
-    // This runs after schema decode, so the appended lines are exempt from the
-    // PROVIDER_SEND_TURN_MAX_INPUT_CHARS check; attachment count is capped, so
-    // the overhead is bounded. Unresolvable ids are skipped here and surface
-    // as adapter errors when the file is read for inlining.
+    // Attachment paths are added after schema decode. Their count is capped,
+    // while accessible window text shares the input length limit.
+    let remainingTextChars = PROVIDER_SEND_TURN_MAX_INPUT_CHARS - (parsed.input?.length ?? 0);
     const attachmentContext = attachments.flatMap((attachment) => {
       const source = attachment.source;
       const accessibleText = source?.accessibleText;
       const sourceLabel = source?.windowTitle
         ? `${source.appName} — ${source.windowTitle}`
         : source?.appName;
-      const textSection = accessibleText
-        ? [`[Available text from ${sourceLabel}]\n${accessibleText}\n[End available window text]`]
-        : [];
+      const textPrefix = `[Available text from ${sourceLabel}]\n`;
+      const textSuffix = "\n[End available window text]";
+      const maxTextChars = Math.max(remainingTextChars - textPrefix.length - textSuffix.length, 0);
+      const candidateEnd = Math.min(accessibleText?.length ?? 0, maxTextChars);
+      const textEnd = /[\uD800-\uDBFF]/.test(accessibleText?.[candidateEnd - 1] ?? "")
+        ? candidateEnd - 1
+        : candidateEnd;
+      const textSection =
+        accessibleText && textEnd > 0
+          ? [`${textPrefix}${accessibleText.slice(0, textEnd)}${textSuffix}`]
+          : [];
+      remainingTextChars -= textSection[0]?.length ?? 0;
       const attachmentPath = resolveAttachmentPath({
         attachmentsDir: serverConfig.attachmentsDir,
         attachment,

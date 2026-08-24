@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   accessibleWindowText,
+  findAccessibleWindow,
   findCaptureSource,
   isWaylandSession,
   shouldRequestScreenCapturePermission,
@@ -66,6 +67,31 @@ describe("accessibleWindowText", () => {
         5,
       ),
     ).toBe("abc😀");
+  });
+});
+
+describe("findAccessibleWindow", () => {
+  const captured = {
+    title: "Editor",
+    bounds: { x: 100, y: 200, width: 800, height: 600 },
+  };
+
+  it("matches one window by its captured bounds", () => {
+    const windows = [
+      { name: "Private", bounds: { x: 0, y: 0, width: 400, height: 300 } },
+      { name: "Editor", bounds: { x: 101, y: 199, width: 800, height: 601 } },
+    ];
+
+    expect(findAccessibleWindow(windows, captured)).toBe(windows[1]);
+  });
+
+  it("does not use a title match when the bounds differ", () => {
+    expect(
+      findAccessibleWindow(
+        [{ name: "Editor", bounds: { x: 0, y: 0, width: 800, height: 600 } }],
+        captured,
+      ),
+    ).toBeUndefined();
   });
 });
 

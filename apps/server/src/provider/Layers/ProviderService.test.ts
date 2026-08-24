@@ -19,6 +19,7 @@ import {
   ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionStartInput,
+  PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ThreadId,
   TurnId,
 } from "@t3tools/contracts";
@@ -1185,6 +1186,45 @@ routing.layer("ProviderServiceLive routing", (it) => {
 
       const turnInput = routing.codex.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput;
       assert.include(turnInput.input ?? "", "const answer = 42;");
+    }),
+  );
+
+  it.effect("caps accessible window text across all attachments", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-window-text-limit");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      routing.codex.sendTurn.mockClear();
+      yield* provider.sendTurn({
+        threadId,
+        input: "fix",
+        attachments: Array.from({ length: 8 }, (_, index) => ({
+          type: "image" as const,
+          id: `window-text-${index}-12345678-1234-1234-1234-123456789abc`,
+          name: `editor-${index}.png`,
+          mimeType: "image/png",
+          sizeBytes: 123,
+          source: {
+            kind: "window-capture" as const,
+            capturedAt: "2026-08-24T11:00:00.000Z",
+            appName: "Editor",
+            windowTitle: `main-${index}.ts`,
+            accessibleText: "Z".repeat(32_000),
+          },
+        })),
+      });
+
+      const turnInput = routing.codex.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput;
+      const accessibleChars = (turnInput.input?.match(/Z/g) ?? []).length;
+      assert.isAbove(accessibleChars, 0);
+      assert.isAtMost(accessibleChars, PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 3);
     }),
   );
 

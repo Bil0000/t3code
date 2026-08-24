@@ -16,7 +16,9 @@ settings page.
 
 - On macOS, allow Accessibility and Screen Recording when the system asks.
 - On Windows and Linux with X11, the shortcut captures the active window.
-- On Linux with Wayland, the system portal asks you to choose the window or screen to share.
+- On Linux with Wayland, the system portal asks you to choose the window or screen to share. Portal
+  captures attach the image without accessibility text because the portal does not identify the
+  selected window.
 
 Text availability depends on the captured app and the operating system. T3 Code still attaches the
 image when an app does not expose accessibility text.

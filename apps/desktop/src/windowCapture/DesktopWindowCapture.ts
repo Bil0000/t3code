@@ -26,6 +26,7 @@ import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import {
   accessibleWindowText,
+  findAccessibleWindow,
   findCaptureSource,
   isWaylandSession,
   shouldRequestScreenCapturePermission,
@@ -34,6 +35,7 @@ import {
 
 const MAX_CAPTURE_WIDTH = 5_120;
 const MAX_CAPTURE_HEIGHT = 2_880;
+const ACCESSIBLE_TEXT_TIMEOUT_MS = 1_000;
 const CAPTURE_READY_ACTION = "window-capture-ready";
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
 const MAC_SCREEN_CAPTURE_SETTINGS_URL =
@@ -193,14 +195,39 @@ async function requestMacWindowCapturePermissions(): Promise<string | null> {
   return screenMessage;
 }
 
-async function readAccessibleWindowText(): Promise<string | undefined> {
+async function readCapturedWindowText(
+  active: ActiveWindow,
+  platform: NodeJS.Platform,
+): Promise<string | undefined> {
+  const { App } = await import("@crowecawcaw/xa11y");
+  const windows =
+    platform === "win32"
+      ? (await App.list())
+          .filter((app) => app.pid === active.owner.processId)
+          .map((app) => app.asElement())
+      : await (await App.byPid(active.owner.processId, { timeout: 0 })).children();
+  const window = findAccessibleWindow(windows, active);
+  if (!window) return undefined;
+  const text = accessibleWindowText(await window.tree(), WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS);
+  return text || undefined;
+}
+
+async function readAccessibleWindowText(
+  active: ActiveWindow,
+  platform: NodeJS.Platform,
+): Promise<string | undefined> {
+  let timeout: number | undefined;
   try {
-    const { App } = await import("@crowecawcaw/xa11y");
-    const app = await App.foreground({ timeout: 0 });
-    const text = accessibleWindowText(await app.tree(), WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS);
-    return text || undefined;
+    return await Promise.race([
+      readCapturedWindowText(active, platform),
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(resolve, ACCESSIBLE_TEXT_TIMEOUT_MS);
+      }),
+    ]);
   } catch {
     return undefined;
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 
@@ -212,7 +239,11 @@ async function revealPreviousWindowIfNeeded(): Promise<Electron.BrowserWindow | 
   return focused;
 }
 
-async function captureSource(mode: DesktopWindowCaptureState["mode"], captureId: string) {
+async function captureSource(
+  mode: DesktopWindowCaptureState["mode"],
+  captureId: string,
+  platform: NodeJS.Platform,
+) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = await revealPreviousWindowIfNeeded();
 
@@ -236,7 +267,7 @@ async function captureSource(mode: DesktopWindowCaptureState["mode"], captureId:
         ? new DesktopWindowCaptureNoWindowSelectedError({ captureId })
         : new DesktopWindowCaptureWindowUnavailableError({ captureId });
     }
-    const accessibleText = await readAccessibleWindowText();
+    const accessibleText = active ? await readAccessibleWindowText(active, platform) : undefined;
     return { source, active, accessibleText };
   } finally {
     if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
@@ -316,7 +347,11 @@ export const make = Effect.gen(function* () {
         const metadataPath = NodePath.join(captureDirectory, `${id}.json`);
         await NodeFSP.mkdir(captureDirectory, { recursive: true });
         try {
-          const { source, active, accessibleText } = await captureSource(mode, id);
+          const { source, active, accessibleText } = await captureSource(
+            mode,
+            id,
+            environment.platform,
+          );
           const png = source.thumbnail.toPNG();
           const capturedAt = new Date().toISOString();
           const appIconDataUrl = await iconDataUrl(source, active);
