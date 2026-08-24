@@ -9,7 +9,7 @@ import {
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useClientSettings } from "../../hooks/useSettings";
 import { readThreadShell } from "../../state/entities";
-import { compressImageToByteLimit } from "../../lib/imageCompression";
+import { compressImageToByteLimit, dataUrlToFile } from "../../lib/imageCompression";
 import { resolveThreadActionProjectRef } from "../../lib/chatThreadActions";
 import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
 import {
@@ -20,11 +20,6 @@ import { readFileAsDataUrl } from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
 type CaptureTarget = DraftId | ScopedThreadRef;
-
-async function dataUrlToFile(dataUrl: string, name: string, mimeType: string): Promise<File> {
-  const blob = await (await fetch(dataUrl)).blob();
-  return new File([blob], name, { type: mimeType });
-}
 
 export function WindowCaptureCoordinator() {
   const {
@@ -101,7 +96,7 @@ export function WindowCaptureCoordinator() {
             }
 
             const capture = await bridge.readWindowCapture(item.id);
-            const original = await dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
+            const original = dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
             const compressed = await compressImageToByteLimit(
               original,
               PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
