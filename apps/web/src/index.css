@@ -763,6 +763,14 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
     outline: none;
   }
 
+  .chat-draft-hero-headline {
+    padding-bottom: 2rem;
+  }
+
+  .chat-composer-stack:has(.chat-composer-shoulder-tab) .chat-draft-hero-headline {
+    padding-bottom: 1rem;
+  }
+
   .chat-composer-shoulder-tab {
     border-color: var(
       --chat-composer-outline,
