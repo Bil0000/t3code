@@ -10,7 +10,10 @@ import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useClientSettings } from "../../hooks/useSettings";
 import { compressImageToByteLimit } from "../../lib/imageCompression";
 import { resolveThreadActionProjectRef } from "../../lib/chatThreadActions";
-import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
+import {
+  getDesktopWindowCaptureBridge,
+  WINDOW_CAPTURE_FOCUS_EVENT,
+} from "../../lib/desktopWindowCapture";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
@@ -161,7 +164,7 @@ export function WindowCaptureCoordinator() {
                 playCaptureSound();
               } catch {}
             }
-            window.dispatchEvent(new Event("t3:focus-composer"));
+            window.dispatchEvent(new Event(WINDOW_CAPTURE_FOCUS_EVENT));
           } catch (error) {
             try {
               await bridge.acknowledgeWindowCapture(item.id);

@@ -212,6 +212,7 @@ import {
   preventTerminalCloseShortcut,
 } from "../lib/terminalCloseShortcut";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
+import { WINDOW_CAPTURE_FOCUS_EVENT } from "../lib/desktopWindowCapture";
 import {
   derivePhysicalProjectKey,
   deriveLogicalProjectKeyFromSettings,
@@ -2918,9 +2919,9 @@ function ChatViewContent(props: ChatViewProps) {
 
   useEffect(() => {
     const handleWindowCapture = () => scheduleComposerFocus();
-    window.addEventListener("t3:focus-composer", handleWindowCapture);
+    window.addEventListener(WINDOW_CAPTURE_FOCUS_EVENT, handleWindowCapture);
     return () => {
-      window.removeEventListener("t3:focus-composer", handleWindowCapture);
+      window.removeEventListener(WINDOW_CAPTURE_FOCUS_EVENT, handleWindowCapture);
     };
   }, [scheduleComposerFocus]);
 

@@ -3221,7 +3221,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             className={cn(
                               "relative overflow-hidden rounded-lg border border-border/80 bg-background",
                               image.source?.kind === "window-capture"
-                                ? "flex h-20 w-56"
+                                ? "flex h-20 max-w-full"
                                 : "h-16 w-16",
                               image.source?.kind === "window-capture" &&
                                 settings.windowCaptureAnimations &&
@@ -3260,7 +3260,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             {image.source?.kind === "window-capture" ? (
                               <WindowCaptureAttachmentDetails
                                 source={image.source}
-                                className="px-2.5 pr-8"
+                                className="max-w-72 px-2.5 pr-8"
                               />
                             ) : null}
                             {nonPersistedComposerImageIdSet.has(image.id) && (

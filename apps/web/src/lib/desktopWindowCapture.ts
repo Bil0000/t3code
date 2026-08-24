@@ -1,5 +1,7 @@
 import type { DesktopBridge } from "@t3tools/contracts";
 
+export const WINDOW_CAPTURE_FOCUS_EVENT = "t3code:focus-composer";
+
 type WindowCaptureMethods =
   | "getWindowCaptureState"
   | "captureWindow"
