@@ -45,10 +45,6 @@ export function findCaptureSource<T extends CaptureSourceLike>(
   return titleMatches.length === 1 ? titleMatches[0] : undefined;
 }
 
-export function macWindowCaptureArguments(windowId: number, outputPath: string): string[] {
-  return ["-l", String(windowId), "-o", "-x", "-t", "png", outputPath];
-}
-
 export function isWaylandSession(
   platform: NodeJS.Platform,
   environment: NodeJS.ProcessEnv,

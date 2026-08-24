@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import {
-  findCaptureSource,
-  isWaylandSession,
-  macWindowCaptureArguments,
-  toElectronAccelerator,
-} from "./windowCapture.ts";
+import { findCaptureSource, isWaylandSession, toElectronAccelerator } from "./windowCapture.ts";
 
 describe("toElectronAccelerator", () => {
   it("converts the default portable shortcut", () => {
@@ -72,20 +67,6 @@ describe("findCaptureSource", () => {
         },
       ),
     ).toBeUndefined();
-  });
-});
-
-describe("macWindowCaptureArguments", () => {
-  it("captures one window as a silent PNG without its shadow", () => {
-    expect(macWindowCaptureArguments(42, "/tmp/window.png")).toEqual([
-      "-l",
-      "42",
-      "-o",
-      "-x",
-      "-t",
-      "png",
-      "/tmp/window.png",
-    ]);
   });
 });
 

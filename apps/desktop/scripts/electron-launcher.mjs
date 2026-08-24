@@ -20,7 +20,7 @@ export const APP_BUNDLE_ID = isDevelopment
   ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
   : "com.t3tools.t3code";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
-const LAUNCHER_VERSION = 16;
+const LAUNCHER_VERSION = 17;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",
@@ -96,6 +96,14 @@ function runChecked(command, args) {
   throw new Error(`Failed to run ${command} ${args.join(" ")}: ${details}`.trim());
 }
 
+export function resolveMacCodeSignArguments(appBundlePath) {
+  return ["--force", "--deep", "--sign", "-", "--timestamp=none", appBundlePath];
+}
+
+function signMacLauncherBundle(appBundlePath) {
+  runChecked("codesign", resolveMacCodeSignArguments(appBundlePath));
+}
+
 function shellSingleQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -127,16 +135,21 @@ export function makeDevelopmentLauncherScript({
 }
 
 function writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryPath) {
-  NodeFS.writeFileSync(
-    targetBinaryPath,
-    makeDevelopmentLauncherScript({
-      electronBinaryPath,
-      mainEntryPath: NodePath.join(desktopDir, "dist-electron", "main.cjs"),
-      desktopRoot: desktopDir,
-      environment: process.env,
-    }),
-  );
+  const script = makeDevelopmentLauncherScript({
+    electronBinaryPath,
+    mainEntryPath: NodePath.join(desktopDir, "dist-electron", "main.cjs"),
+    desktopRoot: desktopDir,
+    environment: process.env,
+  });
+  if (
+    NodeFS.existsSync(targetBinaryPath) &&
+    NodeFS.readFileSync(targetBinaryPath, "utf8") === script
+  ) {
+    return false;
+  }
+  NodeFS.writeFileSync(targetBinaryPath, script);
   NodeFS.chmodSync(targetBinaryPath, 0o755);
+  return true;
 }
 
 function registerMacLauncherBundle(appBundlePath) {
@@ -333,7 +346,9 @@ function buildMacLauncher(electronBinaryPath) {
       // The launcher also handles protocol activations outside the dev runner,
       // so refresh its fallback environment on every launch. Never let a value
       // captured by an older parent app override the live dev-runner environment.
-      writeDevelopmentLauncherScript(launcherBinaryPath, runtimeElectronBinaryPath);
+      if (writeDevelopmentLauncherScript(launcherBinaryPath, runtimeElectronBinaryPath)) {
+        signMacLauncherBundle(targetAppBundlePath);
+      }
     }
     registerMacLauncherBundle(targetAppBundlePath);
     return launcherBinaryPath;
@@ -362,6 +377,7 @@ function buildMacLauncher(electronBinaryPath) {
     // in development mode instead of making app.isPackaged report true.
     writeDevelopmentLauncherScript(launcherBinaryPath, runtimeElectronBinaryPath);
   }
+  signMacLauncherBundle(targetAppBundlePath);
   NodeFS.writeFileSync(metadataPath, `${JSON.stringify(expectedMetadata, null, 2)}\n`);
   registerMacLauncherBundle(targetAppBundlePath);
 

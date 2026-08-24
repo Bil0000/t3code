@@ -4,6 +4,7 @@ import {
   makeDevelopmentLauncherScript,
   resolveElectronBinaryPath,
   resolveMacBundleInfoPlistStrings,
+  resolveMacCodeSignArguments,
   resolveMacLauncherIconPaths,
   resolveMacLauncherPaths,
 } from "./electron-launcher.mjs";
@@ -88,6 +89,17 @@ describe("electron development launcher", () => {
       values.NSScreenCaptureUsageDescription,
       "T3 Code captures the active window when you use the window capture shortcut.",
     );
+  });
+
+  it("ad-hoc signs the complete development app bundle", () => {
+    assert.deepEqual(resolveMacCodeSignArguments("/runtime/T3 Code (Dev).app"), [
+      "--force",
+      "--deep",
+      "--sign",
+      "-",
+      "--timestamp=none",
+      "/runtime/T3 Code (Dev).app",
+    ]);
   });
 
   it("derives launcher icons from canonical development and production assets", () => {
