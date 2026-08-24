@@ -2092,6 +2092,10 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       target: target === "dmg" ? [target, "zip"] : [target],
       icon: "icon.icns",
       category: "public.app-category.developer-tools",
+      extendInfo: {
+        NSScreenCaptureUsageDescription:
+          "T3 Code captures the active window when you use the window capture shortcut.",
+      },
       protocols: [
         {
           name: "T3 Code",

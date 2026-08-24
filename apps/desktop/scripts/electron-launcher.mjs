@@ -20,7 +20,7 @@ export const APP_BUNDLE_ID = isDevelopment
   ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
   : "com.t3tools.t3code";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
-const LAUNCHER_VERSION = 15;
+const LAUNCHER_VERSION = 16;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",
@@ -221,13 +221,23 @@ function ensureMacIconIcns(runtimeDir) {
   }
 }
 
+export function resolveMacBundleInfoPlistStrings(executableName) {
+  return {
+    CFBundleDisplayName: APP_DISPLAY_NAME,
+    CFBundleName: APP_DISPLAY_NAME,
+    CFBundleIdentifier: APP_BUNDLE_ID,
+    CFBundleExecutable: executableName,
+    CFBundleIconFile: "icon.icns",
+    NSScreenCaptureUsageDescription:
+      "T3 Code captures the active window when you use the window capture shortcut.",
+  };
+}
+
 function patchMainBundleInfoPlist(appBundlePath, iconPath, executableName) {
   const infoPlistPath = NodePath.join(appBundlePath, "Contents", "Info.plist");
-  setPlistString(infoPlistPath, "CFBundleDisplayName", APP_DISPLAY_NAME);
-  setPlistString(infoPlistPath, "CFBundleName", APP_DISPLAY_NAME);
-  setPlistString(infoPlistPath, "CFBundleIdentifier", APP_BUNDLE_ID);
-  setPlistString(infoPlistPath, "CFBundleExecutable", executableName);
-  setPlistString(infoPlistPath, "CFBundleIconFile", "icon.icns");
+  for (const [key, value] of Object.entries(resolveMacBundleInfoPlistStrings(executableName))) {
+    setPlistString(infoPlistPath, key, value);
+  }
   setPlistJson(infoPlistPath, "CFBundleURLTypes", [
     {
       CFBundleURLName: APP_BUNDLE_ID,

@@ -3,6 +3,7 @@ import { assert, describe, it } from "vite-plus/test";
 import {
   makeDevelopmentLauncherScript,
   resolveElectronBinaryPath,
+  resolveMacBundleInfoPlistStrings,
   resolveMacLauncherIconPaths,
   resolveMacLauncherPaths,
 } from "./electron-launcher.mjs";
@@ -78,6 +79,15 @@ describe("electron development launcher", () => {
       "exec '/repo/apps/desktop/.electron-runtime/T3 Code (Dev).app/Contents/MacOS/Electron'",
     );
     assert.notInclude(script, "node_modules/electron");
+  });
+
+  it("declares why the macOS app captures the screen", () => {
+    const values = resolveMacBundleInfoPlistStrings("T3 Code (Dev) Launcher");
+
+    assert.equal(
+      values.NSScreenCaptureUsageDescription,
+      "T3 Code captures the active window when you use the window capture shortcut.",
+    );
   });
 
   it("derives launcher icons from canonical development and production assets", () => {
