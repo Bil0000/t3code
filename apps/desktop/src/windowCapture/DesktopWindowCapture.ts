@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDateInEffect:off globalTimers:off nodeBuiltinImport:off - Electron capture APIs and local queue operations run at the native Promise boundary.
+// @effect-diagnostics globalDateInEffect:off globalTimers:off
 
 import {
   DEFAULT_CLIENT_SETTINGS,
@@ -9,14 +9,15 @@ import {
   type ClientSettings,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
+import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
+import * as Encoding from "effect/Encoding";
+import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as NodeCrypto from "node:crypto";
-import * as NodeFSP from "node:fs/promises";
-import * as NodePath from "node:path";
 
 import * as Electron from "electron";
 import { activeWindow, type Result as ActiveWindow } from "get-windows";
@@ -44,11 +45,11 @@ const MAC_SCREEN_CAPTURE_SETTINGS_URL =
 const MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE =
   "Allow Screen Recording in System Settings, then restart T3 Code.";
 
-const decodePendingCapture = Schema.decodeUnknownSync(DesktopPendingWindowCapture);
+const decodePendingCapture = Schema.decodeUnknownEffect(DesktopPendingWindowCapture);
 
 const PendingCaptureJson = Schema.fromJsonString(DesktopPendingWindowCapture);
-const decodePendingCaptureJson = Schema.decodeSync(PendingCaptureJson);
-const encodePendingCaptureJson = Schema.encodeSync(PendingCaptureJson);
+const decodePendingCaptureJson = Schema.decodeEffect(PendingCaptureJson);
+const encodePendingCaptureJson = Schema.encodeEffect(PendingCaptureJson);
 const DesktopWindowCaptureOperation = Schema.Literals(["list-pending", "read", "acknowledge"]);
 
 export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWindowCaptureError>()(
@@ -118,7 +119,7 @@ export class DesktopWindowCaptureWindowUnavailableError extends Schema.TaggedErr
 
 export class DesktopWindowCaptureFailedError extends Schema.TaggedErrorClass<DesktopWindowCaptureFailedError>()(
   "DesktopWindowCaptureFailedError",
-  { captureId: Schema.String, cause: Schema.Defect() },
+  { captureId: Schema.optional(Schema.String), cause: Schema.Defect() },
 ) {
   override get message(): string {
     return "Could not capture the active window.";
@@ -135,6 +136,12 @@ export const DesktopWindowCaptureFailure = Schema.Union([
 ]);
 export type DesktopWindowCaptureFailure = typeof DesktopWindowCaptureFailure.Type;
 export const isDesktopWindowCaptureFailure = Schema.is(DesktopWindowCaptureFailure);
+
+function captureFailure(cause: unknown, captureId?: string): DesktopWindowCaptureFailure {
+  return isDesktopWindowCaptureFailure(cause)
+    ? cause
+    : new DesktopWindowCaptureFailedError({ captureId, cause });
+}
 
 export class DesktopWindowCapture extends Context.Service<
   DesktopWindowCapture,
@@ -333,6 +340,9 @@ export const make = Effect.gen(function* () {
   const environment = yield* DesktopEnvironment.DesktopEnvironment;
   const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
   const desktopWindow = yield* DesktopWindow.DesktopWindow;
+  const fileSystem = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const crypto = yield* Crypto.Crypto;
   const settingsRef = yield* Ref.make(DEFAULT_CLIENT_SETTINGS);
   const stateRef = yield* Ref.make<DesktopWindowCaptureState>({
     mode: captureMode(environment.platform),
@@ -345,7 +355,7 @@ export const make = Effect.gen(function* () {
     DesktopEnvironment.DesktopEnvironment | DesktopWindow.DesktopWindow
   >();
   const runPromise = Effect.runPromiseWith(context);
-  const captureDirectory = NodePath.join(environment.stateDir, "window-captures");
+  const captureDirectory = path.join(environment.stateDir, "window-captures");
   let registeredAccelerator: string | undefined;
 
   const setFailure = (message: string) =>
@@ -357,65 +367,69 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const persistCapture = (settings: ClientSettings) => {
-    const id = NodeCrypto.randomUUID();
-    return Effect.tryPromise({
-      try: async () => {
-        const mode = captureMode(environment.platform);
-        if (mode === "unavailable") {
-          throw new DesktopWindowCaptureUnsupportedError({ captureId: id });
-        }
-        const imagePath = NodePath.join(captureDirectory, `${id}.png`);
-        const imageTempPath = NodePath.join(captureDirectory, `${id}.tmp.png`);
-        const metadataPath = NodePath.join(captureDirectory, `${id}.json`);
-        await NodeFSP.mkdir(captureDirectory, { recursive: true });
-        try {
-          const { source, active, accessibleText } = await captureSource(
-            mode,
-            id,
-            environment.platform,
-          );
-          const png = source.thumbnail.toPNG();
-          const capturedAt = new Date().toISOString();
-          const appIconDataUrl = await iconDataUrl(source, active);
-          const pending = decodePendingCapture({
-            id,
-            name: `window-${capturedAt.replaceAll(":", "-")}.png`,
-            mimeType: "image/png",
-            sizeBytes: png.byteLength,
-            source: {
-              kind: "window-capture",
-              capturedAt,
-              appName: active?.owner.name.trim() || source.name.trim() || "Window",
-              windowTitle: active?.title.trim() || source.name.trim(),
-              ...(accessibleText ? { accessibleText } : {}),
-              ...(active?.platform === "macos" && active.owner.bundleId
-                ? { appIdentifier: active.owner.bundleId }
-                : {}),
-              ...(appIconDataUrl ? { appIconDataUrl } : {}),
-            },
-          });
-          await NodeFSP.writeFile(imageTempPath, png);
-          await NodeFSP.rename(imageTempPath, imagePath);
-          await NodeFSP.writeFile(metadataPath + ".tmp", encodePendingCaptureJson(pending), "utf8");
-          await NodeFSP.rename(metadataPath + ".tmp", metadataPath);
-          showFlash(settings, active);
-        } catch (cause) {
-          await Promise.allSettled([
-            NodeFSP.rm(imagePath, { force: true }),
-            NodeFSP.rm(imageTempPath, { force: true }),
-            NodeFSP.rm(metadataPath, { force: true }),
-            NodeFSP.rm(metadataPath + ".tmp", { force: true }),
-          ]);
-          throw cause;
-        }
-      },
-      catch: (cause) =>
-        isDesktopWindowCaptureFailure(cause)
-          ? cause
-          : new DesktopWindowCaptureFailedError({ captureId: id, cause }),
-    });
-  };
+  const persistCapture = Effect.fn("desktop.windowCapture.persistCapture")(function* (
+    settings: ClientSettings,
+  ) {
+    const id = yield* crypto.randomUUIDv4.pipe(Effect.mapError((cause) => captureFailure(cause)));
+    const mode = captureMode(environment.platform);
+    if (mode === "unavailable") {
+      return yield* new DesktopWindowCaptureUnsupportedError({ captureId: id });
+    }
+    const imagePath = path.join(captureDirectory, `${id}.png`);
+    const imageTempPath = path.join(captureDirectory, `${id}.tmp.png`);
+    const metadataPath = path.join(captureDirectory, `${id}.json`);
+    const cleanup = Effect.all(
+      [imagePath, imageTempPath, metadataPath, metadataPath + ".tmp"].map((filePath) =>
+        fileSystem.remove(filePath, { force: true }),
+      ),
+      { concurrency: "unbounded", discard: true },
+    ).pipe(Effect.ignore);
+
+    yield* Effect.gen(function* () {
+      yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
+      const { source, active, accessibleText } = yield* Effect.tryPromise({
+        try: () => captureSource(mode, id, environment.platform),
+        catch: (cause) => captureFailure(cause, id),
+      });
+      const png = yield* Effect.try({
+        try: () => source.thumbnail.toPNG(),
+        catch: (cause) => captureFailure(cause, id),
+      });
+      const capturedAt = new Date().toISOString();
+      const appIconDataUrl = yield* Effect.promise(() => iconDataUrl(source, active));
+      const pending = yield* decodePendingCapture({
+        id,
+        name: `window-${capturedAt.replaceAll(":", "-")}.png`,
+        mimeType: "image/png",
+        sizeBytes: png.byteLength,
+        source: {
+          kind: "window-capture",
+          capturedAt,
+          appName: active?.owner.name.trim() || source.name.trim() || "Window",
+          windowTitle: active?.title.trim() || source.name.trim(),
+          ...(accessibleText ? { accessibleText } : {}),
+          ...(active?.platform === "macos" && active.owner.bundleId
+            ? { appIdentifier: active.owner.bundleId }
+            : {}),
+          ...(appIconDataUrl ? { appIconDataUrl } : {}),
+        },
+      });
+      yield* fileSystem.writeFile(imageTempPath, png);
+      yield* fileSystem.rename(imageTempPath, imagePath);
+      yield* fileSystem.writeFileString(
+        metadataPath + ".tmp",
+        yield* encodePendingCaptureJson(pending),
+      );
+      yield* fileSystem.rename(metadataPath + ".tmp", metadataPath);
+      yield* Effect.try({
+        try: () => showFlash(settings, active),
+        catch: (cause) => captureFailure(cause, id),
+      });
+    }).pipe(
+      Effect.mapError((cause) => captureFailure(cause, id)),
+      Effect.tapError(() => cleanup),
+    );
+  });
 
   const captureNow = Effect.gen(function* () {
     const settings = yield* Ref.get(settingsRef);
@@ -502,61 +516,59 @@ export const make = Effect.gen(function* () {
     state: Ref.get(stateRef),
     capture,
     captureNow,
-    listPending: Effect.tryPromise({
-      try: async () => {
-        const names = await NodeFSP.readdir(captureDirectory).catch(
-          (error: NodeJS.ErrnoException) => {
-            if (error.code === "ENOENT") return [];
-            throw error;
-          },
-        );
-        const captures = (
-          await Promise.all(
-            names
-              .filter((name) => name.endsWith(".json") && !name.endsWith(".json.tmp"))
-              .map(async (name) => {
-                try {
-                  return decodePendingCaptureJson(
-                    await NodeFSP.readFile(NodePath.join(captureDirectory, name), "utf8"),
-                  );
-                } catch {
-                  return undefined;
-                }
-              }),
-          )
-        ).filter((capture) => capture !== undefined);
-        return captures.sort((left, right) =>
-          left.source.capturedAt.localeCompare(right.source.capturedAt),
-        );
-      },
-      catch: (cause) => new DesktopWindowCaptureError({ operation: "list-pending", cause }),
-    }),
+    listPending: fileSystem.readDirectory(captureDirectory).pipe(
+      Effect.catchTags({
+        PlatformError: (cause) =>
+          cause.reason._tag === "NotFound" ? Effect.succeed([]) : Effect.fail(cause),
+      }),
+      Effect.flatMap((names) =>
+        Effect.forEach(
+          names.filter((name) => name.endsWith(".json") && !name.endsWith(".json.tmp")),
+          (name) =>
+            fileSystem.readFileString(path.join(captureDirectory, name)).pipe(
+              Effect.flatMap(decodePendingCaptureJson),
+              Effect.orElseSucceed(() => undefined),
+            ),
+          { concurrency: "unbounded" },
+        ),
+      ),
+      Effect.map((captures) =>
+        captures
+          .filter((capture) => capture !== undefined)
+          .sort((left, right) => left.source.capturedAt.localeCompare(right.source.capturedAt)),
+      ),
+      Effect.mapError(
+        (cause) => new DesktopWindowCaptureError({ operation: "list-pending", cause }),
+      ),
+    ),
     read: (id) =>
-      Effect.tryPromise({
-        try: async () => {
-          const metadata = decodePendingCaptureJson(
-            await NodeFSP.readFile(NodePath.join(captureDirectory, `${id}.json`), "utf8"),
-          );
-          const png = await NodeFSP.readFile(NodePath.join(captureDirectory, `${id}.png`));
-          return {
-            ...metadata,
-            dataUrl: `data:image/png;base64,${png.toString("base64")}`,
-          };
-        },
-        catch: (cause) =>
-          new DesktopWindowCaptureError({ operation: "read", captureId: id, cause }),
-      }),
+      Effect.gen(function* () {
+        const metadata = yield* fileSystem
+          .readFileString(path.join(captureDirectory, `${id}.json`))
+          .pipe(Effect.flatMap(decodePendingCaptureJson));
+        const png = yield* fileSystem.readFile(path.join(captureDirectory, `${id}.png`));
+        return {
+          ...metadata,
+          dataUrl: `data:image/png;base64,${Encoding.encodeBase64(png)}`,
+        };
+      }).pipe(
+        Effect.mapError(
+          (cause) => new DesktopWindowCaptureError({ operation: "read", captureId: id, cause }),
+        ),
+      ),
     acknowledge: (id) =>
-      Effect.tryPromise({
-        try: async () => {
-          await Promise.all([
-            NodeFSP.rm(NodePath.join(captureDirectory, `${id}.json`), { force: true }),
-            NodeFSP.rm(NodePath.join(captureDirectory, `${id}.png`), { force: true }),
-          ]);
-        },
-        catch: (cause) =>
-          new DesktopWindowCaptureError({ operation: "acknowledge", captureId: id, cause }),
-      }),
+      Effect.all(
+        [
+          fileSystem.remove(path.join(captureDirectory, `${id}.json`), { force: true }),
+          fileSystem.remove(path.join(captureDirectory, `${id}.png`), { force: true }),
+        ],
+        { concurrency: "unbounded", discard: true },
+      ).pipe(
+        Effect.mapError(
+          (cause) =>
+            new DesktopWindowCaptureError({ operation: "acknowledge", captureId: id, cause }),
+        ),
+      ),
   });
 });
 
