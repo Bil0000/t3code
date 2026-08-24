@@ -504,6 +504,13 @@ describe("MessagesTimeline", () => {
             mimeType: "image/png",
             sizeBytes: 1,
             previewUrl: "data:image/png;base64,iVBORw0KGgo=",
+            source: {
+              kind: "window-capture" as const,
+              capturedAt: "2026-03-17T19:12:28.000Z",
+              appName: "Terminal",
+              windowTitle: "t3code — Tests",
+              appIconDataUrl: "data:image/png;base64,aWNvbg==",
+            },
           },
         ],
       },
@@ -529,6 +536,9 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-maintain-visible-content-position-data="true"');
     expect(markup).toContain('data-maintain-visible-content-position-size="true"');
     expect(markup).toContain('data-maintain-visible-content-position-restore="true"');
+    expect(markup).toContain("Terminal");
+    expect(markup).toContain("t3code — Tests");
+    expect(markup).toContain('src="data:image/png;base64,aWNvbg=="');
     expect(onAnchorReady).toHaveBeenCalledOnce();
     expect(onAnchorReady).toHaveBeenCalledWith(firstEntry.message.id, 0);
   });

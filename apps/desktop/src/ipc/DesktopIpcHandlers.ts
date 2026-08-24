@@ -44,6 +44,13 @@ import {
   setTheme,
   showContextMenu,
 } from "./methods/window.ts";
+import {
+  acknowledgeWindowCapture,
+  captureWindow,
+  getWindowCaptureState,
+  listPendingWindowCaptures,
+  readWindowCapture,
+} from "./methods/windowCapture.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
 
@@ -60,6 +67,11 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(getConnectionCatalog);
+  yield* ipc.handle(getWindowCaptureState);
+  yield* ipc.handle(captureWindow);
+  yield* ipc.handle(listPendingWindowCaptures);
+  yield* ipc.handle(readWindowCapture);
+  yield* ipc.handle(acknowledgeWindowCapture);
   yield* ipc.handle(setConnectionCatalog);
   yield* ipc.handle(clearConnectionCatalog);
 

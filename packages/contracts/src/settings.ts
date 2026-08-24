@@ -4,6 +4,7 @@ import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
 import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { ThreadEnvMode } from "./environment.ts";
+import { KeybindingShortcut } from "./keybindings.ts";
 import {
   DEFAULT_TEXT_GENERATION_MODEL,
   DEFAULT_TEXT_GENERATION_REASONING_EFFORT,
@@ -123,6 +124,27 @@ export const DEFAULT_TERMINAL_FONT_SIZE: TerminalFontSize = 12;
 export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill", "none"]);
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
 export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
+
+export const WindowCaptureShortcut = KeybindingShortcut.check(
+  Schema.makeFilter(
+    (shortcut) =>
+      shortcut.metaKey ||
+      shortcut.ctrlKey ||
+      shortcut.shiftKey ||
+      shortcut.altKey ||
+      shortcut.modKey ||
+      "Window capture shortcut requires a modifier.",
+  ),
+);
+export type WindowCaptureShortcut = typeof WindowCaptureShortcut.Type;
+export const DEFAULT_WINDOW_CAPTURE_SHORTCUT: WindowCaptureShortcut = {
+  key: "2",
+  metaKey: false,
+  ctrlKey: false,
+  shiftKey: true,
+  altKey: false,
+  modKey: true,
+};
 
 /**
  * A user-chosen font family (a single name or a comma-separated list). Empty
@@ -253,6 +275,16 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   timestampFormat: TimestampFormat.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
+  ),
+  windowCaptureEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  windowCaptureShortcut: WindowCaptureShortcut.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WINDOW_CAPTURE_SHORTCUT)),
+  ),
+  windowCapturePlaySound: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  windowCaptureFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  windowCaptureAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  windowCaptureOnboardingDismissed: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
   ),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
@@ -926,6 +958,12 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadSortOrder: Schema.optionalKey(SidebarThreadSortOrder),
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
+  windowCaptureEnabled: Schema.optionalKey(Schema.Boolean),
+  windowCaptureShortcut: Schema.optionalKey(WindowCaptureShortcut),
+  windowCapturePlaySound: Schema.optionalKey(Schema.Boolean),
+  windowCaptureFlash: Schema.optionalKey(Schema.Boolean),
+  windowCaptureAnimations: Schema.optionalKey(Schema.Boolean),
+  windowCaptureOnboardingDismissed: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

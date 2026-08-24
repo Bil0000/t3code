@@ -284,6 +284,48 @@ it.effect("accepts both inline and uploaded image attachments from clients", () 
   }),
 );
 
+it.effect("preserves window capture metadata in thread.turn.start", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeThreadTurnStartCommand({
+      type: "thread.turn.start",
+      commandId: "cmd-window-capture",
+      threadId: "thread-1",
+      message: {
+        messageId: "msg-window-capture",
+        role: "user",
+        text: "Review this window",
+        attachments: [
+          {
+            type: "image",
+            id: "window-capture-1",
+            name: "editor.png",
+            mimeType: "image/png",
+            sizeBytes: 4,
+            source: {
+              kind: "window-capture",
+              capturedAt: "2026-08-24T11:00:00.000Z",
+              appName: "Editor",
+              windowTitle: "main.ts",
+              appIdentifier: "com.example.editor",
+              appIconDataUrl: "data:image/png;base64,iVBORw==",
+            },
+          },
+        ],
+      },
+      createdAt: "2026-08-24T11:00:00.000Z",
+    });
+
+    assert.deepStrictEqual(parsed.message.attachments[0]?.source, {
+      kind: "window-capture",
+      capturedAt: "2026-08-24T11:00:00.000Z",
+      appName: "Editor",
+      windowTitle: "main.ts",
+      appIdentifier: "com.example.editor",
+      appIconDataUrl: "data:image/png;base64,iVBORw==",
+    });
+  }),
+);
+
 it.effect("preserves explicit provider and runtime mode in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({

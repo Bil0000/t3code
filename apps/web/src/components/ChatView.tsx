@@ -2915,6 +2915,15 @@ function ChatViewContent(props: ChatViewProps) {
       focusComposer();
     });
   }, [focusComposer]);
+
+  useEffect(() => {
+    const handleWindowCapture = () => scheduleComposerFocus();
+    window.addEventListener("t3:focus-composer", handleWindowCapture);
+    return () => {
+      window.removeEventListener("t3:focus-composer", handleWindowCapture);
+    };
+  }, [scheduleComposerFocus]);
+
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
       composerRef.current?.addTerminalContext(selection);
@@ -5475,6 +5484,7 @@ function ChatViewContent(props: ChatViewProps) {
           mimeType: image.mimeType,
           sizeBytes: image.sizeBytes,
           dataUrl: await readFileAsDataUrl(image.file),
+          ...(image.source ? { source: image.source } : {}),
         };
       }),
     );
@@ -5485,6 +5495,7 @@ function ChatViewContent(props: ChatViewProps) {
       mimeType: image.mimeType,
       sizeBytes: image.sizeBytes,
       previewUrl: image.previewUrl,
+      ...(image.source ? { source: image.source } : {}),
     }));
     const shouldAnchorFirstMessage =
       activeThread.latestTurn === null &&

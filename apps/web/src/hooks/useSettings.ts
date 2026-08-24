@@ -139,9 +139,9 @@ async function hydrateClientSettings(): Promise<void> {
   return clientSettingsHydrationPromise;
 }
 
-function persistClientSettings(settings: ClientSettings): void {
+function persistClientSettings(settings: ClientSettings): Promise<void> {
   replaceClientSettingsSnapshot(settings);
-  void ensureLocalApi()
+  return ensureLocalApi()
     .persistence.setClientSettings(settings)
     .catch((error) => {
       console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} persist failed`, {
@@ -329,7 +329,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         }
       }
       if (Object.keys(clientPatch).length > 0) {
-        persistClientSettings({
+        void persistClientSettings({
           ...getClientSettingsSnapshot(),
           ...clientPatch,
         });
@@ -350,8 +350,8 @@ export function useUpdatePrimarySettings() {
 }
 
 export function useUpdateClientSettings() {
-  return useCallback((patch: ClientSettingsPatch) => {
-    persistClientSettings({
+  return useCallback((patch: ClientSettingsPatch): Promise<void> => {
+    return persistClientSettings({
       ...getClientSettingsSnapshot(),
       ...patch,
     });

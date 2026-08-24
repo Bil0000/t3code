@@ -53,6 +53,18 @@ export const make = Effect.gen(function* () {
       platform === "linux"
         ? readCommandLineSwitchValue(Electron.app.commandLine, "password-store")
         : null;
+    if (platform === "linux") {
+      const enabledFeatures = Electron.app.commandLine
+        .getSwitchValue("enable-features")
+        .split(",")
+        .filter(Boolean);
+      if (!enabledFeatures.includes("GlobalShortcutsPortal")) {
+        Electron.app.commandLine.appendSwitch(
+          "enable-features",
+          [...enabledFeatures, "GlobalShortcutsPortal"].join(","),
+        );
+      }
+    }
     const linux = platform === "linux" ? resolveEarlyLinuxElectronOptionsFromProcess() : null;
 
     if (linux !== null) {

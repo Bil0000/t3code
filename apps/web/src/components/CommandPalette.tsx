@@ -36,6 +36,7 @@ import { useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
+  CameraIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
@@ -1550,6 +1551,29 @@ function OpenCommandPaletteDialog(props: {
       openOverlayMode("content");
     },
   });
+
+  if (window.desktopBridge) {
+    actionItems.push({
+      kind: "action",
+      value: "action:capture-window",
+      searchTerms: ["capture window", "screenshot", "attach", "snap"],
+      title: "Capture window",
+      icon: <CameraIcon className={ITEM_ICON_CLASS} />,
+      run: async () => {
+        try {
+          await window.desktopBridge?.captureWindow();
+        } catch (error) {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Window capture failed",
+              description: error instanceof Error ? error.message : "Try the capture again.",
+            }),
+          );
+        }
+      },
+    });
+  }
 
   actionItems.push({
     kind: "action",

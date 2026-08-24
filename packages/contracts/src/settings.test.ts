@@ -35,6 +35,75 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
+describe("ClientSettings window capture", () => {
+  it("defaults capture off while keeping its feedback enabled", () => {
+    const settings = decodeClientSettings({});
+
+    expect(settings.windowCaptureEnabled).toBe(false);
+    expect(settings.windowCaptureShortcut).toEqual({
+      key: "2",
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: true,
+      altKey: false,
+      modKey: true,
+    });
+    expect(settings.windowCapturePlaySound).toBe(true);
+    expect(settings.windowCaptureFlash).toBe(true);
+    expect(settings.windowCaptureAnimations).toBe(true);
+    expect(settings.windowCaptureOnboardingDismissed).toBe(false);
+  });
+
+  it("accepts capture preference updates", () => {
+    expect(
+      decodeClientSettingsPatch({
+        windowCaptureEnabled: true,
+        windowCaptureShortcut: {
+          key: "w",
+          metaKey: false,
+          ctrlKey: false,
+          shiftKey: true,
+          altKey: true,
+          modKey: false,
+        },
+        windowCapturePlaySound: false,
+        windowCaptureFlash: false,
+        windowCaptureAnimations: false,
+        windowCaptureOnboardingDismissed: true,
+      }),
+    ).toEqual({
+      windowCaptureEnabled: true,
+      windowCaptureShortcut: {
+        key: "w",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: true,
+        altKey: true,
+        modKey: false,
+      },
+      windowCapturePlaySound: false,
+      windowCaptureFlash: false,
+      windowCaptureAnimations: false,
+      windowCaptureOnboardingDismissed: true,
+    });
+  });
+
+  it("rejects a capture shortcut with no modifier", () => {
+    expect(() =>
+      decodeClientSettingsPatch({
+        windowCaptureShortcut: {
+          key: "w",
+          metaKey: false,
+          ctrlKey: false,
+          shiftKey: false,
+          altKey: false,
+          modKey: false,
+        },
+      }),
+    ).toThrow();
+  });
+});
+
 describe("ClientSettings glass opacity", () => {
   it("defaults to a readable translucent surface", () => {
     expect(decodeClientSettings({}).glassOpacity).toBe(80);

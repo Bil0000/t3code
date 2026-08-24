@@ -87,11 +87,12 @@ import type {
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration.ts";
-import { EnvironmentId } from "./baseSchemas.ts";
+import { WindowCaptureSource } from "./orchestration.ts";
+import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import type { ClientSettings } from "./settings.ts";
+import { type ClientSettings, WindowCaptureShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type {
   SourceControlCloneRepositoryInput,
@@ -183,6 +184,38 @@ export const DesktopAppBrandingSchema = Schema.Struct({
   stageLabel: DesktopAppStageLabelSchema,
   displayName: Schema.String,
 });
+
+export const DesktopWindowCaptureMode = Schema.Literals(["direct", "portal", "unavailable"]);
+export type DesktopWindowCaptureMode = typeof DesktopWindowCaptureMode.Type;
+
+export const DesktopWindowCaptureState = Schema.Struct({
+  mode: DesktopWindowCaptureMode,
+  shortcut: WindowCaptureShortcut,
+  shortcutRegistered: Schema.Boolean,
+  message: Schema.NullOr(Schema.String),
+});
+export type DesktopWindowCaptureState = typeof DesktopWindowCaptureState.Type;
+
+export const DesktopWindowCaptureId = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.isPattern(/^[a-f0-9-]+$/i),
+);
+export type DesktopWindowCaptureId = typeof DesktopWindowCaptureId.Type;
+
+export const DesktopPendingWindowCapture = Schema.Struct({
+  id: DesktopWindowCaptureId,
+  name: Schema.String,
+  mimeType: Schema.Literal("image/png"),
+  sizeBytes: Schema.Int,
+  source: WindowCaptureSource,
+});
+export type DesktopPendingWindowCapture = typeof DesktopPendingWindowCapture.Type;
+
+export const DesktopWindowCapture = Schema.Struct({
+  ...DesktopPendingWindowCapture.fields,
+  dataUrl: Schema.String,
+});
+export type DesktopWindowCapture = typeof DesktopWindowCapture.Type;
 
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
@@ -1081,6 +1114,11 @@ export interface DesktopBridge {
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
+  getWindowCaptureState: () => Promise<DesktopWindowCaptureState>;
+  captureWindow: () => Promise<void>;
+  listPendingWindowCaptures: () => Promise<readonly DesktopPendingWindowCapture[]>;
+  readWindowCapture: (id: string) => Promise<DesktopWindowCapture>;
+  acknowledgeWindowCapture: (id: string) => Promise<void>;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: { issuePairingToken?: boolean },

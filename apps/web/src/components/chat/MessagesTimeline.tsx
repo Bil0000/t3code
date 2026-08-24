@@ -66,6 +66,7 @@ import {
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
+import { WindowCaptureAttachmentDetails } from "./WindowCaptureAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
@@ -1015,12 +1016,20 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             {regularImages.map((image: NonNullable<TimelineMessage["attachments"]>[number]) => (
               <div
                 key={image.id}
-                className="overflow-hidden rounded-lg border border-border/80 bg-background/70"
+                className={cn(
+                  "overflow-hidden rounded-lg border border-border/80 bg-background/70",
+                  image.source?.kind === "window-capture" && "col-span-2 flex h-20",
+                )}
               >
                 {image.previewUrl ? (
                   <button
                     type="button"
-                    className="h-full w-full cursor-zoom-in"
+                    className={cn(
+                      "h-full cursor-zoom-in",
+                      image.source?.kind === "window-capture"
+                        ? "w-28 shrink-0 border-r border-border/70"
+                        : "w-full",
+                    )}
                     aria-label={`Preview ${image.name}`}
                     onClick={() => {
                       const preview = buildExpandedImagePreview(regularImages, image.id);
@@ -1031,7 +1040,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     <img
                       src={image.previewUrl}
                       alt={image.name}
-                      className="block h-auto max-h-[220px] w-full object-cover"
+                      className={cn(
+                        "block w-full object-cover",
+                        image.source?.kind === "window-capture" ? "h-full" : "h-auto max-h-[220px]",
+                      )}
                     />
                   </button>
                 ) : (
@@ -1039,6 +1051,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     {image.name}
                   </div>
                 )}
+                {image.source?.kind === "window-capture" ? (
+                  <WindowCaptureAttachmentDetails source={image.source} className="px-3" />
+                ) : null}
               </div>
             ))}
           </div>

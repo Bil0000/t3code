@@ -124,6 +124,7 @@ import {
 import { ContextWindowMeter } from "./ContextWindowMeter";
 import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
+import { WindowCaptureAttachmentDetails } from "./WindowCaptureAttachmentDetails";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
@@ -1606,6 +1607,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 mimeType: image.mimeType,
                 sizeBytes: image.sizeBytes,
                 dataUrl,
+                ...(image.source ? { source: image.source } : {}),
               });
             } catch {
               const existingPersisted = existingPersistedById.get(image.id);
@@ -3216,12 +3218,24 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         return (
                           <div
                             key={image.id}
-                            className="relative h-16 w-16 overflow-hidden rounded-lg border border-border/80 bg-background"
+                            className={cn(
+                              "relative overflow-hidden rounded-lg border border-border/80 bg-background",
+                              image.source?.kind === "window-capture"
+                                ? "flex h-20 w-56"
+                                : "h-16 w-16",
+                              image.source?.kind === "window-capture" &&
+                                settings.windowCaptureAnimations &&
+                                "animate-in fade-in zoom-in-95 duration-200 motion-reduce:animate-none",
+                            )}
                           >
                             {image.previewUrl ? (
                               <button
                                 type="button"
-                                className="h-full w-full cursor-zoom-in"
+                                className={
+                                  image.source?.kind === "window-capture"
+                                    ? "h-full w-24 shrink-0 cursor-zoom-in overflow-hidden border-r border-border/70"
+                                    : "h-full w-full cursor-zoom-in"
+                                }
                                 aria-label={`Preview ${image.name}`}
                                 onClick={() => {
                                   const preview = buildExpandedImagePreview(
@@ -3243,6 +3257,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 {image.name}
                               </div>
                             )}
+                            {image.source?.kind === "window-capture" ? (
+                              <WindowCaptureAttachmentDetails
+                                source={image.source}
+                                className="px-2.5 pr-8"
+                              />
+                            ) : null}
                             {nonPersistedComposerImageIdSet.has(image.id) && (
                               <Tooltip>
                                 <TooltipTrigger

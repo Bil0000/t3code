@@ -4,6 +4,7 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/appearance"
   | "/settings/keybindings"
+  | "/settings/window-capture"
   | "/settings/providers"
   | "/settings/integrations"
   | "/settings/source-control"
@@ -28,6 +29,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
+  "/settings/window-capture": "Window Capture",
   "/settings/providers": "Providers",
   "/settings/integrations": "Integrations",
   "/settings/source-control": "Source Control",
@@ -202,6 +204,31 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "keybindings",
     title: "Keybindings",
     to: "/settings/keybindings",
+  },
+  {
+    id: "window-capture-enabled",
+    title: "Window capture",
+    to: "/settings/window-capture",
+  },
+  {
+    id: "window-capture-shortcut",
+    title: "Capture shortcut",
+    to: "/settings/window-capture",
+  },
+  {
+    id: "window-capture-sound",
+    title: "Capture sound",
+    to: "/settings/window-capture",
+  },
+  {
+    id: "window-capture-flash",
+    title: "Capture flash",
+    to: "/settings/window-capture",
+  },
+  {
+    id: "window-capture-animations",
+    title: "Capture animations",
+    to: "/settings/window-capture",
   },
   {
     id: "providers",
