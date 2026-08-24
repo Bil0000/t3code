@@ -23,12 +23,21 @@ import { activeWindow, type Result as ActiveWindow } from "get-windows";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
-import { findCaptureSource, isWaylandSession, toElectronAccelerator } from "./windowCapture.ts";
+import {
+  findCaptureSource,
+  isWaylandSession,
+  shouldRequestScreenCapturePermission,
+  toElectronAccelerator,
+} from "./windowCapture.ts";
 
 const MAX_CAPTURE_WIDTH = 5_120;
 const MAX_CAPTURE_HEIGHT = 2_880;
 const CAPTURE_READY_ACTION = "window-capture-ready";
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
+const MAC_SCREEN_CAPTURE_SETTINGS_URL =
+  "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
+const MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE =
+  "Allow Screen Recording in System Settings, then restart T3 Code.";
 
 const decodePendingCapture = Schema.decodeUnknownSync(DesktopPendingWindowCapture);
 
@@ -110,6 +119,26 @@ async function iconDataUrl(
   } catch {
     return undefined;
   }
+}
+
+async function requestMacScreenCapturePermission(): Promise<string | null> {
+  let status: ReturnType<typeof Electron.systemPreferences.getMediaAccessStatus>;
+  try {
+    status = Electron.systemPreferences.getMediaAccessStatus("screen");
+    if (status === "granted") return null;
+    if (status === "not-determined") {
+      try {
+        await Electron.desktopCapturer.getSources({
+          types: ["screen"],
+          thumbnailSize: { width: 1, height: 1 },
+        });
+      } catch {}
+      status = Electron.systemPreferences.getMediaAccessStatus("screen");
+      if (status === "granted") return null;
+    }
+  } catch {}
+  await Electron.shell.openExternal(MAC_SCREEN_CAPTURE_SETTINGS_URL).catch(() => undefined);
+  return MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
 }
 
 async function revealPreviousWindowIfNeeded(): Promise<Electron.BrowserWindow | undefined> {
@@ -284,7 +313,15 @@ export const make = Effect.gen(function* () {
   const configure = Effect.fn("desktop.windowCapture.configure")(function* (
     settings: ClientSettings,
   ) {
+    const previousSettings = yield* Ref.get(settingsRef);
     yield* Ref.set(settingsRef, settings);
+    const permissionMessage = shouldRequestScreenCapturePermission(
+      environment.platform,
+      previousSettings.windowCaptureEnabled,
+      settings.windowCaptureEnabled,
+    )
+      ? yield* Effect.promise(requestMacScreenCapturePermission)
+      : null;
     if (registeredAccelerator) {
       Electron.globalShortcut.unregister(registeredAccelerator);
       registeredAccelerator = undefined;
@@ -311,7 +348,8 @@ export const make = Effect.gen(function* () {
       mode,
       shortcut: settings.windowCaptureShortcut,
       shortcutRegistered: registered,
-      message: registered ? null : "This shortcut is already used by another app.",
+      message:
+        permissionMessage ?? (registered ? null : "This shortcut is already used by another app."),
     });
   });
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { findCaptureSource, isWaylandSession, toElectronAccelerator } from "./windowCapture.ts";
+import {
+  findCaptureSource,
+  isWaylandSession,
+  shouldRequestScreenCapturePermission,
+  toElectronAccelerator,
+} from "./windowCapture.ts";
 
 describe("toElectronAccelerator", () => {
   it("converts the default portable shortcut", () => {
@@ -78,5 +83,16 @@ describe("isWaylandSession", () => {
     ["darwin", { XDG_SESSION_TYPE: "wayland", WAYLAND_DISPLAY: "wayland-0" }, false],
   ] as const)("detects %s session %o as portal=%s", (platform, environment, expected) => {
     expect(isWaylandSession(platform, environment)).toBe(expected);
+  });
+});
+
+describe("shouldRequestScreenCapturePermission", () => {
+  it.each([
+    ["darwin", false, true, true],
+    ["darwin", true, true, false],
+    ["darwin", true, false, false],
+    ["win32", false, true, false],
+  ] as const)("returns %s %s → %s as %s", (platform, previous, enabled, expected) => {
+    expect(shouldRequestScreenCapturePermission(platform, previous, enabled)).toBe(expected);
   });
 });
