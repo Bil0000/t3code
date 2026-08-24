@@ -6,25 +6,47 @@ interface AccessibilityTreeNode {
   readonly children: ReadonlyArray<AccessibilityTreeNode>;
 }
 
+const MAX_ACCESSIBILITY_TREE_NODES = 10_000;
+
 export function accessibleWindowText(root: AccessibilityTreeNode, maxChars: number): string {
-  const lines: string[] = [];
   const seen = new Set<string>();
   const stack = [root];
-  while (stack.length > 0) {
+  let text = "";
+  let visited = 0;
+  while (stack.length > 0 && text.length < maxChars && visited < MAX_ACCESSIBILITY_TREE_NODES) {
     const node = stack.pop()!;
-    for (const candidate of [node.name, node.value]) {
-      const text = candidate?.replaceAll("\0", "").trim();
-      if (text && !seen.has(text)) {
-        seen.add(text);
-        lines.push(text);
-      }
+    visited += 1;
+    for (const value of [node.name, node.value]) {
+      const candidate = value?.replaceAll("\0", "").trim();
+      if (!candidate || seen.has(candidate)) continue;
+
+      const separator = text ? "\n" : "";
+      const remaining = maxChars - text.length - separator.length;
+      if (remaining <= 0) return text;
+      const candidateEnd =
+        candidate.length <= remaining
+          ? candidate.length
+          : /[\uD800-\uDBFF]/.test(candidate[remaining - 1] ?? "")
+            ? remaining - 1
+            : remaining;
+      if (candidateEnd === 0) return text;
+      text += separator + candidate.slice(0, candidateEnd);
+      if (candidateEnd < candidate.length) return text;
+      seen.add(candidate);
     }
     stack.push(...node.children.toReversed());
   }
-  const text = lines.join("\n");
-  if (text.length <= maxChars) return text;
-  const end = /[\uD800-\uDBFF]/.test(text[maxChars - 1] ?? "") ? maxChars - 1 : maxChars;
-  return text.slice(0, end);
+  return text;
+}
+
+export function hideAndWaitForBlur(window: {
+  readonly hide: () => void;
+  readonly once: (event: "blur", listener: () => void) => unknown;
+}): Promise<void> {
+  return new Promise((resolve) => {
+    window.once("blur", resolve);
+    window.hide();
+  });
 }
 
 type WindowBounds = {
@@ -70,7 +92,7 @@ const ELECTRON_KEY_NAMES: Readonly<Record<string, string>> = {
 export function toElectronAccelerator(shortcut: WindowCaptureShortcut): string {
   const parts: string[] = [];
   if (shortcut.modKey) parts.push("CommandOrControl");
-  if (shortcut.metaKey) parts.push("Command");
+  if (shortcut.metaKey) parts.push("Super");
   if (shortcut.ctrlKey) parts.push("Control");
   if (shortcut.altKey) parts.push("Alt");
   if (shortcut.shiftKey) parts.push("Shift");

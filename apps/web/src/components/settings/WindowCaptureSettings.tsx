@@ -39,6 +39,13 @@ function captureStatus(state: DesktopWindowCaptureState | null, enabled: boolean
     : "Ready. The active window will be captured.";
 }
 
+export function isWindowCaptureAvailable(
+  hasBridge: boolean,
+  state: Pick<DesktopWindowCaptureState, "mode"> | null,
+): boolean {
+  return hasBridge && state !== null && state.mode !== "unavailable";
+}
+
 export function WindowCaptureSettings() {
   const settings = useClientSettings();
   const updateSettings = useUpdateClientSettings();
@@ -51,6 +58,7 @@ export function WindowCaptureSettings() {
     : window.desktopBridge
       ? "Update the desktop app to use window capture."
       : "Only available in the desktop app.";
+  const captureAvailable = isWindowCaptureAvailable(Boolean(bridge), state);
 
   const refreshState = useCallback(async () => {
     if (bridge) setState(await bridge.getWindowCaptureState());
@@ -88,7 +96,7 @@ export function WindowCaptureSettings() {
   );
 
   const captureNow = useCallback(async () => {
-    if (!bridge || capturing) return;
+    if (!captureAvailable || !bridge || capturing) return;
     setCapturing(true);
     try {
       await bridge.captureWindow();
@@ -104,7 +112,7 @@ export function WindowCaptureSettings() {
       setCapturing(false);
       await refreshState();
     }
-  }, [bridge, capturing, refreshState]);
+  }, [bridge, captureAvailable, capturing, refreshState]);
 
   return (
     <SettingsPageContainer>
@@ -117,7 +125,7 @@ export function WindowCaptureSettings() {
             control={
               <Switch
                 checked={settings.windowCaptureEnabled}
-                disabled={!bridge}
+                disabled={!captureAvailable}
                 aria-label="Enable window capture"
                 onCheckedChange={(checked) => void save({ windowCaptureEnabled: checked })}
               />
@@ -130,7 +138,7 @@ export function WindowCaptureSettings() {
               <SettingResetButton
                 label="window capture shortcut"
                 disabled={
-                  !bridge ||
+                  !captureAvailable ||
                   shortcutToKeybindingInput(settings.windowCaptureShortcut) ===
                     shortcutToKeybindingInput(DEFAULT_WINDOW_CAPTURE_SHORTCUT)
                 }
@@ -144,7 +152,7 @@ export function WindowCaptureSettings() {
                 type="button"
                 size="sm"
                 variant={recording ? "secondary" : "outline"}
-                disabled={!bridge}
+                disabled={!captureAvailable}
                 aria-label="Record window capture shortcut"
                 data-keybinding-capture=""
                 onClick={() => setRecording(true)}
@@ -168,14 +176,14 @@ export function WindowCaptureSettings() {
                   type="button"
                   size="xs"
                   variant="outline"
-                  disabled={!bridge}
+                  disabled={!captureAvailable}
                   onClick={playWindowCaptureSound}
                 >
                   Test sound
                 </Button>
                 <Switch
                   checked={settings.windowCapturePlaySound}
-                  disabled={!bridge}
+                  disabled={!captureAvailable}
                   aria-label="Play window capture sound"
                   onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
                 />
@@ -188,7 +196,7 @@ export function WindowCaptureSettings() {
             control={
               <Switch
                 checked={settings.windowCaptureFlash}
-                disabled={!bridge}
+                disabled={!captureAvailable}
                 aria-label="Flash captured window"
                 onCheckedChange={(checked) => void save({ windowCaptureFlash: checked })}
               />
@@ -200,7 +208,7 @@ export function WindowCaptureSettings() {
             control={
               <Switch
                 checked={settings.windowCaptureAnimations}
-                disabled={!bridge}
+                disabled={!captureAvailable}
                 aria-label="Animate window captures"
                 onCheckedChange={(checked) => void save({ windowCaptureAnimations: checked })}
               />
@@ -214,7 +222,7 @@ export function WindowCaptureSettings() {
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={!bridge || capturing}
+                disabled={!captureAvailable || capturing}
                 onClick={() => void captureNow()}
               >
                 <CameraIcon className="size-3.5" />

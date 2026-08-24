@@ -28,6 +28,7 @@ import {
   accessibleWindowText,
   findAccessibleWindow,
   findCaptureSource,
+  hideAndWaitForBlur,
   isWaylandSession,
   shouldRequestScreenCapturePermission,
   toElectronAccelerator,
@@ -79,6 +80,24 @@ export class DesktopWindowCaptureUnsupportedError extends Schema.TaggedErrorClas
   }
 }
 
+export class DesktopWindowCaptureDisabledError extends Schema.TaggedErrorClass<DesktopWindowCaptureDisabledError>()(
+  "DesktopWindowCaptureDisabledError",
+  {},
+) {
+  override get message(): string {
+    return "Enable Window Capture in Settings first.";
+  }
+}
+
+export class DesktopWindowCaptureUnauthorizedError extends Schema.TaggedErrorClass<DesktopWindowCaptureUnauthorizedError>()(
+  "DesktopWindowCaptureUnauthorizedError",
+  {},
+) {
+  override get message(): string {
+    return "Window capture request was rejected.";
+  }
+}
+
 export class DesktopWindowCaptureNoWindowSelectedError extends Schema.TaggedErrorClass<DesktopWindowCaptureNoWindowSelectedError>()(
   "DesktopWindowCaptureNoWindowSelectedError",
   { captureId: Schema.String },
@@ -108,6 +127,8 @@ export class DesktopWindowCaptureFailedError extends Schema.TaggedErrorClass<Des
 
 export const DesktopWindowCaptureFailure = Schema.Union([
   DesktopWindowCaptureUnsupportedError,
+  DesktopWindowCaptureDisabledError,
+  DesktopWindowCaptureUnauthorizedError,
   DesktopWindowCaptureNoWindowSelectedError,
   DesktopWindowCaptureWindowUnavailableError,
   DesktopWindowCaptureFailedError,
@@ -234,8 +255,7 @@ async function readAccessibleWindowText(
 async function revealPreviousWindowIfNeeded(): Promise<Electron.BrowserWindow | undefined> {
   const focused = Electron.BrowserWindow.getFocusedWindow();
   if (!focused) return undefined;
-  focused.hide();
-  await new Promise((resolve) => setTimeout(resolve, 120));
+  await hideAndWaitForBlur(focused);
   return focused;
 }
 
@@ -395,8 +415,11 @@ export const make = Effect.gen(function* () {
   };
 
   const capture = Effect.gen(function* () {
-    if (yield* Ref.getAndSet(busyRef, true)) return;
     const settings = yield* Ref.get(settingsRef);
+    if (!settings.windowCaptureEnabled) {
+      return yield* new DesktopWindowCaptureDisabledError();
+    }
+    if (yield* Ref.getAndSet(busyRef, true)) return;
     yield* persistCapture(settings).pipe(
       Effect.tap(() =>
         Ref.update(stateRef, (state) => ({ ...state, message: null })).pipe(

@@ -4,11 +4,13 @@ import {
   accessibleWindowText,
   findAccessibleWindow,
   findCaptureSource,
+  hideAndWaitForBlur,
   isWaylandSession,
   shouldRequestScreenCapturePermission,
   toElectronAccelerator,
 } from "./windowCapture.ts";
 import {
+  DesktopWindowCaptureDisabledError,
   DesktopWindowCaptureFailedError,
   DesktopWindowCaptureNoWindowSelectedError,
   DesktopWindowCaptureUnsupportedError,
@@ -20,6 +22,9 @@ describe("window capture errors", () => {
     const captureId = "capture-id";
     expect(new DesktopWindowCaptureUnsupportedError({ captureId }).message).toBe(
       "Window capture is not supported here.",
+    );
+    expect(new DesktopWindowCaptureDisabledError().message).toBe(
+      "Enable Window Capture in Settings first.",
     );
     expect(new DesktopWindowCaptureNoWindowSelectedError({ captureId }).message).toBe(
       "No window was selected.",
@@ -68,6 +73,20 @@ describe("accessibleWindowText", () => {
       ),
     ).toBe("abc😀");
   });
+
+  it("stops traversing very large trees", () => {
+    expect(
+      accessibleWindowText(
+        {
+          children: [
+            ...Array.from({ length: 10_000 }, () => ({ children: [] })),
+            { value: "past node limit", children: [] },
+          ],
+        },
+        100,
+      ),
+    ).not.toContain("past node limit");
+  });
 });
 
 describe("findAccessibleWindow", () => {
@@ -95,6 +114,27 @@ describe("findAccessibleWindow", () => {
   });
 });
 
+describe("hideAndWaitForBlur", () => {
+  it("waits for a delayed blur after hiding the window", async () => {
+    let blur: (() => void) | undefined;
+    let settled = false;
+    const hidden = hideAndWaitForBlur({
+      hide: () => undefined,
+      once: (_event, listener) => {
+        blur = listener;
+      },
+    }).then(() => {
+      settled = true;
+    });
+
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    blur?.();
+    await hidden;
+    expect(settled).toBe(true);
+  });
+});
+
 describe("toElectronAccelerator", () => {
   it("converts the default portable shortcut", () => {
     expect(
@@ -107,6 +147,19 @@ describe("toElectronAccelerator", () => {
         modKey: true,
       }),
     ).toBe("CommandOrControl+Shift+2");
+  });
+
+  it("maps the portable meta key to Super", () => {
+    expect(
+      toElectronAccelerator({
+        key: "k",
+        metaKey: true,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        modKey: false,
+      }),
+    ).toBe("Super+K");
   });
 
   it("normalizes Electron key names", () => {
