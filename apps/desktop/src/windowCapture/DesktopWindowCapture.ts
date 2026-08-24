@@ -13,9 +13,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as NodeChildProcess from "node:child_process";
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
+import * as NodeUtil from "node:util";
 
 import * as Electron from "electron";
 import { activeWindow, type Result as ActiveWindow } from "get-windows";
@@ -23,12 +25,19 @@ import { activeWindow, type Result as ActiveWindow } from "get-windows";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
-import { findCaptureSource, isWaylandSession, toElectronAccelerator } from "./windowCapture.ts";
+import {
+  findCaptureSource,
+  isWaylandSession,
+  macWindowCaptureArguments,
+  toElectronAccelerator,
+} from "./windowCapture.ts";
 
 const MAX_CAPTURE_WIDTH = 5_120;
 const MAX_CAPTURE_HEIGHT = 2_880;
+const MAC_SCREEN_CAPTURE_PATH = "/usr/sbin/screencapture";
 const CAPTURE_READY_ACTION = "window-capture-ready";
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
+const execFile = NodeUtil.promisify(NodeChildProcess.execFile);
 
 const decodePendingCapture = Schema.decodeUnknownSync(DesktopPendingWindowCapture);
 
@@ -96,7 +105,7 @@ function thumbnailSize(active: ActiveWindow | undefined): Electron.Size {
 }
 
 async function iconDataUrl(
-  source: Electron.DesktopCapturerSource,
+  source: { readonly appIcon?: Electron.NativeImage | null },
   active: ActiveWindow | undefined,
 ): Promise<string | undefined> {
   try {
@@ -120,7 +129,11 @@ async function revealPreviousWindowIfNeeded(): Promise<Electron.BrowserWindow | 
   return focused;
 }
 
-async function captureSource(mode: DesktopWindowCaptureState["mode"]) {
+async function captureSource(
+  mode: DesktopWindowCaptureState["mode"],
+  platform: NodeJS.Platform,
+  outputPath: string,
+) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = await revealPreviousWindowIfNeeded();
 
@@ -128,8 +141,21 @@ async function captureSource(mode: DesktopWindowCaptureState["mode"]) {
     if (mode === "direct") {
       active = await activeWindow({
         accessibilityPermission: false,
-        screenRecordingPermission: false,
+        screenRecordingPermission: platform === "darwin",
       });
+    }
+
+    if (platform === "darwin") {
+      if (!active) throw new Error("The active window is not available for capture.");
+      await execFile(MAC_SCREEN_CAPTURE_PATH, macWindowCaptureArguments(active.id, outputPath), {
+        timeout: 15_000,
+      });
+      const thumbnail = Electron.nativeImage.createFromPath(outputPath);
+      if (thumbnail.isEmpty()) throw new Error("macOS returned an empty window capture.");
+      return {
+        source: { appIcon: null, name: active.title, thumbnail },
+        active,
+      };
     }
 
     const sources = await Electron.desktopCapturer.getSources({
@@ -218,44 +244,45 @@ export const make = Effect.gen(function* () {
       try: async () => {
         const mode = captureMode(environment.platform);
         if (mode === "unavailable") throw new Error("Window capture is not supported here.");
-        const { source, active } = await captureSource(mode);
-        const png = source.thumbnail.toPNG();
-        const capturedAt = new Date().toISOString();
-        const appIconDataUrl = await iconDataUrl(source, active);
-        const pending = decodePendingCapture({
-          id,
-          name: `window-${capturedAt.replaceAll(":", "-")}.png`,
-          mimeType: "image/png",
-          sizeBytes: png.byteLength,
-          source: {
-            kind: "window-capture",
-            capturedAt,
-            appName: active?.owner.name.trim() || source.name.trim() || "Window",
-            windowTitle: active?.title.trim() || source.name.trim(),
-            ...(active?.platform === "macos" && active.owner.bundleId
-              ? { appIdentifier: active.owner.bundleId }
-              : {}),
-            ...(appIconDataUrl ? { appIconDataUrl } : {}),
-          },
-        });
-        await NodeFSP.mkdir(captureDirectory, { recursive: true });
         const imagePath = NodePath.join(captureDirectory, `${id}.png`);
+        const imageTempPath = NodePath.join(captureDirectory, `${id}.tmp.png`);
         const metadataPath = NodePath.join(captureDirectory, `${id}.json`);
+        await NodeFSP.mkdir(captureDirectory, { recursive: true });
         try {
-          await NodeFSP.writeFile(imagePath + ".tmp", png);
-          await NodeFSP.rename(imagePath + ".tmp", imagePath);
+          const { source, active } = await captureSource(mode, environment.platform, imageTempPath);
+          const png = source.thumbnail.toPNG();
+          const capturedAt = new Date().toISOString();
+          const appIconDataUrl = await iconDataUrl(source, active);
+          const pending = decodePendingCapture({
+            id,
+            name: `window-${capturedAt.replaceAll(":", "-")}.png`,
+            mimeType: "image/png",
+            sizeBytes: png.byteLength,
+            source: {
+              kind: "window-capture",
+              capturedAt,
+              appName: active?.owner.name.trim() || source.name.trim() || "Window",
+              windowTitle: active?.title.trim() || source.name.trim(),
+              ...(active?.platform === "macos" && active.owner.bundleId
+                ? { appIdentifier: active.owner.bundleId }
+                : {}),
+              ...(appIconDataUrl ? { appIconDataUrl } : {}),
+            },
+          });
+          await NodeFSP.writeFile(imageTempPath, png);
+          await NodeFSP.rename(imageTempPath, imagePath);
           await NodeFSP.writeFile(metadataPath + ".tmp", encodePendingCaptureJson(pending), "utf8");
           await NodeFSP.rename(metadataPath + ".tmp", metadataPath);
+          showFlash(settings, active);
         } catch (cause) {
           await Promise.allSettled([
             NodeFSP.rm(imagePath, { force: true }),
-            NodeFSP.rm(imagePath + ".tmp", { force: true }),
+            NodeFSP.rm(imageTempPath, { force: true }),
             NodeFSP.rm(metadataPath, { force: true }),
             NodeFSP.rm(metadataPath + ".tmp", { force: true }),
           ]);
           throw cause;
         }
-        showFlash(settings, active);
       },
       catch: (cause) =>
         new DesktopWindowCaptureError({ operation: "capture", captureId: id, cause }),
