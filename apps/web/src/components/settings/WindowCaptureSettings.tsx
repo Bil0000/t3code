@@ -69,7 +69,7 @@ export function WindowCaptureSettings() {
 
   const recordShortcut = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (!recording) return;
+      if (!recording || event.key === "Tab") return;
       event.preventDefault();
       event.stopPropagation();
       if (event.key === "Escape") {
