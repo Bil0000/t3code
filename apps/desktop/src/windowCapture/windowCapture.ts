@@ -1,3 +1,5 @@
+// @effect-diagnostics globalTimers:off
+
 import type { WindowCaptureShortcut } from "@t3tools/contracts";
 
 interface AccessibilityTreeNode {
@@ -7,6 +9,7 @@ interface AccessibilityTreeNode {
 }
 
 const MAX_ACCESSIBILITY_TREE_NODES = 10_000;
+const WINDOW_BLUR_TIMEOUT_MS = 1_000;
 
 export function accessibleWindowText(root: AccessibilityTreeNode, maxChars: number): string {
   const seen = new Set<string>();
@@ -42,9 +45,18 @@ export function accessibleWindowText(root: AccessibilityTreeNode, maxChars: numb
 export function hideAndWaitForBlur(window: {
   readonly hide: () => void;
   readonly once: (event: "blur", listener: () => void) => unknown;
+  readonly removeListener: (event: "blur", listener: () => void) => unknown;
 }): Promise<void> {
-  return new Promise((resolve) => {
-    window.once("blur", resolve);
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      window.removeListener("blur", onBlur);
+      reject(new Error("Timed out waiting for T3 Code to lose focus."));
+    }, WINDOW_BLUR_TIMEOUT_MS);
+    const onBlur = () => {
+      clearTimeout(timeout);
+      resolve();
+    };
+    window.once("blur", onBlur);
     window.hide();
   });
 }

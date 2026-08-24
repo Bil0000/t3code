@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vite-plus/test";
+import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   accessibleWindowText,
@@ -143,6 +143,7 @@ describe("hideAndWaitForBlur", () => {
       once: (_event, listener) => {
         blur = listener;
       },
+      removeListener: () => undefined,
     }).then(() => {
       settled = true;
     });
@@ -152,6 +153,26 @@ describe("hideAndWaitForBlur", () => {
     blur?.();
     await hidden;
     expect(settled).toBe(true);
+  });
+
+  it("rejects when the hidden window never blurs", async () => {
+    vi.useFakeTimers();
+    try {
+      let rejected = false;
+      const hidden = hideAndWaitForBlur({
+        hide: () => undefined,
+        once: () => undefined,
+        removeListener: () => undefined,
+      }).catch(() => {
+        rejected = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(rejected).toBe(true);
+      await hidden;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

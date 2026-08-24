@@ -259,22 +259,16 @@ async function readAccessibleWindowText(
   }
 }
 
-async function revealPreviousWindowIfNeeded(): Promise<Electron.BrowserWindow | undefined> {
-  const focused = Electron.BrowserWindow.getFocusedWindow();
-  if (!focused) return undefined;
-  await hideAndWaitForBlur(focused);
-  return focused;
-}
-
 async function captureSource(
   mode: DesktopWindowCaptureState["mode"],
   captureId: string,
   platform: NodeJS.Platform,
 ) {
   let active: ActiveWindow | undefined;
-  const hiddenWindow = await revealPreviousWindowIfNeeded();
+  const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
 
   try {
+    if (hiddenWindow) await hideAndWaitForBlur(hiddenWindow);
     if (mode === "direct") {
       active = await activeWindow({
         accessibilityPermission: false,
