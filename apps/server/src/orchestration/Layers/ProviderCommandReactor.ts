@@ -21,6 +21,7 @@ import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schedule from "effect/Schedule";
 import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
@@ -93,6 +94,12 @@ const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const DEFAULT_THREAD_TITLE = "New thread";
 const MAX_REGENERATION_ATTACHMENTS = 4;
+// Automatic title generation is fire-and-forget: when it fails the thread keeps
+// the placeholder title the client seeded from the first message, and nothing
+// ever tries again. Retry so a transient CLI timeout or auth failure does not
+// permanently leave the thread named after the raw prompt text.
+const THREAD_TITLE_GENERATION_RETRIES = 2;
+const THREAD_TITLE_RETRY_DELAY = Duration.seconds(2);
 const MAX_THREAD_TITLE_CONTEXT_CHARS = 8_000;
 const MAX_FIRST_USER_TITLE_CONTEXT_CHARS = 2_000;
 const THREAD_TITLE_CONTEXT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
@@ -866,12 +873,19 @@ const make = Effect.gen(function* () {
         const { textGenerationModelSelection: modelSelection } =
           yield* serverSettingsService.getSettings;
 
-        const generated = yield* textGeneration.generateThreadTitle({
-          cwd: input.cwd,
-          message: input.messageText,
-          ...(attachments.length > 0 ? { attachments } : {}),
-          modelSelection,
-        });
+        const generated = yield* textGeneration
+          .generateThreadTitle({
+            cwd: input.cwd,
+            message: input.messageText,
+            ...(attachments.length > 0 ? { attachments } : {}),
+            modelSelection,
+          })
+          .pipe(
+            Effect.retry({
+              times: THREAD_TITLE_GENERATION_RETRIES,
+              schedule: Schedule.exponential(THREAD_TITLE_RETRY_DELAY),
+            }),
+          );
         if (!generated) return;
 
         const thread = yield* resolveThread(input.threadId);
