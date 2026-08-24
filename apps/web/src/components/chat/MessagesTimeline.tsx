@@ -1046,7 +1046,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     {image.name}
                   </div>
                 )}
-                {image.source?.kind === "window-capture" ? (
+                {image.previewUrl && image.source?.kind === "window-capture" ? (
                   <WindowCaptureAttachmentDetails source={image.source} />
                 ) : null}
               </div>

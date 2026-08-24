@@ -236,6 +236,33 @@ function buildAssistantTimelineEntry(text: string) {
   };
 }
 
+function buildWindowCaptureTimelineEntry(previewUrl?: string) {
+  const entry = buildUserTimelineEntry("First prompt.");
+  return {
+    ...entry,
+    message: {
+      ...entry.message,
+      attachments: [
+        {
+          type: "image" as const,
+          id: "attachment-1",
+          name: "screenshot.png",
+          mimeType: "image/png",
+          sizeBytes: 1,
+          ...(previewUrl ? { previewUrl } : {}),
+          source: {
+            kind: "window-capture" as const,
+            capturedAt: "2026-03-17T19:12:28.000Z",
+            appName: "Terminal",
+            windowTitle: "t3code — Tests",
+            appIconDataUrl: "data:image/png;base64,aWNvbg==",
+          },
+        },
+      ],
+    },
+  };
+}
+
 describe("MessagesTimeline", () => {
   it("renders a feedback command and its pending response as normal thread messages", () => {
     const submission = {
@@ -492,29 +519,7 @@ describe("MessagesTimeline", () => {
 
   it("anchors the first user message using its measured height", () => {
     const onAnchorReady = vi.fn();
-    const firstEntry = {
-      ...buildUserTimelineEntry("First prompt."),
-      message: {
-        ...buildUserTimelineEntry("First prompt.").message,
-        attachments: [
-          {
-            type: "image" as const,
-            id: "attachment-1",
-            name: "screenshot.png",
-            mimeType: "image/png",
-            sizeBytes: 1,
-            previewUrl: "data:image/png;base64,iVBORw0KGgo=",
-            source: {
-              kind: "window-capture" as const,
-              capturedAt: "2026-03-17T19:12:28.000Z",
-              appName: "Terminal",
-              windowTitle: "t3code — Tests",
-              appIconDataUrl: "data:image/png;base64,aWNvbg==",
-            },
-          },
-        ],
-      },
-    };
+    const firstEntry = buildWindowCaptureTimelineEntry("data:image/png;base64,iVBORw0KGgo=");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -541,6 +546,17 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('src="data:image/png;base64,aWNvbg=="');
     expect(onAnchorReady).toHaveBeenCalledOnce();
     expect(onAnchorReady).toHaveBeenCalledWith(firstEntry.message.id, 0);
+  });
+
+  it("does not render window details before the preview URL resolves", () => {
+    const markup = renderToStaticMarkup(
+      <MessagesTimeline {...buildProps()} timelineEntries={[buildWindowCaptureTimelineEntry()]} />,
+    );
+
+    expect(markup).toContain("screenshot.png");
+    expect(markup).not.toContain("Terminal");
+    expect(markup).not.toContain("t3code — Tests");
+    expect(markup).not.toContain('src="data:image/png;base64,aWNvbg=="');
   });
 
   it("does not reserve end space for a follow-up user message", () => {
