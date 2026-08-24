@@ -10,6 +10,7 @@ import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { formatShortcutLabel } from "../../keybindings";
 import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
+import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
 import {
   keybindingFromKeyboardEvent,
   shortcutToKeybindingInput,
@@ -31,7 +32,8 @@ function captureStatus(state: DesktopWindowCaptureState | null, enabled: boolean
   if (!state) return "Checking desktop support…";
   if (state.mode === "unavailable") return state.message ?? "Not supported on this platform.";
   if (!enabled) return "Turn this on to register the shortcut.";
-  if (!state.shortcutRegistered) return state.message ?? "The shortcut could not be registered.";
+  if (state.message) return state.message;
+  if (!state.shortcutRegistered) return "The shortcut could not be registered.";
   return state.mode === "portal"
     ? "Ready. Your system will ask you to choose a window."
     : "Ready. The active window will be captured.";
@@ -161,12 +163,23 @@ export function WindowCaptureSettings() {
             {...searchableSetting("window-capture-sound")}
             description="Play a short sound after the image is attached."
             control={
-              <Switch
-                checked={settings.windowCapturePlaySound}
-                disabled={!bridge}
-                aria-label="Play window capture sound"
-                onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
-              />
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={!bridge}
+                  onClick={playWindowCaptureSound}
+                >
+                  Test sound
+                </Button>
+                <Switch
+                  checked={settings.windowCapturePlaySound}
+                  disabled={!bridge}
+                  aria-label="Play window capture sound"
+                  onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
+                />
+              </div>
             }
           />
           <SettingsRow
