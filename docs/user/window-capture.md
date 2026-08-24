@@ -2,7 +2,8 @@
 
 Window capture is available in the desktop app on macOS, Windows, and Linux. It captures a window
 from any app and adds the image to the current draft. The attachment includes the app name, window
-title, and app icon when the operating system provides one.
+title, app icon, and available accessibility text. That text can include content outside the visible
+scroll area when the app exposes it.
 
 Open **Settings** → **Window Capture** to turn it on. The default global shortcut is
 `mod+shift+2`: Command+Shift+2 on macOS and Ctrl+Shift+2 on Windows and Linux. Select the shortcut
@@ -13,9 +14,12 @@ settings page.
 
 ## Platform behavior
 
-- On macOS, allow screen recording when the system asks.
+- On macOS, allow Accessibility and Screen Recording when the system asks.
 - On Windows and Linux with X11, the shortcut captures the active window.
 - On Linux with Wayland, the system portal asks you to choose the window or screen to share.
+
+Text availability depends on the captured app and the operating system. T3 Code still attaches the
+image when an app does not expose accessibility text.
 
 The shortcut works while another app is active. T3 Code briefly hides itself, captures the selected
 window, and then returns with the image attached. If no thread is open, it starts a draft in the

@@ -736,26 +736,36 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     // PROVIDER_SEND_TURN_MAX_INPUT_CHARS check; attachment count is capped, so
     // the overhead is bounded. Unresolvable ids are skipped here and surface
     // as adapter errors when the file is read for inlining.
-    const attachmentPathLines = attachments.flatMap((attachment) => {
+    const attachmentContext = attachments.flatMap((attachment) => {
+      const source = attachment.source;
+      const accessibleText = source?.accessibleText;
+      const sourceLabel = source?.windowTitle
+        ? `${source.appName} — ${source.windowTitle}`
+        : source?.appName;
+      const textSection = accessibleText
+        ? [`[Available text from ${sourceLabel}]\n${accessibleText}\n[End available window text]`]
+        : [];
       const attachmentPath = resolveAttachmentPath({
         attachmentsDir: serverConfig.attachmentsDir,
         attachment,
       });
-      return attachmentPath === null
-        ? []
-        : [`[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`];
+      const pathSection =
+        attachmentPath === null
+          ? []
+          : [`[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`];
+      return [...textSection, ...pathSection];
     });
-    const inputTextWithAttachmentPaths =
-      attachmentPathLines.length === 0
+    const inputTextWithAttachmentContext =
+      attachmentContext.length === 0
         ? parsed.input
-        : [parsed.input, attachmentPathLines.join("\n")]
+        : [parsed.input, attachmentContext.join("\n\n")]
             .filter((part): part is string => typeof part === "string" && part.length > 0)
             .join("\n\n");
 
     const input = {
       ...parsed,
-      ...(inputTextWithAttachmentPaths !== undefined
-        ? { input: inputTextWithAttachmentPaths }
+      ...(inputTextWithAttachmentContext !== undefined
+        ? { input: inputTextWithAttachmentContext }
         : {}),
       attachments,
     };

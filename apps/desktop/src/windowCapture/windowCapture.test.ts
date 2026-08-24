@@ -1,21 +1,71 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  accessibleWindowText,
   findCaptureSource,
   isWaylandSession,
   shouldRequestScreenCapturePermission,
   toElectronAccelerator,
-  windowCaptureFailureMessage,
 } from "./windowCapture.ts";
+import {
+  DesktopWindowCaptureFailedError,
+  DesktopWindowCaptureNoWindowSelectedError,
+  DesktopWindowCaptureUnsupportedError,
+  DesktopWindowCaptureWindowUnavailableError,
+} from "./DesktopWindowCapture.ts";
 
-describe("windowCaptureFailureMessage", () => {
-  it.each([
-    ["unsupported", "Window capture is not supported here."],
-    ["no-window-selected", "No window was selected."],
-    ["window-unavailable", "The active window is not available for capture."],
-    [undefined, "Could not capture the active window."],
-  ] as const)("maps %s to its user-facing message", (reason, expected) => {
-    expect(windowCaptureFailureMessage(reason)).toBe(expected);
+describe("window capture errors", () => {
+  it("keeps each user-facing capture failure distinct", () => {
+    const captureId = "capture-id";
+    expect(new DesktopWindowCaptureUnsupportedError({ captureId }).message).toBe(
+      "Window capture is not supported here.",
+    );
+    expect(new DesktopWindowCaptureNoWindowSelectedError({ captureId }).message).toBe(
+      "No window was selected.",
+    );
+    expect(new DesktopWindowCaptureWindowUnavailableError({ captureId }).message).toBe(
+      "The active window is not available for capture.",
+    );
+    expect(
+      new DesktopWindowCaptureFailedError({ captureId, cause: new Error("native failure") })
+        .message,
+    ).toBe("Could not capture the active window.");
+  });
+});
+
+describe("accessibleWindowText", () => {
+  it("keeps unique names and values in tree order", () => {
+    expect(
+      accessibleWindowText(
+        {
+          name: "Settings",
+          children: [
+            {
+              name: "General",
+              children: [],
+            },
+            {
+              name: "Name",
+              value: "Bilal",
+              children: [],
+            },
+          ],
+        },
+        100,
+      ),
+    ).toBe("Settings\nGeneral\nName\nBilal");
+  });
+
+  it("caps large text without splitting a surrogate pair", () => {
+    expect(
+      accessibleWindowText(
+        {
+          value: "abc😀def",
+          children: [],
+        },
+        5,
+      ),
+    ).toBe("abc😀");
   });
 });
 

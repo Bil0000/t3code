@@ -14,6 +14,7 @@
   "dependencies": {
     "@clerk/electron": "catalog:",
     "@clerk/electron-passkeys": "catalog:",
+    "@crowecawcaw/xa11y": "0.13.0",
     "@effect/platform-node": "catalog:",
     "@t3tools/client-runtime": "workspace:*",
     "@t3tools/contracts": "workspace:*",

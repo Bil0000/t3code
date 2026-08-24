@@ -3,6 +3,7 @@
 import {
   DEFAULT_CLIENT_SETTINGS,
   DesktopPendingWindowCapture,
+  WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS,
   type DesktopWindowCapture as DesktopWindowCaptureValue,
   type DesktopWindowCaptureState,
   type ClientSettings,
@@ -24,12 +25,11 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import {
+  accessibleWindowText,
   findCaptureSource,
   isWaylandSession,
   shouldRequestScreenCapturePermission,
   toElectronAccelerator,
-  windowCaptureFailureMessage,
-  type WindowCaptureFailureReason,
 } from "./windowCapture.ts";
 
 const MAX_CAPTURE_WIDTH = 5_120;
@@ -46,31 +46,18 @@ const decodePendingCapture = Schema.decodeUnknownSync(DesktopPendingWindowCaptur
 const PendingCaptureJson = Schema.fromJsonString(DesktopPendingWindowCapture);
 const decodePendingCaptureJson = Schema.decodeSync(PendingCaptureJson);
 const encodePendingCaptureJson = Schema.encodeSync(PendingCaptureJson);
-const DesktopWindowCaptureOperation = Schema.Literals([
-  "capture",
-  "list-pending",
-  "read",
-  "acknowledge",
-]);
-const DesktopWindowCaptureFailureReason = Schema.Literals([
-  "unsupported",
-  "no-window-selected",
-  "window-unavailable",
-]);
+const DesktopWindowCaptureOperation = Schema.Literals(["list-pending", "read", "acknowledge"]);
 
 export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWindowCaptureError>()(
   "DesktopWindowCaptureError",
   {
     operation: DesktopWindowCaptureOperation,
     captureId: Schema.optional(Schema.String),
-    reason: Schema.optional(DesktopWindowCaptureFailureReason),
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
     switch (this.operation) {
-      case "capture":
-        return windowCaptureFailureMessage(this.reason);
       case "list-pending":
         return "Could not list pending window captures.";
       case "read":
@@ -81,7 +68,50 @@ export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWi
   }
 }
 
-const isDesktopWindowCaptureError = Schema.is(DesktopWindowCaptureError);
+export class DesktopWindowCaptureUnsupportedError extends Schema.TaggedErrorClass<DesktopWindowCaptureUnsupportedError>()(
+  "DesktopWindowCaptureUnsupportedError",
+  { captureId: Schema.String },
+) {
+  override get message(): string {
+    return "Window capture is not supported here.";
+  }
+}
+
+export class DesktopWindowCaptureNoWindowSelectedError extends Schema.TaggedErrorClass<DesktopWindowCaptureNoWindowSelectedError>()(
+  "DesktopWindowCaptureNoWindowSelectedError",
+  { captureId: Schema.String },
+) {
+  override get message(): string {
+    return "No window was selected.";
+  }
+}
+
+export class DesktopWindowCaptureWindowUnavailableError extends Schema.TaggedErrorClass<DesktopWindowCaptureWindowUnavailableError>()(
+  "DesktopWindowCaptureWindowUnavailableError",
+  { captureId: Schema.String },
+) {
+  override get message(): string {
+    return "The active window is not available for capture.";
+  }
+}
+
+export class DesktopWindowCaptureFailedError extends Schema.TaggedErrorClass<DesktopWindowCaptureFailedError>()(
+  "DesktopWindowCaptureFailedError",
+  { captureId: Schema.String, cause: Schema.Defect() },
+) {
+  override get message(): string {
+    return "Could not capture the active window.";
+  }
+}
+
+export const DesktopWindowCaptureFailure = Schema.Union([
+  DesktopWindowCaptureUnsupportedError,
+  DesktopWindowCaptureNoWindowSelectedError,
+  DesktopWindowCaptureWindowUnavailableError,
+  DesktopWindowCaptureFailedError,
+]);
+export type DesktopWindowCaptureFailure = typeof DesktopWindowCaptureFailure.Type;
+export const isDesktopWindowCaptureFailure = Schema.is(DesktopWindowCaptureFailure);
 
 export class DesktopWindowCapture extends Context.Service<
   DesktopWindowCapture,
@@ -89,7 +119,7 @@ export class DesktopWindowCapture extends Context.Service<
     readonly initialize: Effect.Effect<void>;
     readonly configure: (settings: ClientSettings) => Effect.Effect<void>;
     readonly state: Effect.Effect<DesktopWindowCaptureState>;
-    readonly capture: Effect.Effect<void, DesktopWindowCaptureError>;
+    readonly capture: Effect.Effect<void, DesktopWindowCaptureFailure>;
     readonly listPending: Effect.Effect<
       ReadonlyArray<DesktopPendingWindowCapture>,
       DesktopWindowCaptureError
@@ -151,6 +181,29 @@ async function requestMacScreenCapturePermission(): Promise<string | null> {
   return MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
 }
 
+async function requestMacWindowCapturePermissions(): Promise<string | null> {
+  const accessibilityGranted = Electron.systemPreferences.isTrustedAccessibilityClient(true);
+  const screenMessage = await requestMacScreenCapturePermission();
+  if (!accessibilityGranted && screenMessage) {
+    return "Allow Accessibility and Screen Recording in System Settings, then restart T3 Code.";
+  }
+  if (!accessibilityGranted) {
+    return "Allow Accessibility in System Settings, then restart T3 Code.";
+  }
+  return screenMessage;
+}
+
+async function readAccessibleWindowText(): Promise<string | undefined> {
+  try {
+    const { App } = await import("@crowecawcaw/xa11y");
+    const app = await App.foreground({ timeout: 0 });
+    const text = accessibleWindowText(await app.tree(), WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS);
+    return text || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function revealPreviousWindowIfNeeded(): Promise<Electron.BrowserWindow | undefined> {
   const focused = Electron.BrowserWindow.getFocusedWindow();
   if (!focused) return undefined;
@@ -179,16 +232,12 @@ async function captureSource(mode: DesktopWindowCaptureState["mode"], captureId:
     const source =
       mode === "portal" ? sources[0] : active ? findCaptureSource(sources, active) : undefined;
     if (!source || source.thumbnail.isEmpty()) {
-      const reason: WindowCaptureFailureReason =
-        mode === "portal" ? "no-window-selected" : "window-unavailable";
-      throw new DesktopWindowCaptureError({
-        operation: "capture",
-        captureId,
-        reason,
-        cause: new Error(windowCaptureFailureMessage(reason)),
-      });
+      throw mode === "portal"
+        ? new DesktopWindowCaptureNoWindowSelectedError({ captureId })
+        : new DesktopWindowCaptureWindowUnavailableError({ captureId });
     }
-    return { source, active };
+    const accessibleText = await readAccessibleWindowText();
+    return { source, active, accessibleText };
   } finally {
     if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
   }
@@ -260,19 +309,14 @@ export const make = Effect.gen(function* () {
       try: async () => {
         const mode = captureMode(environment.platform);
         if (mode === "unavailable") {
-          throw new DesktopWindowCaptureError({
-            operation: "capture",
-            captureId: id,
-            reason: "unsupported",
-            cause: new Error(windowCaptureFailureMessage("unsupported")),
-          });
+          throw new DesktopWindowCaptureUnsupportedError({ captureId: id });
         }
         const imagePath = NodePath.join(captureDirectory, `${id}.png`);
         const imageTempPath = NodePath.join(captureDirectory, `${id}.tmp.png`);
         const metadataPath = NodePath.join(captureDirectory, `${id}.json`);
         await NodeFSP.mkdir(captureDirectory, { recursive: true });
         try {
-          const { source, active } = await captureSource(mode, id);
+          const { source, active, accessibleText } = await captureSource(mode, id);
           const png = source.thumbnail.toPNG();
           const capturedAt = new Date().toISOString();
           const appIconDataUrl = await iconDataUrl(source, active);
@@ -286,6 +330,7 @@ export const make = Effect.gen(function* () {
               capturedAt,
               appName: active?.owner.name.trim() || source.name.trim() || "Window",
               windowTitle: active?.title.trim() || source.name.trim(),
+              ...(accessibleText ? { accessibleText } : {}),
               ...(active?.platform === "macos" && active.owner.bundleId
                 ? { appIdentifier: active.owner.bundleId }
                 : {}),
@@ -308,9 +353,9 @@ export const make = Effect.gen(function* () {
         }
       },
       catch: (cause) =>
-        isDesktopWindowCaptureError(cause)
+        isDesktopWindowCaptureFailure(cause)
           ? cause
-          : new DesktopWindowCaptureError({ operation: "capture", captureId: id, cause }),
+          : new DesktopWindowCaptureFailedError({ captureId: id, cause }),
     });
   };
 
@@ -342,7 +387,7 @@ export const make = Effect.gen(function* () {
       previousSettings.windowCaptureEnabled,
       settings.windowCaptureEnabled,
     )
-      ? yield* Effect.promise(requestMacScreenCapturePermission)
+      ? yield* Effect.promise(requestMacWindowCapturePermissions)
       : null;
     if (registeredAccelerator) {
       Electron.globalShortcut.unregister(registeredAccelerator);

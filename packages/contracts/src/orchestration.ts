@@ -182,11 +182,16 @@ const ChatAttachmentId = TrimmedNonEmptyString.check(
 );
 export type ChatAttachmentId = typeof ChatAttachmentId.Type;
 
+export const WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS = 32_000;
+
 export const WindowCaptureSource = Schema.Struct({
   kind: Schema.Literal("window-capture"),
   capturedAt: IsoDateTime,
   appName: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   windowTitle: TrimmedString.check(Schema.isMaxLength(1_000)),
+  accessibleText: Schema.optional(
+    TrimmedNonEmptyString.check(Schema.isMaxLength(WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS)),
+  ),
   appIdentifier: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
   appIconDataUrl: Schema.optional(
     TrimmedNonEmptyString.check(

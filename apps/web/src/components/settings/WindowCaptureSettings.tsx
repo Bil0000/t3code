@@ -112,7 +112,7 @@ export function WindowCaptureSettings() {
         <SettingsUnavailableGroup message={unavailableMessage}>
           <SettingsRow
             {...searchableSetting("window-capture-enabled")}
-            description="Capture a window from anywhere and attach it to your current draft."
+            description="Capture a window with available text and attach it to your current draft."
             status={bridge ? captureStatus(state, settings.windowCaptureEnabled) : undefined}
             control={
               <Switch

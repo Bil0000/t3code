@@ -306,6 +306,7 @@ it.effect("preserves window capture metadata in thread.turn.start", () =>
               capturedAt: "2026-08-24T11:00:00.000Z",
               appName: "Editor",
               windowTitle: "main.ts",
+              accessibleText: "const answer = 42;",
               appIdentifier: "com.example.editor",
               appIconDataUrl: "data:image/png;base64,iVBORw==",
             },
@@ -320,6 +321,7 @@ it.effect("preserves window capture metadata in thread.turn.start", () =>
       capturedAt: "2026-08-24T11:00:00.000Z",
       appName: "Editor",
       windowTitle: "main.ts",
+      accessibleText: "const answer = 42;",
       appIdentifier: "com.example.editor",
       appIconDataUrl: "data:image/png;base64,iVBORw==",
     });

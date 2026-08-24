@@ -1,21 +1,30 @@
 import type { WindowCaptureShortcut } from "@t3tools/contracts";
 
-export type WindowCaptureFailureReason =
-  | "unsupported"
-  | "no-window-selected"
-  | "window-unavailable";
+interface AccessibilityTreeNode {
+  readonly name?: string;
+  readonly value?: string;
+  readonly children: ReadonlyArray<AccessibilityTreeNode>;
+}
 
-export function windowCaptureFailureMessage(reason?: WindowCaptureFailureReason): string {
-  switch (reason) {
-    case "unsupported":
-      return "Window capture is not supported here.";
-    case "no-window-selected":
-      return "No window was selected.";
-    case "window-unavailable":
-      return "The active window is not available for capture.";
-    default:
-      return "Could not capture the active window.";
+export function accessibleWindowText(root: AccessibilityTreeNode, maxChars: number): string {
+  const lines: string[] = [];
+  const seen = new Set<string>();
+  const stack = [root];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    for (const candidate of [node.name, node.value]) {
+      const text = candidate?.replaceAll("\0", "").trim();
+      if (text && !seen.has(text)) {
+        seen.add(text);
+        lines.push(text);
+      }
+    }
+    stack.push(...node.children.toReversed());
   }
+  const text = lines.join("\n");
+  if (text.length <= maxChars) return text;
+  const end = /[\uD800-\uDBFF]/.test(text[maxChars - 1] ?? "") ? maxChars - 1 : maxChars;
+  return text.slice(0, end);
 }
 
 const ELECTRON_KEY_NAMES: Readonly<Record<string, string>> = {

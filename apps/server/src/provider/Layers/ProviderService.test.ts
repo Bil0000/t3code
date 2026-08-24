@@ -1149,6 +1149,45 @@ routing.layer("ProviderServiceLive routing", (it) => {
     }),
   );
 
+  it.effect("appends accessible window text before provider routing", () =>
+    Effect.gen(function* () {
+      const provider = yield* ProviderService.ProviderService;
+      const threadId = asThreadId("thread-window-text");
+      yield* provider.startSession(threadId, {
+        provider: CODEX_DRIVER,
+        providerInstanceId: codexInstanceId,
+        threadId,
+        cwd: "/tmp/project",
+        runtimeMode: "full-access",
+      });
+
+      routing.codex.sendTurn.mockClear();
+      yield* provider.sendTurn({
+        threadId,
+        input: "fix this",
+        attachments: [
+          {
+            type: "image",
+            id: "thread-window-text-12345678-1234-1234-1234-123456789abc",
+            name: "editor.png",
+            mimeType: "image/png",
+            sizeBytes: 123,
+            source: {
+              kind: "window-capture",
+              capturedAt: "2026-08-24T11:00:00.000Z",
+              appName: "Editor",
+              windowTitle: "main.ts",
+              accessibleText: "const answer = 42;",
+            },
+          },
+        ],
+      });
+
+      const turnInput = routing.codex.sendTurn.mock.calls[0]?.[0] as ProviderSendTurnInput;
+      assert.include(turnInput.input ?? "", "const answer = 42;");
+    }),
+  );
+
   it.effect("recovers stale persisted sessions for rollback by resuming thread identity", () =>
     Effect.gen(function* () {
       const provider = yield* ProviderService.ProviderService;
