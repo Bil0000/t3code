@@ -19,7 +19,7 @@ export function WindowCaptureAttachmentDetails({
         </div>
       )}
       <div className="min-w-0">
-        <div className="truncate text-xs font-medium">{source.appName}</div>
+        <div className="truncate text-xs font-medium text-foreground">{source.appName}</div>
         <div className="truncate text-[11px] text-secondary-label">
           {source.windowTitle || "Captured window"}
         </div>

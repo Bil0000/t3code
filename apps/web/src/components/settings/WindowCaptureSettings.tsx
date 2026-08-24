@@ -169,6 +169,7 @@ export function WindowCaptureSettings() {
           control={
             <Switch
               checked={settings.windowCapturePlaySound}
+              disabled={!bridge}
               aria-label="Play window capture sound"
               onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
             />
@@ -192,6 +193,7 @@ export function WindowCaptureSettings() {
           control={
             <Switch
               checked={settings.windowCaptureAnimations}
+              disabled={!bridge}
               aria-label="Animate window captures"
               onCheckedChange={(checked) => void save({ windowCaptureAnimations: checked })}
             />
