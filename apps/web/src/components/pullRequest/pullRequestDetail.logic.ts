@@ -18,7 +18,7 @@ import type {
 import { inferReviewCommentFenceLanguage, type ReviewCommentContext } from "~/reviewCommentContext";
 
 export const PULL_REQUEST_MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
-  merge: "Create a merge commit",
+  merge: "Merge",
   squash: "Squash and merge",
   rebase: "Rebase and merge",
 };
