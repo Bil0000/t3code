@@ -1,5 +1,23 @@
 import type { WindowCaptureShortcut } from "@t3tools/contracts";
 
+export type WindowCaptureFailureReason =
+  | "unsupported"
+  | "no-window-selected"
+  | "window-unavailable";
+
+export function windowCaptureFailureMessage(reason?: WindowCaptureFailureReason): string {
+  switch (reason) {
+    case "unsupported":
+      return "Window capture is not supported here.";
+    case "no-window-selected":
+      return "No window was selected.";
+    case "window-unavailable":
+      return "The active window is not available for capture.";
+    default:
+      return "Could not capture the active window.";
+  }
+}
+
 const ELECTRON_KEY_NAMES: Readonly<Record<string, string>> = {
   " ": "Space",
   "+": "Plus",

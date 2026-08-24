@@ -28,6 +28,8 @@ import {
   isWaylandSession,
   shouldRequestScreenCapturePermission,
   toElectronAccelerator,
+  windowCaptureFailureMessage,
+  type WindowCaptureFailureReason,
 } from "./windowCapture.ts";
 
 const MAX_CAPTURE_WIDTH = 5_120;
@@ -50,19 +52,25 @@ const DesktopWindowCaptureOperation = Schema.Literals([
   "read",
   "acknowledge",
 ]);
+const DesktopWindowCaptureFailureReason = Schema.Literals([
+  "unsupported",
+  "no-window-selected",
+  "window-unavailable",
+]);
 
 export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWindowCaptureError>()(
   "DesktopWindowCaptureError",
   {
     operation: DesktopWindowCaptureOperation,
     captureId: Schema.optional(Schema.String),
+    reason: Schema.optional(DesktopWindowCaptureFailureReason),
     cause: Schema.Defect(),
   },
 ) {
   override get message(): string {
     switch (this.operation) {
       case "capture":
-        return "Could not capture the active window.";
+        return windowCaptureFailureMessage(this.reason);
       case "list-pending":
         return "Could not list pending window captures.";
       case "read":
@@ -72,6 +80,8 @@ export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWi
     }
   }
 }
+
+const isDesktopWindowCaptureError = Schema.is(DesktopWindowCaptureError);
 
 export class DesktopWindowCapture extends Context.Service<
   DesktopWindowCapture,
@@ -149,7 +159,7 @@ async function revealPreviousWindowIfNeeded(): Promise<Electron.BrowserWindow | 
   return focused;
 }
 
-async function captureSource(mode: DesktopWindowCaptureState["mode"]) {
+async function captureSource(mode: DesktopWindowCaptureState["mode"], captureId: string) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = await revealPreviousWindowIfNeeded();
 
@@ -169,11 +179,14 @@ async function captureSource(mode: DesktopWindowCaptureState["mode"]) {
     const source =
       mode === "portal" ? sources[0] : active ? findCaptureSource(sources, active) : undefined;
     if (!source || source.thumbnail.isEmpty()) {
-      throw new Error(
-        mode === "portal"
-          ? "No window was selected."
-          : "The active window is not available for capture.",
-      );
+      const reason: WindowCaptureFailureReason =
+        mode === "portal" ? "no-window-selected" : "window-unavailable";
+      throw new DesktopWindowCaptureError({
+        operation: "capture",
+        captureId,
+        reason,
+        cause: new Error(windowCaptureFailureMessage(reason)),
+      });
     }
     return { source, active };
   } finally {
@@ -246,13 +259,20 @@ export const make = Effect.gen(function* () {
     return Effect.tryPromise({
       try: async () => {
         const mode = captureMode(environment.platform);
-        if (mode === "unavailable") throw new Error("Window capture is not supported here.");
+        if (mode === "unavailable") {
+          throw new DesktopWindowCaptureError({
+            operation: "capture",
+            captureId: id,
+            reason: "unsupported",
+            cause: new Error(windowCaptureFailureMessage("unsupported")),
+          });
+        }
         const imagePath = NodePath.join(captureDirectory, `${id}.png`);
         const imageTempPath = NodePath.join(captureDirectory, `${id}.tmp.png`);
         const metadataPath = NodePath.join(captureDirectory, `${id}.json`);
         await NodeFSP.mkdir(captureDirectory, { recursive: true });
         try {
-          const { source, active } = await captureSource(mode);
+          const { source, active } = await captureSource(mode, id);
           const png = source.thumbnail.toPNG();
           const capturedAt = new Date().toISOString();
           const appIconDataUrl = await iconDataUrl(source, active);
@@ -288,7 +308,9 @@ export const make = Effect.gen(function* () {
         }
       },
       catch: (cause) =>
-        new DesktopWindowCaptureError({ operation: "capture", captureId: id, cause }),
+        isDesktopWindowCaptureError(cause)
+          ? cause
+          : new DesktopWindowCaptureError({ operation: "capture", captureId: id, cause }),
     });
   };
 

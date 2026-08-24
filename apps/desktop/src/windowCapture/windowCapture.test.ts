@@ -5,7 +5,19 @@ import {
   isWaylandSession,
   shouldRequestScreenCapturePermission,
   toElectronAccelerator,
+  windowCaptureFailureMessage,
 } from "./windowCapture.ts";
+
+describe("windowCaptureFailureMessage", () => {
+  it.each([
+    ["unsupported", "Window capture is not supported here."],
+    ["no-window-selected", "No window was selected."],
+    ["window-unavailable", "The active window is not available for capture."],
+    [undefined, "Could not capture the active window."],
+  ] as const)("maps %s to its user-facing message", (reason, expected) => {
+    expect(windowCaptureFailureMessage(reason)).toBe(expected);
+  });
+});
 
 describe("toElectronAccelerator", () => {
   it("converts the default portable shortcut", () => {
