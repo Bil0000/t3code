@@ -10,6 +10,7 @@ import {
   isWaylandSession,
   shouldRequestScreenCapturePermission,
   updateBothShiftKeys,
+  windowCaptureShortcutRegistrationFailureMessage,
   windowCaptureShortcutSystemConflict,
   toElectronAccelerator,
 } from "./windowCapture.ts";
@@ -315,6 +316,24 @@ describe("both Shift keys", () => {
       state: BOTH_SHIFT_KEYS_IDLE,
       triggered: false,
     });
+  });
+});
+
+describe("windowCaptureShortcutRegistrationFailureMessage", () => {
+  it("distinguishes a Shift listener failure from a reserved key chord", () => {
+    expect(windowCaptureShortcutRegistrationFailureMessage({ kind: "both-shift-keys" })).toMatch(
+      /not available/,
+    );
+    expect(
+      windowCaptureShortcutRegistrationFailureMessage({
+        key: "2",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: true,
+        altKey: false,
+        modKey: true,
+      }),
+    ).toMatch(/already used/);
   });
 });
 

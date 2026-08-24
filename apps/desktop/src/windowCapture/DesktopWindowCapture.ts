@@ -38,6 +38,7 @@ import {
   isWaylandSession,
   shouldRequestScreenCapturePermission,
   toElectronAccelerator,
+  windowCaptureShortcutRegistrationFailureMessage,
   windowCaptureShortcutSystemConflict,
 } from "./windowCapture.ts";
 
@@ -525,7 +526,7 @@ export const make = Effect.gen(function* () {
         available,
         message: available
           ? "Shift + Shift is observed and cannot be reserved exclusively."
-          : "Shift + Shift is not available in this desktop build.",
+          : windowCaptureShortcutRegistrationFailureMessage(shortcut),
       };
     }
     const systemConflict = windowCaptureShortcutSystemConflict(shortcut);
@@ -597,7 +598,7 @@ export const make = Effect.gen(function* () {
           : isBothShiftKeysShortcut(shortcut)
             ? "Shift + Shift is observed and cannot be reserved exclusively."
             : null
-        : "This shortcut is already used by the system or another app.",
+        : windowCaptureShortcutRegistrationFailureMessage(shortcut),
     });
   });
 

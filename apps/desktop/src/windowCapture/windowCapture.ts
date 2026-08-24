@@ -61,6 +61,14 @@ export function effectiveWindowCaptureShortcut(
     : shortcut;
 }
 
+export function windowCaptureShortcutRegistrationFailureMessage(
+  shortcut: WindowCaptureShortcut,
+): string {
+  return isBothShiftKeysShortcut(shortcut)
+    ? "Shift + Shift is not available on this system."
+    : "This shortcut is already used by the system or another app.";
+}
+
 const COMMON_MOD_ACTIONS: Readonly<Record<string, string>> = {
   a: "Select All",
   c: "Copy",
