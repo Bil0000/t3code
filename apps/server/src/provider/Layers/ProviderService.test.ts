@@ -1232,6 +1232,12 @@ routing.layer("ProviderServiceLive routing", (it) => {
       assert.isAbove(accessibleChars, 0);
       assert.isAtMost(accessibleChars, PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 3);
       assert.isAtMost(turnInput.input?.length ?? 0, PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
+      for (let index = 0; index < 8; index += 1) {
+        assert.include(
+          turnInput.input ?? "",
+          `window-text-${index}-12345678-1234-1234-1234-123456789abc.png`,
+        );
+      }
     }),
   );
 

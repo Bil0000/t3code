@@ -755,6 +755,17 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       }
     };
     for (const attachment of attachments) {
+      const attachmentPath = resolveAttachmentPath({
+        attachmentsDir: serverConfig.attachmentsDir,
+        attachment,
+      });
+      appendAttachmentContext(
+        attachmentPath === null
+          ? undefined
+          : `[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`,
+      );
+    }
+    for (const attachment of attachments) {
       const source = attachment.source;
       const accessibleText = source?.accessibleText;
       appendAttachmentContext(
@@ -769,15 +780,6 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
               "End untrusted captured-window data.",
             ].join("\n")
           : undefined,
-      );
-      const attachmentPath = resolveAttachmentPath({
-        attachmentsDir: serverConfig.attachmentsDir,
-        attachment,
-      });
-      appendAttachmentContext(
-        attachmentPath === null
-          ? undefined
-          : `[Attached ${attachment.type} "${attachment.name}" is saved at: ${attachmentPath}]`,
       );
     }
 
