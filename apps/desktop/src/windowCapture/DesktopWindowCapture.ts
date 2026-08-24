@@ -141,7 +141,7 @@ async function captureSource(
     if (mode === "direct") {
       active = await activeWindow({
         accessibilityPermission: false,
-        screenRecordingPermission: platform === "darwin",
+        screenRecordingPermission: false,
       });
     }
 
