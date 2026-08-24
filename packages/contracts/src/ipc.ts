@@ -1114,11 +1114,11 @@ export interface DesktopBridge {
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
-  getWindowCaptureState: () => Promise<DesktopWindowCaptureState>;
-  captureWindow: () => Promise<void>;
-  listPendingWindowCaptures: () => Promise<readonly DesktopPendingWindowCapture[]>;
-  readWindowCapture: (id: string) => Promise<DesktopWindowCapture>;
-  acknowledgeWindowCapture: (id: string) => Promise<void>;
+  getWindowCaptureState?: () => Promise<DesktopWindowCaptureState>;
+  captureWindow?: () => Promise<void>;
+  listPendingWindowCaptures?: () => Promise<readonly DesktopPendingWindowCapture[]>;
+  readWindowCapture?: (id: string) => Promise<DesktopWindowCapture>;
+  acknowledgeWindowCapture?: (id: string) => Promise<void>;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: { issuePairingToken?: boolean },

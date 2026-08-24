@@ -80,6 +80,7 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments"
 import { useProjects, useThreadShells } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
+import { getDesktopWindowCaptureBridge } from "../lib/desktopWindowCapture";
 import {
   appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
@@ -1552,7 +1553,8 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  if (window.desktopBridge) {
+  const windowCaptureBridge = getDesktopWindowCaptureBridge();
+  if (windowCaptureBridge) {
     actionItems.push({
       kind: "action",
       value: "action:capture-window",
@@ -1561,7 +1563,7 @@ function OpenCommandPaletteDialog(props: {
       icon: <CameraIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         try {
-          await window.desktopBridge?.captureWindow();
+          await windowCaptureBridge.captureWindow();
         } catch (error) {
           toastManager.add(
             stackedThreadToast({

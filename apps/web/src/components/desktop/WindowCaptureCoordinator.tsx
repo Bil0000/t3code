@@ -10,6 +10,7 @@ import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useClientSettings } from "../../hooks/useSettings";
 import { compressImageToByteLimit } from "../../lib/imageCompression";
 import { resolveThreadActionProjectRef } from "../../lib/chatThreadActions";
+import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
@@ -57,6 +58,7 @@ export function WindowCaptureCoordinator() {
   const playSound = useClientSettings((settings) => settings.windowCapturePlaySound);
   const lastTargetRef = useRef<CaptureTarget | null>(null);
   const drainingRef = useRef<Promise<void> | null>(null);
+  const rerunRequestedRef = useRef(false);
 
   const currentTarget = routeThreadRef ?? routeDraftId;
   if (currentTarget) lastTargetRef.current = currentTarget;
@@ -77,80 +79,103 @@ export function WindowCaptureCoordinator() {
   }, [activeDraftThread, activeThread, defaultProjectRef, handleNewThread]);
 
   const drain = useCallback(async () => {
-    const bridge = window.desktopBridge;
+    const bridge = getDesktopWindowCaptureBridge();
     if (!bridge) return;
-    if (drainingRef.current) return drainingRef.current;
+    if (drainingRef.current) {
+      rerunRequestedRef.current = true;
+      return drainingRef.current;
+    }
 
     const operation = (async () => {
-      const pending = await bridge.listPendingWindowCaptures();
-      for (const item of pending) {
-        const target = await resolveTarget();
-        if (!target) {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Window captured, but no project is available",
-              description: "Add a project, then capture the window again.",
-            }),
-          );
-          return;
-        }
+      do {
+        rerunRequestedRef.current = false;
+        const pending = await bridge.listPendingWindowCaptures();
+        for (const item of pending) {
+          const target = await resolveTarget();
+          if (!target) {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Window captured, but no project is available",
+                description: "Add a project, then capture the window again.",
+              }),
+            );
+            return;
+          }
 
-        const store = useComposerDraftStore.getState();
-        const existing = store.getComposerDraft(target);
-        if (existing?.persistedAttachments.some((attachment) => attachment.id === item.id)) {
-          await bridge.acknowledgeWindowCapture(item.id);
-          continue;
-        }
-
-        const capture = await bridge.readWindowCapture(item.id);
-        const original = await dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
-        const compressed = await compressImageToByteLimit(
-          original,
-          PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-        );
-        if (!compressed.ok) {
-          throw new Error("The captured window is too large to attach.");
-        }
-        const file = compressed.file;
-        const dataUrl = compressed.recompressed ? await readFileAsDataUrl(file) : capture.dataUrl;
-        store.addImage(target, {
-          type: "image",
-          id: capture.id,
-          name: file.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
-          previewUrl: dataUrl,
-          file,
-          source: capture.source,
-        });
-        const persisted: PersistedComposerImageAttachment = {
-          id: capture.id,
-          name: file.name,
-          mimeType: file.type,
-          sizeBytes: file.size,
-          dataUrl,
-          source: capture.source,
-        };
-        const persistedAttachments =
-          store
-            .getComposerDraft(target)
-            ?.persistedAttachments.filter((attachment) => attachment.id !== capture.id) ?? [];
-        store.syncPersistedAttachments(target, [...persistedAttachments, persisted]);
-        await Promise.resolve();
-        if (
-          !store.getComposerDraft(target)?.persistedAttachments.some(({ id }) => id === capture.id)
-        ) {
-          throw new Error("The captured window could not be saved to the draft.");
-        }
-        await bridge.acknowledgeWindowCapture(capture.id);
-        if (playSound) {
           try {
-            playCaptureSound();
-          } catch {}
+            const store = useComposerDraftStore.getState();
+            const existing = store.getComposerDraft(target);
+            if (existing?.persistedAttachments.some((attachment) => attachment.id === item.id)) {
+              await bridge.acknowledgeWindowCapture(item.id);
+              continue;
+            }
+
+            const capture = await bridge.readWindowCapture(item.id);
+            const original = await dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
+            const compressed = await compressImageToByteLimit(
+              original,
+              PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+            );
+            if (!compressed.ok) {
+              throw new Error("The captured window is too large to attach.");
+            }
+            const file = compressed.file;
+            const dataUrl = compressed.recompressed
+              ? await readFileAsDataUrl(file)
+              : capture.dataUrl;
+            store.addImage(target, {
+              type: "image",
+              id: capture.id,
+              name: file.name,
+              mimeType: file.type,
+              sizeBytes: file.size,
+              previewUrl: dataUrl,
+              file,
+              source: capture.source,
+            });
+            const persisted: PersistedComposerImageAttachment = {
+              id: capture.id,
+              name: file.name,
+              mimeType: file.type,
+              sizeBytes: file.size,
+              dataUrl,
+              source: capture.source,
+            };
+            const persistedAttachments =
+              store
+                .getComposerDraft(target)
+                ?.persistedAttachments.filter((attachment) => attachment.id !== capture.id) ?? [];
+            store.syncPersistedAttachments(target, [...persistedAttachments, persisted]);
+            await Promise.resolve();
+            if (
+              !store
+                .getComposerDraft(target)
+                ?.persistedAttachments.some(({ id }) => id === capture.id)
+            ) {
+              throw new Error("The captured window could not be saved to the draft.");
+            }
+            await bridge.acknowledgeWindowCapture(capture.id);
+            if (playSound) {
+              try {
+                playCaptureSound();
+              } catch {}
+            }
+            window.dispatchEvent(new Event("t3:focus-composer"));
+          } catch (error) {
+            try {
+              await bridge.acknowledgeWindowCapture(item.id);
+            } catch {}
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Window capture failed",
+                description: error instanceof Error ? error.message : "Try the capture again.",
+              }),
+            );
+          }
         }
-        window.dispatchEvent(new Event("t3:focus-composer"));
-      }
+      } while (rerunRequestedRef.current);
     })()
       .catch((error: unknown) => {
         toastManager.add(
@@ -169,7 +194,7 @@ export function WindowCaptureCoordinator() {
   }, [playSound, resolveTarget]);
 
   useEffect(() => {
-    const bridge = window.desktopBridge;
+    const bridge = getDesktopWindowCaptureBridge();
     if (!bridge) return;
     void drain();
     return bridge.onMenuAction((action) => {

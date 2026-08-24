@@ -35,13 +35,34 @@ const decodePendingCapture = Schema.decodeUnknownSync(DesktopPendingWindowCaptur
 const PendingCaptureJson = Schema.fromJsonString(DesktopPendingWindowCapture);
 const decodePendingCaptureJson = Schema.decodeSync(PendingCaptureJson);
 const encodePendingCaptureJson = Schema.encodeSync(PendingCaptureJson);
+const DesktopWindowCaptureOperation = Schema.Literals([
+  "capture",
+  "list-pending",
+  "read",
+  "acknowledge",
+]);
+
 export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWindowCaptureError>()(
   "DesktopWindowCaptureError",
   {
-    message: Schema.String,
+    operation: DesktopWindowCaptureOperation,
+    captureId: Schema.optional(Schema.String),
     cause: Schema.Defect(),
   },
-) {}
+) {
+  override get message(): string {
+    switch (this.operation) {
+      case "capture":
+        return "Could not capture the active window.";
+      case "list-pending":
+        return "Could not list pending window captures.";
+      case "read":
+        return "Could not read the window capture.";
+      case "acknowledge":
+        return "Could not remove the window capture.";
+    }
+  }
+}
 
 export class DesktopWindowCapture extends Context.Service<
   DesktopWindowCapture,
@@ -60,10 +81,6 @@ export class DesktopWindowCapture extends Context.Service<
     readonly acknowledge: (id: string) => Effect.Effect<void, DesktopWindowCaptureError>;
   }
 >()("@t3tools/desktop/windowCapture/DesktopWindowCapture") {}
-
-function captureError(message: string, cause: unknown) {
-  return new DesktopWindowCaptureError({ message, cause });
-}
 
 function captureMode(platform: NodeJS.Platform): DesktopWindowCaptureState["mode"] {
   if (!["darwin", "linux", "win32"].includes(platform)) return "unavailable";
@@ -130,9 +147,8 @@ async function captureSource(mode: DesktopWindowCaptureState["mode"]) {
       );
     }
     return { source, active };
-  } catch (cause) {
+  } finally {
     if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
-    throw cause;
   }
 }
 
@@ -196,14 +212,14 @@ export const make = Effect.gen(function* () {
       ),
     );
 
-  const persistCapture = (settings: ClientSettings) =>
-    Effect.tryPromise({
+  const persistCapture = (settings: ClientSettings) => {
+    const id = NodeCrypto.randomUUID();
+    return Effect.tryPromise({
       try: async () => {
         const mode = captureMode(environment.platform);
         if (mode === "unavailable") throw new Error("Window capture is not supported here.");
         const { source, active } = await captureSource(mode);
         const png = source.thumbnail.toPNG();
-        const id = NodeCrypto.randomUUID();
         const capturedAt = new Date().toISOString();
         const appIconDataUrl = await iconDataUrl(source, active);
         const pending = decodePendingCapture({
@@ -225,14 +241,26 @@ export const make = Effect.gen(function* () {
         await NodeFSP.mkdir(captureDirectory, { recursive: true });
         const imagePath = NodePath.join(captureDirectory, `${id}.png`);
         const metadataPath = NodePath.join(captureDirectory, `${id}.json`);
-        await NodeFSP.writeFile(`${imagePath}.tmp`, png);
-        await NodeFSP.rename(`${imagePath}.tmp`, imagePath);
-        await NodeFSP.writeFile(`${metadataPath}.tmp`, encodePendingCaptureJson(pending), "utf8");
-        await NodeFSP.rename(`${metadataPath}.tmp`, metadataPath);
+        try {
+          await NodeFSP.writeFile(imagePath + ".tmp", png);
+          await NodeFSP.rename(imagePath + ".tmp", imagePath);
+          await NodeFSP.writeFile(metadataPath + ".tmp", encodePendingCaptureJson(pending), "utf8");
+          await NodeFSP.rename(metadataPath + ".tmp", metadataPath);
+        } catch (cause) {
+          await Promise.allSettled([
+            NodeFSP.rm(imagePath, { force: true }),
+            NodeFSP.rm(imagePath + ".tmp", { force: true }),
+            NodeFSP.rm(metadataPath, { force: true }),
+            NodeFSP.rm(metadataPath + ".tmp", { force: true }),
+          ]);
+          throw cause;
+        }
         showFlash(settings, active);
       },
-      catch: (cause) => captureError("Could not capture the active window.", cause),
+      catch: (cause) =>
+        new DesktopWindowCaptureError({ operation: "capture", captureId: id, cause }),
     });
+  };
 
   const capture = Effect.gen(function* () {
     if (yield* Ref.getAndSet(busyRef, true)) return;
@@ -309,20 +337,26 @@ export const make = Effect.gen(function* () {
             throw error;
           },
         );
-        const captures = await Promise.all(
-          names
-            .filter((name) => name.endsWith(".json") && !name.endsWith(".json.tmp"))
-            .map(async (name) =>
-              decodePendingCaptureJson(
-                await NodeFSP.readFile(NodePath.join(captureDirectory, name), "utf8"),
-              ),
-            ),
-        );
+        const captures = (
+          await Promise.all(
+            names
+              .filter((name) => name.endsWith(".json") && !name.endsWith(".json.tmp"))
+              .map(async (name) => {
+                try {
+                  return decodePendingCaptureJson(
+                    await NodeFSP.readFile(NodePath.join(captureDirectory, name), "utf8"),
+                  );
+                } catch {
+                  return undefined;
+                }
+              }),
+          )
+        ).filter((capture) => capture !== undefined);
         return captures.sort((left, right) =>
           left.source.capturedAt.localeCompare(right.source.capturedAt),
         );
       },
-      catch: (cause) => captureError("Could not list pending window captures.", cause),
+      catch: (cause) => new DesktopWindowCaptureError({ operation: "list-pending", cause }),
     }),
     read: (id) =>
       Effect.tryPromise({
@@ -336,7 +370,8 @@ export const make = Effect.gen(function* () {
             dataUrl: `data:image/png;base64,${png.toString("base64")}`,
           };
         },
-        catch: (cause) => captureError("Could not read the window capture.", cause),
+        catch: (cause) =>
+          new DesktopWindowCaptureError({ operation: "read", captureId: id, cause }),
       }),
     acknowledge: (id) =>
       Effect.tryPromise({
@@ -346,7 +381,8 @@ export const make = Effect.gen(function* () {
             NodeFSP.rm(NodePath.join(captureDirectory, `${id}.png`), { force: true }),
           ]);
         },
-        catch: (cause) => captureError("Could not remove the window capture.", cause),
+        catch: (cause) =>
+          new DesktopWindowCaptureError({ operation: "acknowledge", captureId: id, cause }),
       }),
   });
 });

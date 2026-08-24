@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { formatShortcutLabel } from "../../keybindings";
+import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
 import {
   keybindingFromKeyboardEvent,
   shortcutToKeybindingInput,
@@ -29,8 +30,10 @@ function captureStatus(
   state: DesktopWindowCaptureState | null,
   enabled: boolean,
   hasDesktopBridge: boolean,
+  hasWindowCapture: boolean,
 ): string {
   if (!hasDesktopBridge) return "Available in the desktop app.";
+  if (!hasWindowCapture) return "Update the desktop app to use window capture.";
   if (!state) return "Checking desktop support…";
   if (state.mode === "unavailable") return state.message ?? "Not supported on this platform.";
   if (!enabled) return "Turn this on to register the shortcut.";
@@ -43,7 +46,7 @@ function captureStatus(
 export function WindowCaptureSettings() {
   const settings = useClientSettings();
   const updateSettings = useUpdateClientSettings();
-  const bridge = window.desktopBridge;
+  const bridge = getDesktopWindowCaptureBridge();
   const [state, setState] = useState<DesktopWindowCaptureState | null>(null);
   const [recording, setRecording] = useState(false);
   const [capturing, setCapturing] = useState(false);
@@ -112,7 +115,12 @@ export function WindowCaptureSettings() {
         <SettingsRow
           {...searchableSetting("window-capture-enabled")}
           description="Capture a window from anywhere and attach it to your current draft."
-          status={captureStatus(state, settings.windowCaptureEnabled, Boolean(bridge))}
+          status={captureStatus(
+            state,
+            settings.windowCaptureEnabled,
+            Boolean(window.desktopBridge),
+            Boolean(bridge),
+          )}
           control={
             <Switch
               checked={settings.windowCaptureEnabled}
