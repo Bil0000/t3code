@@ -16,6 +16,7 @@ import type {
   ContextMenuItem,
   ModelSelection,
   ProviderDriverKind,
+  PullRequestMergeMethod,
   SidebarProjectGroupingMode,
   T3ProjectFileScript,
   ThreadEnvMode,
@@ -74,6 +75,7 @@ import { useAtomCommand } from "../../state/use-atom-command";
 import { ProviderModelPicker } from "../chat/ProviderModelPicker";
 import { TraitsPicker } from "../chat/TraitsPicker";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { PULL_REQUEST_MERGE_METHOD_LABELS } from "../pullRequest/pullRequestDetail.logic";
 import {
   EMPTY_PROJECT_SCRIPT_INPUT,
   editorRequestForScript,
@@ -294,6 +296,9 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
   const settings = usePrimarySettings();
   const updateClientSettings = useUpdateClientSettings();
   const projectGroupingSettings = useClientSettings(selectProjectGroupingSettings);
+  const mergeMethodOverrides = useClientSettings(
+    (settings) => settings.pullRequestMergeMethodOverrides,
+  );
   const serverProviders = useAtomValue(primaryServerProvidersAtom);
   const threads = useThreadShells();
   const updateProject = useAtomCommand(projectEnvironment.update, { reportFailure: false });
@@ -323,6 +328,20 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
     group.memberProjects.find(
       (member) => member.environmentId === group.environmentId && member.id === group.id,
     ) ?? group.memberProjects[0]!;
+  const projectMergeMethod = mergeMethodOverrides[group.projectKey];
+  const setProjectMergeMethod = useCallback(
+    (method: PullRequestMergeMethod | null) => {
+      const nextOverrides = { ...mergeMethodOverrides };
+      if (method === null) {
+        delete nextOverrides[group.projectKey];
+      } else {
+        nextOverrides[group.projectKey] = method;
+      }
+      updateClientSettings({ pullRequestMergeMethodOverrides: nextOverrides });
+    },
+    [group.projectKey, mergeMethodOverrides, updateClientSettings],
+  );
+
   const faviconPath = representative.faviconPath ?? null;
   const pickProjectFavicon =
     typeof window !== "undefined" &&
@@ -807,6 +826,44 @@ function ProjectDetail({ group }: { group: SidebarProjectSnapshot }) {
                   Choose file
                 </Button>
               </div>
+            }
+          />
+          <SettingsRow
+            title="Default merge method"
+            description="Pull requests in this project start with this method. It overrides the last method selected."
+            resetAction={
+              projectMergeMethod !== undefined ? (
+                <SettingResetButton
+                  label="project merge method"
+                  onClick={() => setProjectMergeMethod(null)}
+                />
+              ) : null
+            }
+            control={
+              <Select
+                value={projectMergeMethod ?? "inherit"}
+                onValueChange={(value) => {
+                  if (value === "merge" || value === "squash" || value === "rebase") {
+                    setProjectMergeMethod(value);
+                  } else if (value === "inherit") {
+                    setProjectMergeMethod(null);
+                  }
+                }}
+              >
+                <SelectTrigger aria-label="Default pull request merge method">
+                  <SelectValue>
+                    {projectMergeMethod === undefined
+                      ? "Last selected"
+                      : PULL_REQUEST_MERGE_METHOD_LABELS[projectMergeMethod]}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="inherit">Last selected</SelectItem>
+                  <SelectItem value="merge">{PULL_REQUEST_MERGE_METHOD_LABELS.merge}</SelectItem>
+                  <SelectItem value="squash">{PULL_REQUEST_MERGE_METHOD_LABELS.squash}</SelectItem>
+                  <SelectItem value="rebase">{PULL_REQUEST_MERGE_METHOD_LABELS.rebase}</SelectItem>
+                </SelectPopup>
+              </Select>
             }
           />
         </SettingsSection>
