@@ -12,7 +12,7 @@ export function WindowCaptureAttachmentDetails({
   return (
     <div
       className={cn(
-        "pointer-events-none absolute inset-x-0 bottom-0 z-[1] flex min-w-0 items-center gap-2 bg-gradient-to-t from-black/85 via-black/55 to-transparent px-2.5 pb-2 pt-6",
+        "pointer-events-none absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-2 bg-gradient-to-t from-black/85 via-black/55 to-transparent px-2.5 pb-2 pt-6",
         className,
       )}
     >

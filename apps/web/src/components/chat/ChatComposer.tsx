@@ -3231,7 +3231,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             {image.previewUrl ? (
                               <button
                                 type="button"
-                                className={"h-full w-full cursor-zoom-in"}
+                                className="h-full w-full cursor-zoom-in"
                                 aria-label={`Preview ${image.name}`}
                                 onClick={() => {
                                   const preview = buildExpandedImagePreview(

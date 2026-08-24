@@ -1018,13 +1018,13 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 key={image.id}
                 className={cn(
                   "relative overflow-hidden rounded-lg border border-border/80 bg-background/70",
-                  image.source?.kind === "window-capture" && "col-span-2 h-28",
+                  image.source?.kind === "window-capture" && "col-span-2 h-28 w-52 max-w-full",
                 )}
               >
                 {image.previewUrl ? (
                   <button
                     type="button"
-                    className={cn("h-full cursor-zoom-in", "w-full")}
+                    className="h-full w-full cursor-zoom-in"
                     aria-label={`Preview ${image.name}`}
                     onClick={() => {
                       const preview = buildExpandedImagePreview(regularImages, image.id);
