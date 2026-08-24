@@ -15,6 +15,7 @@ import {
   shortcutToKeybindingInput,
 } from "./KeybindingsSettings.logic";
 import {
+  SettingsUnavailableGroup,
   SettingResetButton,
   SettingsPageContainer,
   SettingsRow,
@@ -26,14 +27,7 @@ import { Kbd } from "../ui/kbd";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
-function captureStatus(
-  state: DesktopWindowCaptureState | null,
-  enabled: boolean,
-  hasDesktopBridge: boolean,
-  hasWindowCapture: boolean,
-): string {
-  if (!hasDesktopBridge) return "Available in the desktop app.";
-  if (!hasWindowCapture) return "Update the desktop app to use window capture.";
+function captureStatus(state: DesktopWindowCaptureState | null, enabled: boolean): string {
   if (!state) return "Checking desktop support…";
   if (state.mode === "unavailable") return state.message ?? "Not supported on this platform.";
   if (!enabled) return "Turn this on to register the shortcut.";
@@ -50,6 +44,11 @@ export function WindowCaptureSettings() {
   const [state, setState] = useState<DesktopWindowCaptureState | null>(null);
   const [recording, setRecording] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  const unavailableMessage = bridge
+    ? undefined
+    : window.desktopBridge
+      ? "Update the desktop app to use window capture."
+      : "Only available in the desktop app.";
 
   const refreshState = useCallback(async () => {
     if (bridge) setState(await bridge.getWindowCaptureState());
@@ -107,114 +106,109 @@ export function WindowCaptureSettings() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection
-        id="window-capture"
-        title="Window Capture"
-        icon={<CameraIcon className="size-4.5" />}
-      >
-        <SettingsRow
-          {...searchableSetting("window-capture-enabled")}
-          description="Capture a window from anywhere and attach it to your current draft."
-          status={captureStatus(
-            state,
-            settings.windowCaptureEnabled,
-            Boolean(window.desktopBridge),
-            Boolean(bridge),
-          )}
-          control={
-            <Switch
-              checked={settings.windowCaptureEnabled}
-              disabled={!bridge}
-              aria-label="Enable window capture"
-              onCheckedChange={(checked) => void save({ windowCaptureEnabled: checked })}
-            />
-          }
-        />
-        <SettingsRow
-          {...searchableSetting("window-capture-shortcut")}
-          description="Click the shortcut, then press a key with at least one modifier."
-          resetAction={
-            <SettingResetButton
-              label="window capture shortcut"
-              disabled={
-                shortcutToKeybindingInput(settings.windowCaptureShortcut) ===
-                shortcutToKeybindingInput(DEFAULT_WINDOW_CAPTURE_SHORTCUT)
-              }
-              onClick={() => void save({ windowCaptureShortcut: DEFAULT_WINDOW_CAPTURE_SHORTCUT })}
-            />
-          }
-          control={
-            <Button
-              type="button"
-              size="sm"
-              variant={recording ? "secondary" : "outline"}
-              disabled={!bridge}
-              aria-label="Record window capture shortcut"
-              data-keybinding-capture=""
-              onClick={() => setRecording(true)}
-              onKeyDown={recordShortcut}
-              onBlur={() => setRecording(false)}
-            >
-              {recording ? (
-                "Press shortcut…"
-              ) : (
-                <Kbd>{formatShortcutLabel(settings.windowCaptureShortcut)}</Kbd>
-              )}
-            </Button>
-          }
-        />
-        <SettingsRow
-          {...searchableSetting("window-capture-sound")}
-          description="Play a short sound after the image is attached."
-          control={
-            <Switch
-              checked={settings.windowCapturePlaySound}
-              disabled={!bridge}
-              aria-label="Play window capture sound"
-              onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
-            />
-          }
-        />
-        <SettingsRow
-          {...searchableSetting("window-capture-flash")}
-          description="Flash the captured window after the image is saved."
-          control={
-            <Switch
-              checked={settings.windowCaptureFlash}
-              disabled={!bridge}
-              aria-label="Flash captured window"
-              onCheckedChange={(checked) => void save({ windowCaptureFlash: checked })}
-            />
-          }
-        />
-        <SettingsRow
-          {...searchableSetting("window-capture-animations")}
-          description="Animate new capture cards and the capture flash."
-          control={
-            <Switch
-              checked={settings.windowCaptureAnimations}
-              disabled={!bridge}
-              aria-label="Animate window captures"
-              onCheckedChange={(checked) => void save({ windowCaptureAnimations: checked })}
-            />
-          }
-        />
-        <SettingsRow
-          title="Capture now"
-          description="Capture once without changing the global shortcut setting."
-          control={
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              disabled={!bridge || capturing}
-              onClick={() => void captureNow()}
-            >
-              <CameraIcon className="size-3.5" />
-              {capturing ? "Capturing…" : "Capture window"}
-            </Button>
-          }
-        />
+      <SettingsSection id="window-capture" title="Window Capture">
+        <SettingsUnavailableGroup message={unavailableMessage}>
+          <SettingsRow
+            {...searchableSetting("window-capture-enabled")}
+            description="Capture a window from anywhere and attach it to your current draft."
+            status={bridge ? captureStatus(state, settings.windowCaptureEnabled) : undefined}
+            control={
+              <Switch
+                checked={settings.windowCaptureEnabled}
+                disabled={!bridge}
+                aria-label="Enable window capture"
+                onCheckedChange={(checked) => void save({ windowCaptureEnabled: checked })}
+              />
+            }
+          />
+          <SettingsRow
+            {...searchableSetting("window-capture-shortcut")}
+            description="Click the shortcut, then press a key with at least one modifier."
+            resetAction={
+              <SettingResetButton
+                label="window capture shortcut"
+                disabled={
+                  shortcutToKeybindingInput(settings.windowCaptureShortcut) ===
+                  shortcutToKeybindingInput(DEFAULT_WINDOW_CAPTURE_SHORTCUT)
+                }
+                onClick={() =>
+                  void save({ windowCaptureShortcut: DEFAULT_WINDOW_CAPTURE_SHORTCUT })
+                }
+              />
+            }
+            control={
+              <Button
+                type="button"
+                size="sm"
+                variant={recording ? "secondary" : "outline"}
+                disabled={!bridge}
+                aria-label="Record window capture shortcut"
+                data-keybinding-capture=""
+                onClick={() => setRecording(true)}
+                onKeyDown={recordShortcut}
+                onBlur={() => setRecording(false)}
+              >
+                {recording ? (
+                  "Press shortcut…"
+                ) : (
+                  <Kbd>{formatShortcutLabel(settings.windowCaptureShortcut)}</Kbd>
+                )}
+              </Button>
+            }
+          />
+          <SettingsRow
+            {...searchableSetting("window-capture-sound")}
+            description="Play a short sound after the image is attached."
+            control={
+              <Switch
+                checked={settings.windowCapturePlaySound}
+                disabled={!bridge}
+                aria-label="Play window capture sound"
+                onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
+              />
+            }
+          />
+          <SettingsRow
+            {...searchableSetting("window-capture-flash")}
+            description="Flash the captured window after the image is saved."
+            control={
+              <Switch
+                checked={settings.windowCaptureFlash}
+                disabled={!bridge}
+                aria-label="Flash captured window"
+                onCheckedChange={(checked) => void save({ windowCaptureFlash: checked })}
+              />
+            }
+          />
+          <SettingsRow
+            {...searchableSetting("window-capture-animations")}
+            description="Animate new capture cards and the capture flash."
+            control={
+              <Switch
+                checked={settings.windowCaptureAnimations}
+                disabled={!bridge}
+                aria-label="Animate window captures"
+                onCheckedChange={(checked) => void save({ windowCaptureAnimations: checked })}
+              />
+            }
+          />
+          <SettingsRow
+            title="Capture now"
+            description="Capture once without changing the global shortcut setting."
+            control={
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!bridge || capturing}
+                onClick={() => void captureNow()}
+              >
+                <CameraIcon className="size-3.5" />
+                {capturing ? "Capturing…" : "Capture window"}
+              </Button>
+            }
+          />
+        </SettingsUnavailableGroup>
       </SettingsSection>
     </SettingsPageContainer>
   );
