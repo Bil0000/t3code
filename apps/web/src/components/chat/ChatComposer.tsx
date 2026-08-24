@@ -3221,7 +3221,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             className={cn(
                               "relative overflow-hidden rounded-lg border border-border/80 bg-background",
                               image.source?.kind === "window-capture"
-                                ? "flex h-20 max-w-full"
+                                ? "h-28 w-52 max-w-full"
                                 : "h-16 w-16",
                               image.source?.kind === "window-capture" &&
                                 settings.windowCaptureAnimations &&
@@ -3231,11 +3231,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             {image.previewUrl ? (
                               <button
                                 type="button"
-                                className={
-                                  image.source?.kind === "window-capture"
-                                    ? "h-full w-28 shrink-0 cursor-zoom-in overflow-hidden border-r border-border/70"
-                                    : "h-full w-full cursor-zoom-in"
-                                }
+                                className={"h-full w-full cursor-zoom-in"}
                                 aria-label={`Preview ${image.name}`}
                                 onClick={() => {
                                   const preview = buildExpandedImagePreview(
@@ -3260,7 +3256,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             {image.source?.kind === "window-capture" ? (
                               <WindowCaptureAttachmentDetails
                                 source={image.source}
-                                className="max-w-72 px-2.5 pr-8"
+                                className="pr-8"
                               />
                             ) : null}
                             {nonPersistedComposerImageIdSet.has(image.id) && (

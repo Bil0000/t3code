@@ -1017,19 +1017,14 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               <div
                 key={image.id}
                 className={cn(
-                  "overflow-hidden rounded-lg border border-border/80 bg-background/70",
-                  image.source?.kind === "window-capture" && "col-span-2 flex h-20",
+                  "relative overflow-hidden rounded-lg border border-border/80 bg-background/70",
+                  image.source?.kind === "window-capture" && "col-span-2 h-28",
                 )}
               >
                 {image.previewUrl ? (
                   <button
                     type="button"
-                    className={cn(
-                      "h-full cursor-zoom-in",
-                      image.source?.kind === "window-capture"
-                        ? "w-28 shrink-0 border-r border-border/70"
-                        : "w-full",
-                    )}
+                    className={cn("h-full cursor-zoom-in", "w-full")}
                     aria-label={`Preview ${image.name}`}
                     onClick={() => {
                       const preview = buildExpandedImagePreview(regularImages, image.id);
@@ -1052,7 +1047,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                   </div>
                 )}
                 {image.source?.kind === "window-capture" ? (
-                  <WindowCaptureAttachmentDetails source={image.source} className="px-3" />
+                  <WindowCaptureAttachmentDetails source={image.source} />
                 ) : null}
               </div>
             ))}

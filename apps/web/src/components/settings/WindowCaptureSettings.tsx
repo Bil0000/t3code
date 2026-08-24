@@ -1,20 +1,25 @@
+import { useAtomValue } from "@effect/atom-react";
 import {
   DEFAULT_WINDOW_CAPTURE_SHORTCUT,
   type ClientSettingsPatch,
+  type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
+  type WindowCaptureShortcut,
 } from "@t3tools/contracts";
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
 import { CameraIcon } from "lucide-react";
-import { useCallback, useEffect, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
-import { formatShortcutLabel } from "../../keybindings";
 import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
-import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
 import {
-  keybindingFromKeyboardEvent,
-  shortcutToKeybindingInput,
-} from "./KeybindingsSettings.logic";
+  formatWindowCaptureShortcutLabel,
+  sameWindowCaptureShortcut,
+  windowCaptureKeybindingConflict,
+} from "../../lib/windowCaptureShortcut";
+import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
+import { primaryServerKeybindingsAtom } from "../../state/server";
+import { commandLabel, keybindingFromKeyboardEvent } from "./KeybindingsSettings.logic";
 import {
   SettingsUnavailableGroup,
   SettingResetButton,
@@ -28,8 +33,16 @@ import { Kbd } from "../ui/kbd";
 import { Switch } from "../ui/switch";
 import { stackedThreadToast, toastManager } from "../ui/toast";
 
+type ShortcutCheck =
+  | { readonly status: "idle"; readonly availability: null }
+  | { readonly status: "checking"; readonly availability: null }
+  | {
+      readonly status: "checked";
+      readonly availability: DesktopWindowCaptureShortcutAvailability;
+    };
+
 function captureStatus(state: DesktopWindowCaptureState | null, enabled: boolean): string {
-  if (!state) return "Checking desktop support…";
+  if (!state) return "Checking desktop support...";
   if (state.mode === "unavailable") return state.message ?? "Not supported on this platform.";
   if (!enabled) return "Turn this on to register the shortcut.";
   if (state.message) return state.message;
@@ -49,16 +62,27 @@ export function isWindowCaptureAvailable(
 export function WindowCaptureSettings() {
   const settings = useClientSettings();
   const updateSettings = useUpdateClientSettings();
+  const keybindings = useAtomValue(primaryServerKeybindingsAtom);
   const bridge = getDesktopWindowCaptureBridge();
   const [state, setState] = useState<DesktopWindowCaptureState | null>(null);
   const [recording, setRecording] = useState(false);
   const [capturing, setCapturing] = useState(false);
+  const [candidate, setCandidate] = useState<WindowCaptureShortcut>(settings.windowCaptureShortcut);
+  const [shortcutCheck, setShortcutCheck] = useState<ShortcutCheck>({
+    status: "idle",
+    availability: null,
+  });
+  const heldShiftCodesRef = useRef(new Set<string>());
+  const shortcutCheckIdRef = useRef(0);
   const unavailableMessage = bridge
     ? undefined
     : window.desktopBridge
       ? "Update the desktop app to use window capture."
       : "Only available in the desktop app.";
   const captureAvailable = isWindowCaptureAvailable(Boolean(bridge), state);
+  const effectiveShortcut = state?.shortcut ?? settings.windowCaptureShortcut;
+  const shortcutChanged = !sameWindowCaptureShortcut(candidate, effectiveShortcut);
+  const canSaveShortcut = shortcutChanged && shortcutCheck.availability?.available === true;
 
   const refreshState = useCallback(async () => {
     if (bridge) setState(await bridge.getWindowCaptureState());
@@ -68,6 +92,11 @@ export function WindowCaptureSettings() {
     void refreshState();
   }, [refreshState]);
 
+  useEffect(() => {
+    setCandidate(effectiveShortcut);
+    setShortcutCheck({ status: "idle", availability: null });
+  }, [effectiveShortcut]);
+
   const save = useCallback(
     async (patch: ClientSettingsPatch) => {
       await updateSettings(patch);
@@ -76,23 +105,72 @@ export function WindowCaptureSettings() {
     [refreshState, updateSettings],
   );
 
+  const stopRecording = useCallback(() => {
+    heldShiftCodesRef.current.clear();
+    setRecording(false);
+  }, []);
+
+  const checkShortcut = useCallback(
+    async (shortcut: WindowCaptureShortcut) => {
+      const checkId = ++shortcutCheckIdRef.current;
+      setCandidate(shortcut);
+      const conflict = windowCaptureKeybindingConflict(shortcut, keybindings);
+      if (conflict) {
+        setShortcutCheck({
+          status: "checked",
+          availability: {
+            available: false,
+            message: `T3 Code already uses this for "${commandLabel(conflict)}".`,
+          },
+        });
+        return;
+      }
+      if (!bridge) return;
+      setShortcutCheck({ status: "checking", availability: null });
+      try {
+        const availability = await bridge.checkWindowCaptureShortcut(shortcut);
+        if (checkId === shortcutCheckIdRef.current) {
+          setShortcutCheck({ status: "checked", availability });
+        }
+      } catch (error) {
+        if (checkId !== shortcutCheckIdRef.current) return;
+        setShortcutCheck({
+          status: "checked",
+          availability: {
+            available: false,
+            message: error instanceof Error ? error.message : "Could not check this shortcut.",
+          },
+        });
+      }
+    },
+    [bridge, keybindings],
+  );
+
   const recordShortcut = useCallback(
     (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (!recording || event.key === "Tab") return;
+      if (!recording || event.key === "Tab" || event.repeat) return;
       event.preventDefault();
       event.stopPropagation();
       if (event.key === "Escape") {
-        setRecording(false);
+        stopRecording();
+        return;
+      }
+      if (event.key === "Shift" && (event.code === "ShiftLeft" || event.code === "ShiftRight")) {
+        heldShiftCodesRef.current.add(event.code);
+        if (heldShiftCodesRef.current.size === 2) {
+          stopRecording();
+          void checkShortcut({ kind: "both-shift-keys" });
+        }
         return;
       }
       const input = keybindingFromKeyboardEvent(event, navigator.platform);
       if (!input) return;
       const shortcut = parseKeybindingShortcut(input);
       if (!shortcut) return;
-      setRecording(false);
-      void save({ windowCaptureShortcut: shortcut });
+      stopRecording();
+      void checkShortcut(shortcut);
     },
-    [recording, save],
+    [checkShortcut, recording, stopRecording],
   );
 
   const captureNow = useCallback(async () => {
@@ -114,6 +192,16 @@ export function WindowCaptureSettings() {
     }
   }, [bridge, captureAvailable, capturing, refreshState]);
 
+  const shortcutStatus = recording
+    ? "Press both Shift keys, or a key chord. Esc cancels."
+    : shortcutCheck.status === "checking"
+      ? "Checking T3 Code, the system, and other apps..."
+      : shortcutCheck.availability
+        ? shortcutCheck.availability.available
+          ? (shortcutCheck.availability.message ?? "Available. Save to apply.")
+          : shortcutCheck.availability.message
+        : (state?.message ?? (state?.shortcutRegistered ? "Available and reserved." : undefined));
+
   return (
     <SettingsPageContainer>
       <SettingsSection id="window-capture" title="Window Capture">
@@ -133,14 +221,14 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-shortcut")}
-            description="Click the shortcut, then press a key with at least one modifier."
+            description="Press both Shift keys, or choose a key chord. T3 Code checks it before saving."
+            status={shortcutStatus}
             resetAction={
               <SettingResetButton
                 label="window capture shortcut"
                 disabled={
                   !captureAvailable ||
-                  shortcutToKeybindingInput(settings.windowCaptureShortcut) ===
-                    shortcutToKeybindingInput(DEFAULT_WINDOW_CAPTURE_SHORTCUT)
+                  sameWindowCaptureShortcut(effectiveShortcut, DEFAULT_WINDOW_CAPTURE_SHORTCUT)
                 }
                 onClick={() =>
                   void save({ windowCaptureShortcut: DEFAULT_WINDOW_CAPTURE_SHORTCUT })
@@ -148,23 +236,41 @@ export function WindowCaptureSettings() {
               />
             }
             control={
-              <Button
-                type="button"
-                size="xs"
-                variant={recording ? "secondary" : "outline"}
-                disabled={!captureAvailable}
-                aria-label="Record window capture shortcut"
-                data-keybinding-capture=""
-                onClick={() => setRecording(true)}
-                onKeyDown={recordShortcut}
-                onBlur={() => setRecording(false)}
-              >
-                {recording ? (
-                  "Press shortcut…"
-                ) : (
-                  <Kbd>{formatShortcutLabel(settings.windowCaptureShortcut)}</Kbd>
-                )}
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  type="button"
+                  size="xs"
+                  variant={recording ? "secondary" : "outline"}
+                  disabled={!captureAvailable}
+                  aria-label="Record window capture shortcut"
+                  aria-pressed={recording}
+                  data-keybinding-capture=""
+                  onClick={() => {
+                    heldShiftCodesRef.current.clear();
+                    setShortcutCheck({ status: "idle", availability: null });
+                    setRecording(true);
+                  }}
+                  onKeyDown={recordShortcut}
+                  onKeyUp={(event) => heldShiftCodesRef.current.delete(event.code)}
+                  onBlur={stopRecording}
+                >
+                  {recording ? (
+                    "Press shortcut..."
+                  ) : (
+                    <Kbd>{formatWindowCaptureShortcutLabel(candidate)}</Kbd>
+                  )}
+                </Button>
+                {shortcutChanged ? (
+                  <Button
+                    type="button"
+                    size="xs"
+                    disabled={!canSaveShortcut}
+                    onClick={() => void save({ windowCaptureShortcut: candidate })}
+                  >
+                    Save
+                  </Button>
+                ) : null}
+              </div>
             }
           />
           <SettingsRow
@@ -192,7 +298,7 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-flash")}
-            description="Flash the captured window after the image is saved."
+            description="Show a gentle cue on the captured window."
             control={
               <Switch
                 checked={settings.windowCaptureFlash}
@@ -204,7 +310,7 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-animations")}
-            description="Animate new capture cards and the capture flash."
+            description="Animate new capture cards and capture feedback."
             control={
               <Switch
                 checked={settings.windowCaptureAnimations}
@@ -226,7 +332,7 @@ export function WindowCaptureSettings() {
                 onClick={() => void captureNow()}
               >
                 <CameraIcon className="size-3.5" />
-                {capturing ? "Capturing…" : "Capture window"}
+                {capturing ? "Capturing..." : "Capture window"}
               </Button>
             }
           />

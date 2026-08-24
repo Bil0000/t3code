@@ -4,6 +4,7 @@ export const WINDOW_CAPTURE_FOCUS_EVENT = "t3code:focus-composer";
 
 type WindowCaptureMethods =
   | "getWindowCaptureState"
+  | "checkWindowCaptureShortcut"
   | "captureWindow"
   | "listPendingWindowCaptures"
   | "readWindowCapture"
@@ -16,6 +17,7 @@ export function getDesktopWindowCaptureBridge(): DesktopWindowCaptureBridge | un
   const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
   if (
     typeof bridge?.getWindowCaptureState !== "function" ||
+    typeof bridge.checkWindowCaptureShortcut !== "function" ||
     typeof bridge.captureWindow !== "function" ||
     typeof bridge.listPendingWindowCaptures !== "function" ||
     typeof bridge.readWindowCapture !== "function" ||

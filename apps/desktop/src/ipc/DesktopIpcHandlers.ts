@@ -47,6 +47,7 @@ import {
 import {
   acknowledgeWindowCapture,
   captureWindow,
+  checkWindowCaptureShortcut,
   getWindowCaptureState,
   listPendingWindowCaptures,
   readWindowCapture,
@@ -68,6 +69,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getWindowCaptureState);
+  yield* ipc.handle(checkWindowCaptureShortcut);
   yield* ipc.handle(captureWindow);
   yield* ipc.handle(listPendingWindowCaptures);
   yield* ipc.handle(readWindowCapture);

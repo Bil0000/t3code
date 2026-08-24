@@ -1,7 +1,7 @@
 import { CameraIcon, SparklesIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
-import { formatShortcutLabel } from "../../keybindings";
+import { formatWindowCaptureShortcutLabel } from "../../lib/windowCaptureShortcut";
 import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
 import {
   useClientSettings,
@@ -58,7 +58,7 @@ export function WindowCaptureOnboardingDialog() {
               <SparklesIcon className="size-4 text-muted-foreground" />
               Default shortcut
             </span>
-            <Kbd>{formatShortcutLabel(settings.windowCaptureShortcut)}</Kbd>
+            <Kbd>{formatWindowCaptureShortcutLabel(settings.windowCaptureShortcut)}</Kbd>
           </div>
         </DialogPanel>
         <DialogFooter>

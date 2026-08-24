@@ -2,7 +2,9 @@ import {
   DesktopPendingWindowCapture,
   DesktopWindowCapture as DesktopWindowCaptureSchema,
   DesktopWindowCaptureId,
+  DesktopWindowCaptureShortcutAvailability,
   DesktopWindowCaptureState,
+  WindowCaptureShortcut,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -32,6 +34,16 @@ export const getWindowCaptureState = DesktopIpc.makeIpcMethod({
   result: DesktopWindowCaptureState,
   handler: Effect.fn("desktop.ipc.windowCapture.getState")(function* () {
     return yield* (yield* DesktopWindowCapture.DesktopWindowCapture).state;
+  }),
+});
+
+export const checkWindowCaptureShortcut = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.CHECK_WINDOW_CAPTURE_SHORTCUT_CHANNEL,
+  payload: WindowCaptureShortcut,
+  result: DesktopWindowCaptureShortcutAvailability,
+  handler: Effect.fn("desktop.ipc.windowCapture.checkShortcut")(function* (shortcut, event) {
+    yield* ensureTrustedWindowCaptureSender(event);
+    return yield* (yield* DesktopWindowCapture.DesktopWindowCapture).checkShortcut(shortcut);
   }),
 });
 

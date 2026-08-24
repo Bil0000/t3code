@@ -40,14 +40,7 @@ describe("ClientSettings window capture", () => {
     const settings = decodeClientSettings({});
 
     expect(settings.windowCaptureEnabled).toBe(false);
-    expect(settings.windowCaptureShortcut).toEqual({
-      key: "2",
-      metaKey: false,
-      ctrlKey: false,
-      shiftKey: true,
-      altKey: false,
-      modKey: true,
-    });
+    expect(settings.windowCaptureShortcut).toEqual({ kind: "both-shift-keys" });
     expect(settings.windowCapturePlaySound).toBe(true);
     expect(settings.windowCaptureFlash).toBe(true);
     expect(settings.windowCaptureAnimations).toBe(true);

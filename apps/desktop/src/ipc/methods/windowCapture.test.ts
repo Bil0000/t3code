@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as DesktopWindowCapture from "../../windowCapture/DesktopWindowCapture.ts";
-import { captureWindow } from "./windowCapture.ts";
+import { captureWindow, checkWindowCaptureShortcut } from "./windowCapture.ts";
 
 describe("window capture IPC", () => {
   it.effect("uses the manual capture path for a trusted renderer", () => {
@@ -35,6 +35,30 @@ describe("window capture IPC", () => {
       yield* captureWindow.handler(undefined, { sender: { id: 7 } });
       assert.strictEqual(globalCaptures, 0);
       assert.strictEqual(manualCaptures, 1);
+    }).pipe(Effect.provide(layer));
+  });
+  it.effect("checks shortcut availability for a trusted renderer", () => {
+    const layer = Layer.mergeAll(
+      Layer.succeed(
+        ElectronWindow.ElectronWindow,
+        ElectronWindow.ElectronWindow.of({
+          main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
+        } as ElectronWindow.ElectronWindow["Service"]),
+      ),
+      Layer.succeed(
+        DesktopWindowCapture.DesktopWindowCapture,
+        DesktopWindowCapture.DesktopWindowCapture.of({
+          checkShortcut: () => Effect.succeed({ available: true, message: null }),
+        } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      const result = yield* checkWindowCaptureShortcut.handler(
+        { kind: "both-shift-keys" },
+        { sender: { id: 7 } },
+      );
+      assert.deepEqual(result, { available: true, message: null });
     }).pipe(Effect.provide(layer));
   });
 });

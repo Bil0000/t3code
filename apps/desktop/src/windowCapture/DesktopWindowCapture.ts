@@ -5,8 +5,10 @@ import {
   DesktopPendingWindowCapture,
   WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS,
   type DesktopWindowCapture as DesktopWindowCaptureValue,
+  type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
   type ClientSettings,
+  type WindowCaptureShortcut,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
@@ -25,14 +27,18 @@ import { activeWindow, type Result as ActiveWindow } from "get-windows";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
+import { startGlobalShiftShortcut } from "./GlobalShiftShortcut.ts";
 import {
   accessibleWindowText,
+  effectiveWindowCaptureShortcut,
   findAccessibleWindow,
   findCaptureSource,
   hideAndWaitForBlur,
+  isBothShiftKeysShortcut,
   isWaylandSession,
   shouldRequestScreenCapturePermission,
   toElectronAccelerator,
+  windowCaptureShortcutSystemConflict,
 } from "./windowCapture.ts";
 
 const MAX_CAPTURE_WIDTH = 5_120;
@@ -149,6 +155,9 @@ export class DesktopWindowCapture extends Context.Service<
     readonly initialize: Effect.Effect<void>;
     readonly configure: (settings: ClientSettings) => Effect.Effect<void>;
     readonly state: Effect.Effect<DesktopWindowCaptureState>;
+    readonly checkShortcut: (
+      shortcut: WindowCaptureShortcut,
+    ) => Effect.Effect<DesktopWindowCaptureShortcutAvailability>;
     readonly capture: Effect.Effect<void, DesktopWindowCaptureFailure>;
     readonly captureNow: Effect.Effect<void, DesktopWindowCaptureFailure>;
     readonly listPending: Effect.Effect<
@@ -212,6 +221,18 @@ async function requestMacScreenCapturePermission(): Promise<string | null> {
   return MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
 }
 
+function currentMacWindowCapturePermissionMessage(): string | null {
+  const accessibilityGranted = Electron.systemPreferences.isTrustedAccessibilityClient(false);
+  const screenGranted = Electron.systemPreferences.getMediaAccessStatus("screen") === "granted";
+  if (!accessibilityGranted && !screenGranted) {
+    return "Allow Accessibility and Screen Recording in System Settings, then restart T3 Code.";
+  }
+  if (!accessibilityGranted) {
+    return "Allow Accessibility in System Settings, then restart T3 Code.";
+  }
+  return screenGranted ? null : MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
+}
+
 async function requestMacWindowCapturePermissions(): Promise<string | null> {
   const accessibilityGranted = Electron.systemPreferences.isTrustedAccessibilityClient(true);
   const screenMessage = await requestMacScreenCapturePermission();
@@ -270,6 +291,7 @@ async function captureSource(
   mode: DesktopWindowCaptureState["mode"],
   captureId: string,
   platform: NodeJS.Platform,
+  settings: ClientSettings,
 ) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
@@ -295,6 +317,7 @@ async function captureSource(
         ? new DesktopWindowCaptureNoWindowSelectedError({ captureId })
         : new DesktopWindowCaptureWindowUnavailableError({ captureId });
     }
+    showFlash(settings, active);
     const accessibleText = active
       ? await readAccessibleWindowText(active, platform, source.name)
       : undefined;
@@ -321,10 +344,10 @@ function showFlash(settings: ClientSettings, active: ActiveWindow | undefined): 
     transparent: true,
   });
   flash.setIgnoreMouseEvents(true);
-  const duration = settings.windowCaptureAnimations ? 180 : 70;
-  const animation = settings.windowCaptureAnimations ? "animation:flash 180ms ease-out both" : "";
+  const duration = settings.windowCaptureAnimations ? 220 : 60;
+  const animation = settings.windowCaptureAnimations ? "animation:flash 220ms ease-out both" : "";
   const html =
-    '<!doctype html><style>@keyframes flash{0%{opacity:0}20%{opacity:1}100%{opacity:0}}</style><body style="margin:0;background:rgba(255,255,255,.72);' +
+    '<!doctype html><style>@keyframes flash{0%{opacity:0}12%{opacity:1}100%{opacity:0}}</style><body style="margin:0;background:rgba(255,255,255,.26);' +
     animation +
     '"></body>';
   void flash.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(() => {
@@ -334,6 +357,21 @@ function showFlash(settings: ClientSettings, active: ActiveWindow | undefined): 
       if (!flash.isDestroyed()) flash.close();
     }, duration);
   });
+}
+
+function probeGlobalShortcut(accelerator: string): DesktopWindowCaptureShortcutAvailability {
+  try {
+    if (!Electron.globalShortcut.register(accelerator, () => undefined)) {
+      return {
+        available: false,
+        message: "This shortcut is already used by the system or another app.",
+      };
+    }
+    Electron.globalShortcut.unregister(accelerator);
+    return { available: true, message: null };
+  } catch {
+    return { available: false, message: "The system could not register this shortcut." };
+  }
 }
 
 export const make = Effect.gen(function* () {
@@ -357,6 +395,16 @@ export const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(context);
   const captureDirectory = path.join(environment.stateDir, "window-captures");
   let registeredAccelerator: string | undefined;
+  let stopShiftShortcut: (() => void) | undefined;
+
+  const releaseShortcut = () => {
+    if (registeredAccelerator) {
+      Electron.globalShortcut.unregister(registeredAccelerator);
+      registeredAccelerator = undefined;
+    }
+    stopShiftShortcut?.();
+    stopShiftShortcut = undefined;
+  };
 
   const setFailure = (message: string) =>
     Ref.update(stateRef, (state) => ({ ...state, message })).pipe(
@@ -388,7 +436,7 @@ export const make = Effect.gen(function* () {
     yield* Effect.gen(function* () {
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
       const { source, active, accessibleText } = yield* Effect.tryPromise({
-        try: () => captureSource(mode, id, environment.platform),
+        try: () => captureSource(mode, id, environment.platform, settings),
         catch: (cause) => captureFailure(cause, id),
       });
       const png = yield* Effect.try({
@@ -421,10 +469,6 @@ export const make = Effect.gen(function* () {
         yield* encodePendingCaptureJson(pending),
       );
       yield* fileSystem.rename(metadataPath + ".tmp", metadataPath);
-      yield* Effect.try({
-        try: () => showFlash(settings, active),
-        catch: (cause) => captureFailure(cause, id),
-      });
     }).pipe(
       Effect.mapError((cause) => captureFailure(cause, id)),
       Effect.tapError(() => cleanup),
@@ -457,28 +501,53 @@ export const make = Effect.gen(function* () {
     yield* captureNow;
   });
 
-  const configure = Effect.fn("desktop.windowCapture.configure")(function* (
-    settings: ClientSettings,
+  const checkShortcut = Effect.fn("desktop.windowCapture.checkShortcut")(function* (
+    shortcut: WindowCaptureShortcut,
   ) {
-    const previousSettings = yield* Ref.get(settingsRef);
-    yield* Ref.set(settingsRef, settings);
-    const permissionMessage = shouldRequestScreenCapturePermission(
-      environment.platform,
-      previousSettings.windowCaptureEnabled,
-      settings.windowCaptureEnabled,
-    )
-      ? yield* Effect.promise(requestMacWindowCapturePermissions)
-      : null;
-    if (registeredAccelerator) {
-      Electron.globalShortcut.unregister(registeredAccelerator);
-      registeredAccelerator = undefined;
+    const mode = captureMode(environment.platform);
+    if (mode === "unavailable") {
+      return { available: false, message: "Window capture is not supported on this platform." };
     }
+    if (mode === "portal") {
+      return {
+        available: true,
+        message: isBothShiftKeysShortcut(shortcut)
+          ? "Wayland uses Ctrl+Shift+2 because it does not expose physical modifier pairs."
+          : "Your desktop will confirm this shortcut when you enable Window Capture.",
+      };
+    }
+    if (isBothShiftKeysShortcut(shortcut)) {
+      const available = yield* Effect.tryPromise(() => import("uiohook-napi")).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+      return {
+        available,
+        message: available
+          ? "Shift + Shift is observed and cannot be reserved exclusively."
+          : "Shift + Shift is not available in this desktop build.",
+      };
+    }
+    const systemConflict = windowCaptureShortcutSystemConflict(shortcut);
+    if (systemConflict) return { available: false, message: systemConflict };
+    const accelerator = toElectronAccelerator(shortcut);
+    if (registeredAccelerator === accelerator) return { available: true, message: null };
+    return probeGlobalShortcut(accelerator);
+  });
+
+  const applySettings = Effect.fn("desktop.windowCapture.applySettings")(function* (
+    settings: ClientSettings,
+    requestedPermissionMessage: string | null,
+  ) {
+    yield* Ref.set(settingsRef, settings);
+    releaseShortcut();
 
     const mode = captureMode(environment.platform);
+    const shortcut = effectiveWindowCaptureShortcut(mode, settings.windowCaptureShortcut);
     if (!settings.windowCaptureEnabled || mode === "unavailable") {
       yield* Ref.set(stateRef, {
         mode,
-        shortcut: settings.windowCaptureShortcut,
+        shortcut,
         shortcutRegistered: false,
         message:
           mode === "unavailable" ? "Window capture is not supported on this platform." : null,
@@ -486,34 +555,80 @@ export const make = Effect.gen(function* () {
       return;
     }
 
-    const accelerator = toElectronAccelerator(settings.windowCaptureShortcut);
-    const registered = Electron.globalShortcut.register(accelerator, () => {
-      void runPromise(capture).catch(() => undefined);
-    });
-    if (registered) registeredAccelerator = accelerator;
+    const permissionMessage =
+      requestedPermissionMessage ??
+      (environment.platform === "darwin" ? currentMacWindowCapturePermissionMessage() : null);
+    if (permissionMessage) {
+      yield* Ref.set(stateRef, {
+        mode,
+        shortcut,
+        shortcutRegistered: false,
+        message: permissionMessage,
+      });
+      return;
+    }
+
+    let registered = false;
+    if (isBothShiftKeysShortcut(shortcut)) {
+      registered = yield* Effect.tryPromise(async () => {
+        const { uIOhook } = await import("uiohook-napi");
+        stopShiftShortcut = startGlobalShiftShortcut(uIOhook, () => {
+          void runPromise(capture).catch(() => undefined);
+        });
+      }).pipe(
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+    } else {
+      const accelerator = toElectronAccelerator(shortcut);
+      registered = Electron.globalShortcut.register(accelerator, () => {
+        void runPromise(capture).catch(() => undefined);
+      });
+      if (registered) registeredAccelerator = accelerator;
+    }
+
     yield* Ref.set(stateRef, {
       mode,
-      shortcut: settings.windowCaptureShortcut,
+      shortcut,
       shortcutRegistered: registered,
-      message:
-        permissionMessage ?? (registered ? null : "This shortcut is already used by another app."),
+      message: registered
+        ? mode === "portal" && isBothShiftKeysShortcut(settings.windowCaptureShortcut)
+          ? "Wayland uses Ctrl+Shift+2 because it does not expose physical modifier pairs."
+          : isBothShiftKeysShortcut(shortcut)
+            ? "Shift + Shift is observed and cannot be reserved exclusively."
+            : null
+        : "This shortcut is already used by the system or another app.",
     });
   });
 
-  yield* Effect.addFinalizer(() =>
-    Effect.sync(() => {
-      if (registeredAccelerator) Electron.globalShortcut.unregister(registeredAccelerator);
-    }),
-  );
+  const configure = Effect.fn("desktop.windowCapture.configure")(function* (
+    settings: ClientSettings,
+  ) {
+    const previousSettings = yield* Ref.get(settingsRef);
+    const permissionMessage = shouldRequestScreenCapturePermission(
+      environment.platform,
+      previousSettings.windowCaptureEnabled,
+      settings.windowCaptureEnabled,
+    )
+      ? yield* Effect.promise(requestMacWindowCapturePermissions)
+      : null;
+    yield* applySettings(settings, permissionMessage);
+  });
+
+  yield* Effect.addFinalizer(() => Effect.sync(releaseShortcut));
 
   return DesktopWindowCapture.of({
     initialize: clientSettings.get.pipe(
       Effect.flatMap((stored) =>
-        configure(Option.getOrElse(stored, () => DEFAULT_CLIENT_SETTINGS)),
+        applySettings(
+          Option.getOrElse(stored, () => DEFAULT_CLIENT_SETTINGS),
+          null,
+        ),
       ),
     ),
     configure,
     state: Ref.get(stateRef),
+    checkShortcut,
     capture,
     captureNow,
     listPending: fileSystem.readDirectory(captureDirectory).pipe(

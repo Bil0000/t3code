@@ -196,6 +196,13 @@ export const DesktopWindowCaptureState = Schema.Struct({
 });
 export type DesktopWindowCaptureState = typeof DesktopWindowCaptureState.Type;
 
+export const DesktopWindowCaptureShortcutAvailability = Schema.Struct({
+  available: Schema.Boolean,
+  message: Schema.NullOr(Schema.String),
+});
+export type DesktopWindowCaptureShortcutAvailability =
+  typeof DesktopWindowCaptureShortcutAvailability.Type;
+
 export const DesktopWindowCaptureId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(64),
   Schema.isPattern(/^[a-f0-9-]+$/i),
@@ -1115,6 +1122,9 @@ export interface DesktopBridge {
   clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   getWindowCaptureState?: () => Promise<DesktopWindowCaptureState>;
+  checkWindowCaptureShortcut?: (
+    shortcut: WindowCaptureShortcut,
+  ) => Promise<DesktopWindowCaptureShortcutAvailability>;
   captureWindow?: () => Promise<void>;
   listPendingWindowCaptures?: () => Promise<readonly DesktopPendingWindowCapture[]>;
   readWindowCapture?: (id: string) => Promise<DesktopWindowCapture>;

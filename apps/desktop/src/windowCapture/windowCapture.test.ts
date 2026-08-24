@@ -1,12 +1,16 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
+  BOTH_SHIFT_KEYS_IDLE,
   accessibleWindowText,
+  effectiveWindowCaptureShortcut,
   findAccessibleWindow,
   findCaptureSource,
   hideAndWaitForBlur,
   isWaylandSession,
   shouldRequestScreenCapturePermission,
+  updateBothShiftKeys,
+  windowCaptureShortcutSystemConflict,
   toElectronAccelerator,
 } from "./windowCapture.ts";
 import {
@@ -217,6 +221,21 @@ describe("toElectronAccelerator", () => {
   });
 });
 
+describe("effectiveWindowCaptureShortcut", () => {
+  it("keeps Shift + Shift for direct capture and uses an Electron chord on Wayland", () => {
+    const shortcut = { kind: "both-shift-keys" } as const;
+    expect(effectiveWindowCaptureShortcut("direct", shortcut)).toBe(shortcut);
+    expect(effectiveWindowCaptureShortcut("portal", shortcut)).toEqual({
+      key: "2",
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: true,
+      altKey: false,
+      modKey: true,
+    });
+  });
+});
+
 describe("findCaptureSource", () => {
   const sources = [
     { id: "window:42:0", name: "Terminal" },
@@ -276,5 +295,63 @@ describe("shouldRequestScreenCapturePermission", () => {
     ["win32", false, true, false],
   ] as const)("returns %s %s → %s as %s", (platform, previous, enabled, expected) => {
     expect(shouldRequestScreenCapturePermission(platform, previous, enabled)).toBe(expected);
+  });
+});
+describe("both Shift keys", () => {
+  it("fires once when both physical Shift keys are held", () => {
+    const left = updateBothShiftKeys(BOTH_SHIFT_KEYS_IDLE, 42, true);
+    expect(left.triggered).toBe(false);
+
+    const both = updateBothShiftKeys(left.state, 54, true);
+    expect(both.triggered).toBe(true);
+    expect(updateBothShiftKeys(both.state, 54, true).triggered).toBe(false);
+
+    const released = updateBothShiftKeys(both.state, 42, false);
+    expect(updateBothShiftKeys(released.state, 42, true).triggered).toBe(true);
+  });
+
+  it("ignores other keys", () => {
+    expect(updateBothShiftKeys(BOTH_SHIFT_KEYS_IDLE, 30, true)).toEqual({
+      state: BOTH_SHIFT_KEYS_IDLE,
+      triggered: false,
+    });
+  });
+});
+
+describe("windowCaptureShortcutSystemConflict", () => {
+  it("blocks shortcuts that would break typing or common app actions", () => {
+    expect(
+      windowCaptureShortcutSystemConflict({
+        key: "s",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: true,
+        altKey: false,
+        modKey: false,
+      }),
+    ).toMatch(/typing/);
+    expect(
+      windowCaptureShortcutSystemConflict({
+        key: "c",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: false,
+        altKey: false,
+        modKey: true,
+      }),
+    ).toMatch(/Copy/);
+  });
+
+  it("allows a specific multi-modifier shortcut", () => {
+    expect(
+      windowCaptureShortcutSystemConflict({
+        key: "2",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: true,
+        altKey: false,
+        modKey: true,
+      }),
+    ).toBeNull();
   });
 });

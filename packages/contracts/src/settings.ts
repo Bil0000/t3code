@@ -125,7 +125,7 @@ export const EnvironmentIdentificationMode = Schema.Literals(["artwork", "pill",
 export type EnvironmentIdentificationMode = typeof EnvironmentIdentificationMode.Type;
 export const DEFAULT_ENVIRONMENT_IDENTIFICATION_MODE: EnvironmentIdentificationMode = "artwork";
 
-export const WindowCaptureShortcut = KeybindingShortcut.check(
+export const WindowCaptureKeyChord = KeybindingShortcut.check(
   Schema.makeFilter(
     (shortcut) =>
       shortcut.metaKey ||
@@ -136,8 +136,16 @@ export const WindowCaptureShortcut = KeybindingShortcut.check(
       "Window capture shortcut requires a modifier.",
   ),
 );
+export type WindowCaptureKeyChord = typeof WindowCaptureKeyChord.Type;
+export const WindowCaptureShortcut = Schema.Union([
+  Schema.Struct({ kind: Schema.Literal("both-shift-keys") }),
+  WindowCaptureKeyChord,
+]);
 export type WindowCaptureShortcut = typeof WindowCaptureShortcut.Type;
 export const DEFAULT_WINDOW_CAPTURE_SHORTCUT: WindowCaptureShortcut = {
+  kind: "both-shift-keys",
+};
+export const WAYLAND_WINDOW_CAPTURE_SHORTCUT: WindowCaptureKeyChord = {
   key: "2",
   metaKey: false,
   ctrlKey: false,
