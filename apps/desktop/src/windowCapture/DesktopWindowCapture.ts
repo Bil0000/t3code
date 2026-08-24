@@ -20,6 +20,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Semaphore from "effect/Semaphore";
 
 import * as Electron from "electron";
 import { activeWindow, type Result as ActiveWindow } from "get-windows";
@@ -390,6 +391,7 @@ export const make = Effect.gen(function* () {
     message: null,
   });
   const busyRef = yield* Ref.make(false);
+  const configurationMutex = yield* Semaphore.make(1);
   const context = yield* Effect.context<
     DesktopEnvironment.DesktopEnvironment | DesktopWindow.DesktopWindow
   >();
@@ -605,25 +607,31 @@ export const make = Effect.gen(function* () {
   const configure = Effect.fn("desktop.windowCapture.configure")(function* (
     settings: ClientSettings,
   ) {
-    const previousSettings = yield* Ref.get(settingsRef);
-    const permissionMessage = shouldRequestScreenCapturePermission(
-      environment.platform,
-      previousSettings.windowCaptureEnabled,
-      settings.windowCaptureEnabled,
-    )
-      ? yield* Effect.promise(requestMacWindowCapturePermissions)
-      : null;
-    yield* applySettings(settings, permissionMessage);
+    yield* configurationMutex.withPermits(1)(
+      Effect.gen(function* () {
+        const previousSettings = yield* Ref.get(settingsRef);
+        const permissionMessage = shouldRequestScreenCapturePermission(
+          environment.platform,
+          previousSettings.windowCaptureEnabled,
+          settings.windowCaptureEnabled,
+        )
+          ? yield* Effect.promise(requestMacWindowCapturePermissions)
+          : null;
+        yield* applySettings(settings, permissionMessage);
+      }),
+    );
   });
 
   yield* Effect.addFinalizer(() => Effect.sync(releaseShortcut));
 
   return DesktopWindowCapture.of({
-    initialize: clientSettings.get.pipe(
-      Effect.flatMap((stored) =>
-        applySettings(
-          Option.getOrElse(stored, () => DEFAULT_CLIENT_SETTINGS),
-          null,
+    initialize: configurationMutex.withPermits(1)(
+      clientSettings.get.pipe(
+        Effect.flatMap((stored) =>
+          applySettings(
+            Option.getOrElse(stored, () => DEFAULT_CLIENT_SETTINGS),
+            null,
+          ),
         ),
       ),
     ),
