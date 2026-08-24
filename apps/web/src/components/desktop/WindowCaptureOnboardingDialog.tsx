@@ -43,8 +43,8 @@ export function WindowCaptureOnboardingDialog() {
     >
       <DialogPopup className="max-w-md">
         <DialogHeader>
-          <div className="mb-2 flex size-11 items-center justify-center rounded-xl border border-border bg-muted">
-            <CameraIcon className="size-5" />
+          <div className="flex size-11 items-center justify-center rounded-xl border border-border/70 bg-muted/60">
+            <CameraIcon className="size-5 text-muted-foreground" />
           </div>
           <DialogTitle>Capture any window</DialogTitle>
           <DialogDescription>

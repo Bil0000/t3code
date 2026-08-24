@@ -150,7 +150,7 @@ export function WindowCaptureSettings() {
             control={
               <Button
                 type="button"
-                size="sm"
+                size="xs"
                 variant={recording ? "secondary" : "outline"}
                 disabled={!captureAvailable}
                 aria-label="Record window capture shortcut"
@@ -220,7 +220,7 @@ export function WindowCaptureSettings() {
             control={
               <Button
                 type="button"
-                size="sm"
+                size="xs"
                 variant="outline"
                 disabled={!captureAvailable || capturing}
                 onClick={() => void captureNow()}
