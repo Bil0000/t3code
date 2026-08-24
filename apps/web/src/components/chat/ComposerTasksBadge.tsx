@@ -17,6 +17,8 @@ export interface ComposerTaskStep {
   readonly status: "pending" | "inProgress" | "completed";
 }
 
+const MAX_TASK_SEGMENTS = 10;
+
 function keyedTaskSteps(steps: readonly ComposerTaskStep[]) {
   const occurrences = new Map<string, number>();
   return steps.map((step) => {
@@ -33,7 +35,7 @@ function TaskSegments({
   readonly className?: string;
   readonly steps: readonly ComposerTaskStep[];
 }) {
-  if (steps.length <= 1) return null;
+  if (steps.length <= 1 || steps.length > MAX_TASK_SEGMENTS) return null;
 
   return (
     <span aria-hidden className={cn("flex w-10 shrink-0 items-center gap-0.5", className)}>

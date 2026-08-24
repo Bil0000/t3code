@@ -114,6 +114,37 @@ describe("ComposerTasksBadge", () => {
     expect(markup).not.toContain("bg-muted-foreground/25");
   });
 
+  it("drops the step segments when they would render as a blank gap", () => {
+    const manySteps = Array.from({ length: 24 }, (_, index) => ({
+      step: `Step ${index + 1}`,
+      status: "pending" as const,
+    }));
+    const tab = renderToStaticMarkup(
+      <ComposerTasksBadge
+        expanded={false}
+        onDismiss={() => undefined}
+        onToggle={() => undefined}
+        progress={{ ...progress, totalSteps: manySteps.length }}
+        steps={manySteps}
+      />,
+    );
+    const inline = renderToStaticMarkup(
+      <ComposerTasksBadge
+        expanded={false}
+        onDismiss={() => undefined}
+        onToggle={() => undefined}
+        placement="inline"
+        progress={{ ...progress, totalSteps: manySteps.length }}
+        steps={manySteps}
+      />,
+    );
+
+    expect(tab).not.toContain("w-20");
+    expect(tab).toContain("1/24");
+    expect(inline).not.toContain("w-10");
+    expect(inline).toContain("1/24");
+  });
+
   it("does not render an empty task count", () => {
     const markup = renderToStaticMarkup(
       <ComposerTasksBadge
