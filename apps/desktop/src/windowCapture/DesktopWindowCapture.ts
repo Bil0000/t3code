@@ -143,6 +143,7 @@ export class DesktopWindowCapture extends Context.Service<
     readonly configure: (settings: ClientSettings) => Effect.Effect<void>;
     readonly state: Effect.Effect<DesktopWindowCaptureState>;
     readonly capture: Effect.Effect<void, DesktopWindowCaptureFailure>;
+    readonly captureNow: Effect.Effect<void, DesktopWindowCaptureFailure>;
     readonly listPending: Effect.Effect<
       ReadonlyArray<DesktopPendingWindowCapture>,
       DesktopWindowCaptureError
@@ -422,11 +423,8 @@ export const make = Effect.gen(function* () {
     });
   };
 
-  const capture = Effect.gen(function* () {
+  const captureNow = Effect.gen(function* () {
     const settings = yield* Ref.get(settingsRef);
-    if (!settings.windowCaptureEnabled) {
-      return yield* new DesktopWindowCaptureDisabledError();
-    }
     if (yield* Ref.getAndSet(busyRef, true)) return;
     yield* persistCapture(settings).pipe(
       Effect.tap(() =>
@@ -442,6 +440,14 @@ export const make = Effect.gen(function* () {
       Effect.ensuring(Ref.set(busyRef, false)),
     );
   }).pipe(Effect.withSpan("desktop.windowCapture.capture"));
+
+  const capture = Effect.gen(function* () {
+    const settings = yield* Ref.get(settingsRef);
+    if (!settings.windowCaptureEnabled) {
+      return yield* new DesktopWindowCaptureDisabledError();
+    }
+    yield* captureNow;
+  });
 
   const configure = Effect.fn("desktop.windowCapture.configure")(function* (
     settings: ClientSettings,
@@ -501,6 +507,7 @@ export const make = Effect.gen(function* () {
     configure,
     state: Ref.get(stateRef),
     capture,
+    captureNow,
     listPending: Effect.tryPromise({
       try: async () => {
         const names = await NodeFSP.readdir(captureDirectory).catch(

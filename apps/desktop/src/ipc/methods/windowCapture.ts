@@ -41,7 +41,7 @@ export const captureWindow = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.windowCapture.capture")(function* (_, event) {
     yield* ensureTrustedWindowCaptureSender(event);
-    yield* (yield* DesktopWindowCapture.DesktopWindowCapture).capture;
+    yield* (yield* DesktopWindowCapture.DesktopWindowCapture).captureNow;
   }),
 });
 

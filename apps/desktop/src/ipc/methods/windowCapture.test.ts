@@ -1,0 +1,40 @@
+import { assert, describe, it } from "@effect/vitest";
+import * as Effect from "effect/Effect";
+import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+
+import * as ElectronWindow from "../../electron/ElectronWindow.ts";
+import * as DesktopWindowCapture from "../../windowCapture/DesktopWindowCapture.ts";
+import { captureWindow } from "./windowCapture.ts";
+
+describe("window capture IPC", () => {
+  it.effect("uses the manual capture path for a trusted renderer", () => {
+    let globalCaptures = 0;
+    let manualCaptures = 0;
+    const layer = Layer.mergeAll(
+      Layer.succeed(
+        ElectronWindow.ElectronWindow,
+        ElectronWindow.ElectronWindow.of({
+          main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
+        } as ElectronWindow.ElectronWindow["Service"]),
+      ),
+      Layer.succeed(
+        DesktopWindowCapture.DesktopWindowCapture,
+        DesktopWindowCapture.DesktopWindowCapture.of({
+          capture: Effect.sync(() => {
+            globalCaptures += 1;
+          }),
+          captureNow: Effect.sync(() => {
+            manualCaptures += 1;
+          }),
+        } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      yield* captureWindow.handler(undefined, { sender: { id: 7 } });
+      assert.strictEqual(globalCaptures, 0);
+      assert.strictEqual(manualCaptures, 1);
+    }).pipe(Effect.provide(layer));
+  });
+});
