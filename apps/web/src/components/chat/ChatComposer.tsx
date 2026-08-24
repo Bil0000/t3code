@@ -3225,7 +3225,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 : "h-16 w-16",
                               image.source?.kind === "window-capture" &&
                                 settings.windowCaptureAnimations &&
-                                "animate-in fade-in zoom-in-95 duration-200 motion-reduce:animate-none",
+                                "animate-[window-capture-card-enter_180ms_cubic-bezier(0.2,0.8,0.2,1)_both] motion-reduce:animate-none",
                             )}
                           >
                             {image.previewUrl ? (
