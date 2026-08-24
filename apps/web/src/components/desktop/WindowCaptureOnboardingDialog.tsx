@@ -2,6 +2,7 @@ import { CameraIcon, SparklesIcon } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { formatShortcutLabel } from "../../keybindings";
+import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
 import {
   useClientSettings,
   useClientSettingsHydrated,
@@ -13,6 +14,7 @@ import {
   DialogDescription,
   DialogFooter,
   DialogHeader,
+  DialogPanel,
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
@@ -24,7 +26,9 @@ export function WindowCaptureOnboardingDialog() {
   const settingsHydrated = useClientSettingsHydrated();
   const navigate = useNavigate();
   const open =
-    settingsHydrated && Boolean(window.desktopBridge) && !settings.windowCaptureOnboardingDismissed;
+    settingsHydrated &&
+    Boolean(getDesktopWindowCaptureBridge()) &&
+    !settings.windowCaptureOnboardingDismissed;
 
   const close = () => {
     void updateSettings({ windowCaptureOnboardingDismissed: true });
@@ -48,14 +52,16 @@ export function WindowCaptureOnboardingDialog() {
             current draft with its app name and icon.
           </DialogDescription>
         </DialogHeader>
-        <div className="mx-6 flex items-center justify-between rounded-xl border border-border bg-muted/50 px-4 py-3">
-          <span className="flex items-center gap-2 text-sm font-medium">
-            <SparklesIcon className="size-4 text-muted-foreground" />
-            Default shortcut
-          </span>
-          <Kbd>{formatShortcutLabel(settings.windowCaptureShortcut)}</Kbd>
-        </div>
-        <DialogFooter className="mt-6">
+        <DialogPanel>
+          <div className="flex items-center justify-between rounded-xl border border-border bg-muted/50 px-4 py-3">
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <SparklesIcon className="size-4 text-muted-foreground" />
+              Default shortcut
+            </span>
+            <Kbd>{formatShortcutLabel(settings.windowCaptureShortcut)}</Kbd>
+          </div>
+        </DialogPanel>
+        <DialogFooter>
           <Button type="button" variant="ghost" onClick={close}>
             Not now
           </Button>
