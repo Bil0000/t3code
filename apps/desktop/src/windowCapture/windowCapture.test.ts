@@ -104,6 +104,26 @@ describe("findAccessibleWindow", () => {
     expect(findAccessibleWindow(windows, captured)).toBe(windows[1]);
   });
 
+  it("uses the matched source title when macOS omits the active title", () => {
+    const windows = [{ name: "Editor", bounds: captured.bounds }];
+    expect(
+      findAccessibleWindow(windows, {
+        ...captured,
+        title: "",
+        sourceTitle: "Editor",
+      }),
+    ).toBe(windows[0]);
+  });
+
+  it("does not match equal bounds with a different title", () => {
+    expect(
+      findAccessibleWindow(
+        [{ name: "Private", bounds: { x: 100, y: 200, width: 800, height: 600 } }],
+        captured,
+      ),
+    ).toBeUndefined();
+  });
+
   it("does not use a title match when the bounds differ", () => {
     expect(
       findAccessibleWindow(

@@ -60,23 +60,25 @@ export function findAccessibleWindow<
   T extends { readonly name: string | null; readonly bounds: WindowBounds | null },
 >(
   windows: readonly T[],
-  captured: { readonly title: string; readonly bounds: WindowBounds },
+  captured: {
+    readonly title: string;
+    readonly sourceTitle?: string;
+    readonly bounds: WindowBounds;
+  },
 ): T | undefined {
+  const title = captured.title.trim() || captured.sourceTitle?.trim() || "";
+  if (!title) return undefined;
   const matches = windows.filter((window) => {
     const bounds = window.bounds;
     return (
+      window.name?.trim() === title &&
       bounds !== null &&
       (["x", "y", "width", "height"] as const).every(
         (key) => Math.abs(bounds[key] - captured.bounds[key]) <= 2,
       )
     );
   });
-  if (matches.length === 1) return matches[0];
-
-  const title = captured.title.trim();
-  if (!title) return undefined;
-  const titleMatches = matches.filter((window) => window.name?.trim() === title);
-  return titleMatches.length === 1 ? titleMatches[0] : undefined;
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 const ELECTRON_KEY_NAMES: Readonly<Record<string, string>> = {

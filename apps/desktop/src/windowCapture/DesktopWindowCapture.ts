@@ -219,6 +219,7 @@ async function requestMacWindowCapturePermissions(): Promise<string | null> {
 async function readCapturedWindowText(
   active: ActiveWindow,
   platform: NodeJS.Platform,
+  sourceTitle: string,
 ): Promise<string | undefined> {
   const { App } = await import("@crowecawcaw/xa11y");
   const windows =
@@ -227,7 +228,11 @@ async function readCapturedWindowText(
           .filter((app) => app.pid === active.owner.processId)
           .map((app) => app.asElement())
       : await (await App.byPid(active.owner.processId, { timeout: 0 })).children();
-  const window = findAccessibleWindow(windows, active);
+  const window = findAccessibleWindow(windows, {
+    title: active.title,
+    sourceTitle,
+    bounds: active.bounds,
+  });
   if (!window) return undefined;
   const text = accessibleWindowText(await window.tree(), WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS);
   return text || undefined;
@@ -236,11 +241,12 @@ async function readCapturedWindowText(
 async function readAccessibleWindowText(
   active: ActiveWindow,
   platform: NodeJS.Platform,
+  sourceTitle: string,
 ): Promise<string | undefined> {
   let timeout: number | undefined;
   try {
     return await Promise.race([
-      readCapturedWindowText(active, platform),
+      readCapturedWindowText(active, platform, sourceTitle),
       new Promise<undefined>((resolve) => {
         timeout = setTimeout(resolve, ACCESSIBLE_TEXT_TIMEOUT_MS);
       }),
@@ -287,7 +293,9 @@ async function captureSource(
         ? new DesktopWindowCaptureNoWindowSelectedError({ captureId })
         : new DesktopWindowCaptureWindowUnavailableError({ captureId });
     }
-    const accessibleText = active ? await readAccessibleWindowText(active, platform) : undefined;
+    const accessibleText = active
+      ? await readAccessibleWindowText(active, platform, source.name)
+      : undefined;
     return { source, active, accessibleText };
   } finally {
     if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();

@@ -1222,7 +1222,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
             capturedAt: "2026-08-24T11:00:00.000Z",
             appName: "Editor",
             windowTitle: `main-${index}.ts`,
-            accessibleText: "Z".repeat(32_000),
+            accessibleText: "Z".repeat(29_500),
           },
         })),
       });
@@ -1231,6 +1231,7 @@ routing.layer("ProviderServiceLive routing", (it) => {
       const accessibleChars = (turnInput.input?.match(/Z/g) ?? []).length;
       assert.isAbove(accessibleChars, 0);
       assert.isAtMost(accessibleChars, PROVIDER_SEND_TURN_MAX_INPUT_CHARS - 3);
+      assert.isAtMost(turnInput.input?.length ?? 0, PROVIDER_SEND_TURN_MAX_INPUT_CHARS);
     }),
   );
 
