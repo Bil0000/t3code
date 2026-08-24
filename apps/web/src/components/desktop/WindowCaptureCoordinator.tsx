@@ -8,6 +8,7 @@ import {
 } from "../../composerDraftStore";
 import { useHandleNewThread } from "../../hooks/useHandleNewThread";
 import { useClientSettings } from "../../hooks/useSettings";
+import { readThreadShell } from "../../state/entities";
 import { compressImageToByteLimit } from "../../lib/imageCompression";
 import { resolveThreadActionProjectRef } from "../../lib/chatThreadActions";
 import {
@@ -67,7 +68,16 @@ export function WindowCaptureCoordinator() {
   if (currentTarget) lastTargetRef.current = currentTarget;
 
   const resolveTarget = useCallback(async (): Promise<CaptureTarget | null> => {
-    if (lastTargetRef.current) return lastTargetRef.current;
+    const lastTarget = lastTargetRef.current;
+    if (lastTarget) {
+      const store = useComposerDraftStore.getState();
+      const targetExists =
+        typeof lastTarget === "string"
+          ? store.getDraftSession(lastTarget) !== null
+          : store.getDraftSessionByRef(lastTarget) !== null || readThreadShell(lastTarget) !== null;
+      if (targetExists) return lastTarget;
+      lastTargetRef.current = null;
+    }
     const projectRef = resolveThreadActionProjectRef({
       activeDraftThread,
       activeThread: activeThread ?? undefined,
@@ -121,6 +131,7 @@ export function WindowCaptureCoordinator() {
               PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
             );
             if (!compressed.ok) {
+              await bridge.acknowledgeWindowCapture(item.id);
               throw new Error("The captured window is too large to attach.");
             }
             const file = compressed.file;
@@ -166,9 +177,6 @@ export function WindowCaptureCoordinator() {
             }
             window.dispatchEvent(new Event(WINDOW_CAPTURE_FOCUS_EVENT));
           } catch (error) {
-            try {
-              await bridge.acknowledgeWindowCapture(item.id);
-            } catch {}
             toastManager.add(
               stackedThreadToast({
                 type: "error",
