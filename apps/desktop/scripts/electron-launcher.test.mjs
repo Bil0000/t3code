@@ -1,3 +1,7 @@
+import * as NodeFS from "node:fs";
+import * as NodeOS from "node:os";
+import * as NodePath from "node:path";
+
 import { assert, describe, it } from "vite-plus/test";
 
 import {
@@ -7,6 +11,7 @@ import {
   resolveMacCodeSignArguments,
   resolveMacLauncherIconPaths,
   resolveMacLauncherPaths,
+  writeDevelopmentLauncherScript,
 } from "./electron-launcher.mjs";
 
 describe("electron development launcher", () => {
@@ -82,12 +87,16 @@ describe("electron development launcher", () => {
     assert.notInclude(script, "node_modules/electron");
   });
 
-  it("declares why the macOS app captures the screen", () => {
+  it("declares why the macOS app needs protected access", () => {
     const values = resolveMacBundleInfoPlistStrings("T3 Code (Dev) Launcher");
 
     assert.equal(
       values.NSScreenCaptureUsageDescription,
       "T3 Code captures the active window when you use the window capture shortcut.",
+    );
+    assert.equal(
+      values.NSDocumentsFolderUsageDescription,
+      "T3 Code reads project files you open in the desktop app.",
     );
   });
 
@@ -100,6 +109,20 @@ describe("electron development launcher", () => {
       "--timestamp=none",
       "/runtime/T3 Code (Dev).app",
     ]);
+  });
+
+  it("restores execute permissions on an unchanged launcher", () => {
+    const directory = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-launcher-"));
+    const launcherPath = NodePath.join(directory, "launcher");
+    try {
+      writeDevelopmentLauncherScript(launcherPath, "/runtime/Electron");
+      NodeFS.chmodSync(launcherPath, 0o644);
+
+      assert.isFalse(writeDevelopmentLauncherScript(launcherPath, "/runtime/Electron"));
+      assert.equal(NodeFS.statSync(launcherPath).mode & 0o777, 0o755);
+    } finally {
+      NodeFS.rmSync(directory, { recursive: true, force: true });
+    }
   });
 
   it("derives launcher icons from canonical development and production assets", () => {

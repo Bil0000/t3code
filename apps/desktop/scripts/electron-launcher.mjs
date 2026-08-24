@@ -20,7 +20,7 @@ export const APP_BUNDLE_ID = isDevelopment
   ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
   : "com.t3tools.t3code";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
-const LAUNCHER_VERSION = 17;
+const LAUNCHER_VERSION = 18;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",
@@ -134,7 +134,7 @@ export function makeDevelopmentLauncherScript({
   ].join("\n");
 }
 
-function writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryPath) {
+export function writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryPath) {
   const script = makeDevelopmentLauncherScript({
     electronBinaryPath,
     mainEntryPath: NodePath.join(desktopDir, "dist-electron", "main.cjs"),
@@ -145,6 +145,7 @@ function writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryPath) {
     NodeFS.existsSync(targetBinaryPath) &&
     NodeFS.readFileSync(targetBinaryPath, "utf8") === script
   ) {
+    NodeFS.chmodSync(targetBinaryPath, 0o755);
     return false;
   }
   NodeFS.writeFileSync(targetBinaryPath, script);
@@ -243,6 +244,7 @@ export function resolveMacBundleInfoPlistStrings(executableName) {
     CFBundleIconFile: "icon.icns",
     NSScreenCaptureUsageDescription:
       "T3 Code captures the active window when you use the window capture shortcut.",
+    NSDocumentsFolderUsageDescription: "T3 Code reads project files you open in the desktop app.",
   };
 }
 
