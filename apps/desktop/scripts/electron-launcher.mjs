@@ -20,7 +20,7 @@ export const APP_BUNDLE_ID = isDevelopment
   ? `com.t3tools.t3code.dev.${devBundleIdSuffix || "local"}`
   : "com.t3tools.t3code";
 const APP_PROTOCOL_SCHEMES = isDevelopment ? ["t3code-dev"] : ["t3code"];
-const LAUNCHER_VERSION = 18;
+const LAUNCHER_VERSION = 19;
 const developmentMacIconPngPath = NodePath.join(
   repoRoot,
   "assets",
@@ -108,12 +108,7 @@ function shellSingleQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-export function makeDevelopmentLauncherScript({
-  electronBinaryPath,
-  mainEntryPath,
-  desktopRoot,
-  environment,
-}) {
+export function makeDevelopmentEnvironmentScript(environment) {
   const envEntries = [
     ["VITE_DEV_SERVER_URL", environment.VITE_DEV_SERVER_URL],
     ["T3CODE_PORT", environment.T3CODE_PORT],
@@ -124,14 +119,41 @@ export function makeDevelopmentLauncherScript({
     ["T3CODE_DESKTOP_APP_USER_MODEL_ID", APP_BUNDLE_ID],
   ].filter((entry) => typeof entry[1] === "string" && entry[1].trim().length > 0);
   return [
-    "#!/bin/sh",
     ...envEntries.map(
       ([name, value]) =>
         `if [ -z "\${${name}:-}" ]; then export ${name}=${shellSingleQuote(value)}; fi`,
     ),
+    "",
+  ].join("\n");
+}
+
+// The launcher lives inside the signed bundle, so its content must stay
+// stable across dev restarts: macOS TCC pins permissions (Input Monitoring,
+// Accessibility) to the ad-hoc signature, and any rewrite forces a re-sign
+// that silently revokes them. Volatile environment lives in a separate file
+// outside the bundle that the launcher sources at run time.
+export function makeDevelopmentLauncherScript({
+  electronBinaryPath,
+  mainEntryPath,
+  desktopRoot,
+  environmentFilePath,
+}) {
+  return [
+    "#!/bin/sh",
+    `if [ -f ${shellSingleQuote(environmentFilePath)} ]; then . ${shellSingleQuote(environmentFilePath)}; fi`,
     `exec ${shellSingleQuote(electronBinaryPath)} --t3code-dev-root=${shellSingleQuote(desktopRoot)} ${shellSingleQuote(mainEntryPath)} "$@"`,
     "",
   ].join("\n");
+}
+
+export function developmentEnvironmentFilePath() {
+  return NodePath.join(desktopDir, ".electron-runtime", "dev-environment.sh");
+}
+
+export function writeDevelopmentEnvironmentScript() {
+  const environmentFilePath = developmentEnvironmentFilePath();
+  NodeFS.mkdirSync(NodePath.dirname(environmentFilePath), { recursive: true });
+  NodeFS.writeFileSync(environmentFilePath, makeDevelopmentEnvironmentScript(process.env));
 }
 
 export function writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryPath) {
@@ -139,7 +161,7 @@ export function writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryP
     electronBinaryPath,
     mainEntryPath: NodePath.join(desktopDir, "dist-electron", "main.cjs"),
     desktopRoot: desktopDir,
-    environment: process.env,
+    environmentFilePath: developmentEnvironmentFilePath(),
   });
   if (
     NodeFS.existsSync(targetBinaryPath) &&
@@ -348,6 +370,7 @@ function buildMacLauncher(electronBinaryPath) {
       // The launcher also handles protocol activations outside the dev runner,
       // so refresh its fallback environment on every launch. Never let a value
       // captured by an older parent app override the live dev-runner environment.
+      writeDevelopmentEnvironmentScript();
       if (writeDevelopmentLauncherScript(launcherBinaryPath, runtimeElectronBinaryPath)) {
         signMacLauncherBundle(targetAppBundlePath);
       }
@@ -377,6 +400,7 @@ function buildMacLauncher(electronBinaryPath) {
     // Electron.app even though this bundle's Info.plist has the T3 Code name.
     // Its conventional executable name also keeps Electron's default-app runtime
     // in development mode instead of making app.isPackaged report true.
+    writeDevelopmentEnvironmentScript();
     writeDevelopmentLauncherScript(launcherBinaryPath, runtimeElectronBinaryPath);
   }
   signMacLauncherBundle(targetAppBundlePath);
