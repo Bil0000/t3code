@@ -12,6 +12,7 @@ import {
   type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
   type ClientSettings,
+  type WindowCaptureModifier,
   type WindowCaptureModifierPairShortcut,
   type WindowCaptureShortcut,
 } from "@t3tools/contracts";
@@ -35,6 +36,7 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts";
+import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutProcess.ts";
 import {
   accessibleWindowText,
   findAccessibleWindow,
@@ -541,6 +543,15 @@ export const make = Effect.gen(function* () {
   let stopShiftShortcut: (() => void) | undefined;
   const flash = new WindowCaptureFlash(environment.platform);
 
+  const startPairShortcutProcess = (
+    modifier: WindowCaptureModifier,
+    onTrigger: () => void,
+    onFailure: (error: Error) => void,
+  ) =>
+    environment.platform === "darwin"
+      ? startMacModifierPairShortcutProcess(modifier, onTrigger, onFailure)
+      : startGlobalShiftShortcutProcess(shiftShortcutWorkerPath, modifier, onTrigger, onFailure);
+
   const releaseShortcut = () => {
     if (registeredAccelerator) {
       Electron.globalShortcut.unregister(registeredAccelerator);
@@ -657,15 +668,8 @@ export const make = Effect.gen(function* () {
     }
     const effectiveShortcut = effectiveWindowCaptureShortcut(mode, shortcut);
     if (isModifierPairShortcut(effectiveShortcut)) {
-      if (
-        environment.platform === "darwin" &&
-        !Electron.systemPreferences.isTrustedAccessibilityClient(false)
-      ) {
-        return { available: false, message: MAC_ACCESSIBILITY_PERMISSION_MESSAGE };
-      }
       const available = yield* Effect.tryPromise(() =>
-        startGlobalShiftShortcutProcess(
-          shiftShortcutWorkerPath,
+        startPairShortcutProcess(
           windowCaptureShortcutModifierPair(effectiveShortcut),
           () => undefined,
           () => undefined,
@@ -742,8 +746,7 @@ export const make = Effect.gen(function* () {
     let registered = false;
     if (isModifierPairShortcut(shortcut)) {
       registered = yield* Effect.tryPromise(() =>
-        startGlobalShiftShortcutProcess(
-          shiftShortcutWorkerPath,
+        startPairShortcutProcess(
           windowCaptureShortcutModifierPair(shortcut),
           () => {
             void runPromise(capture).catch(() => undefined);

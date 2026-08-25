@@ -16,11 +16,13 @@ const {
   flashWindows,
   getFileIconMock,
   getSourcesMock,
+  mediaAccessStatusMock,
   openExternalMock,
   registerShortcutMock,
   shortcutForkArgs,
   shortcutForkOptions,
   shortcutProcesses,
+  spawnedPollers,
   thumbnailFromPathMock,
   uiohookMock,
 } = vi.hoisted(() => ({
@@ -38,6 +40,7 @@ const {
   }>,
   getFileIconMock: vi.fn(),
   getSourcesMock: vi.fn(),
+  mediaAccessStatusMock: vi.fn(() => "not-determined"),
   openExternalMock: vi.fn(() => Promise.resolve()),
   registerShortcutMock: vi.fn(),
   shortcutForkArgs: [] as Array<ReadonlyArray<string>>,
@@ -47,6 +50,12 @@ const {
     kill: ReturnType<typeof vi.fn>;
     on: (event: string, listener: (value: unknown) => void) => unknown;
     once: (event: string, listener: (value: unknown) => void) => unknown;
+  }>,
+  spawnedPollers: [] as Array<{
+    args: ReadonlyArray<string>;
+    kill: ReturnType<typeof vi.fn>;
+    emitStderr: (text: string) => void;
+    emitExit: (code: number) => void;
   }>,
   thumbnailFromPathMock: vi.fn(),
   uiohookMock: {
@@ -61,6 +70,36 @@ vi.mock("@crowecawcaw/xa11y", () => ({ App: { byPid: accessibilityByPidMock } })
 vi.mock("uiohook-napi", () => ({ uIOhook: uiohookMock }));
 
 vi.mock("node:child_process", () => ({
+  spawn: (_command: string, args: ReadonlyArray<string>) => {
+    const stderrListeners: Array<(chunk: Buffer) => void> = [];
+    const onceListeners = new Map<string, Array<(value?: unknown) => void>>();
+    const record = {
+      args,
+      kill: vi.fn(() => true),
+      emitStderr: (text: string) => {
+        for (const listener of stderrListeners) listener(Buffer.from(text));
+      },
+      emitExit: (code: number) => {
+        for (const listener of onceListeners.get("exit") ?? []) listener(code);
+      },
+    };
+    spawnedPollers.push(record);
+    const child = {
+      stderr: {
+        on: (_event: "data", listener: (chunk: Buffer) => void) => {
+          stderrListeners.push(listener);
+          return child;
+        },
+      },
+      once: (event: string, listener: (value?: unknown) => void) => {
+        onceListeners.set(event, [...(onceListeners.get(event) ?? []), listener]);
+        return child;
+      },
+      kill: record.kill,
+    };
+    queueMicrotask(() => record.emitStderr("ready\n"));
+    return child;
+  },
   fork: (_path: string, args: ReadonlyArray<string>, options: { env?: NodeJS.ProcessEnv }) => {
     const listeners = new Map<string, Array<(value: unknown) => void>>();
     const process = {
@@ -179,7 +218,7 @@ vi.mock("electron", () => {
     },
     shell: { openExternal: openExternalMock },
     systemPreferences: {
-      getMediaAccessStatus: () => "not-determined",
+      getMediaAccessStatus: () => mediaAccessStatusMock(),
       isTrustedAccessibilityClient: () => accessibilityTrustedMock(),
     },
   };
@@ -595,14 +634,43 @@ it.effect("advises about the system menu for a meta pair on Windows", () =>
   ).pipe(Effect.provide(testLayer("win32"))),
 );
 
-it.effect("requires macOS Accessibility before offering a modifier pair", () => {
-  accessibilityTrustedMock.mockReturnValueOnce(false);
+it.effect("probes macOS modifier pairs with the flags poller", () => {
+  spawnedPollers.length = 0;
   return Effect.scoped(
     Effect.gen(function* () {
       const service = yield* DesktopWindowCapture.make;
       const result = yield* service.checkShortcut({ kind: "both-shift-keys" });
-      assert.isFalse(result.available);
-      assert.match(result.message ?? "", /Accessibility/);
+      assert.isTrue(result.available);
+      assert.match(result.message ?? "", /Shift \+ Shift is observed/);
+      assert.notMatch(result.message ?? "", /Input Monitoring/);
+      assert.lengthOf(spawnedPollers, 1);
+      assert.deepEqual(spawnedPollers[0]?.args.slice(-2), ["2", "4"]);
+      assert.strictEqual(spawnedPollers[0]?.kill.mock.calls.length, 1);
+    }),
+  ).pipe(Effect.provide(testLayer("darwin")));
+});
+
+it.effect("registers macOS modifier pairs through the flags poller", () => {
+  spawnedPollers.length = 0;
+  shortcutProcesses.length = 0;
+  accessibilityTrustedMock.mockReturnValue(true);
+  mediaAccessStatusMock.mockReturnValue("granted");
+  const settings = {
+    ...DEFAULT_CLIENT_SETTINGS,
+    windowCaptureShortcut: { kind: "modifier-pair", modifier: "meta" },
+  } satisfies ClientSettings;
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure({ ...settings, windowCaptureEnabled: true });
+      const state = yield* service.state;
+
+      assert.lengthOf(shortcutProcesses, 0);
+      assert.lengthOf(spawnedPollers, 1);
+      assert.deepEqual(spawnedPollers[0]?.args.slice(-2), ["8", "16"]);
+      assert.isTrue(state.shortcutRegistered);
+      mediaAccessStatusMock.mockReturnValue("not-determined");
     }),
   ).pipe(Effect.provide(testLayer("darwin")));
 });
