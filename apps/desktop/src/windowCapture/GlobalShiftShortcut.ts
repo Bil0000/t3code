@@ -15,7 +15,11 @@ export function startGlobalShiftShortcut(hook: GlobalKeyHook, onTrigger: () => v
   const update = (pressed: boolean) => (event: { keycode: number }) => {
     const next = updateBothShiftKeys(state, event.keycode, pressed);
     state = next.state;
-    if (next.triggered) onTrigger();
+    if (next.triggered) {
+      try {
+        onTrigger();
+      } catch {}
+    }
   };
   const keyDown = update(true);
   const keyUp = update(false);

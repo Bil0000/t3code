@@ -4,6 +4,18 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { startGlobalShiftShortcut } from "./GlobalShiftShortcut.ts";
 
 describe("global Shift shortcut", () => {
+  it("contains trigger errors at the native callback boundary", () => {
+    const hook = Object.assign(new NodeEvents.EventEmitter(), { start: vi.fn(), stop: vi.fn() });
+    startGlobalShiftShortcut(hook, () => {
+      throw new Error("capture failed synchronously");
+    });
+
+    expect(() => {
+      hook.emit("keydown", { keycode: 42 });
+      hook.emit("keydown", { keycode: 54 });
+    }).not.toThrow();
+  });
+
   it("fires once for both Shift keys and removes the hook on stop", () => {
     const hook = Object.assign(new NodeEvents.EventEmitter(), { start: vi.fn(), stop: vi.fn() });
     const onTrigger = vi.fn();
