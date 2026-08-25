@@ -48,6 +48,21 @@ const MAX_CAPTURE_HEIGHT = 2_880;
 const ACCESSIBLE_TEXT_TIMEOUT_MS = 1_000;
 const CAPTURE_READY_ACTION = "window-capture-ready";
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
+const FLASH_ANIMATION_DURATION_MS = 180;
+const FLASH_STATIC_DURATION_MS = 60;
+const WINDOW_CAPTURE_FLASH_HTML = [
+  "<!doctype html>",
+  "<style>",
+  "html,body{width:100%;height:100%}",
+  "body{margin:0;opacity:0;background:rgba(255,255,255,.18);will-change:opacity}",
+  "body.animate{animation:flash 180ms cubic-bezier(.2,.8,.2,1) both}",
+  "body.still{opacity:1}",
+  "@keyframes flash{0%{opacity:0}18%{opacity:1}100%{opacity:0}}",
+  "</style><body></body>",
+  '<script>window.playFlash=(className)=>{document.body.className="";void document.body.offsetWidth;if(className==="animate"){requestAnimationFrame(()=>{document.body.className=className});return}document.body.className=className}</script>',
+].join("");
+const WINDOW_CAPTURE_FLASH_URL =
+  "data:text/html;charset=utf-8," + encodeURIComponent(WINDOW_CAPTURE_FLASH_HTML);
 const MAC_SCREEN_CAPTURE_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 const MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE =
@@ -186,18 +201,24 @@ function thumbnailSize(active: ActiveWindow | undefined): Electron.Size {
   };
 }
 
+export function windowCaptureIconDataUrl(
+  capturedIcon: Electron.NativeImage | null | undefined,
+  fileIcon: Electron.NativeImage | null | undefined,
+): string | undefined {
+  const icon = fileIcon && !fileIcon.isEmpty() ? fileIcon : capturedIcon;
+  if (!icon || icon.isEmpty()) return undefined;
+  return icon.resize({ width: 32, height: 32, quality: "best" }).toDataURL({ scaleFactor: 2 });
+}
+
 async function iconDataUrl(
   source: { readonly appIcon?: Electron.NativeImage | null },
   active: ActiveWindow | undefined,
 ): Promise<string | undefined> {
   try {
-    const icon =
-      source.appIcon && !source.appIcon.isEmpty()
-        ? source.appIcon
-        : active?.owner.path
-          ? await Electron.app.getFileIcon(active.owner.path, { size: "small" })
-          : undefined;
-    return icon?.resize({ width: 32, height: 32, quality: "best" }).toDataURL();
+    const fileIcon = active?.owner.path
+      ? await Electron.app.getFileIcon(active.owner.path, { size: "large" }).catch(() => undefined)
+      : undefined;
+    return windowCaptureIconDataUrl(source.appIcon, fileIcon);
   } catch {
     return undefined;
   }
@@ -289,12 +310,19 @@ async function readAccessibleWindowText(
   }
 }
 
-async function captureSource(
-  mode: DesktopWindowCaptureState["mode"],
-  captureId: string,
-  platform: NodeJS.Platform,
-  settings: ClientSettings,
-) {
+async function captureSource({
+  mode,
+  captureId,
+  platform,
+  settings,
+  flash,
+}: {
+  mode: DesktopWindowCaptureState["mode"];
+  captureId: string;
+  platform: NodeJS.Platform;
+  settings: ClientSettings;
+  flash: WindowCaptureFlash;
+}) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
 
@@ -319,7 +347,7 @@ async function captureSource(
         ? new DesktopWindowCaptureNoWindowSelectedError({ captureId })
         : new DesktopWindowCaptureWindowUnavailableError({ captureId });
     }
-    showFlash(settings, active);
+    showFlash(flash, settings, active);
     const accessibleText = active
       ? await readAccessibleWindowText(active, platform, source.name)
       : undefined;
@@ -329,13 +357,10 @@ async function captureSource(
   }
 }
 
-function showFlash(settings: ClientSettings, active: ActiveWindow | undefined): void {
-  if (!settings.windowCaptureFlash) return;
-  const displayBounds = active
-    ? active.bounds
-    : Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).bounds;
-  const flash = new Electron.BrowserWindow({
-    ...displayBounds,
+function createWindowCaptureFlashWindow(): Electron.BrowserWindow {
+  const window = new Electron.BrowserWindow({
+    width: 1,
+    height: 1,
     alwaysOnTop: true,
     focusable: false,
     frame: false,
@@ -345,20 +370,76 @@ function showFlash(settings: ClientSettings, active: ActiveWindow | undefined): 
     skipTaskbar: true,
     transparent: true,
   });
-  flash.setIgnoreMouseEvents(true);
-  const duration = settings.windowCaptureAnimations ? 220 : 60;
-  const animation = settings.windowCaptureAnimations ? "animation:flash 220ms ease-out both" : "";
-  const html =
-    '<!doctype html><style>@keyframes flash{0%{opacity:0}12%{opacity:1}100%{opacity:0}}</style><body style="margin:0;background:rgba(255,255,255,.26);' +
-    animation +
-    '"></body>';
-  void flash.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(() => {
-    if (flash.isDestroyed()) return;
-    flash.showInactive();
-    setTimeout(() => {
-      if (!flash.isDestroyed()) flash.close();
-    }, duration);
-  });
+  window.setIgnoreMouseEvents(true);
+  return window;
+}
+
+export class WindowCaptureFlash {
+  private flashWindow: Electron.BrowserWindow | undefined;
+  private ready: Promise<void> | undefined;
+  private hideTimer: ReturnType<typeof setTimeout> | undefined;
+
+  prepare(): Promise<void> {
+    if (this.flashWindow && !this.flashWindow.isDestroyed() && this.ready) return this.ready;
+    const window = createWindowCaptureFlashWindow();
+    this.flashWindow = window;
+    this.ready = window.loadURL(WINDOW_CAPTURE_FLASH_URL).catch((error) => {
+      if (this.flashWindow === window) this.dispose();
+      throw error;
+    });
+    return this.ready;
+  }
+
+  showAnimated(bounds: Electron.Rectangle): Promise<void> {
+    return this.show(bounds, "animate", FLASH_ANIMATION_DURATION_MS);
+  }
+
+  showStatic(bounds: Electron.Rectangle): Promise<void> {
+    return this.show(bounds, "still", FLASH_STATIC_DURATION_MS);
+  }
+
+  dispose(): void {
+    if (this.hideTimer) clearTimeout(this.hideTimer);
+    this.hideTimer = undefined;
+    if (this.flashWindow && !this.flashWindow.isDestroyed()) this.flashWindow.destroy();
+    this.flashWindow = undefined;
+    this.ready = undefined;
+  }
+
+  private async show(
+    bounds: Electron.Rectangle,
+    className: "animate" | "still",
+    durationMs: number,
+  ): Promise<void> {
+    await this.prepare();
+    const window = this.flashWindow;
+    if (!window || window.isDestroyed()) return;
+    if (this.hideTimer) clearTimeout(this.hideTimer);
+    window.setBounds(bounds);
+    await window.webContents.executeJavaScript(
+      "window.playFlash(" + JSON.stringify(className) + ")",
+    );
+    if (window.isDestroyed()) return;
+    window.showInactive();
+    this.hideTimer = setTimeout(() => {
+      if (!window.isDestroyed()) window.hide();
+    }, durationMs);
+  }
+}
+
+function showFlash(
+  flash: WindowCaptureFlash,
+  settings: ClientSettings,
+  active: ActiveWindow | undefined,
+): void {
+  if (!settings.windowCaptureFlash) return;
+  const bounds = active
+    ? active.bounds
+    : Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).bounds;
+  const playback = settings.windowCaptureAnimations
+    ? flash.showAnimated(bounds)
+    : flash.showStatic(bounds);
+  void playback.catch(() => undefined);
 }
 
 function probeGlobalShortcut(accelerator: string): DesktopWindowCaptureShortcutAvailability {
@@ -399,6 +480,7 @@ export const make = Effect.gen(function* () {
   const captureDirectory = path.join(environment.stateDir, "window-captures");
   let registeredAccelerator: string | undefined;
   let stopShiftShortcut: (() => void) | undefined;
+  const flash = new WindowCaptureFlash();
 
   const releaseShortcut = () => {
     if (registeredAccelerator) {
@@ -439,7 +521,8 @@ export const make = Effect.gen(function* () {
     yield* Effect.gen(function* () {
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
       const { source, active, accessibleText } = yield* Effect.tryPromise({
-        try: () => captureSource(mode, id, environment.platform, settings),
+        try: () =>
+          captureSource({ mode, captureId: id, platform: environment.platform, settings, flash }),
         catch: (cause) => captureFailure(cause, id),
       });
       const png = yield* Effect.try({
@@ -547,6 +630,11 @@ export const make = Effect.gen(function* () {
 
     const mode = captureMode(environment.platform);
     const shortcut = effectiveWindowCaptureShortcut(mode, settings.windowCaptureShortcut);
+    if (settings.windowCaptureEnabled && settings.windowCaptureFlash && mode !== "unavailable") {
+      void flash.prepare().catch(() => undefined);
+    } else {
+      flash.dispose();
+    }
     if (!settings.windowCaptureEnabled || mode === "unavailable") {
       yield* Ref.set(stateRef, {
         mode,
@@ -622,7 +710,12 @@ export const make = Effect.gen(function* () {
     );
   });
 
-  yield* Effect.addFinalizer(() => Effect.sync(releaseShortcut));
+  yield* Effect.addFinalizer(() =>
+    Effect.sync(() => {
+      releaseShortcut();
+      flash.dispose();
+    }),
+  );
 
   return DesktopWindowCapture.of({
     initialize: configurationMutex.withPermits(1)(

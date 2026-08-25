@@ -7,14 +7,71 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import type * as Electron from "electron";
 import { vi } from "vite-plus/test";
 
-const { getSourcesMock, openExternalMock } = vi.hoisted(() => ({
+const { flashWindows, getSourcesMock, openExternalMock } = vi.hoisted(() => ({
+  flashWindows: [] as Array<{
+    bounds: Electron.Rectangle | null;
+    destroyed: boolean;
+    loadCount: number;
+    scripts: Array<string>;
+    showCount: number;
+  }>,
   getSourcesMock: vi.fn(),
   openExternalMock: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("electron", () => ({
+  BrowserWindow: class {
+    static getFocusedWindow() {
+      return null;
+    }
+
+    readonly webContents;
+    private readonly state: (typeof flashWindows)[number];
+
+    constructor() {
+      this.state = {
+        bounds: null,
+        destroyed: false,
+        loadCount: 0,
+        scripts: [],
+        showCount: 0,
+      };
+      flashWindows.push(this.state);
+      this.webContents = {
+        executeJavaScript: async (script: string) => {
+          this.state.scripts.push(script);
+        },
+      };
+    }
+
+    destroy() {
+      this.state.destroyed = true;
+    }
+
+    hide() {}
+
+    isDestroyed() {
+      return this.state.destroyed;
+    }
+
+    loadURL() {
+      this.state.loadCount += 1;
+      return Promise.resolve();
+    }
+
+    setBounds(bounds: Electron.Rectangle) {
+      this.state.bounds = bounds;
+    }
+
+    setIgnoreMouseEvents() {}
+
+    showInactive() {
+      this.state.showCount += 1;
+    }
+  },
   desktopCapturer: { getSources: getSourcesMock },
   shell: { openExternal: openExternalMock },
   systemPreferences: {
@@ -106,6 +163,52 @@ it.effect("reads and acknowledges queued captures through Effect services", () =
       assert.deepEqual(removed.sort(), [imagePath, metadataPath].sort());
     }),
   ).pipe(Effect.provide(layer));
+});
+
+function fakeIcon(label: string, empty = false): Electron.NativeImage {
+  return {
+    isEmpty: () => empty,
+    resize: ({ width, height, quality }) => ({
+      toDataURL: (options) =>
+        "data:image/png;base64," +
+        label +
+        ":" +
+        width +
+        "x" +
+        height +
+        ":" +
+        quality +
+        "@" +
+        options?.scaleFactor,
+    }),
+  } as Electron.NativeImage;
+}
+
+it.each([
+  ["OS app", fakeIcon("captured"), fakeIcon("file"), "file"],
+  ["captured app", fakeIcon("captured"), fakeIcon("file", true), "captured"],
+])("exports the %s icon at high density", (_source, capturedIcon, fileIcon, expectedLabel) => {
+  const dataUrl = DesktopWindowCapture.windowCaptureIconDataUrl(capturedIcon, fileIcon);
+
+  assert.strictEqual(dataUrl, "data:image/png;base64," + expectedLabel + ":32x32:best@2");
+});
+
+it("preloads and reuses one flash window", async () => {
+  flashWindows.length = 0;
+  const flash = new DesktopWindowCapture.WindowCaptureFlash();
+  const bounds = { x: 10, y: 20, width: 800, height: 600 };
+
+  await flash.prepare();
+  await flash.showAnimated(bounds);
+  await flash.showStatic(bounds);
+
+  assert.lengthOf(flashWindows, 1);
+  assert.strictEqual(flashWindows[0]?.loadCount, 1);
+  assert.deepEqual(flashWindows[0]?.bounds, bounds);
+  assert.strictEqual(flashWindows[0]?.showCount, 2);
+  assert.lengthOf(flashWindows[0]?.scripts ?? [], 2);
+  flash.dispose();
+  assert.isTrue(flashWindows[0]?.destroyed);
 });
 
 it.effect("applies concurrent settings changes in order while permissions are pending", () => {
