@@ -29,7 +29,7 @@ import { activeWindow, type Result as ActiveWindow } from "get-windows";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
-import { startGlobalShiftShortcut } from "./GlobalShiftShortcut.ts";
+import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts";
 import {
   accessibleWindowText,
   effectiveWindowCaptureShortcut,
@@ -488,6 +488,11 @@ export const make = Effect.gen(function* () {
   >();
   const runPromise = Effect.runPromiseWith(context);
   const captureDirectory = path.join(environment.stateDir, "window-captures");
+  const shiftShortcutWorkerPath = path.join(
+    __dirname,
+    "windowCapture",
+    "GlobalShiftShortcutWorker.cjs",
+  );
   let registeredAccelerator: string | undefined;
   let stopShiftShortcut: (() => void) | undefined;
   const flash = new WindowCaptureFlash();
@@ -670,12 +675,16 @@ export const make = Effect.gen(function* () {
 
     let registered = false;
     if (isBothShiftKeysShortcut(shortcut)) {
-      registered = yield* Effect.tryPromise(async () => {
-        const { uIOhook } = await import("uiohook-napi");
-        stopShiftShortcut = startGlobalShiftShortcut(uIOhook, () => {
+      registered = yield* Effect.tryPromise(() =>
+        startGlobalShiftShortcutProcess(shiftShortcutWorkerPath, () => {
           void runPromise(capture).catch(() => undefined);
-        });
-      }).pipe(
+        }),
+      ).pipe(
+        Effect.tap((stop) =>
+          Effect.sync(() => {
+            stopShiftShortcut = stop;
+          }),
+        ),
         Effect.as(true),
         Effect.orElseSucceed(() => false),
       );

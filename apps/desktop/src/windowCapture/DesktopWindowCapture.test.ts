@@ -16,6 +16,8 @@ const {
   getSourcesMock,
   openExternalMock,
   registerShortcutMock,
+  shortcutProcesses,
+  uiohookMock,
 } = vi.hoisted(() => ({
   accessibilityByPidMock: vi.fn(),
   flashWindows: [] as Array<{
@@ -28,9 +30,23 @@ const {
   getSourcesMock: vi.fn(),
   openExternalMock: vi.fn(() => Promise.resolve()),
   registerShortcutMock: vi.fn(),
+  shortcutProcesses: [] as Array<{
+    emit: (event: string, value?: unknown) => void;
+    kill: ReturnType<typeof vi.fn>;
+    on: (event: string, listener: (value: unknown) => void) => unknown;
+    once: (event: string, listener: (value: unknown) => void) => unknown;
+    postMessage: ReturnType<typeof vi.fn>;
+  }>,
+  uiohookMock: {
+    off: vi.fn(),
+    on: vi.fn(),
+    start: vi.fn(),
+    stop: vi.fn(),
+  },
 }));
 
 vi.mock("@crowecawcaw/xa11y", () => ({ App: { byPid: accessibilityByPidMock } }));
+vi.mock("uiohook-napi", () => ({ uIOhook: uiohookMock }));
 
 vi.mock("electron", () => ({
   BrowserWindow: class {
@@ -93,6 +109,36 @@ vi.mock("electron", () => ({
   systemPreferences: {
     getMediaAccessStatus: () => "not-determined",
     isTrustedAccessibilityClient: () => true,
+  },
+  utilityProcess: {
+    fork: () => {
+      const listeners = new Map<string, Array<(value: unknown) => void>>();
+      const process = {
+        emit: (event: string, value?: unknown) => {
+          for (const listener of listeners.get(event) ?? []) listener(value);
+        },
+        kill: vi.fn(() => true),
+        on: (event: string, listener: (value: unknown) => void) => {
+          listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+          return process;
+        },
+        once: (event: string, listener: (value: unknown) => void) => {
+          const wrapped = (value: unknown) => {
+            listeners.set(
+              event,
+              (listeners.get(event) ?? []).filter((candidate) => candidate !== wrapped),
+            );
+            listener(value);
+          };
+          listeners.set(event, [...(listeners.get(event) ?? []), wrapped]);
+          return process;
+        },
+        postMessage: vi.fn(),
+      };
+      shortcutProcesses.push(process);
+      queueMicrotask(() => process.emit("message", "ready"));
+      return process;
+    },
   },
 }));
 
@@ -303,6 +349,24 @@ it.effect("does not create the flash window during desktop startup", () => {
       assert.lengthOf(flashWindows, 0);
     }),
   ).pipe(Effect.provide(testLayer("darwin", {}, Option.some(settings))));
+});
+
+it.effect("starts the Shift listener outside the Electron main process", () => {
+  shortcutProcesses.length = 0;
+  uiohookMock.start.mockClear();
+  const settings = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true };
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure(settings);
+      const state = yield* service.state;
+
+      assert.isTrue(state.shortcutRegistered);
+      assert.lengthOf(shortcutProcesses, 1);
+      assert.strictEqual(uiohookMock.start.mock.calls.length, 0);
+    }),
+  ).pipe(Effect.provide(testLayer("linux")));
 });
 
 it.effect("rejects unavailable Wayland shortcuts before saving", () => {

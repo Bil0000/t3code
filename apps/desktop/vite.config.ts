@@ -42,7 +42,7 @@ export default defineConfig({
       sourcemap: true,
       outExtensions: () => ({ js: ".cjs" }),
       define: publicConfigDefine,
-      entry: ["src/main.ts"],
+      entry: ["src/main.ts", "src/windowCapture/GlobalShiftShortcutWorker.ts"],
       clean: true,
       deps: {
         alwaysBundle: (id) => id.startsWith("@t3tools/"),
