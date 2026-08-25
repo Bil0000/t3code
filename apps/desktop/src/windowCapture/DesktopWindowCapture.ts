@@ -1,4 +1,4 @@
-// @effect-diagnostics globalDateInEffect:off globalTimers:off
+// @effect-diagnostics globalTimers:off
 
 import {
   DEFAULT_CLIENT_SETTINGS,
@@ -12,6 +12,7 @@ import {
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
 import * as FileSystem from "effect/FileSystem";
@@ -290,21 +291,27 @@ async function readCapturedWindowText(
   return text || undefined;
 }
 
-async function readAccessibleWindowText(
+let activeAccessibleTextRead: Promise<string | undefined> | undefined;
+
+export async function readAccessibleWindowText(
   active: ActiveWindow,
   platform: NodeJS.Platform,
   sourceTitle: string,
 ): Promise<string | undefined> {
+  if (activeAccessibleTextRead) return undefined;
+  const read = readCapturedWindowText(active, platform, sourceTitle).catch(() => undefined);
+  activeAccessibleTextRead = read;
+  void read.finally(() => {
+    if (activeAccessibleTextRead === read) activeAccessibleTextRead = undefined;
+  });
   let timeout: number | undefined;
   try {
     return await Promise.race([
-      readCapturedWindowText(active, platform, sourceTitle),
+      read,
       new Promise<undefined>((resolve) => {
         timeout = setTimeout(resolve, ACCESSIBLE_TEXT_TIMEOUT_MS);
       }),
     ]);
-  } catch {
-    return undefined;
   } finally {
     if (timeout) clearTimeout(timeout);
   }
@@ -530,7 +537,7 @@ export const make = Effect.gen(function* () {
         try: () => source.thumbnail.toPNG(),
         catch: (cause) => captureFailure(cause, id),
       });
-      const capturedAt = new Date().toISOString();
+      const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
       const appIconDataUrl = yield* Effect.promise(() => iconDataUrl(source, active));
       const pending = yield* decodePendingCapture({
         id,

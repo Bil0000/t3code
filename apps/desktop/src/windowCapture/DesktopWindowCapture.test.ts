@@ -10,17 +10,22 @@ import * as Path from "effect/Path";
 import type * as Electron from "electron";
 import { vi } from "vite-plus/test";
 
-const { flashWindows, getSourcesMock, openExternalMock } = vi.hoisted(() => ({
-  flashWindows: [] as Array<{
-    bounds: Electron.Rectangle | null;
-    destroyed: boolean;
-    loadCount: number;
-    scripts: Array<string>;
-    showCount: number;
-  }>,
-  getSourcesMock: vi.fn(),
-  openExternalMock: vi.fn(() => Promise.resolve()),
-}));
+const { accessibilityByPidMock, flashWindows, getSourcesMock, openExternalMock } = vi.hoisted(
+  () => ({
+    accessibilityByPidMock: vi.fn(),
+    flashWindows: [] as Array<{
+      bounds: Electron.Rectangle | null;
+      destroyed: boolean;
+      loadCount: number;
+      scripts: Array<string>;
+      showCount: number;
+    }>,
+    getSourcesMock: vi.fn(),
+    openExternalMock: vi.fn(() => Promise.resolve()),
+  }),
+);
+
+vi.mock("@crowecawcaw/xa11y", () => ({ App: { byPid: accessibilityByPidMock } }));
 
 vi.mock("electron", () => ({
   BrowserWindow: class {
@@ -192,6 +197,43 @@ it.each([
   const dataUrl = DesktopWindowCapture.windowCaptureIconDataUrl(capturedIcon, fileIcon);
 
   assert.strictEqual(dataUrl, "data:image/png;base64," + expectedLabel + ":32x32:best@2");
+});
+
+it("does not overlap accessibility reads after a timeout", async () => {
+  vi.useFakeTimers();
+  accessibilityByPidMock.mockReset();
+  const read = Promise.withResolvers<{ children: () => Promise<Array<never>> }>();
+  const started = Promise.withResolvers<void>();
+  accessibilityByPidMock.mockImplementationOnce(() => {
+    started.resolve();
+    return read.promise;
+  });
+  const active = {
+    title: "main.ts",
+    owner: { processId: 42 },
+    bounds: { x: 0, y: 0, width: 800, height: 600 },
+  } as Parameters<typeof DesktopWindowCapture.readAccessibleWindowText>[0];
+
+  try {
+    const first = DesktopWindowCapture.readAccessibleWindowText(active, "darwin", "main.ts");
+    await started.promise;
+    await vi.advanceTimersByTimeAsync(1_000);
+    assert.isUndefined(await first);
+    assert.isUndefined(
+      await DesktopWindowCapture.readAccessibleWindowText(active, "darwin", "main.ts"),
+    );
+    assert.strictEqual(accessibilityByPidMock.mock.calls.length, 1);
+
+    read.resolve({ children: async () => [] });
+    await vi.advanceTimersByTimeAsync(0);
+    accessibilityByPidMock.mockResolvedValueOnce({ children: async () => [] });
+    assert.isUndefined(
+      await DesktopWindowCapture.readAccessibleWindowText(active, "darwin", "main.ts"),
+    );
+    assert.strictEqual(accessibilityByPidMock.mock.calls.length, 2);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it("preloads and reuses one flash window", async () => {
