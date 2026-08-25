@@ -117,7 +117,7 @@ describe("DesktopClientSettings diagnostics", () => {
       if (!Array.isArray(message)) {
         return assert.fail("expected structured warning arguments");
       }
-      assert.equal(message[0], "Could not decode desktop client settings.");
+      assert.equal(message[0], "Could not decode desktop client settings; keeping valid fields.");
       const schemaError = message[1];
       if (schemaError === null || typeof schemaError !== "object") {
         return assert.fail("expected the schema error in the warning");
