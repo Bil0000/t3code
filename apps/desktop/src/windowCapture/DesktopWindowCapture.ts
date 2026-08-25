@@ -44,8 +44,8 @@ import {
   windowCaptureShortcutSystemConflict,
 } from "./windowCapture.ts";
 
-const MAX_CAPTURE_WIDTH = 5_120;
-const MAX_CAPTURE_HEIGHT = 2_880;
+const MAX_CAPTURE_WIDTH = 2_560;
+const MAX_CAPTURE_HEIGHT = 1_600;
 const ACCESSIBLE_TEXT_TIMEOUT_MS = 1_000;
 const CAPTURE_READY_ACTION = "window-capture-ready";
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
@@ -194,7 +194,7 @@ function captureMode(platform: NodeJS.Platform): DesktopWindowCaptureState["mode
   return isWaylandSession(platform, process.env) ? "portal" : "direct";
 }
 
-function thumbnailSize(active: ActiveWindow | undefined): Electron.Size {
+export function windowCaptureThumbnailSize(active: ActiveWindow | undefined): Electron.Size {
   if (!active) return { width: 2_560, height: 1_600 };
   return {
     width: Math.min(Math.max(active.bounds.width, 1), MAX_CAPTURE_WIDTH),
@@ -345,7 +345,7 @@ async function captureSource({
 
     const sources = await Electron.desktopCapturer.getSources({
       types: mode === "portal" ? ["window", "screen"] : ["window"],
-      thumbnailSize: thumbnailSize(active),
+      thumbnailSize: windowCaptureThumbnailSize(active),
       fetchWindowIcons: true,
     });
     const source =
@@ -430,7 +430,7 @@ export class WindowCaptureFlash {
     if (window.isDestroyed()) return;
     window.showInactive();
     this.hideTimer = setTimeout(() => {
-      if (!window.isDestroyed()) window.hide();
+      if (this.flashWindow === window) this.dispose();
     }, durationMs);
   }
 }
@@ -602,15 +602,8 @@ export const make = Effect.gen(function* () {
     if (mode === "unavailable") {
       return { available: false, message: "Window capture is not supported on this platform." };
     }
-    if (mode === "portal") {
-      return {
-        available: true,
-        message: isBothShiftKeysShortcut(shortcut)
-          ? "Wayland uses Ctrl+Shift+2 because it does not expose physical modifier pairs."
-          : "Your desktop will confirm this shortcut when you enable Window Capture.",
-      };
-    }
-    if (isBothShiftKeysShortcut(shortcut)) {
+    const effectiveShortcut = effectiveWindowCaptureShortcut(mode, shortcut);
+    if (isBothShiftKeysShortcut(effectiveShortcut)) {
       const available = yield* Effect.tryPromise(() => import("uiohook-napi")).pipe(
         Effect.as(true),
         Effect.orElseSucceed(() => false),
@@ -619,14 +612,22 @@ export const make = Effect.gen(function* () {
         available,
         message: available
           ? "Shift + Shift is observed and cannot be reserved exclusively."
-          : windowCaptureShortcutRegistrationFailureMessage(shortcut),
+          : windowCaptureShortcutRegistrationFailureMessage(effectiveShortcut),
       };
     }
-    const systemConflict = windowCaptureShortcutSystemConflict(shortcut);
+    const systemConflict = windowCaptureShortcutSystemConflict(effectiveShortcut);
     if (systemConflict) return { available: false, message: systemConflict };
-    const accelerator = toElectronAccelerator(shortcut);
-    if (registeredAccelerator === accelerator) return { available: true, message: null };
-    return probeGlobalShortcut(accelerator);
+    const accelerator = toElectronAccelerator(effectiveShortcut);
+    const available =
+      registeredAccelerator === accelerator
+        ? { available: true, message: null }
+        : probeGlobalShortcut(accelerator);
+    return mode === "portal" && isBothShiftKeysShortcut(shortcut) && available.available
+      ? {
+          available: true,
+          message: "Wayland uses Ctrl+Shift+2 because it does not expose physical modifier pairs.",
+        }
+      : available;
   });
 
   const applySettings = Effect.fn("desktop.windowCapture.applySettings")(function* (

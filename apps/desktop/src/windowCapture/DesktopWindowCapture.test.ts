@@ -10,20 +10,25 @@ import * as Path from "effect/Path";
 import type * as Electron from "electron";
 import { vi } from "vite-plus/test";
 
-const { accessibilityByPidMock, flashWindows, getSourcesMock, openExternalMock } = vi.hoisted(
-  () => ({
-    accessibilityByPidMock: vi.fn(),
-    flashWindows: [] as Array<{
-      bounds: Electron.Rectangle | null;
-      destroyed: boolean;
-      loadCount: number;
-      scripts: Array<string>;
-      showCount: number;
-    }>,
-    getSourcesMock: vi.fn(),
-    openExternalMock: vi.fn(() => Promise.resolve()),
-  }),
-);
+const {
+  accessibilityByPidMock,
+  flashWindows,
+  getSourcesMock,
+  openExternalMock,
+  registerShortcutMock,
+} = vi.hoisted(() => ({
+  accessibilityByPidMock: vi.fn(),
+  flashWindows: [] as Array<{
+    bounds: Electron.Rectangle | null;
+    destroyed: boolean;
+    loadCount: number;
+    scripts: Array<string>;
+    showCount: number;
+  }>,
+  getSourcesMock: vi.fn(),
+  openExternalMock: vi.fn(() => Promise.resolve()),
+  registerShortcutMock: vi.fn(),
+}));
 
 vi.mock("@crowecawcaw/xa11y", () => ({ App: { byPid: accessibilityByPidMock } }));
 
@@ -78,6 +83,7 @@ vi.mock("electron", () => ({
     }
   },
   desktopCapturer: { getSources: getSourcesMock },
+  globalShortcut: { register: registerShortcutMock, unregister: vi.fn() },
   shell: { openExternal: openExternalMock },
   systemPreferences: {
     getMediaAccessStatus: () => "not-determined",
@@ -199,6 +205,15 @@ it.each([
   assert.strictEqual(dataUrl, "data:image/png;base64," + expectedLabel + ":32x32:best@2");
 });
 
+it("bounds source thumbnails for large windows", () => {
+  assert.deepEqual(
+    DesktopWindowCapture.windowCaptureThumbnailSize({
+      bounds: { x: 0, y: 0, width: 6_000, height: 4_000 },
+    } as Parameters<typeof DesktopWindowCapture.windowCaptureThumbnailSize>[0]),
+    { width: 2_560, height: 1_600 },
+  );
+});
+
 it("does not overlap accessibility reads after a timeout", async () => {
   vi.useFakeTimers();
   accessibilityByPidMock.mockReset();
@@ -236,22 +251,27 @@ it("does not overlap accessibility reads after a timeout", async () => {
   }
 });
 
-it("preloads and reuses one flash window", async () => {
+it("reuses one flash window and disposes it after playback", async () => {
+  vi.useFakeTimers();
   flashWindows.length = 0;
   const flash = new DesktopWindowCapture.WindowCaptureFlash();
   const bounds = { x: 10, y: 20, width: 800, height: 600 };
 
-  await flash.prepare();
-  await flash.showAnimated(bounds);
-  await flash.showStatic(bounds);
+  try {
+    await flash.prepare();
+    await flash.showAnimated(bounds);
+    await flash.showStatic(bounds);
 
-  assert.lengthOf(flashWindows, 1);
-  assert.strictEqual(flashWindows[0]?.loadCount, 1);
-  assert.deepEqual(flashWindows[0]?.bounds, bounds);
-  assert.strictEqual(flashWindows[0]?.showCount, 2);
-  assert.lengthOf(flashWindows[0]?.scripts ?? [], 2);
-  flash.dispose();
-  assert.isTrue(flashWindows[0]?.destroyed);
+    assert.lengthOf(flashWindows, 1);
+    assert.strictEqual(flashWindows[0]?.loadCount, 1);
+    assert.deepEqual(flashWindows[0]?.bounds, bounds);
+    assert.strictEqual(flashWindows[0]?.showCount, 2);
+    assert.lengthOf(flashWindows[0]?.scripts ?? [], 2);
+    await vi.advanceTimersByTimeAsync(60);
+    assert.isTrue(flashWindows[0]?.destroyed);
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 it.effect("does not create the flash window during desktop startup", () => {
@@ -269,6 +289,38 @@ it.effect("does not create the flash window during desktop startup", () => {
       assert.lengthOf(flashWindows, 0);
     }),
   ).pipe(Effect.provide(testLayer("darwin", {}, Option.some(settings))));
+});
+
+it.effect("rejects unavailable Wayland shortcuts before saving", () => {
+  vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+  registerShortcutMock.mockReset().mockReturnValue(false);
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      const conflict = yield* service.checkShortcut({
+        key: "c",
+        metaKey: false,
+        ctrlKey: true,
+        shiftKey: false,
+        altKey: false,
+        modKey: false,
+      });
+      const unavailable = yield* service.checkShortcut({
+        key: "9",
+        metaKey: false,
+        ctrlKey: true,
+        shiftKey: true,
+        altKey: false,
+        modKey: false,
+      });
+      assert.isFalse(conflict.available);
+      assert.isFalse(unavailable.available);
+    }),
+  ).pipe(
+    Effect.provide(testLayer("linux")),
+    Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+  );
 });
 
 it.effect("applies concurrent settings changes in order while permissions are pending", () => {
