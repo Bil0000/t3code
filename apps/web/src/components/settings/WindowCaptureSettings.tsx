@@ -261,14 +261,13 @@ export function WindowCaptureSettings() {
             description="Press both keys of a modifier like Shift, or choose a key chord. T3 Code checks it before saving."
             status={shortcutStatus}
             resetAction={
-              <SettingResetButton
-                label="window capture shortcut"
-                disabled={
-                  !captureAvailable ||
-                  sameWindowCaptureShortcut(savedShortcut, DEFAULT_WINDOW_CAPTURE_SHORTCUT)
-                }
-                onClick={() => void checkShortcut(DEFAULT_WINDOW_CAPTURE_SHORTCUT)}
-              />
+              captureAvailable &&
+              !sameWindowCaptureShortcut(savedShortcut, DEFAULT_WINDOW_CAPTURE_SHORTCUT) ? (
+                <SettingResetButton
+                  label="window capture shortcut"
+                  onClick={() => void checkShortcut(DEFAULT_WINDOW_CAPTURE_SHORTCUT)}
+                />
+              ) : null
             }
             control={
               <div className="flex items-center gap-2">
