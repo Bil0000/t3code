@@ -1,5 +1,7 @@
+import { it as effectIt } from "@effect/vitest";
 import { effectiveWindowCaptureShortcut } from "@t3tools/contracts";
-import * as NodeFS from "node:fs";
+import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -329,39 +331,48 @@ describe("isWaylandSession", () => {
   });
 
   // The live-socket check reads /proc/net/unix, which only exists on Linux.
-  it.skipIf(!NodeFS.existsSync("/proc/net/unix"))(
+  effectIt.effect(
     "falls back to a live runtime directory socket when session variables are stripped",
-    async () => {
-      const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
-      const { createServer } = await import("node:net");
-      const { tmpdir } = await import("node:os");
-      const { join } = await import("node:path");
-      const runtimeDirectory = await mkdtemp(join(tmpdir(), "t3-wayland-"));
-      const socketPath = join(runtimeDirectory, "wayland-0");
-      const server = createServer();
-      try {
-        expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: runtimeDirectory })).toBe(false);
-        await writeFile(socketPath, "");
-        expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: runtimeDirectory })).toBe(false);
-        await rm(socketPath);
-        await new Promise<void>((resolve, reject) => {
-          server.once("error", reject);
-          server.listen(socketPath, resolve);
+    () =>
+      Effect.gen(function* () {
+        if ((yield* HostProcessPlatform) !== "linux") return;
+        yield* Effect.promise(async () => {
+          const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+          const { createServer } = await import("node:net");
+          const { tmpdir } = await import("node:os");
+          const { join } = await import("node:path");
+          const runtimeDirectory = await mkdtemp(join(tmpdir(), "t3-wayland-"));
+          const socketPath = join(runtimeDirectory, "wayland-0");
+          const server = createServer();
+          try {
+            expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: runtimeDirectory })).toBe(false);
+            await writeFile(socketPath, "");
+            expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: runtimeDirectory })).toBe(false);
+            await rm(socketPath);
+            await new Promise<void>((resolve, reject) => {
+              server.once("error", reject);
+              server.listen(socketPath, resolve);
+            });
+            expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: runtimeDirectory })).toBe(true);
+            expect(
+              isWaylandSession("linux", {
+                XDG_RUNTIME_DIR: runtimeDirectory,
+                XDG_SESSION_TYPE: "x11",
+              }),
+            ).toBe(false);
+            expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: "/nonexistent-t3-test" })).toBe(
+              false,
+            );
+          } finally {
+            if (server.listening) {
+              await new Promise<void>((resolve, reject) => {
+                server.close((error) => (error ? reject(error) : resolve()));
+              });
+            }
+            await rm(runtimeDirectory, { recursive: true, force: true });
+          }
         });
-        expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: runtimeDirectory })).toBe(true);
-        expect(
-          isWaylandSession("linux", { XDG_RUNTIME_DIR: runtimeDirectory, XDG_SESSION_TYPE: "x11" }),
-        ).toBe(false);
-        expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: "/nonexistent-t3-test" })).toBe(false);
-      } finally {
-        if (server.listening) {
-          await new Promise<void>((resolve, reject) => {
-            server.close((error) => (error ? reject(error) : resolve()));
-          });
-        }
-        await rm(runtimeDirectory, { recursive: true, force: true });
-      }
-    },
+      }),
   );
 });
 
