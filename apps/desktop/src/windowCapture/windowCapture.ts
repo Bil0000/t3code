@@ -1,6 +1,16 @@
 // @effect-diagnostics globalTimers:off
+// @effect-diagnostics nodeBuiltinImport:off
 
-import { type WindowCaptureKeyChord, type WindowCaptureShortcut } from "@t3tools/contracts";
+import * as NodeFS from "node:fs";
+
+import {
+  isModifierPairShortcut,
+  windowCaptureModifierPairLabel,
+  windowCaptureShortcutModifierPair,
+  type WindowCaptureKeyChord,
+  type WindowCaptureModifier,
+  type WindowCaptureShortcut,
+} from "@t3tools/contracts";
 
 interface AccessibilityTreeNode {
   readonly name?: string;
@@ -10,31 +20,38 @@ interface AccessibilityTreeNode {
 
 const MAX_ACCESSIBILITY_TREE_NODES = 10_000;
 const WINDOW_BLUR_TIMEOUT_MS = 1_000;
-const LEFT_SHIFT_KEYCODE = 42;
-const RIGHT_SHIFT_KEYCODE = 54;
 
-export interface BothShiftKeysState {
+export const UIOHOOK_MODIFIER_KEYCODES: Record<WindowCaptureModifier, readonly [number, number]> = {
+  shift: [42, 54],
+  control: [29, 3_613],
+  alt: [56, 3_640],
+  meta: [3_675, 3_676],
+};
+
+export interface ModifierPairState {
   readonly leftPressed: boolean;
   readonly rightPressed: boolean;
   readonly active: boolean;
 }
 
-export const BOTH_SHIFT_KEYS_IDLE: BothShiftKeysState = {
+export const MODIFIER_PAIR_IDLE: ModifierPairState = {
   leftPressed: false,
   rightPressed: false,
   active: false,
 };
 
-export function updateBothShiftKeys(
-  state: BothShiftKeysState,
+export function updateModifierPair(
+  state: ModifierPairState,
+  pair: readonly [number, number],
   keycode: number,
   pressed: boolean,
-): { readonly state: BothShiftKeysState; readonly triggered: boolean } {
-  if (keycode !== LEFT_SHIFT_KEYCODE && keycode !== RIGHT_SHIFT_KEYCODE) {
+): { readonly state: ModifierPairState; readonly triggered: boolean } {
+  const [leftKeycode, rightKeycode] = pair;
+  if (keycode !== leftKeycode && keycode !== rightKeycode) {
     return { state, triggered: false };
   }
-  const leftPressed = keycode === LEFT_SHIFT_KEYCODE ? pressed : state.leftPressed;
-  const rightPressed = keycode === RIGHT_SHIFT_KEYCODE ? pressed : state.rightPressed;
+  const leftPressed = keycode === leftKeycode ? pressed : state.leftPressed;
+  const rightPressed = keycode === rightKeycode ? pressed : state.rightPressed;
   const active = leftPressed && rightPressed;
   return {
     state: { leftPressed, rightPressed, active },
@@ -42,17 +59,15 @@ export function updateBothShiftKeys(
   };
 }
 
-export function isBothShiftKeysShortcut(
-  shortcut: WindowCaptureShortcut,
-): shortcut is Extract<WindowCaptureShortcut, { readonly kind: "both-shift-keys" }> {
-  return "kind" in shortcut && shortcut.kind === "both-shift-keys";
-}
-
 export function windowCaptureShortcutRegistrationFailureMessage(
   shortcut: WindowCaptureShortcut,
+  platform: NodeJS.Platform,
 ): string {
-  return isBothShiftKeysShortcut(shortcut)
-    ? "Shift + Shift is not available on this system."
+  return isModifierPairShortcut(shortcut)
+    ? `${windowCaptureModifierPairLabel(
+        windowCaptureShortcutModifierPair(shortcut),
+        platform === "darwin",
+      )} is not available on this system.`
     : "This shortcut is already used by the system or another app.";
 }
 
@@ -236,13 +251,26 @@ export function shouldRequestScreenCapturePermission(
   return platform === "darwin" && !previouslyEnabled && enabled;
 }
 
+export const WAYLAND_SUBSTITUTION_MESSAGE =
+  "Wayland uses Ctrl+Shift+2 because it does not expose physical modifier pairs.";
+
 export function isWaylandSession(
   platform: NodeJS.Platform,
   environment: NodeJS.ProcessEnv,
 ): boolean {
-  return (
-    platform === "linux" &&
-    (environment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" ||
-      Boolean(environment.WAYLAND_DISPLAY))
-  );
+  if (platform !== "linux") return false;
+  if (
+    environment.XDG_SESSION_TYPE?.toLowerCase() === "wayland" ||
+    Boolean(environment.WAYLAND_DISPLAY)
+  ) {
+    return true;
+  }
+  if (environment.XDG_SESSION_TYPE?.toLowerCase() === "x11") return false;
+  const runtimeDirectory = environment.XDG_RUNTIME_DIR;
+  if (!runtimeDirectory) return false;
+  try {
+    return NodeFS.readdirSync(runtimeDirectory).some((entry) => entry.startsWith("wayland-"));
+  } catch {
+    return false;
+  }
 }

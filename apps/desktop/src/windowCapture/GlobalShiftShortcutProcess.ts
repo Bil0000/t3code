@@ -2,12 +2,15 @@
 
 import * as NodeChildProcess from "node:child_process";
 
+import type { WindowCaptureModifier } from "@t3tools/contracts";
+
 export function startGlobalShiftShortcutProcess(
   workerPath: string,
+  modifier: WindowCaptureModifier,
   onTrigger: () => void,
   onFailure: (error: Error) => void,
 ): Promise<() => void> {
-  const worker = NodeChildProcess.fork(workerPath, [], {
+  const worker = NodeChildProcess.fork(workerPath, [modifier], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
     execArgv: [],
     stdio: ["ignore", "ignore", "inherit", "ipc"],

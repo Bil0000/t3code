@@ -5,10 +5,14 @@ import {
   DesktopPendingWindowCapture,
   effectiveWindowCaptureShortcut,
   WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS,
+  isModifierPairShortcut,
+  windowCaptureModifierPairLabel,
+  windowCaptureShortcutModifierPair,
   type DesktopWindowCapture as DesktopWindowCaptureValue,
   type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
   type ClientSettings,
+  type WindowCaptureModifierPairShortcut,
   type WindowCaptureShortcut,
 } from "@t3tools/contracts";
 import * as Context from "effect/Context";
@@ -36,8 +40,8 @@ import {
   findAccessibleWindow,
   findCaptureSource,
   hideAndWaitForBlur,
-  isBothShiftKeysShortcut,
   isWaylandSession,
+  WAYLAND_SUBSTITUTION_MESSAGE,
   shouldRequestScreenCapturePermission,
   toElectronAccelerator,
   windowCaptureShortcutRegistrationFailureMessage,
@@ -57,6 +61,8 @@ const MAC_SCREEN_CAPTURE_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 const MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE =
   "Allow Screen Recording in System Settings, then restart T3 Code.";
+const MAC_ACCESSIBILITY_PERMISSION_MESSAGE =
+  "Allow Accessibility in System Settings, then restart T3 Code.";
 
 const decodePendingCapture = Schema.decodeUnknownEffect(DesktopPendingWindowCapture);
 
@@ -255,7 +261,7 @@ function currentMacWindowCapturePermissionMessage(): string | null {
     return "Allow Accessibility and Screen Recording in System Settings, then restart T3 Code.";
   }
   if (!accessibilityGranted) {
-    return "Allow Accessibility in System Settings, then restart T3 Code.";
+    return MAC_ACCESSIBILITY_PERMISSION_MESSAGE;
   }
   return screenGranted ? null : MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
 }
@@ -474,6 +480,22 @@ function showFlash(
   void playback.catch(() => undefined);
 }
 
+function observedPairMessage(
+  shortcut: WindowCaptureModifierPairShortcut,
+  platform: NodeJS.Platform,
+): string {
+  const modifier = windowCaptureShortcutModifierPair(shortcut);
+  const label = windowCaptureModifierPairLabel(modifier, platform === "darwin");
+  const base = `${label} is observed and cannot be reserved exclusively.`;
+  if (modifier === "meta" && platform !== "darwin") {
+    return `${base} This key can also open the system's own menu.`;
+  }
+  if (modifier === "alt" && platform === "win32") {
+    return `${base} This key can also activate app menu bars.`;
+  }
+  return base;
+}
+
 function probeGlobalShortcut(accelerator: string): DesktopWindowCaptureShortcutAvailability {
   try {
     if (!Electron.globalShortcut.register(accelerator, () => undefined)) {
@@ -634,16 +656,33 @@ export const make = Effect.gen(function* () {
       return { available: false, message: "Window capture is not supported on this platform." };
     }
     const effectiveShortcut = effectiveWindowCaptureShortcut(mode, shortcut);
-    if (isBothShiftKeysShortcut(effectiveShortcut)) {
-      const available = yield* Effect.tryPromise(() => import("uiohook-napi")).pipe(
+    if (isModifierPairShortcut(effectiveShortcut)) {
+      if (
+        environment.platform === "darwin" &&
+        !Electron.systemPreferences.isTrustedAccessibilityClient(false)
+      ) {
+        return { available: false, message: MAC_ACCESSIBILITY_PERMISSION_MESSAGE };
+      }
+      const available = yield* Effect.tryPromise(() =>
+        startGlobalShiftShortcutProcess(
+          shiftShortcutWorkerPath,
+          windowCaptureShortcutModifierPair(effectiveShortcut),
+          () => undefined,
+          () => undefined,
+        ),
+      ).pipe(
+        Effect.tap((stop) => Effect.sync(stop)),
         Effect.as(true),
         Effect.orElseSucceed(() => false),
       );
       return {
         available,
         message: available
-          ? "Shift + Shift is observed and cannot be reserved exclusively."
-          : windowCaptureShortcutRegistrationFailureMessage(effectiveShortcut),
+          ? observedPairMessage(effectiveShortcut, environment.platform)
+          : windowCaptureShortcutRegistrationFailureMessage(
+              effectiveShortcut,
+              environment.platform,
+            ),
       };
     }
     const systemConflict = windowCaptureShortcutSystemConflict(effectiveShortcut);
@@ -653,12 +692,15 @@ export const make = Effect.gen(function* () {
       registeredAccelerator === accelerator
         ? { available: true, message: null }
         : probeGlobalShortcut(accelerator);
-    return mode === "portal" && isBothShiftKeysShortcut(shortcut) && available.available
-      ? {
-          available: true,
-          message: "Wayland uses Ctrl+Shift+2 because it does not expose physical modifier pairs.",
-        }
-      : available;
+    if (mode === "portal" && isModifierPairShortcut(shortcut)) {
+      return available.available
+        ? { available: true, message: WAYLAND_SUBSTITUTION_MESSAGE }
+        : {
+            available: false,
+            message: [WAYLAND_SUBSTITUTION_MESSAGE, available.message].filter(Boolean).join(" "),
+          };
+    }
+    return available;
   });
 
   const applySettings = Effect.fn("desktop.windowCapture.applySettings")(function* (
@@ -698,17 +740,22 @@ export const make = Effect.gen(function* () {
     }
 
     let registered = false;
-    if (isBothShiftKeysShortcut(shortcut)) {
+    if (isModifierPairShortcut(shortcut)) {
       registered = yield* Effect.tryPromise(() =>
         startGlobalShiftShortcutProcess(
           shiftShortcutWorkerPath,
+          windowCaptureShortcutModifierPair(shortcut),
           () => {
             void runPromise(capture).catch(() => undefined);
           },
-          (error) => {
+          () => {
             void runPromise(
               Ref.update(stateRef, (state) => ({ ...state, shortcutRegistered: false })).pipe(
-                Effect.andThen(setFailure(error.message)),
+                Effect.andThen(
+                  setFailure(
+                    windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
+                  ),
+                ),
               ),
             ).catch(() => undefined);
           },
@@ -735,12 +782,12 @@ export const make = Effect.gen(function* () {
       shortcut,
       shortcutRegistered: registered,
       message: registered
-        ? mode === "portal" && isBothShiftKeysShortcut(settings.windowCaptureShortcut)
-          ? "Wayland uses Ctrl+Shift+2 because it does not expose physical modifier pairs."
-          : isBothShiftKeysShortcut(shortcut)
-            ? "Shift + Shift is observed and cannot be reserved exclusively."
+        ? mode === "portal" && isModifierPairShortcut(settings.windowCaptureShortcut)
+          ? WAYLAND_SUBSTITUTION_MESSAGE
+          : isModifierPairShortcut(shortcut)
+            ? observedPairMessage(shortcut, environment.platform)
             : null
-        : windowCaptureShortcutRegistrationFailureMessage(shortcut),
+        : windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
     });
   });
 

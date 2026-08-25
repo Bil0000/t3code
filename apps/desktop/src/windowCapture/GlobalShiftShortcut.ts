@@ -1,4 +1,10 @@
-import { BOTH_SHIFT_KEYS_IDLE, updateBothShiftKeys } from "./windowCapture.ts";
+import type { WindowCaptureModifier } from "@t3tools/contracts";
+
+import {
+  MODIFIER_PAIR_IDLE,
+  UIOHOOK_MODIFIER_KEYCODES,
+  updateModifierPair,
+} from "./windowCapture.ts";
 
 interface GlobalKeyHook {
   on(event: "keydown", listener: (event: { keycode: number; time: number }) => void): unknown;
@@ -9,11 +15,17 @@ interface GlobalKeyHook {
   stop(): void;
 }
 
-const SHIFT_DOUBLE_TAP_MS = 400;
+const MODIFIER_DOUBLE_TAP_MS = 400;
 
-export function startGlobalShiftShortcut(hook: GlobalKeyHook, onTrigger: () => void): () => void {
-  let state = BOTH_SHIFT_KEYS_IDLE;
-  let lastShiftPress: { readonly keycode: number; readonly time: number } | undefined;
+export function startGlobalShiftShortcut(
+  hook: GlobalKeyHook,
+  onTrigger: () => void,
+  modifier: WindowCaptureModifier = "shift",
+): () => void {
+  const pair = UIOHOOK_MODIFIER_KEYCODES[modifier];
+  const [leftKeycode, rightKeycode] = pair;
+  let state = MODIFIER_PAIR_IDLE;
+  let lastModifierPress: { readonly keycode: number; readonly time: number } | undefined;
   let stopped = false;
   const trigger = () => {
     try {
@@ -22,26 +34,30 @@ export function startGlobalShiftShortcut(hook: GlobalKeyHook, onTrigger: () => v
   };
   const update = (pressed: boolean) => (event: { keycode: number; time: number }) => {
     const wasPressed =
-      event.keycode === 42 ? state.leftPressed : event.keycode === 54 ? state.rightPressed : false;
-    const next = updateBothShiftKeys(state, event.keycode, pressed);
+      event.keycode === leftKeycode
+        ? state.leftPressed
+        : event.keycode === rightKeycode
+          ? state.rightPressed
+          : false;
+    const next = updateModifierPair(state, pair, event.keycode, pressed);
     state = next.state;
-    const isShift = event.keycode === 42 || event.keycode === 54;
-    if (pressed && !isShift) lastShiftPress = undefined;
-    if (!pressed || !isShift || wasPressed) return;
+    const isPairKey = event.keycode === leftKeycode || event.keycode === rightKeycode;
+    if (pressed && !isPairKey) lastModifierPress = undefined;
+    if (!pressed || !isPairKey || wasPressed) return;
     if (next.triggered) {
-      lastShiftPress = undefined;
+      lastModifierPress = undefined;
       trigger();
       return;
     }
     if (
-      lastShiftPress?.keycode === event.keycode &&
-      event.time - lastShiftPress.time <= SHIFT_DOUBLE_TAP_MS
+      lastModifierPress?.keycode === event.keycode &&
+      event.time - lastModifierPress.time <= MODIFIER_DOUBLE_TAP_MS
     ) {
-      lastShiftPress = undefined;
+      lastModifierPress = undefined;
       trigger();
       return;
     }
-    lastShiftPress = { keycode: event.keycode, time: event.time };
+    lastModifierPress = { keycode: event.keycode, time: event.time };
   };
   const keyDown = update(true);
   const keyUp = update(false);

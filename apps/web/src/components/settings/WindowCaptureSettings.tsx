@@ -5,6 +5,7 @@ import {
   type ClientSettingsPatch,
   type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
+  type WindowCaptureModifier,
   type WindowCaptureShortcut,
 } from "@t3tools/contracts";
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
@@ -31,6 +32,26 @@ import { searchableSetting } from "./settingsSearch";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Switch } from "../ui/switch";
+
+const MODIFIER_PAIR_DOUBLE_TAP_MS = 400;
+const MODIFIER_FROM_KEY: Readonly<Record<string, WindowCaptureModifier>> = {
+  Shift: "shift",
+  Meta: "meta",
+  OS: "meta",
+  Control: "control",
+  Alt: "alt",
+  AltGraph: "alt",
+};
+const MODIFIER_CODES: Readonly<Record<WindowCaptureModifier, readonly [string, string]>> = {
+  shift: ["ShiftLeft", "ShiftRight"],
+  meta: ["MetaLeft", "MetaRight"],
+  control: ["ControlLeft", "ControlRight"],
+  alt: ["AltLeft", "AltRight"],
+};
+
+function modifierPairShortcut(modifier: WindowCaptureModifier): WindowCaptureShortcut {
+  return modifier === "shift" ? { kind: "both-shift-keys" } : { kind: "modifier-pair", modifier };
+}
 
 type ShortcutCheck =
   | { readonly status: "idle"; readonly availability: null }
@@ -70,7 +91,8 @@ export function WindowCaptureSettings() {
     status: "idle",
     availability: null,
   });
-  const heldShiftCodesRef = useRef(new Set<string>());
+  const heldModifierCodesRef = useRef(new Set<string>());
+  const lastModifierTapRef = useRef<{ code: string; time: number } | null>(null);
   const shortcutCheckIdRef = useRef(0);
   const unavailableMessage = bridge
     ? undefined
@@ -78,8 +100,9 @@ export function WindowCaptureSettings() {
       ? "Update the desktop app to use window capture."
       : "Only available in the desktop app.";
   const captureAvailable = isWindowCaptureAvailable(Boolean(bridge), state);
-  const effectiveShortcut = state?.shortcut ?? settings.windowCaptureShortcut;
-  const shortcutChanged = !sameWindowCaptureShortcut(candidate, effectiveShortcut);
+  const savedShortcut = settings.windowCaptureShortcut;
+  const shortcutChanged = !sameWindowCaptureShortcut(candidate, savedShortcut);
+  const displayShortcut = shortcutChanged ? candidate : (state?.shortcut ?? savedShortcut);
   const canSaveShortcut = shortcutChanged && shortcutCheck.availability?.available === true;
 
   const refreshState = useCallback(async () => {
@@ -91,9 +114,9 @@ export function WindowCaptureSettings() {
   }, [refreshState]);
 
   useEffect(() => {
-    setCandidate(effectiveShortcut);
+    setCandidate(savedShortcut);
     setShortcutCheck({ status: "idle", availability: null });
-  }, [effectiveShortcut]);
+  }, [savedShortcut]);
 
   const save = useCallback(
     async (patch: ClientSettingsPatch) => {
@@ -104,7 +127,8 @@ export function WindowCaptureSettings() {
   );
 
   const stopRecording = useCallback(() => {
-    heldShiftCodesRef.current.clear();
+    heldModifierCodesRef.current.clear();
+    lastModifierTapRef.current = null;
     setRecording(false);
   }, []);
 
@@ -156,14 +180,25 @@ export function WindowCaptureSettings() {
         stopRecording();
         return;
       }
-      if (event.key === "Shift" && (event.code === "ShiftLeft" || event.code === "ShiftRight")) {
-        heldShiftCodesRef.current.add(event.code);
-        if (heldShiftCodesRef.current.size === 2) {
+      const pairModifier = MODIFIER_FROM_KEY[event.key];
+      if (pairModifier) {
+        const held = heldModifierCodesRef.current;
+        held.add(event.code);
+        const [leftCode, rightCode] = MODIFIER_CODES[pairModifier];
+        const bothHeld = held.has(leftCode) && held.has(rightCode);
+        const lastTap = lastModifierTapRef.current;
+        const doubleTap =
+          lastTap?.code === event.code &&
+          event.timeStamp - lastTap.time <= MODIFIER_PAIR_DOUBLE_TAP_MS;
+        if (bothHeld || doubleTap) {
           stopRecording();
-          void checkShortcut({ kind: "both-shift-keys" });
+          void checkShortcut(modifierPairShortcut(pairModifier));
+          return;
         }
+        lastModifierTapRef.current = { code: event.code, time: event.timeStamp };
         return;
       }
+      lastModifierTapRef.current = null;
       const input = keybindingFromKeyboardEvent(event, navigator.platform);
       if (!input) return;
       const shortcut = parseKeybindingShortcut(input);
@@ -175,7 +210,7 @@ export function WindowCaptureSettings() {
   );
 
   const shortcutStatus = recording
-    ? "Press both Shift keys, or a key chord. Esc cancels."
+    ? "Double-tap a modifier, press both of its keys, or press a key chord. Esc cancels."
     : shortcutCheck.status === "checking"
       ? "Checking T3 Code, the system, and other apps..."
       : shortcutCheck.availability
@@ -203,14 +238,14 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-shortcut")}
-            description="Press both Shift keys, or choose a key chord. T3 Code checks it before saving."
+            description="Double-tap a modifier like Shift, press both of its keys, or choose a key chord. T3 Code checks it before saving."
             status={shortcutStatus}
             resetAction={
               <SettingResetButton
                 label="window capture shortcut"
                 disabled={
                   !captureAvailable ||
-                  sameWindowCaptureShortcut(effectiveShortcut, DEFAULT_WINDOW_CAPTURE_SHORTCUT)
+                  sameWindowCaptureShortcut(savedShortcut, DEFAULT_WINDOW_CAPTURE_SHORTCUT)
                 }
                 onClick={() =>
                   void save({ windowCaptureShortcut: DEFAULT_WINDOW_CAPTURE_SHORTCUT })
@@ -224,22 +259,23 @@ export function WindowCaptureSettings() {
                   size="xs"
                   variant={recording ? "secondary" : "outline"}
                   disabled={!captureAvailable}
-                  aria-label={`Record window capture shortcut, currently ${formatWindowCaptureShortcutLabel(candidate)}`}
+                  aria-label={`Record window capture shortcut, currently ${formatWindowCaptureShortcutLabel(displayShortcut)}`}
                   aria-pressed={recording}
                   data-keybinding-capture=""
                   onClick={() => {
-                    heldShiftCodesRef.current.clear();
+                    heldModifierCodesRef.current.clear();
+                    lastModifierTapRef.current = null;
                     setShortcutCheck({ status: "idle", availability: null });
                     setRecording(true);
                   }}
                   onKeyDown={recordShortcut}
-                  onKeyUp={(event) => heldShiftCodesRef.current.delete(event.code)}
+                  onKeyUp={(event) => heldModifierCodesRef.current.delete(event.code)}
                   onBlur={stopRecording}
                 >
                   {recording ? (
                     "Press shortcut..."
                   ) : (
-                    <Kbd>{formatWindowCaptureShortcutLabel(candidate)}</Kbd>
+                    <Kbd>{formatWindowCaptureShortcutLabel(displayShortcut)}</Kbd>
                   )}
                 </Button>
                 {shortcutChanged ? (

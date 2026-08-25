@@ -12,17 +12,20 @@ import { vi } from "vite-plus/test";
 
 const {
   accessibilityByPidMock,
+  accessibilityTrustedMock,
   flashWindows,
   getFileIconMock,
   getSourcesMock,
   openExternalMock,
   registerShortcutMock,
+  shortcutForkArgs,
   shortcutForkOptions,
   shortcutProcesses,
   thumbnailFromPathMock,
   uiohookMock,
 } = vi.hoisted(() => ({
   accessibilityByPidMock: vi.fn(),
+  accessibilityTrustedMock: vi.fn(() => true),
   flashWindows: [] as Array<{
     bounds: Electron.Rectangle | null;
     destroyed: boolean;
@@ -37,6 +40,7 @@ const {
   getSourcesMock: vi.fn(),
   openExternalMock: vi.fn(() => Promise.resolve()),
   registerShortcutMock: vi.fn(),
+  shortcutForkArgs: [] as Array<ReadonlyArray<string>>,
   shortcutForkOptions: [] as Array<{ env?: NodeJS.ProcessEnv }>,
   shortcutProcesses: [] as Array<{
     emit: (event: string, value?: unknown) => void;
@@ -57,7 +61,7 @@ vi.mock("@crowecawcaw/xa11y", () => ({ App: { byPid: accessibilityByPidMock } })
 vi.mock("uiohook-napi", () => ({ uIOhook: uiohookMock }));
 
 vi.mock("node:child_process", () => ({
-  fork: (_path: string, _args: ReadonlyArray<string>, options: { env?: NodeJS.ProcessEnv }) => {
+  fork: (_path: string, args: ReadonlyArray<string>, options: { env?: NodeJS.ProcessEnv }) => {
     const listeners = new Map<string, Array<(value: unknown) => void>>();
     const process = {
       emit: (event: string, value?: unknown) => {
@@ -80,6 +84,7 @@ vi.mock("node:child_process", () => ({
         return process;
       },
     };
+    shortcutForkArgs.push(args);
     shortcutForkOptions.push(options);
     shortcutProcesses.push(process);
     queueMicrotask(() => process.emit("message", "ready"));
@@ -175,7 +180,7 @@ vi.mock("electron", () => {
     shell: { openExternal: openExternalMock },
     systemPreferences: {
       getMediaAccessStatus: () => "not-determined",
-      isTrustedAccessibilityClient: () => true,
+      isTrustedAccessibilityClient: () => accessibilityTrustedMock(),
     },
   };
 });
@@ -464,6 +469,7 @@ it.effect("does not create the flash window during desktop startup", () => {
 });
 
 it.effect("starts the Shift listener outside the Electron main process", () => {
+  shortcutForkArgs.length = 0;
   shortcutForkOptions.length = 0;
   shortcutProcesses.length = 0;
   uiohookMock.start.mockClear();
@@ -477,12 +483,34 @@ it.effect("starts the Shift listener outside the Electron main process", () => {
 
       assert.isTrue(state.shortcutRegistered);
       assert.lengthOf(shortcutProcesses, 1);
+      assert.deepEqual(shortcutForkArgs[0], ["shift"]);
       assert.strictEqual(shortcutForkOptions[0]?.env?.ELECTRON_RUN_AS_NODE, "1");
       assert.strictEqual(uiohookMock.start.mock.calls.length, 0);
 
       shortcutProcesses[0]?.emit("exit", 1);
       yield* Effect.promise(() => new Promise<void>((resolve) => queueMicrotask(resolve)));
       assert.isFalse((yield* service.state).shortcutRegistered);
+    }),
+  ).pipe(Effect.provide(testLayer("linux")));
+});
+
+it.effect("passes the configured modifier pair to the listener process", () => {
+  shortcutForkArgs.length = 0;
+  shortcutProcesses.length = 0;
+  const settings = {
+    ...DEFAULT_CLIENT_SETTINGS,
+    windowCaptureEnabled: true,
+    windowCaptureShortcut: { kind: "modifier-pair", modifier: "meta" },
+  } satisfies ClientSettings;
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure(settings);
+      const state = yield* service.state;
+
+      assert.isTrue(state.shortcutRegistered);
+      assert.deepEqual(shortcutForkArgs[0], ["meta"]);
     }),
   ).pipe(Effect.provide(testLayer("linux")));
 });
@@ -540,11 +568,43 @@ it.effect("rejects unavailable Wayland shortcuts before saving", () => {
       });
       assert.isFalse(conflict.available);
       assert.isFalse(unavailable.available);
+
+      const pairUnavailable = yield* service.checkShortcut({
+        kind: "modifier-pair",
+        modifier: "meta",
+      });
+      assert.isFalse(pairUnavailable.available);
+      assert.match(pairUnavailable.message ?? "", /Wayland uses Ctrl\+Shift\+2/);
+      assert.match(pairUnavailable.message ?? "", /already used/);
     }),
   ).pipe(
     Effect.provide(testLayer("linux")),
     Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
   );
+});
+
+it.effect("advises about the system menu for a meta pair on Windows", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      const result = yield* service.checkShortcut({ kind: "modifier-pair", modifier: "meta" });
+      assert.isTrue(result.available);
+      assert.match(result.message ?? "", /Super \+ Super is observed/);
+      assert.match(result.message ?? "", /system's own menu/);
+    }),
+  ).pipe(Effect.provide(testLayer("win32"))),
+);
+
+it.effect("requires macOS Accessibility before offering a modifier pair", () => {
+  accessibilityTrustedMock.mockReturnValueOnce(false);
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      const result = yield* service.checkShortcut({ kind: "both-shift-keys" });
+      assert.isFalse(result.available);
+      assert.match(result.message ?? "", /Accessibility/);
+    }),
+  ).pipe(Effect.provide(testLayer("darwin")));
 });
 
 it.effect("applies concurrent settings changes in order while permissions are pending", () => {

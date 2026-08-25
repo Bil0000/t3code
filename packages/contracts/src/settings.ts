@@ -137,11 +137,53 @@ export const WindowCaptureKeyChord = KeybindingShortcut.check(
   ),
 );
 export type WindowCaptureKeyChord = typeof WindowCaptureKeyChord.Type;
+export const WINDOW_CAPTURE_MODIFIERS = ["shift", "meta", "control", "alt"] as const;
+export const WindowCaptureModifier = Schema.Literals(WINDOW_CAPTURE_MODIFIERS);
+export type WindowCaptureModifier = typeof WindowCaptureModifier.Type;
 export const WindowCaptureShortcut = Schema.Union([
   Schema.Struct({ kind: Schema.Literal("both-shift-keys") }),
+  Schema.Struct({ kind: Schema.Literal("modifier-pair"), modifier: WindowCaptureModifier }),
   WindowCaptureKeyChord,
 ]);
 export type WindowCaptureShortcut = typeof WindowCaptureShortcut.Type;
+
+export type WindowCaptureModifierPairShortcut = Extract<
+  WindowCaptureShortcut,
+  { readonly kind: string }
+>;
+
+export function isModifierPairShortcut(
+  shortcut: WindowCaptureShortcut,
+): shortcut is WindowCaptureModifierPairShortcut {
+  return "kind" in shortcut;
+}
+
+export function windowCaptureShortcutModifierPair(
+  shortcut: WindowCaptureModifierPairShortcut,
+): WindowCaptureModifier {
+  return shortcut.kind === "both-shift-keys" ? "shift" : shortcut.modifier;
+}
+
+const APPLE_MODIFIER_LABELS: Record<WindowCaptureModifier, string> = {
+  shift: "Shift",
+  meta: "Command",
+  control: "Control",
+  alt: "Option",
+};
+const OTHER_MODIFIER_LABELS: Record<WindowCaptureModifier, string> = {
+  shift: "Shift",
+  meta: "Super",
+  control: "Ctrl",
+  alt: "Alt",
+};
+
+export function windowCaptureModifierPairLabel(
+  modifier: WindowCaptureModifier,
+  apple: boolean,
+): string {
+  const label = (apple ? APPLE_MODIFIER_LABELS : OTHER_MODIFIER_LABELS)[modifier];
+  return `${label} + ${label}`;
+}
 export const DEFAULT_WINDOW_CAPTURE_SHORTCUT: WindowCaptureShortcut = {
   kind: "both-shift-keys",
 };

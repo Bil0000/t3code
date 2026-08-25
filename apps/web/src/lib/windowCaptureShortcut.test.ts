@@ -13,6 +13,18 @@ describe("window capture shortcut labels", () => {
       "Shift + Shift",
     );
   });
+
+  it("labels other modifier pairs per platform", () => {
+    expect(
+      formatWindowCaptureShortcutLabel({ kind: "modifier-pair", modifier: "meta" }, "MacIntel"),
+    ).toBe("Command + Command");
+    expect(
+      formatWindowCaptureShortcutLabel({ kind: "modifier-pair", modifier: "meta" }, "Linux"),
+    ).toBe("Super + Super");
+    expect(
+      formatWindowCaptureShortcutLabel({ kind: "modifier-pair", modifier: "alt" }, "MacIntel"),
+    ).toBe("Option + Option");
+  });
 });
 
 describe("window capture keybinding conflicts", () => {
@@ -83,6 +95,20 @@ describe("sameWindowCaptureShortcut", () => {
         "MacIntel",
       ),
     ).toBe(true);
+    expect(
+      sameWindowCaptureShortcut(
+        { kind: "both-shift-keys" },
+        { kind: "modifier-pair", modifier: "shift" },
+        "MacIntel",
+      ),
+    ).toBe(true);
+    expect(
+      sameWindowCaptureShortcut(
+        { kind: "modifier-pair", modifier: "meta" },
+        { kind: "both-shift-keys" },
+        "MacIntel",
+      ),
+    ).toBe(false);
     expect(
       sameWindowCaptureShortcut(
         { key: "n", metaKey: false, ctrlKey: false, shiftKey: false, altKey: false, modKey: true },

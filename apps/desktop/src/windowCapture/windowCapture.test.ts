@@ -2,14 +2,15 @@ import { effectiveWindowCaptureShortcut } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
-  BOTH_SHIFT_KEYS_IDLE,
+  MODIFIER_PAIR_IDLE,
+  UIOHOOK_MODIFIER_KEYCODES,
   accessibleWindowText,
   findAccessibleWindow,
   findCaptureSource,
   hideAndWaitForBlur,
   isWaylandSession,
   shouldRequestScreenCapturePermission,
-  updateBothShiftKeys,
+  updateModifierPair,
   windowCaptureShortcutRegistrationFailureMessage,
   windowCaptureShortcutSystemConflict,
   toElectronAccelerator,
@@ -235,6 +236,19 @@ describe("effectiveWindowCaptureShortcut", () => {
       modKey: true,
     });
   });
+
+  it("rewrites any modifier pair to the Wayland chord on portal capture", () => {
+    const shortcut = { kind: "modifier-pair", modifier: "meta" } as const;
+    expect(effectiveWindowCaptureShortcut("direct", shortcut)).toBe(shortcut);
+    expect(effectiveWindowCaptureShortcut("portal", shortcut)).toEqual({
+      key: "2",
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: true,
+      altKey: false,
+      modKey: true,
+    });
+  });
 });
 
 describe("findCaptureSource", () => {
@@ -286,6 +300,24 @@ describe("isWaylandSession", () => {
   ] as const)("detects %s session %o as portal=%s", (platform, environment, expected) => {
     expect(isWaylandSession(platform, environment)).toBe(expected);
   });
+
+  it("falls back to the runtime directory socket when session variables are stripped", async () => {
+    const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const runtimeDirectory = await mkdtemp(join(tmpdir(), "t3-wayland-"));
+    try {
+      expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: runtimeDirectory })).toBe(false);
+      await writeFile(join(runtimeDirectory, "wayland-0"), "");
+      expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: runtimeDirectory })).toBe(true);
+      expect(
+        isWaylandSession("linux", { XDG_RUNTIME_DIR: runtimeDirectory, XDG_SESSION_TYPE: "x11" }),
+      ).toBe(false);
+      expect(isWaylandSession("linux", { XDG_RUNTIME_DIR: "/nonexistent-t3-test" })).toBe(false);
+    } finally {
+      await rm(runtimeDirectory, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("shouldRequestScreenCapturePermission", () => {
@@ -298,41 +330,66 @@ describe("shouldRequestScreenCapturePermission", () => {
     expect(shouldRequestScreenCapturePermission(platform, previous, enabled)).toBe(expected);
   });
 });
-describe("both Shift keys", () => {
+describe("modifier pairs", () => {
   it("fires once when both physical Shift keys are held", () => {
-    const left = updateBothShiftKeys(BOTH_SHIFT_KEYS_IDLE, 42, true);
+    const pair = UIOHOOK_MODIFIER_KEYCODES.shift;
+    const left = updateModifierPair(MODIFIER_PAIR_IDLE, pair, 42, true);
     expect(left.triggered).toBe(false);
 
-    const both = updateBothShiftKeys(left.state, 54, true);
+    const both = updateModifierPair(left.state, pair, 54, true);
     expect(both.triggered).toBe(true);
-    expect(updateBothShiftKeys(both.state, 54, true).triggered).toBe(false);
+    expect(updateModifierPair(both.state, pair, 54, true).triggered).toBe(false);
 
-    const released = updateBothShiftKeys(both.state, 42, false);
-    expect(updateBothShiftKeys(released.state, 42, true).triggered).toBe(true);
+    const released = updateModifierPair(both.state, pair, 42, false);
+    expect(updateModifierPair(released.state, pair, 42, true).triggered).toBe(true);
+  });
+
+  it("fires for both physical Command keys", () => {
+    const pair = UIOHOOK_MODIFIER_KEYCODES.meta;
+    const left = updateModifierPair(MODIFIER_PAIR_IDLE, pair, 3_675, true);
+    expect(left.triggered).toBe(false);
+    expect(updateModifierPair(left.state, pair, 3_676, true).triggered).toBe(true);
   });
 
   it("ignores other keys", () => {
-    expect(updateBothShiftKeys(BOTH_SHIFT_KEYS_IDLE, 30, true)).toEqual({
-      state: BOTH_SHIFT_KEYS_IDLE,
+    expect(
+      updateModifierPair(MODIFIER_PAIR_IDLE, UIOHOOK_MODIFIER_KEYCODES.shift, 30, true),
+    ).toEqual({
+      state: MODIFIER_PAIR_IDLE,
       triggered: false,
     });
   });
 });
 
 describe("windowCaptureShortcutRegistrationFailureMessage", () => {
-  it("distinguishes a Shift listener failure from a reserved key chord", () => {
-    expect(windowCaptureShortcutRegistrationFailureMessage({ kind: "both-shift-keys" })).toMatch(
-      /not available/,
-    );
+  it("distinguishes a modifier listener failure from a reserved key chord", () => {
     expect(
-      windowCaptureShortcutRegistrationFailureMessage({
-        key: "2",
-        metaKey: false,
-        ctrlKey: false,
-        shiftKey: true,
-        altKey: false,
-        modKey: true,
-      }),
+      windowCaptureShortcutRegistrationFailureMessage({ kind: "both-shift-keys" }, "darwin"),
+    ).toMatch(/Shift \+ Shift is not available/);
+    expect(
+      windowCaptureShortcutRegistrationFailureMessage(
+        { kind: "modifier-pair", modifier: "meta" },
+        "darwin",
+      ),
+    ).toMatch(/Command \+ Command is not available/);
+    expect(
+      windowCaptureShortcutRegistrationFailureMessage(
+        { kind: "modifier-pair", modifier: "meta" },
+        "linux",
+      ),
+    ).toMatch(/Super \+ Super is not available/);
+    expect(
+      windowCaptureShortcutRegistrationFailureMessage(
+        {
+          key: "2",
+          metaKey: false,
+          ctrlKey: false,
+          shiftKey: true,
+          altKey: false,
+          modKey: true,
+        },
+        "darwin",
+      ),
     ).toMatch(/already used/);
   });
 });

@@ -112,6 +112,21 @@ describe("ClientSettings window capture", () => {
     });
   });
 
+  it("accepts modifier pair shortcuts", () => {
+    expect(
+      decodeClientSettingsPatch({
+        windowCaptureShortcut: { kind: "modifier-pair", modifier: "meta" },
+      }),
+    ).toEqual({
+      windowCaptureShortcut: { kind: "modifier-pair", modifier: "meta" },
+    });
+    expect(() =>
+      decodeClientSettingsPatch({
+        windowCaptureShortcut: { kind: "modifier-pair", modifier: "hyper" },
+      }),
+    ).toThrow();
+  });
+
   it("rejects a capture shortcut with no modifier", () => {
     expect(() =>
       decodeClientSettingsPatch({
