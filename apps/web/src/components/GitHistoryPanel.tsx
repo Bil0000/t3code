@@ -268,7 +268,10 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     }
   }, [failed, historyQueryGeneration, targetKey, values.length]);
   const isPending = selectedRevision === undefined || results.some((result) => result.waiting);
-  const isInitialLoad = selectedRevision === undefined || (values.length === 0 && isPending);
+  const refSelectionError = selectedRevision === undefined ? historyRefs.refPaginationError : null;
+  const isInitialLoad =
+    refSelectionError === null &&
+    (selectedRevision === undefined || (values.length === 0 && isPending));
   const history = useMemo(() => {
     const commitsByHash = new Map<string, GitHistoryCommit>();
     for (const value of values) {
@@ -391,6 +394,8 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const {
     currentRef = null,
     expandedRefKeys,
+    favoriteBranches,
+    favoriteRefs,
     hasMoreRefs,
     isFetchingMoreRefs,
     isRefSnapshotComplete,
@@ -409,6 +414,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     setRefFilter,
     tagRefTree,
     tagRefs,
+    toggleFavorite,
     toggleRefKey,
   } = historyRefs;
   const commitRefKinds = useMemo(() => {
@@ -438,6 +444,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
     onSelectRef: selectRef,
     normalizedRefFilter,
     localRefTree,
+    favoriteRefs,
+    favoriteBranches,
+    onToggleFavorite: toggleFavorite,
     remoteRefTree,
     tagRefTree,
     expandedRefKeys,
@@ -608,6 +617,13 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           onLoadMoreFiles={loadMoreCommitFiles}
           onRetryFiles={() => void commitFilesQuery.refresh()}
         />
+      ) : refSelectionError ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+          <p className="text-xs text-destructive">{refSelectionError}</p>
+          <Button size="sm" variant="outline" onClick={onRetryRefs}>
+            Retry refs
+          </Button>
+        </div>
       ) : isInitialLoad ? (
         <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-muted-foreground">
           <RefreshCwIcon className="mr-2 size-3.5 animate-spin" /> Loading history…

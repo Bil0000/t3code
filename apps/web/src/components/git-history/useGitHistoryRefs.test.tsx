@@ -13,6 +13,7 @@ const refState = vi.hoisted(() => ({
   local: [] as ReadonlyArray<VcsHistoryRef>,
   remote: [] as ReadonlyArray<VcsHistoryRef>,
   tags: [] as ReadonlyArray<VcsHistoryRef>,
+  favoriteBranches: [] as ReadonlyArray<string>,
   isComplete: true,
   nextCursor: null as string | null,
   refreshLocal: vi.fn(),
@@ -45,6 +46,16 @@ vi.mock("react/compiler-runtime", async () => {
   const { reactHookHarness } = await import("../../test/reactHookHarness");
   return { c: reactHookHarness.useMemoCache };
 });
+
+vi.mock("../../hooks/useLocalStorage", () => ({
+  useLocalStorage: () => [
+    refState.favoriteBranches,
+    (next: ReadonlyArray<string> | ((current: ReadonlyArray<string>) => ReadonlyArray<string>)) => {
+      refState.favoriteBranches =
+        typeof next === "function" ? next(refState.favoriteBranches) : next;
+    },
+  ],
+}));
 
 vi.mock("../../state/queries", () => ({
   useDebouncedValue: () => refState.debouncedRefFilter,
@@ -96,7 +107,11 @@ vi.mock("../../state/queries", () => ({
 }));
 
 import { GitRefsPane } from "./GitHistoryRefsPane";
-import { useGitHistoryRefs } from "./useGitHistoryRefs";
+import {
+  gitHistoryFavoriteStorageKey,
+  toggleGitHistoryFavorite,
+  useGitHistoryRefs,
+} from "./useGitHistoryRefs";
 
 const environmentId = EnvironmentId.make("environment-local");
 const repositoryCwd = "C:/workspace";
@@ -117,6 +132,9 @@ function renderRefs(revision = 0) {
     onSelectRef: historyRefs.selectRef,
     normalizedRefFilter: historyRefs.normalizedRefFilter,
     localRefTree: historyRefs.localRefTree,
+    favoriteRefs: historyRefs.favoriteRefs,
+    favoriteBranches: historyRefs.favoriteBranches,
+    onToggleFavorite: historyRefs.toggleFavorite,
     remoteRefTree: historyRefs.remoteRefTree,
     tagRefTree: historyRefs.tagRefTree,
     expandedRefKeys: historyRefs.expandedRefKeys,
@@ -144,6 +162,7 @@ describe("useGitHistoryRefs", () => {
     refState.local = [];
     refState.remote = [];
     refState.tags = [];
+    refState.favoriteBranches = [];
     refState.isComplete = true;
     refState.nextCursor = null;
     refState.refreshLocal.mockReset();
@@ -152,6 +171,14 @@ describe("useGitHistoryRefs", () => {
     refState.remoteGeneration = 0;
     refState.remoteRequestKeys = [];
     refState.targets = [];
+  });
+
+  it("scopes persisted favorites and toggles branch membership", () => {
+    expect(gitHistoryFavoriteStorageKey(environmentId, repositoryCwd)).toBe(
+      "t3code:git-history-favorites:v1:environment-local:C:/workspace",
+    );
+    expect(toggleGitHistoryFavorite([], "feature/favorite")).toEqual(["feature/favorite"]);
+    expect(toggleGitHistoryFavorite(["feature/favorite"], "feature/favorite")).toEqual([]);
   });
 
   it("preserves ref trees and the 10k-row virtual-list model across unchanged rerenders", () => {

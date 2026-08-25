@@ -1,21 +1,47 @@
 import type { EnvironmentId, VcsHistoryRef } from "@t3tools/contracts";
+import * as Schema from "effect/Schema";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { useLocalStorage } from "../../hooks/useLocalStorage";
 import { buildGitRefTree, filterGitRefTree } from "../../lib/gitRefTree";
 import { useDebouncedValue, usePaginatedHistoryRefs } from "../../state/queries";
 
-const REF_FILTER_DEBOUNCE_MS = 200;
+const EMPTY_FAVORITE_BRANCHES: ReadonlyArray<string> = [];
+const FavoriteBranchesSchema = Schema.Array(Schema.String);
+const REF_FILTER_DEBOUNCE_MS = 175;
 
 export interface GitHistoryRevision {
   readonly label: string;
   readonly revision: string;
 }
 
+export function gitHistoryFavoriteStorageKey(environmentId: EnvironmentId, cwd: string): string {
+  return `t3code:git-history-favorites:v1:${environmentId}:${cwd}`;
+}
+
+export function toggleGitHistoryFavorite(
+  favorites: ReadonlyArray<string>,
+  branch: string,
+): ReadonlyArray<string> {
+  return favorites.includes(branch)
+    ? favorites.filter((value) => value !== branch)
+    : [...favorites, branch];
+}
+
 export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, revision: number) {
+  const scopeKey = JSON.stringify([environmentId, cwd]);
+  const [favoriteBranches, setFavoriteBranches] = useLocalStorage(
+    gitHistoryFavoriteStorageKey(environmentId, cwd),
+    EMPTY_FAVORITE_BRANCHES,
+    FavoriteBranchesSchema,
+  );
   const [refFilter, setRefFilter] = useState("");
-  const [selectedRevisionState, setSelectedRevision] = useState<
-    GitHistoryRevision | null | undefined
-  >(undefined);
+  const [selectedRevisionState, setSelectedRevision] = useState<{
+    readonly scopeKey: string;
+    readonly value: GitHistoryRevision | null | undefined;
+  }>(() => ({ scopeKey, value: undefined }));
+  const scopedSelectedRevision =
+    selectedRevisionState.scopeKey === scopeKey ? selectedRevisionState.value : undefined;
   const [expandedRefKeys, setExpandedRefKeys] = useState<ReadonlySet<string>>(
     () => new Set(["section:local"]),
   );
@@ -24,11 +50,11 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
   const shouldLoadRemote =
     deferredRefFilter.length > 0 ||
     expandedRefKeys.has("section:remote") ||
-    selectedRevisionState?.revision.startsWith("refs/remotes/") === true;
+    scopedSelectedRevision?.revision.startsWith("refs/remotes/") === true;
   const shouldLoadTags =
     deferredRefFilter.length > 0 ||
     expandedRefKeys.has("section:tags") ||
-    selectedRevisionState?.revision.startsWith("refs/tags/") === true;
+    scopedSelectedRevision?.revision.startsWith("refs/tags/") === true;
   const refs = usePaginatedHistoryRefs(
     { environmentId, cwd, query: deferredRefFilter },
     { limit: 200, namespace: "local", revision },
@@ -60,6 +86,17 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     () => filterGitRefTree(buildGitRefTree(localRefs), normalizedRefFilter),
     [localRefs, normalizedRefFilter],
   );
+  const favoriteBranchSet = useMemo(() => new Set(favoriteBranches), [favoriteBranches]);
+  const favoriteRefs = useMemo(
+    () =>
+      localRefs.filter(
+        (ref) =>
+          favoriteBranchSet.has(ref.name) &&
+          (normalizedRefFilter.length === 0 ||
+            ref.name.toLocaleLowerCase().includes(normalizedRefFilter)),
+      ),
+    [favoriteBranchSet, localRefs, normalizedRefFilter],
+  );
   const remoteRefTree = useMemo(
     () => filterGitRefTree(buildGitRefTree(remoteRefs), normalizedRefFilter),
     [normalizedRefFilter, remoteRefs],
@@ -86,18 +123,16 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
   const defaultSelectedRevision = useMemo(
     () =>
       currentRef === undefined
-        ? refs.error
-          ? null
-          : undefined
+        ? undefined
         : currentRef === null
           ? null
           : { label: currentRef.name, revision: `refs/heads/${currentRef.name}` },
-    [currentRef, refs.error],
+    [currentRef],
   );
   const selectedRefWasRemoved = useMemo(() => {
-    if (selectedRevisionState === undefined || selectedRevisionState === null) return false;
+    if (scopedSelectedRevision === undefined || scopedSelectedRevision === null) return false;
     if (deferredRefFilter.length > 0) return false;
-    const selectedRef = selectedRevisionState.revision;
+    const selectedRef = scopedSelectedRevision.revision;
     if (selectedRef.startsWith("refs/heads/")) {
       return (
         refs.data?.isComplete === true &&
@@ -128,15 +163,15 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     remote.data?.isComplete,
     remote.data?.nextCursor,
     remoteRefs,
-    selectedRevisionState,
+    scopedSelectedRevision,
     tagRefs,
     tags.data?.isComplete,
     tags.data?.nextCursor,
   ]);
   const selectedRevision =
-    selectedRevisionState === undefined || selectedRefWasRemoved
+    scopedSelectedRevision === undefined || selectedRefWasRemoved
       ? defaultSelectedRevision
-      : selectedRevisionState;
+      : scopedSelectedRevision;
   const toggleRefKey = useCallback((key: string) => {
     setExpandedRefKeys((current) => {
       const next = new Set(current);
@@ -145,26 +180,37 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
       return next;
     });
   }, []);
-  const selectRef = useCallback((label: string, revision: string) => {
-    setSelectedRevision({ label, revision });
-  }, []);
+  const selectRef = useCallback(
+    (label: string, revision: string) => {
+      setSelectedRevision({ scopeKey, value: { label, revision } });
+    },
+    [scopeKey],
+  );
   const selectAllRefs = useCallback(() => {
-    setSelectedRevision(null);
-  }, []);
+    setSelectedRevision({ scopeKey, value: null });
+  }, [scopeKey]);
+  const toggleFavorite = useCallback(
+    (branch: string) => {
+      setFavoriteBranches((current) => toggleGitHistoryFavorite(current, branch));
+    },
+    [setFavoriteBranches],
+  );
 
   useEffect(() => {
-    setSelectedRevision(undefined);
+    setSelectedRevision({ scopeKey, value: undefined });
     setRefFilter("");
     setExpandedRefKeys(new Set(["section:local"]));
-  }, [cwd, environmentId]);
+  }, [cwd, environmentId, scopeKey]);
 
   useEffect(() => {
-    if (selectedRefWasRemoved) setSelectedRevision(undefined);
-  }, [selectedRefWasRemoved]);
+    if (selectedRefWasRemoved) setSelectedRevision({ scopeKey, value: undefined });
+  }, [scopeKey, selectedRefWasRemoved]);
 
   return {
     currentRef,
     expandedRefKeys,
+    favoriteBranches: favoriteBranchSet,
+    favoriteRefs,
     hasMoreRefs:
       (refs.data?.nextCursor !== null && refs.data?.nextCursor !== undefined) ||
       (shouldLoadRemote &&
@@ -211,5 +257,6 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     tagRefTree,
     tagRefs,
     toggleRefKey,
+    toggleFavorite,
   };
 }

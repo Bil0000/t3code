@@ -124,6 +124,10 @@ vi.mock("react/compiler-runtime", async () => {
   return { c: reactHookHarness.useMemoCache };
 });
 
+vi.mock("../hooks/useLocalStorage", () => ({
+  useLocalStorage: () => [[], vi.fn()],
+}));
+
 vi.mock("@effect/atom-react", () => ({
   useAtomValue: (atom: { readonly value: ReadonlyArray<PageAtom["result"]> }) => atom.value,
 }));
@@ -488,26 +492,29 @@ describe("GitHistoryPanel", () => {
   it("does not start an all-refs history request while the current ref is unresolved", () => {
     historyState.refsResolved = false;
 
-    renderPanel();
+    const panel = renderPanel();
 
     expect(historyState.getHistory).not.toHaveBeenCalled();
+    expect(
+      visitElements(panel, (element) => element.props.children === "Loading history…"),
+    ).not.toBeNull();
   });
 
-  it("shows an initial ref failure with a reachable retry while loading all history", () => {
+  it("shows an initial ref failure with a reachable retry", () => {
     historyState.refsResolved = false;
     historyState.refsError = "Could not load refs.";
-    historyState.pages.set(undefined, page([commit(primaryCommitHash, "Initial")]));
 
     const panel = renderPanel();
     const refsPane = componentElement(panel, "GitRefsPane");
 
-    expect(historyState.getHistory).toHaveBeenCalledWith({
-      cacheKey: 0,
-      environmentId,
-      input: { cwd: workspacePath, limit: historyPageSize },
-    });
+    expect(historyState.getHistory).not.toHaveBeenCalled();
     expect(refsPane.props.refPaginationError).toBe("Could not load refs.");
-    (refsPane.props.onRetryRefs as () => void)();
+    expect(
+      visitElements(panel, (element) => element.props.children === "Could not load refs."),
+    ).not.toBeNull();
+    const retry = visitElements(panel, (element) => element.props.children === "Retry refs");
+    expect(retry).not.toBeNull();
+    (retry?.props.onClick as () => void)();
     expect(historyState.retryRefs).toHaveBeenCalledOnce();
   });
 
