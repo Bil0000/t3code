@@ -1020,7 +1020,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                   "relative overflow-hidden rounded-lg border border-border/80 bg-background/70",
                   image.source?.kind === "window-capture" &&
                     image.previewUrl &&
-                    "col-span-2 h-28 w-52 max-w-full",
+                    "h-28 w-52 max-w-full",
                 )}
               >
                 {image.previewUrl ? (
