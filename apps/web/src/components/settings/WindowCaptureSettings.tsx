@@ -220,7 +220,7 @@ export function WindowCaptureSettings() {
                   size="xs"
                   variant={recording ? "secondary" : "outline"}
                   disabled={!captureAvailable}
-                  aria-label="Record window capture shortcut"
+                  aria-label={`Record window capture shortcut, currently ${formatWindowCaptureShortcutLabel(candidate)}`}
                   aria-pressed={recording}
                   data-keybinding-capture=""
                   onClick={() => {
