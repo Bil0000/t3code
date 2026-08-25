@@ -197,16 +197,30 @@ export function windowCaptureIconDataUrl(
 ): string | undefined {
   const icon = fileIcon && !fileIcon.isEmpty() ? fileIcon : capturedIcon;
   if (!icon || icon.isEmpty()) return undefined;
-  return icon.resize({ width: 32, height: 32, quality: "best" }).toDataURL({ scaleFactor: 2 });
+  return icon.resize({ width: 64, height: 64, quality: "best" }).toDataURL({ scaleFactor: 2 });
+}
+
+async function appFileIcon(
+  path: string,
+  platform: NodeJS.Platform,
+): Promise<Electron.NativeImage | undefined> {
+  if (platform === "darwin") {
+    const thumbnail = await Electron.nativeImage
+      .createThumbnailFromPath(path, { width: 64, height: 64 })
+      .catch(() => undefined);
+    if (thumbnail && !thumbnail.isEmpty()) return thumbnail;
+  }
+  return Electron.app.getFileIcon(path, { size: "normal" }).catch(() => undefined);
 }
 
 export async function iconDataUrl(
   source: { readonly appIcon?: Electron.NativeImage | null },
   active: ActiveWindow | undefined,
+  platform: NodeJS.Platform,
 ): Promise<string | undefined> {
   try {
     const fileIcon = active?.owner.path
-      ? await Electron.app.getFileIcon(active.owner.path, { size: "normal" }).catch(() => undefined)
+      ? await appFileIcon(active.owner.path, platform)
       : undefined;
     return windowCaptureIconDataUrl(source.appIcon, fileIcon);
   } catch {
@@ -553,7 +567,9 @@ export const make = Effect.gen(function* () {
         catch: (cause) => captureFailure(cause, id),
       });
       const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
-      const appIconDataUrl = yield* Effect.promise(() => iconDataUrl(source, active));
+      const appIconDataUrl = yield* Effect.promise(() =>
+        iconDataUrl(source, active, environment.platform),
+      );
       const pending = yield* decodePendingCapture({
         id,
         name: `window-${capturedAt.replaceAll(":", "-")}.png`,

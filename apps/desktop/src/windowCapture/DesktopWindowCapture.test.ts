@@ -19,6 +19,7 @@ const {
   registerShortcutMock,
   shortcutForkOptions,
   shortcutProcesses,
+  thumbnailFromPathMock,
   uiohookMock,
 } = vi.hoisted(() => ({
   accessibilityByPidMock: vi.fn(),
@@ -43,6 +44,7 @@ const {
     on: (event: string, listener: (value: unknown) => void) => unknown;
     once: (event: string, listener: (value: unknown) => void) => unknown;
   }>,
+  thumbnailFromPathMock: vi.fn(),
   uiohookMock: {
     off: vi.fn(),
     on: vi.fn(),
@@ -161,6 +163,7 @@ vi.mock("electron", () => {
     BrowserWindow,
     app: { getFileIcon: getFileIconMock },
     desktopCapturer: { getSources: getSourcesMock },
+    nativeImage: { createThumbnailFromPath: thumbnailFromPathMock },
     globalShortcut: { register: registerShortcutMock, unregister: vi.fn() },
     screen: {
       getCursorScreenPoint: () => ({ x: 500, y: 500 }),
@@ -290,21 +293,58 @@ it.each([
 ])("exports the %s icon at high density", (_source, capturedIcon, fileIcon, expectedLabel) => {
   const dataUrl = DesktopWindowCapture.windowCaptureIconDataUrl(capturedIcon, fileIcon);
 
-  assert.strictEqual(dataUrl, "data:image/png;base64," + expectedLabel + ":32x32:best@2");
+  assert.strictEqual(dataUrl, "data:image/png;base64," + expectedLabel + ":64x64:best@2");
 });
 
-it("requests the file icon at a size supported on macOS", async () => {
+const activeEditor = {
+  owner: { path: "/Applications/Editor.app" },
+} as Parameters<typeof DesktopWindowCapture.iconDataUrl>[1];
+
+it("prefers the bundle thumbnail for macOS app icons", async () => {
   getFileIconMock.mockReset();
-  getFileIconMock.mockResolvedValue(fakeIcon("file"));
-  const active = {
-    owner: { path: "/Applications/Editor.app" },
-  } as Parameters<typeof DesktopWindowCapture.iconDataUrl>[1];
+  thumbnailFromPathMock.mockReset();
+  thumbnailFromPathMock.mockResolvedValue(fakeIcon("thumb"));
 
-  const dataUrl = await DesktopWindowCapture.iconDataUrl({ appIcon: fakeIcon("captured") }, active);
+  const dataUrl = await DesktopWindowCapture.iconDataUrl(
+    { appIcon: fakeIcon("captured") },
+    activeEditor,
+    "darwin",
+  );
 
-  assert.deepEqual(getFileIconMock.mock.calls, [["/Applications/Editor.app", { size: "normal" }]]);
-  assert.strictEqual(dataUrl, "data:image/png;base64,file:32x32:best@2");
+  assert.deepEqual(thumbnailFromPathMock.mock.calls, [
+    ["/Applications/Editor.app", { width: 64, height: 64 }],
+  ]);
+  assert.lengthOf(getFileIconMock.mock.calls, 0);
+  assert.strictEqual(dataUrl, "data:image/png;base64,thumb:64x64:best@2");
 });
+
+it.each([
+  [
+    "a failed thumbnail on darwin",
+    "darwin" as const,
+    () => thumbnailFromPathMock.mockRejectedValue(new Error("no thumbnail")),
+  ],
+  ["other platforms", "win32" as const, () => {}],
+])(
+  "requests the file icon at a size supported on macOS after %s",
+  async (_case, platform, arrange) => {
+    getFileIconMock.mockReset();
+    thumbnailFromPathMock.mockReset();
+    arrange();
+    getFileIconMock.mockResolvedValue(fakeIcon("file"));
+
+    const dataUrl = await DesktopWindowCapture.iconDataUrl(
+      { appIcon: fakeIcon("captured") },
+      activeEditor,
+      platform,
+    );
+
+    assert.deepEqual(getFileIconMock.mock.calls, [
+      ["/Applications/Editor.app", { size: "normal" }],
+    ]);
+    assert.strictEqual(dataUrl, "data:image/png;base64,file:64x64:best@2");
+  },
+);
 
 it("uses the primary display for portal flash feedback", () => {
   assert.deepEqual(DesktopWindowCapture.windowCaptureFlashBounds(undefined), {
