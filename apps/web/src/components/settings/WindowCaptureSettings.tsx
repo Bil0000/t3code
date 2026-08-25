@@ -7,7 +7,6 @@ import {
   type WindowCaptureShortcut,
 } from "@t3tools/contracts";
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
-import { CameraIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
@@ -31,7 +30,6 @@ import { searchableSetting } from "./settingsSearch";
 import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Switch } from "../ui/switch";
-import { stackedThreadToast, toastManager } from "../ui/toast";
 
 type ShortcutCheck =
   | { readonly status: "idle"; readonly availability: null }
@@ -66,7 +64,6 @@ export function WindowCaptureSettings() {
   const bridge = getDesktopWindowCaptureBridge();
   const [state, setState] = useState<DesktopWindowCaptureState | null>(null);
   const [recording, setRecording] = useState(false);
-  const [capturing, setCapturing] = useState(false);
   const [candidate, setCandidate] = useState<WindowCaptureShortcut>(settings.windowCaptureShortcut);
   const [shortcutCheck, setShortcutCheck] = useState<ShortcutCheck>({
     status: "idle",
@@ -173,25 +170,6 @@ export function WindowCaptureSettings() {
     [checkShortcut, recording, stopRecording],
   );
 
-  const captureNow = useCallback(async () => {
-    if (!captureAvailable || !bridge || capturing) return;
-    setCapturing(true);
-    try {
-      await bridge.captureWindow();
-    } catch (error) {
-      toastManager.add(
-        stackedThreadToast({
-          type: "error",
-          title: "Window capture failed",
-          description: error instanceof Error ? error.message : "Try the capture again.",
-        }),
-      );
-    } finally {
-      setCapturing(false);
-      await refreshState();
-    }
-  }, [bridge, captureAvailable, capturing, refreshState]);
-
   const shortcutStatus = recording
     ? "Press both Shift keys, or a key chord. Esc cancels."
     : shortcutCheck.status === "checking"
@@ -275,9 +253,9 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-sound")}
-            description="Play a short sound after the image is attached."
-            control={
-              <div className="flex items-center gap-2">
+            title={
+              <span className="inline-flex items-center gap-2">
+                Capture sound
                 <Button
                   type="button"
                   size="xs"
@@ -287,13 +265,16 @@ export function WindowCaptureSettings() {
                 >
                   Test sound
                 </Button>
-                <Switch
-                  checked={settings.windowCapturePlaySound}
-                  disabled={!captureAvailable}
-                  aria-label="Play window capture sound"
-                  onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
-                />
-              </div>
+              </span>
+            }
+            description="Play a short sound after the image is attached."
+            control={
+              <Switch
+                checked={settings.windowCapturePlaySound}
+                disabled={!captureAvailable}
+                aria-label="Play window capture sound"
+                onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
+              />
             }
           />
           <SettingsRow
@@ -318,22 +299,6 @@ export function WindowCaptureSettings() {
                 aria-label="Animate window captures"
                 onCheckedChange={(checked) => void save({ windowCaptureAnimations: checked })}
               />
-            }
-          />
-          <SettingsRow
-            title="Capture now"
-            description="Capture once without changing the global shortcut setting."
-            control={
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={!captureAvailable || capturing}
-                onClick={() => void captureNow()}
-              >
-                <CameraIcon className="size-3.5" />
-                {capturing ? "Capturing..." : "Capture window"}
-              </Button>
             }
           />
         </SettingsUnavailableGroup>
