@@ -2,33 +2,38 @@ export function playWindowCaptureSound(): void {
   const AudioContextClass = window.AudioContext;
   if (!AudioContextClass) return;
   const context = new AudioContextClass();
-  const now = context.currentTime;
-  const noiseBuffer = context.createBuffer(1, context.sampleRate * 0.05, context.sampleRate);
-  const samples = noiseBuffer.getChannelData(0);
-  for (let index = 0; index < samples.length; index += 1) {
-    samples[index] = Math.random() * 2 - 1;
-  }
+  void context.resume().then(
+    () => {
+      const now = context.currentTime;
+      const noiseBuffer = context.createBuffer(1, context.sampleRate * 0.05, context.sampleRate);
+      const samples = noiseBuffer.getChannelData(0);
+      for (let index = 0; index < samples.length; index += 1) {
+        samples[index] = Math.random() * 2 - 1;
+      }
 
-  const click = (at: number, frequency: number, peak: number, duration: number) => {
-    const source = context.createBufferSource();
-    source.buffer = noiseBuffer;
-    const filter = context.createBiquadFilter();
-    filter.type = "bandpass";
-    filter.frequency.setValueAtTime(frequency, at);
-    filter.Q.setValueAtTime(1.4, at);
-    const gain = context.createGain();
-    gain.gain.setValueAtTime(0.0001, at);
-    gain.gain.exponentialRampToValueAtTime(peak, at + 0.003);
-    gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
-    source.connect(filter);
-    filter.connect(gain);
-    gain.connect(context.destination);
-    source.start(at);
-    source.stop(at + duration);
-    return source;
-  };
+      const click = (at: number, frequency: number, peak: number, duration: number) => {
+        const source = context.createBufferSource();
+        source.buffer = noiseBuffer;
+        const filter = context.createBiquadFilter();
+        filter.type = "bandpass";
+        filter.frequency.setValueAtTime(frequency, at);
+        filter.Q.setValueAtTime(1.4, at);
+        const gain = context.createGain();
+        gain.gain.setValueAtTime(0.0001, at);
+        gain.gain.exponentialRampToValueAtTime(peak, at + 0.003);
+        gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+        source.connect(filter);
+        filter.connect(gain);
+        gain.connect(context.destination);
+        source.start(at);
+        source.stop(at + duration);
+        return source;
+      };
 
-  click(now, 2_400, 0.5, 0.03);
-  const shutter = click(now + 0.075, 3_600, 0.85, 0.045);
-  shutter.addEventListener("ended", () => void context.close(), { once: true });
+      click(now, 2_400, 0.5, 0.03);
+      const shutter = click(now + 0.075, 3_600, 0.85, 0.045);
+      shutter.addEventListener("ended", () => void context.close(), { once: true });
+    },
+    () => void context.close(),
+  );
 }
