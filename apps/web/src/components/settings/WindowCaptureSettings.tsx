@@ -253,9 +253,9 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-sound")}
-            description="Play a short sound after the image is attached."
-            control={
-              <>
+            title={
+              <span className="inline-flex items-center gap-2">
+                Capture sound
                 <Button
                   type="button"
                   size="xs"
@@ -265,13 +265,16 @@ export function WindowCaptureSettings() {
                 >
                   Test sound
                 </Button>
-                <Switch
-                  checked={settings.windowCapturePlaySound}
-                  disabled={!captureAvailable}
-                  aria-label="Play window capture sound"
-                  onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
-                />
-              </>
+              </span>
+            }
+            description="Play a short sound after the image is attached."
+            control={
+              <Switch
+                checked={settings.windowCapturePlaySound}
+                disabled={!captureAvailable}
+                aria-label="Play window capture sound"
+                onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
+              />
             }
           />
           <SettingsRow

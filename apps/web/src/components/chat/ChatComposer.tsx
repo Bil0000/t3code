@@ -3379,7 +3379,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             <Button
                               variant="ghost"
                               size="icon-xs"
-                              className="absolute right-1 top-1 bg-background/80 opacity-0 transition-opacity hover:bg-background/90 focus-visible:opacity-100 group-hover/attachment:opacity-100"
+                              className="absolute right-1 top-1 bg-background/80 opacity-0 transition-opacity pointer-coarse:opacity-100 hover:bg-background/90 focus-visible:opacity-100 group-hover/attachment:opacity-100 group-focus-within/attachment:opacity-100"
                               onClick={() => removeComposerImage(image.id)}
                               aria-label={`Remove ${image.name}`}
                             >
