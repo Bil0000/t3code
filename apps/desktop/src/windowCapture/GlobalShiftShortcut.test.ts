@@ -32,4 +32,30 @@ describe("global Shift shortcut", () => {
     hook.emit("keydown", { keycode: 42 });
     expect(onTrigger).toHaveBeenCalledOnce();
   });
+
+  it("fires once for a quick double tap of either Shift key", () => {
+    const hook = Object.assign(new NodeEvents.EventEmitter(), { start: vi.fn(), stop: vi.fn() });
+    const onTrigger = vi.fn();
+    startGlobalShiftShortcut(hook, onTrigger);
+
+    hook.emit("keydown", { keycode: 42, time: 1_000 });
+    hook.emit("keyup", { keycode: 42, time: 1_040 });
+    hook.emit("keydown", { keycode: 42, time: 1_250 });
+    hook.emit("keydown", { keycode: 42, time: 1_260 });
+    expect(onTrigger).toHaveBeenCalledOnce();
+  });
+
+  it("does not count a slow or interrupted Shift tap", () => {
+    const hook = Object.assign(new NodeEvents.EventEmitter(), { start: vi.fn(), stop: vi.fn() });
+    const onTrigger = vi.fn();
+    startGlobalShiftShortcut(hook, onTrigger);
+
+    hook.emit("keydown", { keycode: 42, time: 1_000 });
+    hook.emit("keyup", { keycode: 42, time: 1_040 });
+    hook.emit("keydown", { keycode: 42, time: 2_000 });
+    hook.emit("keyup", { keycode: 42, time: 2_040 });
+    hook.emit("keydown", { keycode: 30, time: 2_100 });
+    hook.emit("keydown", { keycode: 42, time: 2_200 });
+    expect(onTrigger).not.toHaveBeenCalled();
+  });
 });
