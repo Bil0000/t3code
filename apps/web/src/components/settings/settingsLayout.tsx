@@ -174,6 +174,7 @@ export function SettingsUnavailableGroup({
 
 export function SettingsRow({
   title,
+  titleAction,
   description,
   status,
   resetAction,
@@ -183,6 +184,7 @@ export function SettingsRow({
   ...rowProps
 }: Omit<ComponentPropsWithoutRef<"div">, "title"> & {
   title: ReactNode;
+  titleAction?: ReactNode;
   description?: ReactNode;
   status?: ReactNode;
   resetAction?: ReactNode;
@@ -202,6 +204,7 @@ export function SettingsRow({
         <div className="min-w-0 flex-1 space-y-1">
           <div className="flex min-h-5 items-center gap-1.5">
             <h3 className="text-sm font-medium tracking-[-0.005em] text-foreground">{title}</h3>
+            {titleAction}
             <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center">
               {resetAction}
             </span>

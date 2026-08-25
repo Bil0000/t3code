@@ -281,19 +281,16 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-sound")}
-            title={
-              <span className="inline-flex items-center gap-2">
-                Capture sound
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  disabled={!captureAvailable}
-                  onClick={playWindowCaptureSound}
-                >
-                  Test sound
-                </Button>
-              </span>
+            titleAction={
+              <Button
+                type="button"
+                size="xs"
+                variant="outline"
+                disabled={!captureAvailable}
+                onClick={playWindowCaptureSound}
+              >
+                Test sound
+              </Button>
             }
             description="Play a short sound after the image is attached."
             control={
