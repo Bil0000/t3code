@@ -84,6 +84,11 @@ vi.mock("electron", () => ({
   },
   desktopCapturer: { getSources: getSourcesMock },
   globalShortcut: { register: registerShortcutMock, unregister: vi.fn() },
+  screen: {
+    getCursorScreenPoint: () => ({ x: 500, y: 500 }),
+    getDisplayNearestPoint: () => ({ bounds: { x: 100, y: 100, width: 800, height: 600 } }),
+    getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1_440, height: 900 } }),
+  },
   shell: { openExternal: openExternalMock },
   systemPreferences: {
     getMediaAccessStatus: () => "not-determined",
@@ -203,6 +208,15 @@ it.each([
   const dataUrl = DesktopWindowCapture.windowCaptureIconDataUrl(capturedIcon, fileIcon);
 
   assert.strictEqual(dataUrl, "data:image/png;base64," + expectedLabel + ":32x32:best@2");
+});
+
+it("uses the primary display for portal flash feedback", () => {
+  assert.deepEqual(DesktopWindowCapture.windowCaptureFlashBounds(undefined), {
+    x: 0,
+    y: 0,
+    width: 1_440,
+    height: 900,
+  });
 });
 
 it("bounds source thumbnails for large windows", () => {

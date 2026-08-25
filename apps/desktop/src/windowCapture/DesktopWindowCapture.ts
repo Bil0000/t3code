@@ -435,15 +435,17 @@ export class WindowCaptureFlash {
   }
 }
 
+export function windowCaptureFlashBounds(active: ActiveWindow | undefined): Electron.Rectangle {
+  return active?.bounds ?? Electron.screen.getPrimaryDisplay().bounds;
+}
+
 function showFlash(
   flash: WindowCaptureFlash,
   settings: ClientSettings,
   active: ActiveWindow | undefined,
 ): void {
   if (!settings.windowCaptureFlash) return;
-  const bounds = active
-    ? active.bounds
-    : Electron.screen.getDisplayNearestPoint(Electron.screen.getCursorScreenPoint()).bounds;
+  const bounds = windowCaptureFlashBounds(active);
   const playback = settings.windowCaptureAnimations
     ? flash.showAnimated(bounds)
     : flash.showStatic(bounds);
