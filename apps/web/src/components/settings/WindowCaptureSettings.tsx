@@ -33,7 +33,6 @@ import { Button } from "../ui/button";
 import { Kbd } from "../ui/kbd";
 import { Switch } from "../ui/switch";
 
-const MODIFIER_PAIR_DOUBLE_TAP_MS = 400;
 const MODIFIER_FROM_KEY: Readonly<Record<string, WindowCaptureModifier>> = {
   Shift: "shift",
   Meta: "meta",
@@ -92,7 +91,6 @@ export function WindowCaptureSettings() {
     availability: null,
   });
   const heldModifierCodesRef = useRef(new Set<string>());
-  const lastModifierTapRef = useRef<{ code: string; time: number } | null>(null);
   const shortcutCheckIdRef = useRef(0);
   const unavailableMessage = bridge
     ? undefined
@@ -128,7 +126,6 @@ export function WindowCaptureSettings() {
 
   const stopRecording = useCallback(() => {
     heldModifierCodesRef.current.clear();
-    lastModifierTapRef.current = null;
     setRecording(false);
   }, []);
 
@@ -185,20 +182,12 @@ export function WindowCaptureSettings() {
         const held = heldModifierCodesRef.current;
         held.add(event.code);
         const [leftCode, rightCode] = MODIFIER_CODES[pairModifier];
-        const bothHeld = held.has(leftCode) && held.has(rightCode);
-        const lastTap = lastModifierTapRef.current;
-        const doubleTap =
-          lastTap?.code === event.code &&
-          event.timeStamp - lastTap.time <= MODIFIER_PAIR_DOUBLE_TAP_MS;
-        if (bothHeld || doubleTap) {
+        if (held.has(leftCode) && held.has(rightCode)) {
           stopRecording();
           void checkShortcut(modifierPairShortcut(pairModifier));
-          return;
         }
-        lastModifierTapRef.current = { code: event.code, time: event.timeStamp };
         return;
       }
-      lastModifierTapRef.current = null;
       const input = keybindingFromKeyboardEvent(event, navigator.platform);
       if (!input) return;
       const shortcut = parseKeybindingShortcut(input);
@@ -210,7 +199,7 @@ export function WindowCaptureSettings() {
   );
 
   const shortcutStatus = recording
-    ? "Double-tap a modifier, press both of its keys, or press a key chord. Esc cancels."
+    ? "Press both keys of a modifier, like left and right Shift, or press a key chord. Esc cancels."
     : shortcutCheck.status === "checking"
       ? "Checking T3 Code, the system, and other apps..."
       : shortcutCheck.availability
@@ -238,7 +227,7 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-shortcut")}
-            description="Double-tap a modifier like Shift, press both of its keys, or choose a key chord. T3 Code checks it before saving."
+            description="Press both keys of a modifier like Shift, or choose a key chord. T3 Code checks it before saving."
             status={shortcutStatus}
             resetAction={
               <SettingResetButton
@@ -264,7 +253,6 @@ export function WindowCaptureSettings() {
                   data-keybinding-capture=""
                   onClick={() => {
                     heldModifierCodesRef.current.clear();
-                    lastModifierTapRef.current = null;
                     setShortcutCheck({ status: "idle", availability: null });
                     setRecording(true);
                   }}
