@@ -1,4 +1,5 @@
 import type { WindowCaptureShortcut } from "@t3tools/contracts";
+import { Fragment } from "react";
 
 import {
   formatWindowCaptureShortcutLabel,
@@ -14,16 +15,24 @@ export function WindowCaptureShortcutKeys({
   platform?: string;
 }) {
   const occurrences = new Map<string, number>();
+  let first = true;
 
   return (
     <KbdGroup aria-label={formatWindowCaptureShortcutLabel(shortcut, platform)}>
       {windowCaptureShortcutKeyLabels(shortcut, platform).map((key) => {
         const occurrence = (occurrences.get(key) ?? 0) + 1;
         occurrences.set(key, occurrence);
+        const separator = !first;
+        first = false;
         return (
-          <Kbd key={key + "-" + occurrence} aria-hidden>
-            {key}
-          </Kbd>
+          <Fragment key={key + "-" + occurrence}>
+            {separator ? (
+              <span aria-hidden className="text-xs text-muted-foreground">
+                +
+              </span>
+            ) : null}
+            <Kbd aria-hidden>{key}</Kbd>
+          </Fragment>
         );
       })}
     </KbdGroup>
