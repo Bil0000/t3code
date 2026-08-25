@@ -47,6 +47,18 @@ export const checkWindowCaptureShortcut = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const setWindowCaptureShortcutSuppressed = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SET_WINDOW_CAPTURE_SHORTCUT_SUPPRESSED_CHANNEL,
+  payload: Schema.Boolean,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.windowCapture.setShortcutSuppressed")(
+    function* (suppressed, event) {
+      yield* ensureTrustedWindowCaptureSender(event);
+      yield* (yield* DesktopWindowCapture.DesktopWindowCapture).setShortcutSuppressed(suppressed);
+    },
+  ),
+});
+
 export const captureWindow = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CAPTURE_WINDOW_CHANNEL,
   payload: Schema.Void,

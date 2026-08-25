@@ -5,7 +5,11 @@ import * as Option from "effect/Option";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as DesktopWindowCapture from "../../windowCapture/DesktopWindowCapture.ts";
-import { captureWindow, checkWindowCaptureShortcut } from "./windowCapture.ts";
+import {
+  captureWindow,
+  checkWindowCaptureShortcut,
+  setWindowCaptureShortcutSuppressed,
+} from "./windowCapture.ts";
 
 describe("window capture IPC", () => {
   it.effect("uses the manual capture path for a trusted renderer", () => {
@@ -59,6 +63,31 @@ describe("window capture IPC", () => {
         { sender: { id: 7 } },
       );
       assert.deepEqual(result, { available: true, message: null });
+    }).pipe(Effect.provide(layer));
+  });
+  it.effect("suppresses the active shortcut for a trusted renderer", () => {
+    let suppressed = false;
+    const layer = Layer.mergeAll(
+      Layer.succeed(
+        ElectronWindow.ElectronWindow,
+        ElectronWindow.ElectronWindow.of({
+          main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
+        } as ElectronWindow.ElectronWindow["Service"]),
+      ),
+      Layer.succeed(
+        DesktopWindowCapture.DesktopWindowCapture,
+        DesktopWindowCapture.DesktopWindowCapture.of({
+          setShortcutSuppressed: (next: boolean) =>
+            Effect.sync(() => {
+              suppressed = next;
+            }),
+        } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      yield* setWindowCaptureShortcutSuppressed.handler(true, { sender: { id: 7 } });
+      assert.isTrue(suppressed);
     }).pipe(Effect.provide(layer));
   });
 });

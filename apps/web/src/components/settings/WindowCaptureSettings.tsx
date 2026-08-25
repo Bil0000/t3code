@@ -91,6 +91,7 @@ export function WindowCaptureSettings() {
     availability: null,
   });
   const heldModifierCodesRef = useRef(new Set<string>());
+  const recordingRequestedRef = useRef(false);
   const shortcutCheckIdRef = useRef(0);
   const unavailableMessage = bridge
     ? undefined
@@ -132,9 +133,40 @@ export function WindowCaptureSettings() {
   );
 
   const stopRecording = useCallback(() => {
+    recordingRequestedRef.current = false;
     heldModifierCodesRef.current.clear();
     setRecording(false);
-  }, []);
+    void bridge?.setWindowCaptureShortcutSuppressed(false);
+  }, [bridge]);
+
+  const startRecording = useCallback(async () => {
+    if (!bridge) return;
+    recordingRequestedRef.current = true;
+    heldModifierCodesRef.current.clear();
+    setShortcutCheck({ status: "idle", availability: null });
+    try {
+      await bridge.setWindowCaptureShortcutSuppressed(true);
+      if (recordingRequestedRef.current) setRecording(true);
+    } catch (error) {
+      if (!recordingRequestedRef.current) return;
+      recordingRequestedRef.current = false;
+      setShortcutCheck({
+        status: "checked",
+        availability: {
+          available: false,
+          message: error instanceof Error ? error.message : "Could not start shortcut recording.",
+        },
+      });
+    }
+  }, [bridge]);
+
+  useEffect(
+    () => () => {
+      recordingRequestedRef.current = false;
+      void bridge?.setWindowCaptureShortcutSuppressed(false);
+    },
+    [bridge],
+  );
 
   const checkShortcut = useCallback(
     async (shortcut: WindowCaptureShortcut) => {
@@ -260,11 +292,7 @@ export function WindowCaptureSettings() {
                   aria-label={`Record window capture shortcut, currently ${formatWindowCaptureShortcutLabel(displayShortcut)}`}
                   aria-pressed={recording}
                   data-keybinding-capture=""
-                  onClick={() => {
-                    heldModifierCodesRef.current.clear();
-                    setShortcutCheck({ status: "idle", availability: null });
-                    setRecording(true);
-                  }}
+                  onClick={() => void startRecording()}
                   onKeyDown={recordShortcut}
                   onKeyUp={(event) => heldModifierCodesRef.current.delete(event.code)}
                   onBlur={stopRecording}

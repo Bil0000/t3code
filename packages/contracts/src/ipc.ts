@@ -1125,6 +1125,7 @@ export interface DesktopBridge {
   checkWindowCaptureShortcut?: (
     shortcut: WindowCaptureShortcut,
   ) => Promise<DesktopWindowCaptureShortcutAvailability>;
+  setWindowCaptureShortcutSuppressed?: (suppressed: boolean) => Promise<void>;
   captureWindow?: () => Promise<void>;
   listPendingWindowCaptures?: () => Promise<readonly DesktopPendingWindowCapture[]>;
   readWindowCapture?: (id: string) => Promise<DesktopWindowCapture>;

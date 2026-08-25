@@ -24,6 +24,8 @@ export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";
 export const SET_CLIENT_SETTINGS_CHANNEL = "desktop:set-client-settings";
 export const GET_WINDOW_CAPTURE_STATE_CHANNEL = "desktop:get-window-capture-state";
 export const CHECK_WINDOW_CAPTURE_SHORTCUT_CHANNEL = "desktop:check-window-capture-shortcut";
+export const SET_WINDOW_CAPTURE_SHORTCUT_SUPPRESSED_CHANNEL =
+  "desktop:set-window-capture-shortcut-suppressed";
 export const CAPTURE_WINDOW_CHANNEL = "desktop:capture-window";
 export const LIST_PENDING_WINDOW_CAPTURES_CHANNEL = "desktop:list-pending-window-captures";
 export const READ_WINDOW_CAPTURE_CHANNEL = "desktop:read-window-capture";

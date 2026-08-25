@@ -51,6 +51,7 @@ import {
   getWindowCaptureState,
   listPendingWindowCaptures,
   readWindowCapture,
+  setWindowCaptureShortcutSuppressed,
 } from "./methods/windowCapture.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
@@ -70,6 +71,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getWindowCaptureState);
   yield* ipc.handle(checkWindowCaptureShortcut);
+  yield* ipc.handle(setWindowCaptureShortcutSuppressed);
   yield* ipc.handle(captureWindow);
   yield* ipc.handle(listPendingWindowCaptures);
   yield* ipc.handle(readWindowCapture);

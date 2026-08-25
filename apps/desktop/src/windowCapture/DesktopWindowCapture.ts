@@ -175,6 +175,7 @@ export class DesktopWindowCapture extends Context.Service<
     readonly checkShortcut: (
       shortcut: WindowCaptureShortcut,
     ) => Effect.Effect<DesktopWindowCaptureShortcutAvailability>;
+    readonly setShortcutSuppressed: (suppressed: boolean) => Effect.Effect<void>;
     readonly capture: Effect.Effect<void, DesktopWindowCaptureFailure>;
     readonly captureNow: Effect.Effect<void, DesktopWindowCaptureFailure>;
     readonly listPending: Effect.Effect<
@@ -590,6 +591,7 @@ export const make = Effect.gen(function* () {
     "GlobalShiftShortcutWorker.cjs",
   );
   let registeredAccelerator: string | undefined;
+  let shortcutSuppressed = false;
   let stopShiftShortcut: (() => void) | undefined;
   const flash = new WindowCaptureFlash(environment.platform);
 
@@ -799,6 +801,7 @@ export const make = Effect.gen(function* () {
         startPairShortcutProcess(
           windowCaptureShortcutModifierPair(shortcut),
           () => {
+            if (shortcutSuppressed) return;
             void runPromise(capture).catch(() => undefined);
           },
           () => {
@@ -825,6 +828,7 @@ export const make = Effect.gen(function* () {
     } else {
       const accelerator = toElectronAccelerator(shortcut);
       registered = Electron.globalShortcut.register(accelerator, () => {
+        if (shortcutSuppressed) return;
         void runPromise(capture).catch(() => undefined);
       });
       if (registered) registeredAccelerator = accelerator;
@@ -843,6 +847,11 @@ export const make = Effect.gen(function* () {
         : windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
     });
   });
+
+  const setShortcutSuppressed = (suppressed: boolean) =>
+    Effect.sync(() => {
+      shortcutSuppressed = suppressed;
+    });
 
   const configure = Effect.fn("desktop.windowCapture.configure")(function* (
     settings: ClientSettings,
@@ -883,6 +892,7 @@ export const make = Effect.gen(function* () {
     configure,
     state: Ref.get(stateRef),
     checkShortcut,
+    setShortcutSuppressed,
     capture,
     captureNow,
     listPending: fileSystem.readDirectory(captureDirectory).pipe(
