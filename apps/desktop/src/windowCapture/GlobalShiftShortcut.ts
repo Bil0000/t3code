@@ -13,7 +13,7 @@ const SHIFT_DOUBLE_TAP_MS = 400;
 
 export function startGlobalShiftShortcut(hook: GlobalKeyHook, onTrigger: () => void): () => void {
   let state = BOTH_SHIFT_KEYS_IDLE;
-  let lastShiftPressAt: number | undefined;
+  let lastShiftPress: { readonly keycode: number; readonly time: number } | undefined;
   let stopped = false;
   const trigger = () => {
     try {
@@ -26,19 +26,22 @@ export function startGlobalShiftShortcut(hook: GlobalKeyHook, onTrigger: () => v
     const next = updateBothShiftKeys(state, event.keycode, pressed);
     state = next.state;
     const isShift = event.keycode === 42 || event.keycode === 54;
-    if (pressed && !isShift) lastShiftPressAt = undefined;
+    if (pressed && !isShift) lastShiftPress = undefined;
     if (!pressed || !isShift || wasPressed) return;
     if (next.triggered) {
-      lastShiftPressAt = undefined;
+      lastShiftPress = undefined;
       trigger();
       return;
     }
-    if (lastShiftPressAt !== undefined && event.time - lastShiftPressAt <= SHIFT_DOUBLE_TAP_MS) {
-      lastShiftPressAt = undefined;
+    if (
+      lastShiftPress?.keycode === event.keycode &&
+      event.time - lastShiftPress.time <= SHIFT_DOUBLE_TAP_MS
+    ) {
+      lastShiftPress = undefined;
       trigger();
       return;
     }
-    lastShiftPressAt = event.time;
+    lastShiftPress = { keycode: event.keycode, time: event.time };
   };
   const keyDown = update(true);
   const keyUp = update(false);
