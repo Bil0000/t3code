@@ -63,6 +63,20 @@ const EVENT_CODE_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
   Digit8: ["8"],
   Digit9: ["9"],
 };
+const SHIFTED_SHORTCUT_KEY_ALIASES: Readonly<Record<string, string>> = {
+  ")": "0",
+  "!": "1",
+  "@": "2",
+  "#": "3",
+  $: "4",
+  "%": "5",
+  "^": "6",
+  "&": "7",
+  "*": "8",
+  "(": "9",
+  "{": "[",
+  "}": "]",
+};
 
 function normalizeEventKey(key: string): string {
   const normalized = key.toLowerCase();
@@ -160,9 +174,12 @@ export function shortcutConflictKey(
   const useMetaForMod = isMacPlatform(platform);
   const metaKey = shortcut.metaKey || (shortcut.modKey && useMetaForMod);
   const ctrlKey = shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod);
+  const key = shortcut.shiftKey
+    ? (SHIFTED_SHORTCUT_KEY_ALIASES[shortcut.key] ?? shortcut.key)
+    : shortcut.key;
 
   return [
-    shortcut.key,
+    key,
     metaKey ? "meta" : "",
     ctrlKey ? "ctrl" : "",
     shortcut.shiftKey ? "shift" : "",

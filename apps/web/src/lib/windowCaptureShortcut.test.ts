@@ -122,6 +122,39 @@ describe("window capture keybinding conflicts", () => {
       ),
     ).toBe("capture.other");
   });
+
+  it.each([
+    ["{", "["],
+    ["}", "]"],
+    ["@", "2"],
+  ])("finds conflicts for shifted physical key aliases %s and %s", (recorded, bound) => {
+    expect(
+      windowCaptureKeybindingConflict(
+        {
+          key: recorded,
+          metaKey: false,
+          ctrlKey: false,
+          shiftKey: true,
+          altKey: false,
+          modKey: true,
+        },
+        [
+          {
+            command: "capture.other",
+            shortcut: {
+              key: bound,
+              metaKey: false,
+              ctrlKey: false,
+              shiftKey: true,
+              altKey: false,
+              modKey: true,
+            },
+          },
+        ],
+        "MacIntel",
+      ),
+    ).toBe("capture.other");
+  });
 });
 
 describe("sameWindowCaptureShortcut", () => {
