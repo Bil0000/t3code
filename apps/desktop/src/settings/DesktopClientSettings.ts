@@ -30,6 +30,27 @@ const decodeClientSettingsJson = (raw: string): Effect.Effect<ClientSettings, Sc
     }),
   );
 const encodeClientSettingsJson = Schema.encodeEffect(ClientSettingsJson);
+const decodeClientSettingsValue = Schema.decodeUnknownEffect(ClientSettingsSchema);
+const decodeLenientUnknownJson = Schema.decodeEffect(fromLenientJson(Schema.Unknown));
+
+const salvageClientSettings = (raw: string): Effect.Effect<Option.Option<ClientSettings>> =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeLenientUnknownJson(raw).pipe(Effect.option);
+    if (Option.isNone(parsed)) return Option.none<ClientSettings>();
+    const document =
+      typeof parsed.value === "object" && parsed.value !== null && "settings" in parsed.value
+        ? (parsed.value as { readonly settings: unknown }).settings
+        : parsed.value;
+    if (typeof document !== "object" || document === null || Array.isArray(document)) {
+      return Option.none<ClientSettings>();
+    }
+    const surviving: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(document)) {
+      const decoded = yield* decodeClientSettingsValue({ [key]: value }).pipe(Effect.option);
+      if (Option.isSome(decoded)) surviving[key] = value;
+    }
+    return yield* decodeClientSettingsValue(surviving).pipe(Effect.option);
+  });
 
 const DesktopClientSettingsWriteOperation = Schema.Literals([
   "create-temporary-file-name",
@@ -85,9 +106,12 @@ const readClientSettings = (
             Effect.map((settings) => Option.some(settings)),
             Effect.catchTags({
               SchemaError: (cause) =>
-                Effect.logWarning("Could not decode desktop client settings.", cause).pipe(
+                Effect.logWarning(
+                  "Could not decode desktop client settings; keeping valid fields.",
+                  cause,
+                ).pipe(
                   Effect.annotateLogs({ settingsPath }),
-                  Effect.as(Option.none<ClientSettings>()),
+                  Effect.andThen(salvageClientSettings(raw)),
                 ),
             }),
           ),
