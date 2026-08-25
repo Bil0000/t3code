@@ -1,4 +1,5 @@
 import { effectiveWindowCaptureShortcut } from "@t3tools/contracts";
+import * as NodeFS from "node:fs";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
@@ -328,7 +329,7 @@ describe("isWaylandSession", () => {
   });
 
   // The live-socket check reads /proc/net/unix, which only exists on Linux.
-  it.skipIf(process.platform !== "linux")(
+  it.skipIf(!NodeFS.existsSync("/proc/net/unix"))(
     "falls back to a live runtime directory socket when session variables are stripped",
     async () => {
       const { mkdtemp, rm, writeFile } = await import("node:fs/promises");
