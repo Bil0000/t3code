@@ -14,28 +14,19 @@ export function WindowCaptureShortcutKeys({
   shortcut: WindowCaptureShortcut;
   platform?: string;
 }) {
-  const occurrences = new Map<string, number>();
-  let first = true;
-
   return (
     <KbdGroup>
       <span className="sr-only">{formatWindowCaptureShortcutLabel(shortcut, platform)}</span>
-      {windowCaptureShortcutKeyLabels(shortcut, platform).map((key) => {
-        const occurrence = (occurrences.get(key) ?? 0) + 1;
-        occurrences.set(key, occurrence);
-        const separator = !first;
-        first = false;
-        return (
-          <Fragment key={key + "-" + occurrence}>
-            {separator ? (
-              <span aria-hidden className="text-xs text-muted-foreground">
-                +
-              </span>
-            ) : null}
-            <Kbd aria-hidden>{key}</Kbd>
-          </Fragment>
-        );
-      })}
+      {windowCaptureShortcutKeyLabels(shortcut, platform).map((key, index) => (
+        <Fragment key={key + "-" + index}>
+          {index > 0 ? (
+            <span aria-hidden className="text-xs text-muted-foreground">
+              +
+            </span>
+          ) : null}
+          <Kbd aria-hidden>{key}</Kbd>
+        </Fragment>
+      ))}
     </KbdGroup>
   );
 }

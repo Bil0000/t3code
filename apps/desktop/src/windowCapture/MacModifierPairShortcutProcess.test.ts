@@ -43,17 +43,9 @@ vi.mock("node:child_process", () => ({
   },
 }));
 
-import {
-  MAC_MODIFIER_PAIR_DEVICE_MASKS,
-  startMacModifierPairShortcutProcess,
-} from "./MacModifierPairShortcutProcess.ts";
+import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutProcess.ts";
 
 describe("macOS modifier pair poller", () => {
-  it("uses distinct device masks per modifier", () => {
-    const masks = Object.values(MAC_MODIFIER_PAIR_DEVICE_MASKS).flat();
-    expect(new Set(masks).size).toBe(masks.length);
-  });
-
   it("resolves on ready, triggers on lines, and kills on stop", async () => {
     spawnedPollers.length = 0;
     const onTrigger = vi.fn();

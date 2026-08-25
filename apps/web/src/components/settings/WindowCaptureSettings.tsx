@@ -48,10 +48,6 @@ const MODIFIER_CODES: Readonly<Record<WindowCaptureModifier, readonly [string, s
   alt: ["AltLeft", "AltRight"],
 };
 
-function modifierPairShortcut(modifier: WindowCaptureModifier): WindowCaptureShortcut {
-  return modifier === "shift" ? { kind: "both-shift-keys" } : { kind: "modifier-pair", modifier };
-}
-
 type ShortcutCheck =
   | { readonly status: "idle"; readonly availability: null }
   | { readonly status: "checking"; readonly availability: null }
@@ -176,17 +172,7 @@ export function WindowCaptureSettings() {
         effectiveWindowCaptureShortcut(state?.mode ?? "unavailable", shortcut),
         keybindings,
       );
-      if (conflict) {
-        setShortcutCheck({
-          status: "checked",
-          availability: {
-            available: false,
-            message: `T3 Code already uses this for "${commandLabel(conflict)}".`,
-          },
-        });
-        return;
-      }
-      if (!bridge) return;
+      if (conflict || !bridge) return;
       setShortcutCheck({ status: "checking", availability: null });
       try {
         const availability = await bridge.checkWindowCaptureShortcut(shortcut);
@@ -223,7 +209,11 @@ export function WindowCaptureSettings() {
         const [leftCode, rightCode] = MODIFIER_CODES[pairModifier];
         if (held.has(leftCode) && held.has(rightCode)) {
           stopRecording();
-          void checkShortcut(modifierPairShortcut(pairModifier));
+          void checkShortcut(
+            pairModifier === "shift"
+              ? { kind: "both-shift-keys" }
+              : { kind: "modifier-pair", modifier: pairModifier },
+          );
         }
         return;
       }

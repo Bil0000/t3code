@@ -146,14 +146,18 @@ export function makeDevelopmentLauncherScript({
   ].join("\n");
 }
 
-export function developmentEnvironmentFilePath() {
-  return NodePath.join(desktopDir, ".electron-runtime", "dev-environment.sh");
-}
+const developmentEnvironmentFilePath = NodePath.join(
+  desktopDir,
+  ".electron-runtime",
+  "dev-environment.sh",
+);
 
 export function writeDevelopmentEnvironmentScript() {
-  const environmentFilePath = developmentEnvironmentFilePath();
-  NodeFS.mkdirSync(NodePath.dirname(environmentFilePath), { recursive: true });
-  NodeFS.writeFileSync(environmentFilePath, makeDevelopmentEnvironmentScript(process.env));
+  NodeFS.mkdirSync(NodePath.dirname(developmentEnvironmentFilePath), { recursive: true });
+  NodeFS.writeFileSync(
+    developmentEnvironmentFilePath,
+    makeDevelopmentEnvironmentScript(process.env),
+  );
 }
 
 export function writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryPath) {
@@ -161,7 +165,7 @@ export function writeDevelopmentLauncherScript(targetBinaryPath, electronBinaryP
     electronBinaryPath,
     mainEntryPath: NodePath.join(desktopDir, "dist-electron", "main.cjs"),
     desktopRoot: desktopDir,
-    environmentFilePath: developmentEnvironmentFilePath(),
+    environmentFilePath: developmentEnvironmentFilePath,
   });
   if (
     NodeFS.existsSync(targetBinaryPath) &&

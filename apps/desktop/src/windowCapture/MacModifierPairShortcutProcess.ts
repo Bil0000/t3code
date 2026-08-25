@@ -8,10 +8,7 @@ import type { WindowCaptureModifier } from "@t3tools/contracts";
 // modifier. CGEventSourceFlagsState exposes them without any TCC permission,
 // unlike CGEventTap/uiohook which need Input Monitoring and silently break
 // whenever the ad-hoc dev signature changes.
-export const MAC_MODIFIER_PAIR_DEVICE_MASKS: Record<
-  WindowCaptureModifier,
-  readonly [number, number]
-> = {
+const MAC_MODIFIER_PAIR_DEVICE_MASKS: Record<WindowCaptureModifier, readonly [number, number]> = {
   shift: [0x2, 0x4],
   control: [0x1, 0x2000],
   alt: [0x20, 0x40],

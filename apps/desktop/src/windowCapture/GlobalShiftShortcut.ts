@@ -7,10 +7,10 @@ import {
 } from "./windowCapture.ts";
 
 interface GlobalKeyHook {
-  on(event: "keydown", listener: (event: { keycode: number; time: number }) => void): unknown;
-  on(event: "keyup", listener: (event: { keycode: number; time: number }) => void): unknown;
-  off(event: "keydown", listener: (event: { keycode: number; time: number }) => void): unknown;
-  off(event: "keyup", listener: (event: { keycode: number; time: number }) => void): unknown;
+  on(event: "keydown", listener: (event: { keycode: number }) => void): unknown;
+  on(event: "keyup", listener: (event: { keycode: number }) => void): unknown;
+  off(event: "keydown", listener: (event: { keycode: number }) => void): unknown;
+  off(event: "keyup", listener: (event: { keycode: number }) => void): unknown;
   start(): void;
   stop(): void;
 }
@@ -18,7 +18,7 @@ interface GlobalKeyHook {
 export function startGlobalShiftShortcut(
   hook: GlobalKeyHook,
   onTrigger: () => void,
-  modifier: WindowCaptureModifier = "shift",
+  modifier: WindowCaptureModifier,
 ): () => void {
   const pair = UIOHOOK_MODIFIER_KEYCODES[modifier];
   let state = MODIFIER_PAIR_IDLE;
@@ -28,7 +28,7 @@ export function startGlobalShiftShortcut(
       onTrigger();
     } catch {}
   };
-  const update = (pressed: boolean) => (event: { keycode: number; time: number }) => {
+  const update = (pressed: boolean) => (event: { keycode: number }) => {
     const next = updateModifierPair(state, pair, event.keycode, pressed);
     state = next.state;
     if (next.triggered) trigger();

@@ -200,7 +200,9 @@ export function effectiveWindowCaptureShortcut(
   mode: "direct" | "portal" | "unavailable",
   shortcut: WindowCaptureShortcut,
 ): WindowCaptureShortcut {
-  return mode === "portal" && "kind" in shortcut ? WAYLAND_WINDOW_CAPTURE_SHORTCUT : shortcut;
+  return mode === "portal" && isModifierPairShortcut(shortcut)
+    ? WAYLAND_WINDOW_CAPTURE_SHORTCUT
+    : shortcut;
 }
 
 /**

@@ -6,9 +6,13 @@ import { startGlobalShiftShortcut } from "./GlobalShiftShortcut.ts";
 describe("global Shift shortcut", () => {
   it("contains trigger errors at the native callback boundary", () => {
     const hook = Object.assign(new NodeEvents.EventEmitter(), { start: vi.fn(), stop: vi.fn() });
-    startGlobalShiftShortcut(hook, () => {
-      throw new Error("capture failed synchronously");
-    });
+    startGlobalShiftShortcut(
+      hook,
+      () => {
+        throw new Error("capture failed synchronously");
+      },
+      "shift",
+    );
 
     expect(() => {
       hook.emit("keydown", { keycode: 42 });
@@ -19,7 +23,7 @@ describe("global Shift shortcut", () => {
   it("fires once for both Shift keys and removes the hook on stop", () => {
     const hook = Object.assign(new NodeEvents.EventEmitter(), { start: vi.fn(), stop: vi.fn() });
     const onTrigger = vi.fn();
-    const stop = startGlobalShiftShortcut(hook, onTrigger);
+    const stop = startGlobalShiftShortcut(hook, onTrigger, "shift");
 
     hook.emit("keydown", { keycode: 42 });
     hook.emit("keydown", { keycode: 54 });
@@ -52,7 +56,7 @@ describe("global Shift shortcut", () => {
   it("does not fire when the pair keys are pressed one after the other", () => {
     const hook = Object.assign(new NodeEvents.EventEmitter(), { start: vi.fn(), stop: vi.fn() });
     const onTrigger = vi.fn();
-    startGlobalShiftShortcut(hook, onTrigger);
+    startGlobalShiftShortcut(hook, onTrigger, "shift");
 
     hook.emit("keydown", { keycode: 42, time: 1_000 });
     hook.emit("keyup", { keycode: 42, time: 1_040 });
