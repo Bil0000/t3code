@@ -24,7 +24,10 @@ const {
   flashWindows: [] as Array<{
     bounds: Electron.Rectangle | null;
     destroyed: boolean;
+    kind: "base" | "browser";
     loadCount: number;
+    opacities: Array<number>;
+    options: Electron.BrowserWindowConstructorOptions;
     scripts: Array<string>;
     showCount: number;
   }>,
@@ -79,29 +82,28 @@ vi.mock("node:child_process", () => ({
     return process;
   },
 }));
-vi.mock("electron", () => ({
-  BrowserWindow: class {
-    static getFocusedWindow() {
-      return null;
-    }
+vi.mock("electron", () => {
+  class BaseWindow {
+    protected readonly state: (typeof flashWindows)[number];
 
-    readonly webContents;
-    private readonly state: (typeof flashWindows)[number];
-
-    constructor() {
+    constructor(options: Electron.BrowserWindowConstructorOptions) {
       this.state = {
-        bounds: null,
+        bounds:
+          options.x === undefined ||
+          options.y === undefined ||
+          options.width === undefined ||
+          options.height === undefined
+            ? null
+            : { x: options.x, y: options.y, width: options.width, height: options.height },
         destroyed: false,
+        kind: "base",
         loadCount: 0,
+        opacities: options.opacity === undefined ? [] : [options.opacity],
+        options,
         scripts: [],
         showCount: 0,
       };
       flashWindows.push(this.state);
-      this.webContents = {
-        executeJavaScript: async (script: string) => {
-          this.state.scripts.push(script);
-        },
-      };
     }
 
     destroy() {
@@ -114,34 +116,63 @@ vi.mock("electron", () => ({
       return this.state.destroyed;
     }
 
-    loadURL() {
-      this.state.loadCount += 1;
-      return Promise.resolve();
-    }
-
     setBounds(bounds: Electron.Rectangle) {
       this.state.bounds = bounds;
     }
 
     setIgnoreMouseEvents() {}
 
+    setOpacity(opacity: number) {
+      this.state.opacities.push(opacity);
+    }
+
     showInactive() {
       this.state.showCount += 1;
     }
-  },
-  desktopCapturer: { getSources: getSourcesMock },
-  globalShortcut: { register: registerShortcutMock, unregister: vi.fn() },
-  screen: {
-    getCursorScreenPoint: () => ({ x: 500, y: 500 }),
-    getDisplayNearestPoint: () => ({ bounds: { x: 100, y: 100, width: 800, height: 600 } }),
-    getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1_440, height: 900 } }),
-  },
-  shell: { openExternal: openExternalMock },
-  systemPreferences: {
-    getMediaAccessStatus: () => "not-determined",
-    isTrustedAccessibilityClient: () => true,
-  },
-}));
+  }
+
+  class BrowserWindow extends BaseWindow {
+    static getFocusedWindow() {
+      return null;
+    }
+
+    readonly webContents;
+
+    constructor(options: Electron.BrowserWindowConstructorOptions) {
+      super(options);
+      this.state.kind = "browser";
+      this.webContents = {
+        executeJavaScript: async (script: string) => {
+          this.state.scripts.push(script);
+        },
+      };
+    }
+
+    loadURL() {
+      this.state.loadCount += 1;
+      return Promise.resolve();
+    }
+  }
+
+  return {
+    BaseWindow,
+    BrowserWindow,
+    desktopCapturer: { getSources: getSourcesMock },
+    globalShortcut: { register: registerShortcutMock, unregister: vi.fn() },
+    screen: {
+      getCursorScreenPoint: () => ({ x: 500, y: 500 }),
+      getDisplayNearestPoint: () => ({
+        bounds: { x: 100, y: 100, width: 800, height: 600 },
+      }),
+      getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1_440, height: 900 } }),
+    },
+    shell: { openExternal: openExternalMock },
+    systemPreferences: {
+      getMediaAccessStatus: () => "not-determined",
+      isTrustedAccessibilityClient: () => true,
+    },
+  };
+});
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
@@ -314,24 +345,46 @@ it("does not overlap accessibility reads after a timeout", async () => {
   }
 });
 
-it("reuses one flash window and disposes it after playback", async () => {
+it.each(["darwin", "win32"] as const)(
+  "uses native opacity for a short-lived flash on %s",
+  async (platform) => {
+    vi.useFakeTimers();
+    flashWindows.length = 0;
+    const flash = new DesktopWindowCapture.WindowCaptureFlash(platform);
+    const bounds = { x: 10, y: 20, width: 800, height: 600 };
+
+    try {
+      await flash.showAnimated(bounds);
+
+      assert.lengthOf(flashWindows, 1);
+      assert.strictEqual(flashWindows[0]?.kind, "base");
+      assert.strictEqual(flashWindows[0]?.options.transparent, false);
+      assert.strictEqual(flashWindows[0]?.loadCount, 0);
+      assert.deepEqual(flashWindows[0]?.bounds, bounds);
+      assert.strictEqual(flashWindows[0]?.showCount, 1);
+      assert.lengthOf(flashWindows[0]?.scripts ?? [], 0);
+      await vi.advanceTimersByTimeAsync(180);
+      assert.isTrue(flashWindows[0]?.destroyed);
+      assert.isAbove(flashWindows[0]?.opacities.length ?? 0, 1);
+      assert.strictEqual(vi.getTimerCount(), 0);
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("uses a short-lived renderer flash on Linux", async () => {
   vi.useFakeTimers();
   flashWindows.length = 0;
-  const flash = new DesktopWindowCapture.WindowCaptureFlash();
-  const bounds = { x: 10, y: 20, width: 800, height: 600 };
+  const flash = new DesktopWindowCapture.WindowCaptureFlash("linux");
 
   try {
-    await flash.prepare();
-    await flash.showAnimated(bounds);
-    await flash.showStatic(bounds);
-
-    assert.lengthOf(flashWindows, 1);
+    await flash.showStatic({ x: 0, y: 0, width: 800, height: 600 });
+    assert.strictEqual(flashWindows[0]?.options.transparent, true);
     assert.strictEqual(flashWindows[0]?.loadCount, 1);
-    assert.deepEqual(flashWindows[0]?.bounds, bounds);
-    assert.strictEqual(flashWindows[0]?.showCount, 2);
-    assert.lengthOf(flashWindows[0]?.scripts ?? [], 2);
     await vi.advanceTimersByTimeAsync(60);
     assert.isTrue(flashWindows[0]?.destroyed);
+    assert.strictEqual(vi.getTimerCount(), 0);
   } finally {
     vi.useRealTimers();
   }

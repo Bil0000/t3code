@@ -51,19 +51,8 @@ const CAPTURE_READY_ACTION = "window-capture-ready";
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
 const FLASH_ANIMATION_DURATION_MS = 180;
 const FLASH_STATIC_DURATION_MS = 60;
-const WINDOW_CAPTURE_FLASH_HTML = [
-  "<!doctype html>",
-  "<style>",
-  "html,body{width:100%;height:100%}",
-  "body{margin:0;opacity:0;background:rgba(255,255,255,.18);will-change:opacity}",
-  "body.animate{animation:flash 180ms cubic-bezier(.2,.8,.2,1) both}",
-  "body.still{opacity:1}",
-  "@keyframes flash{0%{opacity:0}18%{opacity:1}100%{opacity:0}}",
-  "</style><body></body>",
-  '<script>window.playFlash=(className)=>{document.body.className="";void document.body.offsetWidth;if(className==="animate"){requestAnimationFrame(()=>{document.body.className=className});return}document.body.className=className}</script>',
-].join("");
-const WINDOW_CAPTURE_FLASH_URL =
-  "data:text/html;charset=utf-8," + encodeURIComponent(WINDOW_CAPTURE_FLASH_HTML);
+const FLASH_FRAME_INTERVAL_MS = 16;
+const FLASH_PEAK_OPACITY = 0.14;
 const MAC_SCREEN_CAPTURE_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 const MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE =
@@ -332,8 +321,6 @@ async function captureSource({
 }) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
-  if (settings.windowCaptureFlash) void flash.prepare().catch(() => undefined);
-
   try {
     if (hiddenWindow) await hideAndWaitForBlur(hiddenWindow);
     if (mode === "direct") {
@@ -365,10 +352,12 @@ async function captureSource({
   }
 }
 
-function createWindowCaptureFlashWindow(): Electron.BrowserWindow {
-  const window = new Electron.BrowserWindow({
-    width: 1,
-    height: 1,
+function createWindowCaptureFlashWindow(
+  bounds: Electron.Rectangle,
+  platform: NodeJS.Platform,
+): Electron.BaseWindow {
+  const options = {
+    ...bounds,
     alwaysOnTop: true,
     focusable: false,
     frame: false,
@@ -376,60 +365,79 @@ function createWindowCaptureFlashWindow(): Electron.BrowserWindow {
     resizable: false,
     show: false,
     skipTaskbar: true,
-    transparent: true,
-  });
+  };
+  const window =
+    platform === "linux"
+      ? new Electron.BrowserWindow({ ...options, transparent: true })
+      : new Electron.BaseWindow({
+          ...options,
+          backgroundColor: "#ffffff",
+          opacity: FLASH_PEAK_OPACITY,
+          transparent: false,
+        });
   window.setIgnoreMouseEvents(true);
   return window;
 }
 
 export class WindowCaptureFlash {
-  private flashWindow: Electron.BrowserWindow | undefined;
-  private ready: Promise<void> | undefined;
-  private hideTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly platform: NodeJS.Platform;
+  private flashWindow: Electron.BaseWindow | undefined;
+  private animationTimer: ReturnType<typeof setInterval> | undefined;
+  private closeTimer: ReturnType<typeof setTimeout> | undefined;
 
-  prepare(): Promise<void> {
-    if (this.flashWindow && !this.flashWindow.isDestroyed() && this.ready) return this.ready;
-    const window = createWindowCaptureFlashWindow();
-    this.flashWindow = window;
-    this.ready = window.loadURL(WINDOW_CAPTURE_FLASH_URL).catch((error) => {
-      if (this.flashWindow === window) this.dispose();
-      throw error;
-    });
-    return this.ready;
+  constructor(platform: NodeJS.Platform) {
+    this.platform = platform;
   }
 
   showAnimated(bounds: Electron.Rectangle): Promise<void> {
-    return this.show(bounds, "animate", FLASH_ANIMATION_DURATION_MS);
+    return this.show(bounds, true, FLASH_ANIMATION_DURATION_MS);
   }
 
   showStatic(bounds: Electron.Rectangle): Promise<void> {
-    return this.show(bounds, "still", FLASH_STATIC_DURATION_MS);
+    return this.show(bounds, false, FLASH_STATIC_DURATION_MS);
   }
 
   dispose(): void {
-    if (this.hideTimer) clearTimeout(this.hideTimer);
-    this.hideTimer = undefined;
+    if (this.animationTimer) clearInterval(this.animationTimer);
+    if (this.closeTimer) clearTimeout(this.closeTimer);
+    this.animationTimer = undefined;
+    this.closeTimer = undefined;
     if (this.flashWindow && !this.flashWindow.isDestroyed()) this.flashWindow.destroy();
     this.flashWindow = undefined;
-    this.ready = undefined;
   }
 
   private async show(
     bounds: Electron.Rectangle,
-    className: "animate" | "still",
+    animated: boolean,
     durationMs: number,
   ): Promise<void> {
-    await this.prepare();
-    const window = this.flashWindow;
-    if (!window || window.isDestroyed()) return;
-    if (this.hideTimer) clearTimeout(this.hideTimer);
-    window.setBounds(bounds);
-    await window.webContents.executeJavaScript(
-      "window.playFlash(" + JSON.stringify(className) + ")",
-    );
+    this.dispose();
+    const window = createWindowCaptureFlashWindow(bounds, this.platform);
+    this.flashWindow = window;
+    if (window instanceof Electron.BrowserWindow) {
+      const animation = animated
+        ? "animation:flash " + FLASH_ANIMATION_DURATION_MS + "ms cubic-bezier(.2,.8,.2,1) both"
+        : "opacity:1";
+      const html =
+        '<!doctype html><style>@keyframes flash{0%{opacity:0}18%{opacity:1}100%{opacity:0}}</style><body style="margin:0;background:rgba(255,255,255,.14);' +
+        animation +
+        '"></body>';
+      await window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+    }
     if (window.isDestroyed()) return;
     window.showInactive();
-    this.hideTimer = setTimeout(() => {
+    if (animated && this.platform !== "linux") {
+      let opacity = FLASH_PEAK_OPACITY;
+      this.animationTimer = setInterval(() => {
+        if (window.isDestroyed()) return this.dispose();
+        opacity = Math.max(
+          0,
+          opacity - (FLASH_PEAK_OPACITY * FLASH_FRAME_INTERVAL_MS) / durationMs,
+        );
+        window.setOpacity(opacity);
+      }, FLASH_FRAME_INTERVAL_MS);
+    }
+    this.closeTimer = setTimeout(() => {
       if (this.flashWindow === window) this.dispose();
     }, durationMs);
   }
@@ -495,7 +503,7 @@ export const make = Effect.gen(function* () {
   );
   let registeredAccelerator: string | undefined;
   let stopShiftShortcut: (() => void) | undefined;
-  const flash = new WindowCaptureFlash();
+  const flash = new WindowCaptureFlash(environment.platform);
 
   const releaseShortcut = () => {
     if (registeredAccelerator) {
