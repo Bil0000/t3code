@@ -13,6 +13,7 @@ import { vi } from "vite-plus/test";
 const {
   accessibilityByPidMock,
   flashWindows,
+  getFileIconMock,
   getSourcesMock,
   openExternalMock,
   registerShortcutMock,
@@ -31,6 +32,7 @@ const {
     scripts: Array<string>;
     showCount: number;
   }>,
+  getFileIconMock: vi.fn(),
   getSourcesMock: vi.fn(),
   openExternalMock: vi.fn(() => Promise.resolve()),
   registerShortcutMock: vi.fn(),
@@ -157,6 +159,7 @@ vi.mock("electron", () => {
   return {
     BaseWindow,
     BrowserWindow,
+    app: { getFileIcon: getFileIconMock },
     desktopCapturer: { getSources: getSourcesMock },
     globalShortcut: { register: registerShortcutMock, unregister: vi.fn() },
     screen: {
@@ -288,6 +291,19 @@ it.each([
   const dataUrl = DesktopWindowCapture.windowCaptureIconDataUrl(capturedIcon, fileIcon);
 
   assert.strictEqual(dataUrl, "data:image/png;base64," + expectedLabel + ":32x32:best@2");
+});
+
+it("requests the file icon at a size supported on macOS", async () => {
+  getFileIconMock.mockReset();
+  getFileIconMock.mockResolvedValue(fakeIcon("file"));
+  const active = {
+    owner: { path: "/Applications/Editor.app" },
+  } as Parameters<typeof DesktopWindowCapture.iconDataUrl>[1];
+
+  const dataUrl = await DesktopWindowCapture.iconDataUrl({ appIcon: fakeIcon("captured") }, active);
+
+  assert.deepEqual(getFileIconMock.mock.calls, [["/Applications/Editor.app", { size: "normal" }]]);
+  assert.strictEqual(dataUrl, "data:image/png;base64,file:32x32:best@2");
 });
 
 it("uses the primary display for portal flash feedback", () => {

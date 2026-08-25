@@ -200,13 +200,13 @@ export function windowCaptureIconDataUrl(
   return icon.resize({ width: 32, height: 32, quality: "best" }).toDataURL({ scaleFactor: 2 });
 }
 
-async function iconDataUrl(
+export async function iconDataUrl(
   source: { readonly appIcon?: Electron.NativeImage | null },
   active: ActiveWindow | undefined,
 ): Promise<string | undefined> {
   try {
     const fileIcon = active?.owner.path
-      ? await Electron.app.getFileIcon(active.owner.path, { size: "large" }).catch(() => undefined)
+      ? await Electron.app.getFileIcon(active.owner.path, { size: "normal" }).catch(() => undefined)
       : undefined;
     return windowCaptureIconDataUrl(source.appIcon, fileIcon);
   } catch {
