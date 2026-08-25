@@ -1,11 +1,16 @@
-import * as Electron from "electron";
+// @effect-diagnostics nodeBuiltinImport:off
+
+import * as NodeChildProcess from "node:child_process";
 
 export function startGlobalShiftShortcutProcess(
   workerPath: string,
   onTrigger: () => void,
+  onFailure: (error: Error) => void,
 ): Promise<() => void> {
-  const worker = Electron.utilityProcess.fork(workerPath, [], {
-    serviceName: "Window Capture Shortcut",
+  const worker = NodeChildProcess.fork(workerPath, [], {
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    execArgv: [],
+    stdio: ["ignore", "ignore", "inherit", "ipc"],
   });
 
   return new Promise((resolve, reject) => {
@@ -17,7 +22,12 @@ export function startGlobalShiftShortcutProcess(
       worker.kill();
     };
     const fail = (error: Error) => {
-      if (settled) return;
+      if (stopped) return;
+      if (settled) {
+        stop();
+        onFailure(error);
+        return;
+      }
       settled = true;
       stop();
       reject(error);
@@ -34,8 +44,8 @@ export function startGlobalShiftShortcutProcess(
         onTrigger();
       } catch {}
     });
-    worker.once("error", (type, location) => {
-      fail(new Error(`Window capture shortcut helper failed: ${type} at ${location}`));
+    worker.once("error", (error) => {
+      fail(error);
     });
     worker.once("exit", (code) => {
       fail(new Error(`Window capture shortcut helper exited with code ${code}`));

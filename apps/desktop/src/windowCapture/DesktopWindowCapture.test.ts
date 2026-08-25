@@ -16,6 +16,7 @@ const {
   getSourcesMock,
   openExternalMock,
   registerShortcutMock,
+  shortcutForkOptions,
   shortcutProcesses,
   uiohookMock,
 } = vi.hoisted(() => ({
@@ -30,12 +31,12 @@ const {
   getSourcesMock: vi.fn(),
   openExternalMock: vi.fn(() => Promise.resolve()),
   registerShortcutMock: vi.fn(),
+  shortcutForkOptions: [] as Array<{ env?: NodeJS.ProcessEnv }>,
   shortcutProcesses: [] as Array<{
     emit: (event: string, value?: unknown) => void;
     kill: ReturnType<typeof vi.fn>;
     on: (event: string, listener: (value: unknown) => void) => unknown;
     once: (event: string, listener: (value: unknown) => void) => unknown;
-    postMessage: ReturnType<typeof vi.fn>;
   }>,
   uiohookMock: {
     off: vi.fn(),
@@ -48,6 +49,36 @@ const {
 vi.mock("@crowecawcaw/xa11y", () => ({ App: { byPid: accessibilityByPidMock } }));
 vi.mock("uiohook-napi", () => ({ uIOhook: uiohookMock }));
 
+vi.mock("node:child_process", () => ({
+  fork: (_path: string, _args: ReadonlyArray<string>, options: { env?: NodeJS.ProcessEnv }) => {
+    const listeners = new Map<string, Array<(value: unknown) => void>>();
+    const process = {
+      emit: (event: string, value?: unknown) => {
+        for (const listener of listeners.get(event) ?? []) listener(value);
+      },
+      kill: vi.fn(() => true),
+      on: (event: string, listener: (value: unknown) => void) => {
+        listeners.set(event, [...(listeners.get(event) ?? []), listener]);
+        return process;
+      },
+      once: (event: string, listener: (value: unknown) => void) => {
+        const wrapped = (value: unknown) => {
+          listeners.set(
+            event,
+            (listeners.get(event) ?? []).filter((candidate) => candidate !== wrapped),
+          );
+          listener(value);
+        };
+        listeners.set(event, [...(listeners.get(event) ?? []), wrapped]);
+        return process;
+      },
+    };
+    shortcutForkOptions.push(options);
+    shortcutProcesses.push(process);
+    queueMicrotask(() => process.emit("message", "ready"));
+    return process;
+  },
+}));
 vi.mock("electron", () => ({
   BrowserWindow: class {
     static getFocusedWindow() {
@@ -110,36 +141,6 @@ vi.mock("electron", () => ({
     getMediaAccessStatus: () => "not-determined",
     isTrustedAccessibilityClient: () => true,
   },
-  utilityProcess: {
-    fork: () => {
-      const listeners = new Map<string, Array<(value: unknown) => void>>();
-      const process = {
-        emit: (event: string, value?: unknown) => {
-          for (const listener of listeners.get(event) ?? []) listener(value);
-        },
-        kill: vi.fn(() => true),
-        on: (event: string, listener: (value: unknown) => void) => {
-          listeners.set(event, [...(listeners.get(event) ?? []), listener]);
-          return process;
-        },
-        once: (event: string, listener: (value: unknown) => void) => {
-          const wrapped = (value: unknown) => {
-            listeners.set(
-              event,
-              (listeners.get(event) ?? []).filter((candidate) => candidate !== wrapped),
-            );
-            listener(value);
-          };
-          listeners.set(event, [...(listeners.get(event) ?? []), wrapped]);
-          return process;
-        },
-        postMessage: vi.fn(),
-      };
-      shortcutProcesses.push(process);
-      queueMicrotask(() => process.emit("message", "ready"));
-      return process;
-    },
-  },
 }));
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -169,7 +170,9 @@ const testLayer = (
     ),
     Layer.succeed(
       DesktopWindow.DesktopWindow,
-      DesktopWindow.DesktopWindow.of({} as DesktopWindow.DesktopWindow["Service"]),
+      DesktopWindow.DesktopWindow.of({
+        dispatchMenuAction: () => Effect.void,
+      } as unknown as DesktopWindow.DesktopWindow["Service"]),
     ),
     FileSystem.layerNoop(fileSystemOverrides),
     Path.layer,
@@ -352,6 +355,7 @@ it.effect("does not create the flash window during desktop startup", () => {
 });
 
 it.effect("starts the Shift listener outside the Electron main process", () => {
+  shortcutForkOptions.length = 0;
   shortcutProcesses.length = 0;
   uiohookMock.start.mockClear();
   const settings = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true };
@@ -364,7 +368,40 @@ it.effect("starts the Shift listener outside the Electron main process", () => {
 
       assert.isTrue(state.shortcutRegistered);
       assert.lengthOf(shortcutProcesses, 1);
+      assert.strictEqual(shortcutForkOptions[0]?.env?.ELECTRON_RUN_AS_NODE, "1");
       assert.strictEqual(uiohookMock.start.mock.calls.length, 0);
+
+      shortcutProcesses[0]?.emit("exit", 1);
+      yield* Effect.promise(() => new Promise<void>((resolve) => queueMicrotask(resolve)));
+      assert.isFalse((yield* service.state).shortcutRegistered);
+    }),
+  ).pipe(Effect.provide(testLayer("linux")));
+});
+
+it.effect("registers a configured key chord instead of the Shift listener", () => {
+  registerShortcutMock.mockReset().mockReturnValue(true);
+  shortcutProcesses.length = 0;
+  const settings = {
+    ...DEFAULT_CLIENT_SETTINGS,
+    windowCaptureEnabled: true,
+    windowCaptureShortcut: {
+      key: "k",
+      metaKey: false,
+      ctrlKey: true,
+      shiftKey: false,
+      altKey: true,
+      modKey: false,
+    },
+  };
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure(settings);
+
+      assert.isTrue((yield* service.state).shortcutRegistered);
+      assert.strictEqual(registerShortcutMock.mock.calls[0]?.[0], "Control+Alt+K");
+      assert.lengthOf(shortcutProcesses, 0);
     }),
   ).pipe(Effect.provide(testLayer("linux")));
 });

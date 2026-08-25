@@ -676,9 +676,19 @@ export const make = Effect.gen(function* () {
     let registered = false;
     if (isBothShiftKeysShortcut(shortcut)) {
       registered = yield* Effect.tryPromise(() =>
-        startGlobalShiftShortcutProcess(shiftShortcutWorkerPath, () => {
-          void runPromise(capture).catch(() => undefined);
-        }),
+        startGlobalShiftShortcutProcess(
+          shiftShortcutWorkerPath,
+          () => {
+            void runPromise(capture).catch(() => undefined);
+          },
+          (error) => {
+            void runPromise(
+              Ref.update(stateRef, (state) => ({ ...state, shortcutRegistered: false })).pipe(
+                Effect.andThen(setFailure(error.message)),
+              ),
+            ).catch(() => undefined);
+          },
+        ),
       ).pipe(
         Effect.tap((stop) =>
           Effect.sync(() => {
