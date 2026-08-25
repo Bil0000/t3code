@@ -1,5 +1,5 @@
 import { assert, it } from "@effect/vitest";
-import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
+import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -88,6 +88,7 @@ import * as DesktopWindowCapture from "./DesktopWindowCapture.ts";
 const testLayer = (
   platform: NodeJS.Platform,
   fileSystemOverrides: Parameters<typeof FileSystem.layerNoop>[0] = {},
+  initialSettings: Option.Option<ClientSettings> = Option.none(),
 ) =>
   Layer.mergeAll(
     Layer.succeed(
@@ -100,7 +101,7 @@ const testLayer = (
     Layer.succeed(
       DesktopClientSettings.DesktopClientSettings,
       DesktopClientSettings.DesktopClientSettings.of({
-        get: Effect.succeed(Option.none()),
+        get: Effect.succeed(initialSettings),
         set: () => Effect.void,
       }),
     ),
@@ -209,6 +210,23 @@ it("preloads and reuses one flash window", async () => {
   assert.lengthOf(flashWindows[0]?.scripts ?? [], 2);
   flash.dispose();
   assert.isTrue(flashWindows[0]?.destroyed);
+});
+
+it.effect("does not create the flash window during desktop startup", () => {
+  flashWindows.length = 0;
+  const settings = {
+    ...DEFAULT_CLIENT_SETTINGS,
+    windowCaptureEnabled: true,
+    windowCaptureFlash: true,
+  };
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.initialize;
+      assert.lengthOf(flashWindows, 0);
+    }),
+  ).pipe(Effect.provide(testLayer("darwin", {}, Option.some(settings))));
 });
 
 it.effect("applies concurrent settings changes in order while permissions are pending", () => {

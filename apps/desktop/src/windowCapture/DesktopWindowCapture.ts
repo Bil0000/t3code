@@ -325,6 +325,7 @@ async function captureSource({
 }) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
+  if (settings.windowCaptureFlash) void flash.prepare().catch(() => undefined);
 
   try {
     if (hiddenWindow) await hideAndWaitForBlur(hiddenWindow);
@@ -630,9 +631,7 @@ export const make = Effect.gen(function* () {
 
     const mode = captureMode(environment.platform);
     const shortcut = effectiveWindowCaptureShortcut(mode, settings.windowCaptureShortcut);
-    if (settings.windowCaptureEnabled && settings.windowCaptureFlash && mode !== "unavailable") {
-      void flash.prepare().catch(() => undefined);
-    } else {
+    if (!settings.windowCaptureEnabled || !settings.windowCaptureFlash || mode === "unavailable") {
       flash.dispose();
     }
     if (!settings.windowCaptureEnabled || mode === "unavailable") {
