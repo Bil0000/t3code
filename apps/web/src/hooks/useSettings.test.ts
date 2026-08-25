@@ -7,52 +7,81 @@ import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const setClientSettings = vi.hoisted(() => vi.fn());
+const getClientSettings = vi.hoisted(() => vi.fn());
 
 vi.mock("~/localApi", () => ({
   ensureLocalApi: () => ({
     persistence: {
-      getClientSettings: vi.fn(),
+      getClientSettings,
       setClientSettings,
     },
   }),
 }));
 
 import {
-  __persistClientSettingsForTests,
+  __persistClientSettingsPatchForTests,
   __resetClientSettingsPersistenceForTests,
+  __setClientSettingsForTests,
   mergeEnvironmentSettings,
   resolveEnvironmentIdentificationMode,
 } from "./useSettings";
 
 beforeEach(() => {
   setClientSettings.mockReset();
+  getClientSettings.mockReset().mockResolvedValue(null);
   __resetClientSettingsPersistenceForTests();
 });
 
 describe("client settings persistence", () => {
   it("writes settings snapshots in request order", async () => {
+    __setClientSettingsForTests(DEFAULT_CLIENT_SETTINGS);
     let finishFirst: () => void = () => undefined;
+    let markFirstStarted: () => void = () => undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
     setClientSettings
-      .mockImplementationOnce(
-        () =>
-          new Promise<void>((resolve) => {
-            finishFirst = resolve;
-          }),
-      )
+      .mockImplementationOnce(() => {
+        markFirstStarted();
+        return new Promise<void>((resolve) => {
+          finishFirst = resolve;
+        });
+      })
       .mockResolvedValueOnce(undefined);
 
     const firstSettings = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureFlash: false };
     const secondSettings = { ...firstSettings, windowCapturePlaySound: false };
-    const first = __persistClientSettingsForTests(firstSettings);
-    const second = __persistClientSettingsForTests(secondSettings);
+    const first = __persistClientSettingsPatchForTests({ windowCaptureFlash: false });
+    const second = __persistClientSettingsPatchForTests({ windowCapturePlaySound: false });
 
-    await Promise.resolve();
+    await firstStarted;
     expect(setClientSettings).toHaveBeenCalledTimes(1);
     finishFirst();
     await Promise.all([first, second]);
 
     expect(setClientSettings).toHaveBeenNthCalledWith(1, firstSettings);
     expect(setClientSettings).toHaveBeenNthCalledWith(2, secondSettings);
+  });
+
+  it("hydrates stored settings before applying a patch", async () => {
+    let finishHydration: (settings: typeof DEFAULT_CLIENT_SETTINGS) => void = () => undefined;
+    getClientSettings.mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishHydration = resolve;
+      }),
+    );
+    const storedSettings = { ...DEFAULT_CLIENT_SETTINGS, windowCapturePlaySound: false };
+
+    const write = __persistClientSettingsPatchForTests({ windowCaptureFlash: false });
+    await Promise.resolve();
+    expect(setClientSettings).not.toHaveBeenCalled();
+    finishHydration(storedSettings);
+    await write;
+
+    expect(setClientSettings).toHaveBeenCalledWith({
+      ...storedSettings,
+      windowCaptureFlash: false,
+    });
   });
 });
 

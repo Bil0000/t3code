@@ -277,9 +277,7 @@ export function WindowCaptureSettings() {
                   !captureAvailable ||
                   sameWindowCaptureShortcut(savedShortcut, DEFAULT_WINDOW_CAPTURE_SHORTCUT)
                 }
-                onClick={() =>
-                  void save({ windowCaptureShortcut: DEFAULT_WINDOW_CAPTURE_SHORTCUT })
-                }
+                onClick={() => void checkShortcut(DEFAULT_WINDOW_CAPTURE_SHORTCUT)}
               />
             }
             control={

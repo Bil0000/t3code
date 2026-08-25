@@ -18,7 +18,8 @@ export function WindowCaptureShortcutKeys({
   let first = true;
 
   return (
-    <KbdGroup aria-label={formatWindowCaptureShortcutLabel(shortcut, platform)}>
+    <KbdGroup>
+      <span className="sr-only">{formatWindowCaptureShortcutLabel(shortcut, platform)}</span>
       {windowCaptureShortcutKeyLabels(shortcut, platform).map((key) => {
         const occurrence = (occurrences.get(key) ?? 0) + 1;
         occurrences.set(key, occurrence);

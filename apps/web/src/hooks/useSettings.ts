@@ -153,6 +153,14 @@ function persistClientSettings(settings: ClientSettings): Promise<void> {
   return clientSettingsPersistence;
 }
 
+async function persistClientSettingsPatch(patch: ClientSettingsPatch): Promise<void> {
+  await hydrateClientSettings();
+  await persistClientSettings({
+    ...getClientSettingsSnapshot(),
+    ...patch,
+  });
+}
+
 // ── Key sets for routing patches ─────────────────────────────────────
 
 const SERVER_SETTINGS_KEYS = new Set<string>(Struct.keys(ServerSettings.fields));
@@ -331,10 +339,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
         }
       }
       if (Object.keys(clientPatch).length > 0) {
-        void persistClientSettings({
-          ...getClientSettingsSnapshot(),
-          ...clientPatch,
-        });
+        void persistClientSettingsPatch(clientPatch);
       }
     },
     [environmentId, persistServerSettings],
@@ -352,12 +357,7 @@ export function useUpdatePrimarySettings() {
 }
 
 export function useUpdateClientSettings() {
-  return useCallback((patch: ClientSettingsPatch): Promise<void> => {
-    return persistClientSettings({
-      ...getClientSettingsSnapshot(),
-      ...patch,
-    });
-  }, []);
+  return useCallback(persistClientSettingsPatch, []);
 }
 
 export function __resetClientSettingsPersistenceForTests(): void {
@@ -370,7 +370,7 @@ export function __resetClientSettingsPersistenceForTests(): void {
   clientSettingsHydrationListeners.clear();
 }
 
-export const __persistClientSettingsForTests = persistClientSettings;
+export const __persistClientSettingsPatchForTests = persistClientSettingsPatch;
 
 export function __setClientSettingsForTests(settings: ClientSettings): void {
   clientSettingsHydrationGeneration += 1;
