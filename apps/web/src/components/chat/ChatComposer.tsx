@@ -130,6 +130,10 @@ import { ContextWindowMeter } from "./ContextWindowMeter";
 import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic";
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { WindowCaptureAttachmentDetails } from "./WindowCaptureAttachmentDetails";
+import {
+  consumeWindowCaptureAnimation,
+  hasWindowCaptureAnimation,
+} from "../../lib/windowCaptureAnimation";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
 import { Separator } from "../ui/separator";
@@ -3293,8 +3297,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 : "h-16 w-16",
                               image.source?.kind === "window-capture" &&
                                 settings.windowCaptureAnimations &&
+                                hasWindowCaptureAnimation(image.file) &&
                                 "animate-[window-capture-card-enter_180ms_cubic-bezier(0.2,0.8,0.2,1)_both] motion-reduce:animate-none",
                             )}
+                            onAnimationStart={(event) => {
+                              if (event.currentTarget === event.target) {
+                                consumeWindowCaptureAnimation(image.file);
+                              }
+                            }}
                           >
                             {image.previewUrl ? (
                               <button

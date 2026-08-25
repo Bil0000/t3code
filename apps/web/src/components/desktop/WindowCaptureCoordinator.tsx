@@ -11,6 +11,7 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { readThreadShell } from "../../state/entities";
 import { compressImageToByteLimit, dataUrlToFile } from "../../lib/imageCompression";
 import { resolveThreadActionProjectRef } from "../../lib/chatThreadActions";
+import { markWindowCaptureAnimation } from "../../lib/windowCaptureAnimation";
 import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
 import {
   getDesktopWindowCaptureBridge,
@@ -31,6 +32,7 @@ export function WindowCaptureCoordinator() {
     routeThreadRef,
   } = useHandleNewThread();
   const playSound = useClientSettings((settings) => settings.windowCapturePlaySound);
+  const animateCaptures = useClientSettings((settings) => settings.windowCaptureAnimations);
   const lastTargetRef = useRef<CaptureTarget | null>(null);
   const drainingRef = useRef<Promise<void> | null>(null);
   const rerunRequestedRef = useRef(false);
@@ -106,6 +108,9 @@ export function WindowCaptureCoordinator() {
               throw new Error("The captured window is too large to attach.");
             }
             const file = compressed.file;
+            if (animateCaptures && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+              markWindowCaptureAnimation(file);
+            }
             const dataUrl = compressed.recompressed
               ? await readFileAsDataUrl(file)
               : capture.dataUrl;
@@ -173,7 +178,7 @@ export function WindowCaptureCoordinator() {
       });
     drainingRef.current = operation;
     return operation;
-  }, [playSound, resolveTarget]);
+  }, [animateCaptures, playSound, resolveTarget]);
 
   useEffect(() => {
     const bridge = getDesktopWindowCaptureBridge();
