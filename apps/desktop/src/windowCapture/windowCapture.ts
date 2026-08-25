@@ -2,6 +2,7 @@
 // @effect-diagnostics nodeBuiltinImport:off
 
 import * as NodeFS from "node:fs";
+import * as NodePath from "node:path";
 
 import {
   isModifierPairShortcut,
@@ -286,7 +287,17 @@ export function isWaylandSession(
   const runtimeDirectory = environment.XDG_RUNTIME_DIR;
   if (!runtimeDirectory) return false;
   try {
-    return NodeFS.readdirSync(runtimeDirectory).some((entry) => entry.startsWith("wayland-"));
+    const liveSockets = new Set(
+      NodeFS.readFileSync("/proc/net/unix", "utf8")
+        .split("\n")
+        .flatMap((line) => line.match(/\s(\/.*)$/)?.[1] ?? []),
+    );
+    return NodeFS.readdirSync(runtimeDirectory, { withFileTypes: true }).some(
+      (entry) =>
+        /^wayland-\d+$/.test(entry.name) &&
+        entry.isSocket() &&
+        liveSockets.has(NodePath.join(runtimeDirectory, entry.name)),
+    );
   } catch {
     return false;
   }
