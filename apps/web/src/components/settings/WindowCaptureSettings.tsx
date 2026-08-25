@@ -30,7 +30,7 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { Button } from "../ui/button";
-import { Kbd } from "../ui/kbd";
+import { WindowCaptureShortcutKeys } from "../desktop/WindowCaptureShortcutKeys";
 import { Switch } from "../ui/switch";
 
 const MODIFIER_FROM_KEY: Readonly<Record<string, WindowCaptureModifier>> = {
@@ -263,7 +263,7 @@ export function WindowCaptureSettings() {
                   {recording ? (
                     "Press shortcut..."
                   ) : (
-                    <Kbd>{formatWindowCaptureShortcutLabel(displayShortcut)}</Kbd>
+                    <WindowCaptureShortcutKeys shortcut={displayShortcut} />
                   )}
                 </Button>
                 {shortcutChanged ? (

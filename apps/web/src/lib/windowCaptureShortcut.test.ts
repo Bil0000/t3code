@@ -5,6 +5,7 @@ import {
   formatWindowCaptureShortcutLabel,
   sameWindowCaptureShortcut,
   windowCaptureKeybindingConflict,
+  windowCaptureShortcutKeyLabels,
 } from "./windowCaptureShortcut";
 
 describe("window capture shortcut labels", () => {
@@ -24,6 +25,43 @@ describe("window capture shortcut labels", () => {
     expect(
       formatWindowCaptureShortcutLabel({ kind: "modifier-pair", modifier: "alt" }, "MacIntel"),
     ).toBe("Option + Option");
+  });
+
+  it.each([
+    ["MacIntel", { kind: "modifier-pair", modifier: "meta" } as const, ["⌘", "⌘"]],
+    ["MacIntel", { kind: "both-shift-keys" } as const, ["⇧", "⇧"]],
+    ["MacIntel", { kind: "modifier-pair", modifier: "alt" } as const, ["⌥", "⌥"]],
+    ["MacIntel", { kind: "modifier-pair", modifier: "control" } as const, ["⌃", "⌃"]],
+    ["Win32", { kind: "modifier-pair", modifier: "meta" } as const, ["⊞", "⊞"]],
+    ["Win32", { kind: "both-shift-keys" } as const, ["⇧", "⇧"]],
+    ["Win32", { kind: "modifier-pair", modifier: "alt" } as const, ["Alt", "Alt"]],
+    ["Win32", { kind: "modifier-pair", modifier: "control" } as const, ["Ctrl", "Ctrl"]],
+    ["Linux", { kind: "modifier-pair", modifier: "meta" } as const, ["Super", "Super"]],
+    ["Linux", { kind: "both-shift-keys" } as const, ["⇧", "⇧"]],
+    ["Linux", { kind: "modifier-pair", modifier: "alt" } as const, ["Alt", "Alt"]],
+    ["Linux", { kind: "modifier-pair", modifier: "control" } as const, ["Ctrl", "Ctrl"]],
+  ])("renders modifier-pair key caps on %s", (platform, shortcut, expected) => {
+    expect(windowCaptureShortcutKeyLabels(shortcut, platform)).toEqual(expected);
+  });
+
+  it.each([
+    ["MacIntel", ["⇧", "⌘", "2"]],
+    ["Win32", ["Ctrl", "⇧", "2"]],
+    ["Linux", ["Ctrl", "⇧", "2"]],
+  ])("renders chord key caps on %s", (platform, expected) => {
+    expect(
+      windowCaptureShortcutKeyLabels(
+        {
+          key: "2",
+          metaKey: false,
+          ctrlKey: false,
+          shiftKey: true,
+          altKey: false,
+          modKey: true,
+        },
+        platform,
+      ),
+    ).toEqual(expected);
   });
 });
 

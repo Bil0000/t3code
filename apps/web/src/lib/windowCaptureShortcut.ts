@@ -3,11 +3,12 @@ import {
   windowCaptureModifierPairLabel,
   windowCaptureShortcutModifierPair,
   type KeybindingShortcut,
+  type WindowCaptureModifier,
   type WindowCaptureShortcut,
 } from "@t3tools/contracts";
 
-import { formatShortcutLabel, shortcutConflictKey } from "../keybindings";
-import { isMacPlatform } from "./utils";
+import { formatShortcutKeyLabel, formatShortcutLabel, shortcutConflictKey } from "../keybindings";
+import { isMacPlatform, isWindowsPlatform } from "./utils";
 
 export function formatWindowCaptureShortcutLabel(
   shortcut: WindowCaptureShortcut,
@@ -19,6 +20,41 @@ export function formatWindowCaptureShortcutLabel(
         isMacPlatform(platform),
       )
     : formatShortcutLabel(shortcut, platform);
+}
+
+function modifierKeyLabel(modifier: WindowCaptureModifier, platform: string): string {
+  if (modifier === "shift") return "⇧";
+  if (isMacPlatform(platform)) {
+    if (modifier === "meta") return "⌘";
+    if (modifier === "control") return "⌃";
+    return "⌥";
+  }
+  if (modifier === "meta") return isWindowsPlatform(platform) ? "⊞" : "Super";
+  return modifier === "control" ? "Ctrl" : "Alt";
+}
+
+export function windowCaptureShortcutKeyLabels(
+  shortcut: WindowCaptureShortcut,
+  platform = navigator.platform,
+): readonly string[] {
+  if (isModifierPairShortcut(shortcut)) {
+    const label = modifierKeyLabel(windowCaptureShortcutModifierPair(shortcut), platform);
+    return [label, label];
+  }
+
+  const useMetaForMod = isMacPlatform(platform);
+  const modifiers: readonly [boolean, WindowCaptureModifier][] = [
+    [shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod), "control"],
+    [shortcut.altKey, "alt"],
+    [shortcut.shiftKey, "shift"],
+    [shortcut.metaKey || (shortcut.modKey && useMetaForMod), "meta"],
+  ];
+  return [
+    ...modifiers
+      .filter(([enabled]) => enabled)
+      .map(([, modifier]) => modifierKeyLabel(modifier, platform)),
+    formatShortcutKeyLabel(shortcut.key),
+  ];
 }
 
 export function sameWindowCaptureShortcut(
