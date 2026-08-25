@@ -12,6 +12,7 @@ import { vi } from "vite-plus/test";
 
 const {
   accessibilityByPidMock,
+  accessibilityListMock,
   accessibilityTrustedMock,
   flashWindows,
   getFileIconMock,
@@ -27,6 +28,7 @@ const {
   uiohookMock,
 } = vi.hoisted(() => ({
   accessibilityByPidMock: vi.fn(),
+  accessibilityListMock: vi.fn(),
   accessibilityTrustedMock: vi.fn(() => true),
   flashWindows: [] as Array<{
     bounds: Electron.Rectangle | null;
@@ -66,7 +68,9 @@ const {
   },
 }));
 
-vi.mock("@crowecawcaw/xa11y", () => ({ App: { byPid: accessibilityByPidMock } }));
+vi.mock("@crowecawcaw/xa11y", () => ({
+  App: { byPid: accessibilityByPidMock, list: accessibilityListMock },
+}));
 vi.mock("uiohook-napi", () => ({ uIOhook: uiohookMock }));
 
 vi.mock("node:child_process", () => ({
@@ -443,6 +447,41 @@ it("does not overlap accessibility reads after a timeout", async () => {
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("reads app name and text for a picked portal window", async () => {
+  accessibilityListMock.mockReset();
+  accessibilityListMock.mockResolvedValue([
+    {
+      name: "Editor",
+      children: async () => [
+        {
+          name: "main.ts — Editor",
+          tree: async () => ({ name: "main.ts — Editor", value: "let x = 1", children: [] }),
+        },
+      ],
+    },
+    {
+      name: "Broken",
+      children: async () => {
+        throw new Error("no accessibility");
+      },
+    },
+  ]);
+
+  const context = await DesktopWindowCapture.readPortalWindowContext("main.ts — Editor");
+
+  assert.deepEqual(context, {
+    appName: "Editor",
+    accessibleText: "main.ts — Editor\nlet x = 1",
+  });
+});
+
+it("skips portal accessibility for generic screen sources", async () => {
+  accessibilityListMock.mockReset();
+
+  assert.isUndefined(await DesktopWindowCapture.readPortalWindowContext("Entire screen"));
+  assert.strictEqual(accessibilityListMock.mock.calls.length, 0);
 });
 
 it.each(["darwin", "win32"] as const)(

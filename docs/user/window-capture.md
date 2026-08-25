@@ -23,9 +23,9 @@ settings page.
   on and the permission is not already granted. Modifier-pair shortcuts need no additional
   permission on macOS.
 - On Windows and Linux with X11, the shortcut captures the active window.
-- On Linux with Wayland, the system portal asks you to choose the window or screen to share. Portal
-  captures attach the image without accessibility text because the portal does not identify the
-  selected window.
+- On Linux with Wayland, the system portal asks you to choose the window or screen to share. When
+  the chosen window's title can be matched to a running app, the capture also carries the app name
+  and accessibility text; screen shares and ambiguous titles attach the image alone.
 
 Text availability depends on the captured app and the operating system. T3 Code still attaches the
 image when an app does not expose accessibility text.

@@ -6,8 +6,10 @@ import {
   UIOHOOK_MODIFIER_KEYCODES,
   accessibleWindowText,
   findAccessibleWindow,
+  findAccessibleWindowByTitle,
   findCaptureSource,
   hideAndWaitForBlur,
+  isPortalWindowSourceName,
   isWaylandSession,
   shouldRequestScreenCapturePermission,
   updateModifierPair,
@@ -248,6 +250,30 @@ describe("effectiveWindowCaptureShortcut", () => {
       altKey: false,
       modKey: true,
     });
+  });
+});
+
+describe("portal window matching", () => {
+  it("rejects generic portal source names", () => {
+    expect(isPortalWindowSourceName("Entire screen")).toBe(false);
+    expect(isPortalWindowSourceName("Screen 1")).toBe(false);
+    expect(isPortalWindowSourceName("  ")).toBe(false);
+    expect(isPortalWindowSourceName("main.ts — Editor")).toBe(true);
+  });
+
+  it("matches a picked window only when its title is unique", () => {
+    const windows = [
+      { appName: "Editor", window: { name: "main.ts — Editor" } },
+      { appName: "Browser", window: { name: "Docs" } },
+    ];
+    expect(findAccessibleWindowByTitle(windows, " main.ts — Editor ")).toBe(windows[0]);
+    expect(findAccessibleWindowByTitle(windows, "missing")).toBeUndefined();
+    expect(
+      findAccessibleWindowByTitle(
+        [...windows, { appName: "Other", window: { name: "Docs" } }],
+        "Docs",
+      ),
+    ).toBeUndefined();
   });
 });
 

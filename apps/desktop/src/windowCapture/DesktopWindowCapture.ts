@@ -40,8 +40,10 @@ import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutPr
 import {
   accessibleWindowText,
   findAccessibleWindow,
+  findAccessibleWindowByTitle,
   findCaptureSource,
   hideAndWaitForBlur,
+  isPortalWindowSourceName,
   isWaylandSession,
   WAYLAND_SUBSTITUTION_MESSAGE,
   shouldRequestScreenCapturePermission,
@@ -302,15 +304,39 @@ async function readCapturedWindowText(
   return text || undefined;
 }
 
-let activeAccessibleTextRead: Promise<string | undefined> | undefined;
+async function readPortalCapturedContext(
+  sourceName: string,
+): Promise<{ readonly appName?: string; readonly accessibleText?: string } | undefined> {
+  const { App } = await import("@crowecawcaw/xa11y");
+  const apps = await App.list();
+  const windows = (
+    await Promise.all(
+      apps.map(async (app) => {
+        try {
+          return (await app.children()).map((window) => ({ appName: app.name, window }));
+        } catch {
+          return [];
+        }
+      }),
+    )
+  ).flat();
+  const match = findAccessibleWindowByTitle(windows, sourceName);
+  if (!match) return undefined;
+  const text = accessibleWindowText(
+    await match.window.tree(),
+    WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS,
+  );
+  return {
+    ...(match.appName.trim() ? { appName: match.appName.trim() } : {}),
+    ...(text ? { accessibleText: text } : {}),
+  };
+}
 
-export async function readAccessibleWindowText(
-  active: ActiveWindow,
-  platform: NodeJS.Platform,
-  sourceTitle: string,
-): Promise<string | undefined> {
+let activeAccessibleTextRead: Promise<unknown> | undefined;
+
+async function raceAccessibleRead<T>(run: () => Promise<T>): Promise<T | undefined> {
   if (activeAccessibleTextRead) return undefined;
-  const read = readCapturedWindowText(active, platform, sourceTitle).catch(() => undefined);
+  const read = run().catch(() => undefined);
   activeAccessibleTextRead = read;
   void read.finally(() => {
     if (activeAccessibleTextRead === read) activeAccessibleTextRead = undefined;
@@ -326,6 +352,21 @@ export async function readAccessibleWindowText(
   } finally {
     if (timeout) clearTimeout(timeout);
   }
+}
+
+export function readAccessibleWindowText(
+  active: ActiveWindow,
+  platform: NodeJS.Platform,
+  sourceTitle: string,
+): Promise<string | undefined> {
+  return raceAccessibleRead(() => readCapturedWindowText(active, platform, sourceTitle));
+}
+
+export async function readPortalWindowContext(
+  sourceName: string,
+): Promise<{ readonly appName?: string; readonly accessibleText?: string } | undefined> {
+  if (!isPortalWindowSourceName(sourceName)) return undefined;
+  return await raceAccessibleRead(() => readPortalCapturedContext(sourceName));
 }
 
 async function captureSource({
@@ -365,10 +406,19 @@ async function captureSource({
         : new DesktopWindowCaptureWindowUnavailableError({ captureId });
     }
     showFlash(flash, settings, active);
+    if (mode === "portal") {
+      const portalContext = await readPortalWindowContext(source.name);
+      return {
+        source,
+        active,
+        accessibleText: portalContext?.accessibleText,
+        portalAppName: portalContext?.appName,
+      };
+    }
     const accessibleText = active
       ? await readAccessibleWindowText(active, platform, source.name)
       : undefined;
-    return { source, active, accessibleText };
+    return { source, active, accessibleText, portalAppName: undefined };
   } finally {
     if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
   }
@@ -590,7 +640,7 @@ export const make = Effect.gen(function* () {
 
     yield* Effect.gen(function* () {
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
-      const { source, active, accessibleText } = yield* Effect.tryPromise({
+      const { source, active, accessibleText, portalAppName } = yield* Effect.tryPromise({
         try: () =>
           captureSource({ mode, captureId: id, platform: environment.platform, settings, flash }),
         catch: (cause) => captureFailure(cause, id),
@@ -611,7 +661,7 @@ export const make = Effect.gen(function* () {
         source: {
           kind: "window-capture",
           capturedAt,
-          appName: active?.owner.name.trim() || source.name.trim() || "Window",
+          appName: active?.owner.name.trim() || portalAppName || source.name.trim() || "Window",
           windowTitle: active?.title.trim() || source.name.trim(),
           ...(accessibleText ? { accessibleText } : {}),
           ...(active?.platform === "macos" && active.owner.bundleId
