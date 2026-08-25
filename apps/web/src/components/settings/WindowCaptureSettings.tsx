@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   DEFAULT_WINDOW_CAPTURE_SHORTCUT,
+  effectiveWindowCaptureShortcut,
   type ClientSettingsPatch,
   type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
@@ -111,7 +112,10 @@ export function WindowCaptureSettings() {
     async (shortcut: WindowCaptureShortcut) => {
       const checkId = ++shortcutCheckIdRef.current;
       setCandidate(shortcut);
-      const conflict = windowCaptureKeybindingConflict(shortcut, keybindings);
+      const conflict = windowCaptureKeybindingConflict(
+        effectiveWindowCaptureShortcut(state?.mode ?? "unavailable", shortcut),
+        keybindings,
+      );
       if (conflict) {
         setShortcutCheck({
           status: "checked",
@@ -140,7 +144,7 @@ export function WindowCaptureSettings() {
         });
       }
     },
-    [bridge, keybindings],
+    [bridge, keybindings, state?.mode],
   );
 
   const recordShortcut = useCallback(

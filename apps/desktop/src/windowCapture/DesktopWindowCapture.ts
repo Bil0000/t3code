@@ -3,6 +3,7 @@
 import {
   DEFAULT_CLIENT_SETTINGS,
   DesktopPendingWindowCapture,
+  effectiveWindowCaptureShortcut,
   WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS,
   type DesktopWindowCapture as DesktopWindowCaptureValue,
   type DesktopWindowCaptureShortcutAvailability,
@@ -32,7 +33,6 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts";
 import {
   accessibleWindowText,
-  effectiveWindowCaptureShortcut,
   findAccessibleWindow,
   findCaptureSource,
   hideAndWaitForBlur,

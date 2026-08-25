@@ -154,6 +154,13 @@ export const WAYLAND_WINDOW_CAPTURE_SHORTCUT: WindowCaptureKeyChord = {
   modKey: true,
 };
 
+export function effectiveWindowCaptureShortcut(
+  mode: "direct" | "portal" | "unavailable",
+  shortcut: WindowCaptureShortcut,
+): WindowCaptureShortcut {
+  return mode === "portal" && "kind" in shortcut ? WAYLAND_WINDOW_CAPTURE_SHORTCUT : shortcut;
+}
+
 /**
  * A user-chosen font family (a single name or a comma-separated list). Empty
  * means "use the app default"; clients compose their own fallback stacks.

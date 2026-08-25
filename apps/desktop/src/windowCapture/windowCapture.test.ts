@@ -1,9 +1,9 @@
+import { effectiveWindowCaptureShortcut } from "@t3tools/contracts";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
   BOTH_SHIFT_KEYS_IDLE,
   accessibleWindowText,
-  effectiveWindowCaptureShortcut,
   findAccessibleWindow,
   findCaptureSource,
   hideAndWaitForBlur,

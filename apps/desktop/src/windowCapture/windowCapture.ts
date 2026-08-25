@@ -1,10 +1,6 @@
 // @effect-diagnostics globalTimers:off
 
-import {
-  WAYLAND_WINDOW_CAPTURE_SHORTCUT,
-  type WindowCaptureKeyChord,
-  type WindowCaptureShortcut,
-} from "@t3tools/contracts";
+import { type WindowCaptureKeyChord, type WindowCaptureShortcut } from "@t3tools/contracts";
 
 interface AccessibilityTreeNode {
   readonly name?: string;
@@ -50,15 +46,6 @@ export function isBothShiftKeysShortcut(
   shortcut: WindowCaptureShortcut,
 ): shortcut is Extract<WindowCaptureShortcut, { readonly kind: "both-shift-keys" }> {
   return "kind" in shortcut && shortcut.kind === "both-shift-keys";
-}
-
-export function effectiveWindowCaptureShortcut(
-  mode: "direct" | "portal" | "unavailable",
-  shortcut: WindowCaptureShortcut,
-): WindowCaptureShortcut {
-  return mode === "portal" && isBothShiftKeysShortcut(shortcut)
-    ? WAYLAND_WINDOW_CAPTURE_SHORTCUT
-    : shortcut;
 }
 
 export function windowCaptureShortcutRegistrationFailureMessage(
