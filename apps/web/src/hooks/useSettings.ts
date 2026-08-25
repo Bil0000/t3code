@@ -49,6 +49,7 @@ let clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;
 let clientSettingsHydrated = false;
 let clientSettingsHydrationPromise: Promise<void> | null = null;
 let clientSettingsHydrationGeneration = 0;
+let clientSettingsPersistence = Promise.resolve();
 
 function emitClientSettingsChange() {
   for (const listener of clientSettingsListeners) {
@@ -141,14 +142,15 @@ async function hydrateClientSettings(): Promise<void> {
 
 function persistClientSettings(settings: ClientSettings): Promise<void> {
   replaceClientSettingsSnapshot(settings);
-  return ensureLocalApi()
-    .persistence.setClientSettings(settings)
+  clientSettingsPersistence = clientSettingsPersistence
+    .then(() => ensureLocalApi().persistence.setClientSettings(settings))
     .catch((error) => {
       console.error(`${CLIENT_SETTINGS_PERSISTENCE_ERROR_SCOPE} persist failed`, {
         operation: "persist",
         ...safeErrorLogAttributes(error),
       });
     });
+  return clientSettingsPersistence;
 }
 
 // ── Key sets for routing patches ─────────────────────────────────────
@@ -363,9 +365,12 @@ export function __resetClientSettingsPersistenceForTests(): void {
   clientSettingsSnapshot = DEFAULT_CLIENT_SETTINGS;
   clientSettingsHydrated = false;
   clientSettingsHydrationPromise = null;
+  clientSettingsPersistence = Promise.resolve();
   clientSettingsListeners.clear();
   clientSettingsHydrationListeners.clear();
 }
+
+export const __persistClientSettingsForTests = persistClientSettings;
 
 export function __setClientSettingsForTests(settings: ClientSettings): void {
   clientSettingsHydrationGeneration += 1;

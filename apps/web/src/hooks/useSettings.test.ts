@@ -4,9 +4,57 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts/settings";
-import { describe, expect, it } from "vite-plus/test";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { mergeEnvironmentSettings, resolveEnvironmentIdentificationMode } from "./useSettings";
+const setClientSettings = vi.hoisted(() => vi.fn());
+
+vi.mock("~/localApi", () => ({
+  ensureLocalApi: () => ({
+    persistence: {
+      getClientSettings: vi.fn(),
+      setClientSettings,
+    },
+  }),
+}));
+
+import {
+  __persistClientSettingsForTests,
+  __resetClientSettingsPersistenceForTests,
+  mergeEnvironmentSettings,
+  resolveEnvironmentIdentificationMode,
+} from "./useSettings";
+
+beforeEach(() => {
+  setClientSettings.mockReset();
+  __resetClientSettingsPersistenceForTests();
+});
+
+describe("client settings persistence", () => {
+  it("writes settings snapshots in request order", async () => {
+    let finishFirst: () => void = () => undefined;
+    setClientSettings
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishFirst = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(undefined);
+
+    const firstSettings = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureFlash: false };
+    const secondSettings = { ...firstSettings, windowCapturePlaySound: false };
+    const first = __persistClientSettingsForTests(firstSettings);
+    const second = __persistClientSettingsForTests(secondSettings);
+
+    await Promise.resolve();
+    expect(setClientSettings).toHaveBeenCalledTimes(1);
+    finishFirst();
+    await Promise.all([first, second]);
+
+    expect(setClientSettings).toHaveBeenNthCalledWith(1, firstSettings);
+    expect(setClientSettings).toHaveBeenNthCalledWith(2, secondSettings);
+  });
+});
 
 describe("resolveEnvironmentIdentificationMode", () => {
   it("keeps identification hidden until client settings hydrate", () => {
