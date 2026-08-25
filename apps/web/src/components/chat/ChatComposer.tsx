@@ -61,6 +61,7 @@ import {
 } from "../../composerDraftStore";
 import {
   MAX_STASH_ENTRIES,
+  makePersistedStashAttachment,
   partitionStashAttachments,
   usePromptStashStore,
   type PromptStashEntry,
@@ -2384,13 +2385,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           );
           continue;
         }
-        candidateAttachments.push({
-          id: image.id,
-          name: image.name,
-          mimeType: result.image.mimeType,
-          sizeBytes: result.image.sizeBytes,
-          dataUrl: result.image.dataUrl,
-        });
+        candidateAttachments.push(makePersistedStashAttachment(image, result.image));
       }
       const { kept, droppedNames } = partitionStashAttachments(candidateAttachments);
 
