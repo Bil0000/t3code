@@ -3287,7 +3287,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           <div
                             key={image.id}
                             className={cn(
-                              "relative overflow-hidden rounded-lg border border-border/80 bg-background",
+                              "group/attachment relative overflow-hidden rounded-lg border border-border/80 bg-background",
                               image.source?.kind === "window-capture"
                                 ? "h-28 w-52 max-w-full"
                                 : "h-16 w-16",
@@ -3379,7 +3379,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             <Button
                               variant="ghost"
                               size="icon-xs"
-                              className="absolute right-1 top-1 bg-background/80 hover:bg-background/90"
+                              className="absolute right-1 top-1 bg-background/80 opacity-0 transition-opacity hover:bg-background/90 focus-visible:opacity-100 group-hover/attachment:opacity-100"
                               onClick={() => removeComposerImage(image.id)}
                               aria-label={`Remove ${image.name}`}
                             >
