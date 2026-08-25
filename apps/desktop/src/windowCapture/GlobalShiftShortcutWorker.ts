@@ -9,7 +9,7 @@ if (!(WINDOW_CAPTURE_MODIFIERS as readonly string[]).includes(requested ?? "")) 
 }
 const modifier = requested as WindowCaptureModifier;
 
-const stop = startGlobalShiftShortcut(
+startGlobalShiftShortcut(
   uIOhook,
   () => {
     process.send?.("trigger");
@@ -19,11 +19,7 @@ const stop = startGlobalShiftShortcut(
 
 process.send?.("ready");
 const shutdown = () => {
-  try {
-    stop();
-  } finally {
-    process.exit(0);
-  }
+  process.exit(0);
 };
 process.once("disconnect", shutdown);
 process.once("SIGTERM", shutdown);

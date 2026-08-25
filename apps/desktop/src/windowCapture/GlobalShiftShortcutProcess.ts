@@ -1,3 +1,4 @@
+// @effect-diagnostics globalTimers:off
 // @effect-diagnostics nodeBuiltinImport:off
 
 import * as NodeChildProcess from "node:child_process";
@@ -23,6 +24,9 @@ export function startGlobalShiftShortcutProcess(
       if (stopped) return;
       stopped = true;
       worker.kill();
+      const forceKill = setTimeout(() => worker.kill("SIGKILL"), 1_000);
+      forceKill.unref?.();
+      worker.once("exit", () => clearTimeout(forceKill));
     };
     const fail = (error: Error) => {
       if (stopped) return;
