@@ -101,7 +101,14 @@ export function WindowCaptureSettings() {
   const savedShortcut = settings.windowCaptureShortcut;
   const shortcutChanged = !sameWindowCaptureShortcut(candidate, savedShortcut);
   const displayShortcut = shortcutChanged ? candidate : (state?.shortcut ?? savedShortcut);
-  const canSaveShortcut = shortcutChanged && shortcutCheck.availability?.available === true;
+  const candidateConflict = shortcutChanged
+    ? windowCaptureKeybindingConflict(
+        effectiveWindowCaptureShortcut(state?.mode ?? "unavailable", candidate),
+        keybindings,
+      )
+    : null;
+  const canSaveShortcut =
+    shortcutChanged && candidateConflict === null && shortcutCheck.availability?.available === true;
 
   const refreshState = useCallback(async () => {
     if (bridge) setState(await bridge.getWindowCaptureState());
@@ -200,13 +207,15 @@ export function WindowCaptureSettings() {
 
   const shortcutStatus = recording
     ? "Press both keys of a modifier, like left and right Shift, or press a key chord. Esc cancels."
-    : shortcutCheck.status === "checking"
-      ? "Checking T3 Code, the system, and other apps..."
-      : shortcutCheck.availability
-        ? shortcutCheck.availability.available
-          ? (shortcutCheck.availability.message ?? "Available. Save to apply.")
-          : shortcutCheck.availability.message
-        : (state?.message ?? (state?.shortcutRegistered ? "Available and reserved." : undefined));
+    : candidateConflict
+      ? `T3 Code already uses this for "${commandLabel(candidateConflict)}".`
+      : shortcutCheck.status === "checking"
+        ? "Checking T3 Code, the system, and other apps..."
+        : shortcutCheck.availability
+          ? shortcutCheck.availability.available
+            ? (shortcutCheck.availability.message ?? "Available. Save to apply.")
+            : shortcutCheck.availability.message
+          : (state?.message ?? (state?.shortcutRegistered ? "Available and reserved." : undefined));
 
   return (
     <SettingsPageContainer>
@@ -271,7 +280,9 @@ export function WindowCaptureSettings() {
                     type="button"
                     size="xs"
                     disabled={!canSaveShortcut}
-                    onClick={() => void save({ windowCaptureShortcut: candidate })}
+                    onClick={() => {
+                      if (canSaveShortcut) void save({ windowCaptureShortcut: candidate });
+                    }}
                   >
                     Save
                   </Button>
