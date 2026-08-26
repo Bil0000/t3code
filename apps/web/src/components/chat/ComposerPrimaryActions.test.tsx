@@ -87,13 +87,18 @@ function renderRunningActions(showSendWhileRunning: boolean, hasSendableContent:
   );
 }
 
-function renderSendButton(sendDisabledReason: string | null = null) {
+function renderSendButton(
+  sendDisabledReason: string | null = null,
+  isSideQuestion = false,
+  showPlanFollowUpPrompt = false,
+) {
   return renderToStaticMarkup(
     createElement(ComposerPrimaryActions, {
       compact: true,
       pendingAction: null,
       isRunning: false,
-      showPlanFollowUpPrompt: false,
+      isSideQuestion,
+      showPlanFollowUpPrompt,
       promptHasText: true,
       isSendBusy: false,
       sendDisabledReason,
@@ -209,6 +214,13 @@ describe("ComposerPrimaryActions", () => {
 
     expect(markup).toContain("disabled");
     expect(markup).toContain('aria-label="Sending feedback"');
+  });
+
+  it("labels side questions as Ask even when a plan is active", () => {
+    const markup = renderSendButton(null, true, true);
+
+    expect(markup).toContain('aria-label="Ask side question"');
+    expect(markup).not.toContain("Refine");
   });
 
   it("offers Stop generation while a running turn is waiting for user input", () => {

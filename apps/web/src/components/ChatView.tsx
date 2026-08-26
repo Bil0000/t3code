@@ -1434,8 +1434,11 @@ function ChatViewContent(props: ChatViewProps) {
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
-  const [sideQuestionState, setSideQuestionState] = useState<SideQuestionState | null>(null);
-  const sideQuestionRequestRef = useRef(0);
+  const [sideQuestionsByThread, setSideQuestionsByThread] = useState<
+    Record<string, SideQuestionState>
+  >({});
+  const sideQuestionState = sideQuestionsByThread[routeThreadKey] ?? null;
+  const sideQuestionRequestRef = useRef<Record<string, number>>({});
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
@@ -5389,8 +5392,11 @@ function ChatViewContent(props: ChatViewProps) {
       routeKind === "server" ? parseSideQuestion(promptRef.current.trim()) : null;
     if (sideQuestion !== null) {
       if (sideQuestion.length === 0) {
-        if (sideQuestionState?.threadKey === routeThreadKey) {
-          setSideQuestionState({ ...sideQuestionState, visible: true });
+        if (sideQuestionState) {
+          setSideQuestionsByThread((current) => ({
+            ...current,
+            [routeThreadKey]: { ...sideQuestionState, visible: true },
+          }));
         } else {
           toastManager.add(
             stackedThreadToast({
@@ -5421,25 +5427,25 @@ function ChatViewContent(props: ChatViewProps) {
         );
         return;
       }
-      if (
-        sideQuestionState?.threadKey === routeThreadKey &&
-        sideQuestionState.status === "loading"
-      ) {
+      if (sideQuestionState?.status === "loading") {
         return;
       }
 
       promptRef.current = "";
       setComposerDraftPrompt(composerDraftTarget, "");
       composerRef.current?.resetCursorState();
-      const requestId = sideQuestionRequestRef.current + 1;
-      sideQuestionRequestRef.current = requestId;
-      setSideQuestionState({
-        threadKey: routeThreadKey,
-        question: sideQuestion,
-        visible: true,
-        status: "loading",
-        text: "",
-      });
+      const requestId = (sideQuestionRequestRef.current[routeThreadKey] ?? 0) + 1;
+      sideQuestionRequestRef.current[routeThreadKey] = requestId;
+      setSideQuestionsByThread((current) => ({
+        ...current,
+        [routeThreadKey]: {
+          threadKey: routeThreadKey,
+          question: sideQuestion,
+          visible: true,
+          status: "loading",
+          text: "",
+        },
+      }));
       const result = await askSideQuestion({
         environmentId,
         input: {
@@ -5447,26 +5453,38 @@ function ChatViewContent(props: ChatViewProps) {
           question: sideQuestion,
         },
       });
-      if (sideQuestionRequestRef.current !== requestId) {
+      if (sideQuestionRequestRef.current[routeThreadKey] !== requestId) {
         return;
       }
       if (result._tag === "Success") {
-        setSideQuestionState({
-          threadKey: routeThreadKey,
-          question: sideQuestion,
-          visible: true,
-          status: "success",
-          text: result.value.answer,
-        });
+        setSideQuestionsByThread((current) => ({
+          ...current,
+          [routeThreadKey]: {
+            threadKey: routeThreadKey,
+            question: sideQuestion,
+            visible: true,
+            status: "success",
+            text: result.value.answer,
+          },
+        }));
       } else {
         const error = squashAtomCommandFailure(result);
-        setSideQuestionState({
-          threadKey: routeThreadKey,
-          question: sideQuestion,
-          visible: true,
-          status: "error",
-          text: chatActionErrorMessage(error),
-        });
+        const currentDraft = useComposerDraftStore
+          .getState()
+          .getComposerDraft(composerDraftTarget)?.prompt;
+        if (!currentDraft) {
+          setComposerDraftPrompt(composerDraftTarget, `/btw ${sideQuestion}`);
+        }
+        setSideQuestionsByThread((current) => ({
+          ...current,
+          [routeThreadKey]: {
+            threadKey: routeThreadKey,
+            question: sideQuestion,
+            visible: true,
+            status: "error",
+            text: chatActionErrorMessage(error),
+          },
+        }));
       }
       return;
     }
@@ -7105,7 +7123,7 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
-                  {sideQuestionState?.threadKey === routeThreadKey && sideQuestionState.visible ? (
+                  {sideQuestionState?.visible ? (
                     <div
                       className="mx-auto mb-2 w-full max-w-3xl rounded-2xl border border-border/70 bg-popover p-4 shadow-lg"
                       aria-live="polite"
@@ -7122,7 +7140,10 @@ function ChatViewContent(props: ChatViewProps) {
                           aria-label="Close side answer"
                           className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
                           onClick={() =>
-                            setSideQuestionState({ ...sideQuestionState, visible: false })
+                            setSideQuestionsByThread((current) => ({
+                              ...current,
+                              [routeThreadKey]: { ...sideQuestionState, visible: false },
+                            }))
                           }
                         >
                           <XIcon className="size-4" />

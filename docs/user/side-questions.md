@@ -7,7 +7,7 @@ For example:
 /btw Why did we choose SQLite here?
 ```
 
-T3 Code sends the question and the completed thread context to a separate, tool-free provider
+T3 Code sends the question and the completed thread context to a separate, restricted provider
 request. The active turn keeps running. The side question does not enter the thread transcript or
 change what the main agent is doing.
 

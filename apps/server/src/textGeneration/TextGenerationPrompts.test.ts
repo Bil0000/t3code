@@ -7,6 +7,8 @@ import {
   buildSideQuestionPrompt,
   buildThreadTitlePrompt,
   formatSideQuestionContext,
+  isSideQuestionContextWithinLimit,
+  SIDE_QUESTION_CONTEXT_MAX_BYTES,
 } from "./TextGenerationPrompts.ts";
 import { normalizeCliError, sanitizeThreadTitle } from "./TextGenerationUtils.ts";
 import { TextGenerationError } from "@t3tools/contracts";
@@ -239,6 +241,15 @@ describe("buildThreadTitlePrompt", () => {
 });
 
 describe("side questions", () => {
+  it("rejects context above the provider-safe limit", () => {
+    expect(isSideQuestionContextWithinLimit("a".repeat(SIDE_QUESTION_CONTEXT_MAX_BYTES))).toBe(
+      true,
+    );
+    expect(isSideQuestionContextWithinLimit("a".repeat(SIDE_QUESTION_CONTEXT_MAX_BYTES + 1))).toBe(
+      false,
+    );
+  });
+
   it("uses completed messages and tool results without exposing streaming assistant text", () => {
     const context = formatSideQuestionContext({
       messages: [

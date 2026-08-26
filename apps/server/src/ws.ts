@@ -83,7 +83,10 @@ import {
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
-import { formatSideQuestionContext } from "./textGeneration/TextGenerationPrompts.ts";
+import {
+  formatSideQuestionContext,
+  isSideQuestionContextWithinLimit,
+} from "./textGeneration/TextGenerationPrompts.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -1296,10 +1299,18 @@ const makeWsRpcLayer = (
                 });
               }
 
+              const context = formatSideQuestionContext(thread.value);
+              if (!isSideQuestionContextWithinLimit(context)) {
+                return yield* new TextGenerationError({
+                  operation: "answerSideQuestion",
+                  detail: "The thread context is too large for a side question.",
+                });
+              }
+
               return yield* textGeneration.answerSideQuestion({
                 cwd: thread.value.worktreePath ?? project.value.workspaceRoot,
                 question: input.question,
-                context: formatSideQuestionContext(thread.value),
+                context,
                 modelSelection: thread.value.modelSelection,
               });
             }).pipe(

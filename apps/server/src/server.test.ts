@@ -122,6 +122,7 @@ import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAdapterRequestError } from "./provider/Errors.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import { SIDE_QUESTION_CONTEXT_MAX_BYTES } from "./textGeneration/TextGenerationPrompts.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
@@ -1481,6 +1482,60 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(received[0]?.question, "How does this work?");
       assert.deepEqual(received[0]?.modelSelection, thread.modelSelection);
       assert.equal(dispatchCount, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("rejects oversized side-question context before starting a provider", () =>
+    Effect.gen(function* () {
+      const snapshot = makeDefaultOrchestrationReadModel();
+      const thread = snapshot.threads[0]!;
+      const project = snapshot.projects[0]!;
+      const oversizedThread = {
+        ...thread,
+        messages: [
+          {
+            id: MessageId.make("oversized-side-question-context"),
+            role: "user" as const,
+            text: "a".repeat(SIDE_QUESTION_CONTEXT_MAX_BYTES),
+            turnId: null,
+            streaming: false,
+            createdAt: thread.createdAt,
+            updatedAt: thread.updatedAt,
+          },
+        ],
+      };
+      let generationCount = 0;
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadDetailById: () => Effect.succeed(Option.some(oversizedThread)),
+            getProjectShellById: () => Effect.succeed(Option.some(project)),
+          },
+          textGeneration: {
+            answerSideQuestion: () =>
+              Effect.sync(() => {
+                generationCount += 1;
+                return { answer: "unreachable" };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.askSideQuestion]({
+            threadId: defaultThreadId,
+            question: "Will this start a provider?",
+          }),
+        ).pipe(Effect.result),
+      );
+
+      assertTrue(result._tag === "Failure");
+      assertTrue(result.failure._tag === "TextGenerationError");
+      assert.include(result.failure.detail, "too large");
+      assert.equal(generationCount, 0);
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

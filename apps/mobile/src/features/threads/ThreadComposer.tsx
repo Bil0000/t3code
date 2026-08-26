@@ -1,3 +1,4 @@
+import { parseSideQuestion } from "@t3tools/client-runtime/state/orchestration";
 import type {
   EnvironmentId,
   MessageId,
@@ -333,7 +334,11 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
     props.selectedThread.session?.status === "starting";
 
   const sendLabel =
-    props.connectionState !== "connected" || props.queueCount > 0 ? "Queue" : "Send";
+    parseSideQuestion(props.draftMessage.trim()) !== null
+      ? "Ask"
+      : props.connectionState !== "connected" || props.queueCount > 0
+        ? "Queue"
+        : "Send";
   const currentModelSelection = props.selectedThread.modelSelection;
   const currentRuntimeMode = props.selectedThread.runtimeMode;
   const connectionStatus = composerConnectionStatus({

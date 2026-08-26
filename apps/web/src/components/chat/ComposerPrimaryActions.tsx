@@ -163,7 +163,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     );
   }
 
-  if (showPlanFollowUpPrompt) {
+  if (showPlanFollowUpPrompt && !isSideQuestion) {
     if (promptHasText) {
       return (
         <Button
@@ -248,7 +248,9 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
                 ? "Preparing worktree"
                 : isSendBusy
                   ? "Sending"
-                  : "Send message"
+                  : isSideQuestion
+                    ? "Ask side question"
+                    : "Send message"
       }
     >
       {stageBackdropVariant ? (

@@ -271,8 +271,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   });
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
-  const sideQuestionRequestRef = useRef(0);
-  const [sideQuestionState, setSideQuestionState] = useState<SideQuestionState | null>(null);
+  const sideQuestionRequestRef = useRef<Record<string, number>>({});
+  const [sideQuestionsByThread, setSideQuestionsByThread] = useState<
+    Record<string, SideQuestionState>
+  >({});
+  const sideQuestionState = sideQuestionsByThread[selectedThreadKey] ?? null;
+  const draftMessagesByThreadRef = useRef<Record<string, string>>({});
+  draftMessagesByThreadRef.current[selectedThreadKey] = props.draftMessage;
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   const composerOverlayRef = useRef<View>(null);
   const listRef = useRef<LegendListRef>(null);
@@ -544,9 +549,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     const sideQuestion = parseSideQuestion(props.draftMessage.trim());
     if (sideQuestion !== null) {
       if (sideQuestion.length === 0) {
-        setSideQuestionState((current) =>
-          current?.threadKey === selectedThreadKey
-            ? { ...current, visible: true }
+        setSideQuestionsByThread((current) => ({
+          ...current,
+          [selectedThreadKey]: current[selectedThreadKey]
+            ? { ...current[selectedThreadKey], visible: true }
             : {
                 threadKey: selectedThreadKey,
                 question: "",
@@ -554,36 +560,40 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                 status: "error",
                 text: "Add a question after /btw.",
               },
-        );
+        }));
         return null;
       }
       if (props.draftAttachments.length > 0) {
-        setSideQuestionState({
-          threadKey: selectedThreadKey,
-          question: sideQuestion,
-          visible: true,
-          status: "error",
-          text: "Side questions are text only. Remove draft images and try again.",
-        });
+        setSideQuestionsByThread((current) => ({
+          ...current,
+          [selectedThreadKey]: {
+            threadKey: selectedThreadKey,
+            question: sideQuestion,
+            visible: true,
+            status: "error",
+            text: "Side questions are text only. Remove draft images and try again.",
+          },
+        }));
         return null;
       }
-      if (
-        sideQuestionState?.threadKey === selectedThreadKey &&
-        sideQuestionState.status === "loading"
-      ) {
+      if (sideQuestionState?.status === "loading") {
         return null;
       }
 
       props.onChangeDraftMessage("");
-      const requestId = sideQuestionRequestRef.current + 1;
-      sideQuestionRequestRef.current = requestId;
-      setSideQuestionState({
-        threadKey: selectedThreadKey,
-        question: sideQuestion,
-        visible: true,
-        status: "loading",
-        text: "",
-      });
+      draftMessagesByThreadRef.current[selectedThreadKey] = "";
+      const requestId = (sideQuestionRequestRef.current[selectedThreadKey] ?? 0) + 1;
+      sideQuestionRequestRef.current[selectedThreadKey] = requestId;
+      setSideQuestionsByThread((current) => ({
+        ...current,
+        [selectedThreadKey]: {
+          threadKey: selectedThreadKey,
+          question: sideQuestion,
+          visible: true,
+          status: "loading",
+          text: "",
+        },
+      }));
       const result = await askSideQuestion({
         environmentId: props.environmentId,
         input: {
@@ -591,26 +601,36 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           question: sideQuestion,
         },
       });
-      if (sideQuestionRequestRef.current !== requestId) {
+      if (sideQuestionRequestRef.current[selectedThreadKey] !== requestId) {
         return null;
       }
       if (result._tag === "Success") {
-        setSideQuestionState({
-          threadKey: selectedThreadKey,
-          question: sideQuestion,
-          visible: true,
-          status: "success",
-          text: result.value.answer,
-        });
+        setSideQuestionsByThread((current) => ({
+          ...current,
+          [selectedThreadKey]: {
+            threadKey: selectedThreadKey,
+            question: sideQuestion,
+            visible: true,
+            status: "success",
+            text: result.value.answer,
+          },
+        }));
       } else {
         const error = squashAtomCommandFailure(result);
-        setSideQuestionState({
-          threadKey: selectedThreadKey,
-          question: sideQuestion,
-          visible: true,
-          status: "error",
-          text: error instanceof Error ? error.message : "The side question could not be answered.",
-        });
+        if (!draftMessagesByThreadRef.current[selectedThreadKey]) {
+          props.onChangeDraftMessage(`/btw ${sideQuestion}`);
+        }
+        setSideQuestionsByThread((current) => ({
+          ...current,
+          [selectedThreadKey]: {
+            threadKey: selectedThreadKey,
+            question: sideQuestion,
+            visible: true,
+            status: "error",
+            text:
+              error instanceof Error ? error.message : "The side question could not be answered.",
+          },
+        }));
       }
       return null;
     }
@@ -795,7 +815,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               </Animated.View>
             ) : null}
             <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
-              {sideQuestionState?.threadKey === selectedThreadKey && sideQuestionState.visible ? (
+              {sideQuestionState?.visible ? (
                 <Animated.View
                   className="mx-4 mb-3 rounded-2xl border border-border bg-card p-4"
                   entering={FadeInDown.duration(220)}
@@ -816,9 +836,10 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       accessibilityRole="button"
                       accessibilityLabel="Close side answer"
                       onPress={() =>
-                        setSideQuestionState((current) =>
-                          current ? { ...current, visible: false } : current,
-                        )
+                        setSideQuestionsByThread((current) => ({
+                          ...current,
+                          [selectedThreadKey]: { ...sideQuestionState, visible: false },
+                        }))
                       }
                     >
                       <Text className="text-sm text-foreground-muted">Close</Text>
