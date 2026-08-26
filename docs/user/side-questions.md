@@ -16,5 +16,7 @@ Matching questions from connected clients share one request. Different questions
 The answer appears in a card above the composer. Close the card when you are done. Type `/btw`
 without a question to reopen the latest side-question card for that thread in the current app view.
 
+Side questions are unavailable while the agent is waiting for required user input.
+
 Side questions accept text only. They use the model selected for the thread and work with every
 provider that T3 Code supports.
