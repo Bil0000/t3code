@@ -1864,10 +1864,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             trigger.rangeEnd,
             replacement,
           );
-          applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
-            expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
-          });
-          setComposerHighlightedItemId(null);
+          const applied = applyPromptReplacement(
+            trigger.rangeStart,
+            replacementRangeEnd,
+            replacement,
+            {
+              expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+            },
+          );
+          if (applied) {
+            setComposerHighlightedItemId(null);
+          }
           return;
         }
         void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");

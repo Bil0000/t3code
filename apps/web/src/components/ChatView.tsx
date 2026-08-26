@@ -7155,7 +7155,7 @@ function ChatViewContent(props: ChatViewProps) {
                       </div>
                       {sideQuestionState.status === "loading" ? (
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                          <Spinner className="size-4" />
+                          <Spinner aria-hidden="true" className="size-4" />
                           Thinking…
                         </div>
                       ) : sideQuestionState.status === "error" ? (
