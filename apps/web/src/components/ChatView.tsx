@@ -5388,8 +5388,7 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
-    const sideQuestion =
-      routeKind === "server" ? parseSideQuestion(promptRef.current.trim()) : null;
+    const sideQuestion = isServerThread ? parseSideQuestion(promptRef.current.trim()) : null;
     if (sideQuestion !== null) {
       if (sideQuestion.length === 0) {
         if (sideQuestionState) {

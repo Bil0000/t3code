@@ -1443,7 +1443,36 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const project = snapshot.projects[0]!;
       const received: Array<TextGeneration.SideQuestionGenerationInput> = [];
       let dispatchCount = 0;
+      const currentThread = {
+        ...thread,
+        messages: [
+          {
+            id: MessageId.make("current-side-question-context"),
+            role: "assistant" as const,
+            text: "Current context",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-01-01T00:00:02.000Z",
+            updatedAt: "2026-01-01T00:00:02.000Z",
+          },
+        ],
+      };
+      const olderThread = {
+        ...thread,
+        messages: [
+          {
+            id: MessageId.make("older-side-question-context"),
+            role: "user" as const,
+            text: "Older context",
+            turnId: null,
+            streaming: false,
+            createdAt: "2026-01-01T00:00:01.000Z",
+            updatedAt: "2026-01-01T00:00:01.000Z",
+          },
+        ],
+      };
 
+      let pageReadCount = 0;
       yield* buildAppUnderTest({
         layers: {
           orchestrationEngine: {
@@ -1454,7 +1483,20 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               }),
           },
           projectionSnapshotQuery: {
-            getThreadDetailById: () => Effect.succeed(Option.some(thread)),
+            getThreadDetailSnapshot: () =>
+              Effect.sync(() => {
+                pageReadCount += 1;
+                const firstPage = pageReadCount === 1;
+                return Option.some({
+                  snapshotSequence: 0,
+                  thread: firstPage ? currentThread : olderThread,
+                  page: {
+                    beforeCursor: firstPage ? "older-page" : null,
+                    hasMore: firstPage,
+                    snapshotSequence: 0,
+                  },
+                });
+              }),
             getProjectShellById: () => Effect.succeed(Option.some(project)),
           },
           textGeneration: {
@@ -1482,6 +1524,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(received[0]?.question, "How does this work?");
       assert.deepEqual(received[0]?.modelSelection, thread.modelSelection);
       assert.equal(dispatchCount, 0);
+      assert.equal(pageReadCount, 2);
+      assert.isBelow(
+        received[0]!.context.indexOf("Older context"),
+        received[0]!.context.indexOf("Current context"),
+      );
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
@@ -1509,7 +1556,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       yield* buildAppUnderTest({
         layers: {
           projectionSnapshotQuery: {
-            getThreadDetailById: () => Effect.succeed(Option.some(oversizedThread)),
+            getThreadDetailSnapshot: () =>
+              Effect.succeed(
+                Option.some({
+                  snapshotSequence: 0,
+                  thread: oversizedThread,
+                  page: { beforeCursor: null, hasMore: false, snapshotSequence: 0 },
+                }),
+              ),
             getProjectShellById: () => Effect.succeed(Option.some(project)),
           },
           textGeneration: {

@@ -175,6 +175,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           "--tools",
           "",
           "--dangerously-skip-permissions",
+          "--disallowedTools",
+          "mcp__*",
         ],
         { env: claudeEnvironment },
       );

@@ -41,6 +41,10 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     askSideQuestion: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:orchestration:ask-side-question",
       tag: ORCHESTRATION_WS_METHODS.askSideQuestion,
+      concurrency: {
+        mode: "singleFlight",
+        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
+      },
     }),
   };
 }

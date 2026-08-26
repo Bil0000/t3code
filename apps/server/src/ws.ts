@@ -143,6 +143,8 @@ import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 const isTextGenerationError = Schema.is(TextGenerationError);
+const SIDE_QUESTION_CONTEXT_TURNS_PER_PAGE = 50;
+const SIDE_QUESTION_CONTEXT_MAX_PAGES = 20;
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1283,16 +1285,57 @@ const makeWsRpcLayer = (
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.askSideQuestion,
             Effect.gen(function* () {
-              const thread = yield* projectionSnapshotQuery.getThreadDetailById(input.threadId);
-              if (Option.isNone(thread)) {
+              const firstPage = yield* projectionSnapshotQuery.getThreadDetailSnapshot(
+                input.threadId,
+                { turnLimit: SIDE_QUESTION_CONTEXT_TURNS_PER_PAGE },
+              );
+              if (Option.isNone(firstPage)) {
                 return yield* new TextGenerationError({
                   operation: "answerSideQuestion",
                   detail: "Thread was not found.",
                 });
               }
-              const project = yield* projectionSnapshotQuery.getProjectShellById(
-                thread.value.projectId,
-              );
+
+              const thread = firstPage.value.thread;
+              let context = formatSideQuestionContext(thread);
+              if (!isSideQuestionContextWithinLimit(context)) {
+                return yield* new TextGenerationError({
+                  operation: "answerSideQuestion",
+                  detail: "The thread context is too large for a side question.",
+                });
+              }
+              let beforeCursor = firstPage.value.page?.beforeCursor ?? null;
+              let pageCount = 1;
+              while (beforeCursor !== null) {
+                if (pageCount >= SIDE_QUESTION_CONTEXT_MAX_PAGES) {
+                  return yield* new TextGenerationError({
+                    operation: "answerSideQuestion",
+                    detail: "The thread context is too large for a side question.",
+                  });
+                }
+                const page = yield* projectionSnapshotQuery.getThreadDetailSnapshot(
+                  input.threadId,
+                  { turnLimit: SIDE_QUESTION_CONTEXT_TURNS_PER_PAGE, beforeCursor },
+                );
+                if (Option.isNone(page)) {
+                  return yield* new TextGenerationError({
+                    operation: "answerSideQuestion",
+                    detail: "Thread was not found.",
+                  });
+                }
+                const olderContext = formatSideQuestionContext(page.value.thread);
+                context = [olderContext, context].filter(Boolean).join("\n\n");
+                if (!isSideQuestionContextWithinLimit(context)) {
+                  return yield* new TextGenerationError({
+                    operation: "answerSideQuestion",
+                    detail: "The thread context is too large for a side question.",
+                  });
+                }
+                beforeCursor = page.value.page?.beforeCursor ?? null;
+                pageCount += 1;
+              }
+
+              const project = yield* projectionSnapshotQuery.getProjectShellById(thread.projectId);
               if (Option.isNone(project)) {
                 return yield* new TextGenerationError({
                   operation: "answerSideQuestion",
@@ -1300,19 +1343,11 @@ const makeWsRpcLayer = (
                 });
               }
 
-              const context = formatSideQuestionContext(thread.value);
-              if (!isSideQuestionContextWithinLimit(context)) {
-                return yield* new TextGenerationError({
-                  operation: "answerSideQuestion",
-                  detail: "The thread context is too large for a side question.",
-                });
-              }
-
               return yield* textGeneration.answerSideQuestion({
-                cwd: thread.value.worktreePath ?? project.value.workspaceRoot,
+                cwd: thread.worktreePath ?? project.value.workspaceRoot,
                 question: input.question,
                 context,
-                modelSelection: thread.value.modelSelection,
+                modelSelection: thread.modelSelection,
               });
             }).pipe(
               Effect.mapError((cause) =>

@@ -321,6 +321,30 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
     ),
   );
 
+  it.effect("disables built-in and MCP tools for side questions", () =>
+    withFakeClaudeEnv(
+      {
+        output: JSON.stringify({
+          structured_output: { answer: "The thread chose SQLite for local durability." },
+        }),
+        argsMustContain: "--disallowedTools mcp__*",
+      },
+      (textGeneration) =>
+        Effect.gen(function* () {
+          const generated = yield* textGeneration.answerSideQuestion({
+            cwd: process.cwd(),
+            question: "Why SQLite?",
+            context: "USER: Use SQLite for local durability.",
+            modelSelection: createModelSelection(
+              ProviderInstanceId.make("claudeAgent"),
+              "claude-sonnet-4-6",
+            ),
+          });
+
+          expect(generated.answer).toBe("The thread chose SQLite for local durability.");
+        }),
+    ),
+  );
   it.effect("runs Claude text generation with the configured CLAUDE_CONFIG_DIR", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
