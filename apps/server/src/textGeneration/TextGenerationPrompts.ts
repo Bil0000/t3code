@@ -7,7 +7,7 @@
  * @module textGenerationPrompts
  */
 import * as Schema from "effect/Schema";
-import { Buffer } from "node:buffer";
+import * as NodeBuffer from "node:buffer";
 import type { ChatAttachment } from "@t3tools/contracts";
 
 import { limitSection } from "./TextGenerationUtils.ts";
@@ -336,7 +336,7 @@ interface SideQuestionContextInput {
 export const SIDE_QUESTION_CONTEXT_MAX_BYTES = 512 * 1024;
 
 export function isSideQuestionContextWithinLimit(context: string): boolean {
-  return Buffer.byteLength(context, "utf8") <= SIDE_QUESTION_CONTEXT_MAX_BYTES;
+  return NodeBuffer.Buffer.byteLength(context, "utf8") <= SIDE_QUESTION_CONTEXT_MAX_BYTES;
 }
 
 export function formatSideQuestionContext(input: SideQuestionContextInput): string {

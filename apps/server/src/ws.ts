@@ -142,6 +142,7 @@ import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
+const isTextGenerationError = Schema.is(TextGenerationError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1315,7 +1316,7 @@ const makeWsRpcLayer = (
               });
             }).pipe(
               Effect.mapError((cause) =>
-                Schema.is(TextGenerationError)(cause)
+                isTextGenerationError(cause)
                   ? cause
                   : new TextGenerationError({
                       operation: "answerSideQuestion",
