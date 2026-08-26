@@ -1292,7 +1292,7 @@ const makeWsRpcLayer = (
               if (Option.isNone(firstPage)) {
                 return yield* new TextGenerationError({
                   operation: "answerSideQuestion",
-                  detail: "Thread was not found.",
+                  detail: `Thread '${input.threadId}' was not found.`,
                 });
               }
 
@@ -1320,7 +1320,7 @@ const makeWsRpcLayer = (
                 if (Option.isNone(page)) {
                   return yield* new TextGenerationError({
                     operation: "answerSideQuestion",
-                    detail: "Thread was not found.",
+                    detail: `Thread '${input.threadId}' was not found.`,
                   });
                 }
                 const olderContext = formatSideQuestionContext(page.value.thread);
@@ -1339,7 +1339,7 @@ const makeWsRpcLayer = (
               if (Option.isNone(project)) {
                 return yield* new TextGenerationError({
                   operation: "answerSideQuestion",
-                  detail: "Thread project was not found.",
+                  detail: `Thread project '${thread.projectId}' was not found.`,
                 });
               }
 

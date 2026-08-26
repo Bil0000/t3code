@@ -7124,7 +7124,7 @@ function ChatViewContent(props: ChatViewProps) {
                   )}
                   {sideQuestionState?.visible ? (
                     <div
-                      className="mx-auto mb-2 w-full max-w-3xl rounded-2xl border border-border/70 bg-popover p-4 shadow-lg"
+                      className="alert-glass mx-auto mb-2 w-full max-w-3xl rounded-[22px] border border-border/70 p-4 shadow-lg"
                       aria-live="polite"
                     >
                       <div className="mb-2 flex items-start justify-between gap-3">
@@ -7134,10 +7134,11 @@ function ChatViewContent(props: ChatViewProps) {
                             {sideQuestionState.question}
                           </div>
                         </div>
-                        <button
-                          type="button"
+                        <Button
+                          variant="ghost-muted"
+                          size="icon-xs"
                           aria-label="Close side answer"
-                          className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                          className="shrink-0 rounded-full"
                           onClick={() =>
                             setSideQuestionsByThread((current) => ({
                               ...current,
@@ -7145,8 +7146,8 @@ function ChatViewContent(props: ChatViewProps) {
                             }))
                           }
                         >
-                          <XIcon className="size-4" />
-                        </button>
+                          <XIcon className="size-3.5" />
+                        </Button>
                       </div>
                       {sideQuestionState.status === "loading" ? (
                         <div className="flex items-center gap-2 text-muted-foreground text-sm">
@@ -7156,12 +7157,14 @@ function ChatViewContent(props: ChatViewProps) {
                       ) : sideQuestionState.status === "error" ? (
                         <div className="text-destructive text-sm">{sideQuestionState.text}</div>
                       ) : (
-                        <ChatMarkdown
-                          text={sideQuestionState.text}
-                          cwd={activeThread.worktreePath ?? activeProject?.workspaceRoot}
-                          threadRef={routeThreadRef}
-                          className="text-sm"
-                        />
+                        <div className="max-h-[40vh] overflow-y-auto">
+                          <ChatMarkdown
+                            text={sideQuestionState.text}
+                            cwd={activeThread.worktreePath ?? activeProject?.workspaceRoot}
+                            threadRef={routeThreadRef}
+                            className="text-sm"
+                          />
+                        </div>
                       )}
                     </div>
                   ) : null}

@@ -300,6 +300,7 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
           },
         }),
         stdinMustContain: "Please investigate reconnect failures after restarting the session.",
+        argsMustContain: "--tools  --dangerously-skip-permissions --disallowedTools mcp__*",
       },
       (textGeneration) =>
         Effect.gen(function* () {
@@ -327,7 +328,7 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
         output: JSON.stringify({
           structured_output: { answer: "The thread chose SQLite for local durability." },
         }),
-        argsMustContain: "--disallowedTools mcp__*",
+        argsMustContain: "--tools  --dangerously-skip-permissions --disallowedTools mcp__*",
       },
       (textGeneration) =>
         Effect.gen(function* () {
