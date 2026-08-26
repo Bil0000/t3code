@@ -11,6 +11,8 @@ T3 Code sends the question and the completed thread context to a separate, restr
 request. The active turn keeps running. The side question does not enter the thread transcript or
 change what the main agent is doing.
 
+Matching questions from connected clients share one request. Different questions get separate answers.
+
 The answer appears in a card above the composer. Close the card when you are done. Type `/btw`
 without a question to reopen the latest side-question card for that thread in the current app view.
 
