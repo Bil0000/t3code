@@ -20,7 +20,6 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
-import { parseSideQuestion } from "@t3tools/client-runtime/state/orchestration";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import {
@@ -43,6 +42,7 @@ import {
   composerSubmissionIntentForEnter,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
+  parseComposerSideQuestion,
   replaceTextRange,
 } from "../../composer-logic";
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
@@ -1365,7 +1365,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : null,
     [activePendingIsResponding, activePendingProgress, activePendingResolvedAnswers],
   );
-  const isSideQuestionDraft = isServerThread && parseSideQuestion(prompt.trim()) !== null;
+  const isSideQuestionDraft =
+    parseComposerSideQuestion(prompt.trim(), {
+      isServerThread,
+      hasPendingUserInput: activePendingProgress !== null,
+    }) !== null;
   const collapsedComposerPrimaryActionDisabled =
     (phase === "running" && !isSideQuestionDraft) ||
     isSendBusy ||

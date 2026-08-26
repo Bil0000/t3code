@@ -104,6 +104,7 @@ import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
 import {
   isThreadDetailEvent,
+  makeSideQuestionSingleFlight,
   resolveAvailableEditorsForConfig,
   resolveFileManagerRevealKindForConfig,
 } from "./ws.ts";
@@ -1436,6 +1437,98 @@ const NodeHttpServerTestWithWsDeflate = HttpServer.layerTestClient.pipe(
 );
 
 it.layer(NodeServices.layer)("server router seam", (it) => {
+  it.effect("coalesces matching side questions without sharing different answers", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const input = { threadId: defaultThreadId, question: "Same question" };
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let generationCount = 0;
+        const generation = Effect.gen(function* () {
+          generationCount += 1;
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+          return { answer: "Shared answer" };
+        });
+
+        const first = yield* singleFlight(input, generation).pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        const second = yield* singleFlight(input, generation).pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(release, undefined);
+
+        assert.deepEqual(yield* Fiber.join(first), { answer: "Shared answer" });
+        assert.deepEqual(yield* Fiber.join(second), { answer: "Shared answer" });
+        assert.equal(generationCount, 1);
+
+        const firstDistinctStarted = yield* Deferred.make<void>();
+        const secondDistinctStarted = yield* Deferred.make<void>();
+        const releaseDistinct = yield* Deferred.make<void>();
+        const firstDistinct = yield* singleFlight(
+          { threadId: defaultThreadId, question: "First question" },
+          Deferred.succeed(firstDistinctStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseDistinct)),
+            Effect.as({ answer: "First answer" }),
+          ),
+        ).pipe(Effect.forkChild);
+        const secondDistinct = yield* singleFlight(
+          { threadId: defaultThreadId, question: "Second question" },
+          Deferred.succeed(secondDistinctStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(releaseDistinct)),
+            Effect.as({ answer: "Second answer" }),
+          ),
+        ).pipe(Effect.forkChild);
+        yield* Deferred.await(firstDistinctStarted);
+        yield* Deferred.await(secondDistinctStarted);
+        yield* Deferred.succeed(releaseDistinct, undefined);
+
+        assert.deepEqual(yield* Fiber.join(firstDistinct), { answer: "First answer" });
+        assert.deepEqual(yield* Fiber.join(secondDistinct), { answer: "Second answer" });
+      }),
+    ),
+  );
+
+  it.effect("keeps shared side-question work alive after the first caller is canceled", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const input = { threadId: defaultThreadId, question: "Why SQLite?" };
+        const started = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let generationCount = 0;
+        const generation = Effect.gen(function* () {
+          generationCount += 1;
+          yield* Deferred.succeed(started, undefined);
+          yield* Deferred.await(release);
+          return { answer: "For local durability." };
+        });
+
+        const owner = yield* singleFlight(input, generation).pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        const follower = yield* singleFlight(input, generation).pipe(Effect.forkChild);
+        yield* Effect.yieldNow;
+        yield* Fiber.interrupt(owner);
+        yield* Deferred.succeed(release, undefined);
+
+        assert.deepEqual(yield* Fiber.join(follower), { answer: "For local durability." });
+        assert.equal(generationCount, 1);
+
+        assert.deepEqual(
+          yield* singleFlight(
+            input,
+            Effect.sync(() => {
+              generationCount += 1;
+              return { answer: "Fresh answer" };
+            }),
+          ),
+          { answer: "Fresh answer" },
+        );
+        assert.equal(generationCount, 2);
+      }),
+    ),
+  );
+
   it.effect("answers a side question without dispatching an orchestration command", () =>
     Effect.gen(function* () {
       const snapshot = makeDefaultOrchestrationReadModel();

@@ -9,6 +9,10 @@ export function parseSideQuestion(value: string): string | null {
   return match ? (match[1]?.trim() ?? "") : null;
 }
 
+export function sideQuestionResponseVisibility(currentVisible: boolean | undefined): boolean {
+  return currentVisible ?? true;
+}
+
 export function createOrchestrationEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
 ) {
@@ -43,7 +47,8 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
       tag: ORCHESTRATION_WS_METHODS.askSideQuestion,
       concurrency: {
         mode: "singleFlight",
-        key: ({ environmentId, input }) => JSON.stringify([environmentId, input.threadId]),
+        key: ({ environmentId, input }) =>
+          JSON.stringify([environmentId, input.threadId, input.question]),
       },
     }),
   };

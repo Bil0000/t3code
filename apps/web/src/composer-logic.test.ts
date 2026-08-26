@@ -7,6 +7,7 @@ import {
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   isCollapsedCursorAdjacentToInlineToken,
+  parseComposerSideQuestion,
   parseStandaloneComposerSlashCommand,
   replaceTextRange,
 } from "./composer-logic";
@@ -66,6 +67,23 @@ describe("composerSubmissionIntentForEnter", () => {
         isDraftThread: false,
       }),
     ).toBe("foreground");
+  });
+});
+
+describe("side-question composer state", () => {
+  it("keeps /btw text on the pending user-input response path", () => {
+    expect(
+      parseComposerSideQuestion("/btw custom answer", {
+        isServerThread: true,
+        hasPendingUserInput: true,
+      }),
+    ).toBeNull();
+    expect(
+      parseComposerSideQuestion("/btw side question", {
+        isServerThread: true,
+        hasPendingUserInput: false,
+      }),
+    ).toBe("side question");
   });
 });
 

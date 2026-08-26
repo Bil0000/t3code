@@ -1,3 +1,4 @@
+import { parseSideQuestion } from "@t3tools/client-runtime/state/orchestration";
 import { splitPromptIntoComposerSegments } from "./composer-editor-mentions";
 import { INLINE_TERMINAL_CONTEXT_PLACEHOLDER } from "./lib/terminalContext";
 
@@ -22,6 +23,13 @@ export function composerSubmissionIntentForEnter(input: {
     return null;
   }
   return input.modifierKey && input.isDraftThread ? "background" : "foreground";
+}
+
+export function parseComposerSideQuestion(
+  value: string,
+  input: { isServerThread: boolean; hasPendingUserInput: boolean },
+): string | null {
+  return input.isServerThread && !input.hasPendingUserInput ? parseSideQuestion(value) : null;
 }
 
 const isInlineTokenSegment = (

@@ -1,6 +1,7 @@
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -8,6 +9,7 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -145,6 +147,80 @@ const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchComma
 const isTextGenerationError = Schema.is(TextGenerationError);
 const SIDE_QUESTION_CONTEXT_TURNS_PER_PAGE = 50;
 const SIDE_QUESTION_CONTEXT_MAX_PAGES = 20;
+
+type SideQuestionSingleFlightInput = {
+  readonly threadId: ThreadId;
+  readonly question: string;
+};
+
+type SideQuestionSingleFlight = <R>(
+  input: SideQuestionSingleFlightInput,
+  effect: Effect.Effect<TextGeneration.SideQuestionGenerationResult, TextGenerationError, R>,
+) => Effect.Effect<TextGeneration.SideQuestionGenerationResult, TextGenerationError, R>;
+
+type SideQuestionDeferred = Deferred.Deferred<
+  TextGeneration.SideQuestionGenerationResult,
+  TextGenerationError
+>;
+
+type SideQuestionsInFlight = Map<ThreadId, Map<string, SideQuestionDeferred>>;
+
+export const makeSideQuestionSingleFlight: Effect.Effect<
+  SideQuestionSingleFlight,
+  never,
+  Scope.Scope
+> = Effect.gen(function* () {
+  const scope = yield* Effect.scope;
+  const inFlight = yield* Ref.make<SideQuestionsInFlight>(new Map());
+
+  return (input, effect) =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const candidate = yield* Deferred.make<
+          TextGeneration.SideQuestionGenerationResult,
+          TextGenerationError
+        >();
+        const [deferred, ownsRequest] = yield* Ref.modify<
+          SideQuestionsInFlight,
+          readonly [SideQuestionDeferred, boolean]
+        >(inFlight, (current) => {
+          const threadRequests = current.get(input.threadId);
+          const existing = threadRequests?.get(input.question);
+          if (existing) return [[existing, false] as const, current];
+
+          const nextThreadRequests = new Map(threadRequests);
+          nextThreadRequests.set(input.question, candidate);
+          const next = new Map(current);
+          next.set(input.threadId, nextThreadRequests);
+          return [[candidate, true] as const, next];
+        });
+
+        if (ownsRequest) {
+          yield* Deferred.into(effect, deferred).pipe(
+            Effect.ensuring(
+              Ref.update(inFlight, (current) => {
+                const threadRequests = current.get(input.threadId);
+                if (threadRequests?.get(input.question) !== deferred) return current;
+
+                const nextThreadRequests = new Map(threadRequests);
+                nextThreadRequests.delete(input.question);
+                const next = new Map(current);
+                if (nextThreadRequests.size === 0) {
+                  next.delete(input.threadId);
+                } else {
+                  next.set(input.threadId, nextThreadRequests);
+                }
+                return next;
+              }),
+            ),
+            Effect.forkIn(scope),
+          );
+        }
+
+        return yield* restore(Deferred.await(deferred));
+      }),
+    );
+});
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -433,6 +509,7 @@ const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
+  sideQuestionSingleFlight: SideQuestionSingleFlight,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -1359,6 +1436,7 @@ const makeWsRpcLayer = (
                       cause,
                     }),
               ),
+              (effect) => sideQuestionSingleFlight(input, effect),
             ),
             { "rpc.aggregate": "orchestration" },
           ),
@@ -2553,6 +2631,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
+    const sideQuestionSingleFlight = yield* makeSideQuestionSingleFlight;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2579,7 +2658,12 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(session, clientOrigin, previewAutomationBroker).pipe(
+            makeWsRpcLayer(
+              session,
+              clientOrigin,
+              previewAutomationBroker,
+              sideQuestionSingleFlight,
+            ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),

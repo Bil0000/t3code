@@ -81,8 +81,8 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
-import { parseSideQuestion } from "@t3tools/client-runtime/state/orchestration";
 import * as Cause from "effect/Cause";
+import { sideQuestionResponseVisibility } from "@t3tools/client-runtime/state/orchestration";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
@@ -91,6 +91,7 @@ import { useDiffPanelStore } from "../diffPanelStore";
 import {
   collapseExpandedComposerCursor,
   type ComposerSubmissionIntent,
+  parseComposerSideQuestion,
   parseStandaloneComposerSlashCommand,
 } from "../composer-logic";
 import {
@@ -5388,7 +5389,10 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
-    const sideQuestion = isServerThread ? parseSideQuestion(promptRef.current.trim()) : null;
+    const sideQuestion = parseComposerSideQuestion(promptRef.current.trim(), {
+      isServerThread,
+      hasPendingUserInput: activePendingProgress !== null,
+    });
     if (sideQuestion !== null) {
       if (sideQuestion.length === 0) {
         if (sideQuestionState) {
@@ -5461,7 +5465,7 @@ function ChatViewContent(props: ChatViewProps) {
           [routeThreadKey]: {
             threadKey: routeThreadKey,
             question: sideQuestion,
-            visible: true,
+            visible: sideQuestionResponseVisibility(current[routeThreadKey]?.visible),
             status: "success",
             text: result.value.answer,
           },
@@ -5479,7 +5483,7 @@ function ChatViewContent(props: ChatViewProps) {
           [routeThreadKey]: {
             threadKey: routeThreadKey,
             question: sideQuestion,
-            visible: true,
+            visible: sideQuestionResponseVisibility(current[routeThreadKey]?.visible),
             status: "error",
             text: chatActionErrorMessage(error),
           },

@@ -1,5 +1,8 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
-import { parseSideQuestion } from "@t3tools/client-runtime/state/orchestration";
+import {
+  parseSideQuestion,
+  sideQuestionResponseVisibility,
+} from "@t3tools/client-runtime/state/orchestration";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
@@ -610,7 +613,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           [selectedThreadKey]: {
             threadKey: selectedThreadKey,
             question: sideQuestion,
-            visible: true,
+            visible: sideQuestionResponseVisibility(current[selectedThreadKey]?.visible),
             status: "success",
             text: result.value.answer,
           },
@@ -625,7 +628,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           [selectedThreadKey]: {
             threadKey: selectedThreadKey,
             question: sideQuestion,
-            visible: true,
+            visible: sideQuestionResponseVisibility(current[selectedThreadKey]?.visible),
             status: "error",
             text:
               error instanceof Error ? error.message : "The side question could not be answered.",
