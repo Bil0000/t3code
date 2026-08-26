@@ -51,6 +51,7 @@ import {
   VcsStatusInput,
   VcsStatusResult,
   VcsStatusStreamEvent,
+  TextGenerationError,
 } from "./git.ts";
 import {
   ReviewDiffFileContentsInput,
@@ -63,6 +64,7 @@ import { KeybindingsConfigError } from "./keybindings.ts";
 import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
+  OrchestrationAskSideQuestionInput,
   OrchestrationDispatchCommandError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetFullThreadDiffInput,
@@ -912,6 +914,15 @@ export const WsOrchestrationDispatchCommandRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationAskSideQuestionRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.askSideQuestion,
+  {
+    payload: OrchestrationAskSideQuestionInput,
+    success: OrchestrationRpcSchemas.askSideQuestion.output,
+    error: Schema.Union([TextGenerationError, EnvironmentAuthorizationError]),
+  },
+);
+
 export const WsOrchestrationGetWorkflowScriptRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getWorkflowScript,
   {
@@ -1113,6 +1124,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeBackgroundPolicyRpc,
   WsSubscribeResourceTelemetryRpc,
   WsOrchestrationDispatchCommandRpc,
+  WsOrchestrationAskSideQuestionRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,

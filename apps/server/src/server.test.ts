@@ -121,6 +121,7 @@ import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderService from "./provider/Services/ProviderService.ts";
 import { ProviderAdapterRequestError } from "./provider/Errors.ts";
 import { makeManualOnlyProviderMaintenanceCapabilities } from "./provider/providerMaintenance.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as ServerRuntimeStartup from "./serverRuntimeStartup.ts";
 import * as ServiceLauncherClient from "./cloud/serviceLauncherClient.ts";
@@ -394,6 +395,7 @@ const buildAppUnderTest = (options?: {
     keybindings?: Partial<Keybindings.Keybindings["Service"]>;
     providerRegistry?: Partial<ProviderRegistry.ProviderRegistry["Service"]>;
     providerService?: Partial<ProviderService.ProviderService["Service"]>;
+    textGeneration?: Partial<TextGeneration.TextGeneration["Service"]>;
     serverSettings?: Partial<ServerSettings.ServerSettingsService["Service"]>;
     externalLauncher?: Partial<ExternalLauncher.ExternalLauncher["Service"]>;
     vcsDriver?: Partial<VcsDriver.VcsDriver["Service"]>;
@@ -652,6 +654,9 @@ const buildAppUnderTest = (options?: {
           Layer.mock(ProviderService.ProviderService)({
             uploadFeedback: () => Effect.die("Provider feedback is not stubbed in this test"),
             ...options?.layers?.providerService,
+          }),
+          Layer.mock(TextGeneration.TextGeneration)({
+            ...options?.layers?.textGeneration,
           }),
         ),
       ),
@@ -1430,6 +1435,55 @@ const NodeHttpServerTestWithWsDeflate = HttpServer.layerTestClient.pipe(
 );
 
 it.layer(NodeServices.layer)("server router seam", (it) => {
+  it.effect("answers a side question without dispatching an orchestration command", () =>
+    Effect.gen(function* () {
+      const snapshot = makeDefaultOrchestrationReadModel();
+      const thread = snapshot.threads[0]!;
+      const project = snapshot.projects[0]!;
+      const received: Array<TextGeneration.SideQuestionGenerationInput> = [];
+      let dispatchCount = 0;
+
+      yield* buildAppUnderTest({
+        layers: {
+          orchestrationEngine: {
+            dispatch: () =>
+              Effect.sync(() => {
+                dispatchCount += 1;
+                return { sequence: dispatchCount };
+              }),
+          },
+          projectionSnapshotQuery: {
+            getThreadDetailById: () => Effect.succeed(Option.some(thread)),
+            getProjectShellById: () => Effect.succeed(Option.some(project)),
+          },
+          textGeneration: {
+            answerSideQuestion: (input) =>
+              Effect.sync(() => {
+                received.push(input);
+                return { answer: "It uses the active thread context." };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      const result = yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          client[ORCHESTRATION_WS_METHODS.askSideQuestion]({
+            threadId: defaultThreadId,
+            question: "How does this work?",
+          }),
+        ),
+      );
+
+      assert.deepEqual(result, { answer: "It uses the active thread context." });
+      assert.equal(received[0]?.cwd, project.workspaceRoot);
+      assert.equal(received[0]?.question, "How does this work?");
+      assert.deepEqual(received[0]?.modelSelection, thread.modelSelection);
+      assert.equal(dispatchCount, 0);
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("parks HTTP ingress until command readiness", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;

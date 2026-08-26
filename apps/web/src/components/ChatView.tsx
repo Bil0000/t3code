@@ -81,6 +81,7 @@ import {
   squashAtomCommandFailure,
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
+import { parseSideQuestion } from "@t3tools/client-runtime/state/orchestration";
 import * as Cause from "effect/Cause";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
@@ -182,6 +183,7 @@ import {
   GitBranchIcon,
   Minimize2Icon,
   PaperclipIcon,
+  XIcon,
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
@@ -277,7 +279,10 @@ import {
   useThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
+import { orchestrationEnvironment } from "../state/orchestration";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
+import ChatMarkdown from "./ChatMarkdown";
+import { Spinner } from "./ui/spinner";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -1241,6 +1246,14 @@ type LocalThreadErrorEntry = {
   readonly at: number;
 };
 
+type SideQuestionState = {
+  readonly threadKey: string;
+  readonly question: string;
+  readonly visible: boolean;
+  readonly status: "loading" | "success" | "error";
+  readonly text: string;
+};
+
 function chatActionErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "An error occurred.";
 }
@@ -1311,6 +1324,9 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const revertThreadCheckpoint = useAtomCommand(threadEnvironment.revertCheckpoint, {
+    reportFailure: false,
+  });
+  const askSideQuestion = useAtomCommand(orchestrationEnvironment.askSideQuestion, {
     reportFailure: false,
   });
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
@@ -1418,6 +1434,8 @@ function ChatViewContent(props: ChatViewProps) {
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  const [sideQuestionState, setSideQuestionState] = useState<SideQuestionState | null>(null);
+  const sideQuestionRequestRef = useRef(0);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
@@ -5367,6 +5385,91 @@ function ChatViewContent(props: ChatViewProps) {
       );
       return;
     }
+    const sideQuestion =
+      routeKind === "server" ? parseSideQuestion(promptRef.current.trim()) : null;
+    if (sideQuestion !== null) {
+      if (sideQuestion.length === 0) {
+        if (sideQuestionState?.threadKey === routeThreadKey) {
+          setSideQuestionState({ ...sideQuestionState, visible: true });
+        } else {
+          toastManager.add(
+            stackedThreadToast({
+              type: "info",
+              title: "No recent side answer",
+              description: "Add a question after /btw.",
+            }),
+          );
+        }
+        return;
+      }
+
+      const sideContext = composerRef.current?.getSendContext();
+      const hasSideAttachments =
+        directAnnotation !== undefined ||
+        (sideContext?.images.length ?? 0) > 0 ||
+        (sideContext?.terminalContexts.length ?? 0) > 0 ||
+        (sideContext?.elementContexts.length ?? 0) > 0 ||
+        (sideContext?.previewAnnotations.length ?? 0) > 0 ||
+        (sideContext?.reviewComments.length ?? 0) > 0;
+      if (hasSideAttachments) {
+        toastManager.add(
+          stackedThreadToast({
+            type: "warning",
+            title: "Side questions are text only",
+            description: "Remove draft attachments and context, then try /btw again.",
+          }),
+        );
+        return;
+      }
+      if (
+        sideQuestionState?.threadKey === routeThreadKey &&
+        sideQuestionState.status === "loading"
+      ) {
+        return;
+      }
+
+      promptRef.current = "";
+      setComposerDraftPrompt(composerDraftTarget, "");
+      composerRef.current?.resetCursorState();
+      const requestId = sideQuestionRequestRef.current + 1;
+      sideQuestionRequestRef.current = requestId;
+      setSideQuestionState({
+        threadKey: routeThreadKey,
+        question: sideQuestion,
+        visible: true,
+        status: "loading",
+        text: "",
+      });
+      const result = await askSideQuestion({
+        environmentId,
+        input: {
+          threadId: activeThread.id,
+          question: sideQuestion,
+        },
+      });
+      if (sideQuestionRequestRef.current !== requestId) {
+        return;
+      }
+      if (result._tag === "Success") {
+        setSideQuestionState({
+          threadKey: routeThreadKey,
+          question: sideQuestion,
+          visible: true,
+          status: "success",
+          text: result.value.answer,
+        });
+      } else {
+        const error = squashAtomCommandFailure(result);
+        setSideQuestionState({
+          threadKey: routeThreadKey,
+          question: sideQuestion,
+          visible: true,
+          status: "error",
+          text: chatActionErrorMessage(error),
+        });
+      }
+      return;
+    }
     if (activePendingProgress) {
       if (directAnnotation) {
         notifyDirectAnnotationAttached();
@@ -7002,6 +7105,46 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
+                  {sideQuestionState?.threadKey === routeThreadKey && sideQuestionState.visible ? (
+                    <div
+                      className="mx-auto mb-2 w-full max-w-3xl rounded-2xl border border-border/70 bg-popover p-4 shadow-lg"
+                      aria-live="polite"
+                    >
+                      <div className="mb-2 flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="font-medium text-foreground text-sm">Side question</div>
+                          <div className="truncate text-muted-foreground text-xs">
+                            {sideQuestionState.question}
+                          </div>
+                        </div>
+                        <button
+                          type="button"
+                          aria-label="Close side answer"
+                          className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground"
+                          onClick={() =>
+                            setSideQuestionState({ ...sideQuestionState, visible: false })
+                          }
+                        >
+                          <XIcon className="size-4" />
+                        </button>
+                      </div>
+                      {sideQuestionState.status === "loading" ? (
+                        <div className="flex items-center gap-2 text-muted-foreground text-sm">
+                          <Spinner className="size-4" />
+                          Thinking…
+                        </div>
+                      ) : sideQuestionState.status === "error" ? (
+                        <div className="text-destructive text-sm">{sideQuestionState.text}</div>
+                      ) : (
+                        <ChatMarkdown
+                          text={sideQuestionState.text}
+                          cwd={activeThread.worktreePath ?? activeProject?.workspaceRoot}
+                          threadRef={routeThreadRef}
+                          className="text-sm"
+                        />
+                      )}
+                    </div>
+                  ) : null}
                   {threadSyncPhase && !activeEnvironmentUnavailable ? (
                     <ThreadSyncStatusPill phase={threadSyncPhase} />
                   ) : null}

@@ -55,6 +55,7 @@ import {
   AssetWorkspaceContextResolutionError,
   RpcClientId,
   EnvironmentAuthorizationError,
+  TextGenerationError,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -81,6 +82,8 @@ import {
 } from "./orchestration/Normalizer.ts";
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
+import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import { formatSideQuestionContext } from "./textGeneration/TextGenerationPrompts.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -430,6 +433,7 @@ const makeWsRpcLayer = (
       const currentSessionId = currentSession.sessionId;
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
+      const textGeneration = yield* TextGeneration.TextGeneration;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Every command dispatched on this connection carries the connecting
@@ -1265,6 +1269,46 @@ const makeWsRpcLayer = (
                   ? cause
                   : new OrchestrationDispatchCommandError({
                       message: "Failed to dispatch orchestration command",
+                      cause,
+                    }),
+              ),
+            ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.askSideQuestion]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.askSideQuestion,
+            Effect.gen(function* () {
+              const thread = yield* projectionSnapshotQuery.getThreadDetailById(input.threadId);
+              if (Option.isNone(thread)) {
+                return yield* new TextGenerationError({
+                  operation: "answerSideQuestion",
+                  detail: "Thread was not found.",
+                });
+              }
+              const project = yield* projectionSnapshotQuery.getProjectShellById(
+                thread.value.projectId,
+              );
+              if (Option.isNone(project)) {
+                return yield* new TextGenerationError({
+                  operation: "answerSideQuestion",
+                  detail: "Thread project was not found.",
+                });
+              }
+
+              return yield* textGeneration.answerSideQuestion({
+                cwd: thread.value.worktreePath ?? project.value.workspaceRoot,
+                question: input.question,
+                context: formatSideQuestionContext(thread.value),
+                modelSelection: thread.value.modelSelection,
+              });
+            }).pipe(
+              Effect.mapError((cause) =>
+                Schema.is(TextGenerationError)(cause)
+                  ? cause
+                  : new TextGenerationError({
+                      operation: "answerSideQuestion",
+                      detail: "Failed to load side-question context.",
                       cause,
                     }),
               ),

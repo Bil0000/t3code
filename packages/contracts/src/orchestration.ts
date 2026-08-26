@@ -26,6 +26,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
+  askSideQuestion: "orchestration.askSideQuestion",
   getWorkflowScript: "orchestration.getWorkflowScript",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
@@ -1612,6 +1613,17 @@ export const DispatchResult = Schema.Struct({
 });
 export type DispatchResult = typeof DispatchResult.Type;
 
+export const OrchestrationAskSideQuestionInput = Schema.Struct({
+  threadId: ThreadId,
+  question: TrimmedNonEmptyString.check(Schema.isMaxLength(20_000)),
+});
+export type OrchestrationAskSideQuestionInput = typeof OrchestrationAskSideQuestionInput.Type;
+
+export const OrchestrationAskSideQuestionResult = Schema.Struct({
+  answer: Schema.String,
+});
+export type OrchestrationAskSideQuestionResult = typeof OrchestrationAskSideQuestionResult.Type;
+
 export const OrchestrationGetTurnDiffInput = TurnCountRange.mapFields(
   Struct.assign({
     threadId: ThreadId,
@@ -1711,6 +1723,10 @@ export const OrchestrationRpcSchemas = {
   dispatchCommand: {
     input: ClientOrchestrationCommand,
     output: DispatchResult,
+  },
+  askSideQuestion: {
+    input: OrchestrationAskSideQuestionInput,
+    output: OrchestrationAskSideQuestionResult,
   },
   getWorkflowScript: {
     input: OrchestrationGetWorkflowScriptInput,

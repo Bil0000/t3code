@@ -1,8 +1,13 @@
 import { ORCHESTRATION_WS_METHODS } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
-import { createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
+import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
+
+export function parseSideQuestion(value: string): string | null {
+  const match = /^\/btw(?:\s+([\s\S]*))?$/.exec(value);
+  return match ? (match[1]?.trim() ?? "") : null;
+}
 
 export function createOrchestrationEnvironmentAtoms<R, E>(
   runtime: Atom.AtomRuntime<EnvironmentRegistry | R, E>,
@@ -32,6 +37,10 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
     archivedShellSnapshot: createEnvironmentRpcQueryAtomFamily(runtime, {
       label: "environment-data:orchestration:archived-shell-snapshot",
       tag: ORCHESTRATION_WS_METHODS.getArchivedShellSnapshot,
+    }),
+    askSideQuestion: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:orchestration:ask-side-question",
+      tag: ORCHESTRATION_WS_METHODS.askSideQuestion,
     }),
   };
 }

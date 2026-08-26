@@ -403,6 +403,13 @@ export const ThreadComposer = memo(function ThreadComposer(props: ThreadComposer
           description: "Switch model",
         },
         {
+          id: "cmd:btw",
+          type: "slash-command" as const,
+          command: "btw",
+          label: "/btw",
+          description: "Ask without interrupting the agent",
+        },
+        {
           id: "cmd:plan",
           type: "slash-command" as const,
           command: "plan",

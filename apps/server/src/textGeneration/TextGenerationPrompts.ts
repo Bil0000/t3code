@@ -316,3 +316,65 @@ export function buildThreadTitlePrompt(input: ThreadTitlePromptInput) {
 
   return { prompt, outputSchema };
 }
+
+interface SideQuestionContextInput {
+  messages: ReadonlyArray<{
+    role: "user" | "assistant" | "system";
+    text: string;
+    streaming: boolean;
+    createdAt: string;
+  }>;
+  activities: ReadonlyArray<{
+    kind: string;
+    summary: string;
+    payload: unknown;
+    createdAt: string;
+  }>;
+}
+
+export function formatSideQuestionContext(input: SideQuestionContextInput): string {
+  const entries = [
+    ...input.messages
+      .filter((message) => !message.streaming)
+      .map((message) => ({
+        createdAt: message.createdAt,
+        text: message.role.toUpperCase() + ":\n" + message.text,
+      })),
+    ...input.activities
+      .filter((activity) => activity.kind === "tool.completed")
+      .map((activity) => ({
+        createdAt: activity.createdAt,
+        text: "TOOL:\n" + activity.summary + "\n" + JSON.stringify(activity.payload),
+      })),
+  ].sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+
+  return entries.map((entry) => entry.text).join("\n\n");
+}
+
+export interface SideQuestionPromptInput {
+  question: string;
+  context: string;
+}
+
+export function buildSideQuestionPrompt(input: SideQuestionPromptInput) {
+  const prompt = [
+    "Answer a side question about an existing coding session.",
+    "Return JSON with exactly one key: answer.",
+    "Rules:",
+    "- Answer only from the session context below.",
+    "- Do not use tools, read files, run commands, or access the network.",
+    "- Do not continue or influence the main coding task.",
+    "- If the context does not contain the answer, say so clearly.",
+    "",
+    "Session context:",
+    input.context,
+    "",
+    "Side question:",
+    input.question,
+  ].join("\n");
+
+  return {
+    prompt,
+    outputSchema: Schema.Struct({ answer: Schema.String }),
+  };
+}

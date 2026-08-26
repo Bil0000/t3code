@@ -23,6 +23,7 @@ import {
   buildBranchNamePrompt,
   buildCommitMessagePrompt,
   buildPrContentPrompt,
+  buildSideQuestionPrompt,
   buildThreadTitlePrompt,
 } from "./TextGenerationPrompts.ts";
 import {
@@ -85,7 +86,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle",
+      | "generateThreadTitle"
+      | "answerSideQuestion",
     value: unknown,
     detail: string,
   ): Effect.Effect<string, TextGenerationError> =>
@@ -115,7 +117,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       | "generateCommitMessage"
       | "generatePrContent"
       | "generateBranchName"
-      | "generateThreadTitle";
+      | "generateThreadTitle"
+      | "answerSideQuestion";
     cwd: string;
     prompt: string;
     outputSchemaJson: S;
@@ -169,6 +172,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           resolveClaudeApiModelId(modelSelection),
           ...(cliEffort ? ["--effort", cliEffort] : []),
           ...(settingsJson ? ["--settings", settingsJson] : []),
+          "--tools",
+          "",
           "--dangerously-skip-permissions",
         ],
         { env: claudeEnvironment },
@@ -359,10 +364,28 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
       };
     });
 
+  const answerSideQuestion: TextGeneration.TextGeneration["Service"]["answerSideQuestion"] =
+    Effect.fn("ClaudeTextGeneration.answerSideQuestion")(function* (input) {
+      const { prompt, outputSchema } = buildSideQuestionPrompt({
+        question: input.question,
+        context: input.context,
+      });
+      const generated = yield* runClaudeJson({
+        operation: "answerSideQuestion",
+        cwd: input.cwd,
+        prompt,
+        outputSchemaJson: outputSchema,
+        modelSelection: input.modelSelection,
+      });
+
+      return { answer: generated.answer.trim() };
+    });
+
   return {
     generateCommitMessage,
     generatePrContent,
     generateBranchName,
     generateThreadTitle,
+    answerSideQuestion,
   } satisfies TextGeneration.TextGeneration["Service"];
 });

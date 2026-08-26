@@ -1,4 +1,6 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
+import { parseSideQuestion } from "@t3tools/client-runtime/state/orchestration";
+import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
 import type { LegendListRef } from "@legendapp/list/react-native";
@@ -29,9 +31,11 @@ import {
 } from "react";
 import { isLiquidGlassSupported, LiquidGlassView } from "@callstack/liquid-glass";
 import {
+  ActivityIndicator,
   AppState,
   Keyboard,
   Platform,
+  Pressable,
   useWindowDimensions,
   View,
   type GestureResponderEvent,
@@ -51,11 +55,14 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { AppText as Text } from "../../components/AppText";
 import { ControlPill } from "../../components/ControlPill";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
 import type { StatusTone } from "../../components/StatusPill";
 import type { DraftComposerImageAttachment } from "../../lib/composerImages";
+import { orchestrationEnvironment } from "../../state/orchestration";
+import { useAtomCommand } from "../../state/use-atom-command";
 import { CHAT_CONTENT_MAX_WIDTH, type LayoutVariant } from "../../lib/layout";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { scopedThreadKey } from "../../lib/scopedEntities";
@@ -214,6 +221,14 @@ const USER_INPUT_TOGGLE_TIMING = {
   easing: Easing.out(Easing.cubic),
 };
 
+type SideQuestionState = {
+  readonly threadKey: string;
+  readonly question: string;
+  readonly visible: boolean;
+  readonly status: "loading" | "success" | "error";
+  readonly text: string;
+};
+
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
   const insets = useSafeAreaInsets();
   const isKeyboardVisible = useKeyboardState((state) => state.isVisible);
@@ -251,8 +266,13 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, []);
   const windowHeight = useWindowDimensions().height;
   const navigationHeaderHeight = useContext(HeaderHeightContext) || insets.top + IOS_NAV_BAR_HEIGHT;
+  const askSideQuestion = useAtomCommand(orchestrationEnvironment.askSideQuestion, {
+    reportFailure: false,
+  });
   const agentLabel = `${props.selectedThread.modelSelection.instanceId} agent`;
   const selectedThreadKey = scopedThreadKey(props.environmentId, props.selectedThread.id);
+  const sideQuestionRequestRef = useRef(0);
+  const [sideQuestionState, setSideQuestionState] = useState<SideQuestionState | null>(null);
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
   const composerOverlayRef = useRef<View>(null);
   const listRef = useRef<LegendListRef>(null);
@@ -521,6 +541,80 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   ]);
 
   const handleSendMessage = useCallback(async () => {
+    const sideQuestion = parseSideQuestion(props.draftMessage.trim());
+    if (sideQuestion !== null) {
+      if (sideQuestion.length === 0) {
+        setSideQuestionState((current) =>
+          current?.threadKey === selectedThreadKey
+            ? { ...current, visible: true }
+            : {
+                threadKey: selectedThreadKey,
+                question: "",
+                visible: true,
+                status: "error",
+                text: "Add a question after /btw.",
+              },
+        );
+        return null;
+      }
+      if (props.draftAttachments.length > 0) {
+        setSideQuestionState({
+          threadKey: selectedThreadKey,
+          question: sideQuestion,
+          visible: true,
+          status: "error",
+          text: "Side questions are text only. Remove draft images and try again.",
+        });
+        return null;
+      }
+      if (
+        sideQuestionState?.threadKey === selectedThreadKey &&
+        sideQuestionState.status === "loading"
+      ) {
+        return null;
+      }
+
+      props.onChangeDraftMessage("");
+      const requestId = sideQuestionRequestRef.current + 1;
+      sideQuestionRequestRef.current = requestId;
+      setSideQuestionState({
+        threadKey: selectedThreadKey,
+        question: sideQuestion,
+        visible: true,
+        status: "loading",
+        text: "",
+      });
+      const result = await askSideQuestion({
+        environmentId: props.environmentId,
+        input: {
+          threadId: props.selectedThread.id,
+          question: sideQuestion,
+        },
+      });
+      if (sideQuestionRequestRef.current !== requestId) {
+        return null;
+      }
+      if (result._tag === "Success") {
+        setSideQuestionState({
+          threadKey: selectedThreadKey,
+          question: sideQuestion,
+          visible: true,
+          status: "success",
+          text: result.value.answer,
+        });
+      } else {
+        const error = squashAtomCommandFailure(result);
+        setSideQuestionState({
+          threadKey: selectedThreadKey,
+          question: sideQuestion,
+          visible: true,
+          status: "error",
+          text: error instanceof Error ? error.message : "The side question could not be answered.",
+        });
+      }
+      return null;
+    }
+
     const targetThreadKey = selectedThreadKey;
     const hasUserMessage = selectedThreadFeed.some(
       (entry) => entry.type === "message" && entry.message.role === "user",
@@ -544,11 +638,18 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     return messageId;
   }, [
     anchorMessageId,
+    askSideQuestion,
+    props.draftAttachments.length,
+    props.draftMessage,
+    props.environmentId,
+    props.onChangeDraftMessage,
     props.onSendMessage,
+    props.selectedThread.id,
     props.selectedThread.latestTurn,
     props.selectedThreadQueueCount,
     selectedThreadFeed,
     selectedThreadKey,
+    sideQuestionState?.status,
   ]);
 
   const collapseComposer = useCallback(() => {
@@ -694,6 +795,56 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               </Animated.View>
             ) : null}
             <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
+              {sideQuestionState?.threadKey === selectedThreadKey && sideQuestionState.visible ? (
+                <Animated.View
+                  className="mx-4 mb-3 rounded-2xl border border-border bg-card p-4"
+                  entering={FadeInDown.duration(220)}
+                  exiting={FadeOut.duration(140)}
+                >
+                  <View className="mb-2 flex-row items-start justify-between gap-3">
+                    <View className="min-w-0 flex-1">
+                      <Text className="text-2xs font-t3-bold uppercase tracking-wide text-foreground-muted">
+                        Side answer
+                      </Text>
+                      {sideQuestionState.question ? (
+                        <Text className="mt-1 text-sm text-foreground-secondary" numberOfLines={2}>
+                          {sideQuestionState.question}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Close side answer"
+                      onPress={() =>
+                        setSideQuestionState((current) =>
+                          current ? { ...current, visible: false } : current,
+                        )
+                      }
+                    >
+                      <Text className="text-sm text-foreground-muted">Close</Text>
+                    </Pressable>
+                  </View>
+                  {sideQuestionState.status === "loading" ? (
+                    <View className="flex-row items-center gap-2">
+                      <ActivityIndicator size="small" />
+                      <Text className="text-sm text-foreground-muted">
+                        Answering without interrupting…
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text
+                      selectable
+                      className={
+                        sideQuestionState.status === "error"
+                          ? "text-sm text-rose-700 dark:text-rose-300"
+                          : "text-sm text-foreground"
+                      }
+                    >
+                      {sideQuestionState.text}
+                    </Text>
+                  )}
+                </Animated.View>
+              ) : null}
               {props.activePendingApproval || props.activePendingUserInput ? (
                 <Animated.View
                   className="shrink-0 gap-3 px-4 pb-3"

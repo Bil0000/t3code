@@ -4,6 +4,7 @@
 
 - [Install and first run](./user/install.md)
 - [Permission modes](./user/permission-modes.md)
+- [Ask a side question without interrupting the agent](./user/side-questions.md)
 - [Keyboard shortcuts](./user/keybindings.md)
 - [Organizing threads](./user/thread-sidebar.md)
 - [Review usage](./user/usage.md)

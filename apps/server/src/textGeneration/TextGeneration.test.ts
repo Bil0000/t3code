@@ -21,6 +21,7 @@ const makeStubTextGeneration = (
     generatePrContent: () => Effect.die("generatePrContent stub not configured for this test"),
     generateBranchName: () => Effect.die("generateBranchName stub not configured for this test"),
     generateThreadTitle: () => Effect.die("generateThreadTitle stub not configured for this test"),
+    answerSideQuestion: () => Effect.die("answerSideQuestion stub not configured for this test"),
     ...overrides,
   });
 
@@ -116,6 +117,33 @@ describe("makeTextGenerationFromRegistry", () => {
         expect(result.failure.operation).toBe("generateBranchName");
         expect(result.failure.detail).toContain("missing_instance");
       }
+    }),
+  );
+
+  it.effect("routes a side question through the selected provider instance", () =>
+    Effect.gen(function* () {
+      const instanceId = ProviderInstanceId.make("cursor_work");
+      const seenQuestions: string[] = [];
+      const instance = makeStubInstance(
+        instanceId,
+        makeStubTextGeneration({
+          answerSideQuestion: (input) => {
+            seenQuestions.push(input.question);
+            return Effect.succeed({ answer: "The reconnect token was stale." });
+          },
+        }),
+      );
+      const tg = TextGeneration.makeTextGenerationFromRegistry(makeStubRegistry([instance]));
+
+      const result = yield* tg.answerSideQuestion({
+        cwd: process.cwd(),
+        question: "What failed?",
+        context: "USER:\nInvestigate reconnects",
+        modelSelection: createModelSelection(instanceId, "cursor-model"),
+      });
+
+      expect(result.answer).toBe("The reconnect token was stale.");
+      expect(seenQuestions).toEqual(["What failed?"]);
     }),
   );
 });

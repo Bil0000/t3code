@@ -20,6 +20,7 @@ import {
   PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
 } from "@t3tools/contracts";
 import type { EnvironmentConnectionPresentation } from "@t3tools/client-runtime/connection";
+import { parseSideQuestion } from "@t3tools/client-runtime/state/orchestration";
 import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import {
@@ -449,6 +450,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
     isComplete: boolean;
   } | null;
   isRunning: boolean;
+  isSideQuestion: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -483,6 +485,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
         compact={props.compact}
         pendingAction={props.pendingAction}
         isRunning={props.isRunning}
+        isSideQuestion={props.isSideQuestion}
         showPlanFollowUpPrompt={props.showPlanFollowUpPrompt}
         promptHasText={props.promptHasText}
         isSendBusy={props.isSendBusy}
@@ -681,7 +684,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeThreadId,
     activeThreadEnvironmentId: _activeThreadEnvironmentId,
     activeThread,
-    isServerThread: _isServerThread,
+    isServerThread,
     isLocalDraftThread: _isLocalDraftThread,
     forceExpandedOnMobile,
     projectSelectionRequired,
@@ -1139,11 +1142,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const builtInSlashCommandItems = [
         {
           id: "slash:model",
-          type: "slash-command",
-          command: "model",
+          type: "slash-command" as const,
+          command: "model" as const,
           label: "/model",
           description: "Switch response model for this thread",
         },
+        ...(isServerThread
+          ? [
+              {
+                id: "slash:btw",
+                type: "slash-command" as const,
+                command: "btw" as const,
+                label: "/btw",
+                description: "Ask a side question without interrupting the agent",
+              },
+            ]
+          : []),
         ...(planModeUiEnabled
           ? ([
               {
@@ -1215,6 +1229,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     return [];
   }, [
     composerTrigger,
+    isServerThread,
     planModeUiEnabled,
     selectedProvider,
     selectedProviderStatus,
@@ -1350,8 +1365,9 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
         : null,
     [activePendingIsResponding, activePendingProgress, activePendingResolvedAnswers],
   );
+  const isSideQuestionDraft = isServerThread && parseSideQuestion(prompt.trim()) !== null;
   const collapsedComposerPrimaryActionDisabled =
-    phase === "running" ||
+    (phase === "running" && !isSideQuestionDraft) ||
     isSendBusy ||
     isSendDisabled ||
     isConnecting ||
@@ -1828,6 +1844,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             setComposerHighlightedItemId(null);
             setIsComposerModelPickerOpen(true);
           }
+          return;
+        }
+        if (item.command === "btw") {
+          const replacement = "/btw ";
+          const replacementRangeEnd = extendReplacementRangeForTrailingSpace(
+            snapshot.value,
+            trigger.rangeEnd,
+            replacement,
+          );
+          applyPromptReplacement(trigger.rangeStart, replacementRangeEnd, replacement, {
+            expectedText: snapshot.value.slice(trigger.rangeStart, replacementRangeEnd),
+          });
+          setComposerHighlightedItemId(null);
           return;
         }
         void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
@@ -3561,6 +3590,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     activeThreadModelDisplayName={activeThreadModelDisplayName}
                     pendingAction={pendingPrimaryAction}
                     isRunning={phase === "running"}
+                    isSideQuestion={isSideQuestionDraft}
                     showPlanFollowUpPrompt={
                       pendingUserInputs.length === 0 && showPlanFollowUpPrompt
                     }
@@ -3576,7 +3606,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     isPreparingWorktree={isPreparingWorktree}
                     hasSendableContent={composerSendState.hasSendableContent}
                     preserveComposerFocusOnPointerDown={isMobileViewport}
-                    showSendWhileRunning={isMobileViewport}
+                    showSendWhileRunning={isMobileViewport || isSideQuestionDraft}
                     onPreviousPendingQuestion={onPreviousActivePendingUserInputQuestion}
                     onInterrupt={handleInterruptPrimaryAction}
                     onImplementPlanInNewThread={handleImplementPlanInNewThreadPrimaryAction}

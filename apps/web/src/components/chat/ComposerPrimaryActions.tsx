@@ -19,6 +19,7 @@ interface ComposerPrimaryActionsProps {
   compact: boolean;
   pendingAction: PendingActionState | null;
   isRunning: boolean;
+  isSideQuestion?: boolean;
   showPlanFollowUpPrompt: boolean;
   promptHasText: boolean;
   isSendBusy: boolean;
@@ -62,6 +63,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   compact,
   pendingAction,
   isRunning,
+  isSideQuestion = false,
   showPlanFollowUpPrompt,
   promptHasText,
   isSendBusy,
@@ -106,7 +108,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
     </button>
   );
 
-  if (pendingAction) {
+  if (pendingAction && !isSideQuestion) {
     return (
       <div className={cn("flex items-center justify-end", compact ? "gap-1.5" : "gap-2")}>
         {isRunning ? renderStopGenerationButton(true) : null}
