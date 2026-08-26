@@ -29,7 +29,14 @@ export function parseComposerSideQuestion(
   value: string,
   input: { isServerThread: boolean; hasPendingUserInput: boolean },
 ): string | null {
-  return input.isServerThread && !input.hasPendingUserInput ? parseSideQuestion(value) : null;
+  return canAskComposerSideQuestion(input) ? parseSideQuestion(value) : null;
+}
+
+export function canAskComposerSideQuestion(input: {
+  isServerThread: boolean;
+  hasPendingUserInput: boolean;
+}): boolean {
+  return input.isServerThread && !input.hasPendingUserInput;
 }
 
 const isInlineTokenSegment = (

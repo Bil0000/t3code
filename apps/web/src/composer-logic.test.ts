@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  canAskComposerSideQuestion,
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
   composerSubmissionIntentForEnter,
@@ -71,6 +72,15 @@ describe("composerSubmissionIntentForEnter", () => {
 });
 
 describe("side-question composer state", () => {
+  it("hides side-question actions while pending user input owns the composer", () => {
+    expect(canAskComposerSideQuestion({ isServerThread: true, hasPendingUserInput: true })).toBe(
+      false,
+    );
+    expect(canAskComposerSideQuestion({ isServerThread: true, hasPendingUserInput: false })).toBe(
+      true,
+    );
+  });
+
   it("keeps /btw text on the pending user-input response path", () => {
     expect(
       parseComposerSideQuestion("/btw custom answer", {
