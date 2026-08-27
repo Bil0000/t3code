@@ -363,6 +363,14 @@ export interface SideQuestionPromptInput {
   context: string;
 }
 
+export function formatSideQuestionConversation(
+  turns: ReadonlyArray<{ question: string; answer: string }>,
+): string {
+  return turns
+    .flatMap((turn) => [`SIDE USER:\n${turn.question}`, `SIDE ASSISTANT:\n${turn.answer}`])
+    .join("\n\n");
+}
+
 export function buildSideQuestionPrompt(input: SideQuestionPromptInput) {
   const prompt = [
     "Answer a side question about an existing coding session.",

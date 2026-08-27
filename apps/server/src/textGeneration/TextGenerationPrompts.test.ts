@@ -7,6 +7,7 @@ import {
   buildSideQuestionPrompt,
   buildThreadTitlePrompt,
   formatSideQuestionContext,
+  formatSideQuestionConversation,
   isSideQuestionContextWithinLimit,
   SIDE_QUESTION_CONTEXT_MAX_BYTES,
 } from "./TextGenerationPrompts.ts";
@@ -306,6 +307,19 @@ describe("side questions", () => {
     expect(result.prompt).toContain("Do not continue or influence the main coding task");
     expect(result.prompt).toContain("What did we learn?");
     expect(result.prompt).toContain("Investigate reconnects");
+  });
+
+  it("formats earlier side turns with distinct roles", () => {
+    expect(
+      formatSideQuestionConversation([
+        {
+          question: "What caused the reconnect bug?",
+          answer: "The stored token was stale.",
+        },
+      ]),
+    ).toBe(
+      "SIDE USER:\nWhat caused the reconnect bug?\n\nSIDE ASSISTANT:\nThe stored token was stale.",
+    );
   });
 });
 

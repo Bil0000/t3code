@@ -86,6 +86,7 @@ import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngi
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
 import {
+  formatSideQuestionConversation,
   formatSideQuestionContext,
   isSideQuestionContextWithinLimit,
 } from "./textGeneration/TextGenerationPrompts.ts";
@@ -148,9 +149,20 @@ const isTextGenerationError = Schema.is(TextGenerationError);
 const SIDE_QUESTION_CONTEXT_TURNS_PER_PAGE = 50;
 const SIDE_QUESTION_CONTEXT_MAX_PAGES = 20;
 
+const encodeSideQuestionRequestKey = Schema.encodeSync(
+  Schema.fromJsonString(
+    Schema.Struct({
+      question: Schema.String,
+      previousTurns: Schema.Array(
+        Schema.Struct({ question: Schema.String, answer: Schema.String }),
+      ),
+    }),
+  ),
+);
 type SideQuestionSingleFlightInput = {
   readonly threadId: ThreadId;
   readonly question: string;
+  readonly previousTurns?: ReadonlyArray<{ question: string; answer: string }> | undefined;
 };
 
 type SideQuestionSingleFlight = <R>(
@@ -180,16 +192,20 @@ export const makeSideQuestionSingleFlight: Effect.Effect<
           TextGeneration.SideQuestionGenerationResult,
           TextGenerationError
         >();
+        const requestKey = encodeSideQuestionRequestKey({
+          question: input.question,
+          previousTurns: input.previousTurns ?? [],
+        });
         const [deferred, ownsRequest] = yield* Ref.modify<
           SideQuestionsInFlight,
           readonly [SideQuestionDeferred, boolean]
         >(inFlight, (current) => {
           const threadRequests = current.get(input.threadId);
-          const existing = threadRequests?.get(input.question);
+          const existing = threadRequests?.get(requestKey);
           if (existing) return [[existing, false] as const, current];
 
           const nextThreadRequests = new Map(threadRequests);
-          nextThreadRequests.set(input.question, candidate);
+          nextThreadRequests.set(requestKey, candidate);
           const next = new Map(current);
           next.set(input.threadId, nextThreadRequests);
           return [[candidate, true] as const, next];
@@ -200,10 +216,10 @@ export const makeSideQuestionSingleFlight: Effect.Effect<
             Effect.ensuring(
               Ref.update(inFlight, (current) => {
                 const threadRequests = current.get(input.threadId);
-                if (threadRequests?.get(input.question) !== deferred) return current;
+                if (threadRequests?.get(requestKey) !== deferred) return current;
 
                 const nextThreadRequests = new Map(threadRequests);
-                nextThreadRequests.delete(input.question);
+                nextThreadRequests.delete(requestKey);
                 const next = new Map(current);
                 if (nextThreadRequests.size === 0) {
                   next.delete(input.threadId);
@@ -1412,6 +1428,22 @@ const makeWsRpcLayer = (
                 pageCount += 1;
               }
 
+              const previousConversation = formatSideQuestionConversation(
+                input.previousTurns ?? [],
+              );
+              const providerContext = [
+                context,
+                previousConversation ? `Earlier side conversation:\n${previousConversation}` : "",
+              ]
+                .filter(Boolean)
+                .join("\n\n");
+              if (!isSideQuestionContextWithinLimit(providerContext)) {
+                return yield* new TextGenerationError({
+                  operation: "answerSideQuestion",
+                  detail: "The side-question context is too large.",
+                });
+              }
+
               const project = yield* projectionSnapshotQuery.getProjectShellById(thread.projectId);
               if (Option.isNone(project)) {
                 return yield* new TextGenerationError({
@@ -1423,7 +1455,7 @@ const makeWsRpcLayer = (
               return yield* textGeneration.answerSideQuestion({
                 cwd: thread.worktreePath ?? project.value.workspaceRoot,
                 question: input.question,
-                context,
+                context: providerContext,
                 modelSelection: thread.modelSelection,
               });
             }).pipe(

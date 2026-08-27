@@ -1489,6 +1489,42 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     ),
   );
 
+  it.effect("does not share matching follow-ups from different side conversations", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const firstStarted = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const first = yield* singleFlight(
+          {
+            threadId: defaultThreadId,
+            question: "Same follow-up",
+            previousTurns: [{ question: "First context", answer: "First answer" }],
+          },
+          Deferred.succeed(firstStarted, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as({ answer: "First history answer" }),
+          ),
+        ).pipe(Effect.forkChild);
+        const second = yield* singleFlight(
+          {
+            threadId: defaultThreadId,
+            question: "Same follow-up",
+            previousTurns: [{ question: "Second context", answer: "Second answer" }],
+          },
+          Deferred.await(release).pipe(Effect.as({ answer: "Second history answer" })),
+        ).pipe(Effect.forkChild);
+
+        yield* Deferred.await(firstStarted);
+        yield* Effect.yieldNow;
+        yield* Deferred.succeed(release, undefined);
+
+        assert.deepEqual(yield* Fiber.join(first), { answer: "First history answer" });
+        assert.deepEqual(yield* Fiber.join(second), { answer: "Second history answer" });
+      }),
+    ),
+  );
+
   it.effect("keeps shared side-question work alive after the first caller is canceled", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1608,6 +1644,12 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           client[ORCHESTRATION_WS_METHODS.askSideQuestion]({
             threadId: defaultThreadId,
             question: "How does this work?",
+            previousTurns: [
+              {
+                question: "What did we inspect?",
+                answer: "The reconnect flow.",
+              },
+            ],
           }),
         ),
       );
@@ -1615,6 +1657,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.deepEqual(result, { answer: "It uses the active thread context." });
       assert.equal(received[0]?.cwd, project.workspaceRoot);
       assert.equal(received[0]?.question, "How does this work?");
+      assert.include(received[0]!.context, "SIDE USER:\nWhat did we inspect?");
+      assert.include(received[0]!.context, "SIDE ASSISTANT:\nThe reconnect flow.");
       assert.deepEqual(received[0]?.modelSelection, thread.modelSelection);
       assert.equal(dispatchCount, 0);
       assert.equal(pageReadCount, 2);
