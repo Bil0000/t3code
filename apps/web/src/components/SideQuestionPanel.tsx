@@ -7,6 +7,7 @@ import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
 import { Spinner } from "./ui/spinner";
 import { Textarea } from "./ui/textarea";
+import { isCommentSubmitShortcut } from "./diffs/commentSubmitShortcut";
 
 export type SideQuestionTurn = {
   readonly question: string;
@@ -24,12 +25,15 @@ export function SideQuestionPanel(props: {
 }) {
   const [draft, setDraft] = useState("");
   const pending = props.turns.at(-1)?.status === "loading";
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
+  const submitDraft = () => {
     const question = draft.trim();
     if (!question || pending) return;
     props.onSubmit(question);
     setDraft("");
+  };
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    submitDraft();
   };
 
   return (
@@ -56,7 +60,7 @@ export function SideQuestionPanel(props: {
         <div className="space-y-5 p-4" aria-live="polite">
           {props.turns.map((turn) => (
             <div key={turn.id} className="space-y-2.5">
-              <div className="ml-8 rounded-xl bg-message px-3 py-2 text-message-foreground text-sm">
+              <div className="ml-8 whitespace-pre-wrap wrap-break-word rounded-xl bg-message px-3 py-2 text-message-foreground text-sm">
                 {turn.question}
               </div>
               {turn.status === "loading" ? (
@@ -87,6 +91,11 @@ export function SideQuestionPanel(props: {
           aria-label="Ask a follow-up side question"
           placeholder="Ask a follow-up…"
           onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (!isCommentSubmitShortcut(event, draft, pending)) return;
+            event.preventDefault();
+            submitDraft();
+          }}
         />
         <div className="mt-2 flex justify-end">
           <Button type="submit" size="sm" disabled={pending || draft.trim().length === 0}>

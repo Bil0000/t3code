@@ -27,6 +27,8 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain("It keeps local state durable.");
     expect(markup).toContain("bg-message");
     expect(markup).toContain("text-message-foreground");
+    expect(markup).toContain("whitespace-pre-wrap");
+    expect(markup).toContain("wrap-break-word");
     expect(markup).toContain('aria-label="Ask a follow-up side question"');
     expect(markup).toContain("Ask follow-up");
     expect(markup).toContain('aria-label="Minimize side question"');
