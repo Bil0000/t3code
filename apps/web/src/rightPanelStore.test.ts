@@ -247,6 +247,21 @@ describe("rightPanelStore", () => {
     });
   });
 
+  it("persists an open panel with no surfaces", () => {
+    useRightPanelStore.getState().show(refA);
+
+    const partialize = useRightPanelStore.persist.getOptions().partialize;
+    expect(partialize?.(useRightPanelStore.getState())).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: null,
+          surfaces: [],
+        },
+      },
+    });
+  });
+
   it("opening a different kind keeps both surfaces and activates the new one", () => {
     useRightPanelStore.getState().open(refA, "agents");
     useRightPanelStore.getState().open(refA, "preview");

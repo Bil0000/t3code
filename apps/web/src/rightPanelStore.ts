@@ -124,7 +124,7 @@ interface RightPanelStoreState {
 
 const persistableThreadState = (current: ThreadRightPanelState): ThreadRightPanelState | null => {
   const surfaces = current.surfaces.filter((surface) => surface.kind !== "side-question");
-  if (surfaces.length === 0) return null;
+  if (surfaces.length === 0) return current.surfaces.length === 0 ? current : null;
   const activeSurfaceId = surfaces.some((surface) => surface.id === current.activeSurfaceId)
     ? current.activeSurfaceId
     : surfaces[0]!.id;
