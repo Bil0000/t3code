@@ -176,7 +176,7 @@ export function SideQuestionPanel(props: {
                 <div className="relative px-3 pb-2 pt-3.5 sm:px-4 sm:pt-4">
                   <Textarea
                     unstyled
-                    className="block text-sm [&_[data-slot=textarea]]:max-h-50 [&_[data-slot=textarea]]:overflow-y-auto"
+                    className="block text-sm [&_[data-slot=textarea]]:max-h-50 [&_[data-slot=textarea]]:overflow-y-auto [&_[data-slot=textarea]]:p-0"
                     value={draft}
                     style={{ resize: "none" }}
                     aria-label="Ask a follow-up side question"

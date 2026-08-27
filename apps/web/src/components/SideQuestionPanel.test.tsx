@@ -84,6 +84,7 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain('data-size="default"');
     expect(markup).toContain("min-h-17.5");
     expect(markup).not.toContain("min-h-16.5");
+    expect(markup).toContain("[&amp;_[data-slot=textarea]]:p-0");
     expect(markup).toContain('style="resize:none"');
     expect(markup).toContain("Ask another side question…");
     expect(markup).toContain('aria-label="Ask follow-up"');
