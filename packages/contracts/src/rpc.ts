@@ -65,6 +65,7 @@ import {
   ClientOrchestrationCommand,
   ORCHESTRATION_WS_METHODS,
   OrchestrationAskSideQuestionInput,
+  OrchestrationCancelSideQuestionInput,
   OrchestrationDispatchCommandError,
   OrchestrationGetFullThreadDiffError,
   OrchestrationGetFullThreadDiffInput,
@@ -923,6 +924,15 @@ export const WsOrchestrationAskSideQuestionRpc = Rpc.make(
   },
 );
 
+export const WsOrchestrationCancelSideQuestionRpc = Rpc.make(
+  ORCHESTRATION_WS_METHODS.cancelSideQuestion,
+  {
+    payload: OrchestrationCancelSideQuestionInput,
+    success: OrchestrationRpcSchemas.cancelSideQuestion.output,
+    error: EnvironmentAuthorizationError,
+  },
+);
+
 export const WsOrchestrationGetWorkflowScriptRpc = Rpc.make(
   ORCHESTRATION_WS_METHODS.getWorkflowScript,
   {
@@ -1125,6 +1135,7 @@ export const WsRpcGroup = RpcGroup.make(
   WsSubscribeResourceTelemetryRpc,
   WsOrchestrationDispatchCommandRpc,
   WsOrchestrationAskSideQuestionRpc,
+  WsOrchestrationCancelSideQuestionRpc,
   WsOrchestrationGetWorkflowScriptRpc,
   WsOrchestrationGetTurnDiffRpc,
   WsOrchestrationGetFullThreadDiffRpc,

@@ -27,6 +27,7 @@ import { ProviderInstanceId } from "./providerInstance.ts";
 export const ORCHESTRATION_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
   askSideQuestion: "orchestration.askSideQuestion",
+  cancelSideQuestion: "orchestration.cancelSideQuestion",
   getWorkflowScript: "orchestration.getWorkflowScript",
   getTurnDiff: "orchestration.getTurnDiff",
   getFullThreadDiff: "orchestration.getFullThreadDiff",
@@ -1623,7 +1624,9 @@ export const ORCHESTRATION_SIDE_QUESTION_MAX_PREVIOUS_TURNS = 50;
 
 export const OrchestrationAskSideQuestionInput = Schema.Struct({
   threadId: ThreadId,
+  requestId: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(100))),
   question: TrimmedNonEmptyString.check(Schema.isMaxLength(20_000)),
+  modelSelection: Schema.optional(ModelSelection),
   previousTurns: Schema.optional(
     Schema.Array(OrchestrationSideQuestionTurn).check(
       Schema.isMaxLength(ORCHESTRATION_SIDE_QUESTION_MAX_PREVIOUS_TURNS),
@@ -1631,6 +1634,18 @@ export const OrchestrationAskSideQuestionInput = Schema.Struct({
   ),
 });
 export type OrchestrationAskSideQuestionInput = typeof OrchestrationAskSideQuestionInput.Type;
+
+export const OrchestrationCancelSideQuestionInput = Schema.Struct({
+  threadId: ThreadId,
+  requestId: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+});
+export type OrchestrationCancelSideQuestionInput = typeof OrchestrationCancelSideQuestionInput.Type;
+
+export const OrchestrationCancelSideQuestionResult = Schema.Struct({
+  cancelled: Schema.Boolean,
+});
+export type OrchestrationCancelSideQuestionResult =
+  typeof OrchestrationCancelSideQuestionResult.Type;
 
 export const OrchestrationAskSideQuestionResult = Schema.Struct({
   answer: Schema.String,
@@ -1740,6 +1755,10 @@ export const OrchestrationRpcSchemas = {
   askSideQuestion: {
     input: OrchestrationAskSideQuestionInput,
     output: OrchestrationAskSideQuestionResult,
+  },
+  cancelSideQuestion: {
+    input: OrchestrationCancelSideQuestionInput,
+    output: OrchestrationCancelSideQuestionResult,
   },
   getWorkflowScript: {
     input: OrchestrationGetWorkflowScriptInput,

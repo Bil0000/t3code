@@ -58,5 +58,9 @@ export function createOrchestrationEnvironmentAtoms<R, E>(
         key: ({ environmentId, input }) => JSON.stringify([environmentId, input]),
       },
     }),
+    cancelSideQuestion: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:orchestration:cancel-side-question",
+      tag: ORCHESTRATION_WS_METHODS.cancelSideQuestion,
+    }),
   };
 }

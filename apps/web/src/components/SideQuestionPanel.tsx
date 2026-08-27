@@ -1,10 +1,22 @@
-import type { ScopedThreadRef } from "@t3tools/contracts";
+import type { ModelSelection, ScopedThreadRef, ServerProvider } from "@t3tools/contracts";
+import type { UnifiedSettings } from "@t3tools/contracts/settings";
+import { createModelSelection } from "@t3tools/shared/model";
 import { MessageCircleQuestion, Minimize2Icon, XIcon } from "lucide-react";
-import { type FormEvent, useState } from "react";
+import { type FormEvent, useMemo, useState } from "react";
 
 import { composerSubmissionIntentForEnter } from "../composer-logic";
 import ChatMarkdown from "./ChatMarkdown";
+import { getAppModelOptionsForInstance } from "../modelSelection";
+import {
+  applyProviderInstanceSettings,
+  deriveProviderInstanceEntries,
+  sortProviderInstanceEntries,
+} from "../providerInstances";
+import { ComposerStopButton } from "./chat/ComposerPrimaryActions";
+import { getComposerProviderState } from "./chat/composerProviderState";
 import { MessageCopyButton } from "./chat/MessageCopyButton";
+import { ProviderModelPicker } from "./chat/ProviderModelPicker";
+import { TraitsPicker } from "./chat/TraitsPicker";
 import { UserMessageActions, UserMessageBubble } from "./chat/UserMessageBubble";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
@@ -13,20 +25,62 @@ import { Textarea } from "./ui/textarea";
 
 export type SideQuestionTurn = {
   readonly question: string;
-  readonly id: number;
+  readonly id: string;
   readonly answer: string;
-  readonly status: "loading" | "success" | "error";
+  readonly status: "loading" | "success" | "error" | "stopped";
 };
 
 export function SideQuestionPanel(props: {
   readonly cwd: string | undefined;
   readonly threadRef?: ScopedThreadRef;
   readonly turns: ReadonlyArray<SideQuestionTurn>;
+  readonly providers: ReadonlyArray<ServerProvider>;
+  readonly settings: UnifiedSettings;
+  readonly modelSelection: ModelSelection;
   readonly onMinimize: () => void;
+  readonly onModelSelectionChange: (selection: ModelSelection) => void;
+  readonly onStop: () => void;
   readonly onSubmit: (question: string) => void;
 }) {
   const [draft, setDraft] = useState("");
   const pending = props.turns.at(-1)?.status === "loading";
+  const providerEntries = useMemo(
+    () =>
+      sortProviderInstanceEntries(
+        applyProviderInstanceSettings(
+          deriveProviderInstanceEntries(props.providers),
+          props.settings,
+        ),
+      ),
+    [props.providers, props.settings],
+  );
+  const modelOptionsByInstance = useMemo(
+    () =>
+      new Map(
+        providerEntries.map((entry) => [
+          entry.instanceId,
+          getAppModelOptionsForInstance(props.settings, entry),
+        ]),
+      ),
+    [providerEntries, props.settings],
+  );
+  const activeEntry =
+    providerEntries.find((entry) => entry.instanceId === props.modelSelection.instanceId) ?? null;
+  const selectModel = (instanceId: ModelSelection["instanceId"], model: string) => {
+    const entry = providerEntries.find((candidate) => candidate.instanceId === instanceId);
+    if (!entry) return;
+    const providerState = getComposerProviderState({
+      provider: entry.driverKind,
+      model,
+      models: entry.models,
+      modelOptions:
+        instanceId === props.modelSelection.instanceId ? props.modelSelection.options : undefined,
+      planModeEnabled: props.settings.planModeEnabled,
+    });
+    props.onModelSelectionChange(
+      createModelSelection(instanceId, model, providerState.modelOptionsForDispatch),
+    );
+  };
   const submitDraft = () => {
     const question = draft.trim();
     if (!question || pending) return;
@@ -77,6 +131,8 @@ export function SideQuestionPanel(props: {
                 </div>
               ) : turn.status === "error" ? (
                 <div className="text-destructive text-sm">{turn.answer}</div>
+              ) : turn.status === "stopped" ? (
+                <div className="text-muted-foreground text-sm">Stopped</div>
               ) : (
                 <ChatMarkdown
                   text={turn.answer}
@@ -122,16 +178,53 @@ export function SideQuestionPanel(props: {
                     }}
                   />
                 </div>
-                <div className="flex justify-end px-3 pb-3 sm:px-4 sm:pb-4">
-                  <button
-                    type="submit"
-                    className="relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] enabled:shadow-message-action/24 hover:scale-105 hover:bg-message-action-hover active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8"
-                    disabled={pending || draft.trim().length === 0}
-                    aria-label="Ask follow-up"
-                  >
-                    {pending ? (
-                      <Spinner className="size-3.5" aria-hidden="true" />
-                    ) : (
+                <div className="flex items-center justify-between gap-2 px-3 pb-3 sm:px-4 sm:pb-4">
+                  <div className="flex min-w-0 items-center gap-1">
+                    {activeEntry ? (
+                      <>
+                        <ProviderModelPicker
+                          compact
+                          activeInstanceId={props.modelSelection.instanceId}
+                          model={props.modelSelection.model}
+                          lockedProvider={null}
+                          instanceEntries={providerEntries}
+                          modelOptionsByInstance={modelOptionsByInstance}
+                          terminalOpen={false}
+                          triggerAriaLabel="Side question model"
+                          onInstanceModelChange={selectModel}
+                        />
+                        <TraitsPicker
+                          provider={activeEntry.driverKind}
+                          instanceId={activeEntry.instanceId}
+                          models={activeEntry.models}
+                          model={props.modelSelection.model}
+                          prompt=""
+                          onPromptChange={() => undefined}
+                          modelOptions={props.modelSelection.options}
+                          allowPromptInjectedEffort={false}
+                          planModeEnabled={props.settings.planModeEnabled}
+                          onModelOptionsChange={(options) =>
+                            props.onModelSelectionChange(
+                              createModelSelection(
+                                props.modelSelection.instanceId,
+                                props.modelSelection.model,
+                                options,
+                              ),
+                            )
+                          }
+                        />
+                      </>
+                    ) : null}
+                  </div>
+                  {pending ? (
+                    <ComposerStopButton onClick={props.onStop} />
+                  ) : (
+                    <button
+                      type="submit"
+                      className="relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] enabled:shadow-message-action/24 hover:scale-105 hover:bg-message-action-hover active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8"
+                      disabled={draft.trim().length === 0}
+                      aria-label="Ask follow-up"
+                    >
                       <svg
                         width="14"
                         height="14"
@@ -147,8 +240,8 @@ export function SideQuestionPanel(props: {
                           strokeLinejoin="round"
                         />
                       </svg>
-                    )}
-                  </button>
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -186,7 +279,11 @@ export function SideQuestionMinimized(props: {
             <Spinner aria-hidden="true" className="size-3.5 shrink-0" />
           ) : (
             <span className="shrink-0">
-              {props.status === "error" ? "Needs attention" : "Answered"}
+              {props.status === "error"
+                ? "Needs attention"
+                : props.status === "stopped"
+                  ? "Stopped"
+                  : "Answered"}
             </span>
           )}
         </button>

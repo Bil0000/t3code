@@ -23,7 +23,11 @@ and answers so the side agent can continue the same topic without steering the m
 `/btw` without a question to reopen the latest side conversation for that thread in the current app
 view.
 
+Use the model and reasoning controls in the side composer to change how the next side question runs.
+This choice applies only to the side conversation. Use Stop to end an answer without stopping the
+main agent. If another connected client is waiting for the same shared answer, its request continues.
+
 Side questions are unavailable while the agent is waiting for required user input.
 
-Side questions accept text only. They use the model selected for the thread and work with every
+Side questions accept text only. They start with the model selected for the thread and work with every
 provider that T3 Code supports.

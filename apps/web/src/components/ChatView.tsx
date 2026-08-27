@@ -1252,6 +1252,7 @@ type LocalThreadErrorEntry = {
 type SideQuestionState = {
   readonly mode: "panel" | "minimized" | "hidden";
   readonly turns: ReadonlyArray<SideQuestionTurn>;
+  readonly modelSelection: ModelSelection;
 };
 
 function chatActionErrorMessage(error: unknown): string {
@@ -1327,6 +1328,9 @@ function ChatViewContent(props: ChatViewProps) {
     reportFailure: false,
   });
   const askSideQuestion = useAtomCommand(orchestrationEnvironment.askSideQuestion, {
+    reportFailure: false,
+  });
+  const cancelSideQuestion = useAtomCommand(orchestrationEnvironment.cancelSideQuestion, {
     reportFailure: false,
   });
   const openPreview = useAtomCommand(previewEnvironment.open, { reportFailure: false });
@@ -1439,7 +1443,7 @@ function ChatViewContent(props: ChatViewProps) {
   >({});
   const sideQuestionState = sideQuestionsByThread[routeThreadKey] ?? null;
   const latestSideQuestionTurn = sideQuestionState?.turns.at(-1) ?? null;
-  const sideQuestionRequestRef = useRef<Record<string, number>>({});
+  const sideQuestionRequestRef = useRef<Record<string, string>>({});
   const setSideQuestionMode = useCallback(
     (mode: SideQuestionState["mode"]) =>
       setSideQuestionsByThread((current) => {
@@ -5375,12 +5379,17 @@ function ChatViewContent(props: ChatViewProps) {
       const previousTurns =
         mode === "new" ? [] : sideQuestionPreviousTurns(sideQuestionState?.turns ?? []);
       const retainedTurns = mode === "new" ? [] : (sideQuestionState?.turns ?? []);
-      const requestId = (sideQuestionRequestRef.current[routeThreadKey] ?? 0) + 1;
+      const requestId = randomHex(16);
+      const modelSelection =
+        mode === "new"
+          ? activeThread.modelSelection
+          : (sideQuestionState?.modelSelection ?? activeThread.modelSelection);
       sideQuestionRequestRef.current[routeThreadKey] = requestId;
       setSideQuestionsByThread((current) => ({
         ...current,
         [routeThreadKey]: {
           mode: "panel",
+          modelSelection,
           turns: [...retainedTurns, { id: requestId, question, answer: "", status: "loading" }],
         },
       }));
@@ -5390,7 +5399,9 @@ function ChatViewContent(props: ChatViewProps) {
         environmentId,
         input: {
           threadId: activeThread.id,
+          requestId,
           question,
+          modelSelection,
           previousTurns,
         },
       });
@@ -5449,6 +5460,31 @@ function ChatViewContent(props: ChatViewProps) {
       sideQuestionState,
     ],
   );
+
+  const stopSideQuestion = useCallback(() => {
+    if (!activeThread) return;
+    const requestId = sideQuestionState?.turns.at(-1)?.id;
+    if (!requestId || sideQuestionState?.turns.at(-1)?.status !== "loading") return;
+    sideQuestionRequestRef.current[routeThreadKey] = `stopped:${requestId}`;
+    setSideQuestionsByThread((current) => {
+      const state = current[routeThreadKey];
+      if (!state || state.turns.at(-1)?.id !== requestId) return current;
+      return {
+        ...current,
+        [routeThreadKey]: {
+          ...state,
+          turns: [
+            ...state.turns.slice(0, -1),
+            { ...state.turns.at(-1)!, answer: "", status: "stopped" },
+          ],
+        },
+      };
+    });
+    void cancelSideQuestion({
+      environmentId,
+      input: { threadId: activeThread.id, requestId },
+    });
+  }, [activeThread, cancelSideQuestion, environmentId, routeThreadKey, sideQuestionState]);
 
   const onSend = async (
     e?: { preventDefault: () => void },
@@ -6880,6 +6916,9 @@ function ChatViewContent(props: ChatViewProps) {
         cwd={activeThread.worktreePath ?? activeProject?.workspaceRoot}
         threadRef={activeThreadRef}
         turns={sideQuestionState.turns}
+        providers={providerStatuses}
+        settings={settings}
+        modelSelection={sideQuestionState.modelSelection}
         onMinimize={() => {
           setSideQuestionMode("minimized");
           useRightPanelStore.getState().closeSurface(activeThreadRef, "side-question");
@@ -6887,6 +6926,13 @@ function ChatViewContent(props: ChatViewProps) {
         onSubmit={(question) => {
           void submitSideQuestion(question, "follow-up");
         }}
+        onStop={stopSideQuestion}
+        onModelSelectionChange={(modelSelection) =>
+          setSideQuestionsByThread((current) => {
+            const state = current[routeThreadKey];
+            return state ? { ...current, [routeThreadKey]: { ...state, modelSelection } } : current;
+          })
+        }
       />
     ) : activeRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>

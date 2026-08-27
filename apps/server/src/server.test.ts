@@ -1446,6 +1446,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           threadId: defaultThreadId,
           question: "Same question",
           context: "Same context",
+          modelSelection: defaultModelSelection,
         };
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -1457,9 +1458,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           return { answer: "Shared answer" };
         });
 
-        const first = yield* singleFlight(input, generation).pipe(Effect.forkChild);
+        const first = yield* singleFlight
+          .run({ ...input, requestId: "shared-1" }, generation)
+          .pipe(Effect.forkChild);
         yield* Deferred.await(started);
-        const second = yield* singleFlight(input, generation).pipe(Effect.forkChild);
+        const second = yield* singleFlight
+          .run({ ...input, requestId: "shared-2" }, generation)
+          .pipe(Effect.forkChild);
         yield* Effect.yieldNow;
         yield* Deferred.succeed(release, undefined);
 
@@ -1470,20 +1475,36 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const firstDistinctStarted = yield* Deferred.make<void>();
         const secondDistinctStarted = yield* Deferred.make<void>();
         const releaseDistinct = yield* Deferred.make<void>();
-        const firstDistinct = yield* singleFlight(
-          { threadId: defaultThreadId, question: "First question", context: "Same context" },
-          Deferred.succeed(firstDistinctStarted, undefined).pipe(
-            Effect.andThen(Deferred.await(releaseDistinct)),
-            Effect.as({ answer: "First answer" }),
-          ),
-        ).pipe(Effect.forkChild);
-        const secondDistinct = yield* singleFlight(
-          { threadId: defaultThreadId, question: "Second question", context: "Same context" },
-          Deferred.succeed(secondDistinctStarted, undefined).pipe(
-            Effect.andThen(Deferred.await(releaseDistinct)),
-            Effect.as({ answer: "Second answer" }),
-          ),
-        ).pipe(Effect.forkChild);
+        const firstDistinct = yield* singleFlight
+          .run(
+            {
+              threadId: defaultThreadId,
+              requestId: "distinct-1",
+              question: "First question",
+              context: "Same context",
+              modelSelection: defaultModelSelection,
+            },
+            Deferred.succeed(firstDistinctStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseDistinct)),
+              Effect.as({ answer: "First answer" }),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        const secondDistinct = yield* singleFlight
+          .run(
+            {
+              threadId: defaultThreadId,
+              requestId: "distinct-2",
+              question: "Second question",
+              context: "Same context",
+              modelSelection: defaultModelSelection,
+            },
+            Deferred.succeed(secondDistinctStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseDistinct)),
+              Effect.as({ answer: "Second answer" }),
+            ),
+          )
+          .pipe(Effect.forkChild);
         yield* Deferred.await(firstDistinctStarted);
         yield* Deferred.await(secondDistinctStarted);
         yield* Deferred.succeed(releaseDistinct, undefined);
@@ -1500,25 +1521,33 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const singleFlight = yield* makeSideQuestionSingleFlight;
         const firstStarted = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const first = yield* singleFlight(
-          {
-            threadId: defaultThreadId,
-            question: "Same follow-up",
-            context: "First context",
-          },
-          Deferred.succeed(firstStarted, undefined).pipe(
-            Effect.andThen(Deferred.await(release)),
-            Effect.as({ answer: "First history answer" }),
-          ),
-        ).pipe(Effect.forkChild);
-        const second = yield* singleFlight(
-          {
-            threadId: defaultThreadId,
-            question: "Same follow-up",
-            context: "Second context",
-          },
-          Deferred.await(release).pipe(Effect.as({ answer: "Second history answer" })),
-        ).pipe(Effect.forkChild);
+        const first = yield* singleFlight
+          .run(
+            {
+              threadId: defaultThreadId,
+              requestId: "context-1",
+              question: "Same follow-up",
+              context: "First context",
+              modelSelection: defaultModelSelection,
+            },
+            Deferred.succeed(firstStarted, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.as({ answer: "First history answer" }),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        const second = yield* singleFlight
+          .run(
+            {
+              threadId: defaultThreadId,
+              requestId: "context-2",
+              question: "Same follow-up",
+              context: "Second context",
+              modelSelection: defaultModelSelection,
+            },
+            Deferred.await(release).pipe(Effect.as({ answer: "Second history answer" })),
+          )
+          .pipe(Effect.forkChild);
 
         yield* Deferred.await(firstStarted);
         yield* Effect.yieldNow;
@@ -1538,6 +1567,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           threadId: defaultThreadId,
           question: "Why SQLite?",
           context: "Same context",
+          modelSelection: defaultModelSelection,
         };
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -1549,9 +1579,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           return { answer: "For local durability." };
         });
 
-        const owner = yield* singleFlight(input, generation).pipe(Effect.forkChild);
+        const owner = yield* singleFlight
+          .run({ ...input, requestId: "caller-1" }, generation)
+          .pipe(Effect.forkChild);
         yield* Deferred.await(started);
-        const follower = yield* singleFlight(input, generation).pipe(Effect.forkChild);
+        const follower = yield* singleFlight
+          .run({ ...input, requestId: "caller-2" }, generation)
+          .pipe(Effect.forkChild);
         yield* Effect.yieldNow;
         yield* Fiber.interrupt(owner);
         yield* Deferred.succeed(release, undefined);
@@ -1560,8 +1594,8 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         assert.equal(generationCount, 1);
 
         assert.deepEqual(
-          yield* singleFlight(
-            input,
+          yield* singleFlight.run(
+            { ...input, requestId: "caller-3" },
             Effect.sync(() => {
               generationCount += 1;
               return { answer: "Fresh answer" };
@@ -1570,6 +1604,63 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           { answer: "Fresh answer" },
         );
         assert.equal(generationCount, 2);
+      }),
+    ),
+  );
+
+  it.effect("cancels the provider after the last side-question caller stops", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const started = yield* Deferred.make<void>();
+        const interrupted = yield* Deferred.make<void>();
+        const request = {
+          threadId: defaultThreadId,
+          requestId: "stop-me",
+          question: "Keep going?",
+          context: "Current context",
+          modelSelection: defaultModelSelection,
+        };
+        const generation = Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+        );
+
+        const caller = yield* singleFlight.run(request, generation).pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        assert.isTrue(yield* singleFlight.cancel(request));
+        yield* Deferred.await(interrupted);
+        assert.isTrue((yield* Fiber.await(caller))._tag === "Failure");
+      }),
+    ),
+  );
+
+  it.effect("does not start a side-question provider after an early stop", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const request = {
+          threadId: defaultThreadId,
+          requestId: "stop-before-start",
+          question: "Start later?",
+          context: "Current context",
+          modelSelection: defaultModelSelection,
+        };
+        let started = false;
+
+        assert.isTrue(yield* singleFlight.cancel(request));
+        const exit = yield* singleFlight
+          .run(
+            request,
+            Effect.sync(() => {
+              started = true;
+              return { answer: "Too late" };
+            }),
+          )
+          .pipe(Effect.exit);
+
+        assert.isTrue(exit._tag === "Failure");
+        assert.isFalse(started);
       }),
     ),
   );
@@ -1684,11 +1775,17 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       });
 
       const wsUrl = yield* getWsServerUrl("/ws");
+      const sideModelSelection = {
+        instanceId: ProviderInstanceId.make("claudeAgent"),
+        model: "claude-sonnet-4-5",
+        options: [{ id: "reasoningEffort", value: "high" }],
+      };
       const result = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
           client[ORCHESTRATION_WS_METHODS.askSideQuestion]({
             threadId: defaultThreadId,
             question: "How does this work?",
+            modelSelection: sideModelSelection,
             previousTurns: [
               {
                 question: "What did we inspect?",
@@ -1708,7 +1805,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.include(received[0]!.context, "Older tool summary");
       assert.notInclude(received[0]!.context, "CURRENT_TOOL_SECRET");
       assert.notInclude(received[0]!.context, "OLDER_TOOL_SECRET");
-      assert.deepEqual(received[0]?.modelSelection, thread.modelSelection);
+      assert.deepEqual(received[0]?.modelSelection, sideModelSelection);
       assert.equal(dispatchCount, 0);
       assert.equal(pageReadCount, 2);
       assert.isBelow(

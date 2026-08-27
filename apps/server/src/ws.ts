@@ -29,6 +29,7 @@ import {
   type GitManagerServiceError,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
+  ModelSelection,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
@@ -154,26 +155,54 @@ const encodeSideQuestionRequestKey = Schema.encodeSync(
     Schema.Struct({
       question: Schema.String,
       context: Schema.String,
+      modelSelection: ModelSelection,
     }),
   ),
 );
 type SideQuestionSingleFlightInput = {
   readonly threadId: ThreadId;
+  readonly requestId: string;
   readonly question: string;
   readonly context: string;
+  readonly modelSelection: ModelSelection;
 };
-
-type SideQuestionSingleFlight = <R>(
-  input: SideQuestionSingleFlightInput,
-  effect: Effect.Effect<TextGeneration.SideQuestionGenerationResult, TextGenerationError, R>,
-) => Effect.Effect<TextGeneration.SideQuestionGenerationResult, TextGenerationError, R>;
 
 type SideQuestionDeferred = Deferred.Deferred<
   TextGeneration.SideQuestionGenerationResult,
   TextGenerationError
 >;
 
-type SideQuestionsInFlight = Map<ThreadId, Map<string, SideQuestionDeferred>>;
+type SideQuestionFlight = {
+  readonly result: SideQuestionDeferred;
+  readonly cancel: Deferred.Deferred<void>;
+  readonly requestIds: ReadonlySet<string>;
+};
+
+type SideQuestionRequest = {
+  readonly threadId: ThreadId;
+  readonly requestKey: string;
+  readonly cancel: Deferred.Deferred<void>;
+};
+
+type SideQuestionsInFlight = {
+  readonly flights: Map<ThreadId, Map<string, SideQuestionFlight>>;
+  readonly requests: Map<string, SideQuestionRequest>;
+  readonly cancelledRequests: ReadonlySet<string>;
+};
+
+type SideQuestionSingleFlight = {
+  readonly run: <R>(
+    input: SideQuestionSingleFlightInput,
+    effect: Effect.Effect<TextGeneration.SideQuestionGenerationResult, TextGenerationError, R>,
+  ) => Effect.Effect<TextGeneration.SideQuestionGenerationResult, TextGenerationError, R>;
+  readonly cancel: (input: {
+    readonly threadId: ThreadId;
+    readonly requestId: string;
+  }) => Effect.Effect<boolean>;
+};
+
+const sideQuestionRequestIndexKey = (threadId: ThreadId, requestId: string) =>
+  `${threadId}\u0000${requestId}`;
 
 export const makeSideQuestionSingleFlight: Effect.Effect<
   SideQuestionSingleFlight,
@@ -181,59 +210,155 @@ export const makeSideQuestionSingleFlight: Effect.Effect<
   Scope.Scope
 > = Effect.gen(function* () {
   const scope = yield* Effect.scope;
-  const inFlight = yield* Ref.make<SideQuestionsInFlight>(new Map());
+  const inFlight = yield* Ref.make<SideQuestionsInFlight>({
+    flights: new Map(),
+    requests: new Map(),
+    cancelledRequests: new Set(),
+  });
 
-  return (input, effect) =>
+  const cancel: SideQuestionSingleFlight["cancel"] = (input) =>
+    Effect.gen(function* () {
+      const indexKey = sideQuestionRequestIndexKey(input.threadId, input.requestId);
+      const [request, providerCancel] = yield* Ref.modify<
+        SideQuestionsInFlight,
+        readonly [SideQuestionRequest | undefined, Deferred.Deferred<void> | undefined]
+      >(inFlight, (current) => {
+        const request = current.requests.get(indexKey);
+        if (!request || request.threadId !== input.threadId) {
+          if (current.cancelledRequests.has(indexKey)) {
+            return [[undefined, undefined] as const, current];
+          }
+          return [
+            [undefined, undefined] as const,
+            {
+              ...current,
+              cancelledRequests: new Set(current.cancelledRequests).add(indexKey),
+            },
+          ];
+        }
+
+        const threadFlights = current.flights.get(input.threadId);
+        const flight = threadFlights?.get(request.requestKey);
+        const nextRequests = new Map(current.requests);
+        nextRequests.delete(indexKey);
+        if (!flight || !flight.requestIds.has(input.requestId)) {
+          return [[request, undefined] as const, { ...current, requests: nextRequests }];
+        }
+
+        const nextRequestIds = new Set(flight.requestIds);
+        nextRequestIds.delete(input.requestId);
+        const nextThreadFlights = new Map(threadFlights);
+        let providerCancel: Deferred.Deferred<void> | undefined;
+        if (nextRequestIds.size === 0) {
+          nextThreadFlights.delete(request.requestKey);
+          providerCancel = flight.cancel;
+        } else {
+          nextThreadFlights.set(request.requestKey, { ...flight, requestIds: nextRequestIds });
+        }
+        const nextFlights = new Map(current.flights);
+        if (nextThreadFlights.size === 0) nextFlights.delete(input.threadId);
+        else nextFlights.set(input.threadId, nextThreadFlights);
+        return [
+          [request, providerCancel] as const,
+          { ...current, flights: nextFlights, requests: nextRequests },
+        ];
+      });
+
+      if (!request) return true;
+      yield* Deferred.succeed(request.cancel, undefined);
+      if (providerCancel) yield* Deferred.succeed(providerCancel, undefined);
+      return true;
+    });
+
+  const run: SideQuestionSingleFlight["run"] = (input, effect) =>
     Effect.uninterruptibleMask((restore) =>
       Effect.gen(function* () {
-        const candidate = yield* Deferred.make<
+        const candidateResult = yield* Deferred.make<
           TextGeneration.SideQuestionGenerationResult,
           TextGenerationError
         >();
+        const candidateProviderCancel = yield* Deferred.make<void>();
+        const subscriberCancel = yield* Deferred.make<void>();
         const requestKey = encodeSideQuestionRequestKey({
           question: input.question,
           context: input.context,
+          modelSelection: input.modelSelection,
         });
-        const [deferred, ownsRequest] = yield* Ref.modify<
+        const [flight, ownsRequest] = yield* Ref.modify<
           SideQuestionsInFlight,
-          readonly [SideQuestionDeferred, boolean]
+          readonly [SideQuestionFlight | null, boolean]
         >(inFlight, (current) => {
-          const threadRequests = current.get(input.threadId);
-          const existing = threadRequests?.get(requestKey);
-          if (existing) return [[existing, false] as const, current];
-
-          const nextThreadRequests = new Map(threadRequests);
-          nextThreadRequests.set(requestKey, candidate);
-          const next = new Map(current);
-          next.set(input.threadId, nextThreadRequests);
-          return [[candidate, true] as const, next];
+          const indexKey = sideQuestionRequestIndexKey(input.threadId, input.requestId);
+          if (current.cancelledRequests.has(indexKey)) {
+            const cancelledRequests = new Set(current.cancelledRequests);
+            cancelledRequests.delete(indexKey);
+            return [[null, false] as const, { ...current, cancelledRequests }];
+          }
+          const threadFlights = current.flights.get(input.threadId);
+          const existing = threadFlights?.get(requestKey);
+          const flight = existing
+            ? { ...existing, requestIds: new Set(existing.requestIds).add(input.requestId) }
+            : {
+                result: candidateResult,
+                cancel: candidateProviderCancel,
+                requestIds: new Set([input.requestId]),
+              };
+          const nextThreadFlights = new Map(threadFlights);
+          nextThreadFlights.set(requestKey, flight);
+          const nextFlights = new Map(current.flights);
+          nextFlights.set(input.threadId, nextThreadFlights);
+          const nextRequests = new Map(current.requests);
+          nextRequests.set(sideQuestionRequestIndexKey(input.threadId, input.requestId), {
+            threadId: input.threadId,
+            requestKey,
+            cancel: subscriberCancel,
+          });
+          return [
+            [flight, !existing] as const,
+            { ...current, flights: nextFlights, requests: nextRequests },
+          ];
         });
+
+        if (!flight) return yield* Effect.interrupt;
 
         if (ownsRequest) {
-          yield* Deferred.into(effect, deferred).pipe(
+          const generation = Effect.raceFirst(
+            effect,
+            Deferred.await(flight.cancel).pipe(Effect.andThen(Effect.interrupt)),
+          );
+          yield* Deferred.into(generation, flight.result).pipe(
             Effect.ensuring(
               Ref.update(inFlight, (current) => {
-                const threadRequests = current.get(input.threadId);
-                if (threadRequests?.get(requestKey) !== deferred) return current;
+                const threadFlights = current.flights.get(input.threadId);
+                const currentFlight = threadFlights?.get(requestKey);
+                if (currentFlight?.result !== flight.result) return current;
 
-                const nextThreadRequests = new Map(threadRequests);
-                nextThreadRequests.delete(requestKey);
-                const next = new Map(current);
-                if (nextThreadRequests.size === 0) {
-                  next.delete(input.threadId);
-                } else {
-                  next.set(input.threadId, nextThreadRequests);
+                const nextThreadFlights = new Map(threadFlights);
+                nextThreadFlights.delete(requestKey);
+                const nextFlights = new Map(current.flights);
+                if (nextThreadFlights.size === 0) nextFlights.delete(input.threadId);
+                else nextFlights.set(input.threadId, nextThreadFlights);
+                const nextRequests = new Map(current.requests);
+                for (const requestId of currentFlight.requestIds) {
+                  nextRequests.delete(sideQuestionRequestIndexKey(input.threadId, requestId));
                 }
-                return next;
+                return { ...current, flights: nextFlights, requests: nextRequests };
               }),
             ),
             Effect.forkIn(scope),
           );
         }
 
-        return yield* restore(Deferred.await(deferred));
+        return yield* restore(
+          Effect.raceFirst(
+            Deferred.await(flight.result),
+            Deferred.await(subscriberCancel).pipe(Effect.andThen(Effect.interrupt)),
+          ),
+        );
       }),
     );
+
+  return { run, cancel };
 });
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
@@ -1453,13 +1578,21 @@ const makeWsRpcLayer = (
                 });
               }
 
-              return yield* sideQuestionSingleFlight(
-                { threadId: input.threadId, question: input.question, context: providerContext },
+              const requestId = input.requestId ?? (yield* crypto.randomUUIDv4);
+              const modelSelection = input.modelSelection ?? thread.modelSelection;
+              return yield* sideQuestionSingleFlight.run(
+                {
+                  threadId: input.threadId,
+                  requestId,
+                  question: input.question,
+                  context: providerContext,
+                  modelSelection,
+                },
                 textGeneration.answerSideQuestion({
                   cwd: thread.worktreePath ?? project.value.workspaceRoot,
                   question: input.question,
                   context: providerContext,
-                  modelSelection: thread.modelSelection,
+                  modelSelection,
                 }),
               );
             }).pipe(
@@ -1473,6 +1606,12 @@ const makeWsRpcLayer = (
                     }),
               ),
             ),
+            { "rpc.aggregate": "orchestration" },
+          ),
+        [ORCHESTRATION_WS_METHODS.cancelSideQuestion]: (input) =>
+          observeRpcEffect(
+            ORCHESTRATION_WS_METHODS.cancelSideQuestion,
+            sideQuestionSingleFlight.cancel(input).pipe(Effect.map((cancelled) => ({ cancelled }))),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_WS_METHODS.getWorkflowScript]: (input) =>
