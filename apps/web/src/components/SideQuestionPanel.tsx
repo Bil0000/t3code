@@ -5,6 +5,7 @@ import { MessageCircleQuestion, Minimize2Icon, XIcon } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 
 import { composerSubmissionIntentForEnter } from "../composer-logic";
+import { useMediaQuery } from "../hooks/useMediaQuery";
 import ChatMarkdown from "./ChatMarkdown";
 import { getAppModelOptionsForInstance } from "../modelSelection";
 import {
@@ -43,6 +44,7 @@ export function SideQuestionPanel(props: {
   readonly onSubmit: (question: string) => void;
 }) {
   const [draft, setDraft] = useState("");
+  const isMobileViewport = useMediaQuery("max-sm");
   const pending = props.turns.at(-1)?.status === "loading";
   const providerEntries = useMemo(
     () =>
@@ -158,7 +160,7 @@ export function SideQuestionPanel(props: {
                   <Textarea
                     unstyled
                     size="sm"
-                    className="block text-sm"
+                    className="block text-sm [&_[data-slot=textarea]]:max-h-50 [&_[data-slot=textarea]]:overflow-y-auto"
                     value={draft}
                     style={{ resize: "none" }}
                     aria-label="Ask a follow-up side question"
@@ -167,7 +169,7 @@ export function SideQuestionPanel(props: {
                     onKeyDown={(event) => {
                       if (event.nativeEvent.isComposing || event.key !== "Enter") return;
                       const submissionIntent = composerSubmissionIntentForEnter({
-                        isMobileViewport: false,
+                        isMobileViewport,
                         shiftKey: event.shiftKey,
                         modifierKey: event.metaKey || event.ctrlKey,
                         isDraftThread: false,
@@ -219,9 +221,10 @@ export function SideQuestionPanel(props: {
                   {pending ? (
                     <ComposerStopButton onClick={props.onStop} />
                   ) : (
-                    <button
+                    <Button
                       type="submit"
-                      className="relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] enabled:shadow-message-action/24 hover:scale-105 hover:bg-message-action-hover active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8"
+                      size="icon"
+                      className="rounded-full border-transparent bg-message-action text-message-action-foreground transition-transform hover:scale-105 hover:bg-message-action-hover"
                       disabled={draft.trim().length === 0}
                       aria-label="Ask follow-up"
                     >
@@ -240,7 +243,7 @@ export function SideQuestionPanel(props: {
                           strokeLinejoin="round"
                         />
                       </svg>
-                    </button>
+                    </Button>
                   )}
                 </div>
               </div>

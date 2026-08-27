@@ -6913,6 +6913,7 @@ function ChatViewContent(props: ChatViewProps) {
   const rightPanelContent = activeThreadRef ? (
     activeRightPanelSurface?.kind === "side-question" && sideQuestionState?.mode === "panel" ? (
       <SideQuestionPanel
+        key={activeThreadKey}
         cwd={activeThread.worktreePath ?? activeProject?.workspaceRoot}
         threadRef={activeThreadRef}
         turns={sideQuestionState.turns}
