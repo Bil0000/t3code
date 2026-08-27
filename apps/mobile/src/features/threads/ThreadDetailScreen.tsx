@@ -1157,9 +1157,15 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
                       <View className="mt-2 flex-row items-end gap-2">
                         <TextInput
                           multiline
+                          submitBehavior="submit"
                           value={sideQuestionState.draft}
                           accessibilityLabel="Ask a follow-up side question"
                           placeholder="Ask a follow-up…"
+                          onSubmitEditing={() => {
+                            const question = sideQuestionState.draft.trim();
+                            if (!question) return;
+                            void submitSideQuestion(question, "follow-up");
+                          }}
                           className="min-h-11 flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"
                           onChangeText={(draft) =>
                             setSideQuestionsByThread((current) => {
