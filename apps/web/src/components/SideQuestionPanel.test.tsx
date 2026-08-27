@@ -96,6 +96,10 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain("whitespace-pre-wrap");
     expect(markup).toContain("wrap-break-word");
     expect(markup).toContain("chat-composer-glass-shell");
+    expect(markup).toContain('data-side-question-composer-shell="true"');
+    expect(markup.indexOf('data-side-question-context="true"')).toBeLessThan(
+      markup.indexOf("</form>"),
+    );
     expect(markup).toContain('data-chat-composer-main-surface="true"');
     expect(markup).toContain('aria-label="Ask a follow-up side question"');
     expect(markup).toContain('style="resize:none"');

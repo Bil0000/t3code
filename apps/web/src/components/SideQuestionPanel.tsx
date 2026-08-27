@@ -183,6 +183,7 @@ export function SideQuestionPanel(props: {
 
       <div className="shrink-0 p-3">
         <form
+          data-side-question-composer-shell="true"
           className={cn(
             "chat-composer-glass-shell relative",
             showRunContext && "chat-composer-glass-shell-with-context",
@@ -293,51 +294,51 @@ export function SideQuestionPanel(props: {
               </div>
             </div>
           </div>
-        </form>
-        {showRunContext ? (
-          <div
-            data-side-question-context="true"
-            className="chat-composer-context-strip group/composer-context -mt-4 mx-auto flex w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] items-center gap-2 overflow-x-clip overflow-y-visible ps-1 pe-2 pt-5 pb-1"
-          >
-            <div className="flex min-w-0 flex-1 items-center gap-1">
-              {props.runContext.showEnvironmentIndicator ? (
-                <>
-                  <BranchToolbarEnvironmentSelector
-                    envLocked
-                    environmentId={props.runContext.environmentId}
-                    availableEnvironments={props.runContext.availableEnvironments}
-                  />
-                  {props.runContext.showGitControls ? (
-                    <Separator
-                      orientation="vertical"
-                      className="mx-0.5 h-3.5!"
-                      data-composer-context-control
+          {showRunContext ? (
+            <div
+              data-side-question-context="true"
+              className="chat-composer-context-strip group/composer-context -mt-4 mx-auto flex w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] items-center gap-2 overflow-x-clip overflow-y-visible ps-1 pe-2 pt-5 pb-1"
+            >
+              <div className="flex min-w-0 flex-1 items-center gap-1">
+                {props.runContext.showEnvironmentIndicator ? (
+                  <>
+                    <BranchToolbarEnvironmentSelector
+                      envLocked
+                      environmentId={props.runContext.environmentId}
+                      availableEnvironments={props.runContext.availableEnvironments}
                     />
-                  ) : null}
-                </>
-              ) : null}
+                    {props.runContext.showGitControls ? (
+                      <Separator
+                        orientation="vertical"
+                        className="mx-0.5 h-3.5!"
+                        data-composer-context-control
+                      />
+                    ) : null}
+                  </>
+                ) : null}
+                {props.runContext.showGitControls ? (
+                  <BranchToolbarEnvModeSelector
+                    envLocked
+                    effectiveEnvMode={props.runContext.activeWorktreePath ? "worktree" : "local"}
+                    activeWorktreePath={props.runContext.activeWorktreePath}
+                    onEnvModeChange={ignoreEnvModeChange}
+                  />
+                ) : null}
+              </div>
               {props.runContext.showGitControls ? (
-                <BranchToolbarEnvModeSelector
-                  envLocked
-                  effectiveEnvMode={props.runContext.activeWorktreePath ? "worktree" : "local"}
-                  activeWorktreePath={props.runContext.activeWorktreePath}
-                  onEnvModeChange={ignoreEnvModeChange}
-                />
+                <span
+                  className="inline-flex h-7 min-w-0 flex-1 items-center justify-end gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs"
+                  data-composer-context-control
+                >
+                  <GitBranchIcon className="size-3 shrink-0 opacity-70" />
+                  <span className="min-w-0 max-w-[240px] truncate">
+                    {props.runContext.branch ?? "Select ref"}
+                  </span>
+                </span>
               ) : null}
             </div>
-            {props.runContext.showGitControls ? (
-              <span
-                className="inline-flex h-7 min-w-0 flex-1 items-center justify-end gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs"
-                data-composer-context-control
-              >
-                <GitBranchIcon className="size-3 shrink-0 opacity-70" />
-                <span className="min-w-0 max-w-[240px] truncate">
-                  {props.runContext.branch ?? "Select ref"}
-                </span>
-              </span>
-            ) : null}
-          </div>
-        ) : null}
+          ) : null}
+        </form>
       </div>
     </div>
   );
