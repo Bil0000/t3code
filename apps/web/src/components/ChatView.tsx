@@ -82,7 +82,6 @@ import {
   type AtomCommandResult,
 } from "@t3tools/client-runtime/state/runtime";
 import * as Cause from "effect/Cause";
-import { sideQuestionResponseVisibility } from "@t3tools/client-runtime/state/orchestration";
 import * as Schema from "effect/Schema";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { isElectron } from "../env";
@@ -170,6 +169,11 @@ import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavaila
 import { RightPanelTabs, type PullRequestTabStatus } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import {
+  SideQuestionMinimized,
+  SideQuestionPanel,
+  type SideQuestionTurn,
+} from "./SideQuestionPanel";
+import {
   deriveAgentPanelModel,
   foldSubagentActivities,
 } from "@t3tools/client-runtime/state/subagentRuntime";
@@ -184,7 +188,6 @@ import {
   GitBranchIcon,
   Minimize2Icon,
   PaperclipIcon,
-  XIcon,
   WifiOffIcon,
 } from "lucide-react";
 import { cn, randomHex } from "~/lib/utils";
@@ -282,8 +285,6 @@ import {
 import { environmentShell } from "../state/shell";
 import { orchestrationEnvironment } from "../state/orchestration";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
-import ChatMarkdown from "./ChatMarkdown";
-import { Spinner } from "./ui/spinner";
 import { DraftHeroHeadline } from "./chat/DraftHeroHeadline";
 import { ExpandedImageDialog } from "./chat/ExpandedImageDialog";
 import { PullRequestThreadDialog } from "./PullRequestThreadDialog";
@@ -1248,11 +1249,8 @@ type LocalThreadErrorEntry = {
 };
 
 type SideQuestionState = {
-  readonly threadKey: string;
-  readonly question: string;
-  readonly visible: boolean;
-  readonly status: "loading" | "success" | "error";
-  readonly text: string;
+  readonly mode: "panel" | "minimized" | "hidden";
+  readonly turns: ReadonlyArray<SideQuestionTurn>;
 };
 
 function chatActionErrorMessage(error: unknown): string {
@@ -1439,7 +1437,16 @@ function ChatViewContent(props: ChatViewProps) {
     Record<string, SideQuestionState>
   >({});
   const sideQuestionState = sideQuestionsByThread[routeThreadKey] ?? null;
+  const latestSideQuestionTurn = sideQuestionState?.turns.at(-1) ?? null;
   const sideQuestionRequestRef = useRef<Record<string, number>>({});
+  const setSideQuestionMode = useCallback(
+    (mode: SideQuestionState["mode"]) =>
+      setSideQuestionsByThread((current) => {
+        const state = current[routeThreadKey];
+        return state ? { ...current, [routeThreadKey]: { ...state, mode } } : current;
+      }),
+    [routeThreadKey],
+  );
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
@@ -1725,6 +1732,12 @@ function ChatViewContent(props: ChatViewProps) {
   const activeRightPanelSurface = useRightPanelStore((state) =>
     selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
   );
+  useEffect(() => {
+    if (!activeThreadRef || sideQuestionState) return;
+    if (rightPanelState.surfaces.some((surface) => surface.kind === "side-question")) {
+      useRightPanelStore.getState().closeSurface(activeThreadRef, "side-question");
+    }
+  }, [activeThreadRef, rightPanelState.surfaces, sideQuestionState]);
   const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
     Record<string, PullRequestTabStatus>
   >({});
@@ -3708,6 +3721,9 @@ function ChatViewContent(props: ChatViewProps) {
   const cleanupRightPanelSurfaces = useCallback(
     (surfaces: readonly RightPanelSurface[]) => {
       if (!activeThreadRef) return;
+      if (surfaces.some((surface) => surface.kind === "side-question")) {
+        setSideQuestionMode("hidden");
+      }
       for (const surface of surfaces) {
         if (surface.kind === "preview" && surface.resourceId) {
           void closePreviewSession({
@@ -3733,6 +3749,7 @@ function ChatViewContent(props: ChatViewProps) {
       activePreviewState.sessions,
       closePreview,
       closeTerminalMutation,
+      setSideQuestionMode,
       storeCloseTerminal,
     ],
   );
@@ -5349,6 +5366,93 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
+  const submitSideQuestion = useCallback(
+    async (question: string, mode: "new" | "follow-up") => {
+      if (!activeThread || !activeThreadRef) return;
+      if (sideQuestionState?.turns.at(-1)?.status === "loading") return;
+
+      const previousTurns =
+        mode === "new"
+          ? []
+          : (sideQuestionState?.turns
+              .filter((turn) => turn.status === "success")
+              .map((turn) => ({ question: turn.question, answer: turn.answer })) ?? []);
+      const retainedTurns = mode === "new" ? [] : (sideQuestionState?.turns ?? []);
+      const requestId = (sideQuestionRequestRef.current[routeThreadKey] ?? 0) + 1;
+      sideQuestionRequestRef.current[routeThreadKey] = requestId;
+      setSideQuestionsByThread((current) => ({
+        ...current,
+        [routeThreadKey]: {
+          mode: "panel",
+          turns: [...retainedTurns, { id: requestId, question, answer: "", status: "loading" }],
+        },
+      }));
+      useRightPanelStore.getState().open(activeThreadRef, "side-question");
+
+      const result = await askSideQuestion({
+        environmentId,
+        input: {
+          threadId: activeThread.id,
+          question,
+          previousTurns,
+        },
+      });
+      if (sideQuestionRequestRef.current[routeThreadKey] !== requestId) return;
+
+      if (result._tag === "Success") {
+        setSideQuestionsByThread((current) => {
+          const state = current[routeThreadKey];
+          if (!state) return current;
+          return {
+            ...current,
+            [routeThreadKey]: {
+              ...state,
+              turns: [
+                ...state.turns.slice(0, -1),
+                { id: requestId, question, answer: result.value.answer, status: "success" },
+              ],
+            },
+          };
+        });
+        return;
+      }
+
+      const error = squashAtomCommandFailure(result);
+      if (mode === "new") {
+        const currentDraft = useComposerDraftStore
+          .getState()
+          .getComposerDraft(composerDraftTarget)?.prompt;
+        if (!currentDraft) {
+          setComposerDraftPrompt(composerDraftTarget, `/btw ${question}`);
+        }
+      }
+      setSideQuestionsByThread((current) => {
+        const state = current[routeThreadKey];
+        if (!state) return current;
+        return {
+          ...current,
+          [routeThreadKey]: {
+            ...state,
+            turns: [
+              ...state.turns.slice(0, -1),
+              { id: requestId, question, answer: chatActionErrorMessage(error), status: "error" },
+            ],
+          },
+        };
+      });
+    },
+    [
+      activeThread,
+      activeThreadRef,
+      askSideQuestion,
+      composerDraftTarget,
+      environmentId,
+      routeThreadKey,
+      setComposerDraftPrompt,
+      sideQuestionState,
+    ],
+  );
+
   const onSend = async (
     e?: { preventDefault: () => void },
     submissionIntent: ComposerSubmissionIntent = "foreground",
@@ -5396,10 +5500,10 @@ function ChatViewContent(props: ChatViewProps) {
     if (sideQuestion !== null) {
       if (sideQuestion.length === 0) {
         if (sideQuestionState) {
-          setSideQuestionsByThread((current) => ({
-            ...current,
-            [routeThreadKey]: { ...sideQuestionState, visible: true },
-          }));
+          setSideQuestionMode("panel");
+          if (activeThreadRef) {
+            useRightPanelStore.getState().open(activeThreadRef, "side-question");
+          }
         } else {
           toastManager.add(
             stackedThreadToast({
@@ -5430,65 +5534,14 @@ function ChatViewContent(props: ChatViewProps) {
         );
         return;
       }
-      if (sideQuestionState?.status === "loading") {
+      if (sideQuestionState?.turns.at(-1)?.status === "loading") {
         return;
       }
 
       promptRef.current = "";
       setComposerDraftPrompt(composerDraftTarget, "");
       composerRef.current?.resetCursorState();
-      const requestId = (sideQuestionRequestRef.current[routeThreadKey] ?? 0) + 1;
-      sideQuestionRequestRef.current[routeThreadKey] = requestId;
-      setSideQuestionsByThread((current) => ({
-        ...current,
-        [routeThreadKey]: {
-          threadKey: routeThreadKey,
-          question: sideQuestion,
-          visible: true,
-          status: "loading",
-          text: "",
-        },
-      }));
-      const result = await askSideQuestion({
-        environmentId,
-        input: {
-          threadId: activeThread.id,
-          question: sideQuestion,
-        },
-      });
-      if (sideQuestionRequestRef.current[routeThreadKey] !== requestId) {
-        return;
-      }
-      if (result._tag === "Success") {
-        setSideQuestionsByThread((current) => ({
-          ...current,
-          [routeThreadKey]: {
-            threadKey: routeThreadKey,
-            question: sideQuestion,
-            visible: sideQuestionResponseVisibility(current[routeThreadKey]?.visible),
-            status: "success",
-            text: result.value.answer,
-          },
-        }));
-      } else {
-        const error = squashAtomCommandFailure(result);
-        const currentDraft = useComposerDraftStore
-          .getState()
-          .getComposerDraft(composerDraftTarget)?.prompt;
-        if (!currentDraft) {
-          setComposerDraftPrompt(composerDraftTarget, `/btw ${sideQuestion}`);
-        }
-        setSideQuestionsByThread((current) => ({
-          ...current,
-          [routeThreadKey]: {
-            threadKey: routeThreadKey,
-            question: sideQuestion,
-            visible: sideQuestionResponseVisibility(current[routeThreadKey]?.visible),
-            status: "error",
-            text: chatActionErrorMessage(error),
-          },
-        }));
-      }
+      await submitSideQuestion(sideQuestion, "new");
       return;
     }
     if (activePendingProgress) {
@@ -6825,7 +6878,20 @@ function ChatViewContent(props: ChatViewProps) {
     </div>
   );
   const rightPanelContent = activeThreadRef ? (
-    activeRightPanelSurface?.kind === "preview" ? (
+    activeRightPanelSurface?.kind === "side-question" && sideQuestionState?.mode === "panel" ? (
+      <SideQuestionPanel
+        cwd={activeThread.worktreePath ?? activeProject?.workspaceRoot}
+        threadRef={activeThreadRef}
+        turns={sideQuestionState.turns}
+        onMinimize={() => {
+          setSideQuestionMode("minimized");
+          useRightPanelStore.getState().closeSurface(activeThreadRef, "side-question");
+        }}
+        onSubmit={(question) => {
+          void submitSideQuestion(question, "follow-up");
+        }}
+      />
+    ) : activeRightPanelSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
         <PreviewPanel
           mode="embedded"
@@ -7126,52 +7192,6 @@ function ChatViewContent(props: ChatViewProps) {
                   ) : (
                     <ComposerBannerStack className="relative z-0" items={composerBannerItems} />
                   )}
-                  {sideQuestionState?.visible ? (
-                    <div
-                      className="alert-glass mx-auto mb-2 w-full max-w-3xl rounded-[22px] border border-border/70 p-4 shadow-lg"
-                      aria-live="polite"
-                    >
-                      <div className="mb-2 flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="font-medium text-foreground text-sm">Side question</div>
-                          <div className="truncate text-muted-foreground text-xs">
-                            {sideQuestionState.question}
-                          </div>
-                        </div>
-                        <Button
-                          variant="ghost-muted"
-                          size="icon-xs"
-                          aria-label="Close side answer"
-                          className="shrink-0 rounded-full"
-                          onClick={() =>
-                            setSideQuestionsByThread((current) => ({
-                              ...current,
-                              [routeThreadKey]: { ...sideQuestionState, visible: false },
-                            }))
-                          }
-                        >
-                          <XIcon className="size-3.5" />
-                        </Button>
-                      </div>
-                      {sideQuestionState.status === "loading" ? (
-                        <div className="flex items-center gap-2 text-muted-foreground text-sm">
-                          <Spinner aria-hidden="true" className="size-4" />
-                          Thinking…
-                        </div>
-                      ) : sideQuestionState.status === "error" ? (
-                        <div className="text-destructive text-sm">{sideQuestionState.text}</div>
-                      ) : (
-                        <div className="max-h-[40vh] overflow-y-auto">
-                          <ChatMarkdown
-                            text={sideQuestionState.text}
-                            cwd={activeThread.worktreePath ?? activeProject?.workspaceRoot}
-                            threadRef={routeThreadRef}
-                            className="text-sm"
-                          />
-                        </div>
-                      )}
-                    </div>
-                  ) : null}
                   {threadSyncPhase && !activeEnvironmentUnavailable ? (
                     <ThreadSyncStatusPill phase={threadSyncPhase} />
                   ) : null}
@@ -7191,6 +7211,19 @@ function ChatViewContent(props: ChatViewProps) {
                       )}
                     >
                       <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
+                        {sideQuestionState?.mode === "minimized" &&
+                        latestSideQuestionTurn &&
+                        activeThreadRef ? (
+                          <SideQuestionMinimized
+                            question={latestSideQuestionTurn.question}
+                            status={latestSideQuestionTurn.status}
+                            onDismiss={() => setSideQuestionMode("hidden")}
+                            onRestore={() => {
+                              setSideQuestionMode("panel");
+                              useRightPanelStore.getState().open(activeThreadRef, "side-question");
+                            }}
+                          />
+                        ) : null}
                         <div ref={attachDraftHeroComposerAnchorRef} className="relative z-10">
                           <ChatComposer
                             composerRef={composerRef}

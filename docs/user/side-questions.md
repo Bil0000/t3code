@@ -13,8 +13,14 @@ change what the main agent is doing.
 
 Matching questions from connected clients share one request. Different questions get separate answers.
 
-The answer appears in a card above the composer. Close the card when you are done. Type `/btw`
-without a question to reopen the latest side-question card for that thread in the current app view.
+On web and desktop, the side conversation opens in the right panel. Minimize it to keep a compact
+strip above the composer, or close it to hide it. On mobile, the same conversation appears in a card
+above the composer and can also be minimized.
+
+Ask follow-up questions from the side conversation. T3 Code includes its earlier successful questions
+and answers so the side agent can continue the same topic without steering the main agent. Type
+`/btw` without a question to reopen the latest side conversation for that thread in the current app
+view.
 
 Side questions are unavailable while the agent is waiting for required user input.
 

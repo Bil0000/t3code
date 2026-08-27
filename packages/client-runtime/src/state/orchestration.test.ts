@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseSideQuestion, sideQuestionResponseVisibility } from "./orchestration.ts";
+import { parseSideQuestion } from "./orchestration.ts";
 
 describe("parseSideQuestion", () => {
   it("parses the exact /btw command and preserves a multi-line question", () => {
@@ -14,9 +14,4 @@ describe("parseSideQuestion", () => {
     expect(parseSideQuestion("/btwice explain this")).toBeNull();
     expect(parseSideQuestion("Please /btw explain this")).toBeNull();
   });
-});
-
-it("keeps a dismissed side-answer card hidden when its request finishes", () => {
-  expect(sideQuestionResponseVisibility(false)).toBe(false);
-  expect(sideQuestionResponseVisibility(undefined)).toBe(true);
 });

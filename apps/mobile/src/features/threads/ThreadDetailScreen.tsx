@@ -1,8 +1,5 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
-import {
-  parseSideQuestion,
-  sideQuestionResponseVisibility,
-} from "@t3tools/client-runtime/state/orchestration";
+import { parseSideQuestion } from "@t3tools/client-runtime/state/orchestration";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentThreadStatus } from "@t3tools/client-runtime/state/threads";
 import { useKeyboardChatComposerInset, useKeyboardScrollToEnd } from "@legendapp/list/keyboard";
@@ -40,6 +37,7 @@ import {
   Platform,
   Pressable,
   useWindowDimensions,
+  ScrollView,
   View,
   type GestureResponderEvent,
 } from "react-native";
@@ -58,7 +56,7 @@ import Animated, {
 } from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { AppText as Text } from "../../components/AppText";
+import { AppText as Text, AppTextInput as TextInput } from "../../components/AppText";
 import { ControlPill } from "../../components/ControlPill";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
 import type { ComposerEditorHandle } from "../../components/ComposerEditor";
@@ -224,12 +222,17 @@ const USER_INPUT_TOGGLE_TIMING = {
   easing: Easing.out(Easing.cubic),
 };
 
-type SideQuestionState = {
-  readonly threadKey: string;
+type SideQuestionTurn = {
   readonly question: string;
-  readonly visible: boolean;
+  readonly id: number;
+  readonly answer: string;
   readonly status: "loading" | "success" | "error";
-  readonly text: string;
+};
+
+type SideQuestionState = {
+  readonly mode: "expanded" | "minimized" | "hidden";
+  readonly turns: ReadonlyArray<SideQuestionTurn>;
+  readonly draft: string;
 };
 
 export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: ThreadDetailScreenProps) {
@@ -279,6 +282,14 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     Record<string, SideQuestionState>
   >({});
   const sideQuestionState = sideQuestionsByThread[selectedThreadKey] ?? null;
+  const setSideQuestionMode = useCallback(
+    (mode: SideQuestionState["mode"]) =>
+      setSideQuestionsByThread((current) => {
+        const state = current[selectedThreadKey];
+        return state ? { ...current, [selectedThreadKey]: { ...state, mode } } : current;
+      }),
+    [selectedThreadKey],
+  );
   const draftMessagesByThreadRef = useRef<Record<string, string>>({});
   draftMessagesByThreadRef.current[selectedThreadKey] = props.draftMessage;
   const composerEditorRef = useRef<ComposerEditorHandle>(null);
@@ -548,6 +559,93 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     selectedThreadKey,
   ]);
 
+  const submitSideQuestion = useCallback(
+    async (question: string, mode: "new" | "follow-up") => {
+      if (sideQuestionState?.turns.at(-1)?.status === "loading") return;
+
+      const previousTurns =
+        mode === "new"
+          ? []
+          : (sideQuestionState?.turns
+              .filter((turn) => turn.status === "success")
+              .map((turn) => ({ question: turn.question, answer: turn.answer })) ?? []);
+      const retainedTurns = mode === "new" ? [] : (sideQuestionState?.turns ?? []);
+      const requestId = (sideQuestionRequestRef.current[selectedThreadKey] ?? 0) + 1;
+      sideQuestionRequestRef.current[selectedThreadKey] = requestId;
+      setSideQuestionsByThread((current) => ({
+        ...current,
+        [selectedThreadKey]: {
+          mode: "expanded",
+          turns: [...retainedTurns, { id: requestId, question, answer: "", status: "loading" }],
+          draft: "",
+        },
+      }));
+
+      const result = await askSideQuestion({
+        environmentId: props.environmentId,
+        input: {
+          threadId: props.selectedThread.id,
+          question,
+          previousTurns,
+        },
+      });
+      if (sideQuestionRequestRef.current[selectedThreadKey] !== requestId) return;
+
+      if (result._tag === "Success") {
+        setSideQuestionsByThread((current) => {
+          const state = current[selectedThreadKey];
+          if (!state) return current;
+          return {
+            ...current,
+            [selectedThreadKey]: {
+              ...state,
+              turns: [
+                ...state.turns.slice(0, -1),
+                { id: requestId, question, answer: result.value.answer, status: "success" },
+              ],
+            },
+          };
+        });
+        return;
+      }
+
+      const error = squashAtomCommandFailure(result);
+      if (mode === "new" && !draftMessagesByThreadRef.current[selectedThreadKey]) {
+        props.onChangeDraftMessage(`/btw ${question}`);
+      }
+      setSideQuestionsByThread((current) => {
+        const state = current[selectedThreadKey];
+        if (!state) return current;
+        return {
+          ...current,
+          [selectedThreadKey]: {
+            ...state,
+            turns: [
+              ...state.turns.slice(0, -1),
+              {
+                question,
+                id: requestId,
+                answer:
+                  error instanceof Error
+                    ? error.message
+                    : "The side question could not be answered.",
+                status: "error",
+              },
+            ],
+          },
+        };
+      });
+    },
+    [
+      askSideQuestion,
+      props.environmentId,
+      props.onChangeDraftMessage,
+      props.selectedThread.id,
+      selectedThreadKey,
+      sideQuestionState,
+    ],
+  );
+
   const handleSendMessage = useCallback(async () => {
     const sideQuestion = parseSideQuestion(props.draftMessage.trim());
     if (sideQuestion !== null) {
@@ -555,13 +653,18 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         setSideQuestionsByThread((current) => ({
           ...current,
           [selectedThreadKey]: current[selectedThreadKey]
-            ? { ...current[selectedThreadKey], visible: true }
+            ? { ...current[selectedThreadKey], mode: "expanded" }
             : {
-                threadKey: selectedThreadKey,
-                question: "",
-                visible: true,
-                status: "error",
-                text: "Add a question after /btw.",
+                mode: "expanded",
+                turns: [
+                  {
+                    question: "",
+                    id: 0,
+                    answer: "Add a question after /btw.",
+                    status: "error",
+                  },
+                ],
+                draft: "",
               },
         }));
         return null;
@@ -570,71 +673,27 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         setSideQuestionsByThread((current) => ({
           ...current,
           [selectedThreadKey]: {
-            threadKey: selectedThreadKey,
-            question: sideQuestion,
-            visible: true,
-            status: "error",
-            text: "Side questions are text only. Remove draft images and try again.",
+            mode: "expanded",
+            turns: [
+              {
+                question: sideQuestion,
+                id: 0,
+                answer: "Side questions are text only. Remove draft images and try again.",
+                status: "error",
+              },
+            ],
+            draft: "",
           },
         }));
         return null;
       }
-      if (sideQuestionState?.status === "loading") {
+      if (sideQuestionState?.turns.at(-1)?.status === "loading") {
         return null;
       }
 
       props.onChangeDraftMessage("");
       draftMessagesByThreadRef.current[selectedThreadKey] = "";
-      const requestId = (sideQuestionRequestRef.current[selectedThreadKey] ?? 0) + 1;
-      sideQuestionRequestRef.current[selectedThreadKey] = requestId;
-      setSideQuestionsByThread((current) => ({
-        ...current,
-        [selectedThreadKey]: {
-          threadKey: selectedThreadKey,
-          question: sideQuestion,
-          visible: true,
-          status: "loading",
-          text: "",
-        },
-      }));
-      const result = await askSideQuestion({
-        environmentId: props.environmentId,
-        input: {
-          threadId: props.selectedThread.id,
-          question: sideQuestion,
-        },
-      });
-      if (sideQuestionRequestRef.current[selectedThreadKey] !== requestId) {
-        return null;
-      }
-      if (result._tag === "Success") {
-        setSideQuestionsByThread((current) => ({
-          ...current,
-          [selectedThreadKey]: {
-            threadKey: selectedThreadKey,
-            question: sideQuestion,
-            visible: sideQuestionResponseVisibility(current[selectedThreadKey]?.visible),
-            status: "success",
-            text: result.value.answer,
-          },
-        }));
-      } else {
-        const error = squashAtomCommandFailure(result);
-        if (!draftMessagesByThreadRef.current[selectedThreadKey]) {
-          props.onChangeDraftMessage(`/btw ${sideQuestion}`);
-        }
-        setSideQuestionsByThread((current) => ({
-          ...current,
-          [selectedThreadKey]: {
-            threadKey: selectedThreadKey,
-            question: sideQuestion,
-            visible: sideQuestionResponseVisibility(current[selectedThreadKey]?.visible),
-            status: "error",
-            text:
-              error instanceof Error ? error.message : "The side question could not be answered.",
-          },
-        }));
-      }
+      await submitSideQuestion(sideQuestion, "new");
       return null;
     }
 
@@ -661,18 +720,16 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     return messageId;
   }, [
     anchorMessageId,
-    askSideQuestion,
     props.draftAttachments.length,
     props.draftMessage,
-    props.environmentId,
     props.onChangeDraftMessage,
     props.onSendMessage,
-    props.selectedThread.id,
     props.selectedThread.latestTurn,
     props.selectedThreadQueueCount,
     selectedThreadFeed,
     selectedThreadKey,
-    sideQuestionState?.status,
+    sideQuestionState,
+    submitSideQuestion,
   ]);
 
   const collapseComposer = useCallback(() => {
@@ -687,6 +744,8 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
   }, [freeze, scrollMessageToEnd]);
 
   const showScrollToEndButton = contentPresentationKind === "ready" && !endFollowEnabled;
+  const latestSideQuestionTurn = sideQuestionState?.turns.at(-1) ?? null;
+  const sideQuestionPending = latestSideQuestionTurn?.status === "loading";
   const { themeAppearance } = useAppearancePreferences();
   const isDarkMode = themeAppearance === "dark";
 
@@ -818,54 +877,135 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
               </Animated.View>
             ) : null}
             <View className="w-full self-center" style={{ maxWidth: contentMaxWidth }}>
-              {sideQuestionState?.visible ? (
+              {sideQuestionState &&
+              sideQuestionState.mode !== "hidden" &&
+              latestSideQuestionTurn ? (
                 <Animated.View
-                  className="mx-4 mb-3 rounded-2xl border border-border bg-card p-4"
+                  className="mx-4 mb-3 rounded-2xl border border-border bg-card"
                   entering={FadeInDown.duration(220)}
                   exiting={FadeOut.duration(140)}
                 >
-                  <View className="mb-2 flex-row items-start justify-between gap-3">
-                    <View className="min-w-0 flex-1">
-                      <Text className="text-2xs font-t3-bold uppercase tracking-wide text-foreground-muted">
-                        Side answer
-                      </Text>
-                      {sideQuestionState.question ? (
-                        <Text className="mt-1 text-sm text-foreground-secondary" numberOfLines={2}>
-                          {sideQuestionState.question}
+                  {sideQuestionState.mode === "minimized" ? (
+                    <View className="flex-row items-center gap-3 px-4 py-3">
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Open side question"
+                        className="min-w-0 flex-1"
+                        onPress={() => setSideQuestionMode("expanded")}
+                      >
+                        <Text className="text-2xs font-t3-bold uppercase tracking-wide text-foreground-muted">
+                          Side question
                         </Text>
-                      ) : null}
-                    </View>
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel="Close side answer"
-                      onPress={() =>
-                        setSideQuestionsByThread((current) => ({
-                          ...current,
-                          [selectedThreadKey]: { ...sideQuestionState, visible: false },
-                        }))
-                      }
-                    >
-                      <Text className="text-sm text-foreground-muted">Close</Text>
-                    </Pressable>
-                  </View>
-                  {sideQuestionState.status === "loading" ? (
-                    <View className="flex-row items-center gap-2">
-                      <ActivityIndicator size="small" />
-                      <Text className="text-sm text-foreground-muted">
-                        Answering without interrupting…
-                      </Text>
+                        <Text
+                          className="mt-0.5 text-sm text-foreground-secondary"
+                          numberOfLines={1}
+                        >
+                          {latestSideQuestionTurn.question}
+                        </Text>
+                      </Pressable>
+                      {sideQuestionPending ? <ActivityIndicator size="small" /> : null}
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel="Dismiss side question"
+                        onPress={() => setSideQuestionMode("hidden")}
+                      >
+                        <Text className="text-sm text-foreground-muted">Close</Text>
+                      </Pressable>
                     </View>
                   ) : (
-                    <Text
-                      selectable
-                      className={
-                        sideQuestionState.status === "error"
-                          ? "text-sm text-rose-700 dark:text-rose-300"
-                          : "text-sm text-foreground"
-                      }
-                    >
-                      {sideQuestionState.text}
-                    </Text>
+                    <View className="p-4">
+                      <View className="mb-3 flex-row items-start justify-between gap-3">
+                        <View className="min-w-0 flex-1">
+                          <Text className="text-2xs font-t3-bold uppercase tracking-wide text-foreground-muted">
+                            Side question
+                          </Text>
+                          <Text className="mt-1 text-sm text-foreground-secondary">
+                            Ask without interrupting the main agent.
+                          </Text>
+                        </View>
+                        <View className="flex-row gap-3">
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Minimize side question"
+                            onPress={() => setSideQuestionMode("minimized")}
+                          >
+                            <Text className="text-sm text-foreground-muted">Minimize</Text>
+                          </Pressable>
+                          <Pressable
+                            accessibilityRole="button"
+                            accessibilityLabel="Dismiss side question"
+                            onPress={() => setSideQuestionMode("hidden")}
+                          >
+                            <Text className="text-sm text-foreground-muted">Close</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                      <ScrollView
+                        style={{ maxHeight: windowHeight * 0.35 }}
+                        contentContainerStyle={{ gap: 12 }}
+                        keyboardShouldPersistTaps="handled"
+                      >
+                        {sideQuestionState.turns.map((turn) => (
+                          <View key={turn.id} className="gap-2">
+                            {turn.question ? (
+                              <View className="ml-8 self-end rounded-xl bg-background px-3 py-2">
+                                <Text className="text-sm text-foreground">{turn.question}</Text>
+                              </View>
+                            ) : null}
+                            {turn.status === "loading" ? (
+                              <View className="flex-row items-center gap-2">
+                                <ActivityIndicator size="small" />
+                                <Text className="text-sm text-foreground-muted">
+                                  Answering without interrupting…
+                                </Text>
+                              </View>
+                            ) : (
+                              <Text
+                                selectable
+                                className={
+                                  turn.status === "error"
+                                    ? "text-sm text-rose-700 dark:text-rose-300"
+                                    : "text-sm text-foreground"
+                                }
+                              >
+                                {turn.answer}
+                              </Text>
+                            )}
+                          </View>
+                        ))}
+                      </ScrollView>
+                      <View className="mt-3 flex-row items-end gap-2">
+                        <TextInput
+                          multiline
+                          value={sideQuestionState.draft}
+                          editable={!sideQuestionPending}
+                          accessibilityLabel="Ask a follow-up side question"
+                          placeholder="Ask a follow-up…"
+                          className="min-h-11 flex-1 rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground"
+                          onChangeText={(draft) =>
+                            setSideQuestionsByThread((current) => {
+                              const state = current[selectedThreadKey];
+                              return state
+                                ? { ...current, [selectedThreadKey]: { ...state, draft } }
+                                : current;
+                            })
+                          }
+                        />
+                        <Pressable
+                          accessibilityRole="button"
+                          accessibilityLabel="Ask follow-up"
+                          disabled={
+                            sideQuestionPending || sideQuestionState.draft.trim().length === 0
+                          }
+                          className="rounded-xl bg-blue-500 px-3 py-2.5 disabled:opacity-40"
+                          onPress={() =>
+                            void submitSideQuestion(sideQuestionState.draft.trim(), "follow-up")
+                          }
+                        >
+                          <Text className="font-t3-bold text-sm text-white">Ask</Text>
+                        </Pressable>
+                      </View>
+                    </View>
                   )}
                 </Animated.View>
               ) : null}
