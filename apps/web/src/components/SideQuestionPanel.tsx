@@ -112,12 +112,12 @@ export function SideQuestionPanel(props: {
 
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-background">
-      <div className="flex shrink-0 items-center justify-between border-border/60 border-b px-4 py-3">
-        <div className="min-w-0">
-          <div className="font-medium text-sm">Side question</div>
-          <div className="text-muted-foreground text-xs">
-            Ask without interrupting the main agent.
-          </div>
+      <div
+        className="flex h-10 min-h-10 shrink-0 items-center justify-between gap-2 border-b border-border/60 bg-background px-4 in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent"
+        data-surface-subheader
+      >
+        <div className="min-w-0 truncate text-muted-foreground text-xs">
+          Ask without interrupting the main agent.
         </div>
         <Button
           type="button"

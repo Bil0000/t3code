@@ -75,6 +75,9 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain("whitespace-pre-wrap");
     expect(markup).toContain("wrap-break-word");
     expect(markup).toContain("chat-composer-glass-shell");
+    expect(markup).toContain('data-surface-subheader="true"');
+    expect(markup).toContain("in-data-[preview-panel-mode=inline]:h-7");
+    expect(markup).not.toContain('<div class="font-medium text-sm">Side question</div>');
     expect(markup).toContain('data-side-question-composer-shell="true"');
     expect(markup).toContain('data-side-question-composer-dock="true"');
     expect(markup).toContain("pb-[3.25rem]");
