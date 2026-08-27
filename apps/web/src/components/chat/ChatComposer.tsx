@@ -115,6 +115,7 @@ import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommand
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
 import { ComposerPrimaryActions } from "./ComposerPrimaryActions";
+import { ComposerGlassMainSurface, ComposerGlassSurface } from "./ComposerGlass";
 import { ComposerPendingApprovalPanel } from "./ComposerPendingApprovalPanel";
 import { ComposerPendingUserInputPanel } from "./ComposerPendingUserInputPanel";
 import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
@@ -3164,19 +3165,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             onToggleMenu={toggleStashMenu}
           />
         ) : null}
-        <div
-          data-chat-composer-main-surface="true"
+        <ComposerGlassMainSurface
           className={cn(
-            "group relative z-10 rounded-[22px] p-px transition-colors duration-200",
+            "transition-colors duration-200",
             composerProviderState.composerFrameClassName,
           )}
         >
-          <div
+          <ComposerGlassSurface
             ref={composerSurfaceRef}
-            data-chat-composer-surface="true"
             data-chat-composer-mobile-collapsed={isComposerCollapsedMobile ? "true" : "false"}
             className={cn(
-              "rounded-[20px] transition-[background-color] duration-200",
+              "transition-[background-color] duration-200",
               isDragOverComposer ? "bg-accent/45 ring-1 ring-primary/70" : null,
               projectSelectionRequired ? "opacity-75" : null,
               composerProviderState.composerSurfaceClassName,
@@ -3640,8 +3639,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 </div>
               </div>
             )}
-          </div>
-        </div>
+          </ComposerGlassSurface>
+        </ComposerGlassMainSurface>
       </div>
     </form>
   );

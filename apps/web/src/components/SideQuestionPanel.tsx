@@ -15,6 +15,11 @@ import {
   sortProviderInstanceEntries,
 } from "../providerInstances";
 import { ComposerStopButton } from "./chat/ComposerPrimaryActions";
+import {
+  ComposerGlassHost,
+  ComposerGlassMainSurface,
+  ComposerGlassSurface,
+} from "./chat/ComposerGlass";
 import { getComposerProviderState } from "./chat/composerProviderState";
 import { MessageCopyButton } from "./chat/MessageCopyButton";
 import { ProviderModelPicker } from "./chat/ProviderModelPicker";
@@ -165,12 +170,9 @@ export function SideQuestionPanel(props: {
           className="chat-composer-glass-shell relative"
           onSubmit={submit}
         >
-          <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
-            <div
-              data-chat-composer-main-surface="true"
-              className="group relative z-10 rounded-[22px] p-px"
-            >
-              <div data-chat-composer-surface="true" className="rounded-[20px]">
+          <ComposerGlassHost>
+            <ComposerGlassMainSurface>
+              <ComposerGlassSurface>
                 <div className="relative px-3 pb-2 pt-3.5 sm:px-4 sm:pt-4">
                   <Textarea
                     unstyled
@@ -265,9 +267,9 @@ export function SideQuestionPanel(props: {
                     </Button>
                   )}
                 </div>
-              </div>
-            </div>
-          </div>
+              </ComposerGlassSurface>
+            </ComposerGlassMainSurface>
+          </ComposerGlassHost>
         </form>
       </div>
     </div>
