@@ -6921,6 +6921,14 @@ function ChatViewContent(props: ChatViewProps) {
         providers={providerStatuses}
         settings={settings}
         modelSelection={sideQuestionState.modelSelection}
+        runContext={{
+          environmentId: activeThread.environmentId,
+          availableEnvironments: logicalProjectEnvironments,
+          showEnvironmentIndicator: showComposerEnvironmentIndicator,
+          showGitControls: isGitRepo,
+          activeWorktreePath,
+          branch: gitStatusQuery.data?.refName ?? activeThreadBranch,
+        }}
         onMinimize={() => {
           setSideQuestionMode("minimized");
           useRightPanelStore.getState().closeSurface(activeThreadRef, "side-question");

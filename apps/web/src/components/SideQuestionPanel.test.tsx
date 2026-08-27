@@ -1,6 +1,12 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
-import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ProviderDriverKind,
+  ProviderInstanceId,
+  type ServerProvider,
+} from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
 import { SideQuestionMinimized, SideQuestionPanel } from "./SideQuestionPanel";
@@ -60,6 +66,21 @@ const panelProps = {
   onModelSelectionChange: vi.fn(),
   onStop: vi.fn(),
   onSubmit: vi.fn(),
+  runContext: {
+    environmentId: EnvironmentId.make("remote"),
+    availableEnvironments: [
+      {
+        environmentId: EnvironmentId.make("remote"),
+        projectId: ProjectId.make("project-1"),
+        label: "calendaty-staging",
+        isPrimary: false,
+      },
+    ],
+    showEnvironmentIndicator: true,
+    showGitControls: true,
+    activeWorktreePath: "/tmp/project",
+    branch: "feat/btw-side-questions",
+  },
 };
 
 describe("SideQuestionPanel", () => {
@@ -86,6 +107,10 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain('data-user-message-actions="true"');
     expect(markup).toContain('aria-label="Copy link"');
     expect(markup).toContain('aria-label="Minimize side question"');
+    expect(markup).toContain('data-side-question-context="true"');
+    expect(markup).toContain("calendaty-staging");
+    expect(markup).toContain("Worktree");
+    expect(markup).toContain("feat/btw-side-questions");
   });
 
   it("keeps the follow-up field editable while an answer is pending", () => {

@@ -1,12 +1,21 @@
-import type { ModelSelection, ScopedThreadRef, ServerProvider } from "@t3tools/contracts";
+import type {
+  EnvironmentId,
+  ModelSelection,
+  ScopedThreadRef,
+  ServerProvider,
+} from "@t3tools/contracts";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import { createModelSelection } from "@t3tools/shared/model";
-import { MessageCircleQuestion, Minimize2Icon, XIcon } from "lucide-react";
+import { GitBranchIcon, MessageCircleQuestion, Minimize2Icon, XIcon } from "lucide-react";
 import { type FormEvent, useMemo, useState } from "react";
 
 import { composerSubmissionIntentForEnter } from "../composer-logic";
 import { useMediaQuery } from "../hooks/useMediaQuery";
+import { cn } from "../lib/utils";
 import ChatMarkdown from "./ChatMarkdown";
+import type { EnvironmentOption } from "./BranchToolbar.logic";
+import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
+import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
 import { getAppModelOptionsForInstance } from "../modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -22,8 +31,11 @@ import { TraitsPicker } from "./chat/TraitsPicker";
 import { UserMessageActions, UserMessageBubble } from "./chat/UserMessageBubble";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
+import { Separator } from "./ui/separator";
 import { Spinner } from "./ui/spinner";
 import { Textarea } from "./ui/textarea";
+
+const ignoreEnvModeChange = () => undefined;
 
 export type SideQuestionTurn = {
   readonly question: string;
@@ -39,6 +51,14 @@ export function SideQuestionPanel(props: {
   readonly providers: ReadonlyArray<ServerProvider>;
   readonly settings: UnifiedSettings;
   readonly modelSelection: ModelSelection;
+  readonly runContext: {
+    readonly environmentId: EnvironmentId;
+    readonly availableEnvironments: readonly EnvironmentOption[];
+    readonly showEnvironmentIndicator: boolean;
+    readonly showGitControls: boolean;
+    readonly activeWorktreePath: string | null;
+    readonly branch: string | null;
+  };
   readonly onMinimize: () => void;
   readonly onModelSelectionChange: (selection: ModelSelection) => void;
   readonly onStop: () => void;
@@ -47,6 +67,8 @@ export function SideQuestionPanel(props: {
   const [draft, setDraft] = useState("");
   const isMobileViewport = useMediaQuery("max-sm");
   const pending = props.turns.at(-1)?.status === "loading";
+  const showRunContext =
+    props.runContext.showEnvironmentIndicator || props.runContext.showGitControls;
   const providerEntries = useMemo(
     () =>
       sortProviderInstanceEntries(
@@ -159,8 +181,14 @@ export function SideQuestionPanel(props: {
         </div>
       </ScrollArea>
 
-      <div className="shrink-0 border-border/60 border-t p-3">
-        <form className="chat-composer-glass-shell relative" onSubmit={submit}>
+      <div className="shrink-0 p-3">
+        <form
+          className={cn(
+            "chat-composer-glass-shell relative",
+            showRunContext && "chat-composer-glass-shell-with-context",
+          )}
+          onSubmit={submit}
+        >
           <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
             <div
               data-chat-composer-main-surface="true"
@@ -266,6 +294,50 @@ export function SideQuestionPanel(props: {
             </div>
           </div>
         </form>
+        {showRunContext ? (
+          <div
+            data-side-question-context="true"
+            className="chat-composer-context-strip group/composer-context -mt-4 mx-auto flex w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] items-center gap-2 overflow-x-clip overflow-y-visible ps-1 pe-2 pt-5 pb-1"
+          >
+            <div className="flex min-w-0 flex-1 items-center gap-1">
+              {props.runContext.showEnvironmentIndicator ? (
+                <>
+                  <BranchToolbarEnvironmentSelector
+                    envLocked
+                    environmentId={props.runContext.environmentId}
+                    availableEnvironments={props.runContext.availableEnvironments}
+                  />
+                  {props.runContext.showGitControls ? (
+                    <Separator
+                      orientation="vertical"
+                      className="mx-0.5 h-3.5!"
+                      data-composer-context-control
+                    />
+                  ) : null}
+                </>
+              ) : null}
+              {props.runContext.showGitControls ? (
+                <BranchToolbarEnvModeSelector
+                  envLocked
+                  effectiveEnvMode={props.runContext.activeWorktreePath ? "worktree" : "local"}
+                  activeWorktreePath={props.runContext.activeWorktreePath}
+                  onEnvModeChange={ignoreEnvModeChange}
+                />
+              ) : null}
+            </div>
+            {props.runContext.showGitControls ? (
+              <span
+                className="inline-flex h-7 min-w-0 flex-1 items-center justify-end gap-1 border border-transparent px-[calc(--spacing(3)-1px)] text-sm font-medium text-muted-foreground/70 sm:h-6 sm:text-xs"
+                data-composer-context-control
+              >
+                <GitBranchIcon className="size-3 shrink-0 opacity-70" />
+                <span className="min-w-0 max-w-[240px] truncate">
+                  {props.runContext.branch ?? "Select ref"}
+                </span>
+              </span>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );
