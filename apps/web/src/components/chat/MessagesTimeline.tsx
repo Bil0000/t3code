@@ -116,7 +116,7 @@ import {
   textContainsInlineTerminalContextLabels,
 } from "./userMessageTerminalContexts";
 import { SkillInlineText } from "./SkillInlineText";
-import { UserMessageBubble } from "./UserMessageBubble";
+import { UserMessageActions, UserMessageBubble } from "./UserMessageBubble";
 import { formatWorkspaceRelativePath } from "../../filePathDisplay";
 import {
   buildReviewCommentRenderablePatch,
@@ -1068,7 +1068,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
           markdownCwd={ctx.markdownCwd}
         />
       </UserMessageBubble>
-      <div className="flex w-full max-w-[80%] items-center justify-end pe-1 text-xs tabular-nums opacity-0 transition-opacity duration-200 focus-within:opacity-100 group-hover:opacity-100">
+      <UserMessageActions>
         <div className="flex shrink-0 items-center gap-2">
           <Tooltip>
             <TooltipTrigger render={<p className="text-muted-foreground text-xs tabular-nums" />}>
@@ -1085,7 +1085,7 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
             )}
           </div>
         </div>
-      </div>
+      </UserMessageActions>
     </div>
   );
 }

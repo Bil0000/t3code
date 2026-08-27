@@ -2,13 +2,14 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import { MessageCircleQuestion, Minimize2Icon, XIcon } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
+import { composerSubmissionIntentForEnter } from "../composer-logic";
 import ChatMarkdown from "./ChatMarkdown";
+import { MessageCopyButton } from "./chat/MessageCopyButton";
+import { UserMessageActions, UserMessageBubble } from "./chat/UserMessageBubble";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
 import { Spinner } from "./ui/spinner";
 import { Textarea } from "./ui/textarea";
-import { isCommentSubmitShortcut } from "./diffs/commentSubmitShortcut";
-import { UserMessageBubble } from "./chat/UserMessageBubble";
 
 export type SideQuestionTurn = {
   readonly question: string;
@@ -61,10 +62,13 @@ export function SideQuestionPanel(props: {
         <div className="space-y-5 p-4" aria-live="polite">
           {props.turns.map((turn) => (
             <div key={turn.id} className="space-y-2.5">
-              <div className="flex justify-end">
+              <div className="group flex flex-col items-end gap-1">
                 <UserMessageBubble className="whitespace-pre-wrap wrap-break-word text-sm">
                   {turn.question}
                 </UserMessageBubble>
+                <UserMessageActions>
+                  <MessageCopyButton text={turn.question} variant="ghost" />
+                </UserMessageActions>
               </div>
               {turn.status === "loading" ? (
                 <div className="flex items-center gap-2 text-muted-foreground text-sm">
@@ -100,11 +104,19 @@ export function SideQuestionPanel(props: {
                     size="sm"
                     className="block text-sm"
                     value={draft}
+                    style={{ resize: "none" }}
                     aria-label="Ask a follow-up side question"
                     placeholder="Ask another side question…"
                     onChange={(event) => setDraft(event.target.value)}
                     onKeyDown={(event) => {
-                      if (!isCommentSubmitShortcut(event, draft, pending)) return;
+                      if (event.nativeEvent.isComposing || event.key !== "Enter") return;
+                      const submissionIntent = composerSubmissionIntentForEnter({
+                        isMobileViewport: false,
+                        shiftKey: event.shiftKey,
+                        modifierKey: event.metaKey || event.ctrlKey,
+                        isDraftThread: false,
+                      });
+                      if (!submissionIntent) return;
                       event.preventDefault();
                       submitDraft();
                     }}

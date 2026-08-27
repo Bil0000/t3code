@@ -32,8 +32,11 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain("chat-composer-glass-shell");
     expect(markup).toContain('data-chat-composer-main-surface="true"');
     expect(markup).toContain('aria-label="Ask a follow-up side question"');
+    expect(markup).toContain('style="resize:none"');
     expect(markup).toContain("Ask another side question…");
     expect(markup).toContain('aria-label="Ask follow-up"');
+    expect(markup).toContain('data-user-message-actions="true"');
+    expect(markup).toContain('aria-label="Copy link"');
     expect(markup).toContain('aria-label="Minimize side question"');
   });
 
