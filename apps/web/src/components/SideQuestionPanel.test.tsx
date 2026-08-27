@@ -25,6 +25,8 @@ describe("SideQuestionPanel", () => {
 
     expect(markup).toContain("Why SQLite?");
     expect(markup).toContain("It keeps local state durable.");
+    expect(markup).toContain("bg-message");
+    expect(markup).toContain("text-message-foreground");
     expect(markup).toContain('aria-label="Ask a follow-up side question"');
     expect(markup).toContain("Ask follow-up");
     expect(markup).toContain('aria-label="Minimize side question"');

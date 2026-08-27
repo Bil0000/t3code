@@ -56,7 +56,7 @@ export function SideQuestionPanel(props: {
         <div className="space-y-5 p-4" aria-live="polite">
           {props.turns.map((turn) => (
             <div key={turn.id} className="space-y-2.5">
-              <div className="ml-8 rounded-xl bg-accent px-3 py-2 text-sm text-foreground">
+              <div className="ml-8 rounded-xl bg-message px-3 py-2 text-message-foreground text-sm">
                 {turn.question}
               </div>
               {turn.status === "loading" ? (
