@@ -230,6 +230,23 @@ describe("rightPanelStore", () => {
     ).toEqual([{ id: "side-question", kind: "side-question" }]);
   });
 
+  it("does not persist view-local side question surfaces", () => {
+    useRightPanelStore.getState().open(refA, "diff");
+    useRightPanelStore.getState().open(refA, "side-question");
+    useRightPanelStore.getState().open(refB, "side-question");
+
+    const partialize = useRightPanelStore.persist.getOptions().partialize;
+    expect(partialize?.(useRightPanelStore.getState())).toEqual({
+      byThreadKey: {
+        "env-1:thread-A": {
+          isOpen: true,
+          activeSurfaceId: "diff",
+          surfaces: [{ id: "diff", kind: "diff" }],
+        },
+      },
+    });
+  });
+
   it("opening a different kind keeps both surfaces and activates the new one", () => {
     useRightPanelStore.getState().open(refA, "agents");
     useRightPanelStore.getState().open(refA, "preview");
