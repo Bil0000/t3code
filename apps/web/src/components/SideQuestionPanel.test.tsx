@@ -1,12 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
-import {
-  EnvironmentId,
-  ProjectId,
-  ProviderDriverKind,
-  ProviderInstanceId,
-  type ServerProvider,
-} from "@t3tools/contracts";
+import { ProviderDriverKind, ProviderInstanceId, type ServerProvider } from "@t3tools/contracts";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 
 import { SideQuestionMinimized, SideQuestionPanel } from "./SideQuestionPanel";
@@ -66,21 +60,6 @@ const panelProps = {
   onModelSelectionChange: vi.fn(),
   onStop: vi.fn(),
   onSubmit: vi.fn(),
-  runContext: {
-    environmentId: EnvironmentId.make("remote"),
-    availableEnvironments: [
-      {
-        environmentId: EnvironmentId.make("remote"),
-        projectId: ProjectId.make("project-1"),
-        label: "calendaty-staging",
-        isPrimary: false,
-      },
-    ],
-    showEnvironmentIndicator: true,
-    showGitControls: true,
-    activeWorktreePath: "/tmp/project",
-    branch: "feat/btw-side-questions",
-  },
 };
 
 describe("SideQuestionPanel", () => {
@@ -97,11 +76,14 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain("wrap-break-word");
     expect(markup).toContain("chat-composer-glass-shell");
     expect(markup).toContain('data-side-question-composer-shell="true"');
-    expect(markup.indexOf('data-side-question-context="true"')).toBeLessThan(
-      markup.indexOf("</form>"),
-    );
+    expect(markup).toContain('data-side-question-composer-dock="true"');
+    expect(markup).toContain("pb-[3.25rem]");
+    expect(markup).toContain("relative px-3 pb-2 pt-3.5 sm:px-4 sm:pt-4");
     expect(markup).toContain('data-chat-composer-main-surface="true"');
     expect(markup).toContain('aria-label="Ask a follow-up side question"');
+    expect(markup).toContain('data-size="default"');
+    expect(markup).toContain("min-h-17.5");
+    expect(markup).not.toContain("min-h-16.5");
     expect(markup).toContain('style="resize:none"');
     expect(markup).toContain("Ask another side question…");
     expect(markup).toContain('aria-label="Ask follow-up"');
@@ -111,11 +93,10 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain('data-user-message-actions="true"');
     expect(markup).toContain('aria-label="Copy link"');
     expect(markup).toContain('aria-label="Minimize side question"');
-    expect(markup).toContain('data-side-question-context="true"');
-    expect(markup).toContain("calendaty-staging");
-    expect(markup).toContain("Worktree");
-    expect(markup).toContain("feat/btw-side-questions");
-    expect(markup.match(/data-composer-label=/g) ?? []).toHaveLength(3);
+    expect(markup).not.toContain('data-side-question-context="true"');
+    expect(markup).not.toContain("chat-composer-glass-shell-with-context");
+    expect(markup).not.toContain("calendaty-staging");
+    expect(markup).not.toContain("feat/btw-side-questions");
     expect(markup).not.toContain("max-w-[calc(48rem-2.75rem)]");
   });
 
