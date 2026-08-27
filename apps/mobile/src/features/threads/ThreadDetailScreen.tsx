@@ -692,7 +692,7 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
 
       props.onChangeDraftMessage("");
       draftMessagesByThreadRef.current[selectedThreadKey] = "";
-      await submitSideQuestion(sideQuestion, "new");
+      void submitSideQuestion(sideQuestion, "new");
       return null;
     }
 
