@@ -1441,7 +1441,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.scoped(
       Effect.gen(function* () {
         const singleFlight = yield* makeSideQuestionSingleFlight;
-        const input = { threadId: defaultThreadId, question: "Same question" };
+        const input = {
+          threadId: defaultThreadId,
+          question: "Same question",
+          context: "Same context",
+        };
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         let generationCount = 0;
@@ -1466,14 +1470,14 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         const secondDistinctStarted = yield* Deferred.make<void>();
         const releaseDistinct = yield* Deferred.make<void>();
         const firstDistinct = yield* singleFlight(
-          { threadId: defaultThreadId, question: "First question" },
+          { threadId: defaultThreadId, question: "First question", context: "Same context" },
           Deferred.succeed(firstDistinctStarted, undefined).pipe(
             Effect.andThen(Deferred.await(releaseDistinct)),
             Effect.as({ answer: "First answer" }),
           ),
         ).pipe(Effect.forkChild);
         const secondDistinct = yield* singleFlight(
-          { threadId: defaultThreadId, question: "Second question" },
+          { threadId: defaultThreadId, question: "Second question", context: "Same context" },
           Deferred.succeed(secondDistinctStarted, undefined).pipe(
             Effect.andThen(Deferred.await(releaseDistinct)),
             Effect.as({ answer: "Second answer" }),
@@ -1489,7 +1493,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     ),
   );
 
-  it.effect("does not share matching follow-ups from different side conversations", () =>
+  it.effect("does not share matching questions from different context snapshots", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const singleFlight = yield* makeSideQuestionSingleFlight;
@@ -1499,7 +1503,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           {
             threadId: defaultThreadId,
             question: "Same follow-up",
-            previousTurns: [{ question: "First context", answer: "First answer" }],
+            context: "First context",
           },
           Deferred.succeed(firstStarted, undefined).pipe(
             Effect.andThen(Deferred.await(release)),
@@ -1510,7 +1514,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
           {
             threadId: defaultThreadId,
             question: "Same follow-up",
-            previousTurns: [{ question: "Second context", answer: "Second answer" }],
+            context: "Second context",
           },
           Deferred.await(release).pipe(Effect.as({ answer: "Second history answer" })),
         ).pipe(Effect.forkChild);
@@ -1529,7 +1533,11 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.scoped(
       Effect.gen(function* () {
         const singleFlight = yield* makeSideQuestionSingleFlight;
-        const input = { threadId: defaultThreadId, question: "Why SQLite?" };
+        const input = {
+          threadId: defaultThreadId,
+          question: "Why SQLite?",
+          context: "Same context",
+        };
         const started = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         let generationCount = 0;
@@ -1666,6 +1674,91 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         received[0]!.context.indexOf("Older context"),
         received[0]!.context.indexOf("Current context"),
       );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
+  it.effect("does not coalesce matching questions across thread context revisions", () =>
+    Effect.gen(function* () {
+      const snapshot = makeDefaultOrchestrationReadModel();
+      const thread = snapshot.threads[0]!;
+      const project = snapshot.projects[0]!;
+      const firstGenerationStarted = yield* Deferred.make<void>();
+      const secondGenerationStarted = yield* Deferred.make<void>();
+      const releaseFirstGeneration = yield* Deferred.make<void>();
+      const received: Array<TextGeneration.SideQuestionGenerationInput> = [];
+      let snapshotReadCount = 0;
+
+      yield* buildAppUnderTest({
+        layers: {
+          projectionSnapshotQuery: {
+            getThreadDetailSnapshot: () =>
+              Effect.sync(() => {
+                snapshotReadCount += 1;
+                const context = snapshotReadCount === 1 ? "Earlier context" : "Updated context";
+                return Option.some({
+                  snapshotSequence: snapshotReadCount,
+                  thread: {
+                    ...thread,
+                    messages: [
+                      {
+                        id: MessageId.make(`side-question-context-${snapshotReadCount}`),
+                        role: "assistant" as const,
+                        text: context,
+                        turnId: null,
+                        streaming: false,
+                        createdAt: thread.createdAt,
+                        updatedAt: thread.updatedAt,
+                      },
+                    ],
+                  },
+                  page: {
+                    beforeCursor: null,
+                    hasMore: false,
+                    snapshotSequence: snapshotReadCount,
+                  },
+                });
+              }),
+            getProjectShellById: () => Effect.succeed(Option.some(project)),
+          },
+          textGeneration: {
+            answerSideQuestion: (input) =>
+              Effect.gen(function* () {
+                received.push(input);
+                if (received.length === 1) {
+                  yield* Deferred.succeed(firstGenerationStarted, undefined);
+                  yield* Deferred.await(releaseFirstGeneration);
+                } else {
+                  yield* Deferred.succeed(secondGenerationStarted, undefined);
+                }
+                return { answer: input.context };
+              }),
+          },
+        },
+      });
+
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const input = { threadId: defaultThreadId, question: "What changed?" };
+            const first = yield* client[ORCHESTRATION_WS_METHODS.askSideQuestion](input).pipe(
+              Effect.forkChild,
+            );
+            yield* Deferred.await(firstGenerationStarted);
+            const second = yield* client[ORCHESTRATION_WS_METHODS.askSideQuestion](input).pipe(
+              Effect.forkChild,
+            );
+            yield* Deferred.await(secondGenerationStarted);
+            yield* Deferred.succeed(releaseFirstGeneration, undefined);
+            yield* Fiber.join(first);
+            yield* Fiber.join(second);
+          }),
+        ),
+      );
+
+      assert.equal(received.length, 2);
+      assert.include(received[0]!.context, "Earlier context");
+      assert.include(received[1]!.context, "Updated context");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 

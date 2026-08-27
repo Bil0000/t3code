@@ -26,6 +26,7 @@ import {
   connectionStatusTitle,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
+import { sideQuestionPreviousTurns } from "@t3tools/client-runtime/state/orchestration";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import {
   changeRequestAutoSettles,
@@ -5372,11 +5373,7 @@ function ChatViewContent(props: ChatViewProps) {
       if (sideQuestionState?.turns.at(-1)?.status === "loading") return;
 
       const previousTurns =
-        mode === "new"
-          ? []
-          : (sideQuestionState?.turns
-              .filter((turn) => turn.status === "success")
-              .map((turn) => ({ question: turn.question, answer: turn.answer })) ?? []);
+        mode === "new" ? [] : sideQuestionPreviousTurns(sideQuestionState?.turns ?? []);
       const retainedTurns = mode === "new" ? [] : (sideQuestionState?.turns ?? []);
       const requestId = (sideQuestionRequestRef.current[routeThreadKey] ?? 0) + 1;
       sideQuestionRequestRef.current[routeThreadKey] = requestId;

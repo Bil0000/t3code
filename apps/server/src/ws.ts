@@ -153,16 +153,14 @@ const encodeSideQuestionRequestKey = Schema.encodeSync(
   Schema.fromJsonString(
     Schema.Struct({
       question: Schema.String,
-      previousTurns: Schema.Array(
-        Schema.Struct({ question: Schema.String, answer: Schema.String }),
-      ),
+      context: Schema.String,
     }),
   ),
 );
 type SideQuestionSingleFlightInput = {
   readonly threadId: ThreadId;
   readonly question: string;
-  readonly previousTurns?: ReadonlyArray<{ question: string; answer: string }> | undefined;
+  readonly context: string;
 };
 
 type SideQuestionSingleFlight = <R>(
@@ -194,7 +192,7 @@ export const makeSideQuestionSingleFlight: Effect.Effect<
         >();
         const requestKey = encodeSideQuestionRequestKey({
           question: input.question,
-          previousTurns: input.previousTurns ?? [],
+          context: input.context,
         });
         const [deferred, ownsRequest] = yield* Ref.modify<
           SideQuestionsInFlight,
@@ -1452,12 +1450,15 @@ const makeWsRpcLayer = (
                 });
               }
 
-              return yield* textGeneration.answerSideQuestion({
-                cwd: thread.worktreePath ?? project.value.workspaceRoot,
-                question: input.question,
-                context: providerContext,
-                modelSelection: thread.modelSelection,
-              });
+              return yield* sideQuestionSingleFlight(
+                { threadId: input.threadId, question: input.question, context: providerContext },
+                textGeneration.answerSideQuestion({
+                  cwd: thread.worktreePath ?? project.value.workspaceRoot,
+                  question: input.question,
+                  context: providerContext,
+                  modelSelection: thread.modelSelection,
+                }),
+              );
             }).pipe(
               Effect.mapError((cause) =>
                 isTextGenerationError(cause)
@@ -1468,7 +1469,6 @@ const makeWsRpcLayer = (
                       cause,
                     }),
               ),
-              (effect) => sideQuestionSingleFlight(input, effect),
             ),
             { "rpc.aggregate": "orchestration" },
           ),

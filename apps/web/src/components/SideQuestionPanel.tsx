@@ -86,7 +86,6 @@ export function SideQuestionPanel(props: {
           disabled={pending}
           aria-label="Ask a follow-up side question"
           placeholder="Ask a follow-up…"
-          className="[&_[data-slot=textarea]]:min-h-16"
           onChange={(event) => setDraft(event.target.value)}
         />
         <div className="mt-2 flex justify-end">

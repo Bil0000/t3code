@@ -1,4 +1,7 @@
-import { ORCHESTRATION_WS_METHODS } from "@t3tools/contracts";
+import {
+  ORCHESTRATION_SIDE_QUESTION_MAX_PREVIOUS_TURNS,
+  ORCHESTRATION_WS_METHODS,
+} from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
 import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
@@ -7,6 +10,15 @@ import type { EnvironmentRegistry } from "../connection/registry.ts";
 export function parseSideQuestion(value: string): string | null {
   const match = /^\/btw(?:\s+([\s\S]*))?$/.exec(value);
   return match ? (match[1]?.trim() ?? "") : null;
+}
+
+export function sideQuestionPreviousTurns(
+  turns: ReadonlyArray<{ question: string; answer: string; status: string }>,
+) {
+  return turns
+    .filter((turn) => turn.status === "success")
+    .slice(-ORCHESTRATION_SIDE_QUESTION_MAX_PREVIOUS_TURNS)
+    .map((turn) => ({ question: turn.question, answer: turn.answer }));
 }
 
 export function createOrchestrationEnvironmentAtoms<R, E>(

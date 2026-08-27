@@ -1619,11 +1619,15 @@ export const OrchestrationSideQuestionTurn = Schema.Struct({
 });
 export type OrchestrationSideQuestionTurn = typeof OrchestrationSideQuestionTurn.Type;
 
+export const ORCHESTRATION_SIDE_QUESTION_MAX_PREVIOUS_TURNS = 50;
+
 export const OrchestrationAskSideQuestionInput = Schema.Struct({
   threadId: ThreadId,
   question: TrimmedNonEmptyString.check(Schema.isMaxLength(20_000)),
   previousTurns: Schema.optional(
-    Schema.Array(OrchestrationSideQuestionTurn).check(Schema.isMaxLength(50)),
+    Schema.Array(OrchestrationSideQuestionTurn).check(
+      Schema.isMaxLength(ORCHESTRATION_SIDE_QUESTION_MAX_PREVIOUS_TURNS),
+    ),
   ),
 });
 export type OrchestrationAskSideQuestionInput = typeof OrchestrationAskSideQuestionInput.Type;

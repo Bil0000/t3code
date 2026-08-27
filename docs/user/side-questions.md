@@ -11,7 +11,8 @@ T3 Code sends the question and the completed thread context to a separate, restr
 request. The active turn keeps running. The side question does not enter the thread transcript or
 change what the main agent is doing.
 
-Matching questions from connected clients share one request. Different questions get separate answers.
+Matching questions from connected clients share one request only when the current thread context and
+prior side-conversation context also match. Different questions or contexts get separate answers.
 
 On web and desktop, the side conversation opens in the right panel. Minimize it to keep a compact
 strip above the composer, or close it to hide it. On mobile, the same conversation appears in a card

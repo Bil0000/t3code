@@ -917,6 +917,7 @@ html[data-mobile-composer-route-transition="true"]::view-transition-old(t3-mobil
   }
 
   .chat-composer-drawer-slot + .chat-composer-drawer-slot::before,
+  .chat-composer-top-drawer + :has(.chat-composer-top-drawer) .chat-composer-top-drawer::before,
   .chat-composer-drawer-slot + :has(.chat-composer-top-drawer) .chat-composer-top-drawer::before {
     border-top: 0;
     border-radius: 0;
