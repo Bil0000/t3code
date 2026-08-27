@@ -80,6 +80,7 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain('style="resize:none"');
     expect(markup).toContain("Ask another side question…");
     expect(markup).toContain('aria-label="Ask follow-up"');
+    expect(markup).toContain('class="size-3.5"');
     expect(markup).toContain('aria-label="Side question model"');
     expect(markup).toContain("High");
     expect(markup).toContain('data-user-message-actions="true"');

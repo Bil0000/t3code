@@ -1,7 +1,6 @@
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -9,7 +8,6 @@ import * as Option from "effect/Option";
 import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
-import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
@@ -29,7 +27,6 @@ import {
   type GitManagerServiceError,
   OrchestrationDispatchCommandError,
   type OrchestrationEvent,
-  ModelSelection,
   type OrchestrationShellStreamEvent,
   type OrchestrationShellStreamItem,
   type OrchestrationThreadStreamItem,
@@ -86,6 +83,7 @@ import {
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
+import * as SideQuestionCoordinator from "./textGeneration/SideQuestionCoordinator.ts";
 import {
   formatSideQuestionConversation,
   formatSideQuestionContext,
@@ -149,224 +147,6 @@ const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchComma
 const isTextGenerationError = Schema.is(TextGenerationError);
 const SIDE_QUESTION_CONTEXT_TURNS_PER_PAGE = 50;
 const SIDE_QUESTION_CONTEXT_MAX_PAGES = 20;
-
-const encodeSideQuestionRequestKey = Schema.encodeSync(
-  Schema.fromJsonString(
-    Schema.Struct({
-      question: Schema.String,
-      context: Schema.String,
-      modelSelection: ModelSelection,
-    }),
-  ),
-);
-type SideQuestionSingleFlightInput = {
-  readonly threadId: ThreadId;
-  readonly requestId: string;
-  readonly question: string;
-  readonly context: string;
-  readonly modelSelection: ModelSelection;
-};
-
-type SideQuestionDeferred = Deferred.Deferred<
-  TextGeneration.SideQuestionGenerationResult,
-  TextGenerationError
->;
-
-type SideQuestionFlight = {
-  readonly result: SideQuestionDeferred;
-  readonly cancel: Deferred.Deferred<void>;
-  readonly requestIds: ReadonlySet<string>;
-};
-
-type SideQuestionRequest = {
-  readonly threadId: ThreadId;
-  readonly requestKey: string;
-  readonly cancel: Deferred.Deferred<void>;
-};
-
-type SideQuestionsInFlight = {
-  readonly flights: Map<ThreadId, Map<string, SideQuestionFlight>>;
-  readonly requests: Map<string, SideQuestionRequest>;
-  readonly cancelledRequests: ReadonlySet<string>;
-};
-
-type SideQuestionSingleFlight = {
-  readonly run: <R>(
-    input: SideQuestionSingleFlightInput,
-    effect: Effect.Effect<TextGeneration.SideQuestionGenerationResult, TextGenerationError, R>,
-  ) => Effect.Effect<TextGeneration.SideQuestionGenerationResult, TextGenerationError, R>;
-  readonly cancel: (input: {
-    readonly threadId: ThreadId;
-    readonly requestId: string;
-  }) => Effect.Effect<boolean>;
-};
-
-const sideQuestionRequestIndexKey = (threadId: ThreadId, requestId: string) =>
-  `${threadId}\u0000${requestId}`;
-
-const MAX_EARLY_SIDE_QUESTION_CANCELLATIONS = 1_024;
-
-export const makeSideQuestionSingleFlight: Effect.Effect<
-  SideQuestionSingleFlight,
-  never,
-  Scope.Scope
-> = Effect.gen(function* () {
-  const scope = yield* Effect.scope;
-  const inFlight = yield* Ref.make<SideQuestionsInFlight>({
-    flights: new Map(),
-    requests: new Map(),
-    cancelledRequests: new Set(),
-  });
-
-  const cancelRequest = (
-    input: Parameters<SideQuestionSingleFlight["cancel"]>[0],
-    rememberMissing: boolean,
-  ) =>
-    Effect.gen(function* () {
-      const indexKey = sideQuestionRequestIndexKey(input.threadId, input.requestId);
-      const [request, providerCancel] = yield* Ref.modify<
-        SideQuestionsInFlight,
-        readonly [SideQuestionRequest | undefined, Deferred.Deferred<void> | undefined]
-      >(inFlight, (current) => {
-        const request = current.requests.get(indexKey);
-        if (!request || request.threadId !== input.threadId) {
-          if (!rememberMissing || current.cancelledRequests.has(indexKey)) {
-            return [[undefined, undefined] as const, current];
-          }
-          const cancelledRequests = new Set(current.cancelledRequests);
-          cancelledRequests.add(indexKey);
-          if (cancelledRequests.size > MAX_EARLY_SIDE_QUESTION_CANCELLATIONS) {
-            const oldest = cancelledRequests.values().next().value;
-            if (oldest) cancelledRequests.delete(oldest);
-          }
-          return [[undefined, undefined] as const, { ...current, cancelledRequests }];
-        }
-
-        const threadFlights = current.flights.get(input.threadId);
-        const flight = threadFlights?.get(request.requestKey);
-        const nextRequests = new Map(current.requests);
-        nextRequests.delete(indexKey);
-        if (!flight || !flight.requestIds.has(input.requestId)) {
-          return [[request, undefined] as const, { ...current, requests: nextRequests }];
-        }
-
-        const nextRequestIds = new Set(flight.requestIds);
-        nextRequestIds.delete(input.requestId);
-        const nextThreadFlights = new Map(threadFlights);
-        let providerCancel: Deferred.Deferred<void> | undefined;
-        if (nextRequestIds.size === 0) {
-          nextThreadFlights.delete(request.requestKey);
-          providerCancel = flight.cancel;
-        } else {
-          nextThreadFlights.set(request.requestKey, { ...flight, requestIds: nextRequestIds });
-        }
-        const nextFlights = new Map(current.flights);
-        if (nextThreadFlights.size === 0) nextFlights.delete(input.threadId);
-        else nextFlights.set(input.threadId, nextThreadFlights);
-        return [
-          [request, providerCancel] as const,
-          { ...current, flights: nextFlights, requests: nextRequests },
-        ];
-      });
-
-      if (!request) return true;
-      yield* Deferred.succeed(request.cancel, undefined);
-      if (providerCancel) yield* Deferred.succeed(providerCancel, undefined);
-      return true;
-    });
-
-  const cancel: SideQuestionSingleFlight["cancel"] = (input) => cancelRequest(input, true);
-
-  const run: SideQuestionSingleFlight["run"] = (input, effect) =>
-    Effect.uninterruptibleMask((restore) =>
-      Effect.gen(function* () {
-        const candidateResult = yield* Deferred.make<
-          TextGeneration.SideQuestionGenerationResult,
-          TextGenerationError
-        >();
-        const candidateProviderCancel = yield* Deferred.make<void>();
-        const subscriberCancel = yield* Deferred.make<void>();
-        const requestKey = encodeSideQuestionRequestKey({
-          question: input.question,
-          context: input.context,
-          modelSelection: input.modelSelection,
-        });
-        const [flight, ownsRequest] = yield* Ref.modify<
-          SideQuestionsInFlight,
-          readonly [SideQuestionFlight | null, boolean]
-        >(inFlight, (current) => {
-          const indexKey = sideQuestionRequestIndexKey(input.threadId, input.requestId);
-          if (current.cancelledRequests.has(indexKey)) {
-            const cancelledRequests = new Set(current.cancelledRequests);
-            cancelledRequests.delete(indexKey);
-            return [[null, false] as const, { ...current, cancelledRequests }];
-          }
-          const threadFlights = current.flights.get(input.threadId);
-          const existing = threadFlights?.get(requestKey);
-          const flight = existing
-            ? { ...existing, requestIds: new Set(existing.requestIds).add(input.requestId) }
-            : {
-                result: candidateResult,
-                cancel: candidateProviderCancel,
-                requestIds: new Set([input.requestId]),
-              };
-          const nextThreadFlights = new Map(threadFlights);
-          nextThreadFlights.set(requestKey, flight);
-          const nextFlights = new Map(current.flights);
-          nextFlights.set(input.threadId, nextThreadFlights);
-          const nextRequests = new Map(current.requests);
-          nextRequests.set(sideQuestionRequestIndexKey(input.threadId, input.requestId), {
-            threadId: input.threadId,
-            requestKey,
-            cancel: subscriberCancel,
-          });
-          return [
-            [flight, !existing] as const,
-            { ...current, flights: nextFlights, requests: nextRequests },
-          ];
-        });
-
-        if (!flight) return yield* Effect.interrupt;
-
-        if (ownsRequest) {
-          const generation = Effect.raceFirst(
-            effect,
-            Deferred.await(flight.cancel).pipe(Effect.andThen(Effect.interrupt)),
-          );
-          yield* Deferred.into(generation, flight.result).pipe(
-            Effect.ensuring(
-              Ref.update(inFlight, (current) => {
-                const threadFlights = current.flights.get(input.threadId);
-                const currentFlight = threadFlights?.get(requestKey);
-                if (currentFlight?.result !== flight.result) return current;
-
-                const nextThreadFlights = new Map(threadFlights);
-                nextThreadFlights.delete(requestKey);
-                const nextFlights = new Map(current.flights);
-                if (nextThreadFlights.size === 0) nextFlights.delete(input.threadId);
-                else nextFlights.set(input.threadId, nextThreadFlights);
-                const nextRequests = new Map(current.requests);
-                for (const requestId of currentFlight.requestIds) {
-                  nextRequests.delete(sideQuestionRequestIndexKey(input.threadId, requestId));
-                }
-                return { ...current, flights: nextFlights, requests: nextRequests };
-              }),
-            ),
-            Effect.forkIn(scope),
-          );
-        }
-
-        return yield* restore(
-          Effect.raceFirst(
-            Deferred.await(flight.result),
-            Deferred.await(subscriberCancel).pipe(Effect.andThen(Effect.interrupt)),
-          ).pipe(Effect.ensuring(cancelRequest(input, false))),
-        );
-      }),
-    );
-
-  return { run, cancel };
-});
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -655,7 +435,6 @@ const makeWsRpcLayer = (
   currentSession: EnvironmentAuth.AuthenticatedSession,
   clientOrigin: OrchestrationClientOrigin,
   previewAutomationBroker: PreviewAutomationBroker.PreviewAutomationBroker["Service"],
-  sideQuestionSingleFlight: SideQuestionSingleFlight,
 ) =>
   WsRpcGroup.toLayer(
     Effect.gen(function* () {
@@ -663,6 +442,7 @@ const makeWsRpcLayer = (
       const crypto = yield* Crypto.Crypto;
       const projectionSnapshotQuery = yield* ProjectionSnapshotQuery.ProjectionSnapshotQuery;
       const textGeneration = yield* TextGeneration.TextGeneration;
+      const sideQuestionCoordinator = yield* SideQuestionCoordinator.SideQuestionCoordinator;
       const orchestrationEngine = yield* OrchestrationEngine.OrchestrationEngineService;
       const analytics = yield* AnalyticsService.AnalyticsService;
       // Every command dispatched on this connection carries the connecting
@@ -1587,7 +1367,7 @@ const makeWsRpcLayer = (
 
               const requestId = input.requestId ?? (yield* crypto.randomUUIDv4);
               const modelSelection = input.modelSelection ?? thread.modelSelection;
-              return yield* sideQuestionSingleFlight.run(
+              return yield* sideQuestionCoordinator.run(
                 {
                   threadId: input.threadId,
                   requestId,
@@ -1618,7 +1398,7 @@ const makeWsRpcLayer = (
         [ORCHESTRATION_WS_METHODS.cancelSideQuestion]: (input) =>
           observeRpcEffect(
             ORCHESTRATION_WS_METHODS.cancelSideQuestion,
-            sideQuestionSingleFlight.cancel(input).pipe(Effect.map((cancelled) => ({ cancelled }))),
+            sideQuestionCoordinator.cancel(input).pipe(Effect.map((cancelled) => ({ cancelled }))),
             { "rpc.aggregate": "orchestration" },
           ),
         [ORCHESTRATION_WS_METHODS.getWorkflowScript]: (input) =>
@@ -2812,7 +2592,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
     const previewAutomationBroker = yield* PreviewAutomationBroker.PreviewAutomationBroker;
     const serverSelfUpdate = yield* ServerSelfUpdate.ServerSelfUpdate;
     const pullRequests = yield* PullRequestService.PullRequestService;
-    const sideQuestionSingleFlight = yield* makeSideQuestionSingleFlight;
+    const sideQuestionCoordinator = yield* SideQuestionCoordinator.SideQuestionCoordinator;
     return HttpRouter.add(
       "GET",
       "/ws",
@@ -2839,14 +2619,15 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           disableTracing: true,
         }).pipe(
           Effect.provide(
-            makeWsRpcLayer(
-              session,
-              clientOrigin,
-              previewAutomationBroker,
-              sideQuestionSingleFlight,
-            ).pipe(
+            makeWsRpcLayer(session, clientOrigin, previewAutomationBroker).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(ProviderMaintenanceRunner.layer),
+              Layer.provide(
+                Layer.succeed(
+                  SideQuestionCoordinator.SideQuestionCoordinator,
+                  sideQuestionCoordinator,
+                ),
+              ),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS
               // mutation invalidates the HTTP diff cache that every client reads from.

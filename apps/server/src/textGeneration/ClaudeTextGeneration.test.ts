@@ -300,7 +300,7 @@ it.layer(ClaudeTextGenerationTestLayer)("ClaudeTextGeneration", (it) => {
           },
         }),
         stdinMustContain: "Please investigate reconnect failures after restarting the session.",
-        argsMustContain: "--tools  --dangerously-skip-permissions --disallowedTools mcp__*",
+        argsMustNotContain: "--dangerously-skip-permissions",
       },
       (textGeneration) =>
         Effect.gen(function* () {

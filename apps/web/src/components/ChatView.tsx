@@ -5372,7 +5372,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
 
   const submitSideQuestion = useCallback(
-    async (question: string, mode: "new" | "follow-up", initialModelSelection?: ModelSelection) => {
+    async (question: string, mode: "new" | "follow-up", modelSelection?: ModelSelection) => {
       if (!activeThread || !activeThreadRef) return;
       if (sideQuestionState?.turns.at(-1)?.status === "loading") return;
 
@@ -5380,16 +5380,17 @@ function ChatViewContent(props: ChatViewProps) {
         mode === "new" ? [] : sideQuestionPreviousTurns(sideQuestionState?.turns ?? []);
       const retainedTurns = mode === "new" ? [] : (sideQuestionState?.turns ?? []);
       const requestId = randomHex(16);
-      const modelSelection =
-        mode === "new"
-          ? (initialModelSelection ?? activeThread.modelSelection)
-          : (sideQuestionState?.modelSelection ?? activeThread.modelSelection);
+      const resolvedModelSelection =
+        modelSelection ??
+        (mode === "new"
+          ? activeThread.modelSelection
+          : (sideQuestionState?.modelSelection ?? activeThread.modelSelection));
       sideQuestionRequestRef.current[routeThreadKey] = requestId;
       setSideQuestionsByThread((current) => ({
         ...current,
         [routeThreadKey]: {
           mode: "panel",
-          modelSelection,
+          modelSelection: resolvedModelSelection,
           turns: [...retainedTurns, { id: requestId, question, answer: "", status: "loading" }],
         },
       }));
@@ -5401,7 +5402,7 @@ function ChatViewContent(props: ChatViewProps) {
           threadId: activeThread.id,
           requestId,
           question,
-          modelSelection,
+          modelSelection: resolvedModelSelection,
           previousTurns,
         },
       });
@@ -6924,8 +6925,8 @@ function ChatViewContent(props: ChatViewProps) {
           setSideQuestionMode("minimized");
           useRightPanelStore.getState().closeSurface(activeThreadRef, "side-question");
         }}
-        onSubmit={(question) => {
-          void submitSideQuestion(question, "follow-up");
+        onSubmit={(question, modelSelection) => {
+          void submitSideQuestion(question, "follow-up", modelSelection);
         }}
         onStop={stopSideQuestion}
         onModelSelectionChange={(modelSelection) =>

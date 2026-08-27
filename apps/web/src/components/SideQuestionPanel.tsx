@@ -42,7 +42,7 @@ export function SideQuestionPanel(props: {
   readonly onMinimize: () => void;
   readonly onModelSelectionChange: (selection: ModelSelection) => void;
   readonly onStop: () => void;
-  readonly onSubmit: (question: string) => void;
+  readonly onSubmit: (question: string, modelSelection: ModelSelection) => void;
 }) {
   const [draft, setDraft] = useState("");
   const isMobileViewport = useMediaQuery("max-sm");
@@ -97,7 +97,7 @@ export function SideQuestionPanel(props: {
   const submitDraft = () => {
     const question = draft.trim();
     if (!question || pending) return;
-    props.onSubmit(question);
+    props.onSubmit(question, activeModelSelection);
     setDraft("");
   };
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -249,6 +249,7 @@ export function SideQuestionPanel(props: {
                         viewBox="0 0 14 14"
                         fill="none"
                         aria-hidden="true"
+                        className="size-3.5"
                       >
                         <path
                           d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"

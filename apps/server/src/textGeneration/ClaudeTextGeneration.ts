@@ -112,6 +112,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     prompt,
     outputSchemaJson,
     modelSelection,
+    disableTools,
   }: {
     operation:
       | "generateCommitMessage"
@@ -123,6 +124,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
     prompt: string;
     outputSchemaJson: S;
     modelSelection: ModelSelection;
+    disableTools?: boolean;
   }): Effect.fn.Return<S["Type"], TextGenerationError, S["DecodingServices"]> {
     const jsonSchemaStr = yield* encodeJsonForOperation(
       operation,
@@ -172,11 +174,9 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           resolveClaudeApiModelId(modelSelection),
           ...(cliEffort ? ["--effort", cliEffort] : []),
           ...(settingsJson ? ["--settings", settingsJson] : []),
-          "--tools",
-          "",
-          "--dangerously-skip-permissions",
-          "--disallowedTools",
-          "mcp__*",
+          ...(disableTools
+            ? ["--tools", "", "--dangerously-skip-permissions", "--disallowedTools", "mcp__*"]
+            : []),
         ],
         { env: claudeEnvironment },
       );
@@ -378,6 +378,7 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
         prompt,
         outputSchemaJson: outputSchema,
         modelSelection: input.modelSelection,
+        disableTools: true,
       });
 
       return { answer: generated.answer.trim() };

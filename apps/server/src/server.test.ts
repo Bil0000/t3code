@@ -105,10 +105,10 @@ import * as ServerConfig from "./config.ts";
 import { makeRoutesLayer } from "./server.ts";
 import {
   isThreadDetailEvent,
-  makeSideQuestionSingleFlight,
   resolveAvailableEditorsForConfig,
   resolveFileManagerRevealKindForConfig,
 } from "./ws.ts";
+import * as SideQuestionCoordinator from "./textGeneration/SideQuestionCoordinator.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as GitManager from "./git/GitManager.ts";
 import * as Keybindings from "./keybindings.ts";
@@ -1441,7 +1441,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("coalesces matching side questions without sharing different answers", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const singleFlight = yield* SideQuestionCoordinator.make;
         const input = {
           threadId: defaultThreadId,
           question: "Same question",
@@ -1518,7 +1518,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("does not share matching questions from different context snapshots", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const singleFlight = yield* SideQuestionCoordinator.make;
         const firstStarted = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         const first = yield* singleFlight
@@ -1559,10 +1559,54 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     ),
   );
 
+  it.effect("rejects duplicate active side-question request IDs", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const singleFlight = yield* SideQuestionCoordinator.make;
+        const started = yield* Deferred.make<void>();
+        const interrupted = yield* Deferred.make<void>();
+        const request = {
+          threadId: defaultThreadId,
+          requestId: "duplicate-id",
+          question: "First question",
+          context: "Current context",
+          modelSelection: defaultModelSelection,
+        };
+        const first = yield* singleFlight
+          .run(
+            request,
+            Deferred.succeed(started, undefined).pipe(
+              Effect.andThen(Effect.never),
+              Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+            ),
+          )
+          .pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+
+        let duplicateStarted = false;
+        const duplicateExit = yield* singleFlight
+          .run(
+            { ...request, question: "Second question" },
+            Effect.sync(() => {
+              duplicateStarted = true;
+              return { answer: "Duplicate answer" };
+            }),
+          )
+          .pipe(Effect.exit);
+        assert.isTrue(duplicateExit._tag === "Failure");
+        assert.isFalse(duplicateStarted);
+
+        yield* singleFlight.cancel(request);
+        yield* Deferred.await(interrupted);
+        assert.isTrue((yield* Fiber.await(first))._tag === "Failure");
+      }),
+    ),
+  );
+
   it.effect("keeps shared side-question work alive after the first caller is canceled", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const singleFlight = yield* SideQuestionCoordinator.make;
         const input = {
           threadId: defaultThreadId,
           question: "Why SQLite?",
@@ -1611,7 +1655,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("cancels the provider after the last side-question caller stops", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const singleFlight = yield* SideQuestionCoordinator.make;
         const started = yield* Deferred.make<void>();
         const interrupted = yield* Deferred.make<void>();
         const request = {
@@ -1638,7 +1682,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("cancels the provider after the last side-question caller disconnects", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const singleFlight = yield* SideQuestionCoordinator.make;
         const started = yield* Deferred.make<void>();
         const interrupted = yield* Deferred.make<void>();
         const request = {
@@ -1664,7 +1708,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("does not start a side-question provider after an early stop", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const singleFlight = yield* SideQuestionCoordinator.make;
         const request = {
           threadId: defaultThreadId,
           requestId: "stop-before-start",
@@ -1694,7 +1738,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
   it.effect("bounds remembered early side-question stops", () =>
     Effect.scoped(
       Effect.gen(function* () {
-        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const singleFlight = yield* SideQuestionCoordinator.make;
         const request = (requestId: string) => ({
           threadId: defaultThreadId,
           requestId,
