@@ -204,6 +204,8 @@ type SideQuestionSingleFlight = {
 const sideQuestionRequestIndexKey = (threadId: ThreadId, requestId: string) =>
   `${threadId}\u0000${requestId}`;
 
+const MAX_EARLY_SIDE_QUESTION_CANCELLATIONS = 1_024;
+
 export const makeSideQuestionSingleFlight: Effect.Effect<
   SideQuestionSingleFlight,
   never,
@@ -216,7 +218,10 @@ export const makeSideQuestionSingleFlight: Effect.Effect<
     cancelledRequests: new Set(),
   });
 
-  const cancel: SideQuestionSingleFlight["cancel"] = (input) =>
+  const cancelRequest = (
+    input: Parameters<SideQuestionSingleFlight["cancel"]>[0],
+    rememberMissing: boolean,
+  ) =>
     Effect.gen(function* () {
       const indexKey = sideQuestionRequestIndexKey(input.threadId, input.requestId);
       const [request, providerCancel] = yield* Ref.modify<
@@ -225,16 +230,16 @@ export const makeSideQuestionSingleFlight: Effect.Effect<
       >(inFlight, (current) => {
         const request = current.requests.get(indexKey);
         if (!request || request.threadId !== input.threadId) {
-          if (current.cancelledRequests.has(indexKey)) {
+          if (!rememberMissing || current.cancelledRequests.has(indexKey)) {
             return [[undefined, undefined] as const, current];
           }
-          return [
-            [undefined, undefined] as const,
-            {
-              ...current,
-              cancelledRequests: new Set(current.cancelledRequests).add(indexKey),
-            },
-          ];
+          const cancelledRequests = new Set(current.cancelledRequests);
+          cancelledRequests.add(indexKey);
+          if (cancelledRequests.size > MAX_EARLY_SIDE_QUESTION_CANCELLATIONS) {
+            const oldest = cancelledRequests.values().next().value;
+            if (oldest) cancelledRequests.delete(oldest);
+          }
+          return [[undefined, undefined] as const, { ...current, cancelledRequests }];
         }
 
         const threadFlights = current.flights.get(input.threadId);
@@ -269,6 +274,8 @@ export const makeSideQuestionSingleFlight: Effect.Effect<
       if (providerCancel) yield* Deferred.succeed(providerCancel, undefined);
       return true;
     });
+
+  const cancel: SideQuestionSingleFlight["cancel"] = (input) => cancelRequest(input, true);
 
   const run: SideQuestionSingleFlight["run"] = (input, effect) =>
     Effect.uninterruptibleMask((restore) =>
@@ -353,7 +360,7 @@ export const makeSideQuestionSingleFlight: Effect.Effect<
           Effect.raceFirst(
             Deferred.await(flight.result),
             Deferred.await(subscriberCancel).pipe(Effect.andThen(Effect.interrupt)),
-          ),
+          ).pipe(Effect.ensuring(cancelRequest(input, false))),
         );
       }),
     );

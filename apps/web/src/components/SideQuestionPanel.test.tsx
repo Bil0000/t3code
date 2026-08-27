@@ -97,7 +97,26 @@ describe("SideQuestionPanel", () => {
     );
 
     expect(markup.match(/<textarea[^>]*>/)?.[0]).not.toContain("disabled");
-    expect(markup).toContain('aria-label="Stop generation"');
+    expect(markup).toContain('aria-label="Stop side question"');
+    expect(markup).toContain("size-9 sm:size-8");
+  });
+
+  it("keeps model, effort, and Stop controls when the saved provider is unavailable", () => {
+    const markup = renderToStaticMarkup(
+      <SideQuestionPanel
+        {...panelProps}
+        cwd="/tmp/project"
+        modelSelection={{
+          instanceId: ProviderInstanceId.make("removed-provider"),
+          model: "removed-model",
+        }}
+        turns={[{ ...turns[0]!, status: "loading" }]}
+      />,
+    );
+
+    expect(markup).toContain('aria-label="Side question model"');
+    expect(markup).toContain("Medium");
+    expect(markup).toContain('aria-label="Stop side question"');
   });
 
   it("renders a compact composer attachment that can restore or dismiss the panel", () => {

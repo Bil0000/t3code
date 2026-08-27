@@ -1635,6 +1635,32 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     ),
   );
 
+  it.effect("cancels the provider after the last side-question caller disconnects", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const started = yield* Deferred.make<void>();
+        const interrupted = yield* Deferred.make<void>();
+        const request = {
+          threadId: defaultThreadId,
+          requestId: "disconnect-me",
+          question: "Keep going?",
+          context: "Current context",
+          modelSelection: defaultModelSelection,
+        };
+        const generation = Deferred.succeed(started, undefined).pipe(
+          Effect.andThen(Effect.never),
+          Effect.onInterrupt(() => Deferred.succeed(interrupted, undefined)),
+        );
+
+        const caller = yield* singleFlight.run(request, generation).pipe(Effect.forkChild);
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(caller);
+        yield* Deferred.await(interrupted);
+      }),
+    ),
+  );
+
   it.effect("does not start a side-question provider after an early stop", () =>
     Effect.scoped(
       Effect.gen(function* () {
@@ -1661,6 +1687,45 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
         assert.isTrue(exit._tag === "Failure");
         assert.isFalse(started);
+      }),
+    ),
+  );
+
+  it.effect("bounds remembered early side-question stops", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const singleFlight = yield* makeSideQuestionSingleFlight;
+        const request = (requestId: string) => ({
+          threadId: defaultThreadId,
+          requestId,
+          question: "Start later?",
+          context: "Current context",
+          modelSelection: defaultModelSelection,
+        });
+
+        for (let index = 0; index <= 1_024; index += 1) {
+          yield* singleFlight.cancel(request(`bounded-${index}`));
+        }
+
+        assert.deepEqual(
+          yield* singleFlight.run(
+            request("bounded-0"),
+            Effect.succeed({ answer: "Oldest stop expired" }),
+          ),
+          { answer: "Oldest stop expired" },
+        );
+        let newestStarted = false;
+        const newestExit = yield* singleFlight
+          .run(
+            request("bounded-1024"),
+            Effect.sync(() => {
+              newestStarted = true;
+              return { answer: "Too late" };
+            }),
+          )
+          .pipe(Effect.exit);
+        assert.isTrue(newestExit._tag === "Failure");
+        assert.isFalse(newestStarted);
       }),
     ),
   );

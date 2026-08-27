@@ -11,6 +11,7 @@ import { getAppModelOptionsForInstance } from "../modelSelection";
 import {
   applyProviderInstanceSettings,
   deriveProviderInstanceEntries,
+  resolveSelectableProviderInstanceEntry,
   sortProviderInstanceEntries,
 } from "../providerInstances";
 import { ComposerStopButton } from "./chat/ComposerPrimaryActions";
@@ -67,7 +68,17 @@ export function SideQuestionPanel(props: {
     [providerEntries, props.settings],
   );
   const activeEntry =
-    providerEntries.find((entry) => entry.instanceId === props.modelSelection.instanceId) ?? null;
+    resolveSelectableProviderInstanceEntry(providerEntries, props.modelSelection.instanceId) ??
+    null;
+  const activeModelSelection = activeEntry
+    ? activeEntry.instanceId === props.modelSelection.instanceId
+      ? props.modelSelection
+      : createModelSelection(
+          activeEntry.instanceId,
+          modelOptionsByInstance.get(activeEntry.instanceId)?.[0]?.slug ??
+            props.modelSelection.model,
+        )
+    : props.modelSelection;
   const selectModel = (instanceId: ModelSelection["instanceId"], model: string) => {
     const entry = providerEntries.find((candidate) => candidate.instanceId === instanceId);
     if (!entry) return;
@@ -186,8 +197,8 @@ export function SideQuestionPanel(props: {
                       <>
                         <ProviderModelPicker
                           compact
-                          activeInstanceId={props.modelSelection.instanceId}
-                          model={props.modelSelection.model}
+                          activeInstanceId={activeModelSelection.instanceId}
+                          model={activeModelSelection.model}
                           lockedProvider={null}
                           instanceEntries={providerEntries}
                           modelOptionsByInstance={modelOptionsByInstance}
@@ -199,17 +210,17 @@ export function SideQuestionPanel(props: {
                           provider={activeEntry.driverKind}
                           instanceId={activeEntry.instanceId}
                           models={activeEntry.models}
-                          model={props.modelSelection.model}
+                          model={activeModelSelection.model}
                           prompt=""
                           onPromptChange={() => undefined}
-                          modelOptions={props.modelSelection.options}
+                          modelOptions={activeModelSelection.options}
                           allowPromptInjectedEffort={false}
                           planModeEnabled={props.settings.planModeEnabled}
                           onModelOptionsChange={(options) =>
                             props.onModelSelectionChange(
                               createModelSelection(
-                                props.modelSelection.instanceId,
-                                props.modelSelection.model,
+                                activeModelSelection.instanceId,
+                                activeModelSelection.model,
                                 options,
                               ),
                             )
@@ -219,7 +230,11 @@ export function SideQuestionPanel(props: {
                     ) : null}
                   </div>
                   {pending ? (
-                    <ComposerStopButton onClick={props.onStop} />
+                    <ComposerStopButton
+                      ariaLabel="Stop side question"
+                      className="size-9 sm:size-8"
+                      onClick={props.onStop}
+                    />
                   ) : (
                     <Button
                       type="submit"

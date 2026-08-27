@@ -5372,7 +5372,7 @@ function ChatViewContent(props: ChatViewProps) {
   );
 
   const submitSideQuestion = useCallback(
-    async (question: string, mode: "new" | "follow-up") => {
+    async (question: string, mode: "new" | "follow-up", initialModelSelection?: ModelSelection) => {
       if (!activeThread || !activeThreadRef) return;
       if (sideQuestionState?.turns.at(-1)?.status === "loading") return;
 
@@ -5382,7 +5382,7 @@ function ChatViewContent(props: ChatViewProps) {
       const requestId = randomHex(16);
       const modelSelection =
         mode === "new"
-          ? activeThread.modelSelection
+          ? (initialModelSelection ?? activeThread.modelSelection)
           : (sideQuestionState?.modelSelection ?? activeThread.modelSelection);
       sideQuestionRequestRef.current[routeThreadKey] = requestId;
       setSideQuestionsByThread((current) => ({
@@ -5574,7 +5574,7 @@ function ChatViewContent(props: ChatViewProps) {
       promptRef.current = "";
       setComposerDraftPrompt(composerDraftTarget, "");
       composerRef.current?.resetCursorState();
-      await submitSideQuestion(sideQuestion, "new");
+      await submitSideQuestion(sideQuestion, "new", sideContext?.selectedModelSelection);
       return;
     }
     if (activePendingProgress) {

@@ -796,6 +796,9 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         }));
         return null;
       }
+      if (sideQuestionState?.turns.at(-1)?.status === "loading") {
+        return null;
+      }
       if (props.draftAttachments.length > 0) {
         const errorId = randomHex(16);
         sideQuestionRequestRef.current[selectedThreadKey] = errorId;
@@ -819,9 +822,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
             },
           };
         });
-        return null;
-      }
-      if (sideQuestionState?.turns.at(-1)?.status === "loading") {
         return null;
       }
 
