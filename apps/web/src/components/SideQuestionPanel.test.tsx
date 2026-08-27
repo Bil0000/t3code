@@ -116,6 +116,7 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain("Worktree");
     expect(markup).toContain("feat/btw-side-questions");
     expect(markup.match(/data-composer-label=/g) ?? []).toHaveLength(3);
+    expect(markup).not.toContain("max-w-[calc(48rem-2.75rem)]");
   });
 
   it("keeps the follow-up field editable while an answer is pending", () => {
