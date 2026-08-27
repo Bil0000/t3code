@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 
 import {
   canAskComposerSideQuestion,
+  canOfferComposerSideQuestionCommand,
   clampCollapsedComposerCursor,
   collapseExpandedComposerCursor,
   composerSubmissionIntentForEnter,
@@ -94,6 +95,28 @@ describe("side-question composer state", () => {
         hasPendingUserInput: false,
       }),
     ).toBe("side question");
+  });
+
+  it("offers /btw only from a slash trigger at the prompt start", () => {
+    const promptStartTrigger = detectComposerTrigger("/bt", 3);
+    const laterLineTrigger = detectComposerTrigger("Keep this\n/bt", 13);
+
+    expect(promptStartTrigger).not.toBeNull();
+    expect(laterLineTrigger).not.toBeNull();
+    expect(
+      canOfferComposerSideQuestionCommand({
+        trigger: promptStartTrigger!,
+        isServerThread: true,
+        hasPendingUserInput: false,
+      }),
+    ).toBe(true);
+    expect(
+      canOfferComposerSideQuestionCommand({
+        trigger: laterLineTrigger!,
+        isServerThread: true,
+        hasPendingUserInput: false,
+      }),
+    ).toBe(false);
   });
 });
 

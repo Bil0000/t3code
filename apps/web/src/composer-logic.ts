@@ -39,6 +39,14 @@ export function canAskComposerSideQuestion(input: {
   return input.isServerThread && !input.hasPendingUserInput;
 }
 
+export function canOfferComposerSideQuestionCommand(input: {
+  trigger: ComposerTrigger;
+  isServerThread: boolean;
+  hasPendingUserInput: boolean;
+}): boolean {
+  return input.trigger.rangeStart === 0 && canAskComposerSideQuestion(input);
+}
+
 const isInlineTokenSegment = (
   segment:
     | { type: "text"; text: string }

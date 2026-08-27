@@ -35,7 +35,7 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import {
-  canAskComposerSideQuestion,
+  canOfferComposerSideQuestionCommand,
   clampCollapsedComposerCursor,
   type ComposerSubmissionIntent,
   type ComposerTrigger,
@@ -1148,7 +1148,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           label: "/model",
           description: "Switch response model for this thread",
         },
-        ...(canAskComposerSideQuestion({
+        ...(canOfferComposerSideQuestionCommand({
+          trigger: composerTrigger,
           isServerThread,
           hasPendingUserInput: activePendingProgress !== null,
         })
