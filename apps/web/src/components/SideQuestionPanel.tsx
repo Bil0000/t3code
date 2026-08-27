@@ -17,6 +17,7 @@ import ChatMarkdown from "./ChatMarkdown";
 import type { EnvironmentOption } from "./BranchToolbar.logic";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
 import { BranchToolbarEnvModeSelector } from "./BranchToolbarEnvModeSelector";
+import { ComposerContextLabel } from "./ComposerContextLabel";
 import { getAppModelOptionsForInstance } from "../modelSelection";
 import {
   applyProviderInstanceSettings,
@@ -336,17 +337,9 @@ export function SideQuestionPanel(props: {
                   data-composer-context-control
                 >
                   <GitBranchIcon className="size-3 shrink-0 opacity-70" />
-                  <span
-                    data-composer-label
-                    className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
-                  >
-                    <span
-                      data-composer-label-motion
-                      className="block w-full min-w-0 max-w-[240px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
-                    >
-                      {props.runContext.branch ?? "Select ref"}
-                    </span>
-                  </span>
+                  <ComposerContextLabel>
+                    {props.runContext.branch ?? "Select ref"}
+                  </ComposerContextLabel>
                 </span>
               ) : null}
             </div>
