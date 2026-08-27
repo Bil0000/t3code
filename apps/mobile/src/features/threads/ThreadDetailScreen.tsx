@@ -669,21 +669,27 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
         return null;
       }
       if (props.draftAttachments.length > 0) {
-        setSideQuestionsByThread((current) => ({
-          ...current,
-          [selectedThreadKey]: {
-            mode: "expanded",
-            turns: [
-              {
-                question: sideQuestion,
-                id: 0,
-                answer: "Side questions are text only. Remove draft images and try again.",
-                status: "error",
-              },
-            ],
-            draft: "",
-          },
-        }));
+        const errorId = (sideQuestionRequestRef.current[selectedThreadKey] ?? 0) + 1;
+        sideQuestionRequestRef.current[selectedThreadKey] = errorId;
+        setSideQuestionsByThread((current) => {
+          const state = current[selectedThreadKey];
+          return {
+            ...current,
+            [selectedThreadKey]: {
+              mode: "expanded",
+              turns: [
+                ...(state?.turns ?? []),
+                {
+                  id: errorId,
+                  question: sideQuestion,
+                  answer: "Side questions are text only. Remove draft images and try again.",
+                  status: "error",
+                },
+              ],
+              draft: "",
+            },
+          };
+        });
         return null;
       }
       if (sideQuestionState?.turns.at(-1)?.status === "loading") {
