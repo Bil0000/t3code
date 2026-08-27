@@ -1,5 +1,5 @@
 import type { ScopedThreadRef } from "@t3tools/contracts";
-import { MessageCircleQuestion, Minimize2Icon, SendIcon, XIcon } from "lucide-react";
+import { MessageCircleQuestion, Minimize2Icon, XIcon } from "lucide-react";
 import { type FormEvent, useState } from "react";
 
 import ChatMarkdown from "./ChatMarkdown";
@@ -8,6 +8,7 @@ import { ScrollArea } from "./ui/scroll-area";
 import { Spinner } from "./ui/spinner";
 import { Textarea } from "./ui/textarea";
 import { isCommentSubmitShortcut } from "./diffs/commentSubmitShortcut";
+import { UserMessageBubble } from "./chat/UserMessageBubble";
 
 export type SideQuestionTurn = {
   readonly question: string;
@@ -60,8 +61,10 @@ export function SideQuestionPanel(props: {
         <div className="space-y-5 p-4" aria-live="polite">
           {props.turns.map((turn) => (
             <div key={turn.id} className="space-y-2.5">
-              <div className="ml-8 whitespace-pre-wrap wrap-break-word rounded-xl bg-message px-3 py-2 text-message-foreground text-sm">
-                {turn.question}
+              <div className="flex justify-end">
+                <UserMessageBubble className="whitespace-pre-wrap wrap-break-word text-sm">
+                  {turn.question}
+                </UserMessageBubble>
               </div>
               {turn.status === "loading" ? (
                 <div className="flex items-center gap-2 text-muted-foreground text-sm">
@@ -83,27 +86,63 @@ export function SideQuestionPanel(props: {
         </div>
       </ScrollArea>
 
-      <form className="shrink-0 border-border/60 border-t p-3" onSubmit={submit}>
-        <Textarea
-          size="sm"
-          value={draft}
-          disabled={pending}
-          aria-label="Ask a follow-up side question"
-          placeholder="Ask a follow-up…"
-          onChange={(event) => setDraft(event.target.value)}
-          onKeyDown={(event) => {
-            if (!isCommentSubmitShortcut(event, draft, pending)) return;
-            event.preventDefault();
-            submitDraft();
-          }}
-        />
-        <div className="mt-2 flex justify-end">
-          <Button type="submit" size="sm" disabled={pending || draft.trim().length === 0}>
-            <SendIcon className="size-3.5" />
-            Ask follow-up
-          </Button>
-        </div>
-      </form>
+      <div className="shrink-0 border-border/60 border-t p-3">
+        <form className="chat-composer-glass-shell relative" onSubmit={submit}>
+          <div className="chat-composer-glass-host relative z-10 w-full rounded-[22px]">
+            <div
+              data-chat-composer-main-surface="true"
+              className="group relative z-10 rounded-[22px] p-px"
+            >
+              <div data-chat-composer-surface="true" className="rounded-[20px]">
+                <div className="px-3 pt-3 sm:px-4 sm:pt-3.5">
+                  <Textarea
+                    unstyled
+                    size="sm"
+                    className="block text-sm"
+                    value={draft}
+                    aria-label="Ask a follow-up side question"
+                    placeholder="Ask another side question…"
+                    onChange={(event) => setDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (!isCommentSubmitShortcut(event, draft, pending)) return;
+                      event.preventDefault();
+                      submitDraft();
+                    }}
+                  />
+                </div>
+                <div className="flex justify-end px-3 pb-3 sm:px-4 sm:pb-4">
+                  <button
+                    type="submit"
+                    className="relative isolate flex h-9 w-9 items-center justify-center overflow-hidden rounded-full bg-message-action text-message-action-foreground shadow-xs transition-all duration-150 enabled:cursor-pointer enabled:inset-shadow-[0_1px_--theme(--color-white/16%)] enabled:shadow-message-action/24 hover:scale-105 hover:bg-message-action-hover active:inset-shadow-[0_1px_--theme(--color-black/8%)] active:shadow-none disabled:pointer-events-none disabled:opacity-30 disabled:shadow-none disabled:hover:scale-100 sm:h-8 sm:w-8"
+                    disabled={pending || draft.trim().length === 0}
+                    aria-label="Ask follow-up"
+                  >
+                    {pending ? (
+                      <Spinner className="size-3.5" aria-hidden="true" />
+                    ) : (
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 14 14"
+                        fill="none"
+                        aria-hidden="true"
+                      >
+                        <path
+                          d="M7 11.5V2.5M7 2.5L3 6.5M7 2.5L11 6.5"
+                          stroke="currentColor"
+                          strokeWidth="1.8"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
