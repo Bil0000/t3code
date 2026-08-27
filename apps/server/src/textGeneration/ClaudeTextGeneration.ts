@@ -174,9 +174,8 @@ export const makeClaudeTextGeneration = Effect.fn("makeClaudeTextGeneration")(fu
           resolveClaudeApiModelId(modelSelection),
           ...(cliEffort ? ["--effort", cliEffort] : []),
           ...(settingsJson ? ["--settings", settingsJson] : []),
-          ...(disableTools
-            ? ["--tools", "", "--dangerously-skip-permissions", "--disallowedTools", "mcp__*"]
-            : []),
+          "--dangerously-skip-permissions",
+          ...(disableTools ? ["--tools", "", "--disallowedTools", "mcp__*"] : []),
         ],
         { env: claudeEnvironment },
       );
