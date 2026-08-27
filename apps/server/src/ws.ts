@@ -1387,7 +1387,8 @@ const makeWsRpcLayer = (
                 });
               }
 
-              const thread = firstPage.value.thread;
+              const firstSnapshot = projectThreadDetailSnapshot(firstPage.value);
+              const thread = firstSnapshot.thread;
               let context = formatSideQuestionContext(thread);
               if (!isSideQuestionContextWithinLimit(context)) {
                 return yield* new TextGenerationError({
@@ -1395,7 +1396,7 @@ const makeWsRpcLayer = (
                   detail: "The thread context is too large for a side question.",
                 });
               }
-              let beforeCursor = firstPage.value.page?.beforeCursor ?? null;
+              let beforeCursor = firstSnapshot.page?.beforeCursor ?? null;
               let pageCount = 1;
               while (beforeCursor !== null) {
                 if (pageCount >= SIDE_QUESTION_CONTEXT_MAX_PAGES) {
@@ -1414,7 +1415,9 @@ const makeWsRpcLayer = (
                     detail: `Thread '${input.threadId}' was not found.`,
                   });
                 }
-                const olderContext = formatSideQuestionContext(page.value.thread);
+                const olderContext = formatSideQuestionContext(
+                  projectThreadDetailSnapshot(page.value).thread,
+                );
                 context = [olderContext, context].filter(Boolean).join("\n\n");
                 if (!isSideQuestionContextWithinLimit(context)) {
                   return yield* new TextGenerationError({

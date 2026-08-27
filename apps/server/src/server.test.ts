@@ -17,6 +17,7 @@ import {
   MessageId,
   ExternalLauncherCommandNotFoundError,
   OrchestrationThreadDetailSnapshot,
+  type OrchestrationThreadActivity,
   type OrchestrationThreadStreamItem,
   type OrchestrationThreadShell,
   TerminalNotRunningError,
@@ -1580,6 +1581,28 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const project = snapshot.projects[0]!;
       const received: Array<TextGeneration.SideQuestionGenerationInput> = [];
       let dispatchCount = 0;
+      const toolActivity = (
+        id: string,
+        output: string,
+        createdAt: string,
+      ): OrchestrationThreadActivity =>
+        ({
+          id,
+          tone: "tool",
+          kind: "tool.completed",
+          summary: "Command completed",
+          payload: {
+            itemType: "command_execution",
+            data: {
+              item: {
+                command: "print-context",
+                aggregatedOutput: output,
+              },
+            },
+          },
+          turnId: null,
+          createdAt,
+        }) as OrchestrationThreadActivity;
       const currentThread = {
         ...thread,
         messages: [
@@ -1592,6 +1615,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             createdAt: "2026-01-01T00:00:02.000Z",
             updatedAt: "2026-01-01T00:00:02.000Z",
           },
+        ],
+        activities: [
+          toolActivity(
+            "current-side-question-tool",
+            "Current tool summary\nCURRENT_TOOL_SECRET",
+            "2026-01-01T00:00:02.500Z",
+          ),
         ],
       };
       const olderThread = {
@@ -1606,6 +1636,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             createdAt: "2026-01-01T00:00:01.000Z",
             updatedAt: "2026-01-01T00:00:01.000Z",
           },
+        ],
+        activities: [
+          toolActivity(
+            "older-side-question-tool",
+            "Older tool summary\nOLDER_TOOL_SECRET",
+            "2026-01-01T00:00:01.500Z",
+          ),
         ],
       };
 
@@ -1667,6 +1704,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       assert.equal(received[0]?.question, "How does this work?");
       assert.include(received[0]!.context, "SIDE USER:\nWhat did we inspect?");
       assert.include(received[0]!.context, "SIDE ASSISTANT:\nThe reconnect flow.");
+      assert.include(received[0]!.context, "Current tool summary");
+      assert.include(received[0]!.context, "Older tool summary");
+      assert.notInclude(received[0]!.context, "CURRENT_TOOL_SECRET");
+      assert.notInclude(received[0]!.context, "OLDER_TOOL_SECRET");
       assert.deepEqual(received[0]?.modelSelection, thread.modelSelection);
       assert.equal(dispatchCount, 0);
       assert.equal(pageReadCount, 2);
