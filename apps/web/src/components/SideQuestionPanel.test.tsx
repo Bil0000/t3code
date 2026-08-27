@@ -115,6 +115,7 @@ describe("SideQuestionPanel", () => {
     expect(markup).toContain("calendaty-staging");
     expect(markup).toContain("Worktree");
     expect(markup).toContain("feat/btw-side-questions");
+    expect(markup.match(/data-composer-label=/g) ?? []).toHaveLength(3);
   });
 
   it("keeps the follow-up field editable while an answer is pending", () => {

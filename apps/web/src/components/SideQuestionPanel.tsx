@@ -12,6 +12,7 @@ import { type FormEvent, useMemo, useState } from "react";
 import { composerSubmissionIntentForEnter } from "../composer-logic";
 import { useMediaQuery } from "../hooks/useMediaQuery";
 import { cn } from "../lib/utils";
+import { useLabelsOverflow } from "./BranchToolbar";
 import ChatMarkdown from "./ChatMarkdown";
 import type { EnvironmentOption } from "./BranchToolbar.logic";
 import { BranchToolbarEnvironmentSelector } from "./BranchToolbarEnvironmentSelector";
@@ -69,6 +70,8 @@ export function SideQuestionPanel(props: {
   const pending = props.turns.at(-1)?.status === "loading";
   const showRunContext =
     props.runContext.showEnvironmentIndicator || props.runContext.showGitControls;
+  const [contextStripElement, setContextStripElement] = useState<HTMLDivElement | null>(null);
+  const labelsOverflow = useLabelsOverflow(contextStripElement);
   const providerEntries = useMemo(
     () =>
       sortProviderInstanceEntries(
@@ -296,7 +299,9 @@ export function SideQuestionPanel(props: {
           </div>
           {showRunContext ? (
             <div
+              ref={setContextStripElement}
               data-side-question-context="true"
+              data-compact={labelsOverflow ? "" : undefined}
               className="chat-composer-context-strip group/composer-context -mt-4 mx-auto flex w-[calc(100%-2.75rem)] max-w-[calc(48rem-2.75rem)] items-center gap-2 overflow-x-clip overflow-y-visible ps-1 pe-2 pt-5 pb-1"
             >
               <div className="flex min-w-0 flex-1 items-center gap-1">
@@ -331,8 +336,16 @@ export function SideQuestionPanel(props: {
                   data-composer-context-control
                 >
                   <GitBranchIcon className="size-3 shrink-0 opacity-70" />
-                  <span className="min-w-0 max-w-[240px] truncate">
-                    {props.runContext.branch ?? "Select ref"}
+                  <span
+                    data-composer-label
+                    className="min-w-0 max-w-[240px] group-data-[compact]/composer-context:max-w-0"
+                  >
+                    <span
+                      data-composer-label-motion
+                      className="block w-full min-w-0 max-w-[240px] origin-left truncate transition-[opacity,transform] duration-180 ease-[cubic-bezier(0.32,0.72,0,1)] group-data-[compact]/composer-context:[transform:translateX(-0.25rem)_scaleX(0.95)] group-data-[compact]/composer-context:opacity-0 motion-reduce:transform-none motion-reduce:transition-opacity"
+                    >
+                      {props.runContext.branch ?? "Select ref"}
+                    </span>
                   </span>
                 </span>
               ) : null}
