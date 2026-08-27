@@ -1,6 +1,7 @@
 import { type EnvironmentConnectionPhase } from "@t3tools/client-runtime/connection";
 import {
   parseSideQuestion,
+  sideQuestionCancellationSucceeded,
   sideQuestionPreviousTurns,
 } from "@t3tools/client-runtime/state/orchestration";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
@@ -742,13 +743,29 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
     ],
   );
 
-  const stopSideQuestion = useCallback(() => {
+  const stopSideQuestion = useCallback(async () => {
     const requestId = sideQuestionState?.turns.at(-1)?.id;
     if (!requestId || sideQuestionState?.turns.at(-1)?.status !== "loading") return;
+    const result = await cancelSideQuestion({
+      environmentId: props.environmentId,
+      input: { threadId: props.selectedThread.id, requestId },
+    });
+    if (
+      !sideQuestionCancellationSucceeded(result) ||
+      sideQuestionRequestRef.current[selectedThreadKey] !== requestId
+    ) {
+      return;
+    }
     sideQuestionRequestRef.current[selectedThreadKey] = `stopped:${requestId}`;
     setSideQuestionsByThread((current) => {
       const state = current[selectedThreadKey];
-      if (!state || state.turns.at(-1)?.id !== requestId) return current;
+      if (
+        !state ||
+        state.turns.at(-1)?.id !== requestId ||
+        state.turns.at(-1)?.status !== "loading"
+      ) {
+        return current;
+      }
       return {
         ...current,
         [selectedThreadKey]: {
@@ -759,10 +776,6 @@ export const ThreadDetailScreen = memo(function ThreadDetailScreen(props: Thread
           ],
         },
       };
-    });
-    void cancelSideQuestion({
-      environmentId: props.environmentId,
-      input: { threadId: props.selectedThread.id, requestId },
     });
   }, [
     cancelSideQuestion,

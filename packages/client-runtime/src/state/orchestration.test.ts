@@ -1,6 +1,12 @@
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/unstable/reactivity";
 import { describe, expect, it } from "vite-plus/test";
 
-import { parseSideQuestion, sideQuestionPreviousTurns } from "./orchestration.ts";
+import {
+  parseSideQuestion,
+  sideQuestionCancellationSucceeded,
+  sideQuestionPreviousTurns,
+} from "./orchestration.ts";
 
 describe("parseSideQuestion", () => {
   it("parses the exact /btw command and preserves a multi-line question", () => {
@@ -27,5 +33,17 @@ describe("sideQuestionPreviousTurns", () => {
     expect(sideQuestionPreviousTurns(turns)).toEqual(
       turns.slice(2).map(({ question, answer }) => ({ question, answer })),
     );
+  });
+});
+
+describe("sideQuestionCancellationSucceeded", () => {
+  it("only accepts a confirmed cancellation", () => {
+    expect(sideQuestionCancellationSucceeded(AsyncResult.success({ cancelled: true }))).toBe(true);
+    expect(sideQuestionCancellationSucceeded(AsyncResult.success({ cancelled: false }))).toBe(
+      false,
+    );
+    expect(
+      sideQuestionCancellationSucceeded(AsyncResult.failure(Cause.fail(new Error("offline")))),
+    ).toBe(false);
   });
 });

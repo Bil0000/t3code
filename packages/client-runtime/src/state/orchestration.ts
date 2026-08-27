@@ -1,10 +1,15 @@
 import {
   ORCHESTRATION_SIDE_QUESTION_MAX_PREVIOUS_TURNS,
   ORCHESTRATION_WS_METHODS,
+  type OrchestrationCancelSideQuestionResult,
 } from "@t3tools/contracts";
 import { Atom } from "effect/unstable/reactivity";
 
-import { createEnvironmentRpcCommand, createEnvironmentRpcQueryAtomFamily } from "./runtime.ts";
+import {
+  type AtomCommandResult,
+  createEnvironmentRpcCommand,
+  createEnvironmentRpcQueryAtomFamily,
+} from "./runtime.ts";
 import type { EnvironmentRegistry } from "../connection/registry.ts";
 
 export function parseSideQuestion(value: string): string | null {
@@ -19,6 +24,12 @@ export function sideQuestionPreviousTurns(
     .filter((turn) => turn.status === "success")
     .slice(-ORCHESTRATION_SIDE_QUESTION_MAX_PREVIOUS_TURNS)
     .map((turn) => ({ question: turn.question, answer: turn.answer }));
+}
+
+export function sideQuestionCancellationSucceeded(
+  result: AtomCommandResult<OrchestrationCancelSideQuestionResult, unknown>,
+): boolean {
+  return result._tag === "Success" && result.value.cancelled;
 }
 
 export function createOrchestrationEnvironmentAtoms<R, E>(

@@ -26,7 +26,10 @@ import {
   connectionStatusTitle,
   type EnvironmentConnectionPresentation,
 } from "@t3tools/client-runtime/connection";
-import { sideQuestionPreviousTurns } from "@t3tools/client-runtime/state/orchestration";
+import {
+  sideQuestionCancellationSucceeded,
+  sideQuestionPreviousTurns,
+} from "@t3tools/client-runtime/state/orchestration";
 import { wasBootstrapThreadDeleted } from "@t3tools/client-runtime/errors";
 import {
   changeRequestAutoSettles,
@@ -5463,14 +5466,30 @@ function ChatViewContent(props: ChatViewProps) {
     ],
   );
 
-  const stopSideQuestion = useCallback(() => {
+  const stopSideQuestion = useCallback(async () => {
     if (!activeThread) return;
     const requestId = sideQuestionState?.turns.at(-1)?.id;
     if (!requestId || sideQuestionState?.turns.at(-1)?.status !== "loading") return;
+    const result = await cancelSideQuestion({
+      environmentId,
+      input: { threadId: activeThread.id, requestId },
+    });
+    if (
+      !sideQuestionCancellationSucceeded(result) ||
+      sideQuestionRequestRef.current[routeThreadKey] !== requestId
+    ) {
+      return;
+    }
     sideQuestionRequestRef.current[routeThreadKey] = `stopped:${requestId}`;
     setSideQuestionsByThread((current) => {
       const state = current[routeThreadKey];
-      if (!state || state.turns.at(-1)?.id !== requestId) return current;
+      if (
+        !state ||
+        state.turns.at(-1)?.id !== requestId ||
+        state.turns.at(-1)?.status !== "loading"
+      ) {
+        return current;
+      }
       return {
         ...current,
         [routeThreadKey]: {
@@ -5481,10 +5500,6 @@ function ChatViewContent(props: ChatViewProps) {
           ],
         },
       };
-    });
-    void cancelSideQuestion({
-      environmentId,
-      input: { threadId: activeThread.id, requestId },
     });
   }, [activeThread, cancelSideQuestion, environmentId, routeThreadKey, sideQuestionState]);
 
