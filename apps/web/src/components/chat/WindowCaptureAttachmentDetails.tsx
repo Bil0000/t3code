@@ -19,8 +19,8 @@ export function WindowCaptureAttachmentDetails({
       {source.appIconDataUrl ? (
         <img src={source.appIconDataUrl} alt="" className="size-7 shrink-0 rounded-md" />
       ) : (
-        <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-white/20 text-[10px] font-medium text-white">
-          {source.appName.slice(0, 1).toUpperCase()}
+        <div className="flex size-7 shrink-0 items-center justify-center rounded-md bg-white/20 text-[10px] font-medium text-white uppercase">
+          {source.appName.slice(0, 1)}
         </div>
       )}
       <div className="min-w-0 flex-1">
