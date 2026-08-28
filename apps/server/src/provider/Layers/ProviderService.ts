@@ -17,6 +17,7 @@ import {
   ProviderRespondToRequestInput,
   ProviderRespondToUserInputInput,
   ProviderSendTurnInput,
+  type ChatImageAttachment,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
@@ -739,9 +740,9 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       );
     }
 
-    // Adapters inline attachment pixels into the model prompt, but the model's
-    // tools cannot dereference pixels. Appending the on-disk path is what lets
-    // a turn like "include this screenshot in the PR" copy the actual file.
+    // Every attachment gets an on-disk path in the prompt so the model's tools
+    // can dereference the actual file. Each adapter decides which attachments
+    // its provider ingests natively.
     // Generated attachment context is added only while the complete provider
     // input stays within the validated input length limit.
     let inputTextWithAttachmentContext = parsed.input;
@@ -766,7 +767,8 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       );
     }
     for (const attachment of attachments) {
-      const source = attachment.source;
+      const source =
+        attachment.type === "image" ? (attachment as ChatImageAttachment).source : undefined;
       const accessibleText = source?.accessibleText;
       appendAttachmentContext(
         source && accessibleText
@@ -788,13 +790,12 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
       ...(inputTextWithAttachmentContext !== undefined
         ? { input: inputTextWithAttachmentContext }
         : {}),
-      attachments,
     };
     yield* Effect.annotateCurrentSpan({
       "provider.operation": "send-turn",
       "provider.thread_id": input.threadId,
       "provider.interaction_mode": input.interactionMode,
-      "provider.attachment_count": input.attachments.length,
+      "provider.attachment_count": attachments.length,
     });
     let metricProvider = "unknown";
     let metricModel = input.modelSelection?.model;
@@ -838,7 +839,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         // often, since every toggle restarts the session. Recording it per turn
         // gives a usage-weighted view and lets it cross with interactionMode.
         runtimeMode: routed.runtimeMode,
-        attachmentCount: input.attachments.length,
+        attachmentCount: attachments.length,
         hasInput: typeof input.input === "string" && input.input.trim().length > 0,
       });
       return turn;
