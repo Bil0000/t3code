@@ -582,22 +582,6 @@ const makeWsRpcLayer = (
                 : settingsDetail,
             cause: error,
           });
-      const workItemTaskError =
-        (
-          operation: WorkItemTaskError["operation"],
-          source: WorkItemTaskError["source"],
-          detail: string,
-        ) =>
-        (cause: unknown) =>
-          new WorkItemTaskError({ operation, source, detail, cause });
-      const workItemMatchError =
-        (
-          operation: WorkItemMatchError["operation"],
-          source: WorkItemMatchError["source"],
-          detail: string,
-        ) =>
-        (cause: unknown) =>
-          new WorkItemMatchError({ operation, source, detail, cause });
       const authorizationError = (requiredScope: AuthEnvironmentScope) =>
         new EnvironmentAuthorizationError({
           message: `The authenticated token is missing required scope: ${requiredScope}.`,
@@ -2099,23 +2083,27 @@ const makeWsRpcLayer = (
                       workspaceRoot: detail.workspaceRoot,
                     };
                   }).pipe(
-                    Effect.mapError((cause) =>
-                      workItemTaskError(
-                        "read-source",
-                        item,
-                        "Could not read a selected work item.",
-                      )(cause),
+                    Effect.mapError(
+                      (cause) =>
+                        new WorkItemTaskError({
+                          operation: "read-source",
+                          source: item,
+                          detail: "Could not read a selected work item.",
+                          cause,
+                        }),
                     ),
                   ),
                 { concurrency: 4 },
               );
               const settings = yield* serverSettings.getSettings.pipe(
-                Effect.mapError((cause) =>
-                  workItemTaskError(
-                    "generate",
-                    input.items[0]!,
-                    "Could not load task-generation settings.",
-                  )(cause),
+                Effect.mapError(
+                  (cause) =>
+                    new WorkItemTaskError({
+                      operation: "generate",
+                      source: input.items[0]!,
+                      detail: "Could not load task-generation settings.",
+                      cause,
+                    }),
                 ),
               );
               const generated = yield* textGeneration
@@ -2168,12 +2156,14 @@ const makeWsRpcLayer = (
                               )
                             : [],
                       })),
-                      Effect.mapError((cause) =>
-                        workItemMatchError(
-                          "read-source",
-                          input.source,
-                          "Could not read the source work item.",
-                        )(cause),
+                      Effect.mapError(
+                        (cause) =>
+                          new WorkItemMatchError({
+                            operation: "read-source",
+                            source: input.source,
+                            detail: "Could not read the source work item.",
+                            cause,
+                          }),
                       ),
                     )
                   : pullRequests.detail(reference).pipe(
@@ -2191,12 +2181,14 @@ const makeWsRpcLayer = (
                               )
                             : [],
                       })),
-                      Effect.mapError((cause) =>
-                        workItemMatchError(
-                          "read-source",
-                          input.source,
-                          "Could not read the source work item.",
-                        )(cause),
+                      Effect.mapError(
+                        (cause) =>
+                          new WorkItemMatchError({
+                            operation: "read-source",
+                            source: input.source,
+                            detail: "Could not read the source work item.",
+                            cause,
+                          }),
                       ),
                     );
               const { detail: sourceDetail, known } = yield* sourceRead;
@@ -2224,12 +2216,14 @@ const makeWsRpcLayer = (
                         limit: 50,
                       })
                       .pipe(
-                        Effect.mapError((cause) =>
-                          workItemMatchError(
-                            "list-candidates",
-                            input.source,
-                            "Could not list candidate work items.",
-                          )(cause),
+                        Effect.mapError(
+                          (cause) =>
+                            new WorkItemMatchError({
+                              operation: "list-candidates",
+                              source: input.source,
+                              detail: "Could not list candidate work items.",
+                              cause,
+                            }),
                         ),
                       )
                   : yield* pullRequests
@@ -2239,12 +2233,14 @@ const makeWsRpcLayer = (
                         limit: 50,
                       })
                       .pipe(
-                        Effect.mapError((cause) =>
-                          workItemMatchError(
-                            "list-candidates",
-                            input.source,
-                            "Could not list candidate work items.",
-                          )(cause),
+                        Effect.mapError(
+                          (cause) =>
+                            new WorkItemMatchError({
+                              operation: "list-candidates",
+                              source: input.source,
+                              detail: "Could not list candidate work items.",
+                              cause,
+                            }),
                         ),
                       );
               const knownItems = new Set(known);
@@ -2291,17 +2287,19 @@ const makeWsRpcLayer = (
                       body: detail.body,
                     };
                   }).pipe(
-                    Effect.mapError((cause) =>
-                      workItemMatchError(
-                        "read-candidate",
-                        {
-                          kind: candidateKind,
-                          provider: candidate.provider,
-                          repository: candidate.repository,
-                          number: candidate.number,
-                        },
-                        "Could not read a candidate work item.",
-                      )(cause),
+                    Effect.mapError(
+                      (cause) =>
+                        new WorkItemMatchError({
+                          operation: "read-candidate",
+                          source: {
+                            kind: candidateKind,
+                            provider: candidate.provider,
+                            repository: candidate.repository,
+                            number: candidate.number,
+                          },
+                          detail: "Could not read a candidate work item.",
+                          cause,
+                        }),
                     ),
                   ),
                 { concurrency: 4 },
@@ -2317,12 +2315,14 @@ const makeWsRpcLayer = (
                   modelSelection: settings.textGenerationModelSelection,
                 });
               }).pipe(
-                Effect.mapError((cause) =>
-                  workItemMatchError(
-                    "generate",
-                    input.source,
-                    "Could not generate work item matches.",
-                  )(cause),
+                Effect.mapError(
+                  (cause) =>
+                    new WorkItemMatchError({
+                      operation: "generate",
+                      source: input.source,
+                      detail: "Could not generate work item matches.",
+                      cause,
+                    }),
                 ),
               );
               return { matches: resolveWorkItemMatches(candidateDetails, generated.matches) };
