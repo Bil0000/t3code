@@ -462,6 +462,7 @@ const IssueServiceLive = IssueService.layer.pipe(
   Layer.provide(IssueProviderRegistry.layer),
   Layer.provide(SourceControlProviderRegistryLayerLive),
   Layer.provide(VcsProcess.layer),
+  Layer.provide(SourceControlRateLimit.layer),
 );
 
 export const makeRoutesLayer = Layer.mergeAll(
