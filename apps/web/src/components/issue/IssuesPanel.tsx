@@ -26,7 +26,6 @@ import { useEnvironmentQuery } from "~/state/query";
 
 import type { IssueTabStatus } from "../RightPanelTabs";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { IssueDetailPanel, type IssueHandoffTarget } from "./IssueDetailPanel";
 import { ListGhost } from "../sourceControl/ListGhosts";
@@ -37,7 +36,7 @@ import {
   type IssueViewers,
 } from "./issueList.logic";
 import { IssueFiltersMenu, IssueSortMenu } from "./IssueListFilters";
-import { type ListFilterOption } from "../sourceControl/ListFilterMenu";
+import { ListSearchInput, type ListFilterOption } from "../sourceControl/ListFilterMenu";
 import { IssueRow } from "./IssueRow";
 
 // The same vocabulary the issues page filters by, minus the two questions a panel already knows
@@ -382,11 +381,11 @@ function IssueBrowserList({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 px-2 py-2">
-        <Input
+        <ListSearchInput
+          label="Search issues"
           value={query}
-          aria-label="Search issues"
-          placeholder="Search issues"
-          onChange={(event) => onQuery(event.target.value)}
+          busy={typed.length > 0 && (typed !== sent || listQuery.isPending)}
+          onChange={onQuery}
         />
         <div className="flex shrink-0 items-center gap-1">
           <IssueFiltersMenu

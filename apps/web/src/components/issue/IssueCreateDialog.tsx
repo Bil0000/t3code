@@ -126,8 +126,12 @@ function AnswerTextarea({
       <ToggleGroup
         size="xs"
         variant="outline"
+        aria-label="Markdown view"
         value={[previewing ? "preview" : "write"]}
-        onValueChange={(next) => setPreviewing(next[0] === "preview")}
+        onValueChange={(next) => {
+          const value = next[0];
+          if (value) setPreviewing(value === "preview");
+        }}
       >
         <Toggle value="write">Write</Toggle>
         <Toggle value="preview">Preview</Toggle>
