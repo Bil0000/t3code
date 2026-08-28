@@ -494,6 +494,7 @@ export function IssueSummaryTab({
                         className="mt-2"
                         value={comment.body}
                         cwd={detail.workspaceRoot}
+                        environmentId={environmentId}
                         label="Edit comment"
                         saving={commentSaving}
                         onSave={(body) => void saveComment(comment.id, body)}

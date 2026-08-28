@@ -1,4 +1,8 @@
-import { EnvironmentId, type ExecutionEnvironmentDescriptor } from "@t3tools/contracts";
+import {
+  type ClientConnectionMethod,
+  EnvironmentId,
+  type ExecutionEnvironmentDescriptor,
+} from "@t3tools/contracts";
 import type { RelayManagedEndpoint } from "@t3tools/contracts/relay";
 import {
   exchangeRemoteDpopAccessToken,
@@ -46,6 +50,7 @@ export class RemoteEnvironmentAuthorization extends Context.Service<
       readonly httpBaseUrl: string;
       readonly wsBaseUrl: string;
       readonly bearerToken: string;
+      readonly connectionMethod: ClientConnectionMethod;
     }) => Effect.Effect<AuthorizedRemoteEnvironment, ConnectionAttemptError>;
     readonly authorizeDpop: (input: {
       readonly expectedEnvironmentId: EnvironmentId;
@@ -99,6 +104,7 @@ export const make = Effect.gen(function* () {
       readonly httpBaseUrl: string;
       readonly wsBaseUrl: string;
       readonly bearerToken: string;
+      readonly connectionMethod: ClientConnectionMethod;
     }) {
       const now = yield* Clock.currentTimeMillis;
       const cachedDescriptor = (yield* Ref.get(bearerDescriptors)).get(input.expectedEnvironmentId);
@@ -131,6 +137,8 @@ export const make = Effect.gen(function* () {
         wsBaseUrl: input.wsBaseUrl,
         httpBaseUrl: input.httpBaseUrl,
         bearerToken: input.bearerToken,
+        clientMetadata: presentation.metadata,
+        connectionMethod: input.connectionMethod,
       }).pipe(
         Effect.mapError(mapRemoteEnvironmentError),
         Effect.provideService(HttpClient.HttpClient, httpClient),
@@ -170,6 +178,8 @@ export const make = Effect.gen(function* () {
         httpBaseUrl: token.endpoint.httpBaseUrl,
         accessToken: token.accessToken,
         dpopProof: ticketProof,
+        clientMetadata: presentation.metadata,
+        connectionMethod: "relay",
         ...(timeoutMs === undefined ? {} : { timeoutMs }),
       }).pipe(Effect.provideService(HttpClient.HttpClient, httpClient));
     },
