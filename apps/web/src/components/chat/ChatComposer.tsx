@@ -2,6 +2,7 @@ import type {
   EnvironmentId,
   ModelSelection,
   OrchestrationV2ProjectedTurnItem,
+  OrchestrationV2ProviderTurnTokenUsage,
   PreviewAnnotationPayload,
   ProviderApprovalDecision,
   ProviderInteractionMode,
@@ -616,6 +617,7 @@ export interface ChatComposerProps {
 
   // Context window
   activeThreadVisibleTurnItems: ReadonlyArray<OrchestrationV2ProjectedTurnItem> | undefined;
+  activeThreadLiveTokenUsage?: OrchestrationV2ProviderTurnTokenUsage | null;
 
   // Misc
   resolvedTheme: "light" | "dark";
@@ -714,6 +716,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     activeProjectDefaultModelSelection,
     activeThreadModelSelection,
     activeThreadVisibleTurnItems,
+    activeThreadLiveTokenUsage,
     resolvedTheme,
     settings,
     keybindings,
@@ -1036,8 +1039,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   // Context window
   // ------------------------------------------------------------------
   const activeContextWindow = useMemo(
-    () => deriveLatestContextWindowSnapshot(activeThreadVisibleTurnItems ?? []),
-    [activeThreadVisibleTurnItems],
+    () =>
+      deriveLatestContextWindowSnapshot(
+        activeThreadVisibleTurnItems ?? [],
+        activeThreadLiveTokenUsage ?? null,
+      ),
+    [activeThreadLiveTokenUsage, activeThreadVisibleTurnItems],
   );
   const activeThreadModelDisplayName = useMemo(
     () => resolveContextWindowModelDisplayName(activeThreadModelSelection, modelOptionsByInstance),
