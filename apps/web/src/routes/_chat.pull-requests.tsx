@@ -237,7 +237,6 @@ export const Route = createFileRoute("/_chat/pull-requests")({
 });
 
 function PullRequestsRouteView() {
-  const selectingWorkItems = useWorkItemSelection((state) => state.selecting);
   const selectedWorkItems = useWorkItemSelection((state) => state.items);
   const toggleWorkItem = useWorkItemSelection((state) => state.toggle);
   const search = Route.useSearch();
@@ -1317,9 +1316,8 @@ function PullRequestsRouteView() {
     [rightPanelRef, updateSearch],
   );
 
-  const selectOrToggleEntry = useCallback(
+  const togglePullRequestSelection = useCallback(
     (entry: EnvironmentPullRequestEntry) => {
-      if (!selectingWorkItems) return selectEntry(entry);
       const error = toggleWorkItem({
         kind: "pull-request",
         provider: entry.provider,
@@ -1335,7 +1333,7 @@ function PullRequestsRouteView() {
       if (error === "limit")
         toastManager.add({ type: "warning", title: "You can select up to 20 items" });
     },
-    [selectEntry, selectingWorkItems, toggleWorkItem],
+    [toggleWorkItem],
   );
 
   const searchInput = (
@@ -1442,23 +1440,23 @@ function PullRequestsRouteView() {
                     typedParsed.text.length > 0 &&
                     scorePullRequestMatch(entry, typedParsed.text) <= MATCHED_ELSEWHERE_SCORE
                   }
+                  selectionChecked={isWorkItemSelected(selectedWorkItems, {
+                    kind: "pull-request",
+                    provider: entry.provider,
+                    environmentId: entry.environmentId,
+                    projectId: entry.projectId,
+                    repository: entry.repository,
+                    number: entry.number,
+                    title: entry.title,
+                    url: entry.url,
+                  })}
                   selected={
-                    selectingWorkItems
-                      ? isWorkItemSelected(selectedWorkItems, {
-                          kind: "pull-request",
-                          provider: entry.provider,
-                          environmentId: entry.environmentId,
-                          projectId: entry.projectId,
-                          repository: entry.repository,
-                          number: entry.number,
-                          title: entry.title,
-                          url: entry.url,
-                        })
-                      : selected?.environmentId === entry.environmentId &&
-                        selected.repository === entry.repository &&
-                        selected.number === entry.number
+                    selected?.environmentId === entry.environmentId &&
+                    selected.repository === entry.repository &&
+                    selected.number === entry.number
                   }
-                  onSelect={selectOrToggleEntry}
+                  onSelect={selectEntry}
+                  onToggleSelection={togglePullRequestSelection}
                 />
               ))}
             </div>
