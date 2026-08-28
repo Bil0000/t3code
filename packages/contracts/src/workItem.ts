@@ -29,12 +29,14 @@ export type WorkItemTaskResult = typeof WorkItemTaskResult.Type;
 export class WorkItemTaskError extends Schema.TaggedErrorClass<WorkItemTaskError>()(
   "WorkItemTaskError",
   {
+    operation: Schema.Literals(["read-source", "generate"]),
+    source: WorkItemTaskSourceRef,
     detail: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Work item task generation failed: ${this.detail}`;
+    return `Work item task generation failed during ${this.operation}: ${this.detail}`;
   }
 }
 
@@ -68,11 +70,13 @@ export type WorkItemMatchResult = typeof WorkItemMatchResult.Type;
 export class WorkItemMatchError extends Schema.TaggedErrorClass<WorkItemMatchError>()(
   "WorkItemMatchError",
   {
+    operation: Schema.Literals(["read-source", "list-candidates", "read-candidate", "generate"]),
+    source: WorkItemTaskSourceRef,
     detail: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Work item matching failed: ${this.detail}`;
+    return `Work item matching failed during ${this.operation}: ${this.detail}`;
   }
 }

@@ -1,7 +1,13 @@
 import * as Schema from "effect/Schema";
 import { describe, expect, it } from "vite-plus/test";
 
-import { WorkItemMatchInput, WorkItemMatchResult, WorkItemTaskInput } from "./workItem.ts";
+import {
+  WorkItemMatchError,
+  WorkItemMatchInput,
+  WorkItemMatchResult,
+  WorkItemTaskError,
+  WorkItemTaskInput,
+} from "./workItem.ts";
 
 const match = {
   kind: "issue" as const,
@@ -39,5 +45,29 @@ describe("work item matches", () => {
     expect(() =>
       Schema.decodeUnknownSync(WorkItemMatchResult)({ matches: Array(6).fill(match) }),
     ).toThrow();
+  });
+
+  it("keeps the failed operation and source on service errors", () => {
+    const source = {
+      kind: "issue" as const,
+      provider: "linear",
+      repository: "ENG",
+      number: 12,
+    };
+
+    expect(
+      new WorkItemTaskError({
+        operation: "read-source",
+        source,
+        detail: "Could not read a selected work item.",
+      }),
+    ).toMatchObject({ operation: "read-source", source });
+    expect(
+      new WorkItemMatchError({
+        operation: "list-candidates",
+        source,
+        detail: "Could not list candidate work items.",
+      }),
+    ).toMatchObject({ operation: "list-candidates", source });
   });
 });
