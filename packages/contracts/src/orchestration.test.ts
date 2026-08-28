@@ -6,6 +6,7 @@ import * as Schema from "effect/Schema";
 import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
+  type ChatImageAttachment,
   ClientOrchestrationCommand,
   ModelSelection,
   OrchestrationCommand,
@@ -405,7 +406,9 @@ it.effect("preserves window capture metadata in thread.turn.start", () =>
       createdAt: "2026-08-24T11:00:00.000Z",
     });
 
-    assert.deepStrictEqual(parsed.message.attachments[0]?.source, {
+    const attachment = parsed.message.attachments[0];
+    assert.strictEqual(attachment?.type, "image");
+    assert.deepStrictEqual((attachment as ChatImageAttachment).source, {
       kind: "window-capture",
       capturedAt: "2026-08-24T11:00:00.000Z",
       appName: "Editor",
