@@ -1,3 +1,6 @@
+// @effect-diagnostics nodeBuiltinImport:off
+import * as NodeFS from "node:fs";
+
 import { renderToStaticMarkup } from "react-dom/server";
 import { SettingsIcon } from "lucide-react";
 import type { IssueListEntry, LinearProjectBinding, ProjectId } from "@t3tools/contracts";
@@ -19,6 +22,12 @@ import {
 } from "./_chat.issues";
 
 describe("IssuesColumn", () => {
+  it("offers selection beside issue filters", () => {
+    const routeSource = NodeFS.readFileSync(new URL("./_chat.issues.tsx", import.meta.url), "utf8");
+
+    expect(routeSource).toContain("<WorkItemSelectButton />");
+  });
+
   it("marks only the opened issue as current", () => {
     const opened = {
       projectId: "project_1" as ProjectId,

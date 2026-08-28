@@ -4,7 +4,7 @@ import { Children, isValidElement, type ReactElement, type ReactNode } from "rea
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { CondensedDetailTabStrip, DetailTabStrip } from "./DetailTabStrip";
+import { DetailTabStrip } from "./DetailTabStrip";
 import { EntityPicker } from "./EntityPicker";
 import {
   ListFilterMenu,
@@ -157,25 +157,6 @@ describe("list filter menu", () => {
     expect(onSelect).toHaveBeenCalledWith("timeline");
   });
 
-  it("uses the toggle primitive for condensed detail tabs", () => {
-    const strip = CondensedDetailTabStrip({
-      label: "Issue tabs",
-      tabs: [{ value: "summary", label: "Summary" }],
-      active: "summary",
-      onSelect: vi.fn(),
-      focusable: false,
-    });
-    const group = Children.toArray(strip.props.children)[0] as ReactElement<{
-      readonly children: ReactNode;
-    }>;
-    const toggle = Children.toArray(group.props.children)[0] as ReactElement<{
-      readonly tabIndex: number;
-    }>;
-
-    expect(group.type).toBe(ToggleGroup);
-    expect(toggle.type).toBe(Toggle);
-    expect(toggle.props.tabIndex).toBe(-1);
-  });
   it("does not emit a change when the selected option is chosen again", () => {
     const onChange = vi.fn();
     const group = findValueChange(

@@ -56,7 +56,10 @@ import {
 } from "../components/issue/IssueListFilters";
 import { ListSearchInput, type ListFilterOption } from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
-import { WorkItemSelectionBarHost } from "../components/workItems/WorkItemSelectionBar";
+import {
+  WorkItemSelectButton,
+  WorkItemSelectionBarHost,
+} from "../components/workItems/WorkItemSelectionBar";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import { resolveProjectScope } from "../components/sourceControl/projectScope";
@@ -1350,6 +1353,7 @@ function IssuesRouteView() {
           }
         />
       ) : null}
+      <WorkItemSelectButton />
     </div>
   );
   const columnProps = {
