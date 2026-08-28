@@ -74,7 +74,8 @@ function row(overrides: Partial<EnvironmentPullRequestEntry>): ReactNode {
 
 describe("PullRequestRow checks indicator", () => {
   function indicators(node: ReactNode): number {
-    const meta = (node as { readonly props: { readonly meta: ReactNode } }).props.meta;
+    const row = flatten(node).find((element) => (element as { type?: unknown }).type === ListRow);
+    const meta = (row as { readonly props: { readonly meta: ReactNode } }).props.meta;
     return flatten(meta).filter(
       (element) => (element as { type?: unknown }).type === PullRequestChecksPopover,
     ).length;
@@ -86,6 +87,8 @@ describe("PullRequestRow checks indicator", () => {
   });
 
   it("uses the shared source control row frame", () => {
-    expect((row({}) as { type: unknown }).type).toBe(ListRow);
+    expect(
+      flatten(row({})).some((element) => (element as { type?: unknown }).type === ListRow),
+    ).toBe(true);
   });
 });
