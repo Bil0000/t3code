@@ -330,6 +330,7 @@ import {
   shouldDockDraftHeroForSubmission,
   shouldReleaseTimelineAnchorForToolActivity,
   shouldShowBranchMismatchBanner,
+  shoulderTabReserve,
   getStartedThreadModelChangeBlockReason,
   LAST_INVOKED_SCRIPT_BY_PROJECT_KEY,
   LastInvokedScriptByProjectSchema,
@@ -1242,16 +1243,6 @@ function releaseChatTimelineAnchor<T extends { readonly messageId: MessageId | n
   current: T,
 ): T {
   return current.messageId === null ? current : { ...current, messageId: null };
-}
-
-function shoulderTabReserve(overlay: HTMLElement): number {
-  const form = overlay.querySelector('[data-chat-composer-form="true"]');
-  const surface = overlay.querySelector('[data-chat-composer-main-surface="true"]');
-  if (!form || !surface) return 0;
-  return Math.max(
-    0,
-    Math.round(surface.getBoundingClientRect().top - form.getBoundingClientRect().top),
-  );
 }
 
 function ChatViewContent(props: ChatViewProps) {
@@ -6781,11 +6772,11 @@ function ChatViewContent(props: ChatViewProps) {
                 ref={attachDraftHeroTransitionGroupRef}
                 className="w-full ps-[calc(env(safe-area-inset-left)+0.75rem)] pe-[calc(env(safe-area-inset-right)+0.75rem)] sm:ps-[calc(env(safe-area-inset-left)+1.25rem)] sm:pe-[calc(env(safe-area-inset-right)+1.25rem)]"
               >
-                <div className="chat-composer-stack pointer-events-auto relative z-10">
+                <div className="group/composer-stack pointer-events-auto relative z-10">
                   {isDraftHeroState ? (
                     <div className="absolute inset-x-0 bottom-full z-0">
                       <div
-                        className="chat-draft-hero-headline"
+                        className="pb-8 group-has-[.chat-composer-shoulder-tab]/composer-stack:pb-4"
                         style={
                           forceExpandedMobileComposer
                             ? {
