@@ -30,6 +30,7 @@ import { ScrollArea } from "../ui/scroll-area";
 import { IssueDetailPanel, type IssueHandoffTarget } from "./IssueDetailPanel";
 import { ListGhost } from "../sourceControl/ListGhosts";
 import {
+  filterIssueQueryResults,
   filterIssuesByInvolvement,
   issueEntryKey,
   rankIssueMatches,
@@ -236,6 +237,15 @@ function IssueBrowserList({
   const answered = listQuery.data;
   const githubSortingAvailable =
     answered?.providers.some((provider) => provider.kind === "github") ?? false;
+  const searchingHosts = useMemo(
+    () =>
+      new Set(
+        (answered?.providers ?? []).flatMap((provider) =>
+          provider.searchesOnHost ? [provider.host] : [],
+        ),
+      ),
+    [answered?.providers],
+  );
 
   /**
    * What the list holds, across the slices it has asked for. A continuation carries only the rows
@@ -291,10 +301,26 @@ function IssueBrowserList({
       shown?.viewers ?? answered?.viewers ?? {},
       filters.involvement,
     );
+    const queried = filterIssueQueryResults(
+      byInvolvement,
+      typed,
+      typed === sent && !listQuery.isPending,
+      searchingHosts,
+    );
     return filters.label === undefined
-      ? byInvolvement
-      : byInvolvement.filter((entry) => entry.labels.some((label) => label.name === filters.label));
-  }, [answered, filterKey, filters.involvement, filters.label, ordered]);
+      ? queried
+      : queried.filter((entry) => entry.labels.some((label) => label.name === filters.label));
+  }, [
+    answered,
+    filterKey,
+    filters.involvement,
+    filters.label,
+    listQuery.isPending,
+    ordered,
+    searchingHosts,
+    sent,
+    typed,
+  ]);
 
   /** From what is held rather than from the read in flight, which has not answered yet. */
   const truncated = ordered?.key === filterKey ? ordered.truncated : (answered?.truncated ?? false);

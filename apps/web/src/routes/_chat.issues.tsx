@@ -26,10 +26,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
+  filterIssueQueryResults,
   filterIssuesByInvolvement,
   groupIssuesByInvolvement,
   issueEntryKey,
-  matchesIssueQuery,
   narrowIssuesToFilters,
   partitionIssuesWithPriority,
   rankIssueMatches,
@@ -872,10 +872,7 @@ function IssuesRouteView() {
           );
     if (typedQuery.length === 0) return labelled;
     const answeredLocally = querySettled && !showingCarried;
-    return labelled.filter(
-      (entry) =>
-        (answeredLocally && searchingHosts.has(entry.host)) || matchesIssueQuery(entry, typedQuery),
-    );
+    return filterIssueQueryResults(labelled, typedQuery, answeredLocally, searchingHosts);
   }, [
     filterKey,
     listData,
