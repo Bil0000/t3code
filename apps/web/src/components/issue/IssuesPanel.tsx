@@ -39,6 +39,7 @@ import {
 import { IssueFiltersMenu, IssueSortMenu } from "./IssueListFilters";
 import { ListSearchInput, type ListFilterOption } from "../sourceControl/ListFilterMenu";
 import { IssueRow } from "./IssueRow";
+import { IssuesUnavailableState } from "./IssuesUnavailableState";
 
 // The same vocabulary the issues page filters by, minus the two questions a panel already knows
 // the answer to: it lists one project, on one host.
@@ -440,7 +441,7 @@ function IssueBrowserList({
           {entries.length === 0 && listQuery.isPending ? (
             <ListGhost rows={7} label="Loading issues" />
           ) : listQuery.error !== null && listQuery.data === null ? (
-            <p className="px-2 text-sm text-muted-foreground">{listQuery.error}</p>
+            <IssuesUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
           ) : entries.length === 0 ? (
             <div className="space-y-2 px-2">
               <p className="text-sm text-muted-foreground">
