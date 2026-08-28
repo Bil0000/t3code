@@ -9,6 +9,7 @@ import { usePreviewBridge } from "~/components/preview/usePreviewBridge";
 import { cn } from "~/lib/utils";
 
 import { resolveBrowserSurfacePanelRect, useBrowserSurfaceStore } from "./browserSurfaceStore";
+import { useActiveBrowserRecordingTabIds } from "./browserRecording";
 import {
   browserViewportSettingKey,
   resolveBrowserViewportLayout,
@@ -47,9 +48,11 @@ export function HostedBrowserWebview(props: {
   readonly runtimeTabId: string;
   readonly initialUrl: string | null;
   readonly viewport: PreviewViewportSetting;
+  readonly pictureInPicture: boolean;
   readonly zoomFactor: number;
 }) {
-  const { threadRef, tabId, runtimeTabId, initialUrl, viewport, zoomFactor } = props;
+  const { threadRef, tabId, runtimeTabId, initialUrl, viewport, pictureInPicture, zoomFactor } =
+    props;
   const config = usePreviewWebviewConfig(threadRef.environmentId);
   const [initialSrc] = useState(() => initialUrl ?? "about:blank");
   const tabLeaseRef = useRef<AcquiredDesktopTab | null>(null);
@@ -70,6 +73,10 @@ export function HostedBrowserWebview(props: {
       };
     }),
   );
+  const backgroundActivity = useBrowserSurfaceStore(
+    (state) => (state.activityByTabId[runtimeTabId] ?? 0) > 0,
+  );
+  const recordingActive = useActiveBrowserRecordingTabIds().has(runtimeTabId);
   usePreviewBridge({ threadRef, tabId, runtimeTabId });
 
   useEffect(() => {
@@ -233,6 +240,7 @@ export function HostedBrowserWebview(props: {
 
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({
     active,
+    renderingActive: active || backgroundActivity || pictureInPicture || recordingActive,
     cornerRadius: presentation.cornerRadius,
     rect: lastRect,
     hiddenSize,
