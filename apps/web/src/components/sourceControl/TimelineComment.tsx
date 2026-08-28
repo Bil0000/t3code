@@ -38,7 +38,7 @@ export function TimelineComment({
   onOpen: (url: string) => void;
 }) {
   return (
-    <article className="py-2">
+    <article className="group py-2">
       <div className="px-2">
         <div className="flex min-w-0 items-start gap-2">
           <div className="min-w-0 flex-1">

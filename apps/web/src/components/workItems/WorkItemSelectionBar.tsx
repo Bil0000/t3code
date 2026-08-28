@@ -10,6 +10,7 @@ import { type SelectedWorkItem, useWorkItemSelection } from "~/workItemSelection
 
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 
 export const WORK_ITEM_MODE_HELP = {
   compound: "One task that merges overlap and orders dependencies.",
@@ -160,28 +161,20 @@ export function WorkItemSelectionBar() {
       <span className="mr-auto whitespace-nowrap px-1 text-xs text-muted-foreground">
         {items.length} selected
       </span>
-      <div
-        role="group"
-        aria-label={WORK_ITEM_MODE_HELP[mode]}
-        className="flex rounded-md bg-muted p-0.5"
+      <ToggleGroup
+        size="segmented"
+        variant="segmented"
+        aria-label="Task shape"
+        title={WORK_ITEM_MODE_HELP[mode]}
+        value={[mode]}
+        onValueChange={(next) => {
+          const value = next[0];
+          if (value === "compound" || value === "subtasks") setMode(value);
+        }}
       >
-        <Button
-          size="xs"
-          variant={mode === "compound" ? "secondary" : "ghost"}
-          aria-pressed={mode === "compound"}
-          onClick={() => setMode("compound")}
-        >
-          Compound
-        </Button>
-        <Button
-          size="xs"
-          variant={mode === "subtasks" ? "secondary" : "ghost"}
-          aria-pressed={mode === "subtasks"}
-          onClick={() => setMode("subtasks")}
-        >
-          Subtasks
-        </Button>
-      </div>
+        <Toggle value="compound">Compound</Toggle>
+        <Toggle value="subtasks">Subtasks</Toggle>
+      </ToggleGroup>
       <Button size="xs" disabled={busy} onClick={() => void createTask()}>
         {busy ? (
           <LoaderIcon aria-hidden className="size-3.5 animate-spin" />
