@@ -2099,23 +2099,23 @@ const makeWsRpcLayer = (
                       workspaceRoot: detail.workspaceRoot,
                     };
                   }).pipe(
-                    Effect.mapError(
+                    Effect.mapError((cause) =>
                       workItemTaskError(
                         "read-source",
                         item,
                         "Could not read a selected work item.",
-                      ),
+                      )(cause),
                     ),
                   ),
                 { concurrency: 4 },
               );
               const settings = yield* serverSettings.getSettings.pipe(
-                Effect.mapError(
+                Effect.mapError((cause) =>
                   workItemTaskError(
                     "generate",
                     input.items[0]!,
                     "Could not load task-generation settings.",
-                  ),
+                  )(cause),
                 ),
               );
               const generated = yield* textGeneration
@@ -2151,7 +2151,7 @@ const makeWsRpcLayer = (
                 repository: input.source.repository,
                 number: input.source.number,
               };
-              const sourceRead = (
+              const sourceRead =
                 input.source.kind === "issue"
                   ? issues.detail(reference).pipe(
                       Effect.map((detail) => ({
@@ -2168,6 +2168,13 @@ const makeWsRpcLayer = (
                               )
                             : [],
                       })),
+                      Effect.mapError((cause) =>
+                        workItemMatchError(
+                          "read-source",
+                          input.source,
+                          "Could not read the source work item.",
+                        )(cause),
+                      ),
                     )
                   : pullRequests.detail(reference).pipe(
                       Effect.map((detail) => ({
@@ -2184,16 +2191,14 @@ const makeWsRpcLayer = (
                               )
                             : [],
                       })),
-                    )
-              ).pipe(
-                Effect.mapError(
-                  workItemMatchError(
-                    "read-source",
-                    input.source,
-                    "Could not read the source work item.",
-                  ),
-                ),
-              );
+                      Effect.mapError((cause) =>
+                        workItemMatchError(
+                          "read-source",
+                          input.source,
+                          "Could not read the source work item.",
+                        )(cause),
+                      ),
+                    );
               const { detail: sourceDetail, known } = yield* sourceRead;
               const source = {
                 kind: input.source.kind,
@@ -2210,27 +2215,38 @@ const makeWsRpcLayer = (
                   : input.source.kind === "issue"
                     ? "pull-request"
                     : "issue";
-              const listed = yield* (
+              const listed =
                 candidateKind === "issue"
-                  ? issues.list({
-                      state: input.relationship === "duplicate" ? "all" : "open",
-                      projectId: input.projectId,
-                      limit: 50,
-                    })
-                  : pullRequests.list({
-                      state: input.relationship === "duplicate" ? "all" : "open",
-                      projectId: input.projectId,
-                      limit: 50,
-                    })
-              ).pipe(
-                Effect.mapError(
-                  workItemMatchError(
-                    "list-candidates",
-                    input.source,
-                    "Could not list candidate work items.",
-                  ),
-                ),
-              );
+                  ? yield* issues
+                      .list({
+                        state: input.relationship === "duplicate" ? "all" : "open",
+                        projectId: input.projectId,
+                        limit: 50,
+                      })
+                      .pipe(
+                        Effect.mapError((cause) =>
+                          workItemMatchError(
+                            "list-candidates",
+                            input.source,
+                            "Could not list candidate work items.",
+                          )(cause),
+                        ),
+                      )
+                  : yield* pullRequests
+                      .list({
+                        state: input.relationship === "duplicate" ? "all" : "open",
+                        projectId: input.projectId,
+                        limit: 50,
+                      })
+                      .pipe(
+                        Effect.mapError((cause) =>
+                          workItemMatchError(
+                            "list-candidates",
+                            input.source,
+                            "Could not list candidate work items.",
+                          )(cause),
+                        ),
+                      );
               const knownItems = new Set(known);
               const candidates = shortlistWorkItemCandidates(
                 source,
@@ -2275,7 +2291,7 @@ const makeWsRpcLayer = (
                       body: detail.body,
                     };
                   }).pipe(
-                    Effect.mapError(
+                    Effect.mapError((cause) =>
                       workItemMatchError(
                         "read-candidate",
                         {
@@ -2285,7 +2301,7 @@ const makeWsRpcLayer = (
                           number: candidate.number,
                         },
                         "Could not read a candidate work item.",
-                      ),
+                      )(cause),
                     ),
                   ),
                 { concurrency: 4 },
@@ -2301,12 +2317,12 @@ const makeWsRpcLayer = (
                   modelSelection: settings.textGenerationModelSelection,
                 });
               }).pipe(
-                Effect.mapError(
+                Effect.mapError((cause) =>
                   workItemMatchError(
                     "generate",
                     input.source,
                     "Could not generate work item matches.",
-                  ),
+                  )(cause),
                 ),
               );
               return { matches: resolveWorkItemMatches(candidateDetails, generated.matches) };
