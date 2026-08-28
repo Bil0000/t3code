@@ -238,9 +238,10 @@ export function HostedBrowserWebview(props: {
 
   if (!config) return null;
 
+  const renderingActive = active || backgroundActivity || pictureInPicture || recordingActive;
   const wrapperStyle = resolveHostedBrowserWebviewWrapperStyle({
     active,
-    renderingActive: active || backgroundActivity || pictureInPicture || recordingActive,
+    renderingActive,
     cornerRadius: presentation.cornerRadius,
     rect: lastRect,
     hiddenSize,
@@ -252,6 +253,7 @@ export function HostedBrowserWebview(props: {
       className="fixed overflow-hidden bg-muted/35"
       style={{ ...wrapperStyle, overscrollBehavior: "contain" }}
       onScroll={syncContentPresentation}
+      data-preview-rendering={renderingActive ? "active" : "suspended"}
       data-preview-viewport={runtimeTabId}
     >
       <div className="relative" style={{ width: layout.canvasWidth, height: layout.canvasHeight }}>

@@ -126,7 +126,7 @@ const findPreviewWebview = (tabId: string): ExecutablePreviewWebview | null =>
 
 const isPreviewWebviewRendering = (runtimeTabId: string): boolean => {
   const wrapper = findPreviewWebview(runtimeTabId)?.closest<HTMLElement>("[data-preview-viewport]");
-  return wrapper !== null && wrapper !== undefined && wrapper.style.visibility !== "hidden";
+  return wrapper?.getAttribute("data-preview-rendering") === "active";
 };
 
 const readWebviewViewport = async (
