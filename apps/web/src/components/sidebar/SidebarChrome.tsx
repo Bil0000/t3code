@@ -11,7 +11,7 @@ import { Link, useCanGoBack, useLocation, useNavigate } from "@tanstack/react-ro
 
 import { useEnvironmentIdentificationMode } from "../../hooks/useSettings";
 import { cn } from "../../lib/utils";
-import { useEnvironments } from "../../state/environments";
+import { useEnvironments, usePrimaryEnvironment } from "../../state/environments";
 import {
   resolveEnvironmentIdentificationPillLabel,
   resolveSidebarStageBackdropVariant,
@@ -163,14 +163,12 @@ export const SidebarUtilityMenu = memo(function SidebarUtilityMenu() {
                 : null,
   });
   const { environments } = useEnvironments();
-  // The pages read every connected server, so one of them offering a surface is enough for
-  // its link to lead somewhere.
+  const primaryEnvironment = usePrimaryEnvironment();
   const pullRequestsSupported = environments.some(
     (environment) => environment.serverConfig?.environment.capabilities.pullRequests === true,
   );
-  const issuesSupported = environments.some(
-    (environment) => environment.serverConfig?.environment.capabilities.issues === true,
-  );
+  const issuesSupported =
+    primaryEnvironment?.serverConfig?.environment.capabilities.issues === true;
   const closeMobileSidebar = useCallback(() => {
     if (isMobile) {
       setOpenMobile(false);
