@@ -1,3 +1,4 @@
+import { TextGenerationError, WORK_ITEM_TASK_PROMPT_MAX_LENGTH } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -8,9 +9,9 @@ import {
   buildWorkItemMatchPrompt,
   buildWorkItemTaskPrompt,
   fallbackWorkItemTaskPrompt,
+  resolveWorkItemTaskResult,
 } from "./TextGenerationPrompts.ts";
 import { normalizeCliError, sanitizeThreadTitle } from "./TextGenerationUtils.ts";
-import { TextGenerationError } from "@t3tools/contracts";
 
 describe("buildWorkItemTaskPrompt", () => {
   const items = [
@@ -48,6 +49,19 @@ describe("buildWorkItemTaskPrompt", () => {
     const draft = fallbackWorkItemTaskPrompt({ mode: "subtasks", items });
     expect(draft).toContain("Fix login");
     expect(draft).toContain("https://linear.app/acme/issue/ENG-12");
+  });
+
+  it("falls back when a generated task exceeds the RPC prompt limit", () => {
+    const result = resolveWorkItemTaskResult(
+      { mode: "compound", items },
+      "x".repeat(WORK_ITEM_TASK_PROMPT_MAX_LENGTH + 1),
+    );
+
+    expect(result).toEqual({
+      prompt: fallbackWorkItemTaskPrompt({ mode: "compound", items }),
+      generated: false,
+    });
+    expect(result.prompt.length).toBeLessThanOrEqual(WORK_ITEM_TASK_PROMPT_MAX_LENGTH);
   });
 });
 

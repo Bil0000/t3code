@@ -7,7 +7,7 @@
  * @module textGenerationPrompts
  */
 import * as Schema from "effect/Schema";
-import type { ChatAttachment } from "@t3tools/contracts";
+import { WORK_ITEM_TASK_PROMPT_MAX_LENGTH, type ChatAttachment } from "@t3tools/contracts";
 
 import { limitSection } from "./TextGenerationUtils.ts";
 import type { TextGenerationPolicy } from "./TextGenerationPolicy.ts";
@@ -87,6 +87,17 @@ export function fallbackWorkItemTaskPrompt(input: WorkItemTaskPromptInput): stri
     "",
     ...sources,
   ].join("\n");
+}
+
+export function resolveWorkItemTaskResult(input: WorkItemTaskPromptInput, prompt: string) {
+  const generatedPrompt = prompt.trim();
+  if (generatedPrompt.length > 0 && generatedPrompt.length <= WORK_ITEM_TASK_PROMPT_MAX_LENGTH) {
+    return { prompt: generatedPrompt, generated: true };
+  }
+  return {
+    prompt: fallbackWorkItemTaskPrompt(input).slice(0, WORK_ITEM_TASK_PROMPT_MAX_LENGTH),
+    generated: false,
+  };
 }
 
 export function buildWorkItemMatchPrompt(input: {

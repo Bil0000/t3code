@@ -131,7 +131,7 @@ import * as IssueService from "./issue/IssueService.ts";
 import * as LinearApi from "./issue/LinearApi.ts";
 import * as LinearConnection from "./issue/LinearConnection.ts";
 import * as TextGeneration from "./textGeneration/TextGeneration.ts";
-import { fallbackWorkItemTaskPrompt } from "./textGeneration/TextGenerationPrompts.ts";
+import { resolveWorkItemTaskResult } from "./textGeneration/TextGenerationPrompts.ts";
 import {
   resolveWorkItemMatches,
   shortlistWorkItemCandidates,
@@ -2114,18 +2114,14 @@ const makeWsRpcLayer = (
                   modelSelection: settings.textGenerationModelSelection,
                 })
                 .pipe(
-                  Effect.map(({ prompt }) => ({ prompt: prompt.trim(), generated: true })),
-                  Effect.orElseSucceed(() => ({
-                    prompt: fallbackWorkItemTaskPrompt({ mode: input.mode, items }),
-                    generated: false,
-                  })),
+                  Effect.map(({ prompt }) =>
+                    resolveWorkItemTaskResult({ mode: input.mode, items }, prompt),
+                  ),
+                  Effect.orElseSucceed(() =>
+                    resolveWorkItemTaskResult({ mode: input.mode, items }, ""),
+                  ),
                 );
-              return generated.prompt.length > 0
-                ? generated
-                : {
-                    prompt: fallbackWorkItemTaskPrompt({ mode: input.mode, items }),
-                    generated: false,
-                  };
+              return generated;
             }),
             { "rpc.aggregate": "issues" },
           ),

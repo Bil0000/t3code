@@ -20,8 +20,13 @@ export const WorkItemTaskInput = Schema.Struct({
 });
 export type WorkItemTaskInput = typeof WorkItemTaskInput.Type;
 
+export const WORK_ITEM_TASK_PROMPT_MAX_LENGTH = 65_536;
+
 export const WorkItemTaskResult = Schema.Struct({
-  prompt: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(65_536)),
+  prompt: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(WORK_ITEM_TASK_PROMPT_MAX_LENGTH),
+  ),
   generated: Schema.Boolean,
 });
 export type WorkItemTaskResult = typeof WorkItemTaskResult.Type;
