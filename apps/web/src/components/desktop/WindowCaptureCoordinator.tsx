@@ -14,8 +14,8 @@ import { resolveThreadActionProjectRef } from "../../lib/chatThreadActions";
 import { markWindowCaptureAnimation } from "../../lib/windowCaptureAnimation";
 import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
 import {
+  dispatchWindowCaptureComposerFocus,
   getDesktopWindowCaptureBridge,
-  WINDOW_CAPTURE_FOCUS_EVENT,
 } from "../../lib/desktopWindowCapture";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -151,7 +151,7 @@ export function WindowCaptureCoordinator() {
                 playWindowCaptureSound();
               } catch {}
             }
-            window.dispatchEvent(new Event(WINDOW_CAPTURE_FOCUS_EVENT));
+            dispatchWindowCaptureComposerFocus();
           } catch (error) {
             toastManager.add(
               stackedThreadToast({

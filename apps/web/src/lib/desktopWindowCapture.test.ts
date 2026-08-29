@@ -1,12 +1,16 @@
 import type { DesktopBridge } from "@t3tools/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { getDesktopWindowCaptureBridge } from "./desktopWindowCapture";
+import {
+  dispatchWindowCaptureComposerFocus,
+  getDesktopWindowCaptureBridge,
+  subscribeWindowCaptureComposerFocus,
+} from "./desktopWindowCapture";
 
 beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     configurable: true,
-    value: {},
+    value: new EventTarget(),
   });
 });
 
@@ -34,5 +38,19 @@ describe("getDesktopWindowCaptureBridge", () => {
     window.desktopBridge = bridge;
 
     expect(getDesktopWindowCaptureBridge()).toBe(bridge);
+  });
+});
+
+describe("window capture composer focus", () => {
+  it("notifies active subscribers", () => {
+    const listener = vi.fn();
+    const unsubscribe = subscribeWindowCaptureComposerFocus(listener);
+
+    dispatchWindowCaptureComposerFocus();
+    expect(listener).toHaveBeenCalledOnce();
+
+    unsubscribe();
+    dispatchWindowCaptureComposerFocus();
+    expect(listener).toHaveBeenCalledOnce();
   });
 });
