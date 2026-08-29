@@ -4469,9 +4469,14 @@ function ChatViewContent(props: ChatViewProps) {
     updateHeight();
     if (typeof ResizeObserver === "undefined") return;
 
-    const observer = new ResizeObserver(updateHeight);
-    observer.observe(composerOverlayElement);
-    return () => observer.disconnect();
+    const resizeObserver = new ResizeObserver(updateHeight);
+    resizeObserver.observe(composerOverlayElement);
+    const tabObserver = new MutationObserver(updateHeight);
+    tabObserver.observe(composerOverlayElement, { childList: true, subtree: true });
+    return () => {
+      resizeObserver.disconnect();
+      tabObserver.disconnect();
+    };
   }, [composerOverlayElement]);
 
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
