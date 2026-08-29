@@ -103,6 +103,7 @@ import {
 } from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { useMediaQuery } from "~/hooks/useMediaQuery";
 import {
   deriveDisplayedUserMessageState,
   type ParsedTerminalContextEntry,
@@ -451,6 +452,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     null,
   );
   const [statusRowPinned, setStatusRowPinned] = useState(false);
+  const isWideViewport = useMediaQuery("sm");
+  const statusRowTop = resolveTimelineStatusRowTopOffset(topFadeEnabled, isWideViewport);
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
   const handleAnchorReady = useCallback(
@@ -480,7 +483,8 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
     const scrollTop = state.scroll ?? 0;
     setStatusRowPinned(
-      stickyStatusRow !== undefined && resolveTimelineStatusRowPinned(state, stickyStatusRow.id),
+      stickyStatusRow !== undefined &&
+        resolveTimelineStatusRowPinned(state, stickyStatusRow.id, statusRowTop),
     );
     if (minimapItems.length === 0) {
       return;
@@ -510,6 +514,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     minimapStripMap,
     onIsAtEndChange,
     stickyStatusRow,
+    statusRowTop,
   ]);
 
   useEffect(() => {
@@ -653,12 +658,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           />
           {statusRowPinned && stickyStatusRow ? (
             <div
-              className="pointer-events-none absolute inset-x-0 top-0 z-30 px-3 sm:px-5"
+              className="pointer-events-none absolute inset-x-0 z-10 px-3 sm:px-5"
               data-turn-status-row-pinned="true"
+              style={{ top: statusRowTop }}
             >
               <div
-                aria-hidden
-                className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip bg-background"
+                aria-hidden={stickyStatusRow.kind === "working" || undefined}
+                className={cn(
+                  "mx-auto w-full min-w-0 max-w-3xl overflow-x-clip bg-background",
+                  stickyStatusRow.kind === "turn-fold" && "pointer-events-auto",
+                )}
               >
                 <TimelineRowContent row={stickyStatusRow} />
               </div>
@@ -758,9 +767,21 @@ function resolveTimelineRowTop(state: TimelinePositionState, rowIndex: number) {
   return typeof top === "number" && Number.isFinite(top) ? top : null;
 }
 
-export function resolveTimelineStatusRowPinned(state: TimelinePositionState, rowKey: string) {
+export function resolveTimelineStatusRowPinned(
+  state: TimelinePositionState,
+  rowKey: string,
+  statusRowTop: number,
+) {
   const rowTop = state.positionByKey?.(rowKey);
-  return typeof rowTop === "number" && Number.isFinite(rowTop) && rowTop <= (state.scroll ?? 0);
+  return (
+    typeof rowTop === "number" &&
+    Number.isFinite(rowTop) &&
+    rowTop <= (state.scroll ?? 0) + statusRowTop
+  );
+}
+
+export function resolveTimelineStatusRowTopOffset(topFadeEnabled: boolean, isWide: boolean) {
+  return topFadeEnabled ? (isWide ? 48 : 40) : isWide ? 16 : 12;
 }
 
 function resolveTimelineRowHeight(state: TimelinePositionState, rowIndex: number) {
