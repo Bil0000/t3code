@@ -57,6 +57,8 @@ const DOWNLOAD_MIME_TYPE_PATTERN = /^[\w!#$&^.+-]+\/[\w!#$&^.+-]+$/;
 const isSafeDownloadMimeType = (mimeType: string): boolean =>
   DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) &&
   !/(?:^text\/html$|\/xml(?:$|-)|\+xml$)/i.test(mimeType.trim().toLowerCase());
+const isSafeInlineVideoMimeType = (mimeType: string): boolean =>
+  DOWNLOAD_MIME_TYPE_PATTERN.test(mimeType) && mimeType.toLowerCase().startsWith("video/");
 
 /** RFC 6266 disposition with an ASCII fallback name plus a UTF-8 `filename*`. */
 export function downloadContentDisposition(fileName?: string): string {
@@ -98,9 +100,11 @@ export function assetResponseHeaders(
               ? options.mimeType
               : "application/octet-stream",
         }
-      : lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
-        ? { "Content-Type": "text/html; charset=utf-8" }
-        : {}),
+      : options?.mimeType !== undefined && isSafeInlineVideoMimeType(options.mimeType)
+        ? { "Content-Type": options.mimeType }
+        : lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
+          ? { "Content-Type": "text/html; charset=utf-8" }
+          : {}),
     ...(!options?.download && lowerPath.endsWith(".svg")
       ? { "Content-Security-Policy": SVG_CONTENT_SECURITY_POLICY }
       : {}),
@@ -276,9 +280,9 @@ export const assetRouteLayer = HttpRouter.add(
       status: 200,
       headers: assetResponseHeaders(
         asset.path,
-        asset.download
+        asset.download || asset.mimeType !== undefined
           ? {
-              download: true,
+              ...(asset.download ? { download: true } : {}),
               ...(asset.fileName !== undefined ? { fileName: asset.fileName } : {}),
               ...(asset.mimeType !== undefined ? { mimeType: asset.mimeType } : {}),
             }

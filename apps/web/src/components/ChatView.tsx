@@ -129,6 +129,7 @@ import {
   MAX_TERMINALS_PER_GROUP,
   type ChatMessage,
   isImageAttachment,
+  isVideoAttachment,
   type SessionPhase,
   type Thread,
   type TurnDiffSummary,
@@ -360,6 +361,7 @@ import {
   cloneComposerImageForRetry,
   deriveLockedProvider,
   readFileAsDataUrl,
+  loadDesktopVideoPreviewUrl,
   reconcileMountedTerminalThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftHeroState,
@@ -1440,6 +1442,11 @@ function ChatViewContent(props: ChatViewProps) {
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
+  useEffect(() => {
+    const item = expandedImage?.images[expandedImage.index];
+    if (item?.type !== "video" || !item.src.startsWith("blob:")) return;
+    return () => revokeBlobPreviewUrl(item.src);
+  }, [expandedImage]);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
   const [feedbackSubmissionsByThreadKey, setFeedbackSubmissionsByThreadKey] = useState<
     Record<string, ReadonlyArray<CodexFeedbackSubmission>>
@@ -2504,17 +2511,18 @@ function ChatViewContent(props: ChatViewProps) {
     });
   }, []);
   const serverMessages = activeThread?.messages;
-  const downloadFileAttachment = useCallback(
+  const openFileAttachment = useCallback(
     async (attachment: ChatFileAttachment) => {
       const connection = readPreparedConnection(environmentId);
       if (!connection) {
         toastManager.add({ type: "error", title: "The environment is not connected." });
         return;
       }
+      const isVideo = isVideoAttachment(attachment);
+      const action = isVideo ? "play" : "download";
 
-      // fileName and mimeType ride in the signed claims so the download gets
-      // a real filename and Content-Type even when the anchor's `download`
-      // attribute is ignored (cross-origin environment servers).
+      // fileName and mimeType ride in the signed claims so videos render
+      // inline while other files keep their real download name and type.
       const result = await createAttachmentAssetUrl({
         environmentId,
         input: {
@@ -2530,7 +2538,7 @@ function ChatViewContent(props: ChatViewProps) {
         const error = squashAtomCommandFailure(result);
         toastManager.add({
           type: "error",
-          title: `Could not download ${attachment.name}`,
+          title: "Could not " + action + " " + attachment.name,
           description: error instanceof Error ? error.message : "The attachment is unavailable.",
         });
         return;
@@ -2538,7 +2546,23 @@ function ChatViewContent(props: ChatViewProps) {
 
       const url = resolveAssetUrl(connection.httpBaseUrl, result.value.relativeUrl);
       if (!url) {
-        toastManager.add({ type: "error", title: `Could not download ${attachment.name}` });
+        toastManager.add({ type: "error", title: "Could not " + action + " " + attachment.name });
+        return;
+      }
+      if (isVideo) {
+        try {
+          const previewUrl = window.desktopBridge ? await loadDesktopVideoPreviewUrl(url) : url;
+          setExpandedImage({
+            images: [{ src: previewUrl, name: attachment.name, type: "video" }],
+            index: 0,
+          });
+        } catch (error) {
+          toastManager.add({
+            type: "error",
+            title: "Could not play " + attachment.name,
+            description: error instanceof Error ? error.message : "The attachment is unavailable.",
+          });
+        }
         return;
       }
       const anchor = document.createElement("a");
@@ -7139,7 +7163,7 @@ function ChatViewContent(props: ChatViewProps) {
                 onRevertUserMessage={onRevertUserMessage}
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
-                onFileDownload={downloadFileAttachment}
+                onFileOpen={openFileAttachment}
                 markdownCwd={gitCwd ?? undefined}
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}

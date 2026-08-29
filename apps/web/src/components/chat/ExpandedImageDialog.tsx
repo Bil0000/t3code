@@ -45,18 +45,19 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
 
   const item = preview.images[index];
   if (!item) return null;
+  const mediaLabel = item.type === "video" ? "video" : "image";
 
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 py-6 [-webkit-app-region:no-drag]"
       role="dialog"
       aria-modal="true"
-      aria-label="Expanded image preview"
+      aria-label={`Expanded ${mediaLabel} preview`}
     >
       <button
         type="button"
         className="absolute inset-0 z-0 cursor-zoom-out"
-        aria-label="Close image preview"
+        aria-label={`Close ${mediaLabel} preview`}
         onClick={onClose}
       />
       {preview.images.length > 1 && (
@@ -78,16 +79,26 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
           variant="ghost"
           className="absolute right-2 top-2"
           onClick={onClose}
-          aria-label="Close image preview"
+          aria-label={`Close ${mediaLabel} preview`}
         >
           <XIcon />
         </Button>
-        <img
-          src={item.src}
-          alt={item.name}
-          className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"
-          draggable={false}
-        />
+        {item.type === "video" ? (
+          <video
+            src={item.src}
+            autoPlay
+            controls
+            playsInline
+            className="max-h-[86vh] max-w-[92vw] rounded-lg border border-border/70 bg-black object-contain shadow-2xl"
+          />
+        ) : (
+          <img
+            src={item.src}
+            alt={item.name}
+            className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"
+            draggable={false}
+          />
+        )}
         <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-muted-foreground/80">
           {item.name}
           {preview.images.length > 1 ? ` (${index + 1}/${preview.images.length})` : ""}

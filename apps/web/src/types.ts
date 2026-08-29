@@ -59,6 +59,10 @@ export function isFileAttachment(attachment: ChatAttachment): attachment is Chat
   return attachment.type === "file";
 }
 
+export function isVideoAttachment(attachment: ChatFileAttachment): boolean {
+  return attachment.mimeType.toLowerCase().startsWith("video/");
+}
+
 export interface ChatMessage extends Omit<OrchestrationMessage, "attachments"> {
   readonly attachments?: ReadonlyArray<ChatAttachment> | undefined;
 }

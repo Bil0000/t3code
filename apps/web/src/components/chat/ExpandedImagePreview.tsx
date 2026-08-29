@@ -1,6 +1,7 @@
 export interface ExpandedImageItem {
   src: string;
   name: string;
+  type?: "video";
 }
 
 export interface ExpandedImagePreview {
