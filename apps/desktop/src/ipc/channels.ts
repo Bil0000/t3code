@@ -29,6 +29,11 @@ export const SET_WINDOW_CAPTURE_SHORTCUT_SUPPRESSED_CHANNEL =
 export const CAPTURE_WINDOW_CHANNEL = "desktop:capture-window";
 export const LIST_PENDING_WINDOW_CAPTURES_CHANNEL = "desktop:list-pending-window-captures";
 export const READ_WINDOW_CAPTURE_CHANNEL = "desktop:read-window-capture";
+export const SET_WINDOW_CAPTURE_ANIMATION_DESTINATION_CHANNEL =
+  "desktop:set-window-capture-animation-destination";
+export const WAIT_FOR_WINDOW_CAPTURE_ANIMATION_LANDING_CHANNEL =
+  "desktop:wait-for-window-capture-animation-landing";
+export const DISMISS_WINDOW_CAPTURE_ANIMATION_CHANNEL = "desktop:dismiss-window-capture-animation";
 export const ACKNOWLEDGE_WINDOW_CAPTURE_CHANNEL = "desktop:acknowledge-window-capture";
 export const GET_CONNECTION_CATALOG_CHANNEL = "desktop:get-connection-catalog";
 export const SET_CONNECTION_CATALOG_CHANNEL = "desktop:set-connection-catalog";

@@ -1,6 +1,7 @@
 import {
   DesktopPendingWindowCapture,
   DesktopWindowCapture as DesktopWindowCaptureSchema,
+  DesktopWindowCaptureAnimationDestination,
   DesktopWindowCaptureId,
   DesktopWindowCaptureShortcutAvailability,
   DesktopWindowCaptureState,
@@ -9,6 +10,7 @@ import {
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
+import type * as Electron from "electron";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as DesktopWindowCapture from "../../windowCapture/DesktopWindowCapture.ts";
@@ -27,8 +29,22 @@ const ensureTrustedWindowCaptureSender = Effect.fn("desktop.ipc.windowCapture.en
         operation: "unauthorized",
       });
     }
+    return main.value;
   },
 );
+
+export function windowCaptureScreenFrame(
+  viewportFrame: DesktopWindowCaptureAnimationDestination["viewportFrame"],
+  windowBounds: Electron.Rectangle,
+  zoomFactor: number,
+): Electron.Rectangle {
+  return {
+    x: windowBounds.x + viewportFrame.x * zoomFactor,
+    y: windowBounds.y + viewportFrame.y * zoomFactor,
+    width: viewportFrame.width * zoomFactor,
+    height: viewportFrame.height * zoomFactor,
+  };
+}
 
 export const getWindowCaptureState = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.GET_WINDOW_CAPTURE_STATE_CHANNEL,
@@ -88,6 +104,61 @@ export const readWindowCapture = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.windowCapture.read")(function* (id, event) {
     yield* ensureTrustedWindowCaptureSender(event);
     return yield* (yield* DesktopWindowCapture.DesktopWindowCapture).read(id);
+  }),
+});
+
+export const setWindowCaptureAnimationDestination = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SET_WINDOW_CAPTURE_ANIMATION_DESTINATION_CHANNEL,
+  payload: DesktopWindowCaptureAnimationDestination,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.windowCapture.setAnimationDestination")(
+    function* (destination, event) {
+      const window = yield* ensureTrustedWindowCaptureSender(event);
+      if (
+        destination.viewportFrame.width <= 0 ||
+        destination.viewportFrame.height <= 0 ||
+        destination.borderWidth < 0 ||
+        destination.cornerRadius < 0
+      ) {
+        return;
+      }
+      yield* (yield* DesktopWindowCapture.DesktopWindowCapture).setAnimationDestination(
+        destination.id,
+        {
+          frame: windowCaptureScreenFrame(
+            destination.viewportFrame,
+            window.getBounds(),
+            window.webContents.getZoomFactor(),
+          ),
+          backgroundColor: destination.backgroundColor,
+          borderColor: destination.borderColor,
+          borderWidth: destination.borderWidth * window.webContents.getZoomFactor(),
+          cornerRadius: destination.cornerRadius * window.webContents.getZoomFactor(),
+          scaleFactor: window.webContents.getZoomFactor(),
+          details: destination.details,
+        },
+      );
+    },
+  ),
+});
+
+export const waitForWindowCaptureAnimationLanding = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.WAIT_FOR_WINDOW_CAPTURE_ANIMATION_LANDING_CHANNEL,
+  payload: DesktopWindowCaptureId,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.windowCapture.waitForAnimationLanding")(function* (id, event) {
+    yield* ensureTrustedWindowCaptureSender(event);
+    yield* (yield* DesktopWindowCapture.DesktopWindowCapture).waitForAnimationLanding(id);
+  }),
+});
+
+export const dismissWindowCaptureAnimation = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.DISMISS_WINDOW_CAPTURE_ANIMATION_CHANNEL,
+  payload: DesktopWindowCaptureId,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.windowCapture.dismissAnimation")(function* (id, event) {
+    yield* ensureTrustedWindowCaptureSender(event);
+    yield* (yield* DesktopWindowCapture.DesktopWindowCapture).dismissAnimation(id);
   }),
 });
 

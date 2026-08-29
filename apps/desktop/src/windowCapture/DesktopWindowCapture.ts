@@ -38,6 +38,15 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts";
 import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutProcess.ts";
 import {
+  type WindowCaptureAnimationDestination,
+  WindowCaptureTransition,
+} from "./WindowCaptureTransition.ts";
+
+export {
+  WindowCaptureTransition,
+  windowCaptureAnimationOverlayBounds,
+} from "./WindowCaptureTransition.ts";
+import {
   accessibleWindowText,
   findAccessibleWindow,
   findAccessibleWindowByTitle,
@@ -143,6 +152,12 @@ export class DesktopWindowCapture extends Context.Service<
     readonly read: (
       id: string,
     ) => Effect.Effect<DesktopWindowCaptureValue, DesktopWindowCaptureError>;
+    readonly setAnimationDestination: (
+      id: string,
+      destination: WindowCaptureAnimationDestination,
+    ) => Effect.Effect<void>;
+    readonly waitForAnimationLanding: (id: string) => Effect.Effect<void>;
+    readonly dismissAnimation: (id: string) => Effect.Effect<void>;
     readonly acknowledge: (id: string) => Effect.Effect<void, DesktopWindowCaptureError>;
   }
 >()("@t3tools/desktop/windowCapture/DesktopWindowCapture") {}
@@ -334,12 +349,14 @@ async function captureSource({
   platform,
   settings,
   flash,
+  transition,
 }: {
   mode: DesktopWindowCaptureState["mode"];
   captureId: string;
   platform: NodeJS.Platform;
   settings: ClientSettings;
   flash: WindowCaptureFlash;
+  transition: WindowCaptureTransition;
 }) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
@@ -367,20 +384,27 @@ async function captureSource({
           })
         : new DesktopWindowCaptureError({ operation: "window-unavailable", captureId });
     }
-    showFlash(flash, settings, active);
-    if (mode === "portal") {
-      const portalContext = await readPortalWindowContext(source.name);
-      return {
-        source,
-        active,
-        accessibleText: portalContext?.accessibleText,
-        portalAppName: portalContext?.appName,
-      };
-    }
-    const accessibleText = active
-      ? await readAccessibleWindowText(active, platform, source.name)
-      : undefined;
-    return { source, active, accessibleText, portalAppName: undefined };
+    const animationStarted = await showCaptureFeedback(
+      transition,
+      flash,
+      captureId,
+      source.thumbnail,
+      settings,
+      active,
+    );
+    const contextPromise =
+      mode === "portal"
+        ? readPortalWindowContext(source.name).then((context) => ({
+            accessibleText: context?.accessibleText,
+            portalAppName: context?.appName,
+          }))
+        : active
+          ? readAccessibleWindowText(active, platform, source.name).then((accessibleText) => ({
+              accessibleText,
+              portalAppName: undefined,
+            }))
+          : Promise.resolve({ accessibleText: undefined, portalAppName: undefined });
+    return { source, active, contextPromise, animationStarted };
   } finally {
     if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
   }
@@ -481,17 +505,29 @@ export function windowCaptureFlashBounds(active: ActiveWindow | undefined): Elec
   return active?.bounds ?? Electron.screen.getPrimaryDisplay().bounds;
 }
 
-function showFlash(
+async function showCaptureFeedback(
+  transition: WindowCaptureTransition,
   flash: WindowCaptureFlash,
+  captureId: string,
+  thumbnail: Electron.NativeImage,
   settings: ClientSettings,
   active: ActiveWindow | undefined,
-): void {
-  if (!settings.windowCaptureFlash) return;
+): Promise<boolean> {
   const bounds = windowCaptureFlashBounds(active);
+  if (settings.windowCaptureAnimations) {
+    try {
+      await transition.begin(captureId, bounds, thumbnail, settings.windowCaptureFlash);
+      return true;
+    } catch {
+      transition.dispose();
+    }
+  }
+  if (!settings.windowCaptureFlash) return false;
   const playback = settings.windowCaptureAnimations
     ? flash.showAnimated(bounds)
     : flash.showStatic(bounds);
-  void playback.catch(() => undefined);
+  await playback.catch(() => undefined);
+  return false;
 }
 
 function observedPairMessage(
@@ -555,6 +591,7 @@ export const make = Effect.gen(function* () {
   let shortcutSuppressed = false;
   let stopShiftShortcut: (() => void) | undefined;
   const flash = new WindowCaptureFlash(environment.platform);
+  const transition = new WindowCaptureTransition(environment.platform === "darwin");
 
   const startPairShortcutProcess = (
     modifier: WindowCaptureModifier,
@@ -603,15 +640,28 @@ export const make = Effect.gen(function* () {
 
     yield* Effect.gen(function* () {
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
-      const { source, active, accessibleText, portalAppName } = yield* Effect.tryPromise({
+      const { source, active, contextPromise, animationStarted } = yield* Effect.tryPromise({
         try: () =>
-          captureSource({ mode, captureId: id, platform: environment.platform, settings, flash }),
+          captureSource({
+            mode,
+            captureId: id,
+            platform: environment.platform,
+            settings,
+            flash,
+            transition,
+          }),
         catch: (cause) => captureFailure(cause, id),
       });
+      if (animationStarted) {
+        yield* desktopWindow
+          .dispatchMenuAction(`window-capture-started:${id}`)
+          .pipe(Effect.catch(() => Effect.void));
+      }
       const png = yield* Effect.try({
         try: () => source.thumbnail.toPNG(),
         catch: (cause) => captureFailure(cause, id),
       });
+      const { accessibleText, portalAppName } = yield* Effect.promise(() => contextPromise);
       const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
       const appIconDataUrl = yield* Effect.promise(() =>
         iconDataUrl(source, active, environment.platform),
@@ -642,7 +692,9 @@ export const make = Effect.gen(function* () {
       yield* fileSystem.rename(metadataPath + ".tmp", metadataPath);
     }).pipe(
       Effect.mapError((cause) => captureFailure(cause, id)),
-      Effect.tapError(() => cleanup),
+      Effect.tapError(() =>
+        cleanup.pipe(Effect.andThen(Effect.promise(() => transition.complete(id)))),
+      ),
     );
   });
 
@@ -731,6 +783,13 @@ export const make = Effect.gen(function* () {
     const shortcut = effectiveWindowCaptureShortcut(mode, settings.windowCaptureShortcut);
     if (!settings.windowCaptureEnabled || !settings.windowCaptureFlash || mode === "unavailable") {
       flash.dispose();
+    }
+    if (
+      !settings.windowCaptureEnabled ||
+      !settings.windowCaptureAnimations ||
+      mode === "unavailable"
+    ) {
+      transition.dispose();
     }
     if (!settings.windowCaptureEnabled || mode === "unavailable") {
       yield* Ref.set(stateRef, {
@@ -835,6 +894,7 @@ export const make = Effect.gen(function* () {
     Effect.sync(() => {
       releaseShortcut();
       flash.dispose();
+      transition.dispose();
     }),
   );
 
@@ -895,14 +955,21 @@ export const make = Effect.gen(function* () {
           (cause) => new DesktopWindowCaptureError({ operation: "read", captureId: id, cause }),
         ),
       ),
+    setAnimationDestination: (id, destination) =>
+      Effect.sync(() => transition.animateTo(id, destination)),
+    waitForAnimationLanding: (id) => Effect.promise(() => transition.waitForLanding(id)),
+    dismissAnimation: (id) => Effect.sync(() => transition.dismiss(id)),
     acknowledge: (id) =>
-      Effect.all(
-        [
-          fileSystem.remove(path.join(captureDirectory, `${id}.json`), { force: true }),
-          fileSystem.remove(path.join(captureDirectory, `${id}.png`), { force: true }),
-        ],
-        { concurrency: "unbounded", discard: true },
-      ).pipe(
+      Effect.promise(() => transition.complete(id)).pipe(
+        Effect.andThen(
+          Effect.all(
+            [
+              fileSystem.remove(path.join(captureDirectory, `${id}.json`), { force: true }),
+              fileSystem.remove(path.join(captureDirectory, `${id}.png`), { force: true }),
+            ],
+            { concurrency: "unbounded", discard: true },
+          ),
+        ),
         Effect.mapError(
           (cause) =>
             new DesktopWindowCaptureError({ operation: "acknowledge", captureId: id, cause }),

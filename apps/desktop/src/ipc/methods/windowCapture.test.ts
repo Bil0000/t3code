@@ -8,10 +8,88 @@ import * as DesktopWindowCapture from "../../windowCapture/DesktopWindowCapture.
 import {
   captureWindow,
   checkWindowCaptureShortcut,
+  dismissWindowCaptureAnimation,
+  setWindowCaptureAnimationDestination,
   setWindowCaptureShortcutSuppressed,
+  waitForWindowCaptureAnimationLanding,
+  windowCaptureScreenFrame,
 } from "./windowCapture.ts";
 
 describe("window capture IPC", () => {
+  it("converts renderer viewport coordinates from the window origin using the window zoom", () => {
+    assert.deepEqual(
+      windowCaptureScreenFrame(
+        { x: 12, y: 20, width: 208, height: 112 },
+        { x: 100, y: 80, width: 1_000, height: 700 },
+        1.25,
+      ),
+      { x: 115, y: 105, width: 260, height: 140 },
+    );
+  });
+
+  it.effect("forwards a trusted renderer animation destination in screen coordinates", () => {
+    let received: unknown;
+    const webContents = { id: 7, getZoomFactor: () => 1.25 };
+    const layer = Layer.mergeAll(
+      Layer.succeed(
+        ElectronWindow.ElectronWindow,
+        ElectronWindow.ElectronWindow.of({
+          main: Effect.succeed(
+            Option.some({
+              getBounds: () => ({ x: 100, y: 80, width: 1_000, height: 700 }),
+              getContentBounds: () => ({ x: 100, y: 118, width: 1_000, height: 662 }),
+              webContents,
+            }),
+          ),
+        } as ElectronWindow.ElectronWindow["Service"]),
+      ),
+      Layer.succeed(
+        DesktopWindowCapture.DesktopWindowCapture,
+        DesktopWindowCapture.DesktopWindowCapture.of({
+          setAnimationDestination: (id: string, destination: unknown) =>
+            Effect.sync(() => {
+              received = { id, destination };
+            }),
+        } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      yield* setWindowCaptureAnimationDestination.handler(
+        {
+          id: "12345678-1234-1234-1234-123456789abc",
+          viewportFrame: { x: 12, y: 20, width: 208, height: 112 },
+          backgroundColor: "rgb(20, 20, 20)",
+          borderColor: "rgba(80, 80, 80, 0.8)",
+          borderWidth: 1,
+          cornerRadius: 8,
+          details: {
+            appName: "T3 Code",
+            windowTitle: "Capture animation",
+            appIconDataUrl: "data:image/png;base64,aWNvbg==",
+          },
+        },
+        { sender: webContents },
+      );
+      assert.deepEqual(received, {
+        id: "12345678-1234-1234-1234-123456789abc",
+        destination: {
+          frame: { x: 115, y: 105, width: 260, height: 140 },
+          backgroundColor: "rgb(20, 20, 20)",
+          borderColor: "rgba(80, 80, 80, 0.8)",
+          borderWidth: 1.25,
+          cornerRadius: 10,
+          scaleFactor: 1.25,
+          details: {
+            appName: "T3 Code",
+            windowTitle: "Capture animation",
+            appIconDataUrl: "data:image/png;base64,aWNvbg==",
+          },
+        },
+      });
+    }).pipe(Effect.provide(layer));
+  });
+
   it.effect("uses the manual capture path for a trusted renderer", () => {
     let globalCaptures = 0;
     let manualCaptures = 0;
@@ -39,6 +117,63 @@ describe("window capture IPC", () => {
       yield* captureWindow.handler(undefined, { sender: { id: 7 } });
       assert.strictEqual(globalCaptures, 0);
       assert.strictEqual(manualCaptures, 1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("waits for the native card to land for a trusted renderer", () => {
+    let waitedFor: string | undefined;
+    const webContents = { id: 7 };
+    const layer = Layer.mergeAll(
+      Layer.succeed(
+        ElectronWindow.ElectronWindow,
+        ElectronWindow.ElectronWindow.of({
+          main: Effect.succeed(Option.some({ webContents })),
+        } as ElectronWindow.ElectronWindow["Service"]),
+      ),
+      Layer.succeed(
+        DesktopWindowCapture.DesktopWindowCapture,
+        DesktopWindowCapture.DesktopWindowCapture.of({
+          waitForAnimationLanding: (id: string) =>
+            Effect.sync(() => {
+              waitedFor = id;
+            }),
+        } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      yield* waitForWindowCaptureAnimationLanding.handler("12345678-1234-1234-1234-123456789abc", {
+        sender: webContents,
+      });
+      assert.strictEqual(waitedFor, "12345678-1234-1234-1234-123456789abc");
+    }).pipe(Effect.provide(layer));
+  });
+  it.effect("dismisses the native card for a trusted renderer", () => {
+    let dismissed: string | undefined;
+    const webContents = { id: 7 };
+    const layer = Layer.mergeAll(
+      Layer.succeed(
+        ElectronWindow.ElectronWindow,
+        ElectronWindow.ElectronWindow.of({
+          main: Effect.succeed(Option.some({ webContents })),
+        } as ElectronWindow.ElectronWindow["Service"]),
+      ),
+      Layer.succeed(
+        DesktopWindowCapture.DesktopWindowCapture,
+        DesktopWindowCapture.DesktopWindowCapture.of({
+          dismissAnimation: (id: string) =>
+            Effect.sync(() => {
+              dismissed = id;
+            }),
+        } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      yield* dismissWindowCaptureAnimation.handler("12345678-1234-1234-1234-123456789abc", {
+        sender: webContents,
+      });
+      assert.strictEqual(dismissed, "12345678-1234-1234-1234-123456789abc");
     }).pipe(Effect.provide(layer));
   });
   it.effect("checks shortcut availability for a trusted renderer", () => {

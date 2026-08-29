@@ -39,6 +39,7 @@ const {
     options: Electron.BrowserWindowConstructorOptions;
     scripts: Array<string>;
     showCount: number;
+    urls: Array<string>;
   }>,
   getFileIconMock: vi.fn(),
   getSourcesMock: vi.fn(),
@@ -154,6 +155,7 @@ vi.mock("electron", () => {
         options,
         scripts: [],
         showCount: 0,
+        urls: [],
       };
       flashWindows.push(this.state);
     }
@@ -166,6 +168,10 @@ vi.mock("electron", () => {
 
     isDestroyed() {
       return this.state.destroyed;
+    }
+
+    getBounds() {
+      return this.state.bounds;
     }
 
     setBounds(bounds: Electron.Rectangle) {
@@ -196,12 +202,17 @@ vi.mock("electron", () => {
       this.webContents = {
         executeJavaScript: async (script: string) => {
           this.state.scripts.push(script);
+          if (script.startsWith("window.startCaptureTransition")) {
+            return { source: {}, target: {}, samples: [] };
+          }
+          return undefined;
         },
       };
     }
 
-    loadURL() {
+    loadURL(url: string) {
       this.state.loadCount += 1;
+      this.state.urls.push(url);
       return Promise.resolve();
     }
   }
@@ -214,6 +225,10 @@ vi.mock("electron", () => {
     nativeImage: { createThumbnailFromPath: thumbnailFromPathMock },
     globalShortcut: { register: registerShortcutMock, unregister: vi.fn() },
     screen: {
+      getAllDisplays: () => [
+        { bounds: { x: -1_920, y: 0, width: 1_920, height: 1_080 } },
+        { bounds: { x: 0, y: -200, width: 1_440, height: 900 } },
+      ],
       getCursorScreenPoint: () => ({ x: 500, y: 500 }),
       getDisplayNearestPoint: () => ({
         bounds: { x: 100, y: 100, width: 800, height: 600 },
@@ -401,6 +416,153 @@ it("uses the primary display for portal flash feedback", () => {
     width: 1_440,
     height: 900,
   });
+});
+
+it("covers every display with one capture transition surface", () => {
+  assert.deepEqual(
+    DesktopWindowCapture.windowCaptureAnimationOverlayBounds([
+      { bounds: { x: -1_920, y: 0, width: 1_920, height: 1_080 } },
+      { bounds: { x: 0, y: -200, width: 1_440, height: 900 } },
+    ]),
+    { x: -1_920, y: -200, width: 3_360, height: 1_280 },
+  );
+});
+
+it("uses the macOS work-area origin for transition coordinates", () => {
+  assert.deepEqual(
+    DesktopWindowCapture.windowCaptureAnimationOverlayBounds(
+      [
+        {
+          bounds: { x: 0, y: 0, width: 1_800, height: 1_169 },
+          workArea: { x: 0, y: 38, width: 1_800, height: 1_131 },
+        },
+      ],
+      true,
+    ),
+    { x: 0, y: 38, width: 1_800, height: 1_131 },
+  );
+});
+
+it("holds the captured snapshot through the flash and flies it to the composer", async () => {
+  vi.useFakeTimers();
+  flashWindows.length = 0;
+  const transition = new DesktopWindowCapture.WindowCaptureTransition();
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: 100, y: 50, width: 900, height: 600 },
+      { toDataURL: () => "data:image/png;base64,capture" } as Electron.NativeImage,
+      true,
+    );
+    const overlay = flashWindows[0];
+    assert.deepEqual(overlay?.bounds, { x: -1_920, y: -200, width: 3_360, height: 1_280 });
+    assert.strictEqual(overlay?.options.transparent, true);
+    assert.strictEqual(overlay?.showCount, 1);
+    const overlayHtml = decodeURIComponent(overlay?.urls[0] ?? "");
+    assert.include(overlayHtml, "window.prepareCaptureFlash");
+    assert.include(overlayHtml, "window.startCaptureFlash");
+    assert.include(overlayHtml, 'flashLayer.style.opacity=".96"');
+    assert.include(overlayHtml, "requestAnimationFrame(()=>requestAnimationFrame");
+    assert.include(overlayHtml, "opacity:.96");
+    assert.include(overlayHtml, "await snapshot.decode()");
+    assert.include(overlayHtml, 'id="details"');
+    assert.include(overlayHtml, "detailsAnimation");
+    assert.include(overlayHtml, 'easing:"ease-in"');
+    assert.include(overlayHtml, "samples.push");
+    assert.notInclude(overlayHtml, "transform-origin:bottom left");
+    assert.include(overlayHtml, 'card.style.width=target.width+"px"');
+    assert.include(overlayHtml, "springEasing");
+    assert.include(overlayHtml, 'const linearEasing=(valueAt)=>"linear("');
+    assert.include(overlayHtml, "const transformAt=(progress)=>");
+    assert.include(overlayHtml, "const snapshotTransformAt=(progress)=>");
+    assert.include(overlayHtml, 'id="snapshot"');
+    assert.include(overlayHtml, 'id="content"');
+    assert.include(overlayHtml, 'id="border"');
+    assert.include(overlayHtml, "contentAnimation");
+    assert.include(overlayHtml, "borderAnimation");
+    assert.include(overlayHtml, "snapshotAnimation");
+    assert.notInclude(overlayHtml, "snapshot-crop");
+    assert.notInclude(overlayHtml, "will-change:left");
+    assert.notInclude(overlayHtml, "cubic-bezier(.34,1.56,.64,1)");
+    assert.strictEqual(overlay?.scripts[1], "window.prepareCaptureFlash()");
+    assert.strictEqual(overlay?.scripts[2], "window.startCaptureFlash()");
+
+    transition.animateTo("capture-1", {
+      frame: { x: 300, y: 500, width: 208, height: 112 },
+      backgroundColor: "rgb(20, 20, 20)",
+      borderColor: "rgba(80, 80, 80, 0.8)",
+      borderWidth: 1,
+      cornerRadius: 8,
+      scaleFactor: 1.25,
+      details: {
+        appName: "T3 Code",
+        windowTitle: "Capture animation",
+        appIconDataUrl: "data:image/png;base64,aWNvbg==",
+      },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    assert.include(overlay?.scripts[0] ?? "", "window.setCaptureSnapshot");
+    assert.include(overlay?.scripts[3] ?? "", "window.startCaptureTransition");
+    assert.include(overlay?.scripts[3] ?? "", '"x":2220');
+    assert.notInclude(overlay?.scripts[3] ?? "", "overshootFrame");
+    assert.include(overlay?.scripts[3] ?? "", '"dampingFraction":0.73');
+    assert.include(overlay?.scripts[3] ?? "", '"samples":[{"offset":0,"progress":0}');
+    assert.include(overlay?.scripts[3] ?? "", '"appName":"T3 Code"');
+    assert.include(overlay?.scripts[3] ?? "", '"scaleFactor":1.25');
+    assert.include(overlay?.scripts[3] ?? "", '"borderWidth":1');
+
+    transition.animateTo("capture-1", {
+      frame: { x: 300, y: 500, width: 208, height: 112 },
+      backgroundColor: "rgb(20, 20, 20)",
+      borderColor: "rgba(80, 80, 80, 0.8)",
+      borderWidth: 1,
+      cornerRadius: 8,
+      scaleFactor: 1.25,
+      details: {
+        appName: "Updated T3 Code",
+        windowTitle: "Updated details",
+      },
+    });
+    assert.include(overlay?.scripts[4] ?? "", "window.updateCaptureDetails");
+    assert.include(overlay?.scripts[4] ?? "", '"appName":"Updated T3 Code"');
+
+    await transition.waitForLanding("capture-1");
+    assert.isFalse(overlay?.destroyed);
+    assert.lengthOf(overlay?.scripts ?? [], 5);
+
+    await transition.complete("capture-1");
+    assert.lengthOf(overlay?.scripts ?? [], 5);
+    assert.isTrue(overlay?.destroyed);
+    assert.strictEqual(vi.getTimerCount(), 0);
+  } finally {
+    transition.dispose();
+    vi.useRealTimers();
+  }
+});
+
+it("dismisses the native capture card without waiting for acknowledgement", async () => {
+  vi.useFakeTimers();
+  flashWindows.length = 0;
+  const transition = new DesktopWindowCapture.WindowCaptureTransition();
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: 100, y: 50, width: 900, height: 600 },
+      { toDataURL: () => "data:image/png;base64,capture" } as Electron.NativeImage,
+      false,
+    );
+    const overlay = flashWindows[0];
+
+    transition.dismiss("capture-1");
+
+    assert.isTrue(overlay?.destroyed);
+    assert.strictEqual(vi.getTimerCount(), 0);
+  } finally {
+    transition.dispose();
+    vi.useRealTimers();
+  }
 });
 
 it("bounds source thumbnails for large windows", () => {
