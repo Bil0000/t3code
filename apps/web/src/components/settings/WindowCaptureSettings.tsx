@@ -67,13 +67,6 @@ function captureStatus(state: DesktopWindowCaptureState | null, enabled: boolean
     : "Ready. The active window will be captured.";
 }
 
-export function isWindowCaptureAvailable(
-  hasBridge: boolean,
-  state: Pick<DesktopWindowCaptureState, "mode"> | null,
-): boolean {
-  return hasBridge && state !== null && state.mode !== "unavailable";
-}
-
 export function WindowCaptureSettings() {
   const settings = useClientSettings();
   const updateSettings = useUpdateClientSettings();
@@ -94,7 +87,7 @@ export function WindowCaptureSettings() {
     : window.desktopBridge
       ? "Update the desktop app to use window capture."
       : "Only available in the desktop app.";
-  const captureAvailable = isWindowCaptureAvailable(Boolean(bridge), state);
+  const captureAvailable = Boolean(bridge) && state !== null && state.mode !== "unavailable";
   const savedShortcut = settings.windowCaptureShortcut;
   const shortcutChanged = !sameWindowCaptureShortcut(candidate, savedShortcut);
   const displayShortcut = shortcutChanged ? candidate : (state?.shortcut ?? savedShortcut);

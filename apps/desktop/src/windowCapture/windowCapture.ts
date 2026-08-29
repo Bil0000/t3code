@@ -261,14 +261,6 @@ export function findCaptureSource<T extends CaptureSourceLike>(
   return titleMatches.length === 1 ? titleMatches[0] : undefined;
 }
 
-export function shouldRequestScreenCapturePermission(
-  platform: NodeJS.Platform,
-  previouslyEnabled: boolean,
-  enabled: boolean,
-): boolean {
-  return platform === "darwin" && !previouslyEnabled && enabled;
-}
-
 export const WAYLAND_SUBSTITUTION_MESSAGE =
   "Wayland uses Ctrl+Shift+2 because it does not expose physical modifier pairs.";
 

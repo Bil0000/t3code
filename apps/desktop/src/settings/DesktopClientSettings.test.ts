@@ -231,29 +231,4 @@ describe("DesktopClientSettings", () => {
       }),
     ),
   );
-
-  it.effect("keeps valid fields when one setting no longer decodes", () =>
-    withClientSettings(
-      Effect.gen(function* () {
-        const environment = yield* DesktopEnvironment.DesktopEnvironment;
-        const fileSystem = yield* FileSystem.FileSystem;
-        const settings = yield* DesktopClientSettings.DesktopClientSettings;
-        yield* fileSystem.makeDirectory(environment.stateDir, { recursive: true });
-        yield* fileSystem.writeFileString(
-          environment.clientSettingsPath,
-          `{
-            "timestampFormat": "12-hour",
-            "windowCaptureShortcut": { "kind": "modifier-pair", "modifier": "hyper" }
-          }\n`,
-        );
-
-        const persisted = yield* settings.get;
-        assert.isTrue(Option.isSome(persisted));
-        if (Option.isSome(persisted)) {
-          assert.equal(persisted.value.timestampFormat, "12-hour");
-          assert.deepEqual(persisted.value.windowCaptureShortcut, { kind: "both-shift-keys" });
-        }
-      }),
-    ),
-  );
 });

@@ -23,7 +23,9 @@ const ensureTrustedWindowCaptureSender = Effect.fn("desktop.ipc.windowCapture.en
       Option.isNone(main) ||
       main.value.webContents.id !== event.sender.id
     ) {
-      return yield* new DesktopWindowCapture.DesktopWindowCaptureUnauthorizedError();
+      return yield* new DesktopWindowCapture.DesktopWindowCaptureError({
+        operation: "unauthorized",
+      });
     }
   },
 );

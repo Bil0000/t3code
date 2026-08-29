@@ -46,7 +46,6 @@ import {
   isPortalWindowSourceName,
   isWaylandSession,
   WAYLAND_SUBSTITUTION_MESSAGE,
-  shouldRequestScreenCapturePermission,
   toElectronAccelerator,
   windowCaptureShortcutRegistrationFailureMessage,
   windowCaptureShortcutSystemConflict,
@@ -73,14 +72,24 @@ const decodePendingCapture = Schema.decodeUnknownEffect(DesktopPendingWindowCapt
 const PendingCaptureJson = Schema.fromJsonString(DesktopPendingWindowCapture);
 const decodePendingCaptureJson = Schema.decodeEffect(PendingCaptureJson);
 const encodePendingCaptureJson = Schema.encodeEffect(PendingCaptureJson);
-const DesktopWindowCaptureOperation = Schema.Literals(["list-pending", "read", "acknowledge"]);
+const DesktopWindowCaptureOperation = Schema.Literals([
+  "list-pending",
+  "read",
+  "acknowledge",
+  "unsupported",
+  "disabled",
+  "unauthorized",
+  "no-window-selected",
+  "window-unavailable",
+  "capture",
+]);
 
 export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWindowCaptureError>()(
   "DesktopWindowCaptureError",
   {
     operation: DesktopWindowCaptureOperation,
     captureId: Schema.optional(Schema.String),
-    cause: Schema.Defect(),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
@@ -91,79 +100,28 @@ export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWi
         return "Could not read the window capture.";
       case "acknowledge":
         return "Could not remove the window capture.";
+      case "unsupported":
+        return "Window capture is not supported here.";
+      case "disabled":
+        return "Enable Window Capture in Settings first.";
+      case "unauthorized":
+        return "Window capture request was rejected.";
+      case "no-window-selected":
+        return "No window was selected.";
+      case "window-unavailable":
+        return "The active window is not available for capture.";
+      case "capture":
+        return "Could not capture the active window.";
     }
   }
 }
 
-export class DesktopWindowCaptureUnsupportedError extends Schema.TaggedErrorClass<DesktopWindowCaptureUnsupportedError>()(
-  "DesktopWindowCaptureUnsupportedError",
-  { captureId: Schema.String },
-) {
-  override get message(): string {
-    return "Window capture is not supported here.";
-  }
-}
+const isDesktopWindowCaptureError = Schema.is(DesktopWindowCaptureError);
 
-export class DesktopWindowCaptureDisabledError extends Schema.TaggedErrorClass<DesktopWindowCaptureDisabledError>()(
-  "DesktopWindowCaptureDisabledError",
-  {},
-) {
-  override get message(): string {
-    return "Enable Window Capture in Settings first.";
-  }
-}
-
-export class DesktopWindowCaptureUnauthorizedError extends Schema.TaggedErrorClass<DesktopWindowCaptureUnauthorizedError>()(
-  "DesktopWindowCaptureUnauthorizedError",
-  {},
-) {
-  override get message(): string {
-    return "Window capture request was rejected.";
-  }
-}
-
-export class DesktopWindowCaptureNoWindowSelectedError extends Schema.TaggedErrorClass<DesktopWindowCaptureNoWindowSelectedError>()(
-  "DesktopWindowCaptureNoWindowSelectedError",
-  { captureId: Schema.String },
-) {
-  override get message(): string {
-    return "No window was selected.";
-  }
-}
-
-export class DesktopWindowCaptureWindowUnavailableError extends Schema.TaggedErrorClass<DesktopWindowCaptureWindowUnavailableError>()(
-  "DesktopWindowCaptureWindowUnavailableError",
-  { captureId: Schema.String },
-) {
-  override get message(): string {
-    return "The active window is not available for capture.";
-  }
-}
-
-export class DesktopWindowCaptureFailedError extends Schema.TaggedErrorClass<DesktopWindowCaptureFailedError>()(
-  "DesktopWindowCaptureFailedError",
-  { captureId: Schema.optional(Schema.String), cause: Schema.Defect() },
-) {
-  override get message(): string {
-    return "Could not capture the active window.";
-  }
-}
-
-export const DesktopWindowCaptureFailure = Schema.Union([
-  DesktopWindowCaptureUnsupportedError,
-  DesktopWindowCaptureDisabledError,
-  DesktopWindowCaptureUnauthorizedError,
-  DesktopWindowCaptureNoWindowSelectedError,
-  DesktopWindowCaptureWindowUnavailableError,
-  DesktopWindowCaptureFailedError,
-]);
-export type DesktopWindowCaptureFailure = typeof DesktopWindowCaptureFailure.Type;
-export const isDesktopWindowCaptureFailure = Schema.is(DesktopWindowCaptureFailure);
-
-function captureFailure(cause: unknown, captureId?: string): DesktopWindowCaptureFailure {
-  return isDesktopWindowCaptureFailure(cause)
+function captureFailure(cause: unknown, captureId?: string): DesktopWindowCaptureError {
+  return isDesktopWindowCaptureError(cause)
     ? cause
-    : new DesktopWindowCaptureFailedError({ captureId, cause });
+    : new DesktopWindowCaptureError({ operation: "capture", captureId, cause });
 }
 
 export class DesktopWindowCapture extends Context.Service<
@@ -176,8 +134,8 @@ export class DesktopWindowCapture extends Context.Service<
       shortcut: WindowCaptureShortcut,
     ) => Effect.Effect<DesktopWindowCaptureShortcutAvailability>;
     readonly setShortcutSuppressed: (suppressed: boolean) => Effect.Effect<void>;
-    readonly capture: Effect.Effect<void, DesktopWindowCaptureFailure>;
-    readonly captureNow: Effect.Effect<void, DesktopWindowCaptureFailure>;
+    readonly capture: Effect.Effect<void, DesktopWindowCaptureError>;
+    readonly captureNow: Effect.Effect<void, DesktopWindowCaptureError>;
     readonly listPending: Effect.Effect<
       ReadonlyArray<DesktopPendingWindowCapture>,
       DesktopWindowCaptureError
@@ -403,8 +361,11 @@ async function captureSource({
       mode === "portal" ? sources[0] : active ? findCaptureSource(sources, active) : undefined;
     if (!source || source.thumbnail.isEmpty()) {
       throw mode === "portal"
-        ? new DesktopWindowCaptureNoWindowSelectedError({ captureId })
-        : new DesktopWindowCaptureWindowUnavailableError({ captureId });
+        ? new DesktopWindowCaptureError({
+            operation: "no-window-selected",
+            captureId,
+          })
+        : new DesktopWindowCaptureError({ operation: "window-unavailable", captureId });
     }
     showFlash(flash, settings, active);
     if (mode === "portal") {
@@ -628,7 +589,7 @@ export const make = Effect.gen(function* () {
     const id = yield* crypto.randomUUIDv4.pipe(Effect.mapError((cause) => captureFailure(cause)));
     const mode = captureMode(environment.platform);
     if (mode === "unavailable") {
-      return yield* new DesktopWindowCaptureUnsupportedError({ captureId: id });
+      return yield* new DesktopWindowCaptureError({ operation: "unsupported", captureId: id });
     }
     const imagePath = path.join(captureDirectory, `${id}.png`);
     const imageTempPath = path.join(captureDirectory, `${id}.tmp.png`);
@@ -706,7 +667,7 @@ export const make = Effect.gen(function* () {
   const capture = Effect.gen(function* () {
     const settings = yield* Ref.get(settingsRef);
     if (!settings.windowCaptureEnabled) {
-      return yield* new DesktopWindowCaptureDisabledError();
+      return yield* new DesktopWindowCaptureError({ operation: "disabled" });
     }
     yield* captureNow;
   });
@@ -859,13 +820,12 @@ export const make = Effect.gen(function* () {
     yield* configurationMutex.withPermits(1)(
       Effect.gen(function* () {
         const previousSettings = yield* Ref.get(settingsRef);
-        const permissionMessage = shouldRequestScreenCapturePermission(
-          environment.platform,
-          previousSettings.windowCaptureEnabled,
-          settings.windowCaptureEnabled,
-        )
-          ? yield* Effect.promise(requestMacWindowCapturePermissions)
-          : null;
+        const permissionMessage =
+          environment.platform === "darwin" &&
+          !previousSettings.windowCaptureEnabled &&
+          settings.windowCaptureEnabled
+            ? yield* Effect.promise(requestMacWindowCapturePermissions)
+            : null;
         yield* applySettings(settings, permissionMessage);
       }),
     );

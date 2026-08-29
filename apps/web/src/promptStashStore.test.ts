@@ -6,7 +6,6 @@ import {
   MAX_STASH_ENTRIES,
   PROMPT_STASH_STORAGE_KEY,
   MAX_STASH_ENTRY_ATTACHMENT_CHARS,
-  makePersistedStashAttachment,
   partitionStashAttachments,
   usePromptStashStore,
   writePromptStashStorageForTest,
@@ -43,23 +42,6 @@ function resetPromptStashStore() {
   writePromptStashStorageForTest("");
   removeLocalStorageItem(PROMPT_STASH_STORAGE_KEY);
 }
-
-describe("makePersistedStashAttachment", () => {
-  it("keeps window capture metadata", () => {
-    const source = {
-      kind: "window-capture" as const,
-      capturedAt: "2026-08-25T12:00:00.000Z",
-      appName: "Terminal",
-      windowTitle: "t3code",
-    };
-    const attachment = makePersistedStashAttachment(
-      { id: "capture", name: "window.png", source },
-      { mimeType: "image/png", sizeBytes: 100, dataUrl: "data:image/png;base64,AA==" },
-    );
-
-    expect(attachment.source).toEqual(source);
-  });
-});
 
 describe("partitionStashAttachments", () => {
   it("keeps attachments within the budget and reports dropped names in order", () => {

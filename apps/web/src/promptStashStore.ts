@@ -1,10 +1,7 @@
 import * as Schema from "effect/Schema";
 import { create } from "zustand";
 
-import {
-  PersistedComposerImageAttachment,
-  type ComposerImageAttachment,
-} from "./composerDraftStore";
+import { PersistedComposerImageAttachment } from "./composerDraftStore";
 import { createMemoryStorage, type StateStorage } from "./lib/storage";
 
 export const PROMPT_STASH_STORAGE_KEY = "t3code:prompt-stash:v2";
@@ -28,18 +25,6 @@ export const MAX_STASH_ENTRIES = 20;
  * pair survives intact.
  */
 export const MAX_STASH_ENTRY_ATTACHMENT_CHARS = 2_700_000;
-
-export function makePersistedStashAttachment(
-  image: Pick<ComposerImageAttachment, "id" | "name" | "source">,
-  compressed: Pick<PersistedComposerImageAttachment, "mimeType" | "sizeBytes" | "dataUrl">,
-): PersistedComposerImageAttachment {
-  return {
-    id: image.id,
-    name: image.name,
-    ...compressed,
-    ...(image.source ? { source: image.source } : {}),
-  };
-}
 
 /**
  * A stashed prompt carries only what every provider can accept: text and

@@ -14,39 +14,22 @@ import {
   hideAndWaitForBlur,
   isPortalWindowSourceName,
   isWaylandSession,
-  shouldRequestScreenCapturePermission,
   updateModifierPair,
   windowCaptureShortcutRegistrationFailureMessage,
   windowCaptureShortcutSystemConflict,
   toElectronAccelerator,
 } from "./windowCapture.ts";
-import {
-  DesktopWindowCaptureDisabledError,
-  DesktopWindowCaptureFailedError,
-  DesktopWindowCaptureNoWindowSelectedError,
-  DesktopWindowCaptureUnsupportedError,
-  DesktopWindowCaptureWindowUnavailableError,
-} from "./DesktopWindowCapture.ts";
+import { DesktopWindowCaptureError } from "./DesktopWindowCapture.ts";
 
 describe("window capture errors", () => {
-  it("keeps each user-facing capture failure distinct", () => {
-    const captureId = "capture-id";
-    expect(new DesktopWindowCaptureUnsupportedError({ captureId }).message).toBe(
-      "Window capture is not supported here.",
-    );
-    expect(new DesktopWindowCaptureDisabledError().message).toBe(
-      "Enable Window Capture in Settings first.",
-    );
-    expect(new DesktopWindowCaptureNoWindowSelectedError({ captureId }).message).toBe(
-      "No window was selected.",
-    );
-    expect(new DesktopWindowCaptureWindowUnavailableError({ captureId }).message).toBe(
-      "The active window is not available for capture.",
-    );
-    expect(
-      new DesktopWindowCaptureFailedError({ captureId, cause: new Error("native failure") })
-        .message,
-    ).toBe("Could not capture the active window.");
+  it.each([
+    ["unsupported", "Window capture is not supported here."],
+    ["disabled", "Enable Window Capture in Settings first."],
+    ["no-window-selected", "No window was selected."],
+    ["window-unavailable", "The active window is not available for capture."],
+    ["capture", "Could not capture the active window."],
+  ] as const)("keeps %s failures user-facing", (operation, message) => {
+    expect(new DesktopWindowCaptureError({ operation }).message).toBe(message);
   });
 });
 
@@ -376,16 +359,6 @@ describe("isWaylandSession", () => {
   );
 });
 
-describe("shouldRequestScreenCapturePermission", () => {
-  it.each([
-    ["darwin", false, true, true],
-    ["darwin", true, true, false],
-    ["darwin", true, false, false],
-    ["win32", false, true, false],
-  ] as const)("returns %s %s → %s as %s", (platform, previous, enabled, expected) => {
-    expect(shouldRequestScreenCapturePermission(platform, previous, enabled)).toBe(expected);
-  });
-});
 describe("modifier pairs", () => {
   it("fires once when both physical Shift keys are held", () => {
     const pair = UIOHOOK_MODIFIER_KEYCODES.shift;

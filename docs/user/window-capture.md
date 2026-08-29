@@ -14,8 +14,7 @@ Super key can also open the system's own menu, so prefer another modifier there.
 keybindings and asks the operating system whether the shortcut is already reserved before it lets
 you save. On Wayland, the system confirms the shortcut when you turn Window Capture on.
 
-You can also use **Capture window** from the command palette or the **Capture now** button on the
-settings page.
+You can also use **Capture window** from the command palette.
 
 ## Platform behavior
 
