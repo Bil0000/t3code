@@ -22,6 +22,27 @@ import { stackedThreadToast, toastManager } from "../ui/toast";
 
 type CaptureTarget = DraftId | ScopedThreadRef;
 
+export function resolveExistingWindowCaptureTarget(
+  target: CaptureTarget,
+  routeThreadRef: ScopedThreadRef | null,
+): CaptureTarget | null {
+  const store = useComposerDraftStore.getState();
+  if (typeof target === "string") {
+    const draftSession = store.getDraftSession(target);
+    if (draftSession?.promotedTo) return draftSession.promotedTo;
+    return draftSession ? target : null;
+  }
+  const targetIsCurrentRoute =
+    routeThreadRef !== null &&
+    routeThreadRef.environmentId === target.environmentId &&
+    routeThreadRef.threadId === target.threadId;
+  return targetIsCurrentRoute ||
+    store.getDraftSessionByRef(target) !== null ||
+    readThreadShell(target) !== null
+    ? target
+    : null;
+}
+
 export function WindowCaptureCoordinator() {
   const {
     activeDraftThread,
@@ -43,12 +64,11 @@ export function WindowCaptureCoordinator() {
   const resolveTarget = useCallback(async (): Promise<CaptureTarget | null> => {
     const lastTarget = lastTargetRef.current;
     if (lastTarget) {
-      const store = useComposerDraftStore.getState();
-      const targetExists =
-        typeof lastTarget === "string"
-          ? store.getDraftSession(lastTarget) !== null
-          : store.getDraftSessionByRef(lastTarget) !== null || readThreadShell(lastTarget) !== null;
-      if (targetExists) return lastTarget;
+      const existingTarget = resolveExistingWindowCaptureTarget(lastTarget, routeThreadRef);
+      if (existingTarget) {
+        lastTargetRef.current = existingTarget;
+        return existingTarget;
+      }
       lastTargetRef.current = null;
     }
     const projectRef = resolveThreadActionProjectRef({
@@ -62,7 +82,7 @@ export function WindowCaptureCoordinator() {
     if (!created) return null;
     lastTargetRef.current = created.draftId;
     return created.draftId;
-  }, [activeDraftThread, activeThread, defaultProjectRef, handleNewThread]);
+  }, [activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef]);
 
   const drain = useCallback(async () => {
     const bridge = getDesktopWindowCaptureBridge();
