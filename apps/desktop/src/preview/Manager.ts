@@ -2623,20 +2623,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       },
       () => image.toJPEG(RECORDING_JPEG_QUALITY),
     );
-    const frameConsumers = yield* SynchronizedRef.modify(frameCaptureSessionsRef, (sessions) => {
-      const current = sessions.get(tabId);
-      if (current?.scope !== captureSession.scope) {
-        return [undefined, sessions] as const;
-      }
-      const recording = current.consumers.has("recording");
-      const pictureInPicture =
-        current.consumers.has("picture-in-picture") &&
-        current.lastPictureInPictureFrame?.equals(encoded) !== true;
-      return recording || pictureInPicture
-        ? [{ pictureInPicture, recording, session: current }, sessions]
-        : [undefined, sessions];
-    });
-    if (!frameConsumers) return;
+    const frameSession = (yield* SynchronizedRef.get(frameCaptureSessionsRef)).get(tabId);
+    if (frameSession?.scope !== captureSession.scope) return;
+    const recording = frameSession.consumers.has("recording");
+    const pictureInPicture =
+      frameSession.consumers.has("picture-in-picture") &&
+      frameSession.lastPictureInPictureFrame?.equals(encoded) !== true;
+    if (!recording && !pictureInPicture) return;
     const receivedAt = yield* currentIso;
     const frame: DesktopPreviewRecordingFrame = {
       tabId,
@@ -2646,7 +2639,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       receivedAt,
     };
     const deliveries: Array<Effect.Effect<void>> = [];
-    if (frameConsumers.recording) {
+    if (recording) {
       const listeners = yield* Ref.get(recordingFrameListenersRef);
       deliveries.push(
         Effect.forEach(
@@ -2656,7 +2649,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         ),
       );
     }
-    if (frameConsumers.pictureInPicture) {
+    if (pictureInPicture) {
       const pictureInPictureWindow = (yield* SynchronizedRef.get(pictureInPictureSessionsRef)).get(
         tabId,
       )?.window;
@@ -2707,10 +2700,10 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               },
             );
             yield* SynchronizedRef.update(frameCaptureSessionsRef, (sessions) => {
-              if (sessions.get(tabId) !== frameConsumers.session) return sessions;
+              if (sessions.get(tabId) !== frameSession) return sessions;
               return replaceMap(sessions, (copy) => {
                 copy.set(tabId, {
-                  ...frameConsumers.session,
+                  ...frameSession,
                   lastPictureInPictureFrame: encoded,
                 });
               });
