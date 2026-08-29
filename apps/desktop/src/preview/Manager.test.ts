@@ -335,6 +335,15 @@ const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () 
   const webContentsListeners = new Map<string, () => void>();
   const send = vi.fn();
   let destroyed = false;
+  const webContents = {
+    on: vi.fn((event: string, listener: () => void) => {
+      webContentsListeners.set(event, listener);
+    }),
+    off: vi.fn((event: string) => {
+      webContentsListeners.delete(event);
+    }),
+    send,
+  };
   const pictureInPictureWindow = {
     isDestroyed: vi.fn(() => destroyed),
     once: vi.fn((event: string, listener: () => void) => {
@@ -354,14 +363,9 @@ const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () 
       destroyed = true;
       listeners.get("closed")?.();
     }),
-    webContents: {
-      on: vi.fn((event: string, listener: () => void) => {
-        webContentsListeners.set(event, listener);
-      }),
-      off: vi.fn((event: string) => {
-        webContentsListeners.delete(event);
-      }),
-      send,
+    get webContents() {
+      if (destroyed) throw new Error("Picture-in-picture window is closed.");
+      return webContents;
     },
   };
   return { pictureInPictureWindow, send, webContentsListeners };
@@ -2556,6 +2560,40 @@ describe("PreviewManager", () => {
         expect(send).toHaveBeenCalledOnce();
         yield* manager.closePictureInPicture("tab_recording_then_pip");
         yield* manager.stopRecording("tab_recording_then_pip");
+      }),
+    ),
+  );
+
+  effectIt.effect("stops frame capture when the native picture-in-picture window closes", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const capturePage = vi.fn(async () => ({
+          toJPEG: () => Buffer.from("native-close-preview-frame"),
+          getSize: () => ({ width: 1280, height: 720 }),
+        }));
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
+        const { pictureInPictureWindow } = makeTestPictureInPictureWindow();
+        browserWindowConstructor.mockImplementation(function () {
+          return pictureInPictureWindow;
+        });
+        const states: PreviewManager.PreviewTabState[] = [];
+        yield* manager.subscribeStateChanges((_tabId, state) =>
+          Effect.sync(() => {
+            states.push(state);
+          }),
+        );
+
+        yield* manager.createTab("tab_native_pip_close");
+        yield* manager.registerWebview("tab_native_pip_close", 42);
+        yield* manager.openPictureInPicture("tab_native_pip_close");
+
+        pictureInPictureWindow.close();
+        yield* settle(() => states.at(-1)?.pictureInPicture === false);
+
+        expect(states.at(-1)?.pictureInPicture).toBe(false);
+        const capturesAfterClose = capturePage.mock.calls.length;
+        yield* TestClock.adjust(200);
+        expect(capturePage).toHaveBeenCalledTimes(capturesAfterClose);
       }),
     ),
   );

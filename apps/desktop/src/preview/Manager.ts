@@ -2941,6 +2941,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             }),
           );
         };
+        const pipWebContents = pictureInPictureWindow.webContents;
         yield* attempt(
           {
             operation: "pictureInPicture.configure",
@@ -2961,7 +2962,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                 skipTransformProcessType: true,
               });
             }
-            pictureInPictureWindow.webContents.on("did-finish-load", onDidFinishLoad);
+            pipWebContents.on("did-finish-load", onDidFinishLoad);
           },
         ).pipe(
           Effect.onError(() =>
@@ -2979,7 +2980,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         yield* Scope.addFinalizer(
           initializationScope,
           Effect.sync(() => {
-            pictureInPictureWindow.webContents.off("did-finish-load", onDidFinishLoad);
+            pipWebContents.off("did-finish-load", onDidFinishLoad);
           }).pipe(Effect.ignore),
         );
         yield* SynchronizedRef.update(pictureInPictureSessionsRef, (sessions) =>
