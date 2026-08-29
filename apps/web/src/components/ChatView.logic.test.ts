@@ -59,6 +59,8 @@ describe("shoulderTabReserve", () => {
     } as HTMLElement;
 
     expect(shoulderTabReserve(overlay)).toBe(28);
+    elements.set(".chat-composer-tasks-tab", elementAt(100));
+    expect(shoulderTabReserve(overlay)).toBe(0);
   });
 });
 

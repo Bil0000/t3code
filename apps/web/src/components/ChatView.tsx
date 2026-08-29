@@ -4450,8 +4450,6 @@ function ChatViewContent(props: ChatViewProps) {
     activeComposerTasksProgress && activePlan && activePlan.turnId === activeLatestTurn?.turnId
       ? activePlan.steps
       : null;
-  const hasWideShoulderTab =
-    activeComposerTasksProgress !== null && activeComposerTaskSteps !== null;
 
   useLayoutEffect(() => {
     if (!composerOverlayElement) return;
@@ -4462,9 +4460,7 @@ function ChatViewContent(props: ChatViewProps) {
       setComposerOverlayHeight((currentHeight) =>
         currentHeight === nextHeight ? currentHeight : nextHeight,
       );
-      const nextClearance = hasWideShoulderTab
-        ? nextHeight
-        : Math.max(0, nextHeight - shoulderTabReserve(composerOverlayElement));
+      const nextClearance = Math.max(0, nextHeight - shoulderTabReserve(composerOverlayElement));
       setScrollToEndClearance((currentClearance) =>
         currentClearance === nextClearance ? currentClearance : nextClearance,
       );
@@ -4476,7 +4472,7 @@ function ChatViewContent(props: ChatViewProps) {
     const observer = new ResizeObserver(updateHeight);
     observer.observe(composerOverlayElement);
     return () => observer.disconnect();
-  }, [composerOverlayElement, hasWideShoulderTab]);
+  }, [composerOverlayElement]);
 
   const autoSettleAfterDays = useClientSettings((settings) => settings.sidebarAutoSettleAfterDays);
   const autoSettleOnMerge = useClientSettings((settings) => settings.sidebarAutoSettleOnMerge);
