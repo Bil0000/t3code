@@ -444,9 +444,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
   const rows = useStableRows(rawRows);
   const minimapItems = useMemo(() => deriveTimelineMinimapItems(rows), [rows]);
+  const stickyStatusRow = isWorking
+    ? rows.find((row) => row.kind === "working")
+    : rows.find((row) => row.kind === "turn-fold" && row.turnId === latestTurn?.turnId);
   const [timelineViewportElement, setTimelineViewportElement] = useState<HTMLDivElement | null>(
     null,
   );
+  const [statusRowPinned, setStatusRowPinned] = useState(false);
   const [minimapHasPersistentGutter, setMinimapHasPersistentGutter] = useState(false);
   const [minimapHitStripWidth, setMinimapHitStripWidth] = useState(0);
   const handleAnchorReady = useCallback(
@@ -470,11 +474,18 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     if (isAtEnd !== undefined) {
       onIsAtEndChange(isAtEnd);
     }
-    if (!state || minimapItems.length === 0) {
+    if (!state) {
       return;
     }
 
     const scrollTop = state.scroll ?? 0;
+    setStatusRowPinned(
+      stickyStatusRow !== undefined && resolveTimelineStatusRowPinned(state, stickyStatusRow.id),
+    );
+    if (minimapItems.length === 0) {
+      return;
+    }
+
     const scrollBottom = scrollTop + (state.scrollLength ?? 0);
 
     for (const item of minimapItems) {
@@ -492,7 +503,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
       strip.dataset.inView = inView ? "true" : "false";
     }
-  }, [contentInsetEndAdjustment, listRef, minimapItems, minimapStripMap, onIsAtEndChange]);
+  }, [
+    contentInsetEndAdjustment,
+    listRef,
+    minimapItems,
+    minimapStripMap,
+    onIsAtEndChange,
+    stickyStatusRow,
+  ]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(handleScroll);
@@ -633,6 +651,19 @@ export const MessagesTimeline = memo(function MessagesTimeline({
             }
             ListFooterComponent={TIMELINE_LIST_FOOTER}
           />
+          {statusRowPinned && stickyStatusRow ? (
+            <div
+              className="pointer-events-none absolute inset-x-0 top-0 z-30 px-3 sm:px-5"
+              data-turn-status-row-pinned="true"
+            >
+              <div
+                aria-hidden
+                className="mx-auto w-full min-w-0 max-w-3xl overflow-x-clip bg-background"
+              >
+                <TimelineRowContent row={stickyStatusRow} />
+              </div>
+            </div>
+          ) : null}
           <TimelineMinimap
             items={minimapItems}
             hasPersistentGutter={minimapHasPersistentGutter}
@@ -670,6 +701,7 @@ interface TimelineMinimapItem {
 
 interface TimelinePositionState {
   readonly contentLength?: number;
+  readonly positionByKey?: (key: string) => number | undefined;
   readonly scroll?: number;
   readonly scrollLength?: number;
   readonly positionAtIndex?: (index: number) => number | undefined;
@@ -724,6 +756,11 @@ function compactMinimapPreview(text: string | null | undefined) {
 function resolveTimelineRowTop(state: TimelinePositionState, rowIndex: number) {
   const top = state.positionAtIndex?.(rowIndex);
   return typeof top === "number" && Number.isFinite(top) ? top : null;
+}
+
+export function resolveTimelineStatusRowPinned(state: TimelinePositionState, rowKey: string) {
+  const rowTop = state.positionByKey?.(rowKey);
+  return typeof rowTop === "number" && Number.isFinite(rowTop) && rowTop <= (state.scroll ?? 0);
 }
 
 function resolveTimelineRowHeight(state: TimelinePositionState, rowIndex: number) {
@@ -971,6 +1008,7 @@ const TimelineRowContent = memo(function TimelineRowContent({ row }: { row: Time
                   row.kind === "turn-plan"
                 ? "pb-2"
                 : "pb-4",
+        row.kind === "turn-fold" || row.kind === "working" ? "bg-background" : null,
         row.kind === "message" && row.message.role === "assistant" ? "group/assistant" : null,
       )}
       data-timeline-row-id={row.id}

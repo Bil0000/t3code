@@ -135,6 +135,7 @@ function matchMedia() {
 }
 
 let MessagesTimeline: typeof import("./MessagesTimeline").MessagesTimeline;
+let resolveTimelineStatusRowPinned: typeof import("./MessagesTimeline").resolveTimelineStatusRowPinned;
 
 beforeAll(async () => {
   const classList = {
@@ -168,7 +169,7 @@ beforeAll(async () => {
     },
   });
 
-  ({ MessagesTimeline } = await import("./MessagesTimeline"));
+  ({ MessagesTimeline, resolveTimelineStatusRowPinned } = await import("./MessagesTimeline"));
 }, 30_000);
 
 const ACTIVE_THREAD_ENVIRONMENT_ID = EnvironmentId.make("environment-local");
@@ -328,6 +329,19 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain("Worked for 8.0s");
     expect(markup).toContain("px-1 text-sm leading-relaxed text-muted-foreground");
+  });
+
+  it("pins a keyed status row when later rows follow it", () => {
+    const state = {
+      scroll: 100,
+      positionByKey: (key: string) => (key === "working-indicator-row" ? 100 : undefined),
+    };
+
+    expect(resolveTimelineStatusRowPinned(state, "working-indicator-row")).toBe(true);
+    expect(resolveTimelineStatusRowPinned({ ...state, scroll: 99 }, "working-indicator-row")).toBe(
+      false,
+    );
+    expect(resolveTimelineStatusRowPinned({ scroll: 100 }, "working-indicator-row")).toBe(false);
   });
 
   it("uses the larger leading inset only when the top fade is enabled", () => {
