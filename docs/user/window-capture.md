@@ -40,4 +40,5 @@ separately. Use **Test sound** to hear the capture sound. Turn off animations to
 motion. The operating system's reduced-motion setting also disables the attachment animation.
 
 Pending captures stay on disk until the image is saved in the draft. If T3 Code closes during that
-step, it retries the capture the next time the desktop app starts.
+step, it retries the capture the next time the desktop app starts. Captures rejected because the
+image is too large are deleted and cannot be retried.
