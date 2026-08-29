@@ -678,11 +678,24 @@ describe("ProviderCommandReactor", () => {
     }),
   );
 
-  it("generates a thread title on the first turn", async () => {
+  it("retries thread title generation after a transient failure", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
     const seededTitle = "Please investigate reconnect failures after restar...";
-    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Generated title" }));
+    let attempts = 0;
+    harness.generateThreadTitle.mockReturnValue(
+      Effect.suspend(() => {
+        attempts += 1;
+        return attempts === 1
+          ? Effect.fail(
+              new TextGenerationError({
+                operation: "generateThreadTitle",
+                detail: "Claude CLI request timed out.",
+              }),
+            )
+          : Effect.succeed({ title: "Generated title" });
+      }),
+    );
 
     await Effect.runPromise(
       harness.engine.dispatch({
@@ -726,63 +739,8 @@ describe("ProviderCommandReactor", () => {
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
     expect(thread?.title).toBe("Generated title");
+    expect(attempts).toBe(2);
   });
-
-  effectIt.effect("retries thread title generation after a transient failure", () =>
-    Effect.gen(function* () {
-      const harness = yield* Effect.promise(() => createHarness());
-      const now = "2026-01-01T00:00:00.000Z";
-      const seededTitle = "Please investigate reconnect failures after restar...";
-      let attempts = 0;
-      harness.generateThreadTitle.mockReturnValue(
-        Effect.suspend(() => {
-          attempts += 1;
-          return attempts === 1
-            ? Effect.fail(
-                new TextGenerationError({
-                  operation: "generateThreadTitle",
-                  detail: "Claude CLI request timed out.",
-                }),
-              )
-            : Effect.succeed({ title: "Generated title" });
-        }),
-      );
-
-      yield* harness.engine.dispatch({
-        type: "thread.meta.update",
-        commandId: CommandId.make("cmd-thread-title-retry-seed"),
-        threadId: ThreadId.make("thread-1"),
-        title: seededTitle,
-      });
-
-      yield* harness.engine.dispatch({
-        type: "thread.turn.start",
-        commandId: CommandId.make("cmd-turn-start-title-retry"),
-        threadId: ThreadId.make("thread-1"),
-        message: {
-          messageId: asMessageId("user-message-title-retry"),
-          role: "user",
-          text: "Please investigate reconnect failures after restarting the session.",
-          attachments: [],
-        },
-        titleSeed: seededTitle,
-        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
-        runtimeMode: "approval-required",
-        createdAt: now,
-      });
-
-      yield* Effect.promise(() =>
-        waitFor(async () => {
-          const readModel = await harness.readModel();
-          return (
-            readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"))?.title ===
-            "Generated title"
-          );
-        }),
-      );
-      expect(attempts).toBe(2);
-    }),
-  );
 
   it("regenerates a thread title from the current conversation", async () => {
     const harness = await createHarness();

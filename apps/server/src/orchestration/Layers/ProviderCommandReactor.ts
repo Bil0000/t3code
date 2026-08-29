@@ -95,8 +95,6 @@ const HANDLED_TURN_START_KEY_MAX = 10_000;
 const HANDLED_TURN_START_KEY_TTL = Duration.minutes(30);
 const DEFAULT_RUNTIME_MODE: RuntimeMode = "full-access";
 const MAX_REGENERATION_ATTACHMENTS = 4;
-const THREAD_TITLE_GENERATION_RETRIES = 2;
-const THREAD_TITLE_RETRY_DELAY = Duration.seconds(2);
 const MAX_THREAD_TITLE_CONTEXT_CHARS = 8_000;
 const MAX_FIRST_USER_TITLE_CONTEXT_CHARS = 2_000;
 const THREAD_TITLE_CONTEXT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
@@ -917,8 +915,8 @@ const make = Effect.gen(function* () {
           })
           .pipe(
             Effect.retry({
-              times: THREAD_TITLE_GENERATION_RETRIES,
-              schedule: Schedule.exponential(THREAD_TITLE_RETRY_DELAY),
+              times: 2,
+              schedule: Schedule.exponential("2 seconds"),
             }),
           );
         if (!generated) return;
