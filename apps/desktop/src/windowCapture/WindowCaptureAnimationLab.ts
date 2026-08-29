@@ -174,9 +174,14 @@ async function run(): Promise<void> {
 
   const thumbnail = await source.webContents.capturePage();
   const sourceBounds = source.getContentBounds();
-  const transition = new WindowCaptureTransition(useWorkArea);
+  // oxlint-disable-next-line t3code/no-global-process-runtime -- Disposable Electron visual-test entrypoint has no Effect runtime.
+  const boundOverlayToFlight = process.platform === "win32";
+  const transition = new WindowCaptureTransition({
+    boundOverlayToFlight,
+    useWorkArea,
+  });
   const id = "00000000-0000-4000-8000-000000000001";
-  await transition.begin(id, sourceBounds, thumbnail, true, false);
+  await transition.begin(id, sourceBounds, thumbnail.toDataURL(), true, false);
 
   const targetFrame = (await target.webContents.executeJavaScript(`(() => {
     const frame=document.getElementById("slot").getBoundingClientRect();
@@ -189,10 +194,11 @@ async function run(): Promise<void> {
     readonly screen: Electron.Rectangle;
   };
   const targetBounds = target.getBounds();
+  const targetContentBounds = target.getContentBounds();
   const zoomFactor = target.webContents.getZoomFactor();
   const destination = {
-    x: targetBounds.x + targetFrame.viewport.x * zoomFactor,
-    y: targetBounds.y + targetFrame.viewport.y * zoomFactor,
+    x: targetContentBounds.x + targetFrame.viewport.x * zoomFactor,
+    y: targetContentBounds.y + targetFrame.viewport.y * zoomFactor,
     width: targetFrame.viewport.width * zoomFactor,
     height: targetFrame.viewport.height * zoomFactor,
   };
@@ -271,7 +277,7 @@ async function run(): Promise<void> {
     overlayBounds,
     sourceBounds,
     targetWindowBounds: targetBounds,
-    targetContentBounds: target.getContentBounds(),
+    targetContentBounds,
     targetFrame,
     destination,
     trace,

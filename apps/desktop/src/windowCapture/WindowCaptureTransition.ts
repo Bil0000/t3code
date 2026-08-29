@@ -2,12 +2,19 @@
 import * as Electron from "electron";
 
 import type { WindowCaptureAnimationTrace } from "./WindowCaptureAnimationAnalysis.ts";
-import { windowCaptureSpring } from "./WindowCaptureSpring.ts";
+import { windowCaptureSpring, type WindowCaptureSpring } from "./WindowCaptureSpring.ts";
 
 const CAPTURE_TRANSITION_FLASH_DURATION_MS = 300;
 const CAPTURE_TRANSITION_TIMEOUT_MS = 6_000;
 const CAPTURE_TRANSITION_SOURCE_CORNER_RADIUS = 12;
 const CAPTURE_TRANSITION_ACCESSORY_FADE_DURATION_MS = 125;
+const CAPTURE_TRANSITION_SHADOW_MARGIN = 72;
+
+type WindowCaptureAnimationDetails = {
+  readonly appName: string;
+  readonly windowTitle: string;
+  readonly appIconDataUrl?: string | undefined;
+};
 
 export type WindowCaptureAnimationDestination = {
   readonly frame: Electron.Rectangle;
@@ -18,23 +25,25 @@ export type WindowCaptureAnimationDestination = {
   readonly scaleFactor: number;
   readonly probeColor?: string | undefined;
   readonly traceSamples?: boolean | undefined;
-  readonly details?:
-    | {
-        readonly appName: string;
-        readonly windowTitle: string;
-        readonly appIconDataUrl?: string | undefined;
-      }
-    | undefined;
+  readonly details?: WindowCaptureAnimationDetails | undefined;
 };
 
 type ActiveWindowCaptureTransition = {
   readonly id: string;
-  readonly overlayBounds: Electron.Rectangle;
   readonly sourceFrame: Electron.Rectangle;
+  readonly flash: boolean;
   readonly window: Electron.BrowserWindow;
+  overlayBounds: Electron.Rectangle;
+  details: WindowCaptureAnimationDetails | undefined;
+  startFlashWhenReady: boolean;
   closeTimer: ReturnType<typeof setTimeout> | undefined;
   flight: Promise<WindowCaptureAnimationTrace | undefined> | undefined;
   trace: WindowCaptureAnimationTrace | undefined;
+};
+
+type WindowCaptureTransitionOptions = {
+  readonly boundOverlayToFlight?: boolean | undefined;
+  readonly useWorkArea?: boolean | undefined;
 };
 
 export function windowCaptureAnimationOverlayBounds(
@@ -58,6 +67,82 @@ export function windowCaptureAnimationOverlayBounds(
     bottom = Math.max(bottom, bounds.y + bounds.height);
   }
   return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+export function windowCaptureAnimationFlightBounds(
+  source: Electron.Rectangle,
+  target: Electron.Rectangle,
+  samples: WindowCaptureSpring["samples"],
+  margin = CAPTURE_TRANSITION_SHADOW_MARGIN,
+): Electron.Rectangle {
+  const sourceCenter = { x: source.x + source.width / 2, y: source.y + source.height / 2 };
+  const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+  let left = source.x;
+  let top = source.y;
+  let right = source.x + source.width;
+  let bottom = source.y + source.height;
+
+  for (const { progress } of samples) {
+    const width = Math.max(1, source.width + (target.width - source.width) * progress);
+    const height = Math.max(1, source.height + (target.height - source.height) * progress);
+    const centerX = sourceCenter.x + (targetCenter.x - sourceCenter.x) * progress;
+    const centerY = sourceCenter.y + (targetCenter.y - sourceCenter.y) * progress;
+    left = Math.min(left, centerX - width / 2);
+    top = Math.min(top, centerY - height / 2);
+    right = Math.max(right, centerX + width / 2);
+    bottom = Math.max(bottom, centerY + height / 2);
+  }
+
+  const safeMargin = Math.max(0, margin);
+  const x = Math.floor(left - safeMargin);
+  const y = Math.floor(top - safeMargin);
+  return {
+    x,
+    y,
+    width: Math.max(1, Math.ceil(right + safeMargin) - x),
+    height: Math.max(1, Math.ceil(bottom + safeMargin) - y),
+  };
+}
+
+function createCaptureTransitionWindow(bounds: Electron.Rectangle): Electron.BrowserWindow {
+  const window = new Electron.BrowserWindow({
+    ...bounds,
+    alwaysOnTop: true,
+    backgroundColor: "#00000000",
+    focusable: false,
+    frame: false,
+    hasShadow: false,
+    resizable: false,
+    show: false,
+    skipTaskbar: true,
+    title: "T3 Code Window Capture Animation",
+    transparent: true,
+    webPreferences: {
+      backgroundThrottling: false,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  window.setIgnoreMouseEvents(true);
+  return window;
+}
+
+async function loadCaptureTransitionWindow(
+  window: Electron.BrowserWindow,
+  overlayBounds: Electron.Rectangle,
+  sourceBounds: Electron.Rectangle,
+  snapshotDataUrl: string,
+  flash: boolean,
+): Promise<void> {
+  await window.loadURL(
+    "data:text/html;charset=utf-8," +
+      encodeURIComponent(captureTransitionHtml({ flash, overlayBounds, sourceBounds })),
+  );
+  if (window.isDestroyed()) return;
+  await window.webContents.executeJavaScript(
+    `window.setCaptureSnapshot(${JSON.stringify(snapshotDataUrl)})`,
+  );
 }
 
 function captureTransitionHtml({
@@ -109,6 +194,13 @@ const appName=document.getElementById("app-name");
 const windowTitle=document.getElementById("window-title");
 const borderLayer=document.getElementById("border");
 const probe=document.getElementById("probe");
+window.rebaseCaptureSource=(nextSource)=>{
+  Object.assign(source,nextSource);
+  card.style.left=source.x+"px";
+  card.style.top=source.y+"px";
+  card.style.width=source.width+"px";
+  card.style.height=source.height+"px";
+};
 const applyDetails=(details)=>{
   if(!details) return;
   detailsLayer.dataset.ready="";
@@ -277,128 +369,155 @@ window.startCaptureTransition=async(destination)=>{
 
 export class WindowCaptureTransition {
   private active: ActiveWindowCaptureTransition | undefined;
+  private readonly boundOverlayToFlight: boolean;
   private readonly useWorkArea: boolean;
 
-  constructor(useWorkArea = false) {
-    this.useWorkArea = useWorkArea;
+  constructor(options: WindowCaptureTransitionOptions = {}) {
+    this.boundOverlayToFlight = options.boundOverlayToFlight ?? false;
+    this.useWorkArea = options.useWorkArea ?? false;
   }
 
   async begin(
     id: string,
     sourceBounds: Electron.Rectangle,
-    thumbnail: Electron.NativeImage,
+    snapshotDataUrl: string,
     flash: boolean,
     startFlash = true,
   ): Promise<void> {
     this.dispose();
-    const requestedOverlayBounds = windowCaptureAnimationOverlayBounds(
-      Electron.screen.getAllDisplays(),
-      this.useWorkArea,
-    );
-    const window = new Electron.BrowserWindow({
-      ...requestedOverlayBounds,
-      alwaysOnTop: true,
-      backgroundColor: "#00000000",
-      focusable: false,
-      frame: false,
-      hasShadow: false,
-      resizable: false,
-      show: false,
-      skipTaskbar: true,
-      title: "T3 Code Window Capture Animation",
-      transparent: true,
-      webPreferences: {
-        backgroundThrottling: false,
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-      },
-    });
+    const requestedOverlayBounds = this.boundOverlayToFlight
+      ? windowCaptureAnimationFlightBounds(sourceBounds, sourceBounds, [])
+      : windowCaptureAnimationOverlayBounds(Electron.screen.getAllDisplays(), this.useWorkArea);
+    const window = createCaptureTransitionWindow(requestedOverlayBounds);
     const overlayBounds = window.getBounds();
-    window.setIgnoreMouseEvents(true);
-    try {
-      await window.loadURL(
-        "data:text/html;charset=utf-8," +
-          encodeURIComponent(captureTransitionHtml({ flash, overlayBounds, sourceBounds })),
-      );
-      if (window.isDestroyed()) return;
-      await window.webContents.executeJavaScript(
-        `window.setCaptureSnapshot(${JSON.stringify(thumbnail.toDataURL())})`,
-      );
-      if (flash && startFlash) {
-        await window.webContents.executeJavaScript("window.prepareCaptureFlash()");
-      }
-    } catch (error) {
-      if (!window.isDestroyed()) window.destroy();
-      throw error;
-    }
-    if (window.isDestroyed()) return;
     const active: ActiveWindowCaptureTransition = {
       id,
-      overlayBounds,
       sourceFrame: sourceBounds,
+      flash,
       window,
+      overlayBounds,
+      details: undefined,
+      startFlashWhenReady: flash && startFlash,
       closeTimer: undefined,
       flight: undefined,
       trace: undefined,
     };
     this.active = active;
-    window.showInactive();
-    if (flash && startFlash) await this.startFlash(id);
     active.closeTimer = setTimeout(() => {
       if (this.active === active) this.dispose();
     }, CAPTURE_TRANSITION_TIMEOUT_MS);
+    try {
+      await loadCaptureTransitionWindow(
+        window,
+        overlayBounds,
+        sourceBounds,
+        snapshotDataUrl,
+        flash,
+      );
+      if (window.isDestroyed()) return;
+      if (!this.boundOverlayToFlight && flash && startFlash) {
+        await window.webContents.executeJavaScript("window.prepareCaptureFlash()");
+      }
+    } catch (error) {
+      if (this.active === active) this.dispose();
+      else if (!window.isDestroyed()) window.destroy();
+      throw error;
+    }
+    if (window.isDestroyed() || this.active !== active) return;
+    window.showInactive();
+    if (!this.boundOverlayToFlight && flash && startFlash) await this.startFlash(id);
   }
 
   async startFlash(id: string): Promise<void> {
     const active = this.active;
-    if (!active || active.id !== id || active.window.isDestroyed()) return;
-    await active.window.webContents.executeJavaScript("window.startCaptureFlash()").catch(() => {});
+    if (!active || active.id !== id || !active.flash) return;
+    active.startFlashWhenReady = true;
+    const window = active.window;
+    if (window.isDestroyed() || (this.boundOverlayToFlight && !active.flight)) return;
+    active.startFlashWhenReady = false;
+    await window.webContents.executeJavaScript("window.startCaptureFlash()").catch(() => {});
   }
 
   animateTo(id: string, destination: WindowCaptureAnimationDestination): void {
     const active = this.active;
-    if (!active || active.id !== id || active.window.isDestroyed()) return;
+    if (!active || active.id !== id) return;
+    if (destination.details) active.details = destination.details;
     if (active.flight) {
-      if (destination.details) {
-        void active.window.webContents
+      const window = active.window;
+      if (destination.details && !window.isDestroyed()) {
+        void window.webContents
           .executeJavaScript(`window.updateCaptureDetails(${JSON.stringify(destination.details)})`)
           .catch(() => undefined);
       }
       return;
     }
+    const spring = windowCaptureSpring(active.sourceFrame, destination.frame);
+    active.flight = Promise.resolve().then(() => this.runFlight(active, destination, spring));
+  }
+
+  private async runFlight(
+    active: ActiveWindowCaptureTransition,
+    destination: WindowCaptureAnimationDestination,
+    spring: WindowCaptureSpring,
+  ): Promise<WindowCaptureAnimationTrace | undefined> {
+    const window = active.window;
+    let overlayBounds = active.overlayBounds;
+    if (this.boundOverlayToFlight) {
+      const requestedBounds = windowCaptureAnimationFlightBounds(
+        active.sourceFrame,
+        destination.frame,
+        spring.samples,
+      );
+      const boundsChanged =
+        requestedBounds.x !== overlayBounds.x ||
+        requestedBounds.y !== overlayBounds.y ||
+        requestedBounds.width !== overlayBounds.width ||
+        requestedBounds.height !== overlayBounds.height;
+      if (boundsChanged) {
+        window.setBounds(requestedBounds, false);
+        overlayBounds = window.getBounds();
+        active.overlayBounds = overlayBounds;
+        const localSource = {
+          x: active.sourceFrame.x - overlayBounds.x,
+          y: active.sourceFrame.y - overlayBounds.y,
+          width: active.sourceFrame.width,
+          height: active.sourceFrame.height,
+        };
+        await window.webContents.executeJavaScript(
+          `window.rebaseCaptureSource(${JSON.stringify(localSource)})`,
+        );
+      }
+    }
+    if (window.isDestroyed() || this.active !== active) return;
+    if (active.startFlashWhenReady) await this.startFlash(active.id);
+
     const localFrame = {
-      x: destination.frame.x - active.overlayBounds.x,
-      y: destination.frame.y - active.overlayBounds.y,
+      x: destination.frame.x - overlayBounds.x,
+      y: destination.frame.y - overlayBounds.y,
       width: destination.frame.width,
       height: destination.frame.height,
     };
-    const spring = windowCaptureSpring(active.sourceFrame, destination.frame);
-    active.flight = Promise.resolve().then(async () => {
-      if (active.window.isDestroyed() || this.active !== active) return;
-      const result = (await active.window.webContents.executeJavaScript(
-        `window.startCaptureTransition(${JSON.stringify({
-          frame: localFrame,
-          backgroundColor: destination.backgroundColor,
-          borderColor: destination.borderColor,
-          borderWidth: Math.max(0, destination.borderWidth),
-          cornerRadius: Math.max(0, destination.cornerRadius),
-          scaleFactor: Math.max(0.1, destination.scaleFactor),
-          probeColor: destination.probeColor,
-          traceSamples: destination.traceSamples,
-          details: destination.details,
-          spring,
-        })}).catch((error)=>({captureTransitionError:String(error),stack:error&&error.stack}))`,
-      )) as
-        | WindowCaptureAnimationTrace
-        | { readonly captureTransitionError: string; readonly stack?: string | undefined };
-      if ("captureTransitionError" in result) {
-        throw new Error(result.stack ?? result.captureTransitionError);
-      }
-      const trace = result;
-      active.trace = trace;
-      return trace;
-    });
+    const result = (await window.webContents.executeJavaScript(
+      `window.startCaptureTransition(${JSON.stringify({
+        frame: localFrame,
+        backgroundColor: destination.backgroundColor,
+        borderColor: destination.borderColor,
+        borderWidth: Math.max(0, destination.borderWidth),
+        cornerRadius: Math.max(0, destination.cornerRadius),
+        scaleFactor: Math.max(0.1, destination.scaleFactor),
+        probeColor: destination.probeColor,
+        traceSamples: destination.traceSamples,
+        details: active.details,
+        spring,
+      })}).catch((error)=>({captureTransitionError:String(error),stack:error&&error.stack}))`,
+    )) as
+      | WindowCaptureAnimationTrace
+      | { readonly captureTransitionError: string; readonly stack?: string | undefined };
+    if ("captureTransitionError" in result) {
+      throw new Error(result.stack ?? result.captureTransitionError);
+    }
+    active.trace = result;
+    return result;
   }
 
   async complete(id: string): Promise<void> {

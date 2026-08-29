@@ -35,12 +35,12 @@ const ensureTrustedWindowCaptureSender = Effect.fn("desktop.ipc.windowCapture.en
 
 export function windowCaptureScreenFrame(
   viewportFrame: DesktopWindowCaptureAnimationDestination["viewportFrame"],
-  windowBounds: Electron.Rectangle,
+  contentBounds: Electron.Rectangle,
   zoomFactor: number,
 ): Electron.Rectangle {
   return {
-    x: windowBounds.x + viewportFrame.x * zoomFactor,
-    y: windowBounds.y + viewportFrame.y * zoomFactor,
+    x: contentBounds.x + viewportFrame.x * zoomFactor,
+    y: contentBounds.y + viewportFrame.y * zoomFactor,
     width: viewportFrame.width * zoomFactor,
     height: viewportFrame.height * zoomFactor,
   };
@@ -127,7 +127,7 @@ export const setWindowCaptureAnimationDestination = DesktopIpc.makeIpcMethod({
         {
           frame: windowCaptureScreenFrame(
             destination.viewportFrame,
-            window.getBounds(),
+            window.getContentBounds(),
             window.webContents.getZoomFactor(),
           ),
           backgroundColor: destination.backgroundColor,

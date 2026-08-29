@@ -16,7 +16,7 @@ import {
 } from "./windowCapture.ts";
 
 describe("window capture IPC", () => {
-  it("converts renderer viewport coordinates from the window origin using the window zoom", () => {
+  it("converts renderer viewport coordinates from the content origin using the window zoom", () => {
     assert.deepEqual(
       windowCaptureScreenFrame(
         { x: 12, y: 20, width: 208, height: 112 },
@@ -74,7 +74,7 @@ describe("window capture IPC", () => {
       assert.deepEqual(received, {
         id: "12345678-1234-1234-1234-123456789abc",
         destination: {
-          frame: { x: 115, y: 105, width: 260, height: 140 },
+          frame: { x: 115, y: 143, width: 260, height: 140 },
           backgroundColor: "rgb(20, 20, 20)",
           borderColor: "rgba(80, 80, 80, 0.8)",
           borderWidth: 1.25,

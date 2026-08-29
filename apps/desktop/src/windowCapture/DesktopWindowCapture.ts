@@ -44,6 +44,7 @@ import {
 
 export {
   WindowCaptureTransition,
+  windowCaptureAnimationFlightBounds,
   windowCaptureAnimationOverlayBounds,
 } from "./WindowCaptureTransition.ts";
 import {
@@ -162,9 +163,20 @@ export class DesktopWindowCapture extends Context.Service<
   }
 >()("@t3tools/desktop/windowCapture/DesktopWindowCapture") {}
 
+type WindowCaptureSystemAnimationSettings = Pick<
+  ReturnType<typeof Electron.systemPreferences.getAnimationSettings>,
+  "prefersReducedMotion" | "shouldRenderRichAnimation"
+>;
+
 function captureMode(platform: NodeJS.Platform): DesktopWindowCaptureState["mode"] {
   if (!["darwin", "linux", "win32"].includes(platform)) return "unavailable";
   return isWaylandSession(platform, process.env) ? "portal" : "direct";
+}
+
+export function shouldAnimateWindowCapture(
+  settings: WindowCaptureSystemAnimationSettings,
+): boolean {
+  return settings.shouldRenderRichAnimation && !settings.prefersReducedMotion;
 }
 
 export function windowCaptureThumbnailSize(active: ActiveWindow | undefined): Electron.Size {
@@ -384,13 +396,15 @@ async function captureSource({
           })
         : new DesktopWindowCaptureError({ operation: "window-unavailable", captureId });
     }
+    const png = source.thumbnail.toPNG();
     const animationStarted = await showCaptureFeedback(
       transition,
       flash,
       captureId,
-      source.thumbnail,
+      `data:image/png;base64,${png.toString("base64")}`,
       settings,
       active,
+      platform,
     );
     const contextPromise =
       mode === "portal"
@@ -404,7 +418,7 @@ async function captureSource({
               portalAppName: undefined,
             }))
           : Promise.resolve({ accessibleText: undefined, portalAppName: undefined });
-    return { source, active, contextPromise, animationStarted };
+    return { source, active, contextPromise, animationStarted, png };
   } finally {
     if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
   }
@@ -501,31 +515,47 @@ export class WindowCaptureFlash {
   }
 }
 
-export function windowCaptureFlashBounds(active: ActiveWindow | undefined): Electron.Rectangle {
-  return active?.bounds ?? Electron.screen.getPrimaryDisplay().bounds;
+export function windowCaptureFlashBounds(
+  active: ActiveWindow | undefined,
+  platform: NodeJS.Platform,
+): Electron.Rectangle {
+  if (!active) return Electron.screen.getPrimaryDisplay().bounds;
+  return platform === "win32"
+    ? Electron.screen.screenToDipRect(null, active.bounds)
+    : active.bounds;
 }
 
 async function showCaptureFeedback(
   transition: WindowCaptureTransition,
   flash: WindowCaptureFlash,
   captureId: string,
-  thumbnail: Electron.NativeImage,
+  snapshotDataUrl: string,
   settings: ClientSettings,
   active: ActiveWindow | undefined,
+  platform: NodeJS.Platform,
 ): Promise<boolean> {
-  const bounds = windowCaptureFlashBounds(active);
-  if (settings.windowCaptureAnimations) {
+  const bounds = windowCaptureFlashBounds(active, platform);
+  const animationsEnabled =
+    settings.windowCaptureAnimations &&
+    shouldAnimateWindowCapture(Electron.systemPreferences.getAnimationSettings());
+  if (animationsEnabled) {
     try {
-      await transition.begin(captureId, bounds, thumbnail, settings.windowCaptureFlash);
+      await transition.begin(
+        captureId,
+        bounds,
+        snapshotDataUrl,
+        settings.windowCaptureFlash && platform !== "win32",
+      );
+      if (settings.windowCaptureFlash && platform === "win32") {
+        await flash.showAnimated(bounds).catch(() => undefined);
+      }
       return true;
     } catch {
       transition.dispose();
     }
   }
   if (!settings.windowCaptureFlash) return false;
-  const playback = settings.windowCaptureAnimations
-    ? flash.showAnimated(bounds)
-    : flash.showStatic(bounds);
+  const playback = animationsEnabled ? flash.showAnimated(bounds) : flash.showStatic(bounds);
   await playback.catch(() => undefined);
   return false;
 }
@@ -591,7 +621,10 @@ export const make = Effect.gen(function* () {
   let shortcutSuppressed = false;
   let stopShiftShortcut: (() => void) | undefined;
   const flash = new WindowCaptureFlash(environment.platform);
-  const transition = new WindowCaptureTransition(environment.platform === "darwin");
+  const transition = new WindowCaptureTransition({
+    boundOverlayToFlight: environment.platform === "win32",
+    useWorkArea: environment.platform === "darwin",
+  });
 
   const startPairShortcutProcess = (
     modifier: WindowCaptureModifier,
@@ -640,7 +673,7 @@ export const make = Effect.gen(function* () {
 
     yield* Effect.gen(function* () {
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
-      const { source, active, contextPromise, animationStarted } = yield* Effect.tryPromise({
+      const { source, active, contextPromise, animationStarted, png } = yield* Effect.tryPromise({
         try: () =>
           captureSource({
             mode,
@@ -657,10 +690,6 @@ export const make = Effect.gen(function* () {
           .dispatchMenuAction(`window-capture-started:${id}`)
           .pipe(Effect.catch(() => Effect.void));
       }
-      const png = yield* Effect.try({
-        try: () => source.thumbnail.toPNG(),
-        catch: (cause) => captureFailure(cause, id),
-      });
       const { accessibleText, portalAppName } = yield* Effect.promise(() => contextPromise);
       const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
       const appIconDataUrl = yield* Effect.promise(() =>

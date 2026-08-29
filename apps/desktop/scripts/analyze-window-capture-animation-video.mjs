@@ -314,8 +314,11 @@ if (landingMaxScaleAfterMin < Math.min(0.995, landingMinScale + 0.02)) {
 if (!handoffPixelDifferenceResult) {
   issues.push("the native-to-DOM handoff markers were not detected");
 } else if (
-  handoffPixelDifferenceResult.meanChannelDifference > 4 ||
-  handoffPixelDifferenceResult.p95ChannelDifference > 20
+  // Windows rasterizes the transparent native window and opaque DOM card with
+  // slightly different text antialiasing. Keep the average below 2% and the
+  // 95th-percentile channel delta below 10% so geometry or content changes fail.
+  handoffPixelDifferenceResult.meanChannelDifference > 5 ||
+  handoffPixelDifferenceResult.p95ChannelDifference > 25
 ) {
   issues.push("the native card visibly changes when the DOM attachment takes over");
 }

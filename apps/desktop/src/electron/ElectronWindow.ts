@@ -1,4 +1,5 @@
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as Xa11y from "@crowecawcaw/xa11y";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -7,8 +8,11 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
+import * as NodeTimersPromises from "node:timers/promises";
 
 import * as Electron from "electron";
+
+const WINDOWS_FOREGROUND_PROMOTION_MS = 100;
 
 const ElectronWindowCreateOptions = Schema.Struct({
   title: Schema.NullOr(Schema.String),
@@ -210,25 +214,59 @@ export const make = Effect.gen(function* () {
         return Option.none();
       }),
     reveal: (window) =>
-      Effect.try({
-        try: () => {
+      Effect.tryPromise({
+        try: async () => {
           if (window.isDestroyed()) {
             return;
           }
 
-          if (window.isMinimized()) {
-            window.restore();
-          }
+          const promoteOnWindows = platform === "win32" && !window.isAlwaysOnTop();
+          let focusedNatively = false;
+          if (promoteOnWindows) window.setAlwaysOnTop(true);
+          try {
+            if (window.isMinimized()) {
+              window.restore();
+            }
 
-          if (!window.isVisible()) {
-            window.show();
-          }
+            if (platform === "win32") {
+              Electron.app.focus();
+            }
 
-          if (platform === "darwin") {
-            Electron.app.focus({ steal: true });
-          }
+            // On Windows, show() activates an already-visible window. focus()
+            // and moveTop() alone are blocked by foreground-lock rules in some
+            // remote-desktop sessions.
+            if (platform === "win32" || !window.isVisible()) {
+              window.show();
+            }
 
-          window.focus();
+            if (platform === "win32") {
+              window.moveTop();
+            }
+
+            if (platform === "darwin") {
+              Electron.app.focus({ steal: true });
+            }
+
+            window.focus();
+
+            if (platform === "win32") {
+              focusedNatively = await Xa11y.App.byPid(process.pid, { timeout: 0 }).then(
+                async (app) => {
+                  await app.asElement().focus();
+                  return true;
+                },
+                () => false,
+              );
+            }
+
+            // If native focus is unavailable, let Windows commit the z-order
+            // fallback before removing the temporary topmost state.
+            if (promoteOnWindows && !focusedNatively) {
+              await NodeTimersPromises.setTimeout(WINDOWS_FOREGROUND_PROMOTION_MS);
+            }
+          } finally {
+            if (promoteOnWindows && !window.isDestroyed()) window.setAlwaysOnTop(false);
+          }
         },
         catch: (cause) =>
           new ElectronWindowOperationError({
