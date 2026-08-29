@@ -368,31 +368,37 @@ export function reconcilePreviewServerSessions(
   });
 }
 
+function isPreviewStateEqual(
+  previous: DesktopPreviewOverlay | null,
+  next: DesktopPreviewOverlay | null,
+) {
+  return (
+    previous === next ||
+    (previous !== null &&
+      next !== null &&
+      previous.hasWebContents === next.hasWebContents &&
+      previous.canGoBack === next.canGoBack &&
+      previous.canGoForward === next.canGoForward &&
+      previous.loading === next.loading &&
+      previous.zoomFactor === next.zoomFactor &&
+      previous.pictureInPicture === next.pictureInPicture &&
+      previous.colorScheme === next.colorScheme &&
+      previous.audioMuted === next.audioMuted &&
+      previous.audible === next.audible &&
+      previous.controller === next.controller &&
+      previous.favicon?.dataUrl === next.favicon?.dataUrl &&
+      previous.favicon?.pageUrl === next.favicon?.pageUrl &&
+      previous.favicon?.capturedAt === next.favicon?.capturedAt)
+  );
+}
+
 export function applyPreviewDesktopState(
   ref: ScopedThreadRef,
   tabId: string,
   overlay: DesktopPreviewOverlay | null,
 ): void {
   updateThreadPreviewState(ref, (current) => {
-    const previous = current.desktopByTabId[tabId] ?? null;
-    if (
-      previous === overlay ||
-      (previous !== null &&
-        overlay !== null &&
-        previous.hasWebContents === overlay.hasWebContents &&
-        previous.canGoBack === overlay.canGoBack &&
-        previous.canGoForward === overlay.canGoForward &&
-        previous.loading === overlay.loading &&
-        previous.zoomFactor === overlay.zoomFactor &&
-        previous.pictureInPicture === overlay.pictureInPicture &&
-        previous.colorScheme === overlay.colorScheme &&
-        previous.audioMuted === overlay.audioMuted &&
-        previous.audible === overlay.audible &&
-        previous.controller === overlay.controller &&
-        previous.favicon?.dataUrl === overlay.favicon?.dataUrl &&
-        previous.favicon?.pageUrl === overlay.favicon?.pageUrl &&
-        previous.favicon?.capturedAt === overlay.favicon?.capturedAt)
-    ) {
+    if (isPreviewStateEqual(current.desktopByTabId[tabId] ?? null, overlay)) {
       return current;
     }
     const desktopByTabId = { ...current.desktopByTabId };
