@@ -288,6 +288,7 @@ const settle = function* (until: () => boolean) {
 
 const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () => undefined) => {
   const listeners = new Map<string, () => void>();
+  const webContentsListeners = new Map<string, () => void>();
   const send = vi.fn();
   let destroyed = false;
   const pictureInPictureWindow = {
@@ -310,10 +311,16 @@ const makeTestPictureInPictureWindow = (loadURL: () => Promise<void> = async () 
       listeners.get("closed")?.();
     }),
     webContents: {
+      on: vi.fn((event: string, listener: () => void) => {
+        webContentsListeners.set(event, listener);
+      }),
+      off: vi.fn((event: string) => {
+        webContentsListeners.delete(event);
+      }),
       send,
     },
   };
-  return { pictureInPictureWindow, send };
+  return { pictureInPictureWindow, send, webContentsListeners };
 };
 
 describe("PreviewManager", () => {
@@ -2369,6 +2376,8 @@ describe("PreviewManager", () => {
             pictureInPictureListeners.get("closed")?.();
           }),
           webContents: {
+            on: vi.fn(),
+            off: vi.fn(),
             send: pictureInPictureSend,
           },
         };
@@ -2467,7 +2476,7 @@ describe("PreviewManager", () => {
     ),
   );
 
-  effectIt.effect("delivers unchanged frames only to a new picture-in-picture consumer", () =>
+  effectIt.effect("starts picture-in-picture without an extra recording capture", () =>
     withManager((manager) =>
       Effect.gen(function* () {
         const jpeg = Buffer.from("shared-preview-frame");
@@ -2499,7 +2508,7 @@ describe("PreviewManager", () => {
         yield* TestClock.adjust(100);
 
         expect(capturePage).toHaveBeenCalledTimes(2);
-        expect(recordingFrames).toHaveLength(1);
+        expect(recordingFrames).toHaveLength(2);
         expect(send).toHaveBeenCalledOnce();
         yield* manager.closePictureInPicture("tab_recording_then_pip");
         yield* manager.stopRecording("tab_recording_then_pip");
@@ -2538,20 +2547,43 @@ describe("PreviewManager", () => {
     ),
   );
 
-  effectIt.effect("delivers recording frames only when pixels change", () =>
+  effectIt.effect("replays an unchanged picture-in-picture frame after its renderer reloads", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const jpeg = Buffer.from("reloaded-preview-frame");
+        const capturePage = vi.fn(async () => ({
+          toJPEG: () => jpeg,
+          getSize: () => ({ width: 1280, height: 720 }),
+        }));
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
+        const { pictureInPictureWindow, send, webContentsListeners } =
+          makeTestPictureInPictureWindow();
+        browserWindowConstructor.mockImplementation(function () {
+          return pictureInPictureWindow;
+        });
+
+        yield* manager.createTab("tab_pip_reload");
+        yield* manager.registerWebview("tab_pip_reload", 42);
+        yield* manager.openPictureInPicture("tab_pip_reload");
+        expect(send).toHaveBeenCalledOnce();
+
+        webContentsListeners.get("did-finish-load")?.();
+        yield* TestClock.adjust(100);
+
+        expect(send).toHaveBeenCalledTimes(2);
+        yield* manager.closePictureInPicture("tab_pip_reload");
+      }),
+    ),
+  );
+
+  effectIt.effect("keeps recording cadence when pixels remain unchanged", () =>
     withManager((manager) =>
       Effect.gen(function* () {
         const unchanged = Buffer.from("unchanged-preview-frame");
-        const changed = Buffer.from("changed-preview-frame");
-        let captureIndex = 0;
-        const capturePage = vi.fn(async () => {
-          const jpeg = captureIndex < 2 ? unchanged : changed;
-          captureIndex += 1;
-          return {
-            toJPEG: () => jpeg,
-            getSize: () => ({ width: 1280, height: 720 }),
-          };
-        });
+        const capturePage = vi.fn(async () => ({
+          toJPEG: () => unchanged,
+          getSize: () => ({ width: 1280, height: 720 }),
+        }));
         fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
         const frames: DesktopPreviewRecordingFrame[] = [];
 
@@ -2569,16 +2601,50 @@ describe("PreviewManager", () => {
         yield* TestClock.adjust(100);
 
         expect(capturePage).toHaveBeenCalledTimes(2);
-        expect(frames.map((frame) => frame.data)).toEqual([unchanged.toString("base64")]);
+        expect(frames.map((frame) => frame.data)).toEqual([
+          unchanged.toString("base64"),
+          unchanged.toString("base64"),
+        ]);
 
         yield* TestClock.adjust(100);
 
         expect(capturePage).toHaveBeenCalledTimes(3);
         expect(frames.map((frame) => frame.data)).toEqual([
           unchanged.toString("base64"),
-          changed.toString("base64"),
+          unchanged.toString("base64"),
+          unchanged.toString("base64"),
         ]);
         yield* manager.stopRecording("tab_unchanged_frame");
+      }),
+    ),
+  );
+
+  effectIt.effect("retries recording delivery when pixels remain unchanged", () =>
+    withManager((manager) =>
+      Effect.gen(function* () {
+        const jpeg = Buffer.from("retry-recording-frame");
+        const capturePage = vi.fn(async () => ({
+          toJPEG: () => jpeg,
+          getSize: () => ({ width: 1280, height: 720 }),
+        }));
+        fromId.mockReturnValue(makeTestPreviewWebContents(capturePage));
+        let deliveries = 0;
+
+        yield* manager.subscribeRecordingFrames(() =>
+          Effect.sync(() => {
+            deliveries += 1;
+            if (deliveries === 1) throw new Error("recording delivery failed");
+          }),
+        );
+        yield* manager.createTab("tab_recording_delivery_retry");
+        yield* manager.registerWebview("tab_recording_delivery_retry", 42);
+        yield* manager.startRecording("tab_recording_delivery_retry");
+        expect(deliveries).toBe(1);
+
+        yield* TestClock.adjust(100);
+
+        expect(deliveries).toBe(2);
+        yield* manager.stopRecording("tab_recording_delivery_retry");
       }),
     ),
   );

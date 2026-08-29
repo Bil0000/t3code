@@ -382,7 +382,6 @@ interface FrameCaptureSession {
   readonly scope: Scope.Closeable;
   readonly consumers: ReadonlySet<FrameCaptureConsumer>;
   readonly lastPictureInPictureFrame: Buffer | null;
-  readonly lastRecordingFrame: Buffer | null;
 }
 
 interface PictureInPictureSession {
@@ -623,7 +622,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                 consumers,
                 lastPictureInPictureFrame:
                   consumer === "picture-in-picture" ? null : current.lastPictureInPictureFrame,
-                lastRecordingFrame: consumer === "recording" ? null : current.lastRecordingFrame,
               });
             }),
           ] as const;
@@ -2564,23 +2562,13 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
       if (current?.scope !== captureSession.scope) {
         return [undefined, sessions] as const;
       }
-      const recording =
-        current.consumers.has("recording") && current.lastRecordingFrame?.equals(encoded) !== true;
+      const recording = current.consumers.has("recording");
       const pictureInPicture =
         current.consumers.has("picture-in-picture") &&
         current.lastPictureInPictureFrame?.equals(encoded) !== true;
-      if (!recording && !pictureInPicture) {
-        return [undefined, sessions] as const;
-      }
-      const next = recording ? { ...current, lastRecordingFrame: encoded } : current;
-      return [
-        { pictureInPicture, recording, session: next },
-        recording
-          ? replaceMap(sessions, (copy) => {
-              copy.set(tabId, next);
-            })
-          : sessions,
-      ] as const;
+      return recording || pictureInPicture
+        ? [{ pictureInPicture, recording, session: current }, sessions]
+        : [undefined, sessions];
     });
     if (!frameConsumers) return;
     const receivedAt = yield* currentIso;
@@ -2729,7 +2717,6 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               scope,
               consumers: new Set([consumer]),
               lastPictureInPictureFrame: null,
-              lastRecordingFrame: null,
             });
           }),
         ] as const;
@@ -2884,6 +2871,17 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
             ),
           );
         };
+        const onDidFinishLoad = () => {
+          runFork(
+            SynchronizedRef.update(frameCaptureSessionsRef, (sessions) => {
+              const current = sessions.get(tabId);
+              if (!current?.consumers.has("picture-in-picture")) return sessions;
+              return replaceMap(sessions, (copy) => {
+                copy.set(tabId, { ...current, lastPictureInPictureFrame: null });
+              });
+            }),
+          );
+        };
         yield* attempt(
           {
             operation: "pictureInPicture.configure",
@@ -2904,6 +2902,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
                 skipTransformProcessType: true,
               });
             }
+            pictureInPictureWindow.webContents.on("did-finish-load", onDidFinishLoad);
           },
         ).pipe(
           Effect.onError(() =>
@@ -2917,6 +2916,12 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
               { discard: true },
             ),
           ),
+        );
+        yield* Scope.addFinalizer(
+          initializationScope,
+          Effect.sync(() => {
+            pictureInPictureWindow.webContents.off("did-finish-load", onDidFinishLoad);
+          }).pipe(Effect.ignore),
         );
         yield* SynchronizedRef.update(pictureInPictureSessionsRef, (sessions) =>
           replaceMap(sessions, (copy) => {
