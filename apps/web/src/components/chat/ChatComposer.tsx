@@ -150,7 +150,6 @@ import { WindowCaptureAttachmentDetails } from "./WindowCaptureAttachmentDetails
 import {
   getPendingWindowCaptureAnimations,
   pendingWindowCaptureAnimationIdsForTarget,
-  pendingWindowCaptureAnimationSource,
   scheduleWindowCaptureAnimationDestination,
   setWindowCaptureAnimationDestination,
   subscribeToPendingWindowCaptureAnimations,
@@ -3882,10 +3881,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         key={captureId}
                         aria-hidden="true"
                         animationId={settings.windowCaptureAnimations ? captureId : undefined}
-                        animationSource={pendingWindowCaptureAnimationSource(
-                          pendingWindowCaptureAnimations,
-                          captureId,
-                        )}
+                        animationSource={
+                          pendingWindowCaptureAnimations.find((capture) => capture.id === captureId)
+                            ?.source
+                        }
                         className="invisible h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80 bg-background"
                       />
                     ))}

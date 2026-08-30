@@ -3,47 +3,30 @@ import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { playWindowCaptureSound } from "./windowCaptureSound";
 
 afterEach(() => {
-  Reflect.deleteProperty(globalThis, "Audio");
-  vi.restoreAllMocks();
+  Reflect.deleteProperty(globalThis, "window");
 });
 
 describe("playWindowCaptureSound", () => {
-  it("plays the upward foley pop from its first sample", () => {
-    const sound = {
-      currentTime: 3,
-      play: vi.fn().mockResolvedValue(undefined),
-      preload: "none",
+  it("closes the audio context when it cannot resume", async () => {
+    const context = {
+      close: vi.fn().mockResolvedValue(undefined),
+      createBuffer: vi.fn(),
+      resume: vi.fn().mockRejectedValue(new Error("blocked")),
     };
-    const AudioMock = vi.fn(function AudioMock() {
-      return sound;
-    });
-    Object.defineProperty(globalThis, "Audio", {
+    function AudioContextMock() {
+      return context;
+    }
+    Object.defineProperty(globalThis, "window", {
       configurable: true,
-      value: AudioMock,
+      value: {
+        AudioContext: AudioContextMock,
+      },
     });
 
     playWindowCaptureSound();
+    await vi.waitFor(() => expect(context.close).toHaveBeenCalledOnce());
 
-    expect(AudioMock).toHaveBeenCalledWith(expect.stringMatching(/window-capture-up-pop\.wav/));
-    expect(sound.preload).toBe("auto");
-    expect(sound.currentTime).toBe(0);
-    expect(sound.play).toHaveBeenCalledOnce();
-  });
-
-  it("ignores blocked playback", async () => {
-    const sound = {
-      currentTime: 0,
-      play: vi.fn().mockRejectedValue(new Error("blocked")),
-      preload: "none",
-    };
-    Object.defineProperty(globalThis, "Audio", {
-      configurable: true,
-      value: vi.fn(function AudioMock() {
-        return sound;
-      }),
-    });
-
-    expect(() => playWindowCaptureSound()).not.toThrow();
-    await vi.waitFor(() => expect(sound.play).toHaveBeenCalledOnce());
+    expect(context.resume).toHaveBeenCalledOnce();
+    expect(context.createBuffer).not.toHaveBeenCalled();
   });
 });

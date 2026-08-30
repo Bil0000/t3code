@@ -225,8 +225,8 @@ export const make = Effect.gen(function* () {
         return Option.none();
       }),
     reveal: (window) =>
-      Effect.tryPromise({
-        try: async () => {
+      Effect.try({
+        try: () => {
           if (window.isDestroyed()) {
             return;
           }

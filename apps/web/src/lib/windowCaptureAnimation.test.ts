@@ -8,7 +8,6 @@ import {
   finishWindowCaptureAnimation,
   getPendingWindowCaptureAnimations,
   pendingWindowCaptureAnimationIdsForTarget,
-  pendingWindowCaptureAnimationSource,
   scheduleWindowCaptureAnimationDestination,
   updateWindowCaptureAnimationSource,
 } from "./windowCaptureAnimation";
@@ -33,9 +32,10 @@ describe("window capture animation", () => {
     updateWindowCaptureAnimationSource("capture-1", source);
 
     const pending = getPendingWindowCaptureAnimations();
+    expect(pending[0]).toMatchObject({ target: draft });
     expect(pendingWindowCaptureAnimationIdsForTarget(pending, draft)).toEqual(["capture-1"]);
     expect(pendingWindowCaptureAnimationIdsForTarget(pending, thread)).toEqual([]);
-    expect(pendingWindowCaptureAnimationSource(pending, "capture-1")).toEqual(source);
+    expect(pending[0]?.source).toEqual(source);
   });
 
   it("keeps one card through Strict Mode and the attachment handoff", async () => {

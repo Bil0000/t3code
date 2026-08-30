@@ -16,6 +16,7 @@ import {
   dismissAllWindowCaptureAnimations,
   dismissWindowCaptureAnimation,
   finishWindowCaptureAnimation,
+  getPendingWindowCaptureAnimations,
   updateWindowCaptureAnimationSource,
   waitForWindowCaptureAnimationDestination,
 } from "../../lib/windowCaptureAnimation";
@@ -77,7 +78,6 @@ export function WindowCaptureCoordinator() {
   const playSound = useClientSettings((settings) => settings.windowCapturePlaySound);
   const animateCaptures = useClientSettings((settings) => settings.windowCaptureAnimations);
   const lastTargetRef = useRef<CaptureTarget | null>(null);
-  const targetResolutionRef = useRef<Promise<CaptureTarget | null> | null>(null);
   const drainingRef = useRef<Promise<void> | null>(null);
   const rerunRequestedRef = useRef(false);
   const soundedCaptureIdsRef = useRef(new Set<string>());
@@ -108,15 +108,6 @@ export function WindowCaptureCoordinator() {
     return created.draftId;
   }, [activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef]);
 
-  const resolveCaptureTarget = useCallback((): Promise<CaptureTarget | null> => {
-    if (targetResolutionRef.current) return targetResolutionRef.current;
-    const resolution = resolveTarget().finally(() => {
-      if (targetResolutionRef.current === resolution) targetResolutionRef.current = null;
-    });
-    targetResolutionRef.current = resolution;
-    return resolution;
-  }, [resolveTarget]);
-
   const playCaptureSound = useCallback(
     (id: string) => {
       if (!playSound || soundedCaptureIdsRef.current.has(id)) return;
@@ -142,7 +133,12 @@ export function WindowCaptureCoordinator() {
         const pending = await bridge.listPendingWindowCaptures();
         for (const item of pending) {
           playCaptureSound(item.id);
-          const target = await resolveCaptureTarget();
+          const animationTarget = getPendingWindowCaptureAnimations().find(
+            (animation) => animation.id === item.id,
+          )?.target;
+          const target = animationTarget
+            ? resolveExistingWindowCaptureTarget(animationTarget, routeThreadRef)
+            : await resolveTarget();
           if (!target) {
             toastManager.add(
               stackedThreadToast({
@@ -248,7 +244,7 @@ export function WindowCaptureCoordinator() {
       });
     drainingRef.current = operation;
     return operation;
-  }, [playCaptureSound, resolveCaptureTarget]);
+  }, [playCaptureSound, resolveTarget, routeThreadRef]);
 
   useEffect(() => {
     const bridge = getDesktopWindowCaptureBridge();
@@ -263,9 +259,11 @@ export function WindowCaptureCoordinator() {
           animateCaptures &&
           !window.matchMedia("(prefers-reduced-motion: reduce)").matches
         ) {
-          void resolveCaptureTarget().then((target) => {
-            if (target) beginWindowCaptureAnimation(captureId, target);
-          });
+          const target = lastTargetRef.current;
+          const existingTarget = target
+            ? resolveExistingWindowCaptureTarget(target, routeThreadRef)
+            : null;
+          if (existingTarget) beginWindowCaptureAnimation(captureId, existingTarget);
         }
       }
       if (action === "window-capture-ready") void drain();
@@ -283,7 +281,7 @@ export function WindowCaptureCoordinator() {
         });
       }
     });
-  }, [animateCaptures, drain, playCaptureSound, resolveCaptureTarget]);
+  }, [animateCaptures, drain, playCaptureSound, routeThreadRef]);
 
   useEffect(() => {
     const dismissOnBlur = () => dismissAllWindowCaptureAnimations();

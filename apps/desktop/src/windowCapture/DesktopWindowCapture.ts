@@ -42,11 +42,6 @@ import {
   WindowCaptureTransition,
 } from "./WindowCaptureTransition.ts";
 
-export {
-  WindowCaptureTransition,
-  windowCaptureAnimationFlightBounds,
-  windowCaptureAnimationOverlayBounds,
-} from "./WindowCaptureTransition.ts";
 import {
   accessibleWindowText,
   findAccessibleWindow,

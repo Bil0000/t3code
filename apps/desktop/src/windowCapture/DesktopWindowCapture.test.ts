@@ -164,6 +164,10 @@ vi.mock("electron", () => {
       this.state.destroyed = true;
     }
 
+    getBounds() {
+      return this.state.bounds;
+    }
+
     hide() {}
 
     isDestroyed() {
@@ -248,6 +252,11 @@ import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWindowCapture from "./DesktopWindowCapture.ts";
 
+import {
+  WindowCaptureTransition,
+  windowCaptureAnimationFlightBounds,
+  windowCaptureAnimationOverlayBounds,
+} from "./WindowCaptureTransition.ts";
 const testLayer = (
   platform: NodeJS.Platform,
   fileSystemOverrides: Parameters<typeof FileSystem.layerNoop>[0] = {},
@@ -436,34 +445,40 @@ it("uses the operating system animation policy", () => {
 
 it("bounds the transition surface to its displays and flight", () => {
   assert.deepEqual(
-    DesktopWindowCapture.windowCaptureAnimationOverlayBounds([
+    windowCaptureAnimationOverlayBounds([
       { bounds: { x: -1_920, y: 0, width: 1_920, height: 1_080 } },
       { bounds: { x: 0, y: -200, width: 1_440, height: 900 } },
     ]),
     { x: -1_920, y: -200, width: 3_360, height: 1_280 },
   );
   assert.deepEqual(
-    DesktopWindowCapture.windowCaptureAnimationFlightBounds(
+    windowCaptureAnimationFlightBounds(
       { x: 100, y: 50, width: 900, height: 600 },
       { x: 1_200, y: 800, width: 208, height: 112 },
-      [],
       0,
     ),
     { x: 100, y: 50, width: 1_308, height: 862 },
   );
-  assert.deepEqual(
-    DesktopWindowCapture.windowCaptureAnimationFlightBounds(
-      { x: 0, y: 0, width: 100, height: 100 },
-      { x: 200, y: 0, width: 50, height: 50 },
-      [
-        { offset: 0, progress: 0 },
-        { offset: 0.5, progress: 1 },
-        { offset: 1, progress: 1.1 },
-      ],
-      0,
-    ),
-    { x: 0, y: 0, width: 265, height: 100 },
-  );
+});
+
+it("keeps the Windows transition above the revealed main window", async () => {
+  flashWindows.length = 0;
+  const transition = new WindowCaptureTransition({
+    alwaysOnTopLevel: "pop-up-menu",
+  });
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: 100, y: 50, width: 900, height: 600 },
+      "data:image/png;base64,",
+      false,
+    );
+
+    assert.deepEqual(flashWindows[0]?.alwaysOnTopCalls, [[true, "pop-up-menu"]]);
+  } finally {
+    transition.dispose();
+  }
 });
 
 it("bounds source thumbnails for large windows", () => {

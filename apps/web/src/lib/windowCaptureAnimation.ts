@@ -8,7 +8,7 @@ type WindowCaptureTarget = DraftId | ScopedThreadRef;
 
 export type PendingWindowCaptureAnimation = {
   readonly id: string;
-  readonly targetKey: string;
+  readonly target: WindowCaptureTarget;
   readonly source?: WindowCaptureSource | undefined;
 };
 
@@ -28,7 +28,7 @@ function emitChange(): void {
 export function beginWindowCaptureAnimation(id: string, target: WindowCaptureTarget): void {
   if (pendingAnimations.some((capture) => capture.id === id)) return;
   destinationRequests.delete(id);
-  pendingAnimations = [{ id, targetKey: targetKey(target) }, ...pendingAnimations];
+  pendingAnimations = [{ id, target }, ...pendingAnimations];
   emitChange();
 }
 
@@ -91,14 +91,9 @@ export function pendingWindowCaptureAnimationIdsForTarget(
   target: WindowCaptureTarget,
 ): ReadonlyArray<string> {
   const key = targetKey(target);
-  return pending.filter((capture) => capture.targetKey === key).map((capture) => capture.id);
-}
-
-export function pendingWindowCaptureAnimationSource(
-  pending: ReadonlyArray<PendingWindowCaptureAnimation>,
-  id: string,
-): WindowCaptureSource | undefined {
-  return pending.find((capture) => capture.id === id)?.source;
+  return pending
+    .filter((capture) => targetKey(capture.target) === key)
+    .map((capture) => capture.id);
 }
 
 export function setWindowCaptureAnimationDestination(
