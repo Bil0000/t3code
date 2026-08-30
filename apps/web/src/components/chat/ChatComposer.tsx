@@ -150,9 +150,6 @@ import { WindowCaptureAttachmentDetails } from "./WindowCaptureAttachmentDetails
 import {
   dismissWindowCaptureAnimation,
   getPendingWindowCaptureAnimations,
-  pendingWindowCaptureAnimationIdsForTarget,
-  pendingWindowCaptureAnimationSource,
-  scheduleWindowCaptureAnimationDestination,
   setWindowCaptureAnimationDestination,
   subscribeToPendingWindowCaptureAnimations,
 } from "../../lib/windowCaptureAnimation";
@@ -185,15 +182,17 @@ function WindowCaptureAttachmentFrame({
 
   useLayoutEffect(() => {
     const frame = frameRef.current;
-    if (!frame || !animationId) return;
-    return scheduleWindowCaptureAnimationDestination(
-      animationId,
-      () => setWindowCaptureAnimationDestination(animationId, frame, animationSource),
-      animationSource
-        ? () => setWindowCaptureAnimationDestination(animationId, frame, animationSource)
-        : undefined,
-      () => dismissWindowCaptureAnimation(animationId),
-    );
+    if (!frame || !animationId || !animationSource) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (active) setWindowCaptureAnimationDestination(animationId, frame, animationSource);
+    });
+    return () => {
+      active = false;
+      queueMicrotask(() => {
+        if (!frame.isConnected) dismissWindowCaptureAnimation(animationId);
+      });
+    };
   }, [animationId, animationSource]);
 
   return <div ref={frameRef} {...props} />;
@@ -821,21 +820,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     subscribeToPendingWindowCaptureAnimations,
     getPendingWindowCaptureAnimations,
     getPendingWindowCaptureAnimations,
-  );
-  const pendingWindowCaptureIds = useMemo(
-    () =>
-      pendingWindowCaptureAnimationIdsForTarget(
-        pendingWindowCaptureAnimations,
-        composerDraftTarget,
-      ),
-    [composerDraftTarget, pendingWindowCaptureAnimations],
-  );
-  const pendingWindowCaptureIdSet = useMemo(
-    () => new Set(pendingWindowCaptureIds),
-    [pendingWindowCaptureIds],
-  );
-  const uncommittedWindowCaptureIds = pendingWindowCaptureIds.filter(
-    (id) => !composerImages.some((image) => image.id === id),
   );
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
   const uploadsByImageId = useAttachmentUploadStore((state) => state.uploadsByImageId);
@@ -3747,11 +3731,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               {!isComposerCollapsedMobile &&
                 !isComposerApprovalState &&
                 pendingUserInputs.length === 0 &&
-                (uncommittedWindowCaptureIds.length > 0 ||
-                  composerImages.some(
-                    (image) =>
-                      !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
-                  )) && (
+                composerImages.some(
+                  (image) =>
+                    !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
+                ) && (
                   <div className="mb-3 flex flex-wrap gap-2">
                     {composerImages
                       .filter(
@@ -3766,7 +3749,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           : undefined;
                         const windowCaptureAnimationPending =
                           image.source?.kind === "window-capture" &&
-                          pendingWindowCaptureIdSet.has(image.id);
+                          pendingWindowCaptureAnimations.has(image.id);
                         return (
                           <WindowCaptureAttachmentFrame
                             key={image.id}
@@ -3883,18 +3866,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           </WindowCaptureAttachmentFrame>
                         );
                       })}
-                    {uncommittedWindowCaptureIds.map((captureId) => (
-                      <WindowCaptureAttachmentFrame
-                        key={captureId}
-                        aria-hidden="true"
-                        animationId={settings.windowCaptureAnimations ? captureId : undefined}
-                        animationSource={pendingWindowCaptureAnimationSource(
-                          pendingWindowCaptureAnimations,
-                          captureId,
-                        )}
-                        className="invisible h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80 bg-background"
-                      />
-                    ))}
                   </div>
                 )}
 

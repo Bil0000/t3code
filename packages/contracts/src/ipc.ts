@@ -236,13 +236,11 @@ export const DesktopWindowCaptureAnimationDestination = Schema.Struct({
   borderColor: Schema.String,
   borderWidth: Schema.Number,
   cornerRadius: Schema.Number,
-  details: Schema.optional(
-    Schema.Struct({
-      appName: WindowCaptureSource.fields.appName,
-      windowTitle: WindowCaptureSource.fields.windowTitle,
-      appIconDataUrl: WindowCaptureSource.fields.appIconDataUrl,
-    }),
-  ),
+  details: Schema.Struct({
+    appName: WindowCaptureSource.fields.appName,
+    windowTitle: WindowCaptureSource.fields.windowTitle,
+    appIconDataUrl: WindowCaptureSource.fields.appIconDataUrl,
+  }),
 });
 export type DesktopWindowCaptureAnimationDestination =
   typeof DesktopWindowCaptureAnimationDestination.Type;
@@ -1163,7 +1161,6 @@ export interface DesktopBridge {
   setWindowCaptureAnimationDestination?: (
     destination: DesktopWindowCaptureAnimationDestination,
   ) => Promise<void>;
-  waitForWindowCaptureAnimationLanding?: (id: DesktopWindowCaptureId) => Promise<void>;
   dismissWindowCaptureAnimation?: (id: DesktopWindowCaptureId) => Promise<void>;
   acknowledgeWindowCapture?: (id: string) => Promise<void>;
   ensureSshEnvironment: (

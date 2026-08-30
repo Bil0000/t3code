@@ -157,7 +157,6 @@ export class DesktopWindowCapture extends Context.Service<
       id: string,
       destination: WindowCaptureAnimationDestination,
     ) => Effect.Effect<void>;
-    readonly waitForAnimationLanding: (id: string) => Effect.Effect<void>;
     readonly dismissAnimation: (id: string) => Effect.Effect<void>;
     readonly acknowledge: (id: string) => Effect.Effect<void, DesktopWindowCaptureError>;
   }
@@ -686,9 +685,7 @@ export const make = Effect.gen(function* () {
         catch: (cause) => captureFailure(cause, id),
       });
       if (animationStarted) {
-        yield* desktopWindow
-          .dispatchMenuAction(`window-capture-started:${id}`)
-          .pipe(Effect.catch(() => Effect.void));
+        yield* desktopWindow.activate.pipe(Effect.catch(() => Effect.void));
       }
       const { accessibleText, portalAppName } = yield* Effect.promise(() => contextPromise);
       const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
@@ -985,8 +982,10 @@ export const make = Effect.gen(function* () {
         ),
       ),
     setAnimationDestination: (id, destination) =>
-      Effect.sync(() => transition.animateTo(id, destination)),
-    waitForAnimationLanding: (id) => Effect.promise(() => transition.waitForLanding(id)),
+      Effect.promise(async () => {
+        transition.animateTo(id, destination);
+        await transition.waitForLanding(id);
+      }),
     dismissAnimation: (id) => Effect.sync(() => transition.dismiss(id)),
     acknowledge: (id) =>
       Effect.promise(() => transition.complete(id)).pipe(

@@ -1,83 +1,50 @@
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
-import type { ScopedThreadRef, WindowCaptureSource } from "@t3tools/contracts";
+import type { WindowCaptureSource } from "@t3tools/contracts";
 
-import type { DraftId } from "../composerDraftStore";
 import { getDesktopWindowCaptureBridge } from "./desktopWindowCapture";
 
-type WindowCaptureTarget = DraftId | ScopedThreadRef;
-
-export type PendingWindowCaptureAnimation = {
-  readonly id: string;
-  readonly targetKey: string;
-  readonly source?: WindowCaptureSource | undefined;
-};
-
-let pendingAnimations: ReadonlyArray<PendingWindowCaptureAnimation> = [];
-const destinationStarted = new Set<string>();
-const destinationMountCounts = new Map<string, number>();
+let pendingAnimations: ReadonlySet<string> = new Set();
+const destinationRequests = new Map<string, Promise<void>>();
 const listeners = new Set<() => void>();
-
-function targetKey(target: WindowCaptureTarget): string {
-  return typeof target === "string" ? target.trim() : scopedThreadKey(target);
-}
 
 function emitChange(): void {
   for (const listener of listeners) listener();
 }
 
-export function beginWindowCaptureAnimation(id: string, target: WindowCaptureTarget): void {
-  if (pendingAnimations.some((capture) => capture.id === id)) return;
-  destinationStarted.delete(id);
-  pendingAnimations = [{ id, targetKey: targetKey(target) }, ...pendingAnimations];
+export function beginWindowCaptureAnimation(id: string): void {
+  if (pendingAnimations.has(id)) return;
+  pendingAnimations = new Set(pendingAnimations).add(id);
   emitChange();
 }
 
 export function finishWindowCaptureAnimation(id: string): void {
-  const next = pendingAnimations.filter((capture) => capture.id !== id);
-  destinationStarted.delete(id);
-  destinationMountCounts.delete(id);
-  if (next.length === pendingAnimations.length) return;
+  if (!pendingAnimations.has(id)) return;
+  const next = new Set(pendingAnimations);
+  next.delete(id);
   pendingAnimations = next;
+  destinationRequests.delete(id);
   emitChange();
-}
-
-export function updateWindowCaptureAnimationSource(id: string, source: WindowCaptureSource): void {
-  const index = pendingAnimations.findIndex((capture) => capture.id === id);
-  if (index < 0 || pendingAnimations[index]?.source === source) return;
-  pendingAnimations = pendingAnimations.map((capture, captureIndex) =>
-    captureIndex === index ? { ...capture, source } : capture,
-  );
-  emitChange();
-}
-
-export function finishAllWindowCaptureAnimations(): void {
-  const hadPendingAnimations = pendingAnimations.length > 0;
-  pendingAnimations = [];
-  destinationStarted.clear();
-  destinationMountCounts.clear();
-  if (hadPendingAnimations) emitChange();
 }
 
 export function dismissWindowCaptureAnimation(id: string): void {
-  if (!pendingAnimations.some((capture) => capture.id === id)) return;
-  const bridge = getDesktopWindowCaptureBridge();
-  if (typeof bridge?.dismissWindowCaptureAnimation !== "function") return;
+  if (!pendingAnimations.has(id)) return;
   finishWindowCaptureAnimation(id);
-  void bridge.dismissWindowCaptureAnimation(id).catch(() => undefined);
+  void getDesktopWindowCaptureBridge()
+    ?.dismissWindowCaptureAnimation?.(id)
+    .catch(() => undefined);
 }
 
 export function dismissAllWindowCaptureAnimations(): void {
-  const ids = pendingAnimations.map((capture) => capture.id);
-  if (ids.length === 0) return;
-  const bridge = getDesktopWindowCaptureBridge();
-  if (typeof bridge?.dismissWindowCaptureAnimation !== "function") return;
-  finishAllWindowCaptureAnimations();
-  for (const id of ids) {
-    void bridge.dismissWindowCaptureAnimation(id).catch(() => undefined);
-  }
+  if (pendingAnimations.size === 0) return;
+  const ids = [...pendingAnimations];
+  pendingAnimations = new Set();
+  destinationRequests.clear();
+  emitChange();
+  const dismiss = getDesktopWindowCaptureBridge()?.dismissWindowCaptureAnimation;
+  if (!dismiss) return;
+  for (const id of ids) void dismiss(id).catch(() => undefined);
 }
 
-export function getPendingWindowCaptureAnimations(): ReadonlyArray<PendingWindowCaptureAnimation> {
+export function getPendingWindowCaptureAnimations(): ReadonlySet<string> {
   return pendingAnimations;
 }
 
@@ -86,37 +53,20 @@ export function subscribeToPendingWindowCaptureAnimations(listener: () => void):
   return () => listeners.delete(listener);
 }
 
-export function pendingWindowCaptureAnimationIdsForTarget(
-  pending: ReadonlyArray<PendingWindowCaptureAnimation>,
-  target: WindowCaptureTarget,
-): ReadonlyArray<string> {
-  const key = targetKey(target);
-  return pending.filter((capture) => capture.targetKey === key).map((capture) => capture.id);
-}
-
-export function pendingWindowCaptureAnimationSource(
-  pending: ReadonlyArray<PendingWindowCaptureAnimation>,
-  id: string,
-): WindowCaptureSource | undefined {
-  return pending.find((capture) => capture.id === id)?.source;
-}
-
 export function setWindowCaptureAnimationDestination(
   id: string,
   target: HTMLElement,
-  source?: WindowCaptureSource,
+  source: WindowCaptureSource,
 ): void {
-  if (!target.isConnected || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-    return;
-  }
+  if (!target.isConnected || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const bridge = getDesktopWindowCaptureBridge();
-  if (typeof bridge?.setWindowCaptureAnimationDestination !== "function") return;
+  if (!bridge?.setWindowCaptureAnimationDestination) return;
   const frame = target.getBoundingClientRect();
   if (frame.width <= 0 || frame.height <= 0) return;
   const style = window.getComputedStyle(target);
-  const cornerRadius = Number.parseFloat(style.borderTopLeftRadius);
   const borderWidth = Number.parseFloat(style.borderTopWidth);
-  void bridge
+  const cornerRadius = Number.parseFloat(style.borderTopLeftRadius);
+  const request = bridge
     .setWindowCaptureAnimationDestination({
       id,
       viewportFrame: {
@@ -129,46 +79,16 @@ export function setWindowCaptureAnimationDestination(
       borderColor: style.borderTopColor,
       borderWidth: Number.isFinite(borderWidth) ? borderWidth : 0,
       cornerRadius: Number.isFinite(cornerRadius) ? cornerRadius : 0,
-      ...(source
-        ? {
-            details: {
-              appName: source.appName,
-              windowTitle: source.windowTitle,
-              ...(source.appIconDataUrl ? { appIconDataUrl: source.appIconDataUrl } : {}),
-            },
-          }
-        : {}),
+      details: {
+        appName: source.appName,
+        windowTitle: source.windowTitle,
+        ...(source.appIconDataUrl ? { appIconDataUrl: source.appIconDataUrl } : {}),
+      },
     })
     .catch(() => undefined);
+  destinationRequests.set(id, request);
 }
 
-export function scheduleWindowCaptureAnimationDestination(
-  id: string,
-  start: () => void,
-  update?: (() => void) | undefined,
-  onDisconnected?: (() => void) | undefined,
-): () => void {
-  let active = true;
-  destinationMountCounts.set(id, (destinationMountCounts.get(id) ?? 0) + 1);
-  queueMicrotask(() => {
-    if (!active) return;
-    if (destinationStarted.has(id)) {
-      update?.();
-      return;
-    }
-    destinationStarted.add(id);
-    start();
-  });
-  return () => {
-    if (!active) return;
-    active = false;
-    const remainingMounts = Math.max(0, (destinationMountCounts.get(id) ?? 1) - 1);
-    if (remainingMounts === 0) destinationMountCounts.delete(id);
-    else destinationMountCounts.set(id, remainingMounts);
-    queueMicrotask(() => {
-      if ((destinationMountCounts.get(id) ?? 0) > 0) return;
-      if (!pendingAnimations.some((capture) => capture.id === id)) return;
-      onDisconnected?.();
-    });
-  };
+export async function waitForWindowCaptureAnimationDestination(id: string): Promise<void> {
+  await destinationRequests.get(id);
 }

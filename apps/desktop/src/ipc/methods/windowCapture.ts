@@ -33,7 +33,7 @@ const ensureTrustedWindowCaptureSender = Effect.fn("desktop.ipc.windowCapture.en
   },
 );
 
-export function windowCaptureScreenFrame(
+function windowCaptureScreenFrame(
   viewportFrame: DesktopWindowCaptureAnimationDestination["viewportFrame"],
   contentBounds: Electron.Rectangle,
   zoomFactor: number,
@@ -140,16 +140,6 @@ export const setWindowCaptureAnimationDestination = DesktopIpc.makeIpcMethod({
       );
     },
   ),
-});
-
-export const waitForWindowCaptureAnimationLanding = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.WAIT_FOR_WINDOW_CAPTURE_ANIMATION_LANDING_CHANNEL,
-  payload: DesktopWindowCaptureId,
-  result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.windowCapture.waitForAnimationLanding")(function* (id, event) {
-    yield* ensureTrustedWindowCaptureSender(event);
-    yield* (yield* DesktopWindowCapture.DesktopWindowCapture).waitForAnimationLanding(id);
-  }),
 });
 
 export const dismissWindowCaptureAnimation = DesktopIpc.makeIpcMethod({

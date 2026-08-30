@@ -879,23 +879,18 @@ export const make = Effect.gen(function* () {
       }
       const targetWindow = Option.isSome(existingWindow) ? existingWindow.value : yield* ensureMain;
 
-      const revealAndSend = electronWindow.reveal(targetWindow).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            if (targetWindow.isDestroyed()) return;
-            targetWindow.webContents.send(MENU_ACTION_CHANNEL, action);
-          }),
-        ),
-      );
+      const send = () => {
+        if (targetWindow.isDestroyed()) return;
+        targetWindow.webContents.send(MENU_ACTION_CHANNEL, action);
+        void runPromise(electronWindow.reveal(targetWindow));
+      };
 
       if (targetWindow.webContents.isLoadingMainFrame()) {
-        targetWindow.webContents.once("did-finish-load", () => {
-          void runPromise(revealAndSend);
-        });
+        targetWindow.webContents.once("did-finish-load", send);
         return;
       }
 
-      yield* revealAndSend;
+      send();
     }),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });

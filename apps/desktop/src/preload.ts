@@ -66,8 +66,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   readWindowCapture: (id) => ipcRenderer.invoke(IpcChannels.READ_WINDOW_CAPTURE_CHANNEL, id),
   setWindowCaptureAnimationDestination: (destination) =>
     ipcRenderer.invoke(IpcChannels.SET_WINDOW_CAPTURE_ANIMATION_DESTINATION_CHANNEL, destination),
-  waitForWindowCaptureAnimationLanding: (id) =>
-    ipcRenderer.invoke(IpcChannels.WAIT_FOR_WINDOW_CAPTURE_ANIMATION_LANDING_CHANNEL, id),
   dismissWindowCaptureAnimation: (id) =>
     ipcRenderer.invoke(IpcChannels.DISMISS_WINDOW_CAPTURE_ANIMATION_CHANNEL, id),
   acknowledgeWindowCapture: (id) =>

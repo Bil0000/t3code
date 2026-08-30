@@ -1,14 +1,12 @@
-// @effect-diagnostics globalTimers:off -- The isolated animation window is driven by Chromium's animation clock and guarded by a native timeout.
+import * as Effect from "effect/Effect";
+import type * as Fiber from "effect/Fiber";
+
 import * as Electron from "electron";
 
-import type { WindowCaptureAnimationTrace } from "./WindowCaptureAnimationAnalysis.ts";
-import { windowCaptureSpring, type WindowCaptureSpring } from "./WindowCaptureSpring.ts";
-
-const CAPTURE_TRANSITION_FLASH_DURATION_MS = 300;
-const CAPTURE_TRANSITION_TIMEOUT_MS = 6_000;
-const CAPTURE_TRANSITION_SOURCE_CORNER_RADIUS = 12;
-const CAPTURE_TRANSITION_ACCESSORY_FADE_DURATION_MS = 125;
-const CAPTURE_TRANSITION_SHADOW_MARGIN = 72;
+const DURATION_MS = 360;
+const EASING = "cubic-bezier(.2,.8,.2,1)";
+const TIMEOUT_MS = 6_000;
+const MARGIN = 72;
 
 type WindowCaptureAnimationDetails = {
   readonly appName: string;
@@ -23,22 +21,16 @@ export type WindowCaptureAnimationDestination = {
   readonly borderWidth: number;
   readonly cornerRadius: number;
   readonly scaleFactor: number;
-  readonly probeColor?: string | undefined;
-  readonly traceSamples?: boolean | undefined;
-  readonly details?: WindowCaptureAnimationDetails | undefined;
+  readonly details: WindowCaptureAnimationDetails;
 };
 
-type ActiveWindowCaptureTransition = {
+type ActiveTransition = {
   readonly id: string;
-  readonly sourceFrame: Electron.Rectangle;
-  readonly flash: boolean;
+  readonly source: Electron.Rectangle;
   readonly window: Electron.BrowserWindow;
-  overlayBounds: Electron.Rectangle;
-  details: WindowCaptureAnimationDetails | undefined;
-  startFlashWhenReady: boolean;
-  closeTimer: ReturnType<typeof setTimeout> | undefined;
-  flight: Promise<WindowCaptureAnimationTrace | undefined> | undefined;
-  trace: WindowCaptureAnimationTrace | undefined;
+  bounds: Electron.Rectangle;
+  timer?: Fiber.Fiber<void> | undefined;
+  flight?: Promise<void> | undefined;
 };
 
 type WindowCaptureTransitionOptions = {
@@ -72,39 +64,20 @@ export function windowCaptureAnimationOverlayBounds(
 export function windowCaptureAnimationFlightBounds(
   source: Electron.Rectangle,
   target: Electron.Rectangle,
-  samples: WindowCaptureSpring["samples"],
-  margin = CAPTURE_TRANSITION_SHADOW_MARGIN,
+  margin = MARGIN,
 ): Electron.Rectangle {
-  const sourceCenter = { x: source.x + source.width / 2, y: source.y + source.height / 2 };
-  const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
-  let left = source.x;
-  let top = source.y;
-  let right = source.x + source.width;
-  let bottom = source.y + source.height;
-
-  for (const { progress } of samples) {
-    const width = Math.max(1, source.width + (target.width - source.width) * progress);
-    const height = Math.max(1, source.height + (target.height - source.height) * progress);
-    const centerX = sourceCenter.x + (targetCenter.x - sourceCenter.x) * progress;
-    const centerY = sourceCenter.y + (targetCenter.y - sourceCenter.y) * progress;
-    left = Math.min(left, centerX - width / 2);
-    top = Math.min(top, centerY - height / 2);
-    right = Math.max(right, centerX + width / 2);
-    bottom = Math.max(bottom, centerY + height / 2);
-  }
-
-  const safeMargin = Math.max(0, margin);
-  const x = Math.floor(left - safeMargin);
-  const y = Math.floor(top - safeMargin);
+  const padding = Math.max(0, margin);
+  const x = Math.floor(Math.min(source.x, target.x) - padding);
+  const y = Math.floor(Math.min(source.y, target.y) - padding);
   return {
     x,
     y,
-    width: Math.max(1, Math.ceil(right + safeMargin) - x),
-    height: Math.max(1, Math.ceil(bottom + safeMargin) - y),
+    width: Math.ceil(Math.max(source.x + source.width, target.x + target.width) + padding) - x,
+    height: Math.ceil(Math.max(source.y + source.height, target.y + target.height) + padding) - y,
   };
 }
 
-function createCaptureTransitionWindow(bounds: Electron.Rectangle): Electron.BrowserWindow {
+function createWindow(bounds: Electron.Rectangle): Electron.BrowserWindow {
   const window = new Electron.BrowserWindow({
     ...bounds,
     alwaysOnTop: true,
@@ -128,247 +101,67 @@ function createCaptureTransitionWindow(bounds: Electron.Rectangle): Electron.Bro
   return window;
 }
 
-async function loadCaptureTransitionWindow(
-  window: Electron.BrowserWindow,
-  overlayBounds: Electron.Rectangle,
+function transitionHtml(
   sourceBounds: Electron.Rectangle,
-  snapshotDataUrl: string,
+  overlayBounds: Electron.Rectangle,
   flash: boolean,
-): Promise<void> {
-  await window.loadURL(
-    "data:text/html;charset=utf-8," +
-      encodeURIComponent(captureTransitionHtml({ flash, overlayBounds, sourceBounds })),
-  );
-  if (window.isDestroyed()) return;
-  await window.webContents.executeJavaScript(
-    `window.setCaptureSnapshot(${JSON.stringify(snapshotDataUrl)})`,
-  );
-}
-
-function captureTransitionHtml({
-  flash,
-  overlayBounds,
-  sourceBounds,
-}: {
-  readonly flash: boolean;
-  readonly overlayBounds: Electron.Rectangle;
-  readonly sourceBounds: Electron.Rectangle;
-}): string {
+): string {
   const source = {
     x: sourceBounds.x - overlayBounds.x,
     y: sourceBounds.y - overlayBounds.y,
     width: sourceBounds.width,
     height: sourceBounds.height,
   };
-  const sourceJson = JSON.stringify(source);
-  return `<!doctype html><title>T3 Code Window Capture Animation</title>
-<style>
+  return `<!doctype html><style>
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent}
-#card{position:absolute;left:${source.x}px;top:${source.y}px;width:${source.width}px;height:${source.height}px;contain:strict;overflow:hidden;border-radius:${CAPTURE_TRANSITION_SOURCE_CORNER_RADIUS}px;background:#fff;box-shadow:0 24px 70px rgba(0,0,0,.24);transform:translate3d(0,0,0) scale(1);transform-origin:center;backface-visibility:hidden;will-change:transform}
-#content{position:absolute;inset:0;overflow:hidden;border-radius:inherit;transform:translate3d(0,0,0) scale(1);transform-origin:center;backface-visibility:hidden;will-change:transform}
-.snapshot{position:absolute;inset:0;display:block;width:100%;height:100%;object-fit:fill;transform:translate3d(0,0,0) scale(1);transform-origin:center;backface-visibility:hidden;will-change:transform}
-#flash{position:absolute;inset:0;background:#fff;opacity:0;will-change:opacity;${flash ? "" : "display:none"}}
-#details{--details-scale:1;position:absolute;inset-inline:0;bottom:0;display:flex;min-width:0;align-items:center;gap:calc(6px * var(--details-scale));padding:calc(24px * var(--details-scale)) calc(10px * var(--details-scale)) calc(8px * var(--details-scale));background:linear-gradient(to top,rgba(0,0,0,.85),rgba(0,0,0,.55),transparent);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;opacity:0;will-change:opacity}
+#card{position:absolute;left:${source.x}px;top:${source.y}px;width:${source.width}px;height:${source.height}px;contain:strict;overflow:hidden;border-radius:12px;background:#fff;box-shadow:0 24px 70px rgba(0,0,0,.24);transform-origin:center;will-change:transform}
+#content{position:absolute;inset:0;overflow:hidden;border-radius:inherit;transform-origin:center;will-change:transform}
+#snapshot{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;transform-origin:center;will-change:transform}
+#flash{position:absolute;inset:0;background:#fff;opacity:0;${flash ? "" : "display:none"}}
+#details{--scale:1;position:absolute;inset-inline:0;bottom:0;display:flex;align-items:center;gap:calc(6px * var(--scale));padding:calc(24px * var(--scale)) calc(10px * var(--scale)) calc(8px * var(--scale));background:linear-gradient(to top,rgba(0,0,0,.85),rgba(0,0,0,.55),transparent);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;opacity:0}
 #details:not([data-ready]){visibility:hidden}
-#app-icon,#app-fallback{width:calc(28px * var(--details-scale));height:calc(28px * var(--details-scale));flex:none;border-radius:calc(6px * var(--details-scale))}
-#app-icon{display:none;object-fit:cover}
-#app-fallback{display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.2);color:#fff;font-size:calc(10px * var(--details-scale));font-weight:500;text-transform:uppercase}
-#details-copy{min-width:0;flex:1}
-#app-name,#window-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:calc(14px * var(--details-scale))}
-#app-name{color:#fff;font-size:calc(11px * var(--details-scale));font-weight:500}
-#window-title{color:rgba(255,255,255,.7);font-size:calc(9px * var(--details-scale))}
-#border{position:absolute;z-index:2;inset:0;box-sizing:border-box;border:0 solid transparent;border-radius:inherit;opacity:0;will-change:opacity}
-#probe{position:absolute;z-index:10;inset:0;display:none;box-sizing:border-box;border:4px solid transparent;border-radius:inherit}
-</style>
-<div id="card"><div id="content"><img id="snapshot" class="snapshot"><div id="details"><img id="app-icon"><div id="app-fallback"></div><div id="details-copy"><div id="app-name"></div><div id="window-title"></div></div></div></div><div id="border"></div><div id="flash"></div><div id="probe"></div></div>
-<script>
-const source=${sourceJson};
-const card=document.getElementById("card");
-const content=document.getElementById("content");
-const snapshot=document.getElementById("snapshot");
-const flashLayer=document.getElementById("flash");
-const detailsLayer=document.getElementById("details");
-const appIcon=document.getElementById("app-icon");
-const appFallback=document.getElementById("app-fallback");
-const appName=document.getElementById("app-name");
-const windowTitle=document.getElementById("window-title");
-const borderLayer=document.getElementById("border");
-const probe=document.getElementById("probe");
-window.rebaseCaptureSource=(nextSource)=>{
-  Object.assign(source,nextSource);
-  card.style.left=source.x+"px";
-  card.style.top=source.y+"px";
-  card.style.width=source.width+"px";
-  card.style.height=source.height+"px";
-};
-const applyDetails=(details)=>{
-  if(!details) return;
-  detailsLayer.dataset.ready="";
-  appName.textContent=details.appName;
-  windowTitle.textContent=details.windowTitle||"Captured window";
-  appFallback.textContent=details.appName.slice(0,1);
-  if(details.appIconDataUrl){
-    appIcon.src=details.appIconDataUrl;
-    appIcon.style.display="block";
-    appFallback.style.display="none";
+#icon,#fallback{width:calc(28px * var(--scale));height:calc(28px * var(--scale));flex:none;border-radius:calc(6px * var(--scale))}
+#icon{display:none;object-fit:cover}
+#fallback{display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.2);color:#fff;font-size:calc(10px * var(--scale));font-weight:500;text-transform:uppercase}
+#copy{min-width:0;flex:1}#app,#title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:calc(14px * var(--scale))}
+#app{color:#fff;font-size:calc(11px * var(--scale));font-weight:500}#title{color:rgba(255,255,255,.7);font-size:calc(9px * var(--scale))}
+#border{position:absolute;z-index:2;inset:0;box-sizing:border-box;border:0 solid transparent;border-radius:inherit;opacity:0}
+</style><div id="card"><div id="content"><img id="snapshot"><div id="details"><img id="icon"><div id="fallback"></div><div id="copy"><div id="app"></div><div id="title"></div></div></div></div><div id="border"></div><div id="flash"></div></div><script>
+const source=${JSON.stringify(source)},card=document.getElementById("card"),content=document.getElementById("content"),snapshot=document.getElementById("snapshot"),details=document.getElementById("details"),border=document.getElementById("border");
+window.setCaptureSnapshot=async src=>{snapshot.src=src;await snapshot.decode()};
+window.rebaseCaptureSource=next=>{Object.assign(source,next);Object.assign(card.style,{left:source.x+"px",top:source.y+"px",width:source.width+"px",height:source.height+"px"})};
+window.startCaptureFlash=()=>document.getElementById("flash").animate([{opacity:.96},{offset:.38,opacity:.96},{offset:.68,opacity:.28},{opacity:0}],{duration:300,fill:"forwards",easing:"${EASING}"});
+window.startCaptureTransition=async destination=>{
+  const target=destination.frame,borderWidth=Math.min(Math.max(0,destination.borderWidth),Math.max(0,(Math.min(target.width,target.height)-1)/2));
+  const inner={width:Math.max(1,target.width-borderWidth*2),height:Math.max(1,target.height-borderWidth*2)};
+  const sourceCenter={x:source.x+source.width/2,y:source.y+source.height/2},targetCenter={x:target.x+target.width/2,y:target.y+target.height/2};
+  const initial="translate3d("+(sourceCenter.x-targetCenter.x)+"px,"+(sourceCenter.y-targetCenter.y)+"px,0) scale("+(source.width/target.width)+","+(source.height/target.height)+")";
+  const imageWidth=Math.max(1,snapshot.naturalWidth||source.width),imageHeight=Math.max(1,snapshot.naturalHeight||source.height),cover=Math.max(inner.width/imageWidth,inner.height/imageHeight);
+  Object.assign(card.style,{left:target.x+"px",top:target.y+"px",width:target.width+"px",height:target.height+"px",borderRadius:destination.cornerRadius+"px",backgroundColor:destination.backgroundColor,boxShadow:"none"});
+  Object.assign(content.style,{inset:borderWidth+"px",borderRadius:Math.max(0,destination.cornerRadius-borderWidth)+"px"});
+  Object.assign(border.style,{borderWidth:borderWidth+"px",borderColor:destination.borderColor});
+  details.style.setProperty("--scale",String(destination.scaleFactor));
+  details.dataset.ready="";
+  document.getElementById("app").textContent=destination.details.appName;
+  document.getElementById("title").textContent=destination.details.windowTitle||"Captured window";
+  document.getElementById("fallback").textContent=destination.details.appName.slice(0,1);
+  if(destination.details.appIconDataUrl){
+    const icon=document.getElementById("icon");icon.src=destination.details.appIconDataUrl;icon.style.display="block";document.getElementById("fallback").style.display="none";
   }
-};
-window.updateCaptureDetails=applyDetails;
-window.setCaptureSnapshot=async(src)=>{
-  snapshot.src=src;
-  await snapshot.decode();
-};
-let flashSequence=0;
-let flashAnimation;
-window.prepareCaptureFlash=()=>{
-  if (!${flash}) return false;
-  flashSequence+=1;
-  flashAnimation?.cancel();
-  flashAnimation=undefined;
-  flashLayer.style.opacity=".96";
-  return true;
-};
-window.startCaptureFlash=()=>{
-  if (!window.prepareCaptureFlash()) return false;
-  const sequence=flashSequence;
-  requestAnimationFrame(()=>requestAnimationFrame(()=>{
-    if(sequence!==flashSequence) return;
-    flashAnimation=flashLayer.animate([
-      {offset:0,opacity:.96},
-      {offset:.38,opacity:.96},
-      {offset:.68,opacity:.28},
-      {offset:1,opacity:0}
-    ],{duration:${CAPTURE_TRANSITION_FLASH_DURATION_MS},fill:"forwards",easing:"cubic-bezier(.2,.8,.2,1)"});
-  }));
-  return true;
-};
-window.startCaptureTransition=async(destination)=>{
-  const target=destination.frame;
-  const borderWidth=Math.min(
-    Math.max(0,destination.borderWidth),
-    Math.max(0,(Math.min(target.width,target.height)-1)/2)
-  );
-  const contentTarget={
-    width:Math.max(1,target.width-borderWidth*2),
-    height:Math.max(1,target.height-borderWidth*2)
-  };
-  const sourceCenter={x:source.x+source.width/2,y:source.y+source.height/2};
-  const targetCenter={x:target.x+target.width/2,y:target.y+target.height/2};
-  const lerp=(from,to,progress)=>from+(to-from)*progress;
-  const rectAt=(progress)=>({
-    width:Math.max(1,lerp(source.width,target.width,progress)),
-    height:Math.max(1,lerp(source.height,target.height,progress)),
-    centerX:lerp(sourceCenter.x,targetCenter.x,progress),
-    centerY:lerp(sourceCenter.y,targetCenter.y,progress)
-  });
-  const transformAt=(progress)=>{
-    const {width,height,centerX,centerY}=rectAt(progress);
-    return "translate3d("+(centerX-targetCenter.x)+"px,"+(centerY-targetCenter.y)+"px,0) scale("+(width/target.width)+","+(height/target.height)+")";
-  };
-  const contentTransformAt=(progress)=>{
-    const width=lerp(target.width,contentTarget.width,progress);
-    const height=lerp(target.height,contentTarget.height,progress);
-    return "translate3d(0,0,0) scale("+(width/contentTarget.width)+","+(height/contentTarget.height)+")";
-  };
-  const imageWidth=Math.max(1,snapshot.naturalWidth||source.width);
-  const imageHeight=Math.max(1,snapshot.naturalHeight||source.height);
-  const coverScale=Math.max(contentTarget.width/imageWidth,contentTarget.height/imageHeight);
-  const snapshotTargetScale={
-    x:(imageWidth*coverScale)/contentTarget.width,
-    y:(imageHeight*coverScale)/contentTarget.height
-  };
-  const snapshotScaleAt=(progress)=>({
-    x:lerp(1,snapshotTargetScale.x,progress),
-    y:lerp(1,snapshotTargetScale.y,progress)
-  });
-  const snapshotTransformAt=(progress)=>{
-    const scale=snapshotScaleAt(progress);
-    return "translate3d(0,0,0) scale("+scale.x+","+scale.y+")";
-  };
-  const linearEasing=(valueAt)=>"linear("+destination.spring.samples.map(({offset,progress})=>valueAt(progress)+" "+(offset*100)+"%").join(",")+")";
-  card.style.left=target.x+"px";
-  card.style.top=target.y+"px";
-  card.style.width=target.width+"px";
-  card.style.height=target.height+"px";
-  card.style.borderRadius=destination.cornerRadius+"px";
-  card.style.backgroundColor=destination.backgroundColor;
-  content.style.inset=borderWidth+"px";
-  content.style.borderRadius=Math.max(0,destination.cornerRadius-borderWidth)+"px";
-  borderLayer.style.borderWidth=borderWidth+"px";
-  borderLayer.style.borderColor=destination.borderColor;
-  if(destination.probeColor){probe.style.display="block";probe.style.borderColor=destination.probeColor;}
-  detailsLayer.style.setProperty("--details-scale",String(destination.scaleFactor));
-  applyDetails(destination.details);
-  const startedAt=performance.now();
-  const samples=[];
-  let sampleFrame=0;
-  const sample=()=>{
-    const frame=card.getBoundingClientRect();
-    samples.push({
-      elapsedMs:performance.now()-startedAt,
-      animationTimeMs:Number(animation.currentTime||0),
-      x:frame.x,
-      y:frame.y,
-      width:frame.width,
-      height:frame.height,
-      detailsOpacity:Number.parseFloat(getComputedStyle(detailsLayer).opacity),
-      flashOpacity:Number.parseFloat(getComputedStyle(flashLayer).opacity)
-    });
-    sampleFrame=requestAnimationFrame(sample);
-  };
-  card.style.boxShadow="none";
-  const springEasing=linearEasing((progress)=>progress);
-  const snapshotEnd=snapshotScaleAt(1);
-  const snapshotAxis=Math.abs(snapshotEnd.x-1)>Math.abs(snapshotEnd.y-1)?"x":"y";
-  const snapshotDelta=snapshotEnd[snapshotAxis]-1;
-  const snapshotEasing=Math.abs(snapshotDelta)<1e-6
-    ? springEasing
-    : linearEasing((progress)=>(snapshotScaleAt(progress)[snapshotAxis]-1)/snapshotDelta);
-  const animation=card.animate([
-    {transform:transformAt(0)},
-    {transform:transformAt(1)}
-  ],{duration:destination.spring.durationMs,fill:"forwards",easing:springEasing});
-  const contentAnimation=content.animate([
-    {transform:contentTransformAt(0)},
-    {transform:contentTransformAt(1)}
-  ],{duration:destination.spring.durationMs,fill:"forwards",easing:springEasing});
-  const snapshotAnimation=snapshot.animate([
-    {transform:snapshotTransformAt(0)},
-    {transform:snapshotTransformAt(1)}
-  ],{duration:destination.spring.durationMs,fill:"forwards",easing:snapshotEasing});
-  const borderAnimation=borderLayer.animate([
-    {opacity:0},
-    {opacity:1}
-  ],{duration:destination.spring.durationMs,fill:"forwards",easing:springEasing});
-  const detailsAnimation=detailsLayer.animate([
-    {opacity:0},
-    {opacity:1}
-  ],{
-    delay:Math.max(0,destination.spring.response*1000-${CAPTURE_TRANSITION_ACCESSORY_FADE_DURATION_MS}),
-    duration:${CAPTURE_TRANSITION_ACCESSORY_FADE_DURATION_MS},
-    fill:"forwards",
-    easing:"ease-in"
-  });
-  if(destination.traceSamples) sample();
+  const options={duration:${DURATION_MS},fill:"forwards",easing:"${EASING}"};
   await Promise.all([
-    animation.finished.catch(()=>undefined),
-    contentAnimation.finished.catch(()=>undefined),
-    snapshotAnimation.finished.catch(()=>undefined),
-    borderAnimation.finished.catch(()=>undefined),
-    detailsAnimation.finished.catch(()=>undefined)
-  ]);
-  if(destination.traceSamples){
-    cancelAnimationFrame(sampleFrame);
-    sample();
-    cancelAnimationFrame(sampleFrame);
-  }
-  return {source,target,spring:destination.spring,samples};
+    card.animate([{transform:initial},{transform:"translate3d(0,0,0) scale(1)"}],options).finished.catch(()=>undefined),
+    content.animate([{transform:"scale("+(target.width/inner.width)+","+(target.height/inner.height)+")"},{transform:"scale(1)"}],options).finished.catch(()=>undefined),
+    snapshot.animate([{transform:"scale(1)"},{transform:"scale("+((imageWidth*cover)/inner.width)+","+((imageHeight*cover)/inner.height)+")"}],options).finished.catch(()=>undefined),
+    border.animate([{opacity:0},{opacity:1}],options).finished.catch(()=>undefined),
+    details.animate([{opacity:0},{opacity:1}],{delay:235,duration:125,fill:"forwards",easing:"ease-in"}).finished.catch(()=>undefined)
+  ])
 };
 </script>`;
 }
 
 export class WindowCaptureTransition {
-  private active: ActiveWindowCaptureTransition | undefined;
+  private active: ActiveTransition | undefined;
   private readonly boundOverlayToFlight: boolean;
   private readonly useWorkArea: boolean;
 
@@ -379,44 +172,40 @@ export class WindowCaptureTransition {
 
   async begin(
     id: string,
-    sourceBounds: Electron.Rectangle,
+    source: Electron.Rectangle,
     snapshotDataUrl: string,
     flash: boolean,
-    startFlash = true,
   ): Promise<void> {
     this.dispose();
-    const requestedOverlayBounds = this.boundOverlayToFlight
-      ? windowCaptureAnimationFlightBounds(sourceBounds, sourceBounds, [])
+    const requestedBounds = this.boundOverlayToFlight
+      ? windowCaptureAnimationFlightBounds(source, source)
       : windowCaptureAnimationOverlayBounds(Electron.screen.getAllDisplays(), this.useWorkArea);
-    const window = createCaptureTransitionWindow(requestedOverlayBounds);
-    const overlayBounds = window.getBounds();
-    const active: ActiveWindowCaptureTransition = {
+    const window = createWindow(requestedBounds);
+    const active: ActiveTransition = {
       id,
-      sourceFrame: sourceBounds,
-      flash,
+      source,
       window,
-      overlayBounds,
-      details: undefined,
-      startFlashWhenReady: flash && startFlash,
-      closeTimer: undefined,
-      flight: undefined,
-      trace: undefined,
+      bounds: window.getBounds(),
     };
+    active.timer = Effect.runFork(
+      Effect.sleep(TIMEOUT_MS).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            if (this.active === active) this.dispose();
+          }),
+        ),
+      ),
+    );
     this.active = active;
-    active.closeTimer = setTimeout(() => {
-      if (this.active === active) this.dispose();
-    }, CAPTURE_TRANSITION_TIMEOUT_MS);
     try {
-      await loadCaptureTransitionWindow(
-        window,
-        overlayBounds,
-        sourceBounds,
-        snapshotDataUrl,
-        flash,
+      await window.loadURL(
+        "data:text/html;charset=utf-8," +
+          encodeURIComponent(transitionHtml(source, active.bounds, flash)),
       );
-      if (window.isDestroyed()) return;
-      if (!this.boundOverlayToFlight && flash && startFlash) {
-        await window.webContents.executeJavaScript("window.prepareCaptureFlash()");
+      if (!window.isDestroyed()) {
+        await window.webContents.executeJavaScript(
+          `window.setCaptureSnapshot(${JSON.stringify(snapshotDataUrl)})`,
+        );
       }
     } catch (error) {
       if (this.active === active) this.dispose();
@@ -425,105 +214,72 @@ export class WindowCaptureTransition {
     }
     if (window.isDestroyed() || this.active !== active) return;
     window.showInactive();
-    if (!this.boundOverlayToFlight && flash && startFlash) await this.startFlash(id);
-  }
-
-  async startFlash(id: string): Promise<void> {
-    const active = this.active;
-    if (!active || active.id !== id || !active.flash) return;
-    active.startFlashWhenReady = true;
-    const window = active.window;
-    if (window.isDestroyed() || (this.boundOverlayToFlight && !active.flight)) return;
-    active.startFlashWhenReady = false;
-    await window.webContents.executeJavaScript("window.startCaptureFlash()").catch(() => {});
+    if (flash) {
+      await window.webContents
+        .executeJavaScript("window.startCaptureFlash()")
+        .catch(() => undefined);
+    }
   }
 
   animateTo(id: string, destination: WindowCaptureAnimationDestination): void {
     const active = this.active;
-    if (!active || active.id !== id) return;
-    if (destination.details) active.details = destination.details;
-    if (active.flight) {
-      const window = active.window;
-      if (destination.details && !window.isDestroyed()) {
-        void window.webContents
-          .executeJavaScript(`window.updateCaptureDetails(${JSON.stringify(destination.details)})`)
-          .catch(() => undefined);
-      }
-      return;
-    }
-    const spring = windowCaptureSpring(active.sourceFrame, destination.frame);
-    active.flight = Promise.resolve().then(() => this.runFlight(active, destination, spring));
+    if (!active || active.id !== id || active.flight) return;
+    active.flight = this.runFlight(active, destination);
   }
 
   private async runFlight(
-    active: ActiveWindowCaptureTransition,
+    active: ActiveTransition,
     destination: WindowCaptureAnimationDestination,
-    spring: WindowCaptureSpring,
-  ): Promise<WindowCaptureAnimationTrace | undefined> {
+  ): Promise<void> {
     const window = active.window;
-    let overlayBounds = active.overlayBounds;
+    let bounds = active.bounds;
     if (this.boundOverlayToFlight) {
-      const requestedBounds = windowCaptureAnimationFlightBounds(
-        active.sourceFrame,
-        destination.frame,
-        spring.samples,
-      );
-      const boundsChanged =
-        requestedBounds.x !== overlayBounds.x ||
-        requestedBounds.y !== overlayBounds.y ||
-        requestedBounds.width !== overlayBounds.width ||
-        requestedBounds.height !== overlayBounds.height;
-      if (boundsChanged) {
-        window.setBounds(requestedBounds, false);
-        overlayBounds = window.getBounds();
-        active.overlayBounds = overlayBounds;
-        const localSource = {
-          x: active.sourceFrame.x - overlayBounds.x,
-          y: active.sourceFrame.y - overlayBounds.y,
-          width: active.sourceFrame.width,
-          height: active.sourceFrame.height,
-        };
+      const requested = windowCaptureAnimationFlightBounds(active.source, destination.frame);
+      if (
+        requested.x !== bounds.x ||
+        requested.y !== bounds.y ||
+        requested.width !== bounds.width ||
+        requested.height !== bounds.height
+      ) {
+        window.setBounds(requested, false);
+        bounds = window.getBounds();
+        active.bounds = bounds;
         await window.webContents.executeJavaScript(
-          `window.rebaseCaptureSource(${JSON.stringify(localSource)})`,
+          `window.rebaseCaptureSource(${JSON.stringify({
+            x: active.source.x - bounds.x,
+            y: active.source.y - bounds.y,
+            width: active.source.width,
+            height: active.source.height,
+          })})`,
         );
       }
     }
     if (window.isDestroyed() || this.active !== active) return;
-    if (active.startFlashWhenReady) await this.startFlash(active.id);
-
-    const localFrame = {
-      x: destination.frame.x - overlayBounds.x,
-      y: destination.frame.y - overlayBounds.y,
-      width: destination.frame.width,
-      height: destination.frame.height,
-    };
-    const result = (await window.webContents.executeJavaScript(
+    await window.webContents.executeJavaScript(
       `window.startCaptureTransition(${JSON.stringify({
-        frame: localFrame,
-        backgroundColor: destination.backgroundColor,
-        borderColor: destination.borderColor,
+        ...destination,
+        frame: {
+          x: destination.frame.x - bounds.x,
+          y: destination.frame.y - bounds.y,
+          width: destination.frame.width,
+          height: destination.frame.height,
+        },
         borderWidth: Math.max(0, destination.borderWidth),
         cornerRadius: Math.max(0, destination.cornerRadius),
         scaleFactor: Math.max(0.1, destination.scaleFactor),
-        probeColor: destination.probeColor,
-        traceSamples: destination.traceSamples,
-        details: active.details,
-        spring,
-      })}).catch((error)=>({captureTransitionError:String(error),stack:error&&error.stack}))`,
-    )) as
-      | WindowCaptureAnimationTrace
-      | { readonly captureTransitionError: string; readonly stack?: string | undefined };
-    if ("captureTransitionError" in result) {
-      throw new Error(result.stack ?? result.captureTransitionError);
-    }
-    active.trace = result;
-    return result;
+      })})`,
+    );
+  }
+
+  async waitForLanding(id: string): Promise<void> {
+    const active = this.active;
+    if (active?.id === id) await active.flight;
   }
 
   async complete(id: string): Promise<void> {
     const active = this.active;
     if (!active || active.id !== id) return;
-    await this.waitForLanding(id);
+    await active.flight;
     if (this.active === active) this.dispose();
   }
 
@@ -531,27 +287,11 @@ export class WindowCaptureTransition {
     if (this.active?.id === id) this.dispose();
   }
 
-  async waitForLanding(id: string): Promise<void> {
-    const active = this.active;
-    if (!active || active.id !== id) return;
-    try {
-      await active.flight;
-    } catch (error) {
-      if (active.window.isDestroyed() || this.active !== active) return;
-      throw error;
-    }
-  }
-
-  trace(id: string): WindowCaptureAnimationTrace | undefined {
-    const active = this.active;
-    return active?.id === id ? active.trace : undefined;
-  }
-
   dispose(): void {
     const active = this.active;
     this.active = undefined;
     if (!active) return;
-    if (active.closeTimer) clearTimeout(active.closeTimer);
+    active.timer?.interruptUnsafe();
     if (!active.window.isDestroyed()) active.window.destroy();
   }
 }

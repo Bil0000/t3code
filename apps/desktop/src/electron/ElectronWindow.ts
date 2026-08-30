@@ -232,9 +232,6 @@ export const make = Effect.gen(function* () {
               Electron.app.focus();
             }
 
-            // On Windows, show() activates an already-visible window. focus()
-            // and moveTop() alone are blocked by foreground-lock rules in some
-            // remote-desktop sessions.
             if (platform === "win32" || !window.isVisible()) {
               window.show();
             }
@@ -259,8 +256,6 @@ export const make = Effect.gen(function* () {
               );
             }
 
-            // If native focus is unavailable, let Windows commit the z-order
-            // fallback before removing the temporary topmost state.
             if (promoteOnWindows && !focusedNatively) {
               await NodeTimersPromises.setTimeout(WINDOWS_FOREGROUND_PROMOTION_MS);
             }
