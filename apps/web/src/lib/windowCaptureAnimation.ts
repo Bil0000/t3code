@@ -50,14 +50,6 @@ export function updateWindowCaptureAnimationSource(id: string, source: WindowCap
   emitChange();
 }
 
-function finishAllWindowCaptureAnimations(): void {
-  const hadPendingAnimations = pendingAnimations.length > 0;
-  pendingAnimations = [];
-  destinationRequests.clear();
-  destinationMountCounts.clear();
-  if (hadPendingAnimations) emitChange();
-}
-
 export async function dismissWindowCaptureAnimation(id: string): Promise<void> {
   if (!pendingAnimations.some((capture) => capture.id === id)) return;
   finishWindowCaptureAnimation(id);
@@ -69,7 +61,10 @@ export async function dismissWindowCaptureAnimation(id: string): Promise<void> {
 export function dismissAllWindowCaptureAnimations(): void {
   const ids = pendingAnimations.map((capture) => capture.id);
   if (ids.length === 0) return;
-  finishAllWindowCaptureAnimations();
+  pendingAnimations = [];
+  destinationRequests.clear();
+  destinationMountCounts.clear();
+  emitChange();
   const bridge = getDesktopWindowCaptureBridge();
   if (typeof bridge?.dismissWindowCaptureAnimation !== "function") return;
   for (const id of ids) {

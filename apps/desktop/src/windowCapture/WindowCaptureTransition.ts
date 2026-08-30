@@ -68,9 +68,8 @@ export function windowCaptureAnimationOverlayBounds(
 export function windowCaptureAnimationFlightBounds(
   source: Electron.Rectangle,
   target: Electron.Rectangle,
-  margin = MARGIN,
 ): Electron.Rectangle {
-  const padding = Math.max(0, margin);
+  const padding = MARGIN;
   const x = Math.floor(Math.min(source.x, target.x) - padding);
   const y = Math.floor(Math.min(source.y, target.y) - padding);
   return {
@@ -138,7 +137,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 const source=${JSON.stringify(source)},card=document.getElementById("card"),content=document.getElementById("content"),snapshot=document.getElementById("snapshot"),details=document.getElementById("details"),border=document.getElementById("border");
 window.setCaptureSnapshot=async src=>{snapshot.src=src;await snapshot.decode()};
 window.rebaseCaptureSource=next=>{Object.assign(source,next);Object.assign(card.style,{left:source.x+"px",top:source.y+"px",width:source.width+"px",height:source.height+"px"})};
-window.startCaptureFlash=()=>document.getElementById("flash").animate([{opacity:.96},{offset:.38,opacity:.96},{offset:.68,opacity:.28},{opacity:0}],{duration:300,fill:"forwards",easing:"${EASING}"});
+window.startCaptureFlash=()=>document.getElementById("flash").animate([{opacity:.14},{offset:.38,opacity:.14},{offset:.68,opacity:.04},{opacity:0}],{duration:300,fill:"forwards",easing:"${EASING}"});
 const applyDetails=value=>{
   if(!value)return;
   details.dataset.ready="";

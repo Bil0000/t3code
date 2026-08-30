@@ -36,6 +36,7 @@ const {
     destroyed: boolean;
     kind: "base" | "browser";
     loadCount: number;
+    loadedUrls: Array<string>;
     opacities: Array<number>;
     options: Electron.BrowserWindowConstructorOptions;
     scripts: Array<string>;
@@ -153,6 +154,7 @@ vi.mock("electron", () => {
         destroyed: false,
         kind: "base",
         loadCount: 0,
+        loadedUrls: [],
         opacities: options.opacity === undefined ? [] : [options.opacity],
         options,
         scripts: [],
@@ -218,8 +220,9 @@ vi.mock("electron", () => {
       };
     }
 
-    loadURL() {
+    loadURL(url: string) {
       this.state.loadCount += 1;
+      this.state.loadedUrls.push(url);
       return Promise.resolve();
     }
   }
@@ -451,6 +454,28 @@ it("uses the operating system animation policy", () => {
   );
 });
 
+it("keeps the transition flash subdued", async () => {
+  flashWindows.length = 0;
+  const transition = new WindowCaptureTransition();
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: 100, y: 50, width: 900, height: 600 },
+      "data:image/png;base64,",
+      true,
+    );
+
+    const html = decodeURIComponent(flashWindows[0]?.loadedUrls[0] ?? "");
+    assert.include(
+      html,
+      "[{opacity:.14},{offset:.38,opacity:.14},{offset:.68,opacity:.04},{opacity:0}]",
+    );
+  } finally {
+    transition.dispose();
+  }
+});
+
 it("bounds the transition surface to its displays and flight", () => {
   assert.deepEqual(
     windowCaptureAnimationOverlayBounds([
@@ -463,9 +488,8 @@ it("bounds the transition surface to its displays and flight", () => {
     windowCaptureAnimationFlightBounds(
       { x: 100, y: 50, width: 900, height: 600 },
       { x: 1_200, y: 800, width: 208, height: 112 },
-      0,
     ),
-    { x: 100, y: 50, width: 1_308, height: 862 },
+    { x: 28, y: -22, width: 1_452, height: 1_006 },
   );
 });
 
