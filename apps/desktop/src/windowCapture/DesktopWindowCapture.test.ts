@@ -11,15 +11,19 @@ import type * as Electron from "electron";
 import { vi } from "vite-plus/test";
 
 const {
+  activeWindowMock,
+  animationSettingsMock,
   accessibilityByPidMock,
   accessibilityListMock,
   accessibilityTrustedMock,
   flashWindows,
   getFileIconMock,
   getSourcesMock,
+  macCaptureMock,
   mediaAccessStatusMock,
   openExternalMock,
   registerShortcutMock,
+  screenshotMock,
   shortcutForkArgs,
   shortcutForkOptions,
   shortcutProcesses,
@@ -28,6 +32,11 @@ const {
   transitionScriptState,
   uiohookMock,
 } = vi.hoisted(() => ({
+  activeWindowMock: vi.fn(),
+  animationSettingsMock: vi.fn(() => ({
+    prefersReducedMotion: true,
+    shouldRenderRichAnimation: false,
+  })),
   accessibilityByPidMock: vi.fn(),
   accessibilityListMock: vi.fn(),
   accessibilityTrustedMock: vi.fn(() => true),
@@ -45,9 +54,11 @@ const {
   }>,
   getFileIconMock: vi.fn(),
   getSourcesMock: vi.fn(),
+  macCaptureMock: vi.fn(),
   mediaAccessStatusMock: vi.fn(() => "not-determined"),
   openExternalMock: vi.fn(() => Promise.resolve()),
   registerShortcutMock: vi.fn(),
+  screenshotMock: vi.fn(),
   shortcutForkArgs: [] as Array<ReadonlyArray<string>>,
   shortcutForkOptions: [] as Array<{ env?: NodeJS.ProcessEnv }>,
   shortcutProcesses: [] as Array<{
@@ -72,9 +83,16 @@ const {
   },
 }));
 
-vi.mock("@crowecawcaw/xa11y", () => ({
-  App: { byPid: accessibilityByPidMock, list: accessibilityListMock },
-}));
+vi.mock("@crowecawcaw/xa11y", () => {
+  const api = { screenshot: screenshotMock };
+  return {
+    ...api,
+    default: api,
+    App: { byPid: accessibilityByPidMock, list: accessibilityListMock },
+  };
+});
+vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
+vi.mock("./MacWindowCapture.ts", () => ({ captureMacWindowSnapshot: macCaptureMock }));
 vi.mock("uiohook-napi", () => ({ uIOhook: uiohookMock }));
 
 vi.mock("node:child_process", () => ({
@@ -248,10 +266,7 @@ vi.mock("electron", () => {
     },
     shell: { openExternal: openExternalMock },
     systemPreferences: {
-      getAnimationSettings: () => ({
-        prefersReducedMotion: true,
-        shouldRenderRichAnimation: false,
-      }),
+      getAnimationSettings: () => animationSettingsMock(),
       getMediaAccessStatus: () => mediaAccessStatusMock(),
       isTrustedAccessibilityClient: () => accessibilityTrustedMock(),
     },
@@ -349,6 +364,84 @@ it.effect("reads and acknowledges queued captures through Effect services", () =
 
       yield* service.acknowledge(captureId);
       assert.deepEqual(removed.sort(), [imagePath, metadataPath].sort());
+    }),
+  ).pipe(Effect.provide(layer));
+});
+
+it.effect("captures the active Linux X11 window without enumerating desktop sources", () => {
+  const png = Buffer.from([1, 2, 3]);
+  const active = {
+    platform: "linux",
+    id: 42,
+    title: "Editor",
+    owner: { name: "Editor", processId: 123 },
+    bounds: { x: 10, y: 20, width: 800, height: 600 },
+  } as const;
+  activeWindowMock.mockReset().mockResolvedValue(active);
+  accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [] });
+  screenshotMock.mockReset().mockResolvedValue({ toPng: () => png });
+  getSourcesMock.mockReset().mockResolvedValue([
+    {
+      id: "window:42:0",
+      name: "Editor",
+      thumbnail: { isEmpty: () => false, toPNG: () => png },
+    },
+  ]);
+  const writtenFiles: Array<[string, Uint8Array]> = [];
+  const layer = testLayer("linux", {
+    makeDirectory: () => Effect.void,
+    rename: () => Effect.void,
+    writeFile: (path, bytes) =>
+      Effect.sync(() => {
+        writtenFiles.push([path, bytes]);
+      }),
+    writeFileString: () => Effect.void,
+  });
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.captureNow;
+
+      assert.deepEqual(screenshotMock.mock.calls, [[{ region: active.bounds }]]);
+      assert.lengthOf(getSourcesMock.mock.calls, 0);
+      assert.deepEqual(writtenFiles[0]?.[1], png);
+    }),
+  ).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps the macOS capture transition above the revealed main window", () => {
+  const png = Buffer.from([1, 2, 3]);
+  const active = {
+    platform: "macos",
+    id: 42,
+    title: "Terminal",
+    owner: { name: "Terminal", processId: 123 },
+    bounds: { x: 10, y: 20, width: 800, height: 600 },
+  } as const;
+  activeWindowMock.mockReset().mockResolvedValue(active);
+  accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [] });
+  macCaptureMock.mockReset().mockResolvedValue({
+    source: { name: "Terminal" },
+    png,
+  });
+  animationSettingsMock.mockReturnValueOnce({
+    prefersReducedMotion: false,
+    shouldRenderRichAnimation: true,
+  });
+  flashWindows.length = 0;
+  const layer = testLayer("darwin", {
+    makeDirectory: () => Effect.void,
+    rename: () => Effect.void,
+    writeFileString: () => Effect.void,
+  });
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.captureNow;
+
+      assert.deepEqual(flashWindows[0]?.alwaysOnTopCalls, [[true, "pop-up-menu"]]);
     }),
   ).pipe(Effect.provide(layer));
 });

@@ -1,3 +1,5 @@
+// @effect-diagnostics nodeBuiltinImport:off
+
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";
 

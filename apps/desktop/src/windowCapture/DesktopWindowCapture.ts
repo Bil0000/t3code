@@ -39,9 +39,9 @@ import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts
 import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutProcess.ts";
 import { captureMacWindowSnapshot, type MacWindowCaptureSource } from "./MacWindowCapture.ts";
 import {
-  captureWindowsWindowSnapshot,
-  type WindowsWindowCaptureSource,
-} from "./WindowsWindowCapture.ts";
+  captureRegionWindowSnapshot,
+  type RegionWindowCaptureSource,
+} from "./RegionWindowCapture.ts";
 import {
   type WindowCaptureAnimationDestination,
   WindowCaptureTransition,
@@ -51,7 +51,6 @@ import {
   accessibleWindowText,
   findAccessibleWindow,
   findAccessibleWindowByTitle,
-  findCaptureSource,
   hideAndWaitForBlur,
   isPortalWindowSourceName,
   isWaylandSession,
@@ -379,10 +378,7 @@ async function captureSource({
       });
     }
 
-    let source:
-      | MacWindowCaptureSource
-      | WindowsWindowCaptureSource
-      | Electron.DesktopCapturerSource;
+    let source: MacWindowCaptureSource | RegionWindowCaptureSource | Electron.DesktopCapturerSource;
     let png: Buffer;
     let imageTempReady = false;
     if (platform === "darwin") {
@@ -395,26 +391,25 @@ async function captureSource({
         windowCaptureThumbnailSize(active),
       ));
       imageTempReady = true;
-    } else if (platform === "win32") {
+    } else if (mode === "direct") {
       if (!active) {
         throw new DesktopWindowCaptureError({ operation: "window-unavailable", captureId });
       }
-      ({ source, png } = await captureWindowsWindowSnapshot(active));
+      ({ source, png } = await captureRegionWindowSnapshot(
+        active,
+        windowCaptureFlashBounds(active, platform),
+      ));
     } else {
-      const sources = await Electron.desktopCapturer.getSources({
-        types: mode === "portal" ? ["window", "screen"] : ["window"],
+      const [selected] = await Electron.desktopCapturer.getSources({
+        types: ["window", "screen"],
         thumbnailSize: windowCaptureThumbnailSize(active),
         fetchWindowIcons: true,
       });
-      const selected =
-        mode === "portal" ? sources[0] : active ? findCaptureSource(sources, active) : undefined;
       if (!selected || selected.thumbnail.isEmpty()) {
-        throw mode === "portal"
-          ? new DesktopWindowCaptureError({
-              operation: "no-window-selected",
-              captureId,
-            })
-          : new DesktopWindowCaptureError({ operation: "window-unavailable", captureId });
+        throw new DesktopWindowCaptureError({
+          operation: "no-window-selected",
+          captureId,
+        });
       }
       source = selected;
       png = selected.thumbnail.toPNG();
@@ -646,7 +641,7 @@ export const make = Effect.gen(function* () {
   const transition = new WindowCaptureTransition({
     boundOverlayToFlight: environment.platform === "win32",
     useWorkArea: environment.platform === "darwin",
-    ...(environment.platform === "win32" ? { alwaysOnTopLevel: "pop-up-menu" } : {}),
+    alwaysOnTopLevel: environment.platform === "linux" ? undefined : "pop-up-menu",
   });
 
   const startPairShortcutProcess = (
