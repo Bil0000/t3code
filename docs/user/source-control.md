@@ -57,6 +57,16 @@ T3 Code works with the platforms your team already uses:
 - Works on GitHub, GitLab, and Bitbucket. Azure DevOps takes a new title and description; its
   comments stay read-only here, as they already were
 
+### Clean Up Worktrees Automatically
+
+In **Settings → General**, set **Auto-delete worktrees** to **Instant**, **After 3 days**, or
+**After 7 days**. It is off by default. When enabled, T3 Code removes worktrees as soon as their
+thread is deleted, or after a manually settled thread reaches the selected age.
+
+Only clean, idle worktrees managed by T3 Code are removed. Changed worktrees, worktrees shared
+with an active thread, active agent sessions, and open terminals are skipped and checked again
+later. The Git branch remains. A settled thread recreates its worktree when you use it again.
+
 ### Know Your Setup at a Glance
 
 The **Source Control settings** page shows you exactly what's connected:

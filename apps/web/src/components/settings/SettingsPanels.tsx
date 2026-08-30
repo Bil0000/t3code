@@ -526,6 +526,10 @@ export function useSettingsRestore(onRestored?: () => void) {
       DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin
         ? ["New worktrees start from origin"]
         : []),
+      ...(settings.worktreeAutoDeleteAfterDays !==
+      DEFAULT_UNIFIED_SETTINGS.worktreeAutoDeleteAfterDays
+        ? ["Auto-delete worktrees"]
+        : []),
       ...(settings.addProjectBaseDirectory !== DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory
         ? ["Add project base directory"]
         : []),
@@ -563,6 +567,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       settings.addProjectBaseDirectory,
       settings.defaultThreadEnvMode,
       settings.newWorktreesStartFromOrigin,
+      settings.worktreeAutoDeleteAfterDays,
       settings.diffIgnoreWhitespace,
       settings.environmentIdentificationMode,
       settings.fontFamilyCode,
@@ -671,6 +676,7 @@ export function useSettingsRestore(onRestored?: () => void) {
       providerHealthRefreshInterval: DEFAULT_UNIFIED_SETTINGS.providerHealthRefreshInterval,
       defaultThreadEnvMode: DEFAULT_UNIFIED_SETTINGS.defaultThreadEnvMode,
       newWorktreesStartFromOrigin: DEFAULT_UNIFIED_SETTINGS.newWorktreesStartFromOrigin,
+      worktreeAutoDeleteAfterDays: DEFAULT_UNIFIED_SETTINGS.worktreeAutoDeleteAfterDays,
       addProjectBaseDirectory: DEFAULT_UNIFIED_SETTINGS.addProjectBaseDirectory,
       confirmThreadArchive: DEFAULT_UNIFIED_SETTINGS.confirmThreadArchive,
       confirmThreadDelete: DEFAULT_UNIFIED_SETTINGS.confirmThreadDelete,
@@ -2296,6 +2302,67 @@ export function GeneralSettingsPanel() {
             }
           />
         ) : null}
+
+        <SettingsRow
+          {...searchableSetting("worktree-auto-delete")}
+          description="Delete clean T3-managed worktrees for deleted threads, or after manually settled threads reach this age."
+          resetAction={
+            settings.worktreeAutoDeleteAfterDays !==
+            DEFAULT_UNIFIED_SETTINGS.worktreeAutoDeleteAfterDays ? (
+              <SettingResetButton
+                label="auto-delete worktrees"
+                onClick={() =>
+                  updateSettings({
+                    worktreeAutoDeleteAfterDays:
+                      DEFAULT_UNIFIED_SETTINGS.worktreeAutoDeleteAfterDays,
+                  })
+                }
+              />
+            ) : null
+          }
+          control={
+            <Select
+              value={
+                settings.worktreeAutoDeleteAfterDays === null
+                  ? "off"
+                  : String(settings.worktreeAutoDeleteAfterDays)
+              }
+              onValueChange={(value) => {
+                if (value === "off") {
+                  updateSettings({ worktreeAutoDeleteAfterDays: null });
+                } else if (value === "0" || value === "3" || value === "7") {
+                  updateSettings({
+                    worktreeAutoDeleteAfterDays: value === "0" ? 0 : value === "3" ? 3 : 7,
+                  });
+                }
+              }}
+            >
+              <SelectTrigger className="w-full sm:w-44" aria-label="Auto-delete worktrees">
+                <SelectValue>
+                  {settings.worktreeAutoDeleteAfterDays === null
+                    ? "Off"
+                    : settings.worktreeAutoDeleteAfterDays === 0
+                      ? "Instant"
+                      : `After ${settings.worktreeAutoDeleteAfterDays} days`}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectPopup align="end" alignItemWithTrigger={false}>
+                <SelectItem hideIndicator value="off">
+                  Off
+                </SelectItem>
+                <SelectItem hideIndicator value="0">
+                  Instant
+                </SelectItem>
+                <SelectItem hideIndicator value="3">
+                  After 3 days
+                </SelectItem>
+                <SelectItem hideIndicator value="7">
+                  After 7 days
+                </SelectItem>
+              </SelectPopup>
+            </Select>
+          }
+        />
 
         <SettingsRow
           {...searchableSetting("add-project-starts-in")}

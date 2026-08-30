@@ -292,10 +292,28 @@ describe("ServerSettings worktree defaults", () => {
     expect(decodeServerSettings({}).newWorktreesStartFromOrigin).toBe(true);
   });
 
+  it("defaults automatic worktree deletion off for legacy configs", () => {
+    expect(decodeServerSettings({}).worktreeAutoDeleteAfterDays).toBeNull();
+  });
+
   it("accepts start-from-origin updates", () => {
     expect(
       decodeServerSettingsPatch({ newWorktreesStartFromOrigin: false }).newWorktreesStartFromOrigin,
     ).toBe(false);
+  });
+
+  it.each([0, 3, 7] as const)("accepts a supported worktree deletion delay: %s", (value) => {
+    expect(
+      decodeServerSettings({ worktreeAutoDeleteAfterDays: value }).worktreeAutoDeleteAfterDays,
+    ).toBe(value);
+    expect(
+      decodeServerSettingsPatch({ worktreeAutoDeleteAfterDays: value }).worktreeAutoDeleteAfterDays,
+    ).toBe(value);
+  });
+
+  it.each([-1, 1, 14, "3"])("rejects an unsupported worktree deletion delay: %s", (value) => {
+    expect(() => decodeServerSettings({ worktreeAutoDeleteAfterDays: value })).toThrow();
+    expect(() => decodeServerSettingsPatch({ worktreeAutoDeleteAfterDays: value })).toThrow();
   });
 });
 
