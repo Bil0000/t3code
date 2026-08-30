@@ -52,27 +52,22 @@ type ActiveTransition = {
 
 type WindowCaptureTransitionOptions = {
   readonly boundOverlayToFlight?: boolean | undefined;
-  readonly useWorkArea?: boolean | undefined;
   readonly alwaysOnTopLevel?:
     | NonNullable<Parameters<Electron.BrowserWindow["setAlwaysOnTop"]>[1]>
     | undefined;
 };
 
 export function windowCaptureAnimationOverlayBounds(
-  displays: ReadonlyArray<
-    Pick<Electron.Display, "bounds"> & Partial<Pick<Electron.Display, "workArea">>
-  >,
-  useWorkArea = false,
+  displays: ReadonlyArray<Pick<Electron.Display, "bounds">>,
 ): Electron.Rectangle {
   const firstDisplay = displays[0];
-  const first = (useWorkArea ? firstDisplay?.workArea : undefined) ??
-    firstDisplay?.bounds ?? { x: 0, y: 0, width: 1, height: 1 };
+  const first = firstDisplay?.bounds ?? { x: 0, y: 0, width: 1, height: 1 };
   let left = first.x;
   let top = first.y;
   let right = first.x + first.width;
   let bottom = first.y + first.height;
   for (const display of displays.slice(1)) {
-    const bounds = (useWorkArea ? display.workArea : undefined) ?? display.bounds;
+    const bounds = display.bounds;
     left = Math.min(left, bounds.x);
     top = Math.min(top, bounds.y);
     right = Math.max(right, bounds.x + bounds.width);
@@ -191,12 +186,10 @@ window.startCaptureTransition=async destination=>{
 export class WindowCaptureTransition {
   private active: ActiveTransition | undefined;
   private readonly boundOverlayToFlight: boolean;
-  private readonly useWorkArea: boolean;
   private readonly alwaysOnTopLevel: WindowCaptureTransitionOptions["alwaysOnTopLevel"];
 
   constructor(options: WindowCaptureTransitionOptions = {}) {
     this.boundOverlayToFlight = options.boundOverlayToFlight ?? false;
-    this.useWorkArea = options.useWorkArea ?? false;
     this.alwaysOnTopLevel = options.alwaysOnTopLevel;
   }
 
@@ -209,7 +202,7 @@ export class WindowCaptureTransition {
     this.dispose();
     const requestedBounds = this.boundOverlayToFlight
       ? windowCaptureAnimationFlightBounds(source, source)
-      : windowCaptureAnimationOverlayBounds(Electron.screen.getAllDisplays(), this.useWorkArea);
+      : windowCaptureAnimationOverlayBounds(Electron.screen.getAllDisplays());
     const window = createWindow(requestedBounds, this.alwaysOnTopLevel);
     const active: ActiveTransition = {
       id,

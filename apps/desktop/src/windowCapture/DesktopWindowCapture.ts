@@ -645,8 +645,7 @@ export const make = Effect.gen(function* () {
   let stopShiftShortcut: (() => void) | undefined;
   const flash = new WindowCaptureFlash(environment.platform);
   const transition = new WindowCaptureTransition({
-    boundOverlayToFlight: environment.platform === "win32",
-    useWorkArea: environment.platform === "darwin",
+    boundOverlayToFlight: environment.platform !== "linux",
     alwaysOnTopLevel: environment.platform === "linux" ? undefined : "pop-up-menu",
   });
 

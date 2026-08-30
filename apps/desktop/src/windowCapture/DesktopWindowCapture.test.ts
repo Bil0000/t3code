@@ -415,7 +415,7 @@ it.effect("captures the active Linux X11 window without enumerating desktop sour
   ).pipe(Effect.provide(layer));
 });
 
-it.effect("keeps the macOS capture transition above the revealed main window", () => {
+it.effect("keeps the macOS capture transition on the source display", () => {
   const png = Buffer.from([1, 2, 3]);
   const active = {
     platform: "macos",
@@ -459,6 +459,12 @@ it.effect("keeps the macOS capture transition above the revealed main window", (
       yield* service.captureNow;
 
       assert.deepEqual(flashWindows[0]?.alwaysOnTopCalls, [[true, "pop-up-menu"]]);
+      assert.deepEqual(flashWindows[0]?.bounds, {
+        x: -62,
+        y: -52,
+        width: 944,
+        height: 744,
+      });
       assert.isBelow(
         mainShowMock.mock.invocationCallOrder[0]!,
         transitionShowMock.mock.invocationCallOrder[0]!,
