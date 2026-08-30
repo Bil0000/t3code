@@ -49,48 +49,39 @@ const TERMINAL_WORD_FORWARD = "\u001bf";
 const TERMINAL_LINE_START = "\u0001";
 const TERMINAL_LINE_END = "\u0005";
 const TERMINAL_DELETE_TO_LINE_START = "\u0015";
-const EVENT_CODE_KEY_ALIASES: Readonly<Record<string, readonly string[]>> = {
-  BracketLeft: ["["],
-  BracketRight: ["]"],
-  Digit0: ["0"],
-  Digit1: ["1"],
-  Digit2: ["2"],
-  Digit3: ["3"],
-  Digit4: ["4"],
-  Digit5: ["5"],
-  Digit6: ["6"],
-  Digit7: ["7"],
-  Digit8: ["8"],
-  Digit9: ["9"],
-};
-const SHIFTED_SHORTCUT_KEY_ALIASES: Readonly<Record<string, string>> = {
-  ")": "0",
-  "!": "1",
-  "@": "2",
-  "#": "3",
-  $: "4",
-  "%": "5",
-  "^": "6",
-  "&": "7",
-  "*": "8",
-  "(": "9",
-  "{": "[",
-  "}": "]",
-  "~": "`",
-  _: "-",
-  "+": "=",
-  "|": "\\",
-  ":": ";",
-  '"': "'",
-  "<": ",",
-  ">": ".",
-  "?": "/",
+const EVENT_CODE_SHORTCUT_KEYS: Readonly<Record<string, string>> = {
+  Backquote: "`",
+  Backslash: "\\",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Comma: ",",
+  Digit0: "0",
+  Digit1: "1",
+  Digit2: "2",
+  Digit3: "3",
+  Digit4: "4",
+  Digit5: "5",
+  Digit6: "6",
+  Digit7: "7",
+  Digit8: "8",
+  Digit9: "9",
+  Equal: "=",
+  Minus: "-",
+  Period: ".",
+  Quote: "'",
+  Semicolon: ";",
+  Slash: "/",
 };
 
 function normalizeEventKey(key: string): string {
   const normalized = key.toLowerCase();
   if (normalized === "esc") return "escape";
   return normalized;
+}
+
+export function shortcutKeyFromEvent(event: Pick<ShortcutEventLike, "key" | "code">): string {
+  const physicalKey = event.code ? EVENT_CODE_SHORTCUT_KEYS[event.code] : undefined;
+  return physicalKey ?? normalizeEventKey(event.key);
 }
 
 function resolveEventKeys(event: ShortcutEventLike): Set<string> {
@@ -105,12 +96,7 @@ function resolveEventKeys(event: ShortcutEventLike): Set<string> {
   if (letterCode && !/^[a-z]$/.test(layoutKey)) {
     keys.add(letterCode.toLowerCase());
   }
-  const aliases = event.code ? EVENT_CODE_KEY_ALIASES[event.code] : undefined;
-  if (!aliases) return keys;
-
-  for (const alias of aliases) {
-    keys.add(alias);
-  }
+  keys.add(shortcutKeyFromEvent(event));
   return keys;
 }
 
@@ -183,12 +169,8 @@ export function shortcutConflictKey(
   const useMetaForMod = isMacPlatform(platform);
   const metaKey = shortcut.metaKey || (shortcut.modKey && useMetaForMod);
   const ctrlKey = shortcut.ctrlKey || (shortcut.modKey && !useMetaForMod);
-  const key = shortcut.shiftKey
-    ? (SHIFTED_SHORTCUT_KEY_ALIASES[shortcut.key] ?? shortcut.key)
-    : shortcut.key;
-
   return [
-    key,
+    shortcut.key,
     metaKey ? "meta" : "",
     ctrlKey ? "ctrl" : "",
     shortcut.shiftKey ? "shift" : "",

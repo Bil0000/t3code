@@ -759,6 +759,28 @@ describe("resolveShortcutCommand", () => {
     );
   });
 
+  it("matches punctuation shortcuts by physical key across keyboard layouts", () => {
+    const keybindings = compile([
+      { shortcut: modShortcut("'", { shiftKey: true }), command: "diff.toggle" },
+    ]);
+
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "@", code: "Quote", metaKey: true, shiftKey: true }),
+        keybindings,
+        { platform: "MacIntel" },
+      ),
+      "diff.toggle",
+    );
+    assert.isNull(
+      resolveShortcutCommand(
+        event({ key: '"', code: "Digit2", metaKey: true, shiftKey: true }),
+        keybindings,
+        { platform: "MacIntel" },
+      ),
+    );
+  });
+
   it("matches Option-modified letters using the physical key code on macOS", () => {
     assert.strictEqual(
       resolveShortcutCommand(

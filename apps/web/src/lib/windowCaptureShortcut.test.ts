@@ -123,46 +123,27 @@ describe("window capture keybinding conflicts", () => {
     ).toBe("capture.other");
   });
 
-  it.each([
-    ["{", "["],
-    ["}", "]"],
-    ["@", "2"],
-    ["<", ","],
-    [">", "."],
-    ["?", "/"],
-    [":", ";"],
-    ['"', "'"],
-    ["_", "-"],
-    ["+", "="],
-    ["|", "\\"],
-    ["~", "`"],
-  ])("finds conflicts for shifted physical key aliases %s and %s", (recorded, bound) => {
+  it("keeps symbols on different physical keys distinct", () => {
+    const modifiers = {
+      metaKey: false,
+      ctrlKey: false,
+      shiftKey: true,
+      altKey: false,
+      modKey: true,
+    } as const;
+
     expect(
       windowCaptureKeybindingConflict(
-        {
-          key: recorded,
-          metaKey: false,
-          ctrlKey: false,
-          shiftKey: true,
-          altKey: false,
-          modKey: true,
-        },
+        { key: '"', ...modifiers },
         [
           {
             command: "capture.other",
-            shortcut: {
-              key: bound,
-              metaKey: false,
-              ctrlKey: false,
-              shiftKey: true,
-              altKey: false,
-              modKey: true,
-            },
+            shortcut: { key: "'", ...modifiers },
           },
         ],
         "MacIntel",
       ),
-    ).toBe("capture.other");
+    ).toBeNull();
   });
 });
 
