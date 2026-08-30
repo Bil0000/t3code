@@ -17,6 +17,15 @@ import * as DesktopWindowCapture from "../../windowCapture/DesktopWindowCapture.
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
+class WindowCaptureIpcUnauthorizedSenderError extends Schema.TaggedErrorClass<WindowCaptureIpcUnauthorizedSenderError>()(
+  "WindowCaptureIpcUnauthorizedSenderError",
+  {},
+) {
+  override get message(): string {
+    return "Window capture request was rejected.";
+  }
+}
+
 const ensureTrustedWindowCaptureSender = Effect.fn("desktop.ipc.windowCapture.ensureTrustedSender")(
   function* (event: DesktopIpc.DesktopIpcInvokeEvent | undefined) {
     const main = yield* (yield* ElectronWindow.ElectronWindow).main;
@@ -25,9 +34,7 @@ const ensureTrustedWindowCaptureSender = Effect.fn("desktop.ipc.windowCapture.en
       Option.isNone(main) ||
       main.value.webContents.id !== event.sender.id
     ) {
-      return yield* new DesktopWindowCapture.DesktopWindowCaptureError({
-        operation: "unauthorized",
-      });
+      return yield* new WindowCaptureIpcUnauthorizedSenderError();
     }
     return main.value;
   },

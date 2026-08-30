@@ -83,7 +83,6 @@ const DesktopWindowCaptureOperation = Schema.Literals([
   "acknowledge",
   "unsupported",
   "disabled",
-  "unauthorized",
   "no-window-selected",
   "window-unavailable",
   "capture",
@@ -109,8 +108,6 @@ export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWi
         return "Window capture is not supported here.";
       case "disabled":
         return "Enable Window Capture in Settings first.";
-      case "unauthorized":
-        return "Window capture request was rejected.";
       case "no-window-selected":
         return "No window was selected.";
       case "window-unavailable":
