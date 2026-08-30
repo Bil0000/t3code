@@ -37,6 +37,7 @@ import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts";
 import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutProcess.ts";
+import { captureMacWindowSnapshot, type MacWindowCaptureSource } from "./MacWindowCapture.ts";
 import {
   captureWindowsWindowSnapshot,
   type WindowsWindowCaptureSource,
@@ -357,6 +358,7 @@ async function captureSource({
   settings,
   flash,
   transition,
+  imageTempPath,
 }: {
   mode: DesktopWindowCaptureState["mode"];
   captureId: string;
@@ -364,6 +366,7 @@ async function captureSource({
   settings: ClientSettings;
   flash: WindowCaptureFlash;
   transition: WindowCaptureTransition;
+  imageTempPath: string;
 }) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
@@ -372,13 +375,27 @@ async function captureSource({
     if (mode === "direct") {
       active = await activeWindow({
         accessibilityPermission: false,
-        screenRecordingPermission: false,
+        screenRecordingPermission: platform === "darwin",
       });
     }
 
-    let source: WindowsWindowCaptureSource | Electron.DesktopCapturerSource;
+    let source:
+      | MacWindowCaptureSource
+      | WindowsWindowCaptureSource
+      | Electron.DesktopCapturerSource;
     let png: Buffer;
-    if (platform === "win32") {
+    let imageTempReady = false;
+    if (platform === "darwin") {
+      if (!active) {
+        throw new DesktopWindowCaptureError({ operation: "window-unavailable", captureId });
+      }
+      ({ source, png } = await captureMacWindowSnapshot(
+        active,
+        imageTempPath,
+        windowCaptureThumbnailSize(active),
+      ));
+      imageTempReady = true;
+    } else if (platform === "win32") {
       if (!active) {
         throw new DesktopWindowCaptureError({ operation: "window-unavailable", captureId });
       }
@@ -423,7 +440,7 @@ async function captureSource({
               portalAppName: undefined,
             }))
           : Promise.resolve({ accessibleText: undefined, portalAppName: undefined });
-    return { source, active, contextPromise, animationStarted, png };
+    return { source, active, contextPromise, animationStarted, png, imageTempReady };
   } finally {
     if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
   }
@@ -679,18 +696,20 @@ export const make = Effect.gen(function* () {
 
     yield* Effect.gen(function* () {
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
-      const { source, active, contextPromise, animationStarted, png } = yield* Effect.tryPromise({
-        try: () =>
-          captureSource({
-            mode,
-            captureId: id,
-            platform: environment.platform,
-            settings,
-            flash,
-            transition,
-          }),
-        catch: (cause) => captureFailure(cause, id),
-      });
+      const { source, active, contextPromise, animationStarted, png, imageTempReady } =
+        yield* Effect.tryPromise({
+          try: () =>
+            captureSource({
+              mode,
+              captureId: id,
+              platform: environment.platform,
+              settings,
+              flash,
+              transition,
+              imageTempPath,
+            }),
+          catch: (cause) => captureFailure(cause, id),
+        });
       if (animationStarted) {
         yield* desktopWindow
           .dispatchMenuAction(`window-capture-started:${id}`)
@@ -718,7 +737,7 @@ export const make = Effect.gen(function* () {
           ...(appIconDataUrl ? { appIconDataUrl } : {}),
         },
       });
-      yield* fileSystem.writeFile(imageTempPath, png);
+      if (!imageTempReady) yield* fileSystem.writeFile(imageTempPath, png);
       yield* fileSystem.rename(imageTempPath, imagePath);
       yield* fileSystem.writeFileString(
         metadataPath + ".tmp",
