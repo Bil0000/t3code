@@ -330,12 +330,22 @@ export function WindowCaptureSettings() {
                 }
                 value={soundSelection}
               >
-                <SelectTrigger aria-label="Window capture sound" className="w-40" size="sm">
-                  <SelectValue />
+                <SelectTrigger
+                  aria-label="Window capture sound"
+                  className="w-fit min-w-0"
+                  size="sm"
+                >
+                  <SelectValue>
+                    {soundSelection === "off"
+                      ? "Off"
+                      : soundSelection === "soft-pop"
+                        ? "Soft Pop (Default)"
+                        : "Camera Shutter"}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectPopup align="end" alignItemWithTrigger={false}>
                   <SelectItem value="off">Off</SelectItem>
-                  <SelectItem value="soft-pop">Soft Pop</SelectItem>
+                  <SelectItem value="soft-pop">Soft Pop (Default)</SelectItem>
                   <SelectItem value="camera-shutter">Camera Shutter</SelectItem>
                 </SelectPopup>
               </Select>
