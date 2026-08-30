@@ -21,6 +21,7 @@ import {
 import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { commandLabel, keybindingFromKeyboardEvent } from "./KeybindingsSettings.logic";
+import { createRecordingRequestTracker } from "./WindowCaptureSettings.logic";
 import {
   SettingsUnavailableGroup,
   SettingResetButton,
@@ -80,7 +81,7 @@ export function WindowCaptureSettings() {
     availability: null,
   });
   const heldModifierCodesRef = useRef(new Set<string>());
-  const recordingRequestedRef = useRef(false);
+  const [recordingRequests] = useState(createRecordingRequestTracker);
   const shortcutCheckIdRef = useRef(0);
   const unavailableMessage = bridge
     ? undefined
@@ -122,23 +123,24 @@ export function WindowCaptureSettings() {
   );
 
   const stopRecording = useCallback(() => {
-    recordingRequestedRef.current = false;
+    recordingRequests.clear();
     heldModifierCodesRef.current.clear();
     setRecording(false);
     void bridge?.setWindowCaptureShortcutSuppressed(false);
-  }, [bridge]);
+  }, [bridge, recordingRequests]);
 
   const startRecording = useCallback(async () => {
-    if (!bridge || recordingRequestedRef.current) return;
-    recordingRequestedRef.current = true;
+    if (!bridge) return;
+    const recordingRequest = recordingRequests.tryBegin();
+    if (!recordingRequest) return;
     heldModifierCodesRef.current.clear();
     setShortcutCheck({ status: "idle", availability: null });
     try {
       await bridge.setWindowCaptureShortcutSuppressed(true);
-      if (recordingRequestedRef.current) setRecording(true);
+      if (recordingRequests.owns(recordingRequest)) setRecording(true);
     } catch (error) {
-      if (!recordingRequestedRef.current) return;
-      recordingRequestedRef.current = false;
+      if (!recordingRequests.owns(recordingRequest)) return;
+      recordingRequests.clear();
       setShortcutCheck({
         status: "checked",
         availability: {
@@ -147,14 +149,14 @@ export function WindowCaptureSettings() {
         },
       });
     }
-  }, [bridge]);
+  }, [bridge, recordingRequests]);
 
   useEffect(
     () => () => {
-      recordingRequestedRef.current = false;
+      recordingRequests.clear();
       void bridge?.setWindowCaptureShortcutSuppressed(false);
     },
-    [bridge],
+    [bridge, recordingRequests],
   );
 
   const checkShortcut = useCallback(
