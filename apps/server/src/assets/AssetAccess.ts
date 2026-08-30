@@ -304,16 +304,17 @@ export const issueAssetUrl = Effect.fn("AssetAccess.issueAssetUrl")(function* (i
       // shape resolves the on-disk path); images do not. Videos and images
       // render inline; other generic files download.
       const isGenericFile = parseAttachmentFileExtension(input.resource.attachmentId) !== null;
-      const isVideo =
-        input.resource.mimeType !== undefined &&
-        INLINE_VIDEO_MIME_TYPE_PATTERN.test(input.resource.mimeType);
+      const videoMimeType = input.resource.mimeType?.split(";", 1)[0]?.trim() ?? "";
+      const isVideo = INLINE_VIDEO_MIME_TYPE_PATTERN.test(videoMimeType);
       claims = {
         version: 1,
         kind: "attachment",
         attachmentId: input.resource.attachmentId,
         ...(isGenericFile && !isVideo ? { download: true } : {}),
         ...(input.resource.fileName !== undefined ? { fileName: input.resource.fileName } : {}),
-        ...(input.resource.mimeType !== undefined ? { mimeType: input.resource.mimeType } : {}),
+        ...(input.resource.mimeType !== undefined
+          ? { mimeType: isVideo ? videoMimeType : input.resource.mimeType }
+          : {}),
         expiresAt,
       };
       fileName = input.resource.fileName ?? path.basename(attachmentPath);

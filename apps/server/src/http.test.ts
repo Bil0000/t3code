@@ -51,7 +51,11 @@ describe("assetResponseHeaders", () => {
   });
 
   it("serves inline videos with their declared mime type", () => {
-    expect(assetResponseHeaders("/attachments/demo.bin", { mimeType: "video/mp4" })).toEqual({
+    expect(
+      assetResponseHeaders("/attachments/demo.bin", {
+        mimeType: 'video/mp4; codecs="avc1.42E01E"',
+      }),
+    ).toEqual({
       "Cache-Control": "private, max-age=3600",
       "Content-Type": "video/mp4",
       "X-Content-Type-Options": "nosniff",

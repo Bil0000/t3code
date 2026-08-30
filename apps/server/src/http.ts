@@ -88,6 +88,7 @@ export function assetResponseHeaders(
   },
 ): Record<string, string> {
   const lowerPath = filePath.toLowerCase();
+  const inlineVideoMimeType = options?.mimeType?.split(";", 1)[0]?.trim();
   return {
     "Cache-Control": "private, max-age=3600",
     "X-Content-Type-Options": "nosniff",
@@ -100,8 +101,8 @@ export function assetResponseHeaders(
               ? options.mimeType
               : "application/octet-stream",
         }
-      : options?.mimeType !== undefined && isSafeInlineVideoMimeType(options.mimeType)
-        ? { "Content-Type": options.mimeType }
+      : inlineVideoMimeType !== undefined && isSafeInlineVideoMimeType(inlineVideoMimeType)
+        ? { "Content-Type": inlineVideoMimeType }
         : lowerPath.endsWith(".html") || lowerPath.endsWith(".htm")
           ? { "Content-Type": "text/html; charset=utf-8" }
           : {}),

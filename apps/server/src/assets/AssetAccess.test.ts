@@ -223,7 +223,7 @@ describe("AssetAccess", () => {
           _tag: "attachment",
           attachmentId,
           fileName: "demo.mp4",
-          mimeType: "video/mp4",
+          mimeType: 'video/mp4; codecs="avc1.42E01E"',
         },
       });
       const suffix = result.relativeUrl.slice(`${ASSET_ROUTE_PREFIX}/`.length);
