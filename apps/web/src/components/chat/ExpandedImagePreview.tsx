@@ -1,3 +1,6 @@
+import type { ComposerFileAttachment } from "../../composerDraftStore";
+import { type ChatImageAttachment, isVideoAttachment } from "../../types";
+
 export interface ExpandedImageItem {
   src: string;
   name: string;
@@ -10,11 +13,20 @@ export interface ExpandedImagePreview {
 }
 
 export function buildExpandedImagePreview(
-  images: ReadonlyArray<{ id: string; name: string; previewUrl?: string }>,
+  images: ReadonlyArray<ChatImageAttachment | ComposerFileAttachment>,
   selectedImageId: string,
 ): ExpandedImagePreview | null {
+  const selected = images.find((image) => image.id === selectedImageId);
+  if (selected?.type === "file" && selected.file && isVideoAttachment(selected)) {
+    return {
+      images: [{ src: URL.createObjectURL(selected.file), name: selected.name, type: "video" }],
+      index: 0,
+    };
+  }
   const previewableImages = images.flatMap((image) =>
-    image.previewUrl ? [{ id: image.id, src: image.previewUrl, name: image.name }] : [],
+    image.type === "image" && image.previewUrl
+      ? [{ id: image.id, src: image.previewUrl, name: image.name }]
+      : [],
   );
   if (previewableImages.length === 0) {
     return null;
