@@ -8,6 +8,7 @@ import {
   fileAttachmentCapabilityBlockReason,
   fileAttachmentStagingLimit,
   inferImageMimeTypeFromName,
+  isPreviewableComposerVideo,
   normalizeComposerImageFileMimeType,
   shouldHandleComposerAttachmentPaste,
 } from "./composerAttachmentFiles";
@@ -265,6 +266,23 @@ describe("composer attachment files", () => {
     ]);
 
     expect(released.map((attachment) => attachment.id)).toEqual(["image-1", "file-uploading"]);
+  });
+
+  it("keeps restored videos on the preview path in their upload environment", () => {
+    const environmentId = EnvironmentId.make("environment-1");
+    const video: ComposerFileAttachment = {
+      type: "file",
+      id: "video-1",
+      name: "clip.mp4",
+      mimeType: "video/mp4",
+      sizeBytes: 3,
+      file: null,
+      uploadedAttachmentId: "uploaded-video-1",
+      uploadEnvironmentId: environmentId,
+    };
+
+    expect(isPreviewableComposerVideo(video, environmentId)).toBe(true);
+    expect(isPreviewableComposerVideo(video, EnvironmentId.make("environment-2"))).toBe(false);
   });
 
   it("claims image pastes even when clipboard text is present", () => {
