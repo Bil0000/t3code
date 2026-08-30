@@ -3764,11 +3764,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           <WindowCaptureAttachmentFrame
                             key={image.id}
                             aria-hidden={windowCaptureAnimationPending || undefined}
-                            animationId={
-                              windowCaptureAnimationPending && settings.windowCaptureAnimations
-                                ? image.id
-                                : undefined
-                            }
+                            animationId={windowCaptureAnimationPending ? image.id : undefined}
                             animationSource={
                               windowCaptureAnimationPending ? image.source : undefined
                             }
@@ -3880,7 +3876,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       <WindowCaptureAttachmentFrame
                         key={captureId}
                         aria-hidden="true"
-                        animationId={settings.windowCaptureAnimations ? captureId : undefined}
+                        animationId={captureId}
                         animationSource={
                           pendingWindowCaptureAnimations.find((capture) => capture.id === captureId)
                             ?.source
