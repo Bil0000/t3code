@@ -3880,11 +3880,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             {isOpening ? (
                               <span className="relative z-10 text-[10px]">Loading…</span>
                             ) : (
-                              <PlayIcon className="relative z-10 size-5 fill-current drop-shadow-md" />
+                              <PlayIcon className="relative z-10 size-4 fill-current drop-shadow-md" />
                             )}
-                            <span className="pointer-events-none absolute inset-x-1 bottom-1 truncate text-[9px] drop-shadow-md">
-                              {file.name}
-                            </span>
                           </button>
                           {upload?.status === "uploading" && (
                             <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-background/85 px-1 text-center text-[10px] text-foreground">
