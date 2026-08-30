@@ -4,10 +4,6 @@ import * as NodeChildProcess from "node:child_process";
 
 import type { WindowCaptureModifier } from "@t3tools/contracts";
 
-// NX device-dependent CGEventFlags bits for the left and right key of each
-// modifier. CGEventSourceFlagsState exposes them without any TCC permission,
-// unlike CGEventTap/uiohook which need Input Monitoring and silently break
-// whenever the ad-hoc dev signature changes.
 const MAC_MODIFIER_PAIR_DEVICE_MASKS: Record<WindowCaptureModifier, readonly [number, number]> = {
   shift: [0x2, 0x4],
   control: [0x1, 0x2000],

@@ -313,7 +313,6 @@ describe("isWaylandSession", () => {
     expect(isWaylandSession(platform, environment)).toBe(expected);
   });
 
-  // The live-socket check reads /proc/net/unix, which only exists on Linux.
   effectIt.effect(
     "falls back to a live runtime directory socket when session variables are stripped",
     () =>

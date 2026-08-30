@@ -127,11 +127,6 @@ export function makeDevelopmentEnvironmentScript(environment) {
   ].join("\n");
 }
 
-// The launcher lives inside the signed bundle, so its content must stay
-// stable across dev restarts: macOS TCC pins permissions (Input Monitoring,
-// Accessibility) to the ad-hoc signature, and any rewrite forces a re-sign
-// that silently revokes them. Volatile environment lives in a separate file
-// outside the bundle that the launcher sources at run time.
 export function makeDevelopmentLauncherScript({
   electronBinaryPath,
   mainEntryPath,
