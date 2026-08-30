@@ -7479,15 +7479,6 @@ function ChatViewContent(props: ChatViewProps) {
                       </div>
                     </div>
                   ) : null}
-                  {isServerThread && activeThread ? (
-                    <QueuedRunsControl
-                      environmentId={activeThread.environmentId}
-                      threadId={activeThread.id}
-                      optimisticMessages={optimisticUserMessages}
-                      editingRunId={editingQueuedRun?.runId ?? null}
-                      onEditQueuedRun={beginEditingQueuedRun}
-                    />
-                  ) : null}
                   <div
                     ref={draftHeroTransition.composerAnchorRef}
                     className="relative z-10"
@@ -7521,6 +7512,17 @@ function ChatViewContent(props: ChatViewProps) {
                             isConnecting={isConnecting}
                             isSendBusy={isSendBusy}
                             isPreparingWorktree={isPreparingWorktree}
+                            queuedRunsControl={
+                              isServerThread && activeThread ? (
+                                <QueuedRunsControl
+                                  environmentId={activeThread.environmentId}
+                                  threadId={activeThread.id}
+                                  optimisticMessages={optimisticUserMessages}
+                                  editingRunId={editingQueuedRun?.runId ?? null}
+                                  onEditQueuedRun={beginEditingQueuedRun}
+                                />
+                              ) : null
+                            }
                             bannerItems={composerBannerItems}
                             environmentUnavailable={activeEnvironmentUnavailableState}
                             activePendingApproval={activePendingApproval}
