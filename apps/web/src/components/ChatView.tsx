@@ -210,7 +210,6 @@ import {
   PaperclipIcon,
   ChevronDownIcon,
   GitBranchIcon,
-  PencilIcon,
   InfoIcon,
   WifiOffIcon,
 } from "lucide-react";
@@ -5130,31 +5129,11 @@ function ChatViewContent(props: ChatViewProps) {
     void handleSwitchCheckoutToThread();
   }, [gitStatusQuery.data?.hasWorkingTreeChanges, handleSwitchCheckoutToThread]);
   const composerBannerItems = useMemo<ComposerBannerStackItem[]>(() => {
-    const queuedEditItems: ComposerBannerStackItem[] =
-      editingQueuedRun === null
-        ? []
-        : [
-            {
-              id: `queued-edit:${editingQueuedRun.runId}`,
-              variant: "info",
-              priority: "urgent",
-              icon: <PencilIcon />,
-              title: "Editing queued message",
-              actions: (
-                <Button size="xs" variant="ghost" onClick={cancelEditingQueuedRun}>
-                  Cancel
-                </Button>
-              ),
-              dismissLabel: "Cancel editing queued message",
-              onDismiss: cancelEditingQueuedRun,
-            },
-          ];
     const parkedThreadItems = parkedThreadBannerItem === null ? [] : [parkedThreadBannerItem];
     if (!localCheckoutBranchMismatch || !showBranchMismatchBanner || !activeBranchMismatchKey) {
-      return [...queuedEditItems, ...systemComposerBannerItems, ...parkedThreadItems];
+      return [...systemComposerBannerItems, ...parkedThreadItems];
     }
     return [
-      ...queuedEditItems,
       ...systemComposerBannerItems,
       {
         id: `branch-mismatch:${activeBranchMismatchKey}`,
@@ -5198,8 +5177,6 @@ function ChatViewContent(props: ChatViewProps) {
     ];
   }, [
     activeBranchMismatchKey,
-    cancelEditingQueuedRun,
-    editingQueuedRun,
     handleRestoreThreadBranch,
     isRestoringThreadBranch,
     localCheckoutBranchMismatch,
@@ -7520,6 +7497,7 @@ function ChatViewContent(props: ChatViewProps) {
                                   optimisticMessages={optimisticUserMessages}
                                   editingRunId={editingQueuedRun?.runId ?? null}
                                   onEditQueuedRun={beginEditingQueuedRun}
+                                  onCancelEdit={cancelEditingQueuedRun}
                                 />
                               ) : null
                             }
