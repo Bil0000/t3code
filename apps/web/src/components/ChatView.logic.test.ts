@@ -52,7 +52,7 @@ describe("loadDesktopVideoPreviewUrl", () => {
 });
 
 describe("isVideoPreviewRequestCurrent", () => {
-  it("rejects changed threads and superseded requests", () => {
+  it("rejects changed threads and replaced previews", () => {
     expect(isVideoPreviewRequestCurrent("thread-1", "thread-2", 1, 1)).toBe(false);
     expect(isVideoPreviewRequestCurrent("thread-1", "thread-1", 1, 2)).toBe(false);
     expect(isVideoPreviewRequestCurrent("thread-1", "thread-1", 2, 2)).toBe(true);

@@ -1444,6 +1444,7 @@ function ChatViewContent(props: ChatViewProps) {
   const routeThreadKeyRef = useRef(routeThreadKey);
   routeThreadKeyRef.current = routeThreadKey;
   const videoPreviewRequestIdRef = useRef(0);
+  const [openingVideoAttachmentId, setOpeningVideoAttachmentId] = useState<string | null>(null);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   useEffect(() => {
@@ -2533,6 +2534,12 @@ function ChatViewContent(props: ChatViewProps) {
           videoPreviewRequestId,
           videoPreviewRequestIdRef.current,
         );
+      const finishVideoPreviewRequest = () => {
+        if (videoPreviewRequestIdRef.current === videoPreviewRequestId) {
+          setOpeningVideoAttachmentId(null);
+        }
+      };
+      if (isVideo) setOpeningVideoAttachmentId(attachment.id);
 
       // fileName and mimeType ride in the signed claims so videos render
       // inline while other files keep their real download name and type.
@@ -2547,8 +2554,12 @@ function ChatViewContent(props: ChatViewProps) {
           },
         },
       });
-      if (!isCurrentRequest()) return;
+      if (!isCurrentRequest()) {
+        finishVideoPreviewRequest();
+        return;
+      }
       if (result._tag === "Failure") {
+        finishVideoPreviewRequest();
         const error = squashAtomCommandFailure(result);
         toastManager.add({
           type: "error",
@@ -2560,6 +2571,7 @@ function ChatViewContent(props: ChatViewProps) {
 
       const url = resolveAssetUrl(connection.httpBaseUrl, result.value.relativeUrl);
       if (!url) {
+        finishVideoPreviewRequest();
         toastManager.add({ type: "error", title: "Could not " + action + " " + attachment.name });
         return;
       }
@@ -2581,6 +2593,8 @@ function ChatViewContent(props: ChatViewProps) {
             title: "Could not play " + attachment.name,
             description: error instanceof Error ? error.message : "The attachment is unavailable.",
           });
+        } finally {
+          finishVideoPreviewRequest();
         }
         return;
       }
@@ -4432,6 +4446,8 @@ function ChatViewContent(props: ChatViewProps) {
       return [];
     });
     resetLocalDispatch();
+    videoPreviewRequestIdRef.current += 1;
+    setOpeningVideoAttachmentId(null);
     setExpandedImage(null);
   }, [draftId, resetLocalDispatch, threadId]);
 
@@ -6887,6 +6903,8 @@ function ChatViewContent(props: ChatViewProps) {
   };
 
   const onExpandTimelineImage = useCallback((preview: ExpandedImagePreview) => {
+    videoPreviewRequestIdRef.current += 1;
+    setOpeningVideoAttachmentId(null);
     setExpandedImage(preview);
   }, []);
   const onOpenTurnDiff = useCallback(
@@ -7183,6 +7201,7 @@ function ChatViewContent(props: ChatViewProps) {
                 isRevertingCheckpoint={isRevertingCheckpoint}
                 onImageExpand={onExpandTimelineImage}
                 onFileOpen={openFileAttachment}
+                openingVideoAttachmentId={openingVideoAttachmentId}
                 markdownCwd={gitCwd ?? undefined}
                 resolvedTheme={resolvedTheme}
                 timestampFormat={timestampFormat}
