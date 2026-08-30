@@ -105,9 +105,7 @@ export function WindowCaptureSettings() {
     : null;
   const canSaveShortcut =
     shortcutChanged && candidateConflict === null && shortcutCheck.availability?.available === true;
-  const soundSelection: WindowCaptureSoundSelection = settings.windowCapturePlaySound
-    ? settings.windowCaptureSound
-    : "off";
+  const soundSelection = settings.windowCapturePlaySound ? settings.windowCaptureSound : "off";
 
   const refreshState = useCallback(async () => {
     if (bridge) setState(await bridge.getWindowCaptureState());
@@ -321,7 +319,7 @@ export function WindowCaptureSettings() {
                 Test sound
               </Button>
             }
-            description="Choose the sound played after the image is attached."
+            description="Choose the sound played when capture starts."
             control={
               <Select
                 disabled={!captureAvailable}

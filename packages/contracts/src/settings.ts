@@ -148,7 +148,7 @@ export const WindowCaptureShortcut = Schema.Union([
 export type WindowCaptureShortcut = typeof WindowCaptureShortcut.Type;
 export const WindowCaptureSound = Schema.Literals(["soft-pop", "camera-shutter"]);
 export type WindowCaptureSound = typeof WindowCaptureSound.Type;
-export const DEFAULT_WINDOW_CAPTURE_SOUND: WindowCaptureSound = "soft-pop";
+export const DEFAULT_WINDOW_CAPTURE_SOUND = "soft-pop";
 
 export type WindowCaptureModifierPairShortcut = Extract<
   WindowCaptureShortcut,
