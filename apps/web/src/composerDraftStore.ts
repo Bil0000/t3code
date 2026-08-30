@@ -749,8 +749,21 @@ function composerImageDedupKey(image: ComposerImageAttachment): string {
 export function composerFileDedupKey(
   file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
 ): string {
-  const mimeType = videoMimeType(file) === null ? file.mimeType : "video";
-  return `${mimeType}\u0000${file.sizeBytes}\u0000${file.name}`;
+  return `${file.mimeType}\u0000${file.sizeBytes}\u0000${file.name}`;
+}
+
+export function composerFileMatchesReattachMarker(
+  marker: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
+  file: Pick<ComposerFileAttachment, "mimeType" | "sizeBytes" | "name">,
+): boolean {
+  if (marker.name !== file.name || marker.sizeBytes !== file.sizeBytes) return false;
+  if (marker.mimeType === file.mimeType) return true;
+  const markerMimeType = marker.mimeType.toLowerCase();
+  return (
+    (markerMimeType === "" || markerMimeType === "application/octet-stream") &&
+    videoMimeType(marker) !== null &&
+    videoMimeType(file) !== null
+  );
 }
 
 function terminalContextDedupKey(context: TerminalContextDraft): string {
@@ -3208,15 +3221,21 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               if (knownIds.has(file.id)) {
                 continue;
               }
-              const duplicate = knownFiles.get(key);
+              const duplicate =
+                knownFiles.get(key) ??
+                existing.files.find(
+                  (candidate) =>
+                    composerFileNeedsReattach(candidate) &&
+                    !replacements.has(candidate.id) &&
+                    composerFileMatchesReattachMarker(candidate, file),
+                );
               if (duplicate) {
-                // A needs-reattach marker persists exactly the metadata this
-                // key hashes, so re-picking the same file matches its marker.
-                // Dropping the pick as a duplicate would leave the draft
-                // blocked forever; replace the marker so the upload restarts.
+                // A needs-reattach marker is not a usable duplicate. Replace
+                // it so the upload restarts.
                 if (composerFileNeedsReattach(duplicate) && !replacements.has(duplicate.id)) {
                   replacements.set(duplicate.id, file);
                   knownIds.add(file.id);
+                  knownFiles.set(key, file);
                 }
                 continue;
               }

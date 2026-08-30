@@ -57,6 +57,7 @@ import {
   type PersistedComposerFileAttachment,
   type PersistedComposerImageAttachment,
   composerFileDedupKey,
+  composerFileMatchesReattachMarker,
   composerFileNeedsReattach,
   composerTargetKey,
   hydrateImagesFromPersisted,
@@ -2413,9 +2414,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           ),
         );
         const existingFileKeys = new Set(composerFilesNow.map(composerFileDedupKey));
-        const reattachMarkerKeys = new Set(
-          composerFilesNow.filter(composerFileNeedsReattach).map(composerFileDedupKey),
-        );
+        const reattachMarkers = composerFilesNow.filter(composerFileNeedsReattach);
+        const restoredMarkerIds = new Set<string>();
         const duplicateFiles: PersistedComposerFileAttachment[] = [];
         const markerReplacements: ComposerFileAttachment[] = [];
         const appendedFiles: ComposerFileAttachment[] = [];
@@ -2441,23 +2441,23 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             }
             continue;
           }
-          if (existingFileKeys.has(key)) {
-            if (reattachMarkerKeys.has(key)) {
-              // The draft row with this identity is a needs-reattach marker,
-              // not a real duplicate. Replace it (addFiles swaps a matching
-              // marker in place) instead of deleting the only uploaded copy.
-              reattachMarkerKeys.delete(key);
-              existingFileIds.add(file.id);
-              if (expired) {
-                // The draft's marker already says "attach again"; nothing to
-                // restore or release, but say why the stash copy is gone.
-                expiredFileNames.push(file.name);
-              } else {
-                retainedUploadIds.add(file.attachmentId);
-                markerReplacements.push(restored);
-              }
-              continue;
+          const reattachMarker = reattachMarkers.find(
+            (marker) =>
+              !restoredMarkerIds.has(marker.id) && composerFileMatchesReattachMarker(marker, file),
+          );
+          if (reattachMarker) {
+            restoredMarkerIds.add(reattachMarker.id);
+            existingFileIds.add(file.id);
+            existingFileKeys.add(key);
+            if (expired) {
+              expiredFileNames.push(file.name);
+            } else {
+              retainedUploadIds.add(file.attachmentId);
+              markerReplacements.push(restored);
             }
+            continue;
+          }
+          if (existingFileKeys.has(key)) {
             if (!expired && !retainedUploadIds.has(file.attachmentId)) {
               duplicateFiles.push(file);
             }
@@ -2993,9 +2993,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // A pick that matches a needs-reattach marker replaces it in the draft, so
     // it must not consume a slot; a draft full of markers would otherwise hit
     // the capacity error before the replacement path could run.
-    const reattachKeys = new Set(
-      composerFilesRef.current.filter(composerFileNeedsReattach).map(composerFileDedupKey),
-    );
+    const reattachMarkers = composerFilesRef.current.filter(composerFileNeedsReattach);
+    const replacedReattachMarkerIds = new Set<string>();
     const acceptedImages: File[] = [];
     const acceptedFiles: ComposerFileAttachment[] = [];
     let error: string | null = null;
@@ -3006,16 +3005,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           ? (videoMimeType({ name: file.name, mimeType: file.type }) ??
             (file.type || "application/octet-stream"))
           : file.type;
-      const replacesReattachMarker =
-        attachmentKind === "file" &&
-        reattachKeys.delete(
-          composerFileDedupKey({
-            name: file.name || "file",
-            mimeType: fileMimeType,
-            sizeBytes: file.size,
-          }),
-        );
-      if (!replacesReattachMarker && reservedCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
+      const matchingReattachMarker =
+        attachmentKind === "file"
+          ? reattachMarkers.find(
+              (marker) =>
+                !replacedReattachMarkerIds.has(marker.id) &&
+                composerFileMatchesReattachMarker(marker, {
+                  name: file.name || "file",
+                  mimeType: fileMimeType,
+                  sizeBytes: file.size,
+                }),
+            )
+          : undefined;
+      if (matchingReattachMarker) {
+        replacedReattachMarkerIds.add(matchingReattachMarker.id);
+      }
+      if (!matchingReattachMarker && reservedCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
         error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`;
         // Keep scanning: a later file in this batch can still replace a
         // needs-reattach marker without needing a free slot.
@@ -3053,7 +3058,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           file: attachmentFile,
         });
       }
-      if (!replacesReattachMarker) {
+      if (!matchingReattachMarker) {
         reservedCount += 1;
       }
     }

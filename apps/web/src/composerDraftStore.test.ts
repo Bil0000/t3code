@@ -530,16 +530,15 @@ describe("composerDraftStore file attachments", () => {
     store.addFiles(threadRef, [marker]);
 
     const file = new File(["report"], marker.name, { type: "video/x-matroska" });
-    store.addFiles(threadRef, [
-      {
-        type: "file",
-        id: "file-repicked",
-        name: file.name,
-        mimeType: file.type,
-        sizeBytes: file.size,
-        file,
-      },
-    ]);
+    const repicked: ComposerFileAttachment = {
+      type: "file",
+      id: "file-repicked",
+      name: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      file,
+    };
+    store.addFiles(threadRef, [repicked, { ...repicked, id: "file-repicked-duplicate" }]);
 
     const files = store.getComposerDraft(threadRef)?.files;
     expect(files?.map((entry) => entry.id)).toEqual(["file-repicked"]);
@@ -579,6 +578,36 @@ describe("composerDraftStore file attachments", () => {
 
     expect(store.getComposerDraft(threadRef)?.files.map((file) => file.id)).toEqual([
       "file-original",
+    ]);
+  });
+
+  it("keeps same-name videos with different MIME types", () => {
+    const store = useComposerDraftStore.getState();
+    const mp4 = new File(["report"], "clip", { type: "video/mp4" });
+    const webm = new File(["report"], "clip", { type: "video/webm" });
+
+    store.addFiles(threadRef, [
+      {
+        type: "file",
+        id: "video-mp4",
+        name: mp4.name,
+        mimeType: mp4.type,
+        sizeBytes: mp4.size,
+        file: mp4,
+      },
+      {
+        type: "file",
+        id: "video-webm",
+        name: webm.name,
+        mimeType: webm.type,
+        sizeBytes: webm.size,
+        file: webm,
+      },
+    ]);
+
+    expect(store.getComposerDraft(threadRef)?.files.map((file) => file.id)).toEqual([
+      "video-mp4",
+      "video-webm",
     ]);
   });
 
