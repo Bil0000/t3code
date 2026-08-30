@@ -3882,7 +3882,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             ) : (
                               <PlayIcon className="relative z-10 size-5 fill-current drop-shadow-md" />
                             )}
-                            <span className="absolute inset-x-1 bottom-1 z-10 truncate text-[9px] drop-shadow-md">
+                            <span className="pointer-events-none absolute inset-x-1 bottom-1 truncate text-[9px] drop-shadow-md">
                               {file.name}
                             </span>
                           </button>
