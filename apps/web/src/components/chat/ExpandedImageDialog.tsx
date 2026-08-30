@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useState } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, XIcon } from "lucide-react";
+import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import type { ExpandedImagePreview } from "./ExpandedImagePreview";
 
@@ -13,6 +13,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   onClose,
 }: ExpandedImageDialogProps) {
   const [imageOffset, setImageOffset] = useState(0);
+  const [failedVideoSrc, setFailedVideoSrc] = useState<string | null>(null);
   const index = (preview.index + imageOffset + preview.images.length) % preview.images.length;
 
   const navigateImage = useCallback((direction: -1 | 1) => {
@@ -83,13 +84,26 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         >
           <XIcon />
         </Button>
-        {item.type === "video" ? (
+        {item.type === "video" && failedVideoSrc === item.src ? (
+          <div className="flex h-48 w-[min(92vw,32rem)] flex-col items-center justify-center gap-3 rounded-lg border border-border/70 bg-black px-6 text-center text-white shadow-2xl">
+            <p className="text-sm">This video format cannot be played here.</p>
+            <Button
+              size="sm"
+              variant="secondary"
+              render={<a href={item.src} download={item.name} />}
+            >
+              <DownloadIcon />
+              Download video
+            </Button>
+          </div>
+        ) : item.type === "video" ? (
           <video
             src={item.src}
             aria-label={item.name}
             autoPlay
             controls
             playsInline
+            onError={() => setFailedVideoSrc(item.src)}
             className="max-h-[86vh] max-w-[92vw] rounded-lg border border-border/70 bg-black object-contain shadow-2xl"
           />
         ) : (
