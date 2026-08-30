@@ -9,7 +9,9 @@ import {
   type OrchestrationThreadShell,
   type ProviderSession,
 } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -73,7 +75,7 @@ const makeThread = (
 });
 
 describe("worktree auto-delete", () => {
-  it.effect("only removes eligible clean managed worktrees", () =>
+  it.effect("only removes eligible clean managed worktrees and preserves interrupts", () =>
     Effect.scoped(
       Effect.gen(function* () {
         let projects: ProjectionProject[] = [];
@@ -83,6 +85,7 @@ describe("worktree auto-delete", () => {
         const activeThreadIds = new Set<ThreadId>();
         const terminalPaths = new Set<string>();
         let racePath = "";
+        let interruptPath = "";
 
         const testLayer = Layer.mergeAll(
           ServerConfig.layerTest(process.cwd(), { prefix: "t3-worktree-cleanup-test-" }).pipe(
@@ -144,8 +147,9 @@ describe("worktree auto-delete", () => {
               }).pipe(Effect.as(() => undefined)),
           }),
           Layer.mock(GitVcsDriver.GitVcsDriver)({
-            statusDetailsLocal: (cwd) =>
-              Effect.sync(() => {
+            statusDetailsLocal: (cwd) => {
+              if (cwd === interruptPath) return Effect.interrupt;
+              return Effect.sync(() => {
                 if (cwd === racePath) {
                   threads = threads.map((thread) =>
                     thread.worktreePath === racePath
@@ -166,7 +170,8 @@ describe("worktree auto-delete", () => {
                   behindCount: 0,
                   aheadOfDefaultCount: 0,
                 };
-              }),
+              });
+            },
             removeWorktree: (input) =>
               Effect.sync(() => removed.push({ path: input.path, force: input.force })),
           }),
@@ -194,8 +199,10 @@ describe("worktree auto-delete", () => {
           const sessionPath = path.join(config.worktreesDir, "repo", "session");
           const terminalPath = path.join(config.worktreesDir, "repo", "terminal");
           racePath = path.join(config.worktreesDir, "repo", "race");
+          interruptPath = path.join(config.worktreesDir, "repo", "interrupt");
           const outsidePath = yield* fs.makeTempDirectoryScoped({ prefix: "outside-worktree-" });
           const managedPaths = [
+            interruptPath,
             deletedPath,
             expiredPath,
             recentPath,
@@ -225,6 +232,7 @@ describe("worktree auto-delete", () => {
             },
           ];
           threads = [
+            makeThread("interrupt", interruptPath, { settledAt: recent }),
             makeThread("deleted", deletedPath, {
               settledOverride: null,
               settledAt: null,
@@ -262,6 +270,13 @@ describe("worktree auto-delete", () => {
             [deletedPath, expiredPath].sort(),
           );
           assert.isTrue(removed.every(({ force }) => force !== true));
+
+          threads = threads.map((thread) =>
+            thread.threadId === ThreadId.make("interrupt") ? { ...thread, settledAt: old } : thread,
+          );
+          const exit = yield* Effect.exit(cleanup.sweep);
+          assert.isTrue(Exit.isFailure(exit));
+          if (Exit.isFailure(exit)) assert.isTrue(Cause.hasInterruptsOnly(exit.cause));
         }).pipe(Effect.provide(testLayer));
       }),
     ),

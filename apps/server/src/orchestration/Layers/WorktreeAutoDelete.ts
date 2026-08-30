@@ -210,10 +210,12 @@ export const makeWorktreeAutoDelete = Effect.gen(function* () {
       if (candidate === null) continue;
       yield* removeCandidate(candidate, delay).pipe(
         Effect.catchCause((cause) =>
-          Effect.logDebug("worktree.auto-delete.skipped", {
-            path: candidate.path,
-            cause: Cause.pretty(cause),
-          }),
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.failCause(cause)
+            : Effect.logDebug("worktree.auto-delete.skipped", {
+                path: candidate.path,
+                cause: Cause.pretty(cause),
+              }),
         ),
       );
     }
@@ -221,7 +223,9 @@ export const makeWorktreeAutoDelete = Effect.gen(function* () {
 
   const sweepSafely = sweep().pipe(
     Effect.catchCause((cause) =>
-      Effect.logWarning("worktree.auto-delete.sweep-failed", { cause: Cause.pretty(cause) }),
+      Cause.hasInterruptsOnly(cause)
+        ? Effect.failCause(cause)
+        : Effect.logWarning("worktree.auto-delete.sweep-failed", { cause: Cause.pretty(cause) }),
     ),
   );
   const worker = yield* makeDrainableWorker((_: void) => sweepSafely);
