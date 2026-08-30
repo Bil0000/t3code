@@ -224,6 +224,29 @@ export const DesktopWindowCapture = Schema.Struct({
 });
 export type DesktopWindowCapture = typeof DesktopWindowCapture.Type;
 
+export const DesktopWindowCaptureAnimationDestination = Schema.Struct({
+  id: DesktopWindowCaptureId,
+  viewportFrame: Schema.Struct({
+    x: Schema.Number,
+    y: Schema.Number,
+    width: Schema.Number,
+    height: Schema.Number,
+  }),
+  backgroundColor: Schema.String,
+  borderColor: Schema.String,
+  borderWidth: Schema.Number,
+  cornerRadius: Schema.Number,
+  details: Schema.optional(
+    Schema.Struct({
+      appName: WindowCaptureSource.fields.appName,
+      windowTitle: WindowCaptureSource.fields.windowTitle,
+      appIconDataUrl: WindowCaptureSource.fields.appIconDataUrl,
+    }),
+  ),
+});
+export type DesktopWindowCaptureAnimationDestination =
+  typeof DesktopWindowCaptureAnimationDestination.Type;
+
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
   appArch: DesktopRuntimeArch;
@@ -1137,6 +1160,10 @@ export interface DesktopBridge {
   captureWindow?: () => Promise<void>;
   listPendingWindowCaptures?: () => Promise<readonly DesktopPendingWindowCapture[]>;
   readWindowCapture?: (id: string) => Promise<DesktopWindowCapture>;
+  setWindowCaptureAnimationDestination?: (
+    destination: DesktopWindowCaptureAnimationDestination,
+  ) => Promise<void>;
+  dismissWindowCaptureAnimation?: (id: DesktopWindowCaptureId) => Promise<void>;
   acknowledgeWindowCapture?: (id: string) => Promise<void>;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,

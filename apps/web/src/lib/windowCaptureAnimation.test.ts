@@ -1,19 +1,58 @@
-import { describe, expect, it } from "vite-plus/test";
+import type { EnvironmentId, ScopedThreadRef, ThreadId } from "@t3tools/contracts";
+import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
+import type { DraftId } from "../composerDraftStore";
 import {
-  consumeWindowCaptureAnimation,
-  hasWindowCaptureAnimation,
-  markWindowCaptureAnimation,
+  beginWindowCaptureAnimation,
+  dismissAllWindowCaptureAnimations,
+  finishWindowCaptureAnimation,
+  getPendingWindowCaptureAnimations,
+  pendingWindowCaptureAnimationIdsForTarget,
+  pendingWindowCaptureAnimationSource,
+  scheduleWindowCaptureAnimationDestination,
+  updateWindowCaptureAnimationSource,
 } from "./windowCaptureAnimation";
 
 describe("window capture animation", () => {
-  it("runs once for a newly attached file", () => {
-    const file = new File(["capture"], "capture.png", { type: "image/png" });
+  beforeEach(() => dismissAllWindowCaptureAnimations());
 
-    expect(hasWindowCaptureAnimation(file)).toBe(false);
-    markWindowCaptureAnimation(file);
-    expect(hasWindowCaptureAnimation(file)).toBe(true);
-    consumeWindowCaptureAnimation(file);
-    expect(hasWindowCaptureAnimation(file)).toBe(false);
+  it("keeps each reserved composer slot with its target and source", () => {
+    const draft = "draft-1" as DraftId;
+    const thread = {
+      environmentId: "environment-1" as EnvironmentId,
+      threadId: "thread-1" as ThreadId,
+    } satisfies ScopedThreadRef;
+    const source = {
+      kind: "window-capture" as const,
+      capturedAt: "2026-08-29T00:00:00.000Z",
+      appName: "T3 Code",
+      windowTitle: "Capture animation",
+    };
+
+    beginWindowCaptureAnimation("capture-1", draft);
+    updateWindowCaptureAnimationSource("capture-1", source);
+
+    const pending = getPendingWindowCaptureAnimations();
+    expect(pendingWindowCaptureAnimationIdsForTarget(pending, draft)).toEqual(["capture-1"]);
+    expect(pendingWindowCaptureAnimationIdsForTarget(pending, thread)).toEqual([]);
+    expect(pendingWindowCaptureAnimationSource(pending, "capture-1")).toEqual(source);
+  });
+
+  it("keeps one card through Strict Mode and the attachment handoff", async () => {
+    const start = vi.fn();
+    beginWindowCaptureAnimation("capture-1", "draft-1" as DraftId);
+
+    const stopFirstSetup = scheduleWindowCaptureAnimationDestination("capture-1", start);
+    stopFirstSetup();
+    const stopPlaceholder = scheduleWindowCaptureAnimationDestination("capture-1", start);
+    await Promise.resolve();
+    stopPlaceholder();
+    const stopAttachment = scheduleWindowCaptureAnimationDestination("capture-1", start);
+    await Promise.resolve();
+
+    expect(start).toHaveBeenCalledTimes(2);
+    expect(getPendingWindowCaptureAnimations()).toHaveLength(1);
+    finishWindowCaptureAnimation("capture-1");
+    stopAttachment();
   });
 });

@@ -64,6 +64,10 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   listPendingWindowCaptures: () =>
     ipcRenderer.invoke(IpcChannels.LIST_PENDING_WINDOW_CAPTURES_CHANNEL),
   readWindowCapture: (id) => ipcRenderer.invoke(IpcChannels.READ_WINDOW_CAPTURE_CHANNEL, id),
+  setWindowCaptureAnimationDestination: (destination) =>
+    ipcRenderer.invoke(IpcChannels.SET_WINDOW_CAPTURE_ANIMATION_DESTINATION_CHANNEL, destination),
+  dismissWindowCaptureAnimation: (id) =>
+    ipcRenderer.invoke(IpcChannels.DISMISS_WINDOW_CAPTURE_ANIMATION_CHANNEL, id),
   acknowledgeWindowCapture: (id) =>
     ipcRenderer.invoke(IpcChannels.ACKNOWLEDGE_WINDOW_CAPTURE_CHANNEL, id),
   getConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.GET_CONNECTION_CATALOG_CHANNEL),

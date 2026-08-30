@@ -39,6 +39,7 @@ const {
     options: Electron.BrowserWindowConstructorOptions;
     scripts: Array<string>;
     showCount: number;
+    alwaysOnTopCalls: Array<[boolean, string | undefined]>;
   }>,
   getFileIconMock: vi.fn(),
   getSourcesMock: vi.fn(),
@@ -154,6 +155,7 @@ vi.mock("electron", () => {
         options,
         scripts: [],
         showCount: 0,
+        alwaysOnTopCalls: [],
       };
       flashWindows.push(this.state);
     }
@@ -176,6 +178,10 @@ vi.mock("electron", () => {
 
     setOpacity(opacity: number) {
       this.state.opacities.push(opacity);
+    }
+
+    setAlwaysOnTop(flag: boolean, level?: string) {
+      this.state.alwaysOnTopCalls.push([flag, level]);
     }
 
     showInactive() {
@@ -214,14 +220,23 @@ vi.mock("electron", () => {
     nativeImage: { createThumbnailFromPath: thumbnailFromPathMock },
     globalShortcut: { register: registerShortcutMock, unregister: vi.fn() },
     screen: {
+      getAllDisplays: () => [
+        { bounds: { x: -1_920, y: 0, width: 1_920, height: 1_080 } },
+        { bounds: { x: 0, y: -200, width: 1_440, height: 900 } },
+      ],
       getCursorScreenPoint: () => ({ x: 500, y: 500 }),
       getDisplayNearestPoint: () => ({
         bounds: { x: 100, y: 100, width: 800, height: 600 },
       }),
       getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1_440, height: 900 } }),
+      screenToDipRect: (_window: unknown, bounds: Electron.Rectangle) => bounds,
     },
     shell: { openExternal: openExternalMock },
     systemPreferences: {
+      getAnimationSettings: () => ({
+        prefersReducedMotion: true,
+        shouldRenderRichAnimation: false,
+      }),
       getMediaAccessStatus: () => mediaAccessStatusMock(),
       isTrustedAccessibilityClient: () => accessibilityTrustedMock(),
     },
@@ -256,6 +271,7 @@ const testLayer = (
     Layer.succeed(
       DesktopWindow.DesktopWindow,
       DesktopWindow.DesktopWindow.of({
+        activate: Effect.void,
         dispatchMenuAction: () => Effect.void,
       } as unknown as DesktopWindow.DesktopWindow["Service"]),
     ),
@@ -395,12 +411,59 @@ it.each([
 );
 
 it("uses the primary display for portal flash feedback", () => {
-  assert.deepEqual(DesktopWindowCapture.windowCaptureFlashBounds(undefined), {
+  assert.deepEqual(DesktopWindowCapture.windowCaptureFlashBounds(undefined, "linux"), {
     x: 0,
     y: 0,
     width: 1_440,
     height: 900,
   });
+});
+
+it("uses the operating system animation policy", () => {
+  assert.isTrue(
+    DesktopWindowCapture.shouldAnimateWindowCapture({
+      prefersReducedMotion: false,
+      shouldRenderRichAnimation: true,
+    }),
+  );
+  assert.isFalse(
+    DesktopWindowCapture.shouldAnimateWindowCapture({
+      prefersReducedMotion: true,
+      shouldRenderRichAnimation: true,
+    }),
+  );
+});
+
+it("bounds the transition surface to its displays and flight", () => {
+  assert.deepEqual(
+    DesktopWindowCapture.windowCaptureAnimationOverlayBounds([
+      { bounds: { x: -1_920, y: 0, width: 1_920, height: 1_080 } },
+      { bounds: { x: 0, y: -200, width: 1_440, height: 900 } },
+    ]),
+    { x: -1_920, y: -200, width: 3_360, height: 1_280 },
+  );
+  assert.deepEqual(
+    DesktopWindowCapture.windowCaptureAnimationFlightBounds(
+      { x: 100, y: 50, width: 900, height: 600 },
+      { x: 1_200, y: 800, width: 208, height: 112 },
+      [],
+      0,
+    ),
+    { x: 100, y: 50, width: 1_308, height: 862 },
+  );
+  assert.deepEqual(
+    DesktopWindowCapture.windowCaptureAnimationFlightBounds(
+      { x: 0, y: 0, width: 100, height: 100 },
+      { x: 200, y: 0, width: 50, height: 50 },
+      [
+        { offset: 0, progress: 0 },
+        { offset: 0.5, progress: 1 },
+        { offset: 1, progress: 1.1 },
+      ],
+      0,
+    ),
+    { x: 0, y: 0, width: 265, height: 100 },
+  );
 });
 
 it("bounds source thumbnails for large windows", () => {

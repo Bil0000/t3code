@@ -11,6 +11,7 @@ import type {
   ServerProvider,
   ThreadId,
   TurnId,
+  WindowCaptureSource,
 } from "@t3tools/contracts";
 import {
   ProviderDriverKind,
@@ -23,6 +24,7 @@ import { serializeComposerFileLink } from "@t3tools/shared/composerTrigger";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
 import {
   memo,
+  type ComponentProps,
   type ReactNode,
   useCallback,
   useEffect,
@@ -31,6 +33,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -145,8 +148,12 @@ import { resolveContextWindowModelDisplayName } from "./ContextWindowMeter.logic
 import { buildExpandedImagePreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import { WindowCaptureAttachmentDetails } from "./WindowCaptureAttachmentDetails";
 import {
-  consumeWindowCaptureAnimation,
-  hasWindowCaptureAnimation,
+  getPendingWindowCaptureAnimations,
+  pendingWindowCaptureAnimationIdsForTarget,
+  pendingWindowCaptureAnimationSource,
+  scheduleWindowCaptureAnimationDestination,
+  setWindowCaptureAnimationDestination,
+  subscribeToPendingWindowCaptureAnimations,
 } from "../../lib/windowCaptureAnimation";
 import { basenameOfPath } from "../../pierre-icons";
 import { cn, randomUUID } from "~/lib/utils";
@@ -164,6 +171,27 @@ type ComposerCommandMenuPosition = {
   maxHeight: number;
   width: number;
 };
+
+function WindowCaptureAttachmentFrame({
+  animationId,
+  animationSource,
+  ...props
+}: ComponentProps<"div"> & {
+  readonly animationId?: string | undefined;
+  readonly animationSource?: WindowCaptureSource | undefined;
+}) {
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const frame = frameRef.current;
+    if (!frame || !animationId) return;
+    return scheduleWindowCaptureAnimationDestination(animationId, () =>
+      setWindowCaptureAnimationDestination(animationId, frame, animationSource),
+    );
+  }, [animationId, animationSource]);
+
+  return <div ref={frameRef} {...props} />;
+}
 
 function composerCommandMenuPositionsEqual(
   a: ComposerCommandMenuPosition,
@@ -783,6 +811,26 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const composerElementContexts = composerDraft.elementContexts;
   const composerPreviewAnnotations = composerDraft.previewAnnotations;
   const composerReviewComments = composerDraft.reviewComments;
+  const pendingWindowCaptureAnimations = useSyncExternalStore(
+    subscribeToPendingWindowCaptureAnimations,
+    getPendingWindowCaptureAnimations,
+    getPendingWindowCaptureAnimations,
+  );
+  const pendingWindowCaptureIds = useMemo(
+    () =>
+      pendingWindowCaptureAnimationIdsForTarget(
+        pendingWindowCaptureAnimations,
+        composerDraftTarget,
+      ),
+    [composerDraftTarget, pendingWindowCaptureAnimations],
+  );
+  const pendingWindowCaptureIdSet = useMemo(
+    () => new Set(pendingWindowCaptureIds),
+    [pendingWindowCaptureIds],
+  );
+  const uncommittedWindowCaptureIds = pendingWindowCaptureIds.filter(
+    (id) => !composerImages.some((image) => image.id === id),
+  );
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
   const uploadsByImageId = useAttachmentUploadStore((state) => state.uploadsByImageId);
   const needsReattachFileCount = composerFiles.filter(composerFileNeedsReattach).length;
@@ -3693,10 +3741,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
               {!isComposerCollapsedMobile &&
                 !isComposerApprovalState &&
                 pendingUserInputs.length === 0 &&
-                composerImages.some(
-                  (image) =>
-                    !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
-                ) && (
+                (uncommittedWindowCaptureIds.length > 0 ||
+                  composerImages.some(
+                    (image) =>
+                      !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
+                  )) && (
                   <div className="mb-3 flex flex-wrap gap-2">
                     {composerImages
                       .filter(
@@ -3709,24 +3758,28 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         const upload = supportsAttachmentUploads
                           ? uploadsByImageId[image.id]
                           : undefined;
+                        const windowCaptureAnimationPending =
+                          image.source?.kind === "window-capture" &&
+                          pendingWindowCaptureIdSet.has(image.id);
                         return (
-                          <div
+                          <WindowCaptureAttachmentFrame
                             key={image.id}
+                            aria-hidden={windowCaptureAnimationPending || undefined}
+                            animationId={
+                              windowCaptureAnimationPending && settings.windowCaptureAnimations
+                                ? image.id
+                                : undefined
+                            }
+                            animationSource={
+                              windowCaptureAnimationPending ? image.source : undefined
+                            }
                             className={cn(
                               "group/attachment relative overflow-hidden rounded-lg border border-border/80 bg-background",
                               image.source?.kind === "window-capture"
                                 ? "h-28 w-52 max-w-full"
                                 : "h-16 w-16",
-                              image.source?.kind === "window-capture" &&
-                                settings.windowCaptureAnimations &&
-                                hasWindowCaptureAnimation(image.file) &&
-                                "animate-[window-capture-card-enter_180ms_cubic-bezier(0.2,0.8,0.2,1)_both] motion-reduce:animate-none",
+                              windowCaptureAnimationPending && "invisible",
                             )}
-                            onAnimationStart={(event) => {
-                              if (event.currentTarget === event.target) {
-                                consumeWindowCaptureAnimation(image.file);
-                              }
-                            }}
                           >
                             {image.previewUrl ? (
                               <button
@@ -3821,9 +3874,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             >
                               <XIcon />
                             </Button>
-                          </div>
+                          </WindowCaptureAttachmentFrame>
                         );
                       })}
+                    {uncommittedWindowCaptureIds.map((captureId) => (
+                      <WindowCaptureAttachmentFrame
+                        key={captureId}
+                        aria-hidden="true"
+                        animationId={settings.windowCaptureAnimations ? captureId : undefined}
+                        animationSource={pendingWindowCaptureAnimationSource(
+                          pendingWindowCaptureAnimations,
+                          captureId,
+                        )}
+                        className="invisible h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80 bg-background"
+                      />
+                    ))}
                   </div>
                 )}
 

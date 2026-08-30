@@ -335,7 +335,7 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-animations")}
-            description="Animate new capture cards and capture feedback."
+            description="Fly captured windows into the composer and animate capture feedback."
             control={
               <Switch
                 checked={settings.windowCaptureAnimations}

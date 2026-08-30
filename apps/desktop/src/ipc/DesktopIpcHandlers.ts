@@ -48,9 +48,11 @@ import {
   acknowledgeWindowCapture,
   captureWindow,
   checkWindowCaptureShortcut,
+  dismissWindowCaptureAnimation,
   getWindowCaptureState,
   listPendingWindowCaptures,
   readWindowCapture,
+  setWindowCaptureAnimationDestination,
   setWindowCaptureShortcutSuppressed,
 } from "./methods/windowCapture.ts";
 import * as PreviewIpc from "./methods/preview.ts";
@@ -75,6 +77,8 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(captureWindow);
   yield* ipc.handle(listPendingWindowCaptures);
   yield* ipc.handle(readWindowCapture);
+  yield* ipc.handle(setWindowCaptureAnimationDestination);
+  yield* ipc.handle(dismissWindowCaptureAnimation);
   yield* ipc.handle(acknowledgeWindowCapture);
   yield* ipc.handle(setConnectionCatalog);
   yield* ipc.handle(clearConnectionCatalog);

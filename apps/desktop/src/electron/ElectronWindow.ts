@@ -1,4 +1,5 @@
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import * as Xa11y from "@crowecawcaw/xa11y";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -9,6 +10,20 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
+
+async function focusWindowsBrowserWindow(window: Electron.BrowserWindow): Promise<void> {
+  const title = window.getTitle().trim();
+  const exactWindow = await Xa11y.App.list().then(
+    (apps) =>
+      apps
+        .filter((app) => app.pid === process.pid)
+        .map((app) => app.asElement())
+        .find((element) => (element.name ?? "").trim() === title),
+    () => undefined,
+  );
+  const element = exactWindow ?? (await Xa11y.App.byPid(process.pid, { timeout: 0 })).asElement();
+  await element.focus();
+}
 
 const ElectronWindowCreateOptions = Schema.Struct({
   title: Schema.NullOr(Schema.String),
@@ -210,8 +225,8 @@ export const make = Effect.gen(function* () {
         return Option.none();
       }),
     reveal: (window) =>
-      Effect.try({
-        try: () => {
+      Effect.tryPromise({
+        try: async () => {
           if (window.isDestroyed()) {
             return;
           }
@@ -220,8 +235,16 @@ export const make = Effect.gen(function* () {
             window.restore();
           }
 
-          if (!window.isVisible()) {
+          if (platform === "win32") {
+            Electron.app.focus();
+          }
+
+          if (platform === "win32" || !window.isVisible()) {
             window.show();
+          }
+
+          if (platform === "win32") {
+            window.moveTop();
           }
 
           if (platform === "darwin") {
@@ -229,6 +252,10 @@ export const make = Effect.gen(function* () {
           }
 
           window.focus();
+
+          if (platform === "win32") {
+            void focusWindowsBrowserWindow(window).catch(() => undefined);
+          }
         },
         catch: (cause) =>
           new ElectronWindowOperationError({
