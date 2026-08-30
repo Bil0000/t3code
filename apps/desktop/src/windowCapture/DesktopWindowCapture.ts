@@ -68,7 +68,7 @@ const CAPTURE_FAILED_ACTION = "window-capture-failed";
 const FLASH_ANIMATION_DURATION_MS = 180;
 const FLASH_STATIC_DURATION_MS = 60;
 const FLASH_FRAME_INTERVAL_MS = 16;
-const FLASH_PEAK_OPACITY = 0.14;
+const FLASH_PEAK_OPACITY = 0.08;
 const MAC_SCREEN_CAPTURE_SETTINGS_URL =
   "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture";
 const MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE =
@@ -514,7 +514,7 @@ export class WindowCaptureFlash {
         ? "animation:flash " + FLASH_ANIMATION_DURATION_MS + "ms cubic-bezier(.2,.8,.2,1) both"
         : "opacity:1";
       const html =
-        '<!doctype html><style>@keyframes flash{0%{opacity:0}18%{opacity:1}100%{opacity:0}}</style><body style="margin:0;background:rgba(255,255,255,.14);' +
+        '<!doctype html><style>@keyframes flash{0%{opacity:0}18%{opacity:1}100%{opacity:0}}</style><body style="margin:0;background:rgba(255,255,255,.08);' +
         animation +
         '"></body>';
       await window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
@@ -646,6 +646,7 @@ export const make = Effect.gen(function* () {
   const flash = new WindowCaptureFlash(environment.platform);
   const transition = new WindowCaptureTransition({
     boundOverlayToFlight: environment.platform !== "linux",
+    hideWhileResizing: environment.platform === "darwin",
     alwaysOnTopLevel: environment.platform === "linux" ? undefined : "pop-up-menu",
   });
 

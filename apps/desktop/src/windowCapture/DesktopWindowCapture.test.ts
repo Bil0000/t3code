@@ -45,6 +45,7 @@ const {
   flashWindows: [] as Array<{
     bounds: Electron.Rectangle | null;
     destroyed: boolean;
+    hideCount: number;
     kind: "base" | "browser";
     loadCount: number;
     loadedUrls: Array<string>;
@@ -174,6 +175,7 @@ vi.mock("electron", () => {
             ? null
             : { x: options.x, y: options.y, width: options.width, height: options.height },
         destroyed: false,
+        hideCount: 0,
         kind: "base",
         loadCount: 0,
         loadedUrls: [],
@@ -194,7 +196,9 @@ vi.mock("electron", () => {
       return this.state.bounds;
     }
 
-    hide() {}
+    hide() {
+      this.state.hideCount += 1;
+    }
 
     isDestroyed() {
       return this.state.destroyed;
@@ -590,7 +594,7 @@ it("keeps the transition flash subdued", async () => {
     const html = decodeURIComponent(flashWindows[0]?.loadedUrls[0] ?? "");
     assert.include(
       html,
-      "[{opacity:.14},{offset:.38,opacity:.14},{offset:.68,opacity:.04},{opacity:0}]",
+      "[{opacity:.08},{offset:.38,opacity:.08},{offset:.68,opacity:.02},{opacity:0}]",
     );
   } finally {
     transition.dispose();
@@ -633,6 +637,37 @@ it("bounds the transition surface to its displays and flight", () => {
     ),
     { x: 28, y: -22, width: 1_452, height: 1_006 },
   );
+});
+
+it("hides a bounded transition while resizing its flight surface", async () => {
+  flashWindows.length = 0;
+  const transition = new WindowCaptureTransition({
+    boundOverlayToFlight: true,
+    hideWhileResizing: true,
+  });
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: -1_800, y: 50, width: 900, height: 600 },
+      "data:image/png;base64,",
+      false,
+    );
+    transition.animateTo("capture-1", {
+      frame: { x: 600, y: 400, width: 208, height: 112 },
+      backgroundColor: "#fff",
+      borderColor: "#ccc",
+      borderWidth: 1,
+      cornerRadius: 8,
+      scaleFactor: 1,
+    });
+    await transition.waitForLanding("capture-1");
+
+    assert.strictEqual(flashWindows[0]?.hideCount, 1);
+    assert.strictEqual(flashWindows[0]?.showCount, 2);
+  } finally {
+    transition.dispose();
+  }
 });
 
 it("keeps the Windows transition above the revealed main window", async () => {

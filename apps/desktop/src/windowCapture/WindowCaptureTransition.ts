@@ -4,8 +4,8 @@ import type * as Fiber from "effect/Fiber";
 import * as Electron from "electron";
 
 const MIN_DURATION_MS = 280;
-const MAX_DURATION_MS = 570;
-const DURATION_DISTANCE_SCALE = 2_800;
+const MAX_DURATION_MS = 680;
+const DURATION_DISTANCE_SCALE = 2_000;
 const EASING = "cubic-bezier(.2,.8,.2,1)";
 const TIMEOUT_MS = 6_000;
 const MARGIN = 72;
@@ -52,6 +52,7 @@ type ActiveTransition = {
 
 type WindowCaptureTransitionOptions = {
   readonly boundOverlayToFlight?: boolean | undefined;
+  readonly hideWhileResizing?: boolean | undefined;
   readonly alwaysOnTopLevel?:
     | NonNullable<Parameters<Electron.BrowserWindow["setAlwaysOnTop"]>[1]>
     | undefined;
@@ -148,7 +149,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 const source=${JSON.stringify(source)},card=document.getElementById("card"),content=document.getElementById("content"),snapshot=document.getElementById("snapshot"),details=document.getElementById("details"),border=document.getElementById("border");
 window.setCaptureSnapshot=async src=>{snapshot.src=src;await snapshot.decode()};
 window.rebaseCaptureSource=next=>{Object.assign(source,next);Object.assign(card.style,{left:source.x+"px",top:source.y+"px",width:source.width+"px",height:source.height+"px"})};
-window.startCaptureFlash=()=>document.getElementById("flash").animate([{opacity:.14},{offset:.38,opacity:.14},{offset:.68,opacity:.04},{opacity:0}],{duration:300,fill:"forwards",easing:"${EASING}"});
+window.startCaptureFlash=()=>document.getElementById("flash").animate([{opacity:.08},{offset:.38,opacity:.08},{offset:.68,opacity:.02},{opacity:0}],{duration:300,fill:"forwards",easing:"${EASING}"});
 const applyDetails=value=>{
   if(!value)return;
   details.dataset.ready="";
@@ -186,10 +187,12 @@ window.startCaptureTransition=async destination=>{
 export class WindowCaptureTransition {
   private active: ActiveTransition | undefined;
   private readonly boundOverlayToFlight: boolean;
+  private readonly hideWhileResizing: boolean;
   private readonly alwaysOnTopLevel: WindowCaptureTransitionOptions["alwaysOnTopLevel"];
 
   constructor(options: WindowCaptureTransitionOptions = {}) {
     this.boundOverlayToFlight = options.boundOverlayToFlight ?? false;
+    this.hideWhileResizing = options.hideWhileResizing ?? false;
     this.alwaysOnTopLevel = options.alwaysOnTopLevel;
   }
 
@@ -275,6 +278,7 @@ export class WindowCaptureTransition {
         requested.width !== bounds.width ||
         requested.height !== bounds.height
       ) {
+        if (this.hideWhileResizing) window.hide();
         window.setBounds(requested, false);
         bounds = window.getBounds();
         active.bounds = bounds;
@@ -286,6 +290,9 @@ export class WindowCaptureTransition {
             height: active.source.height,
           })})`,
         );
+        if (this.hideWhileResizing && !window.isDestroyed() && this.active === active) {
+          window.showInactive();
+        }
       }
     }
     if (window.isDestroyed() || this.active !== active) return;
