@@ -22,6 +22,7 @@ import {
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getStartedThreadModelChangeBlockReason,
   loadDesktopVideoPreviewUrl,
+  isVideoPreviewRequestCurrent,
   hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
   isBranchMismatchDismissedForSession,
@@ -47,6 +48,14 @@ describe("loadDesktopVideoPreviewUrl", () => {
     const objectUrl = await loadDesktopVideoPreviewUrl("data:video/mp4;base64,AA==");
     expect(objectUrl).toMatch(/^blob:/);
     URL.revokeObjectURL(objectUrl);
+  });
+});
+
+describe("isVideoPreviewRequestCurrent", () => {
+  it("rejects changed threads and superseded requests", () => {
+    expect(isVideoPreviewRequestCurrent("thread-1", "thread-2", 1, 1)).toBe(false);
+    expect(isVideoPreviewRequestCurrent("thread-1", "thread-1", 1, 2)).toBe(false);
+    expect(isVideoPreviewRequestCurrent("thread-1", "thread-1", 2, 2)).toBe(true);
   });
 });
 

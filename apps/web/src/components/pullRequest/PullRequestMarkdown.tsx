@@ -10,9 +10,10 @@ import { splitPullRequestBody } from "./pullRequestMarkdown.logic";
  * A pull request body, rendered with the app's markdown renderer plus a card for each upload
  * embedded in it, which that renderer drops on the floor.
  *
- * The card links out instead of playing in place because GitHub serves the file as uploaded.
- * Mac recordings use `video/quicktime`, which Chromium cannot decode, so an in-app player would
- * still fail for common pull request videos while opening the host works for every format.
+ * The card links out instead of playing in place. GitHub serves the file as uploaded — Mac
+ * recordings are `video/quicktime`, which no Chromium decodes — and the desktop window's
+ * `media-src` allows only `'self'`, the app scheme and `blob:`, so a remote source is refused
+ * before a byte is fetched. Opening the host works for every format.
  */
 export function PullRequestMarkdown({
   text,

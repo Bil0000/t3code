@@ -296,6 +296,15 @@ export async function loadDesktopVideoPreviewUrl(url: string): Promise<string> {
   return URL.createObjectURL(await response.blob());
 }
 
+export function isVideoPreviewRequestCurrent(
+  requestThreadKey: string,
+  currentThreadKey: string,
+  requestId: number,
+  currentRequestId: number,
+): boolean {
+  return requestThreadKey === currentThreadKey && requestId === currentRequestId;
+}
+
 export function revokeUserMessagePreviewUrls(message: ChatMessage): void {
   if (message.role !== "user" || !message.attachments) {
     return;

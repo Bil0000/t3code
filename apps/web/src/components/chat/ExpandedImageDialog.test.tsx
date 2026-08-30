@@ -23,5 +23,6 @@ describe("ExpandedImageDialog", () => {
 
     expect(markup).toContain("<video");
     expect(markup).toContain('controls=""');
+    expect(markup).toContain('aria-label="demo.mp4"');
   });
 });

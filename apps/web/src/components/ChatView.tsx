@@ -362,6 +362,7 @@ import {
   deriveLockedProvider,
   readFileAsDataUrl,
   loadDesktopVideoPreviewUrl,
+  isVideoPreviewRequestCurrent,
   reconcileMountedTerminalThreadIds,
   resolveBackgroundDraftWorkspaceOptions,
   resolveDraftHeroState,
@@ -1440,6 +1441,9 @@ function ChatViewContent(props: ChatViewProps) {
   const localComposerRef = useRef<ChatComposerHandle | null>(null);
   const composerRef = useComposerHandleContext() ?? localComposerRef;
   const [isWorkspaceFileDragActive, setIsWorkspaceFileDragActive] = useState(false);
+  const routeThreadKeyRef = useRef(routeThreadKey);
+  routeThreadKeyRef.current = routeThreadKey;
+  const videoPreviewRequestIdRef = useRef(0);
   const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   useEffect(() => {
@@ -2520,6 +2524,15 @@ function ChatViewContent(props: ChatViewProps) {
       }
       const isVideo = isVideoAttachment(attachment);
       const action = isVideo ? "play" : "download";
+      const videoPreviewRequestId = isVideo ? ++videoPreviewRequestIdRef.current : 0;
+      const isCurrentRequest = () =>
+        !isVideo ||
+        isVideoPreviewRequestCurrent(
+          routeThreadKey,
+          routeThreadKeyRef.current,
+          videoPreviewRequestId,
+          videoPreviewRequestIdRef.current,
+        );
 
       // fileName and mimeType ride in the signed claims so videos render
       // inline while other files keep their real download name and type.
@@ -2534,6 +2547,7 @@ function ChatViewContent(props: ChatViewProps) {
           },
         },
       });
+      if (!isCurrentRequest()) return;
       if (result._tag === "Failure") {
         const error = squashAtomCommandFailure(result);
         toastManager.add({
@@ -2552,11 +2566,16 @@ function ChatViewContent(props: ChatViewProps) {
       if (isVideo) {
         try {
           const previewUrl = window.desktopBridge ? await loadDesktopVideoPreviewUrl(url) : url;
+          if (!isCurrentRequest()) {
+            revokeBlobPreviewUrl(previewUrl);
+            return;
+          }
           setExpandedImage({
             images: [{ src: previewUrl, name: attachment.name, type: "video" }],
             index: 0,
           });
         } catch (error) {
+          if (!isCurrentRequest()) return;
           toastManager.add({
             type: "error",
             title: "Could not play " + attachment.name,
@@ -2570,7 +2589,7 @@ function ChatViewContent(props: ChatViewProps) {
       anchor.download = attachment.name;
       anchor.click();
     },
-    [createAttachmentAssetUrl, environmentId],
+    [createAttachmentAssetUrl, environmentId, routeThreadKey],
   );
   const serverAttachmentIds = useMemo(() => {
     const attachmentIds = new Set<string>();

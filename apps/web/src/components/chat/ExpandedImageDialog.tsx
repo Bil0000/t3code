@@ -86,6 +86,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         {item.type === "video" ? (
           <video
             src={item.src}
+            aria-label={item.name}
             autoPlay
             controls
             playsInline
