@@ -369,6 +369,7 @@ async function captureSource({
 }) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
+  let hiddenWindowRestored = false;
   try {
     if (hiddenWindow) await hideAndWaitForBlur(hiddenWindow);
     if (mode === "direct") {
@@ -398,6 +399,7 @@ async function captureSource({
       ({ source, png } = await captureRegionWindowSnapshot(
         active,
         windowCaptureFlashBounds(active, platform),
+        windowCaptureThumbnailSize(active),
       ));
     } else {
       const [selected] = await Electron.desktopCapturer.getSources({
@@ -413,6 +415,10 @@ async function captureSource({
       }
       source = selected;
       png = selected.thumbnail.toPNG();
+    }
+    if (hiddenWindow && !hiddenWindow.isDestroyed()) {
+      hiddenWindow.show();
+      hiddenWindowRestored = true;
     }
     const animationStarted = await showCaptureFeedback(
       transition,
@@ -437,7 +443,7 @@ async function captureSource({
           : Promise.resolve({ accessibleText: undefined, portalAppName: undefined });
     return { source, active, contextPromise, animationStarted, png, imageTempReady };
   } finally {
-    if (hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
+    if (!hiddenWindowRestored && hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
   }
 }
 

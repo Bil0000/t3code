@@ -17,6 +17,7 @@ const {
   accessibilityListMock,
   accessibilityTrustedMock,
   flashWindows,
+  focusedWindowMock,
   getFileIconMock,
   getSourcesMock,
   macCaptureMock,
@@ -30,6 +31,7 @@ const {
   spawnedPollers,
   thumbnailFromPathMock,
   transitionScriptState,
+  transitionShowMock,
   uiohookMock,
 } = vi.hoisted(() => ({
   activeWindowMock: vi.fn(),
@@ -52,6 +54,7 @@ const {
     showCount: number;
     alwaysOnTopCalls: Array<[boolean, string | undefined]>;
   }>,
+  focusedWindowMock: vi.fn(),
   getFileIconMock: vi.fn(),
   getSourcesMock: vi.fn(),
   macCaptureMock: vi.fn(),
@@ -75,6 +78,7 @@ const {
   }>,
   thumbnailFromPathMock: vi.fn(),
   transitionScriptState: { rejectFlight: false },
+  transitionShowMock: vi.fn(),
   uiohookMock: {
     off: vi.fn(),
     on: vi.fn(),
@@ -211,13 +215,14 @@ vi.mock("electron", () => {
     }
 
     showInactive() {
+      transitionShowMock();
       this.state.showCount += 1;
     }
   }
 
   class BrowserWindow extends BaseWindow {
     static getFocusedWindow() {
-      return null;
+      return focusedWindowMock();
     }
 
     readonly webContents;
@@ -379,7 +384,7 @@ it.effect("captures the active Linux X11 window without enumerating desktop sour
   } as const;
   activeWindowMock.mockReset().mockResolvedValue(active);
   accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [] });
-  screenshotMock.mockReset().mockResolvedValue({ toPng: () => png });
+  screenshotMock.mockReset().mockResolvedValue({ width: 800, height: 600, toPng: () => png });
   getSourcesMock.mockReset().mockResolvedValue([
     {
       id: "window:42:0",
@@ -429,6 +434,18 @@ it.effect("keeps the macOS capture transition above the revealed main window", (
     prefersReducedMotion: false,
     shouldRenderRichAnimation: true,
   });
+  let blur: () => void = () => undefined;
+  const mainShowMock = vi.fn();
+  focusedWindowMock.mockReturnValue({
+    hide: () => queueMicrotask(blur),
+    once: (_event: string, listener: () => void) => {
+      blur = listener;
+    },
+    removeListener: () => undefined,
+    isDestroyed: () => false,
+    show: mainShowMock,
+  });
+  transitionShowMock.mockClear();
   flashWindows.length = 0;
   const layer = testLayer("darwin", {
     makeDirectory: () => Effect.void,
@@ -442,8 +459,12 @@ it.effect("keeps the macOS capture transition above the revealed main window", (
       yield* service.captureNow;
 
       assert.deepEqual(flashWindows[0]?.alwaysOnTopCalls, [[true, "pop-up-menu"]]);
+      assert.isBelow(
+        mainShowMock.mock.invocationCallOrder[0]!,
+        transitionShowMock.mock.invocationCallOrder[0]!,
+      );
     }),
-  ).pipe(Effect.provide(layer));
+  ).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(() => focusedWindowMock.mockReset())));
 });
 
 function fakeIcon(label: string, empty = false): Electron.NativeImage {
