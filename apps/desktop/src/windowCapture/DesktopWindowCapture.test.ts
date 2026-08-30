@@ -265,6 +265,7 @@ import * as DesktopWindowCapture from "./DesktopWindowCapture.ts";
 
 import {
   WindowCaptureTransition,
+  windowCaptureAnimationDurationMs,
   windowCaptureAnimationFlightBounds,
   windowCaptureAnimationOverlayBounds,
 } from "./WindowCaptureTransition.ts";
@@ -474,6 +475,27 @@ it("keeps the transition flash subdued", async () => {
   } finally {
     transition.dispose();
   }
+});
+
+it("scales transition timing with travel distance", () => {
+  const source = { x: 0, y: 0, width: 200, height: 100 };
+  assert.strictEqual(windowCaptureAnimationDurationMs(source, source), 280);
+  const near = windowCaptureAnimationDurationMs(source, {
+    x: 100,
+    y: 0,
+    width: 200,
+    height: 100,
+  });
+  const far = windowCaptureAnimationDurationMs(source, {
+    x: 1_000,
+    y: 0,
+    width: 200,
+    height: 100,
+  });
+
+  assert.isAtLeast(near, 280);
+  assert.isBelow(far, 570);
+  assert.isAbove(far, near);
 });
 
 it("bounds the transition surface to its displays and flight", () => {

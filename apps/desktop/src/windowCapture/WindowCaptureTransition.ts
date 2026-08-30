@@ -3,7 +3,9 @@ import type * as Fiber from "effect/Fiber";
 
 import * as Electron from "electron";
 
-const DURATION_MS = 360;
+const MIN_DURATION_MS = 280;
+const MAX_DURATION_MS = 570;
+const DURATION_DISTANCE_SCALE = 2_800;
 const EASING = "cubic-bezier(.2,.8,.2,1)";
 const TIMEOUT_MS = 6_000;
 const MARGIN = 72;
@@ -23,6 +25,20 @@ export type WindowCaptureAnimationDestination = {
   readonly scaleFactor: number;
   readonly details?: WindowCaptureAnimationDetails | undefined;
 };
+
+export function windowCaptureAnimationDurationMs(
+  source: Electron.Rectangle,
+  target: Electron.Rectangle,
+): number {
+  const distance = Math.hypot(
+    source.x + source.width / 2 - target.x - target.width / 2,
+    source.y + source.height / 2 - target.y - target.height / 2,
+  );
+  return (
+    MAX_DURATION_MS -
+    (MAX_DURATION_MS - MIN_DURATION_MS) * Math.exp(-distance / DURATION_DISTANCE_SCALE)
+  );
+}
 
 type ActiveTransition = {
   readonly id: string;
@@ -160,13 +176,13 @@ window.startCaptureTransition=async destination=>{
   Object.assign(border.style,{borderWidth:borderWidth+"px",borderColor:destination.borderColor});
   details.style.setProperty("--scale",String(destination.scaleFactor));
   applyDetails(destination.details);
-  const options={duration:${DURATION_MS},fill:"forwards",easing:"${EASING}"};
+  const options={duration:destination.durationMs,fill:"forwards",easing:"${EASING}"};
   await Promise.all([
     card.animate([{transform:initial},{transform:"translate3d(0,0,0) scale(1)"}],options).finished.catch(()=>undefined),
     content.animate([{transform:"scale("+(target.width/inner.width)+","+(target.height/inner.height)+")"},{transform:"scale(1)"}],options).finished.catch(()=>undefined),
     snapshot.animate([{transform:"scale(1)"},{transform:"scale("+((imageWidth*cover)/inner.width)+","+((imageHeight*cover)/inner.height)+")"}],options).finished.catch(()=>undefined),
     border.animate([{opacity:0},{opacity:1}],options).finished.catch(()=>undefined),
-    details.animate([{opacity:0},{opacity:1}],{delay:235,duration:125,fill:"forwards",easing:"ease-in"}).finished.catch(()=>undefined)
+    details.animate([{opacity:0},{opacity:1}],{delay:Math.max(0,destination.durationMs-125),duration:125,fill:"forwards",easing:"ease-in"}).finished.catch(()=>undefined)
   ])
 };
 </script>`;
@@ -293,6 +309,7 @@ export class WindowCaptureTransition {
         cornerRadius: Math.max(0, destination.cornerRadius),
         scaleFactor: Math.max(0.1, destination.scaleFactor),
         details: active.details,
+        durationMs: windowCaptureAnimationDurationMs(active.source, destination.frame),
       })})`,
     );
   }
