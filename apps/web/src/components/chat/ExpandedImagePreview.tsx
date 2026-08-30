@@ -12,6 +12,12 @@ export interface ExpandedImagePreview {
   index: number;
 }
 
+export function attachVideoThumbnail(video: HTMLVideoElement, file: File): () => void {
+  const url = URL.createObjectURL(file);
+  video.src = url;
+  return () => URL.revokeObjectURL(url);
+}
+
 export function buildExpandedImagePreview(
   images: ReadonlyArray<ChatImageAttachment | ComposerFileAttachment>,
   selectedImageId: string,
