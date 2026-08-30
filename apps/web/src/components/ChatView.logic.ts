@@ -290,8 +290,8 @@ export function revokeBlobPreviewUrl(previewUrl: string | undefined): void {
   URL.revokeObjectURL(previewUrl);
 }
 
-export async function loadDesktopVideoPreviewUrl(url: string): Promise<string> {
-  const response = await fetch(url);
+export async function loadVideoPreviewUrl(url: string, signal?: AbortSignal): Promise<string> {
+  const response = await fetch(url, signal ? { signal } : {});
   if (!response.ok) throw new Error(`Could not load video (${response.status}).`);
   return URL.createObjectURL(await response.blob());
 }

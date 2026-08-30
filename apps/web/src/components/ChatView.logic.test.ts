@@ -21,7 +21,7 @@ import {
   dismissBranchMismatchForSession,
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
   getStartedThreadModelChangeBlockReason,
-  loadDesktopVideoPreviewUrl,
+  loadVideoPreviewUrl,
   isVideoPreviewRequestCurrent,
   hasEnvironmentReconnectWarningGraceElapsed,
   hasServerAcknowledgedLocalDispatch,
@@ -43,11 +43,20 @@ import {
   shouldWriteThreadErrorToCurrentServerThread,
 } from "./ChatView.logic";
 
-describe("loadDesktopVideoPreviewUrl", () => {
+describe("loadVideoPreviewUrl", () => {
   it("loads video bytes into an object URL", async () => {
-    const objectUrl = await loadDesktopVideoPreviewUrl("data:video/mp4;base64,AA==");
+    const objectUrl = await loadVideoPreviewUrl("data:video/mp4;base64,AA==");
     expect(objectUrl).toMatch(/^blob:/);
     URL.revokeObjectURL(objectUrl);
+  });
+
+  it("stops loading when the preview request is cancelled", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      loadVideoPreviewUrl("data:video/mp4;base64,AA==", controller.signal),
+    ).rejects.toMatchObject({ name: "AbortError" });
   });
 });
 

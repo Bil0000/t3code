@@ -311,7 +311,7 @@ import {
 } from "../../providerInstances";
 import { type AppModelOption, getAppModelOptionsForInstance } from "../../modelSelection";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
-import { type SessionPhase, type Thread } from "../../types";
+import { type SessionPhase, type Thread, videoMimeType } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
 import type { PendingApproval, PendingUserInput } from "../../session-logic";
 import type { ContextWindowSnapshot } from "../../lib/contextWindow";
@@ -3007,11 +3007,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     let error: string | null = null;
     for (const file of files) {
       const attachmentKind = classifyComposerAttachmentFile(file);
+      const fileMimeType =
+        attachmentKind === "file"
+          ? (videoMimeType({ name: file.name, mimeType: file.type }) ??
+            (file.type || "application/octet-stream"))
+          : file.type;
       const replacesReattachMarker =
         attachmentKind === "file" &&
-        reattachKeys.delete(
-          `${file.type || "application/octet-stream"}\u0000${file.size}\u0000${file.name || "file"}`,
-        );
+        reattachKeys.delete(`${fileMimeType}\u0000${file.size}\u0000${file.name || "file"}`);
       if (!replacesReattachMarker && reservedCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
         error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`;
         // Keep scanning: a later file in this batch can still replace a
@@ -3037,13 +3040,17 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           error = fileAttachmentTooLargeMessage(file.name, fileStagingLimit);
           continue;
         }
+        const attachmentFile =
+          file.type === fileMimeType
+            ? file
+            : new File([file], file.name, { type: fileMimeType, lastModified: file.lastModified });
         acceptedFiles.push({
           type: "file",
           id: randomUUID(),
-          name: file.name || "file",
-          mimeType: file.type || "application/octet-stream",
-          sizeBytes: file.size,
-          file,
+          name: attachmentFile.name || "file",
+          mimeType: fileMimeType,
+          sizeBytes: attachmentFile.size,
+          file: attachmentFile,
         });
       }
       if (!replacesReattachMarker) {
