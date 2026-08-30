@@ -1072,11 +1072,12 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 <button
                   type="button"
                   disabled={file.downloadable === false}
-                  className="flex min-h-[72px] w-full cursor-zoom-in items-center justify-center text-white disabled:cursor-default disabled:opacity-50"
+                  className="flex min-h-[72px] w-full cursor-zoom-in flex-col items-center justify-center gap-1 px-2 py-2 text-white disabled:cursor-default disabled:opacity-50"
                   aria-label={`Play ${file.name}`}
                   onClick={() => ctx.onFileOpen(file)}
                 >
                   <PlayIcon className="size-8 fill-current" />
+                  <span className="max-w-full truncate text-[11px]">{file.name}</span>
                 </button>
               </div>
             ))}

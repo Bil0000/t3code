@@ -609,6 +609,7 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain('aria-label="Play demo.mp4"');
     expect(markup).toContain("min-h-[72px]");
+    expect(markup).toContain(">demo.mp4</span>");
     expect(markup).not.toContain('aria-label="Download demo.mp4"');
   });
   it("renders a file download button without creating its URL in advance", () => {

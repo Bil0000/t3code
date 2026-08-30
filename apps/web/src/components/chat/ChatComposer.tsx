@@ -3821,7 +3821,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         >
                           <button
                             type="button"
-                            className="flex h-full w-full cursor-zoom-in items-center justify-center text-white"
+                            className="flex h-full w-full cursor-zoom-in flex-col items-center justify-center gap-1 px-1 text-white"
                             aria-label={`Play ${file.name}`}
                             onClick={() => {
                               const preview = buildExpandedImagePreview([file], file.id);
@@ -3829,6 +3829,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             }}
                           >
                             <PlayIcon className="size-6 fill-current" />
+                            <span className="max-w-full truncate text-[9px]">{file.name}</span>
                           </button>
                           {upload?.status === "uploading" && (
                             <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-background/85 px-1 text-center text-[10px] text-foreground">
