@@ -535,7 +535,7 @@ it("keeps the Windows transition above the revealed main window", async () => {
   }
 });
 
-it("does not let a failed transition fail capture completion", async () => {
+it("does not let a failed transition fail landing or capture completion", async () => {
   flashWindows.length = 0;
   transitionScriptState.rejectFlight = true;
   const transition = new WindowCaptureTransition();
@@ -556,6 +556,7 @@ it("does not let a failed transition fail capture completion", async () => {
       scaleFactor: 1,
     });
 
+    await transition.waitForLanding("capture-1");
     await transition.complete("capture-1");
 
     assert.isTrue(flashWindows[0]?.destroyed);

@@ -317,18 +317,13 @@ export class WindowCaptureTransition {
   async waitForLanding(id: string): Promise<void> {
     const active = this.active;
     if (!active || active.id !== id) return;
-    try {
-      await active.flight;
-    } catch (error) {
-      if (active.window.isDestroyed() || this.active !== active) return;
-      throw error;
-    }
+    await active.flight?.catch(() => undefined);
   }
 
   async complete(id: string): Promise<void> {
     const active = this.active;
     if (!active || active.id !== id) return;
-    await this.waitForLanding(id).catch(() => undefined);
+    await this.waitForLanding(id);
     if (this.active === active) this.dispose();
   }
 
