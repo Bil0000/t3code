@@ -1078,11 +1078,15 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 >
                   <button
                     type="button"
-                    disabled={file.downloadable === false || isOpening}
-                    className="flex min-h-[72px] w-full cursor-zoom-in flex-col items-center justify-center gap-1 px-2 py-2 text-white disabled:cursor-default disabled:opacity-50"
+                    disabled={file.downloadable === false}
+                    className="flex min-h-[72px] w-full cursor-zoom-in flex-col items-center justify-center gap-1 px-2 py-2 text-white disabled:cursor-default disabled:opacity-50 aria-disabled:cursor-default aria-disabled:opacity-50"
                     aria-busy={isOpening || undefined}
+                    aria-disabled={isOpening || undefined}
                     aria-label={`${isOpening ? "Loading" : "Play"} ${file.name}`}
-                    onClick={() => ctx.onFileOpen(file)}
+                    onClick={() => {
+                      if (isOpening) return;
+                      ctx.onFileOpen(file);
+                    }}
                   >
                     {isOpening ? (
                       <span className="text-[11px]">Loading…</span>

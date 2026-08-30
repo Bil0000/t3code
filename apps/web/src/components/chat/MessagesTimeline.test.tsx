@@ -620,6 +620,8 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain(">demo.mp4</span>");
     expect(markup).not.toContain('aria-label="Download demo.mp4"');
     expect(busyMarkup).toContain('aria-busy="true"');
+    expect(busyMarkup).toContain('aria-disabled="true"');
+    expect(busyMarkup).not.toContain('disabled=""');
     expect(busyMarkup).toContain(">Loading…</span>");
   });
   it("renders a file download button without creating its URL in advance", () => {

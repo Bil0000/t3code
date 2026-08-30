@@ -3828,11 +3828,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         >
                           <button
                             type="button"
-                            disabled={isOpening}
-                            className="flex h-full w-full cursor-zoom-in flex-col items-center justify-center gap-1 px-1 text-white disabled:cursor-default disabled:opacity-50"
+                            className="flex h-full w-full cursor-zoom-in flex-col items-center justify-center gap-1 px-1 text-white aria-disabled:cursor-default aria-disabled:opacity-50"
                             aria-busy={isOpening || undefined}
+                            aria-disabled={isOpening || undefined}
                             aria-label={`${isOpening ? "Loading" : "Play"} ${file.name}`}
                             onClick={() => {
+                              if (isOpening) return;
                               if (file.file !== null) {
                                 const preview = buildExpandedImagePreview([file], file.id);
                                 if (preview) onExpandImage(preview);
