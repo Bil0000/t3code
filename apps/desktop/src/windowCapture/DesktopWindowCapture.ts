@@ -38,6 +38,10 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts";
 import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutProcess.ts";
 import {
+  captureWindowsWindowSnapshot,
+  type WindowsWindowCaptureSource,
+} from "./WindowsWindowCapture.ts";
+import {
   type WindowCaptureAnimationDestination,
   WindowCaptureTransition,
 } from "./WindowCaptureTransition.ts";
@@ -372,22 +376,32 @@ async function captureSource({
       });
     }
 
-    const sources = await Electron.desktopCapturer.getSources({
-      types: mode === "portal" ? ["window", "screen"] : ["window"],
-      thumbnailSize: windowCaptureThumbnailSize(active),
-      fetchWindowIcons: true,
-    });
-    const source =
-      mode === "portal" ? sources[0] : active ? findCaptureSource(sources, active) : undefined;
-    if (!source || source.thumbnail.isEmpty()) {
-      throw mode === "portal"
-        ? new DesktopWindowCaptureError({
-            operation: "no-window-selected",
-            captureId,
-          })
-        : new DesktopWindowCaptureError({ operation: "window-unavailable", captureId });
+    let source: WindowsWindowCaptureSource | Electron.DesktopCapturerSource;
+    let png: Buffer;
+    if (platform === "win32") {
+      if (!active) {
+        throw new DesktopWindowCaptureError({ operation: "window-unavailable", captureId });
+      }
+      ({ source, png } = await captureWindowsWindowSnapshot(active));
+    } else {
+      const sources = await Electron.desktopCapturer.getSources({
+        types: mode === "portal" ? ["window", "screen"] : ["window"],
+        thumbnailSize: windowCaptureThumbnailSize(active),
+        fetchWindowIcons: true,
+      });
+      const selected =
+        mode === "portal" ? sources[0] : active ? findCaptureSource(sources, active) : undefined;
+      if (!selected || selected.thumbnail.isEmpty()) {
+        throw mode === "portal"
+          ? new DesktopWindowCaptureError({
+              operation: "no-window-selected",
+              captureId,
+            })
+          : new DesktopWindowCaptureError({ operation: "window-unavailable", captureId });
+      }
+      source = selected;
+      png = selected.thumbnail.toPNG();
     }
-    const png = source.thumbnail.toPNG();
     const animationStarted = await showCaptureFeedback(
       transition,
       flash,
