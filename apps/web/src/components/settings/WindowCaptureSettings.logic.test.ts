@@ -1,6 +1,17 @@
 import { assert, expect, it } from "vite-plus/test";
 
-import { createRecordingRequestTracker } from "./WindowCaptureSettings.logic";
+import {
+  createRecordingRequestTracker,
+  windowCaptureSoundPatch,
+} from "./WindowCaptureSettings.logic";
+
+it.each([
+  ["off", { windowCapturePlaySound: false }],
+  ["soft-pop", { windowCapturePlaySound: true, windowCaptureSound: "soft-pop" }],
+  ["camera-shutter", { windowCapturePlaySound: true, windowCaptureSound: "camera-shutter" }],
+] as const)("maps %s to compatible capture settings", (sound, patch) => {
+  expect(windowCaptureSoundPatch(sound)).toEqual(patch);
+});
 
 it("ignores a stale request after a newer request starts", () => {
   const requests = createRecordingRequestTracker();

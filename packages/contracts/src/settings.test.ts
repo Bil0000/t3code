@@ -73,6 +73,7 @@ describe("ClientSettings window capture", () => {
     expect(settings.windowCaptureEnabled).toBe(false);
     expect(settings.windowCaptureShortcut).toEqual({ kind: "both-shift-keys" });
     expect(settings.windowCapturePlaySound).toBe(true);
+    expect(settings.windowCaptureSound).toBe("soft-pop");
     expect(settings.windowCaptureFlash).toBe(true);
     expect(settings.windowCaptureAnimations).toBe(true);
     expect(settings.windowCaptureOnboardingDismissed).toBe(false);
@@ -91,6 +92,7 @@ describe("ClientSettings window capture", () => {
           modKey: false,
         },
         windowCapturePlaySound: false,
+        windowCaptureSound: "camera-shutter",
         windowCaptureFlash: false,
         windowCaptureAnimations: false,
         windowCaptureOnboardingDismissed: true,
@@ -106,10 +108,15 @@ describe("ClientSettings window capture", () => {
         modKey: false,
       },
       windowCapturePlaySound: false,
+      windowCaptureSound: "camera-shutter",
       windowCaptureFlash: false,
       windowCaptureAnimations: false,
       windowCaptureOnboardingDismissed: true,
     });
+  });
+
+  it("rejects unknown capture sounds", () => {
+    expect(() => decodeClientSettingsPatch({ windowCaptureSound: "doorbell" })).toThrow();
   });
 
   it("accepts modifier pair shortcuts", () => {

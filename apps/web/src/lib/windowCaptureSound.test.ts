@@ -4,6 +4,7 @@ import { playWindowCaptureSound } from "./windowCaptureSound";
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis, "Audio");
+  Reflect.deleteProperty(globalThis, "window");
   vi.restoreAllMocks();
 });
 
@@ -22,12 +23,34 @@ describe("playWindowCaptureSound", () => {
       value: AudioMock,
     });
 
-    playWindowCaptureSound();
+    playWindowCaptureSound("soft-pop");
 
     expect(AudioMock).toHaveBeenCalledWith(expect.stringMatching(/window-capture-up-pop\.wav/));
     expect(sound.preload).toBe("auto");
     expect(sound.currentTime).toBe(0);
     expect(sound.play).toHaveBeenCalledOnce();
+  });
+
+  it("closes the camera shutter context when resume is blocked", async () => {
+    const context = {
+      close: vi.fn().mockResolvedValue(undefined),
+      createBuffer: vi.fn(),
+      resume: vi.fn().mockRejectedValue(new Error("blocked")),
+    };
+    function AudioContextMock() {
+      return context;
+    }
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: { AudioContext: AudioContextMock },
+    });
+
+    playWindowCaptureSound("camera-shutter");
+
+    await vi.waitFor(() => expect(context.close).toHaveBeenCalledOnce());
+
+    expect(context.resume).toHaveBeenCalledOnce();
+    expect(context.createBuffer).not.toHaveBeenCalled();
   });
 
   it("ignores blocked playback", async () => {
@@ -43,7 +66,7 @@ describe("playWindowCaptureSound", () => {
       }),
     });
 
-    expect(() => playWindowCaptureSound()).not.toThrow();
+    expect(() => playWindowCaptureSound("soft-pop")).not.toThrow();
     await vi.waitFor(() => expect(sound.play).toHaveBeenCalledOnce());
   });
 });

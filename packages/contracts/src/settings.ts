@@ -146,6 +146,9 @@ export const WindowCaptureShortcut = Schema.Union([
   WindowCaptureKeyChord,
 ]);
 export type WindowCaptureShortcut = typeof WindowCaptureShortcut.Type;
+export const WindowCaptureSound = Schema.Literals(["soft-pop", "camera-shutter"]);
+export type WindowCaptureSound = typeof WindowCaptureSound.Type;
+export const DEFAULT_WINDOW_CAPTURE_SOUND: WindowCaptureSound = "soft-pop";
 
 export type WindowCaptureModifierPairShortcut = Extract<
   WindowCaptureShortcut,
@@ -354,6 +357,9 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_WINDOW_CAPTURE_SHORTCUT)),
   ),
   windowCapturePlaySound: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  windowCaptureSound: WindowCaptureSound.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_WINDOW_CAPTURE_SOUND)),
+  ),
   windowCaptureFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   windowCaptureAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   windowCaptureOnboardingDismissed: Schema.Boolean.pipe(
@@ -1071,6 +1077,7 @@ export const ClientSettingsPatch = Schema.Struct({
   windowCaptureEnabled: Schema.optionalKey(Schema.Boolean),
   windowCaptureShortcut: Schema.optionalKey(WindowCaptureShortcut),
   windowCapturePlaySound: Schema.optionalKey(Schema.Boolean),
+  windowCaptureSound: Schema.optionalKey(WindowCaptureSound),
   windowCaptureFlash: Schema.optionalKey(Schema.Boolean),
   windowCaptureAnimations: Schema.optionalKey(Schema.Boolean),
   windowCaptureOnboardingDismissed: Schema.optionalKey(Schema.Boolean),

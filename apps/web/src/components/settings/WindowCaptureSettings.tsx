@@ -21,7 +21,11 @@ import {
 import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
 import { primaryServerKeybindingsAtom } from "../../state/server";
 import { commandLabel, keybindingFromKeyboardEvent } from "./KeybindingsSettings.logic";
-import { createRecordingRequestTracker } from "./WindowCaptureSettings.logic";
+import {
+  createRecordingRequestTracker,
+  windowCaptureSoundPatch,
+  type WindowCaptureSoundSelection,
+} from "./WindowCaptureSettings.logic";
 import {
   SettingsUnavailableGroup,
   SettingResetButton,
@@ -32,6 +36,7 @@ import {
 import { searchableSetting } from "./settingsSearch";
 import { Button } from "../ui/button";
 import { WindowCaptureShortcutKeys } from "../desktop/WindowCaptureShortcutKeys";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 
 const MODIFIER_FROM_KEY: Readonly<Record<string, WindowCaptureModifier>> = {
@@ -100,6 +105,9 @@ export function WindowCaptureSettings() {
     : null;
   const canSaveShortcut =
     shortcutChanged && candidateConflict === null && shortcutCheck.availability?.available === true;
+  const soundSelection: WindowCaptureSoundSelection = settings.windowCapturePlaySound
+    ? settings.windowCaptureSound
+    : "off";
 
   const refreshState = useCallback(async () => {
     if (bridge) setState(await bridge.getWindowCaptureState());
@@ -307,20 +315,30 @@ export function WindowCaptureSettings() {
                 type="button"
                 size="xs"
                 variant="outline"
-                disabled={!captureAvailable}
-                onClick={playWindowCaptureSound}
+                disabled={!captureAvailable || soundSelection === "off"}
+                onClick={() => playWindowCaptureSound(settings.windowCaptureSound)}
               >
                 Test sound
               </Button>
             }
-            description="Play a short sound after the image is attached."
+            description="Choose the sound played after the image is attached."
             control={
-              <Switch
-                checked={settings.windowCapturePlaySound}
+              <Select
                 disabled={!captureAvailable}
-                aria-label="Play window capture sound"
-                onCheckedChange={(checked) => void save({ windowCapturePlaySound: checked })}
-              />
+                onValueChange={(value) =>
+                  value && void save(windowCaptureSoundPatch(value as WindowCaptureSoundSelection))
+                }
+                value={soundSelection}
+              >
+                <SelectTrigger aria-label="Window capture sound" className="w-40" size="sm">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="off">Off</SelectItem>
+                  <SelectItem value="soft-pop">Soft Pop</SelectItem>
+                  <SelectItem value="camera-shutter">Camera Shutter</SelectItem>
+                </SelectPopup>
+              </Select>
             }
           />
           <SettingsRow

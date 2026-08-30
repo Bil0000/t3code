@@ -75,7 +75,9 @@ export function WindowCaptureCoordinator() {
     routeDraftId,
     routeThreadRef,
   } = useHandleNewThread();
-  const playSound = useClientSettings((settings) => settings.windowCapturePlaySound);
+  const captureSound = useClientSettings((settings) =>
+    settings.windowCapturePlaySound ? settings.windowCaptureSound : null,
+  );
   const animateCaptures = useClientSettings((settings) => settings.windowCaptureAnimations);
   const lastTargetRef = useRef<CaptureTarget | null>(null);
   const drainingRef = useRef<Promise<void> | null>(null);
@@ -110,13 +112,13 @@ export function WindowCaptureCoordinator() {
 
   const playCaptureSound = useCallback(
     (id: string) => {
-      if (!playSound || soundedCaptureIdsRef.current.has(id)) return;
+      if (!captureSound || soundedCaptureIdsRef.current.has(id)) return;
       soundedCaptureIdsRef.current.add(id);
       try {
-        playWindowCaptureSound();
+        playWindowCaptureSound(captureSound);
       } catch {}
     },
-    [playSound],
+    [captureSound],
   );
 
   const drain = useCallback(async () => {

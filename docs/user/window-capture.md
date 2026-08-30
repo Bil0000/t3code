@@ -36,10 +36,10 @@ current project.
 ## Feedback
 
 The settings page controls the capture sound, gentle window cue, and attachment animation
-separately. With animations on, the captured window flies into its new composer attachment and
-settles into place. Use **Test sound** to hear the capture sound. Turn off animations to remove
-capture motion. The operating system's reduced-motion setting also disables the attachment
-animation.
+separately. Choose **Off**, **Soft Pop** (the default), or **Camera Shutter** for the capture sound.
+Use **Test sound** to hear the selected sound. With animations on, the captured window flies into
+its new composer attachment and settles into place. Turn off animations to remove capture motion.
+The operating system's reduced-motion setting also disables the attachment animation.
 
 Pending captures stay on disk until the image is saved in the draft. If T3 Code closes during that
 step, it retries the capture the next time the desktop app starts. Captures rejected because the
