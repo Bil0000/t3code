@@ -23,6 +23,7 @@ import { primaryServerKeybindingsAtom } from "../../state/server";
 import { commandLabel, keybindingFromKeyboardEvent } from "./KeybindingsSettings.logic";
 import {
   createRecordingRequestTracker,
+  windowCaptureUnavailableMessage,
   windowCaptureSoundPatch,
   type WindowCaptureSoundSelection,
 } from "./WindowCaptureSettings.logic";
@@ -88,11 +89,7 @@ export function WindowCaptureSettings() {
   const heldModifierCodesRef = useRef(new Set<string>());
   const [recordingRequests] = useState(createRecordingRequestTracker);
   const shortcutCheckIdRef = useRef(0);
-  const unavailableMessage = bridge
-    ? undefined
-    : window.desktopBridge
-      ? "Update the desktop app to use window capture."
-      : "Only available in the desktop app.";
+  const unavailableMessage = windowCaptureUnavailableMessage(Boolean(bridge));
   const captureAvailable = Boolean(bridge) && state !== null && state.mode !== "unavailable";
   const savedShortcut = settings.windowCaptureShortcut;
   const shortcutChanged = !sameWindowCaptureShortcut(candidate, savedShortcut);
@@ -328,11 +325,7 @@ export function WindowCaptureSettings() {
                 }
                 value={soundSelection}
               >
-                <SelectTrigger
-                  aria-label="Window capture sound"
-                  className="w-full sm:w-fit"
-                  size="sm"
-                >
+                <SelectTrigger aria-label="Window capture sound" className="w-full sm:w-44">
                   <SelectValue>
                     {soundSelection === "off"
                       ? "Off"

@@ -2,6 +2,7 @@ import { assert, expect, it } from "vite-plus/test";
 
 import {
   createRecordingRequestTracker,
+  windowCaptureUnavailableMessage,
   windowCaptureSoundPatch,
 } from "./WindowCaptureSettings.logic";
 
@@ -25,4 +26,8 @@ it("ignores a stale request after a newer request starts", () => {
   expect(requests.owns(firstRequest)).toBe(false);
   expect(requests.owns(secondRequest)).toBe(true);
   expect(requests.tryBegin()).toBeNull();
+});
+
+it("reports unavailable capture support without browser globals", () => {
+  expect(windowCaptureUnavailableMessage(false)).toBe("Only available in the desktop app.");
 });
