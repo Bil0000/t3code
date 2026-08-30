@@ -8,6 +8,7 @@ const MAX_DURATION_MS = 680;
 const DURATION_DISTANCE_SCALE = 2_000;
 const EASING = "cubic-bezier(.2,.8,.2,1)";
 const TIMEOUT_MS = 6_000;
+const CROSS_DISPLAY_EXIT_DURATION_MS = 220;
 const MARGIN = 72;
 
 type WindowCaptureAnimationDetails = {
@@ -44,6 +45,7 @@ type ActiveTransition = {
   readonly id: string;
   readonly source: Electron.Rectangle;
   readonly window: Electron.BrowserWindow;
+  readonly sourceDisplayId: number;
   bounds: Electron.Rectangle;
   details?: WindowCaptureAnimationDetails | undefined;
   timer?: Fiber.Fiber<void> | undefined;
@@ -52,7 +54,7 @@ type ActiveTransition = {
 
 type WindowCaptureTransitionOptions = {
   readonly boundOverlayToFlight?: boolean | undefined;
-  readonly hideWhileResizing?: boolean | undefined;
+  readonly sourceDisplayOnly?: boolean | undefined;
   readonly alwaysOnTopLevel?:
     | NonNullable<Parameters<Electron.BrowserWindow["setAlwaysOnTop"]>[1]>
     | undefined;
@@ -150,6 +152,7 @@ const source=${JSON.stringify(source)},card=document.getElementById("card"),cont
 window.setCaptureSnapshot=async src=>{snapshot.src=src;await snapshot.decode()};
 window.rebaseCaptureSource=next=>{Object.assign(source,next);Object.assign(card.style,{left:source.x+"px",top:source.y+"px",width:source.width+"px",height:source.height+"px"})};
 window.startCaptureFlash=()=>document.getElementById("flash").animate([{opacity:.08},{offset:.38,opacity:.08},{offset:.68,opacity:.02},{opacity:0}],{duration:300,fill:"forwards",easing:"${EASING}"});
+window.startCaptureExit=async()=>{await card.animate([{opacity:1,transform:"scale(1)"},{opacity:0,transform:"scale(.94)"}],{duration:${CROSS_DISPLAY_EXIT_DURATION_MS},fill:"forwards",easing:"${EASING}"}).finished.catch(()=>undefined)};
 const applyDetails=value=>{
   if(!value)return;
   details.dataset.ready="";
@@ -187,12 +190,12 @@ window.startCaptureTransition=async destination=>{
 export class WindowCaptureTransition {
   private active: ActiveTransition | undefined;
   private readonly boundOverlayToFlight: boolean;
-  private readonly hideWhileResizing: boolean;
+  private readonly sourceDisplayOnly: boolean;
   private readonly alwaysOnTopLevel: WindowCaptureTransitionOptions["alwaysOnTopLevel"];
 
   constructor(options: WindowCaptureTransitionOptions = {}) {
     this.boundOverlayToFlight = options.boundOverlayToFlight ?? false;
-    this.hideWhileResizing = options.hideWhileResizing ?? false;
+    this.sourceDisplayOnly = options.sourceDisplayOnly ?? false;
     this.alwaysOnTopLevel = options.alwaysOnTopLevel;
   }
 
@@ -203,13 +206,17 @@ export class WindowCaptureTransition {
     flash: boolean,
   ): Promise<void> {
     this.dispose();
-    const requestedBounds = this.boundOverlayToFlight
-      ? windowCaptureAnimationFlightBounds(source, source)
-      : windowCaptureAnimationOverlayBounds(Electron.screen.getAllDisplays());
+    const sourceDisplay = Electron.screen.getDisplayMatching(source);
+    const requestedBounds = this.sourceDisplayOnly
+      ? sourceDisplay.bounds
+      : this.boundOverlayToFlight
+        ? windowCaptureAnimationFlightBounds(source, source)
+        : windowCaptureAnimationOverlayBounds(Electron.screen.getAllDisplays());
     const window = createWindow(requestedBounds, this.alwaysOnTopLevel);
     const active: ActiveTransition = {
       id,
       source,
+      sourceDisplayId: sourceDisplay.id,
       window,
       bounds: window.getBounds(),
     };
@@ -269,6 +276,13 @@ export class WindowCaptureTransition {
     destination: WindowCaptureAnimationDestination,
   ): Promise<void> {
     const window = active.window;
+    if (
+      this.sourceDisplayOnly &&
+      Electron.screen.getDisplayMatching(destination.frame).id !== active.sourceDisplayId
+    ) {
+      await window.webContents.executeJavaScript("window.startCaptureExit()");
+      return;
+    }
     let bounds = active.bounds;
     if (this.boundOverlayToFlight) {
       const requested = windowCaptureAnimationFlightBounds(active.source, destination.frame);
@@ -278,7 +292,6 @@ export class WindowCaptureTransition {
         requested.width !== bounds.width ||
         requested.height !== bounds.height
       ) {
-        if (this.hideWhileResizing) window.hide();
         window.setBounds(requested, false);
         bounds = window.getBounds();
         active.bounds = bounds;
@@ -290,9 +303,6 @@ export class WindowCaptureTransition {
             height: active.source.height,
           })})`,
         );
-        if (this.hideWhileResizing && !window.isDestroyed() && this.active === active) {
-          window.showInactive();
-        }
       }
     }
     if (window.isDestroyed() || this.active !== active) return;
