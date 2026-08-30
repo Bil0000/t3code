@@ -127,6 +127,15 @@ describe("window capture keybinding conflicts", () => {
     ["{", "["],
     ["}", "]"],
     ["@", "2"],
+    ["<", ","],
+    [">", "."],
+    ["?", "/"],
+    [":", ";"],
+    ['"', "'"],
+    ["_", "-"],
+    ["+", "="],
+    ["|", "\\"],
+    ["~", "`"],
   ])("finds conflicts for shifted physical key aliases %s and %s", (recorded, bound) => {
     expect(
       windowCaptureKeybindingConflict(

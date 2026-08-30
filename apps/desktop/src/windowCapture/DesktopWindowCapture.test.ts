@@ -849,12 +849,12 @@ it.effect("registers macOS modifier pairs through the flags poller", () => {
       assert.lengthOf(spawnedPollers, 1);
       assert.deepEqual(spawnedPollers[0]?.args.slice(-2), ["8", "16"]);
       assert.isTrue(state.shortcutRegistered);
-      mediaAccessStatusMock.mockReturnValue("not-determined");
     }),
   ).pipe(Effect.provide(testLayer("darwin")));
 });
 
 it.effect("applies concurrent settings changes in order while permissions are pending", () => {
+  mediaAccessStatusMock.mockReturnValue("not-determined");
   let finishPermissionRequest: (() => void) | undefined;
   getSourcesMock.mockImplementationOnce(
     () =>

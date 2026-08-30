@@ -129,7 +129,7 @@ export function WindowCaptureSettings() {
   }, [bridge]);
 
   const startRecording = useCallback(async () => {
-    if (!bridge) return;
+    if (!bridge || recordingRequestedRef.current) return;
     recordingRequestedRef.current = true;
     heldModifierCodesRef.current.clear();
     setShortcutCheck({ status: "idle", availability: null });

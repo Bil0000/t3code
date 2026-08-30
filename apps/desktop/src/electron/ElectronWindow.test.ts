@@ -253,6 +253,7 @@ describe("ElectronWindow", () => {
       assert.deepEqual(operations, ["app-focus", "show", "move-top", "focus"]);
       assert.equal(vi.mocked(window.restore).mock.calls.length, 0);
       assert.deepEqual(appFocusMock.mock.calls, [[]]);
+      yield* Effect.promise(() => vi.dynamicImportSettled());
       assert.deepEqual(nativeAppListMock.mock.calls, [[]]);
 
       listedApps.resolve(apps);

@@ -76,6 +76,15 @@ const SHIFTED_SHORTCUT_KEY_ALIASES: Readonly<Record<string, string>> = {
   "(": "9",
   "{": "[",
   "}": "]",
+  "~": "`",
+  _: "-",
+  "+": "=",
+  "|": "\\",
+  ":": ";",
+  '"': "'",
+  "<": ",",
+  ">": ".",
+  "?": "/",
 };
 
 function normalizeEventKey(key: string): string {

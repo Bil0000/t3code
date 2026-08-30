@@ -1,5 +1,4 @@
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
-import * as Xa11y from "@crowecawcaw/xa11y";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -12,8 +11,9 @@ import * as Schema from "effect/Schema";
 import * as Electron from "electron";
 
 async function focusWindowsBrowserWindow(window: Electron.BrowserWindow): Promise<void> {
+  const { App } = await import("@crowecawcaw/xa11y");
   const title = window.getTitle().trim();
-  const exactWindow = await Xa11y.App.list().then(
+  const exactWindow = await App.list().then(
     (apps) =>
       apps
         .filter((app) => app.pid === process.pid)
@@ -21,7 +21,7 @@ async function focusWindowsBrowserWindow(window: Electron.BrowserWindow): Promis
         .find((element) => (element.name ?? "").trim() === title),
     () => undefined,
   );
-  const element = exactWindow ?? (await Xa11y.App.byPid(process.pid, { timeout: 0 })).asElement();
+  const element = exactWindow ?? (await App.byPid(process.pid, { timeout: 0 })).asElement();
   await element.focus();
 }
 
