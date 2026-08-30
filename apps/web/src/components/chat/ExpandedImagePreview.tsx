@@ -26,7 +26,7 @@ export async function downloadVideoPreview(src: string, name: string): Promise<v
   anchor.href = url;
   anchor.download = name;
   anchor.click();
-  setTimeout(() => URL.revokeObjectURL(url), 0);
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
 
 export function buildExpandedImagePreview(
