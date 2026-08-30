@@ -56,6 +56,7 @@ import {
   type DraftId,
   type PersistedComposerFileAttachment,
   type PersistedComposerImageAttachment,
+  composerFileDedupKey,
   composerFileNeedsReattach,
   composerTargetKey,
   hydrateImagesFromPersisted,
@@ -2404,11 +2405,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       let restoredFileCount = 0;
       const stashedFiles = entry.files ?? [];
       if (stashedFiles.length > 0) {
-        const fileDedupKey = (file: {
-          readonly mimeType: string;
-          readonly sizeBytes: number;
-          readonly name: string;
-        }) => `${file.mimeType}\u0000${file.sizeBytes}\u0000${file.name}`;
         const composerFilesNow = composerFilesRef.current;
         const existingFileIds = new Set(composerFilesNow.map((file) => file.id));
         const retainedUploadIds = new Set(
@@ -2416,16 +2412,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
             file.uploadedAttachmentId ? [file.uploadedAttachmentId] : [],
           ),
         );
-        const existingFileKeys = new Set(composerFilesNow.map(fileDedupKey));
+        const existingFileKeys = new Set(composerFilesNow.map(composerFileDedupKey));
         const reattachMarkerKeys = new Set(
-          composerFilesNow.filter(composerFileNeedsReattach).map(fileDedupKey),
+          composerFilesNow.filter(composerFileNeedsReattach).map(composerFileDedupKey),
         );
         const duplicateFiles: PersistedComposerFileAttachment[] = [];
         const markerReplacements: ComposerFileAttachment[] = [];
         const appendedFiles: ComposerFileAttachment[] = [];
         for (const file of stashedFiles) {
           const expired = expiredAttachmentIds.has(file.attachmentId);
-          const key = fileDedupKey(file);
+          const key = composerFileDedupKey(file);
           const restored: ComposerFileAttachment = {
             type: "file",
             id: file.id,
@@ -2998,9 +2994,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     // it must not consume a slot; a draft full of markers would otherwise hit
     // the capacity error before the replacement path could run.
     const reattachKeys = new Set(
-      composerFilesRef.current
-        .filter(composerFileNeedsReattach)
-        .map((file) => `${file.mimeType}\u0000${file.sizeBytes}\u0000${file.name}`),
+      composerFilesRef.current.filter(composerFileNeedsReattach).map(composerFileDedupKey),
     );
     const acceptedImages: File[] = [];
     const acceptedFiles: ComposerFileAttachment[] = [];
@@ -3014,7 +3008,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           : file.type;
       const replacesReattachMarker =
         attachmentKind === "file" &&
-        reattachKeys.delete(`${fileMimeType}\u0000${file.size}\u0000${file.name || "file"}`);
+        reattachKeys.delete(
+          composerFileDedupKey({
+            name: file.name || "file",
+            mimeType: fileMimeType,
+            sizeBytes: file.size,
+          }),
+        );
       if (!replacesReattachMarker && reservedCount >= PROVIDER_SEND_TURN_MAX_ATTACHMENTS) {
         error = `You can attach up to ${PROVIDER_SEND_TURN_MAX_ATTACHMENTS} files per message.`;
         // Keep scanning: a later file in this batch can still replace a

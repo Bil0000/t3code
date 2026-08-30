@@ -517,6 +517,35 @@ describe("composerDraftStore file attachments", () => {
     expect(files?.some(composerFileNeedsReattach)).toBe(false);
   });
 
+  it("replaces a legacy video marker after its MIME type is normalized", () => {
+    const store = useComposerDraftStore.getState();
+    const marker: ComposerFileAttachment = {
+      type: "file",
+      id: "file-marker",
+      name: "clip.mkv",
+      mimeType: "application/octet-stream",
+      sizeBytes: 6,
+      file: null,
+    };
+    store.addFiles(threadRef, [marker]);
+
+    const file = new File(["report"], marker.name, { type: "video/x-matroska" });
+    store.addFiles(threadRef, [
+      {
+        type: "file",
+        id: "file-repicked",
+        name: file.name,
+        mimeType: file.type,
+        sizeBytes: file.size,
+        file,
+      },
+    ]);
+
+    const files = store.getComposerDraft(threadRef)?.files;
+    expect(files?.map((entry) => entry.id)).toEqual(["file-repicked"]);
+    expect(files?.some(composerFileNeedsReattach)).toBe(false);
+  });
+
   it("replaces a needs-reattach marker with a stash-restored uploaded file", () => {
     const store = useComposerDraftStore.getState();
     const marker: ComposerFileAttachment = { ...makeFile("file-marker"), file: null };
