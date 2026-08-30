@@ -142,6 +142,9 @@ export function WindowCaptureCoordinator() {
             ? resolveExistingWindowCaptureTarget(animationTarget, routeThreadRef)
             : await resolveTarget();
           if (!target) {
+            await dismissWindowCaptureAnimation(item.id);
+            await bridge.acknowledgeWindowCapture(item.id);
+            soundedCaptureIdsRef.current.delete(item.id);
             toastManager.add(
               stackedThreadToast({
                 type: "error",
@@ -149,7 +152,7 @@ export function WindowCaptureCoordinator() {
                 description: "Add a project, then capture the window again.",
               }),
             );
-            return;
+            continue;
           }
 
           try {
@@ -181,16 +184,30 @@ export function WindowCaptureCoordinator() {
             const dataUrl = compressed.recompressed
               ? await readFileAsDataUrl(file)
               : capture.dataUrl;
-            store.addImage(target, {
-              type: "image",
-              id: capture.id,
-              name: file.name,
-              mimeType: file.type,
-              sizeBytes: file.size,
-              previewUrl: dataUrl,
-              file,
-              source: capture.source,
-            });
+            if (
+              !store.addImage(target, {
+                type: "image",
+                id: capture.id,
+                name: file.name,
+                mimeType: file.type,
+                sizeBytes: file.size,
+                previewUrl: dataUrl,
+                file,
+                source: capture.source,
+              })
+            ) {
+              await dismissWindowCaptureAnimation(item.id);
+              await bridge.acknowledgeWindowCapture(item.id);
+              soundedCaptureIdsRef.current.delete(item.id);
+              toastManager.add(
+                stackedThreadToast({
+                  type: "error",
+                  title: "Window capture failed",
+                  description: "Remove an attachment, then capture the window again.",
+                }),
+              );
+              continue;
+            }
             const persisted: PersistedComposerImageAttachment = {
               id: capture.id,
               name: file.name,

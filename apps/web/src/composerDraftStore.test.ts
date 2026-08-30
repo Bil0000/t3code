@@ -246,8 +246,8 @@ describe("composerDraftStore addImages", () => {
       lastModified: 999,
     });
 
-    useComposerDraftStore.getState().addImage(threadRef, first);
-    useComposerDraftStore.getState().addImage(threadRef, duplicateLater);
+    expect(useComposerDraftStore.getState().addImage(threadRef, first)).toBe(true);
+    expect(useComposerDraftStore.getState().addImage(threadRef, duplicateLater)).toBe(false);
 
     const draft = draftFor(threadId, TEST_ENVIRONMENT_ID);
     expect(draft?.images.map((image) => image.id)).toEqual(["img-a"]);
@@ -489,9 +489,12 @@ describe("composerDraftStore file attachments", () => {
       makeFile("file-accepted"),
       { ...makeFile("file-overflow"), name: "other.pdf" },
     ]);
-    store.addImages(threadRef, [
-      makeImage({ id: "image-overflow", name: "overflow.png", previewUrl: "blob:overflow" }),
-    ]);
+    expect(
+      store.addImage(
+        threadRef,
+        makeImage({ id: "image-overflow", name: "overflow.png", previewUrl: "blob:overflow" }),
+      ),
+    ).toBe(false);
 
     const draft = store.getComposerDraft(threadRef);
     expect(draft?.images).toHaveLength(PROVIDER_SEND_TURN_MAX_ATTACHMENTS - 1);

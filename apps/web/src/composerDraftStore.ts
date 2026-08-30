@@ -536,7 +536,7 @@ interface ComposerDraftStoreState {
     threadRef: ComposerThreadTarget,
     interactionMode: ProviderInteractionMode | null | undefined,
   ) => void;
-  addImage: (threadRef: ComposerThreadTarget, image: ComposerImageAttachment) => void;
+  addImage: (threadRef: ComposerThreadTarget, image: ComposerImageAttachment) => boolean;
   addImages: (threadRef: ComposerThreadTarget, images: ComposerImageAttachment[]) => void;
   removeImage: (threadRef: ComposerThreadTarget, imageId: string) => void;
   addFiles: (threadRef: ComposerThreadTarget, files: ComposerFileAttachment[]) => void;
@@ -3094,11 +3094,14 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
           const threadKey = resolveComposerDraftKey(get(), threadRef);
           const threadId = resolveComposerThreadId(get(), threadRef);
           if (!threadKey || !threadId) {
-            return;
+            return false;
           }
           get().addImages(typeof threadRef === "string" ? DraftId.make(threadKey) : threadRef, [
             image,
           ]);
+          return (
+            get().draftsByThreadKey[threadKey]?.images.some(({ id }) => id === image.id) ?? false
+          );
         },
         addImages: (threadRef, images) => {
           const threadKey = resolveComposerDraftKey(get(), threadRef) ?? "";
