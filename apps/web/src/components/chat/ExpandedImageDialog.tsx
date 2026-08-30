@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useState } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
-import type { ExpandedImagePreview } from "./ExpandedImagePreview";
+import { downloadVideoPreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
@@ -14,11 +14,25 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
 }: ExpandedImageDialogProps) {
   const [imageOffset, setImageOffset] = useState(0);
   const [failedVideoSrc, setFailedVideoSrc] = useState<string | null>(null);
+  const [downloadingVideoSrc, setDownloadingVideoSrc] = useState<string | null>(null);
+  const [downloadFailedVideoSrc, setDownloadFailedVideoSrc] = useState<string | null>(null);
   const index = (preview.index + imageOffset + preview.images.length) % preview.images.length;
 
   const navigateImage = useCallback((direction: -1 | 1) => {
     setImageOffset((current) => current + direction);
   }, []);
+
+  const downloadVideo = async (src: string, name: string) => {
+    setDownloadFailedVideoSrc(null);
+    setDownloadingVideoSrc(src);
+    try {
+      await downloadVideoPreview(src, name);
+    } catch {
+      setDownloadFailedVideoSrc(src);
+    } finally {
+      setDownloadingVideoSrc((current) => (current === src ? null : current));
+    }
+  };
 
   useEffect(() => {
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
@@ -48,6 +62,8 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   if (!item) return null;
   const mediaLabel = item.type === "video" ? "video" : "image";
 
+  const isDownloadingVideo = downloadingVideoSrc === item.src;
+  const videoDownloadFailed = downloadFailedVideoSrc === item.src;
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 px-4 py-6 [-webkit-app-region:no-drag]"
@@ -86,14 +102,23 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
         </Button>
         {item.type === "video" && failedVideoSrc === item.src ? (
           <div className="flex h-48 w-[min(92vw,32rem)] flex-col items-center justify-center gap-3 rounded-lg border border-border/70 bg-black px-6 text-center text-white shadow-2xl">
-            <p className="text-sm">This video format cannot be played here.</p>
+            <p className="text-sm">
+              {videoDownloadFailed
+                ? "Could not download this video."
+                : "This video format cannot be played here."}
+            </p>
             <Button
               size="sm"
               variant="secondary"
-              render={<a href={item.src} download={item.name} />}
+              aria-busy={isDownloadingVideo || undefined}
+              aria-disabled={isDownloadingVideo || undefined}
+              onClick={() => {
+                if (isDownloadingVideo) return;
+                void downloadVideo(item.src, item.name);
+              }}
             >
               <DownloadIcon />
-              Download video
+              {isDownloadingVideo ? "Downloading…" : "Download video"}
             </Button>
           </div>
         ) : item.type === "video" ? (

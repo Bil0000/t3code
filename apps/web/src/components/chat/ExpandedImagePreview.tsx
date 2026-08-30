@@ -18,6 +18,17 @@ export function attachVideoThumbnail(video: HTMLVideoElement, file: File): () =>
   return () => URL.revokeObjectURL(url);
 }
 
+export async function downloadVideoPreview(src: string, name: string): Promise<void> {
+  const response = await fetch(src);
+  if (!response.ok) throw new Error(`Could not download video (${response.status}).`);
+  const url = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = name;
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(url), 0);
+}
+
 export function buildExpandedImagePreview(
   images: ReadonlyArray<ChatImageAttachment | ComposerFileAttachment>,
   selectedImageId: string,
