@@ -25,6 +25,7 @@ const {
   shortcutProcesses,
   spawnedPollers,
   thumbnailFromPathMock,
+  transitionScriptState,
   uiohookMock,
 } = vi.hoisted(() => ({
   accessibilityByPidMock: vi.fn(),
@@ -35,10 +36,12 @@ const {
     destroyed: boolean;
     kind: "base" | "browser";
     loadCount: number;
+    loadedUrls: Array<string>;
     opacities: Array<number>;
     options: Electron.BrowserWindowConstructorOptions;
     scripts: Array<string>;
     showCount: number;
+    alwaysOnTopCalls: Array<[boolean, string | undefined]>;
   }>,
   getFileIconMock: vi.fn(),
   getSourcesMock: vi.fn(),
@@ -60,6 +63,7 @@ const {
     emitExit: (code: number) => void;
   }>,
   thumbnailFromPathMock: vi.fn(),
+  transitionScriptState: { rejectFlight: false },
   uiohookMock: {
     off: vi.fn(),
     on: vi.fn(),
@@ -150,16 +154,22 @@ vi.mock("electron", () => {
         destroyed: false,
         kind: "base",
         loadCount: 0,
+        loadedUrls: [],
         opacities: options.opacity === undefined ? [] : [options.opacity],
         options,
         scripts: [],
         showCount: 0,
+        alwaysOnTopCalls: [],
       };
       flashWindows.push(this.state);
     }
 
     destroy() {
       this.state.destroyed = true;
+    }
+
+    getBounds() {
+      return this.state.bounds;
     }
 
     hide() {}
@@ -176,6 +186,10 @@ vi.mock("electron", () => {
 
     setOpacity(opacity: number) {
       this.state.opacities.push(opacity);
+    }
+
+    setAlwaysOnTop(flag: boolean, level?: string) {
+      this.state.alwaysOnTopCalls.push([flag, level]);
     }
 
     showInactive() {
@@ -196,12 +210,19 @@ vi.mock("electron", () => {
       this.webContents = {
         executeJavaScript: async (script: string) => {
           this.state.scripts.push(script);
+          if (
+            transitionScriptState.rejectFlight &&
+            script.startsWith("window.startCaptureTransition")
+          ) {
+            throw new Error("transition failed");
+          }
         },
       };
     }
 
-    loadURL() {
+    loadURL(url: string) {
       this.state.loadCount += 1;
+      this.state.loadedUrls.push(url);
       return Promise.resolve();
     }
   }
@@ -214,14 +235,23 @@ vi.mock("electron", () => {
     nativeImage: { createThumbnailFromPath: thumbnailFromPathMock },
     globalShortcut: { register: registerShortcutMock, unregister: vi.fn() },
     screen: {
+      getAllDisplays: () => [
+        { bounds: { x: -1_920, y: 0, width: 1_920, height: 1_080 } },
+        { bounds: { x: 0, y: -200, width: 1_440, height: 900 } },
+      ],
       getCursorScreenPoint: () => ({ x: 500, y: 500 }),
       getDisplayNearestPoint: () => ({
         bounds: { x: 100, y: 100, width: 800, height: 600 },
       }),
       getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1_440, height: 900 } }),
+      screenToDipRect: (_window: unknown, bounds: Electron.Rectangle) => bounds,
     },
     shell: { openExternal: openExternalMock },
     systemPreferences: {
+      getAnimationSettings: () => ({
+        prefersReducedMotion: true,
+        shouldRenderRichAnimation: false,
+      }),
       getMediaAccessStatus: () => mediaAccessStatusMock(),
       isTrustedAccessibilityClient: () => accessibilityTrustedMock(),
     },
@@ -233,6 +263,11 @@ import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWindowCapture from "./DesktopWindowCapture.ts";
 
+import {
+  WindowCaptureTransition,
+  windowCaptureAnimationFlightBounds,
+  windowCaptureAnimationOverlayBounds,
+} from "./WindowCaptureTransition.ts";
 const testLayer = (
   platform: NodeJS.Platform,
   fileSystemOverrides: Parameters<typeof FileSystem.layerNoop>[0] = {},
@@ -256,6 +291,7 @@ const testLayer = (
     Layer.succeed(
       DesktopWindow.DesktopWindow,
       DesktopWindow.DesktopWindow.of({
+        activate: Effect.void,
         dispatchMenuAction: () => Effect.void,
       } as unknown as DesktopWindow.DesktopWindow["Service"]),
     ),
@@ -395,12 +431,116 @@ it.each([
 );
 
 it("uses the primary display for portal flash feedback", () => {
-  assert.deepEqual(DesktopWindowCapture.windowCaptureFlashBounds(undefined), {
+  assert.deepEqual(DesktopWindowCapture.windowCaptureFlashBounds(undefined, "linux"), {
     x: 0,
     y: 0,
     width: 1_440,
     height: 900,
   });
+});
+
+it("uses the operating system animation policy", () => {
+  assert.isTrue(
+    DesktopWindowCapture.shouldAnimateWindowCapture({
+      prefersReducedMotion: false,
+      shouldRenderRichAnimation: true,
+    }),
+  );
+  assert.isFalse(
+    DesktopWindowCapture.shouldAnimateWindowCapture({
+      prefersReducedMotion: true,
+      shouldRenderRichAnimation: true,
+    }),
+  );
+});
+
+it("keeps the transition flash subdued", async () => {
+  flashWindows.length = 0;
+  const transition = new WindowCaptureTransition();
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: 100, y: 50, width: 900, height: 600 },
+      "data:image/png;base64,",
+      true,
+    );
+
+    const html = decodeURIComponent(flashWindows[0]?.loadedUrls[0] ?? "");
+    assert.include(
+      html,
+      "[{opacity:.14},{offset:.38,opacity:.14},{offset:.68,opacity:.04},{opacity:0}]",
+    );
+  } finally {
+    transition.dispose();
+  }
+});
+
+it("bounds the transition surface to its displays and flight", () => {
+  assert.deepEqual(
+    windowCaptureAnimationOverlayBounds([
+      { bounds: { x: -1_920, y: 0, width: 1_920, height: 1_080 } },
+      { bounds: { x: 0, y: -200, width: 1_440, height: 900 } },
+    ]),
+    { x: -1_920, y: -200, width: 3_360, height: 1_280 },
+  );
+  assert.deepEqual(
+    windowCaptureAnimationFlightBounds(
+      { x: 100, y: 50, width: 900, height: 600 },
+      { x: 1_200, y: 800, width: 208, height: 112 },
+    ),
+    { x: 28, y: -22, width: 1_452, height: 1_006 },
+  );
+});
+
+it("keeps the Windows transition above the revealed main window", async () => {
+  flashWindows.length = 0;
+  const transition = new WindowCaptureTransition({
+    alwaysOnTopLevel: "pop-up-menu",
+  });
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: 100, y: 50, width: 900, height: 600 },
+      "data:image/png;base64,",
+      false,
+    );
+
+    assert.deepEqual(flashWindows[0]?.alwaysOnTopCalls, [[true, "pop-up-menu"]]);
+  } finally {
+    transition.dispose();
+  }
+});
+
+it("does not let a failed transition fail capture completion", async () => {
+  flashWindows.length = 0;
+  transitionScriptState.rejectFlight = true;
+  const transition = new WindowCaptureTransition();
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: 100, y: 50, width: 900, height: 600 },
+      "data:image/png;base64,",
+      false,
+    );
+    transition.animateTo("capture-1", {
+      frame: { x: 20, y: 20, width: 208, height: 112 },
+      backgroundColor: "#fff",
+      borderColor: "#ccc",
+      borderWidth: 1,
+      cornerRadius: 8,
+      scaleFactor: 1,
+    });
+
+    await transition.complete("capture-1");
+
+    assert.isTrue(flashWindows[0]?.destroyed);
+  } finally {
+    transitionScriptState.rejectFlight = false;
+    transition.dispose();
+  }
 });
 
 it("bounds source thumbnails for large windows", () => {

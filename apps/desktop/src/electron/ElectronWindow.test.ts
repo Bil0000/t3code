@@ -6,14 +6,28 @@ import * as Layer from "effect/Layer";
 import type * as Electron from "electron";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { appFocusMock, browserWindowMock, getAllWindowsMock, getFocusedWindowMock } = vi.hoisted(
-  () => ({
-    appFocusMock: vi.fn(),
-    browserWindowMock: vi.fn(function BrowserWindowMock() {}),
-    getAllWindowsMock: vi.fn(),
-    getFocusedWindowMock: vi.fn(),
-  }),
-);
+const {
+  appFocusMock,
+  browserWindowMock,
+  getAllWindowsMock,
+  getFocusedWindowMock,
+  nativeAppByPidMock,
+  nativeAppListMock,
+} = vi.hoisted(() => ({
+  appFocusMock: vi.fn(),
+  browserWindowMock: vi.fn(function BrowserWindowMock() {}),
+  getAllWindowsMock: vi.fn(),
+  getFocusedWindowMock: vi.fn(),
+  nativeAppByPidMock: vi.fn(),
+  nativeAppListMock: vi.fn(),
+}));
+
+vi.mock("@crowecawcaw/xa11y", () => ({
+  App: {
+    byPid: nativeAppByPidMock,
+    list: nativeAppListMock,
+  },
+}));
 
 vi.mock("electron", () => ({
   app: {
@@ -27,9 +41,10 @@ vi.mock("electron", () => ({
 
 import * as ElectronWindow from "./ElectronWindow.ts";
 
-const TestLayer = ElectronWindow.layer.pipe(
-  Layer.provide(Layer.succeed(HostProcessPlatform, "linux")),
-);
+const testLayer = (platform: NodeJS.Platform) =>
+  ElectronWindow.layer.pipe(Layer.provide(Layer.succeed(HostProcessPlatform, platform)));
+
+const TestLayer = testLayer("linux");
 
 function makeBrowserWindow(input: { readonly id: number; readonly destroyed: boolean }) {
   return {
@@ -44,6 +59,8 @@ describe("ElectronWindow", () => {
     browserWindowMock.mockReset();
     getAllWindowsMock.mockReset();
     getFocusedWindowMock.mockReset();
+    nativeAppByPidMock.mockReset();
+    nativeAppListMock.mockReset();
   });
 
   it.effect("preserves schema-safe creation context and the Electron cause", () =>
@@ -177,6 +194,73 @@ describe("ElectronWindow", () => {
         assert.strictEqual(error.cause, cause);
       }
     }).pipe(Effect.provide(TestLayer)),
+  );
+
+  it.effect("raises a visible Windows window before focusing it", () =>
+    Effect.gen(function* () {
+      const operations: Array<string> = [];
+      const listedApps = Promise.withResolvers<
+        Array<{
+          pid: number;
+          asElement: () => { name: string; focus: () => Promise<void> };
+        }>
+      >();
+      appFocusMock.mockImplementation(() => operations.push("app-focus"));
+      nativeAppListMock.mockReturnValue(listedApps.promise);
+      const apps = [
+        {
+          pid: process.pid,
+          asElement: () => ({
+            name: "Developer Tools - t3code-dev://app/",
+            focus: async () => {
+              operations.push("wrong-native-focus");
+            },
+          }),
+        },
+        {
+          pid: process.pid,
+          asElement: () => ({
+            name: "T3 Code (Dev)",
+            focus: async () => {
+              operations.push("native-focus");
+            },
+          }),
+        },
+      ];
+      nativeAppByPidMock.mockResolvedValue({
+        asElement: () => ({
+          name: "fallback",
+          focus: async () => {
+            operations.push("fallback-native-focus");
+          },
+        }),
+      });
+      const window = {
+        id: 41,
+        isDestroyed: vi.fn(() => false),
+        isMinimized: vi.fn(() => false),
+        isVisible: vi.fn(() => true),
+        show: vi.fn(() => operations.push("show")),
+        moveTop: vi.fn(() => operations.push("move-top")),
+        focus: vi.fn(() => operations.push("focus")),
+        getTitle: vi.fn(() => "T3 Code (Dev)"),
+        restore: vi.fn(),
+      } as unknown as Electron.BrowserWindow;
+
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+      yield* electronWindow.reveal(window);
+
+      assert.deepEqual(operations, ["app-focus", "show", "move-top", "focus"]);
+      assert.equal(vi.mocked(window.restore).mock.calls.length, 0);
+      assert.deepEqual(appFocusMock.mock.calls, [[]]);
+      assert.deepEqual(nativeAppListMock.mock.calls, [[]]);
+
+      listedApps.resolve(apps);
+      yield* Effect.promise(() => Promise.resolve());
+      yield* Effect.promise(() => Promise.resolve());
+      assert.deepEqual(operations, ["app-focus", "show", "move-top", "focus", "native-focus"]);
+      assert.lengthOf(nativeAppByPidMock.mock.calls, 0);
+    }).pipe(Effect.provide(testLayer("win32"))),
   );
 
   it.effect("preserves message delivery failures with window and channel context", () =>

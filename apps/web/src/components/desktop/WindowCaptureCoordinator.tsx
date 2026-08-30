@@ -11,7 +11,15 @@ import { useClientSettings } from "../../hooks/useSettings";
 import { readThreadShell } from "../../state/entities";
 import { compressImageToByteLimit, dataUrlToFile } from "../../lib/imageCompression";
 import { resolveThreadActionProjectRef } from "../../lib/chatThreadActions";
-import { markWindowCaptureAnimation } from "../../lib/windowCaptureAnimation";
+import {
+  beginWindowCaptureAnimation,
+  dismissAllWindowCaptureAnimations,
+  dismissWindowCaptureAnimation,
+  finishWindowCaptureAnimation,
+  getPendingWindowCaptureAnimations,
+  updateWindowCaptureAnimationSource,
+  waitForWindowCaptureAnimationDestination,
+} from "../../lib/windowCaptureAnimation";
 import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
 import {
   dispatchWindowCaptureComposerFocus,
@@ -43,6 +51,21 @@ export function resolveExistingWindowCaptureTarget(
     : null;
 }
 
+const WINDOW_CAPTURE_STARTED_ACTION_PREFIX = "window-capture-started:";
+const NEXT_PAINT_FALLBACK_MS = 100;
+
+async function afterNextPaint(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const fallback = window.setTimeout(resolve, NEXT_PAINT_FALLBACK_MS);
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        window.clearTimeout(fallback);
+        resolve();
+      });
+    });
+  });
+}
+
 export function WindowCaptureCoordinator() {
   const {
     activeDraftThread,
@@ -57,6 +80,7 @@ export function WindowCaptureCoordinator() {
   const lastTargetRef = useRef<CaptureTarget | null>(null);
   const drainingRef = useRef<Promise<void> | null>(null);
   const rerunRequestedRef = useRef(false);
+  const soundedCaptureIdsRef = useRef(new Set<string>());
 
   const currentTarget = routeThreadRef ?? routeDraftId;
   if (currentTarget) lastTargetRef.current = currentTarget;
@@ -84,6 +108,17 @@ export function WindowCaptureCoordinator() {
     return created.draftId;
   }, [activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef]);
 
+  const playCaptureSound = useCallback(
+    (id: string) => {
+      if (!playSound || soundedCaptureIdsRef.current.has(id)) return;
+      soundedCaptureIdsRef.current.add(id);
+      try {
+        playWindowCaptureSound();
+      } catch {}
+    },
+    [playSound],
+  );
+
   const drain = useCallback(async () => {
     const bridge = getDesktopWindowCaptureBridge();
     if (!bridge) return;
@@ -97,7 +132,13 @@ export function WindowCaptureCoordinator() {
         rerunRequestedRef.current = false;
         const pending = await bridge.listPendingWindowCaptures();
         for (const item of pending) {
-          const target = await resolveTarget();
+          playCaptureSound(item.id);
+          const animationTarget = getPendingWindowCaptureAnimations().find(
+            (animation) => animation.id === item.id,
+          )?.target;
+          const target = animationTarget
+            ? resolveExistingWindowCaptureTarget(animationTarget, routeThreadRef)
+            : await resolveTarget();
           if (!target) {
             toastManager.add(
               stackedThreadToast({
@@ -114,8 +155,14 @@ export function WindowCaptureCoordinator() {
             const existing = store.getComposerDraft(target);
             if (existing?.persistedAttachments.some((attachment) => attachment.id === item.id)) {
               await bridge.acknowledgeWindowCapture(item.id);
+              finishWindowCaptureAnimation(item.id);
+              soundedCaptureIdsRef.current.delete(item.id);
               continue;
             }
+
+            updateWindowCaptureAnimationSource(item.id, item.source);
+            await afterNextPaint();
+            await waitForWindowCaptureAnimationDestination(item.id);
 
             const capture = await bridge.readWindowCapture(item.id);
             const original = dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
@@ -125,12 +172,10 @@ export function WindowCaptureCoordinator() {
             );
             if (!compressed.ok) {
               await bridge.acknowledgeWindowCapture(item.id);
+              finishWindowCaptureAnimation(item.id);
               throw new Error("The captured window is too large to attach.");
             }
             const file = compressed.file;
-            if (animateCaptures && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-              markWindowCaptureAnimation(file);
-            }
             const dataUrl = compressed.recompressed
               ? await readFileAsDataUrl(file)
               : capture.dataUrl;
@@ -157,7 +202,7 @@ export function WindowCaptureCoordinator() {
                 .getComposerDraft(target)
                 ?.persistedAttachments.filter((attachment) => attachment.id !== capture.id) ?? [];
             store.syncPersistedAttachments(target, [...persistedAttachments, persisted]);
-            await Promise.resolve();
+            await afterNextPaint();
             if (
               !store
                 .getComposerDraft(target)
@@ -165,14 +210,14 @@ export function WindowCaptureCoordinator() {
             ) {
               throw new Error("The captured window could not be saved to the draft.");
             }
+            finishWindowCaptureAnimation(capture.id);
+            await afterNextPaint();
             await bridge.acknowledgeWindowCapture(capture.id);
-            if (playSound) {
-              try {
-                playWindowCaptureSound();
-              } catch {}
-            }
+            soundedCaptureIdsRef.current.delete(capture.id);
             dispatchWindowCaptureComposerFocus();
           } catch (error) {
+            await dismissWindowCaptureAnimation(item.id);
+            soundedCaptureIdsRef.current.delete(item.id);
             toastManager.add(
               stackedThreadToast({
                 type: "error",
@@ -185,6 +230,7 @@ export function WindowCaptureCoordinator() {
       } while (rerunRequestedRef.current);
     })()
       .catch((error: unknown) => {
+        dismissAllWindowCaptureAnimations();
         toastManager.add(
           stackedThreadToast({
             type: "error",
@@ -198,15 +244,32 @@ export function WindowCaptureCoordinator() {
       });
     drainingRef.current = operation;
     return operation;
-  }, [animateCaptures, playSound, resolveTarget]);
+  }, [playCaptureSound, resolveTarget, routeThreadRef]);
 
   useEffect(() => {
     const bridge = getDesktopWindowCaptureBridge();
     if (!bridge) return;
     void drain();
     return bridge.onMenuAction((action) => {
+      if (action.startsWith(WINDOW_CAPTURE_STARTED_ACTION_PREFIX)) {
+        const captureId = action.slice(WINDOW_CAPTURE_STARTED_ACTION_PREFIX.length);
+        if (captureId) playCaptureSound(captureId);
+        if (
+          captureId &&
+          animateCaptures &&
+          !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ) {
+          const target = lastTargetRef.current;
+          const existingTarget = target
+            ? resolveExistingWindowCaptureTarget(target, routeThreadRef)
+            : null;
+          if (existingTarget) beginWindowCaptureAnimation(captureId, existingTarget);
+        }
+      }
       if (action === "window-capture-ready") void drain();
       if (action === "window-capture-failed") {
+        dismissAllWindowCaptureAnimations();
+        soundedCaptureIdsRef.current.clear();
         void bridge.getWindowCaptureState().then((state) => {
           toastManager.add(
             stackedThreadToast({
@@ -218,7 +281,20 @@ export function WindowCaptureCoordinator() {
         });
       }
     });
-  }, [drain]);
+  }, [animateCaptures, drain, playCaptureSound, routeThreadRef]);
+
+  useEffect(() => {
+    const dismissOnBlur = () => dismissAllWindowCaptureAnimations();
+    const dismissWhenHidden = () => {
+      if (document.visibilityState === "hidden") dismissAllWindowCaptureAnimations();
+    };
+    window.addEventListener("blur", dismissOnBlur);
+    document.addEventListener("visibilitychange", dismissWhenHidden);
+    return () => {
+      window.removeEventListener("blur", dismissOnBlur);
+      document.removeEventListener("visibilitychange", dismissWhenHidden);
+    };
+  }, []);
 
   return null;
 }
