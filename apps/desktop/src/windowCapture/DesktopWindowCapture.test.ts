@@ -25,6 +25,7 @@ const {
   shortcutProcesses,
   spawnedPollers,
   thumbnailFromPathMock,
+  transitionScriptState,
   uiohookMock,
 } = vi.hoisted(() => ({
   accessibilityByPidMock: vi.fn(),
@@ -61,6 +62,7 @@ const {
     emitExit: (code: number) => void;
   }>,
   thumbnailFromPathMock: vi.fn(),
+  transitionScriptState: { rejectFlight: false },
   uiohookMock: {
     off: vi.fn(),
     on: vi.fn(),
@@ -206,6 +208,12 @@ vi.mock("electron", () => {
       this.webContents = {
         executeJavaScript: async (script: string) => {
           this.state.scripts.push(script);
+          if (
+            transitionScriptState.rejectFlight &&
+            script.startsWith("window.startCaptureTransition")
+          ) {
+            throw new Error("transition failed");
+          }
         },
       };
     }
@@ -477,6 +485,36 @@ it("keeps the Windows transition above the revealed main window", async () => {
 
     assert.deepEqual(flashWindows[0]?.alwaysOnTopCalls, [[true, "pop-up-menu"]]);
   } finally {
+    transition.dispose();
+  }
+});
+
+it("does not let a failed transition fail capture completion", async () => {
+  flashWindows.length = 0;
+  transitionScriptState.rejectFlight = true;
+  const transition = new WindowCaptureTransition();
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: 100, y: 50, width: 900, height: 600 },
+      "data:image/png;base64,",
+      false,
+    );
+    transition.animateTo("capture-1", {
+      frame: { x: 20, y: 20, width: 208, height: 112 },
+      backgroundColor: "#fff",
+      borderColor: "#ccc",
+      borderWidth: 1,
+      cornerRadius: 8,
+      scaleFactor: 1,
+    });
+
+    await transition.complete("capture-1");
+
+    assert.isTrue(flashWindows[0]?.destroyed);
+  } finally {
+    transitionScriptState.rejectFlight = false;
     transition.dispose();
   }
 });
