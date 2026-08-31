@@ -25,6 +25,7 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
+import { WorktreeLifecycleLock } from "../../vcs/WorktreeLifecycleLock.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
@@ -73,6 +74,7 @@ export const makeWorktreeAutoDelete = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const git = yield* GitVcsDriver.GitVcsDriver;
+  const worktreeLifecycle = yield* WorktreeLifecycleLock;
   const checkpointReactor = yield* CheckpointReactor;
   const deletionReactor = yield* ThreadDeletionReactor;
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -128,7 +130,23 @@ export const makeWorktreeAutoDelete = Effect.gen(function* () {
   const readTerminals = Effect.fn("WorktreeAutoDelete.readTerminals")(function* () {
     const current = yield* Ref.make<ReadonlyArray<TerminalSummary>>([]);
     const unsubscribe = yield* terminalManager.subscribeMetadata((event) =>
-      event.type === "snapshot" ? Ref.set(current, event.terminals) : Effect.void,
+      Ref.update(current, (terminals) => {
+        if (event.type === "snapshot") return event.terminals;
+        if (event.type === "remove") {
+          return terminals.filter(
+            (terminal) =>
+              terminal.threadId !== event.threadId || terminal.terminalId !== event.terminalId,
+          );
+        }
+        return [
+          ...terminals.filter(
+            (terminal) =>
+              terminal.threadId !== event.terminal.threadId ||
+              terminal.terminalId !== event.terminal.terminalId,
+          ),
+          event.terminal,
+        ];
+      }),
     );
     yield* Effect.sync(unsubscribe);
     return yield* Ref.get(current);
@@ -177,7 +195,6 @@ export const makeWorktreeAutoDelete = Effect.gen(function* () {
 
   const removeCandidate = Effect.fn("WorktreeAutoDelete.removeCandidate")(function* (
     initial: WorktreeCandidate,
-    delay: WorktreeAutoDeleteAfterDays,
   ) {
     if (!(yield* runtimeIsIdle(initial))) return;
     const status = yield* git.statusDetailsLocal(initial.path);
@@ -185,19 +202,26 @@ export const makeWorktreeAutoDelete = Effect.gen(function* () {
       return;
     }
 
-    const freshGroups = yield* loadGroups(delay);
-    const fresh = toCandidate(initial.path, freshGroups.get(initial.path));
-    if (fresh === null || !(yield* runtimeIsIdle(fresh))) return;
+    yield* worktreeLifecycle.withLock(
+      Effect.gen(function* () {
+        const delay = (yield* serverSettings.getSettings).worktreeAutoDeleteAfterDays;
+        if (delay === null) return;
+        const freshGroups = yield* loadGroups(delay);
+        const fresh = toCandidate(initial.path, freshGroups.get(initial.path));
+        if (fresh === null || !(yield* runtimeIsIdle(fresh))) return;
+        if ((yield* serverSettings.getSettings).worktreeAutoDeleteAfterDays !== delay) return;
 
-    yield* git.removeWorktree({
-      cwd: fresh.references[0]!.workspaceRoot,
-      path: fresh.path,
-      force: false,
-    });
-    yield* Effect.logInfo("worktree.auto-delete.removed", {
-      path: fresh.path,
-      threadCount: fresh.references.length,
-    });
+        yield* git.removeWorktree({
+          cwd: fresh.references[0]!.workspaceRoot,
+          path: fresh.path,
+          force: false,
+        });
+        yield* Effect.logInfo("worktree.auto-delete.removed", {
+          path: fresh.path,
+          threadCount: fresh.references.length,
+        });
+      }),
+    );
   });
 
   const sweep = Effect.fn("WorktreeAutoDelete.sweep")(function* () {
@@ -208,7 +232,7 @@ export const makeWorktreeAutoDelete = Effect.gen(function* () {
     for (const [candidatePath, references] of groups) {
       const candidate = toCandidate(candidatePath, references);
       if (candidate === null) continue;
-      yield* removeCandidate(candidate, delay).pipe(
+      yield* removeCandidate(candidate).pipe(
         Effect.catchCause((cause) =>
           Cause.hasInterruptsOnly(cause)
             ? Effect.failCause(cause)

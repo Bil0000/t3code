@@ -59,6 +59,7 @@ import {
 } from "../observability/Metrics.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
+import { WorktreeLifecycleLock } from "../vcs/WorktreeLifecycleLock.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
 
 export {
@@ -1146,6 +1147,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
+  const worktreeLifecycle = yield* WorktreeLifecycleLock;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
 
@@ -1246,6 +1248,9 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     effect: Effect.Effect<A, E, R>,
   ): Effect.Effect<A, E, R> =>
     Effect.flatMap(getThreadSemaphore(threadId), (semaphore) => semaphore.withPermit(effect));
+
+  const withWorktreeAndThreadLock = <A, E, R>(threadId: string, effect: Effect.Effect<A, E, R>) =>
+    worktreeLifecycle.withLock(withThreadLock(threadId, effect));
 
   const clearKillFiber = Effect.fn("terminal.clearKillFiber")(function* (
     process: PtyAdapter.PtyProcess | null,
@@ -2266,10 +2271,10 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
   });
 
   const open: TerminalManager["Service"]["open"] = (input) =>
-    withThreadLock(input.threadId, openLocked(input));
+    withWorktreeAndThreadLock(input.threadId, openLocked(input));
 
   const openOrAttachForStream = (input: TerminalAttachInput) =>
-    withThreadLock(
+    withWorktreeAndThreadLock(
       input.threadId,
       Effect.gen(function* () {
         const terminalId = input.terminalId;
@@ -2552,7 +2557,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
     );
 
   const restart: TerminalManager["Service"]["restart"] = (input) =>
-    withThreadLock(
+    withWorktreeAndThreadLock(
       input.threadId,
       Effect.gen(function* () {
         yield* increment(terminalRestartsTotal, { scope: "thread" });

@@ -36,6 +36,7 @@ import { ProviderService } from "../../provider/Services/ProviderService.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import * as TerminalManager from "../../terminal/Manager.ts";
 import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
+import { WorktreeLifecycleLock } from "../../vcs/WorktreeLifecycleLock.ts";
 import { makeWorktreeAutoDelete } from "./WorktreeAutoDelete.ts";
 
 const projectId = ProjectId.make("worktree-cleanup-project");
@@ -86,6 +87,21 @@ describe("worktree auto-delete", () => {
         const terminalPaths = new Set<string>();
         let racePath = "";
         let interruptPath = "";
+        let bufferedTerminalPath = "";
+        let afterRemove: Effect.Effect<void> = Effect.void;
+        const terminalSummary = (cwd: string, id: string | number) => ({
+          threadId: `other-${id}`,
+          terminalId: `terminal-${id}`,
+          cwd,
+          worktreePath: null,
+          status: "running" as const,
+          pid: 1,
+          exitCode: null,
+          exitSignal: null,
+          hasRunningSubprocess: false,
+          label: "shell",
+          updatedAt: old,
+        });
 
         const testLayer = Layer.mergeAll(
           ServerConfig.layerTest(process.cwd(), { prefix: "t3-worktree-cleanup-test-" }).pipe(
@@ -129,22 +145,19 @@ describe("worktree auto-delete", () => {
           }),
           Layer.mock(TerminalManager.TerminalManager)({
             subscribeMetadata: (listener) =>
-              listener({
-                type: "snapshot",
-                terminals: [...terminalPaths].map((cwd, index) => ({
-                  threadId: `other-${index}`,
-                  terminalId: `terminal-${index}`,
-                  cwd,
-                  worktreePath: null,
-                  status: "running" as const,
-                  pid: 1,
-                  exitCode: null,
-                  exitSignal: null,
-                  hasRunningSubprocess: false,
-                  label: "shell",
-                  updatedAt: old,
-                })),
-              }).pipe(Effect.as(() => undefined)),
+              Effect.gen(function* () {
+                yield* listener({
+                  type: "snapshot",
+                  terminals: [...terminalPaths].map(terminalSummary),
+                });
+                if (bufferedTerminalPath) {
+                  yield* listener({
+                    type: "upsert",
+                    terminal: terminalSummary(bufferedTerminalPath, "buffered"),
+                  });
+                }
+                return () => undefined;
+              }),
           }),
           Layer.mock(GitVcsDriver.GitVcsDriver)({
             statusDetailsLocal: (cwd) => {
@@ -173,7 +186,9 @@ describe("worktree auto-delete", () => {
               });
             },
             removeWorktree: (input) =>
-              Effect.sync(() => removed.push({ path: input.path, force: input.force })),
+              Effect.sync(() => removed.push({ path: input.path, force: input.force })).pipe(
+                Effect.andThen(afterRemove),
+              ),
           }),
           Layer.mock(CheckpointReactor)({ drain: Effect.void }),
           Layer.mock(ThreadDeletionReactor)({
@@ -185,6 +200,7 @@ describe("worktree auto-delete", () => {
             latestSequence: Effect.succeed(0),
           }),
           NodeServices.layer,
+          WorktreeLifecycleLock.layer,
         );
 
         yield* Effect.gen(function* () {
@@ -198,6 +214,9 @@ describe("worktree auto-delete", () => {
           const dirtyPath = path.join(config.worktreesDir, "repo", "dirty");
           const sessionPath = path.join(config.worktreesDir, "repo", "session");
           const terminalPath = path.join(config.worktreesDir, "repo", "terminal");
+          const bufferedPath = path.join(config.worktreesDir, "repo", "buffered-terminal");
+          const disableFirstPath = path.join(config.worktreesDir, "repo", "disable-first");
+          const disableSecondPath = path.join(config.worktreesDir, "repo", "disable-second");
           racePath = path.join(config.worktreesDir, "repo", "race");
           interruptPath = path.join(config.worktreesDir, "repo", "interrupt");
           const outsidePath = yield* fs.makeTempDirectoryScoped({ prefix: "outside-worktree-" });
@@ -210,6 +229,9 @@ describe("worktree auto-delete", () => {
             dirtyPath,
             sessionPath,
             terminalPath,
+            bufferedPath,
+            disableFirstPath,
+            disableSecondPath,
             racePath,
           ];
           yield* Effect.forEach(managedPaths, (candidate) =>
@@ -218,6 +240,8 @@ describe("worktree auto-delete", () => {
           const terminalChildPath = path.join(terminalPath, "packages", "app");
           yield* fs.makeDirectory(terminalChildPath, { recursive: true });
 
+          const bufferedChildPath = path.join(bufferedPath, "packages", "app");
+          yield* fs.makeDirectory(bufferedChildPath, { recursive: true });
           projects = [
             {
               projectId,
@@ -277,6 +301,27 @@ describe("worktree auto-delete", () => {
           const exit = yield* Effect.exit(cleanup.sweep);
           assert.isTrue(Exit.isFailure(exit));
           if (Exit.isFailure(exit)) assert.isTrue(Cause.hasInterruptsOnly(exit.cause));
+
+          interruptPath = "";
+          removed.length = 0;
+          threads = [makeThread("buffered-terminal", bufferedPath)];
+          bufferedTerminalPath = bufferedChildPath;
+          yield* cleanup.sweep;
+          assert.isEmpty(removed);
+
+          bufferedTerminalPath = "";
+          threads = [
+            makeThread("disable-first", disableFirstPath),
+            makeThread("disable-second", disableSecondPath),
+          ];
+          afterRemove = settings
+            .updateSettings({ worktreeAutoDeleteAfterDays: null })
+            .pipe(Effect.orDie);
+          yield* cleanup.sweep;
+          assert.deepStrictEqual(
+            removed.map(({ path: removedPath }) => removedPath),
+            [disableFirstPath],
+          );
         }).pipe(Effect.provide(testLayer));
       }),
     ),

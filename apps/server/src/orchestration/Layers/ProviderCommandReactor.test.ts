@@ -62,6 +62,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as Clock from "effect/Clock";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
+import { WorktreeLifecycleLock } from "../../vcs/WorktreeLifecycleLock.ts";
 import * as GitWorkflowService from "../../git/GitWorkflowService.ts";
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
@@ -270,10 +271,21 @@ describe("ProviderCommandReactor", () => {
             : "renamed-branch",
       }),
     );
+    const worktreeLifecycleEvents: string[] = [];
+    const worktreeLifecycle = WorktreeLifecycleLock.of({
+      withLock: (effect) =>
+        Effect.sync(() => worktreeLifecycleEvents.push("lock")).pipe(
+          Effect.andThen(effect),
+          Effect.ensuring(Effect.sync(() => worktreeLifecycleEvents.push("unlock"))),
+        ),
+    });
     const pruneWorktrees = vi.fn((_: { readonly cwd: string }) => Effect.void);
     const createWorktree = vi.fn(
       (input: { readonly refName: string; readonly path: string | null }) =>
-        Effect.succeed({ worktree: { path: input.path ?? "", refName: input.refName } }),
+        Effect.sync(() => {
+          worktreeLifecycleEvents.push("create");
+          return { worktree: { path: input.path ?? "", refName: input.refName } };
+        }),
     );
     const refreshStatus = vi.fn((_: string) =>
       Effect.succeed({
@@ -427,6 +439,7 @@ describe("ProviderCommandReactor", () => {
         }),
       ),
       Layer.provideMerge(ServerSettingsService.layerTest()),
+      Layer.provideMerge(Layer.succeed(WorktreeLifecycleLock, worktreeLifecycle)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), baseDir)),
       Layer.provideMerge(NodeServices.layer),
     );
@@ -515,6 +528,7 @@ describe("ProviderCommandReactor", () => {
       renameBranch,
       pruneWorktrees,
       createWorktree,
+      worktreeLifecycleEvents,
       refreshStatus,
       generateBranchName,
       generateThreadTitle,
@@ -1579,6 +1593,7 @@ describe("ProviderCommandReactor", () => {
       refName: "feature/restore",
       path: worktreePath,
     });
+    expect(harness.worktreeLifecycleEvents).toEqual(["lock", "create", "unlock"]);
     expect(harness.createWorktree.mock.invocationCallOrder[0]).toBeLessThan(
       harness.startSession.mock.invocationCallOrder[0]!,
     );
