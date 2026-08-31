@@ -59,7 +59,7 @@ import {
 } from "../observability/Metrics.ts";
 import * as ProcessRunner from "../processRunner.ts";
 import * as PortScanner from "../preview/PortScanner.ts";
-import { WorktreeLifecycleLock } from "../vcs/WorktreeLifecycleLock.ts";
+import * as WorktreeLifecycleLock from "../vcs/WorktreeLifecycleLock.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
 
 export {
@@ -1147,7 +1147,7 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
 ) {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
-  const worktreeLifecycle = yield* WorktreeLifecycleLock;
+  const worktreeLifecycle = yield* WorktreeLifecycleLock.WorktreeLifecycleLock;
   const context = yield* Effect.context<never>();
   const runFork = Effect.runForkWith(context);
 

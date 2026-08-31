@@ -80,7 +80,7 @@ import * as WorkspaceEntries from "../src/workspace/WorkspaceEntries.ts";
 import * as WorkspacePaths from "../src/workspace/WorkspacePaths.ts";
 import * as VcsDriverRegistry from "../src/vcs/VcsDriverRegistry.ts";
 import { VcsStatusBroadcaster } from "../src/vcs/VcsStatusBroadcaster.ts";
-import { WorktreeLifecycleLock } from "../src/vcs/WorktreeLifecycleLock.ts";
+import * as WorktreeLifecycleLock from "../src/vcs/WorktreeLifecycleLock.ts";
 import { GitWorkflowService } from "../src/git/GitWorkflowService.ts";
 import * as VcsProcess from "../src/vcs/VcsProcess.ts";
 import * as AgentAwarenessRelay from "../src/relay/AgentAwarenessRelay.ts";

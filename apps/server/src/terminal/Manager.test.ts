@@ -28,7 +28,7 @@ import { ChildProcessSpawner } from "effect/unstable/process";
 import { expect } from "vite-plus/test";
 
 import * as ProcessRunner from "../processRunner.ts";
-import { WorktreeLifecycleLock } from "../vcs/WorktreeLifecycleLock.ts";
+import * as WorktreeLifecycleLock from "../vcs/WorktreeLifecycleLock.ts";
 import * as TerminalManager from "./Manager.ts";
 import * as PtyAdapter from "./PtyAdapter.ts";
 
@@ -235,7 +235,7 @@ const createManager = (
   | Path.Path
   | Scope.Scope
   | ProcessRunner.ProcessRunner
-  | WorktreeLifecycleLock
+  | WorktreeLifecycleLock.WorktreeLifecycleLock
 > =>
   Effect.flatMap(Effect.service(FileSystem.FileSystem), (fs) =>
     Effect.gen(function* () {

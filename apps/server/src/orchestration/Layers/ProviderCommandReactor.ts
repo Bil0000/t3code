@@ -47,7 +47,7 @@ import {
   ServerSettingsService,
 } from "../../serverSettings.ts";
 import { VcsStatusBroadcaster } from "../../vcs/VcsStatusBroadcaster.ts";
-import { WorktreeLifecycleLock } from "../../vcs/WorktreeLifecycleLock.ts";
+import * as WorktreeLifecycleLock from "../../vcs/WorktreeLifecycleLock.ts";
 import { GitWorkflowService } from "../../git/GitWorkflowService.ts";
 const isProviderAdapterRequestError = Schema.is(ProviderAdapterRequestError);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
@@ -310,7 +310,7 @@ const make = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const providerRegistry = yield* ProviderRegistry;
   const gitWorkflow = yield* GitWorkflowService;
-  const worktreeLifecycle = yield* WorktreeLifecycleLock;
+  const worktreeLifecycle = yield* WorktreeLifecycleLock.WorktreeLifecycleLock;
   const fileSystem = yield* FileSystem.FileSystem;
   const vcsStatusBroadcaster = yield* VcsStatusBroadcaster;
   const textGeneration = yield* TextGeneration;

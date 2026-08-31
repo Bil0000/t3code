@@ -19,25 +19,25 @@ import * as Path from "effect/Path";
 import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
-import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
-import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
-import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
-import { ServerConfig } from "../../config.ts";
+import { CheckpointReactor } from "./Services/CheckpointReactor.ts";
+import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { ThreadDeletionReactor } from "./Services/ThreadDeletionReactor.ts";
+import { ServerConfig } from "../config.ts";
 import {
   ProjectionProjectRepository,
   type ProjectionProject,
-} from "../../persistence/Services/ProjectionProjects.ts";
+} from "../persistence/Services/ProjectionProjects.ts";
 import {
   ProjectionThreadRepository,
   type ProjectionThread,
-} from "../../persistence/Services/ProjectionThreads.ts";
-import { ProviderService } from "../../provider/Services/ProviderService.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
-import * as TerminalManager from "../../terminal/Manager.ts";
-import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
-import { WorktreeLifecycleLock } from "../../vcs/WorktreeLifecycleLock.ts";
-import { makeWorktreeAutoDelete } from "./WorktreeAutoDelete.ts";
+} from "../persistence/Services/ProjectionThreads.ts";
+import { ProviderService } from "../provider/Services/ProviderService.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+import * as TerminalManager from "../terminal/Manager.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as WorktreeLifecycleLock from "../vcs/WorktreeLifecycleLock.ts";
+import * as WorktreeAutoDelete from "./WorktreeAutoDelete.ts";
 
 const projectId = ProjectId.make("worktree-cleanup-project");
 const branch = "feature/worktree-cleanup";
@@ -280,7 +280,7 @@ describe("worktree auto-delete", () => {
           terminalPaths.add(terminalChildPath);
 
           yield* TestClock.setTime(Date.parse("2026-08-30T00:00:00.000Z"));
-          const cleanup = yield* makeWorktreeAutoDelete;
+          const cleanup = yield* WorktreeAutoDelete.make;
           const settings = yield* ServerSettingsService;
 
           yield* cleanup.sweep;

@@ -15,22 +15,22 @@ import * as Ref from "effect/Ref";
 import * as Schedule from "effect/Schedule";
 import * as Stream from "effect/Stream";
 
-import { ServerConfig } from "../../config.ts";
-import { ProjectionProjectRepository } from "../../persistence/Services/ProjectionProjects.ts";
+import { ServerConfig } from "../config.ts";
+import { ProjectionProjectRepository } from "../persistence/Services/ProjectionProjects.ts";
 import {
   ProjectionThreadRepository,
   type ProjectionThread,
-} from "../../persistence/Services/ProjectionThreads.ts";
-import { ProviderService } from "../../provider/Services/ProviderService.ts";
-import { ServerSettingsService } from "../../serverSettings.ts";
-import * as TerminalManager from "../../terminal/Manager.ts";
-import * as GitVcsDriver from "../../vcs/GitVcsDriver.ts";
-import { WorktreeLifecycleLock } from "../../vcs/WorktreeLifecycleLock.ts";
-import { forkParked } from "../../serverActivation.ts";
-import { CheckpointReactor } from "../Services/CheckpointReactor.ts";
-import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
-import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
-import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
+} from "../persistence/Services/ProjectionThreads.ts";
+import { ProviderService } from "../provider/Services/ProviderService.ts";
+import { ServerSettingsService } from "../serverSettings.ts";
+import * as TerminalManager from "../terminal/Manager.ts";
+import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as WorktreeLifecycleLock from "../vcs/WorktreeLifecycleLock.ts";
+import { forkParked } from "../serverActivation.ts";
+import { CheckpointReactor } from "./Services/CheckpointReactor.ts";
+import { OrchestrationEngineService } from "./Services/OrchestrationEngine.ts";
+import { ProjectionSnapshotQuery } from "./Services/ProjectionSnapshotQuery.ts";
+import { ThreadDeletionReactor } from "./Services/ThreadDeletionReactor.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
 
@@ -64,7 +64,7 @@ const threadIsReady = (
   return latestUserMessageAt !== null && latestUserMessageAt <= settledAt;
 };
 
-export const makeWorktreeAutoDelete = Effect.gen(function* () {
+export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -74,7 +74,7 @@ export const makeWorktreeAutoDelete = Effect.gen(function* () {
   const providerService = yield* ProviderService;
   const terminalManager = yield* TerminalManager.TerminalManager;
   const git = yield* GitVcsDriver.GitVcsDriver;
-  const worktreeLifecycle = yield* WorktreeLifecycleLock;
+  const worktreeLifecycle = yield* WorktreeLifecycleLock.WorktreeLifecycleLock;
   const checkpointReactor = yield* CheckpointReactor;
   const deletionReactor = yield* ThreadDeletionReactor;
   const orchestrationEngine = yield* OrchestrationEngineService;
@@ -280,6 +280,4 @@ export const makeWorktreeAutoDelete = Effect.gen(function* () {
   return { start, sweep: sweep() };
 });
 
-export const WorktreeAutoDeleteLive = Layer.effectDiscard(
-  makeWorktreeAutoDelete.pipe(Effect.flatMap(({ start }) => start())),
-);
+export const layer = Layer.effectDiscard(make.pipe(Effect.flatMap(({ start }) => start())));

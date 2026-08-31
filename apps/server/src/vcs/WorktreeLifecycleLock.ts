@@ -8,11 +8,10 @@ export class WorktreeLifecycleLock extends Context.Service<
   {
     readonly withLock: <A, E, R>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>;
   }
->()("t3/vcs/WorktreeLifecycleLock") {
-  static readonly layer = Layer.effect(
-    WorktreeLifecycleLock,
-    Effect.map(Semaphore.make(1), (semaphore) =>
-      WorktreeLifecycleLock.of({ withLock: (effect) => semaphore.withPermit(effect) }),
-    ),
-  );
-}
+>()("t3/vcs/WorktreeLifecycleLock") {}
+
+export const make = Effect.map(Semaphore.make(1), (semaphore) =>
+  WorktreeLifecycleLock.of({ withLock: (effect) => semaphore.withPermit(effect) }),
+);
+
+export const layer = Layer.effect(WorktreeLifecycleLock, make);

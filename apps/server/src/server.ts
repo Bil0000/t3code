@@ -62,7 +62,7 @@ import { ProviderRuntimeIngestionLive } from "./orchestration/Layers/ProviderRun
 import { ProviderCommandReactorLive } from "./orchestration/Layers/ProviderCommandReactor.ts";
 import { CheckpointReactorLive } from "./orchestration/Layers/CheckpointReactor.ts";
 import { ThreadDeletionReactorLive } from "./orchestration/Layers/ThreadDeletionReactor.ts";
-import { WorktreeAutoDeleteLive } from "./orchestration/Layers/WorktreeAutoDelete.ts";
+import * as WorktreeAutoDelete from "./orchestration/WorktreeAutoDelete.ts";
 import * as AgentAwarenessRelay from "./relay/AgentAwarenessRelay.ts";
 import { hasCloudPublicConfig } from "./cloud/publicConfig.ts";
 import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
@@ -74,7 +74,7 @@ import * as WorkspaceEntries from "./workspace/WorkspaceEntries.ts";
 import * as WorkspaceFileSystem from "./workspace/WorkspaceFileSystem.ts";
 import * as WorkspacePaths from "./workspace/WorkspacePaths.ts";
 import * as GitVcsDriver from "./vcs/GitVcsDriver.ts";
-import { WorktreeLifecycleLock } from "./vcs/WorktreeLifecycleLock.ts";
+import * as WorktreeLifecycleLock from "./vcs/WorktreeLifecycleLock.ts";
 import * as VcsDriverRegistry from "./vcs/VcsDriverRegistry.ts";
 import * as VcsProjectConfig from "./vcs/VcsProjectConfig.ts";
 import * as VcsProcess from "./vcs/VcsProcess.ts";
@@ -257,7 +257,7 @@ const CoreReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 
-const ReactorLayerLive = WorktreeAutoDeleteLive.pipe(Layer.provideMerge(CoreReactorLayerLive));
+const ReactorLayerLive = WorktreeAutoDelete.layer.pipe(Layer.provideMerge(CoreReactorLayerLive));
 
 const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
   Layer.provide(ProviderSessionRuntime.layer),
