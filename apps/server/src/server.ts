@@ -256,10 +256,7 @@ const CoreReactorLayerLive = Layer.empty.pipe(
   Layer.provideMerge(RuntimeReceiptBusLive),
 );
 
-const ReactorLayerLive = Layer.mergeAll(
-  CoreReactorLayerLive,
-  WorktreeAutoDeleteLive.pipe(Layer.provide(CoreReactorLayerLive)),
-);
+const ReactorLayerLive = WorktreeAutoDeleteLive.pipe(Layer.provideMerge(CoreReactorLayerLive));
 
 const ProviderSessionDirectoryLayerLive = ProviderSessionDirectoryLive.pipe(
   Layer.provide(ProviderSessionRuntime.layer),
