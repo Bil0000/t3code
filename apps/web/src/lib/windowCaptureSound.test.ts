@@ -4,12 +4,14 @@ import { playWindowCaptureSound } from "./windowCaptureSound";
 
 afterEach(() => {
   Reflect.deleteProperty(globalThis, "Audio");
-  Reflect.deleteProperty(globalThis, "window");
   vi.restoreAllMocks();
 });
 
 describe("playWindowCaptureSound", () => {
-  it("plays the upward foley pop from its first sample", () => {
+  it.each([
+    ["soft-pop", /window-capture-whoosh\.mp3/],
+    ["camera-shutter", /window-capture-click\.mp3/],
+  ] as const)("plays the %s sound from its first sample", (selection, expectedUrl) => {
     const sound = {
       currentTime: 3,
       play: vi.fn().mockResolvedValue(undefined),
@@ -23,36 +25,13 @@ describe("playWindowCaptureSound", () => {
       value: AudioMock,
     });
 
-    playWindowCaptureSound("soft-pop");
+    playWindowCaptureSound(selection);
 
-    expect(AudioMock).toHaveBeenCalledWith(expect.stringMatching(/window-capture-up-pop\.wav/));
+    expect(AudioMock).toHaveBeenCalledWith(expect.stringMatching(expectedUrl));
     expect(sound.preload).toBe("auto");
     expect(sound.currentTime).toBe(0);
     expect(sound.play).toHaveBeenCalledOnce();
   });
-
-  it("closes the camera shutter context when resume is blocked", async () => {
-    const context = {
-      close: vi.fn().mockResolvedValue(undefined),
-      createBuffer: vi.fn(),
-      resume: vi.fn().mockRejectedValue(new Error("blocked")),
-    };
-    function AudioContextMock() {
-      return context;
-    }
-    Object.defineProperty(globalThis, "window", {
-      configurable: true,
-      value: { AudioContext: AudioContextMock },
-    });
-
-    playWindowCaptureSound("camera-shutter");
-
-    await vi.waitFor(() => expect(context.close).toHaveBeenCalledOnce());
-
-    expect(context.resume).toHaveBeenCalledOnce();
-    expect(context.createBuffer).not.toHaveBeenCalled();
-  });
-
   it("ignores blocked playback", async () => {
     const sound = {
       currentTime: 0,

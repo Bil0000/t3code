@@ -321,14 +321,14 @@ export function WindowCaptureSettings() {
                       {soundSelection === "off"
                         ? "Off"
                         : soundSelection === "soft-pop"
-                          ? "Soft Pop (Default)"
-                          : "Camera Shutter"}
+                          ? "Whoosh (Default)"
+                          : "Click"}
                     </SelectValue>
                   </SelectTrigger>
                   <SelectPopup align="end" alignItemWithTrigger={false}>
                     <SelectItem value="off">Off</SelectItem>
-                    <SelectItem value="soft-pop">Soft Pop (Default)</SelectItem>
-                    <SelectItem value="camera-shutter">Camera Shutter</SelectItem>
+                    <SelectItem value="soft-pop">Whoosh (Default)</SelectItem>
+                    <SelectItem value="camera-shutter">Click</SelectItem>
                   </SelectPopup>
                 </Select>
                 <Button
