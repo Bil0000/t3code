@@ -16,6 +16,7 @@ const {
   accessibilityByPidMock,
   accessibilityListMock,
   accessibilityTrustedMock,
+  allWindowsMock,
   flashWindows,
   focusedWindowMock,
   getFileIconMock,
@@ -42,6 +43,13 @@ const {
   accessibilityByPidMock: vi.fn(),
   accessibilityListMock: vi.fn(),
   accessibilityTrustedMock: vi.fn(() => true),
+  allWindowsMock: vi.fn(
+    () =>
+      [] as Array<{
+        getBounds: () => Electron.Rectangle;
+        isDestroyed: () => boolean;
+      }>,
+  ),
   flashWindows: [] as Array<{
     bounds: Electron.Rectangle | null;
     destroyed: boolean;
@@ -213,7 +221,8 @@ vi.mock("electron", () => {
     }
 
     showInactive() {
-      transitionShowMock();
+      const shownBounds = transitionShowMock(this.state.bounds);
+      if (shownBounds !== undefined) this.state.bounds = shownBounds;
       this.state.showCount += 1;
     }
   }
@@ -221,6 +230,10 @@ vi.mock("electron", () => {
   class BrowserWindow extends BaseWindow {
     static getFocusedWindow() {
       return focusedWindowMock();
+    }
+
+    static getAllWindows() {
+      return allWindowsMock();
     }
 
     readonly webContents;
@@ -417,7 +430,7 @@ it.effect("captures the active Linux X11 window without enumerating desktop sour
   ).pipe(Effect.provide(layer));
 });
 
-it.effect("keeps the macOS capture transition on the source display", () => {
+it.effect("uses display-local macOS capture surfaces across the source and main displays", () => {
   const png = Buffer.from([1, 2, 3]);
   const active = {
     platform: "macos",
@@ -439,6 +452,7 @@ it.effect("keeps the macOS capture transition on the source display", () => {
   let blur: () => void = () => undefined;
   const mainShowMock = vi.fn();
   focusedWindowMock.mockReturnValue({
+    getBounds: () => ({ x: -1_600, y: 100, width: 1_200, height: 800 }),
     hide: () => queueMicrotask(blur),
     once: (_event: string, listener: () => void) => {
       blur = listener;
@@ -460,20 +474,77 @@ it.effect("keeps the macOS capture transition on the source display", () => {
       const service = yield* DesktopWindowCapture.make;
       yield* service.captureNow;
 
-      const transitionWindow = flashWindows.find((window) => window.kind === "browser");
-      assert.deepEqual(transitionWindow?.alwaysOnTopCalls, [[true, "pop-up-menu"]]);
-      assert.deepEqual(transitionWindow?.bounds, {
-        x: 0,
-        y: -200,
-        width: 1_440,
-        height: 900,
-      });
+      const transitionWindows = flashWindows.filter((window) => window.kind === "browser");
+      assert.deepEqual(
+        transitionWindows.map((window) => window.bounds),
+        [
+          { x: 0, y: -200, width: 1_440, height: 900 },
+          { x: -1_920, y: 0, width: 1_920, height: 1_080 },
+        ],
+      );
+      for (const transitionWindow of transitionWindows) {
+        assert.deepEqual(transitionWindow.alwaysOnTopCalls, [[true, "pop-up-menu"]]);
+      }
       assert.isBelow(
         mainShowMock.mock.invocationCallOrder[0]!,
         transitionShowMock.mock.invocationCallOrder[0]!,
       );
     }),
   ).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(() => focusedWindowMock.mockReset())));
+});
+
+it.effect("uses the unfocused main window for a macOS cross-display transition", () => {
+  const png = Buffer.from([1, 2, 3]);
+  const active = {
+    platform: "macos",
+    id: 42,
+    title: "Terminal",
+    owner: { name: "Terminal", processId: 123 },
+    bounds: { x: 10, y: 20, width: 800, height: 600 },
+  } as const;
+  activeWindowMock.mockReset().mockResolvedValue(active);
+  accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [] });
+  macCaptureMock.mockReset().mockResolvedValue({ source: { name: "Terminal" }, png });
+  animationSettingsMock.mockReturnValueOnce({
+    prefersReducedMotion: false,
+    shouldRenderRichAnimation: true,
+  });
+  focusedWindowMock.mockReturnValue(undefined);
+  allWindowsMock.mockReturnValue([
+    {
+      getBounds: () => ({ x: -1_600, y: 100, width: 1_200, height: 800 }),
+      isDestroyed: () => false,
+    },
+  ]);
+  flashWindows.length = 0;
+  const layer = testLayer("darwin", {
+    makeDirectory: () => Effect.void,
+    rename: () => Effect.void,
+    writeFileString: () => Effect.void,
+  });
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.captureNow;
+
+      assert.deepEqual(
+        flashWindows.filter((window) => window.kind === "browser").map((window) => window.bounds),
+        [
+          { x: 0, y: -200, width: 1_440, height: 900 },
+          { x: -1_920, y: 0, width: 1_920, height: 1_080 },
+        ],
+      );
+    }),
+  ).pipe(
+    Effect.provide(layer),
+    Effect.ensuring(
+      Effect.sync(() => {
+        focusedWindowMock.mockReset();
+        allWindowsMock.mockReset();
+      }),
+    ),
+  );
 });
 
 function fakeIcon(label: string, empty = false): Electron.NativeImage {
@@ -600,6 +671,28 @@ it("keeps the transition flash subdued", async () => {
   }
 });
 
+it("presents the landed card before completing the transition", async () => {
+  flashWindows.length = 0;
+  const transition = new WindowCaptureTransition();
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: 100, y: 50, width: 900, height: 600 },
+      "data:image/png;base64,",
+      false,
+    );
+
+    const html = decodeURIComponent(flashWindows[0]?.loadedUrls[0] ?? "");
+    assert.include(
+      html,
+      "await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+    );
+  } finally {
+    transition.dispose();
+  }
+});
+
 it("scales transition timing with travel distance", () => {
   const source = { x: 0, y: 0, width: 200, height: 100 };
   assert.strictEqual(windowCaptureAnimationDurationMs(source, source), 280);
@@ -638,10 +731,10 @@ it("bounds the transition surface to its displays and flight", () => {
   );
 });
 
-it("keeps a cross-display handoff on the source display", async () => {
+it("keeps cross-display handoff surfaces local to each display", async () => {
   flashWindows.length = 0;
   const transition = new WindowCaptureTransition({
-    sourceDisplayOnly: true,
+    boundOverlayToCaptureDisplays: true,
   });
 
   try {
@@ -650,6 +743,7 @@ it("keeps a cross-display handoff on the source display", async () => {
       { x: -1_800, y: 50, width: 900, height: 600 },
       "data:image/png;base64,",
       false,
+      { x: 100, y: 50, width: 1_000, height: 700 },
     );
     transition.animateTo("capture-1", {
       frame: { x: 600, y: 400, width: 208, height: 112 },
@@ -661,18 +755,18 @@ it("keeps a cross-display handoff on the source display", async () => {
     });
     await transition.waitForLanding("capture-1");
 
-    assert.deepEqual(flashWindows[0]?.bounds, {
-      x: -1_920,
-      y: 0,
-      width: 1_920,
-      height: 1_080,
-    });
-    assert.isTrue(
-      flashWindows[0]?.scripts.some((script) => script.startsWith("window.startCaptureExit")),
+    assert.deepEqual(
+      flashWindows.map((window) => window.bounds),
+      [
+        { x: -1_920, y: 0, width: 1_920, height: 1_080 },
+        { x: 0, y: -200, width: 1_440, height: 900 },
+      ],
     );
-    assert.isFalse(
-      flashWindows[0]?.scripts.some((script) => script.startsWith("window.startCaptureTransition")),
-    );
+    for (const window of flashWindows) {
+      assert.isTrue(
+        window.scripts.some((script) => script.startsWith("window.startCaptureTransition")),
+      );
+    }
   } finally {
     transition.dispose();
   }
@@ -681,7 +775,7 @@ it("keeps a cross-display handoff on the source display", async () => {
 it("keeps same-display motion inside one stable surface", async () => {
   flashWindows.length = 0;
   const transition = new WindowCaptureTransition({
-    sourceDisplayOnly: true,
+    boundOverlayToCaptureDisplays: true,
   });
 
   try {
@@ -690,6 +784,7 @@ it("keeps same-display motion inside one stable surface", async () => {
       { x: 100, y: 50, width: 900, height: 600 },
       "data:image/png;base64,",
       false,
+      { x: 200, y: 100, width: 1_000, height: 700 },
     );
     transition.animateTo("capture-1", {
       frame: { x: 600, y: 400, width: 208, height: 112 },
@@ -711,6 +806,53 @@ it("keeps same-display motion inside one stable surface", async () => {
       flashWindows[0]?.scripts.some((script) => script.startsWith("window.startCaptureTransition")),
     );
   } finally {
+    transition.dispose();
+  }
+});
+
+it("rebases the transition when macOS moves the visible surface", async () => {
+  flashWindows.length = 0;
+  transitionShowMock.mockReset().mockReturnValueOnce({
+    x: 0,
+    y: -161,
+    width: 1_440,
+    height: 900,
+  });
+  const transition = new WindowCaptureTransition({
+    boundOverlayToCaptureDisplays: true,
+  });
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: 100, y: 50, width: 900, height: 600 },
+      "data:image/png;base64,",
+      false,
+      { x: 200, y: 100, width: 1_000, height: 700 },
+    );
+    transition.animateTo("capture-1", {
+      frame: { x: 600, y: 400, width: 208, height: 112 },
+      backgroundColor: "#fff",
+      borderColor: "#ccc",
+      borderWidth: 1,
+      cornerRadius: 8,
+      scaleFactor: 1,
+    });
+    await transition.waitForLanding("capture-1");
+
+    assert.include(
+      flashWindows[0]?.scripts ?? [],
+      'window.rebaseCaptureSource({"x":100,"y":211,"width":900,"height":600})',
+    );
+    assert.isTrue(
+      flashWindows[0]?.scripts.some(
+        (script) =>
+          script.startsWith("window.startCaptureTransition") &&
+          script.includes('"frame":{"x":600,"y":561,"width":208,"height":112}'),
+      ),
+    );
+  } finally {
+    transitionShowMock.mockReset();
     transition.dispose();
   }
 });

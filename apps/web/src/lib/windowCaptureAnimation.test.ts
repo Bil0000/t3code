@@ -46,6 +46,7 @@ describe("window capture animation", () => {
     stopFirstSetup();
     const stopPlaceholder = scheduleWindowCaptureAnimationDestination("capture-1", start);
     await Promise.resolve();
+    expect(start).toHaveBeenCalledTimes(1);
     stopPlaceholder();
     const stopAttachment = scheduleWindowCaptureAnimationDestination("capture-1", start);
     await Promise.resolve();
