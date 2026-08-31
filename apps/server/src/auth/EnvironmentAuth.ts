@@ -563,18 +563,32 @@ function parseDpopToken(request: HttpServerRequest.HttpServerRequest): string | 
   return token.length > 0 ? token : null;
 }
 
-export function selectedLegacySessionCookieToken(
+export function selectRequestCredential(
   request: HttpServerRequest.HttpServerRequest,
   cookieName: string,
   legacyCookieName: string | undefined,
-): string | undefined {
+) {
+  const cookieToken = request.cookies[cookieName];
+  if (cookieToken !== undefined) {
+    return { token: cookieToken, source: "cookie" } as const;
+  }
+
+  const bearerToken = parseBearerToken(request);
+  if (bearerToken !== null) {
+    return { token: bearerToken, source: "bearer" } as const;
+  }
+
+  const dpopToken = parseDpopToken(request);
+  if (dpopToken !== null) {
+    return { token: dpopToken, source: "dpop" } as const;
+  }
+
   const legacyToken = legacyCookieName ? request.cookies[legacyCookieName] : undefined;
-  return legacyToken &&
-    !request.cookies[cookieName] &&
-    !parseBearerToken(request) &&
-    !parseDpopToken(request)
-    ? legacyToken
-    : undefined;
+  if (legacyToken !== undefined) {
+    return { token: legacyToken, source: "legacy-cookie" } as const;
+  }
+
+  return undefined;
 }
 
 export const make = Effect.gen(function* () {
@@ -615,20 +629,19 @@ export const make = Effect.gen(function* () {
   const authenticateRequest = (
     request: HttpServerRequest.HttpServerRequest,
   ): Effect.Effect<AuthenticatedSession, ServerAuthCredentialError | ServerAuthInternalError> => {
-    const cookieToken = request.cookies[sessions.cookieName];
-    const legacyCookieToken = sessions.legacyCookieName
-      ? request.cookies[sessions.legacyCookieName]
-      : undefined;
-    const bearerToken = parseBearerToken(request);
-    const dpopToken = parseDpopToken(request);
-    const credential = cookieToken ?? bearerToken ?? dpopToken ?? legacyCookieToken;
-    if (!credential) {
+    const credential = selectRequestCredential(
+      request,
+      sessions.cookieName,
+      sessions.legacyCookieName,
+    );
+    if (!credential?.token) {
       return Effect.fail(new ServerAuthMissingCredentialError({}));
     }
-    return authenticateToken(credential).pipe(
+    const dpopToken = parseDpopToken(request);
+    return authenticateToken(credential.token).pipe(
       Effect.flatMap((session) => {
         if (session.proofKeyThumbprint) {
-          if (!dpopToken || dpopToken !== credential) {
+          if (!dpopToken || dpopToken !== credential.token) {
             return Effect.fail(
               new ServerAuthInvalidCredentialError({
                 diagnostic: "DPoP-bound access token requires DPoP authorization.",

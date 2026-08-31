@@ -242,18 +242,18 @@ export const authHttpApiLayer = HttpApiBuilder.group(
             yield* annotateEnvironmentRequest(args.endpoint.name);
             const request = yield* HttpServerRequest.HttpServerRequest;
             const result = yield* serverAuth.getSessionState(request);
-            const legacyToken = EnvironmentAuth.selectedLegacySessionCookieToken(
+            const credential = EnvironmentAuth.selectRequestCredential(
               request,
               sessions.cookieName,
               sessions.legacyCookieName,
             );
             if (
-              legacyToken &&
+              credential?.source === "legacy-cookie" &&
               result.authenticated &&
               result.sessionMethod === "browser-session-cookie" &&
               result.expiresAt
             ) {
-              yield* appendSessionCookie(sessions.cookieName, legacyToken, result.expiresAt);
+              yield* appendSessionCookie(sessions.cookieName, credential.token, result.expiresAt);
             }
             return result;
           },
