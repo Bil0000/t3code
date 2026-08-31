@@ -64,6 +64,32 @@ const threadIsReady = (
   return latestUserMessageAt !== null && latestUserMessageAt <= settledAt;
 };
 
+const isWithin = (path: Path.Path, parent: string, child: string) => {
+  const relative = path.relative(parent, child);
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
+};
+
+export const isManagedWorktreePath = Effect.fn("WorktreeAutoDelete.isManagedWorktreePath")(
+  function* (candidatePath: string) {
+    const config = yield* ServerConfig;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const [root, candidate] = yield* Effect.all([
+      fileSystem.realPath(path.resolve(config.worktreesDir)).pipe(Effect.option),
+      fileSystem.realPath(path.resolve(candidatePath)).pipe(Effect.option),
+    ]);
+    return (
+      Option.isSome(root) &&
+      Option.isSome(candidate) &&
+      root.value !== candidate.value &&
+      isWithin(path, root.value, candidate.value)
+    );
+  },
+);
+
 export const make = Effect.gen(function* () {
   const config = yield* ServerConfig;
   const fileSystem = yield* FileSystem.FileSystem;
@@ -79,13 +105,6 @@ export const make = Effect.gen(function* () {
   const deletionReactor = yield* ThreadDeletionReactor;
   const orchestrationEngine = yield* OrchestrationEngineService;
   const serverSettings = yield* ServerSettingsService;
-  const isWithin = (parent: string, child: string) => {
-    const relative = path.relative(parent, child);
-    return (
-      relative === "" ||
-      (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-    );
-  };
 
   const loadGroups = Effect.fn("WorktreeAutoDelete.loadGroups")(function* (
     delay: WorktreeAutoDeleteAfterDays,
@@ -102,7 +121,7 @@ export const make = Effect.gen(function* () {
           .realPath(path.resolve(thread.worktreePath))
           .pipe(Effect.option);
         if (Option.isNone(realPath)) continue;
-        if (realPath.value === root.value || !isWithin(root.value, realPath.value)) continue;
+        if (realPath.value === root.value || !isWithin(path, root.value, realPath.value)) continue;
         const references = groups.get(realPath.value) ?? [];
         references.push({ thread, workspaceRoot: project.workspaceRoot });
         groups.set(realPath.value, references);
@@ -164,7 +183,7 @@ export const make = Effect.gen(function* () {
       for (const terminalPath of [terminal.worktreePath, terminal.cwd]) {
         if (terminalPath === null) continue;
         const realPath = yield* fileSystem.realPath(path.resolve(terminalPath)).pipe(Effect.option);
-        if (Option.isSome(realPath) && isWithin(candidate.path, realPath.value)) return false;
+        if (Option.isSome(realPath) && isWithin(path, candidate.path, realPath.value)) return false;
       }
     }
 

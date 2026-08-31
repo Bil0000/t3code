@@ -36,7 +36,11 @@ import {
 import { useTerminalUiStateStore } from "../terminalUiStateStore";
 import { useUiStateStore } from "../uiStateStore";
 import { buildThreadRouteParams, resolveThreadRouteRef } from "../threadRoutes";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
+import {
+  canSkipWorktreeDeletePrompt,
+  formatWorktreePathForDisplay,
+  getOrphanedWorktreePathForThread,
+} from "../worktreeCleanup";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { useClientSettings } from "./useSettings";
 import { useAtomCommand } from "../state/use-atom-command";
@@ -342,7 +346,16 @@ export function useThreadActions() {
       const canDeleteWorktree = orphanedWorktreePath !== null && threadProject !== null;
       const localApi = readLocalApi();
       let shouldDeleteWorktree = false;
-      if (canDeleteWorktree && worktreeAutoDeleteAfterDays === null && localApi) {
+      let skipWorktreeDeletePrompt = false;
+      if (canDeleteWorktree && worktreeAutoDeleteAfterDays !== null) {
+        const status = await refreshVcsStatus({
+          environmentId: threadRef.environmentId,
+          input: { cwd: orphanedWorktreePath },
+        });
+        skipWorktreeDeletePrompt =
+          status._tag === "Success" && canSkipWorktreeDeletePrompt(status.value, thread.branch);
+      }
+      if (canDeleteWorktree && !skipWorktreeDeletePrompt && localApi) {
         const confirmationResult = await settlePromise(() =>
           localApi.dialogs.confirm(
             [

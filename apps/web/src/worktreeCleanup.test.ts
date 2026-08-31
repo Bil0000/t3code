@@ -2,9 +2,19 @@ import { EnvironmentId, ProjectId, ProviderInstanceId, ThreadId } from "@t3tools
 import { describe, expect, it } from "vite-plus/test";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "./worktreeCleanup";
+import {
+  canSkipWorktreeDeletePrompt,
+  formatWorktreePathForDisplay,
+  getOrphanedWorktreePathForThread,
+} from "./worktreeCleanup";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
+const autoDeleteStatus = {
+  isAutoDeleteManagedWorktree: true,
+  isRepo: true,
+  refName: "feature/demo",
+  hasWorkingTreeChanges: false,
+};
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -82,6 +92,35 @@ describe("getOrphanedWorktreePathForThread", () => {
     ];
     const result = getOrphanedWorktreePathForThread(threads, ThreadId.make("thread-1"));
     expect(result).toBe("/tmp/repo/worktrees/feature-a");
+  });
+});
+
+describe("canSkipWorktreeDeletePrompt", () => {
+  it("accepts a clean managed repository on the thread branch", () => {
+    expect(canSkipWorktreeDeletePrompt(autoDeleteStatus, "feature/demo")).toBe(true);
+  });
+
+  it.each([
+    [
+      "a missing managed flag",
+      {
+        isRepo: true,
+        refName: "feature/demo",
+        hasWorkingTreeChanges: false,
+      },
+      "feature/demo",
+    ],
+    [
+      "an unmanaged worktree",
+      { ...autoDeleteStatus, isAutoDeleteManagedWorktree: false },
+      "feature/demo",
+    ],
+    ["a dirty worktree", { ...autoDeleteStatus, hasWorkingTreeChanges: true }, "feature/demo"],
+    ["a non-repository", { ...autoDeleteStatus, isRepo: false }, "feature/demo"],
+    ["a branch mismatch", autoDeleteStatus, "feature/other"],
+    ["a branchless thread", { ...autoDeleteStatus, refName: null }, null],
+  ] as const)("rejects %s", (_case, status, branch) => {
+    expect(canSkipWorktreeDeletePrompt(status, branch)).toBe(false);
   });
 });
 

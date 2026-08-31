@@ -242,6 +242,9 @@ describe("worktree auto-delete", () => {
 
           const bufferedChildPath = path.join(bufferedPath, "packages", "app");
           yield* fs.makeDirectory(bufferedChildPath, { recursive: true });
+          assert.isTrue(yield* WorktreeAutoDelete.isManagedWorktreePath(deletedPath));
+          assert.isFalse(yield* WorktreeAutoDelete.isManagedWorktreePath(config.worktreesDir));
+          assert.isFalse(yield* WorktreeAutoDelete.isManagedWorktreePath(outsidePath));
           projects = [
             {
               projectId,

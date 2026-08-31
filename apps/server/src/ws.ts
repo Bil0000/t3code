@@ -87,6 +87,7 @@ import {
 import * as OrchestrationEngine from "./orchestration/Services/OrchestrationEngine.ts";
 import * as ProjectionSnapshotQuery from "./orchestration/Services/ProjectionSnapshotQuery.ts";
 import { ThreadDeletionReactor } from "./orchestration/Services/ThreadDeletionReactor.ts";
+import * as WorktreeAutoDelete from "./orchestration/WorktreeAutoDelete.ts";
 import {
   observeRpcEffect as instrumentRpcEffect,
   observeRpcStream as instrumentRpcStream,
@@ -2141,7 +2142,15 @@ const makeWsRpcLayer = (
         [WS_METHODS.vcsRefreshStatus]: (input) =>
           observeRpcEffect(
             WS_METHODS.vcsRefreshStatus,
-            vcsStatusBroadcaster.refreshStatus(input.cwd),
+            Effect.all([
+              vcsStatusBroadcaster.refreshStatus(input.cwd),
+              WorktreeAutoDelete.isManagedWorktreePath(input.cwd),
+            ]).pipe(
+              Effect.map(([status, isAutoDeleteManagedWorktree]) => ({
+                ...status,
+                isAutoDeleteManagedWorktree,
+              })),
+            ),
             {
               "rpc.aggregate": "vcs",
             },

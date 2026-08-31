@@ -6023,6 +6023,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
         ),
       );
       assert.equal(refreshedStatus.isRepo, true);
+      assert.equal(refreshedStatus.isAutoDeleteManagedWorktree, false);
 
       const stackedEvents = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>

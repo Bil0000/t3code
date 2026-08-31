@@ -1,4 +1,22 @@
+import type { VcsStatusResult } from "@t3tools/contracts";
+
 import type { ThreadShell } from "./types";
+
+export function canSkipWorktreeDeletePrompt(
+  status: Pick<
+    VcsStatusResult,
+    "hasWorkingTreeChanges" | "isAutoDeleteManagedWorktree" | "isRepo" | "refName"
+  >,
+  branch: string | null,
+): boolean {
+  return (
+    branch !== null &&
+    status.isAutoDeleteManagedWorktree === true &&
+    status.isRepo &&
+    !status.hasWorkingTreeChanges &&
+    status.refName === branch
+  );
+}
 
 function normalizeWorktreePath(path: string | null): string | null {
   const trimmed = path?.trim();

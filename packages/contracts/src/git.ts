@@ -244,6 +244,7 @@ export type VcsStatusRemoteResult = typeof VcsStatusRemoteResult.Type;
 export const VcsStatusResult = Schema.Struct({
   ...VcsStatusLocalShape,
   ...VcsStatusRemoteShape,
+  isAutoDeleteManagedWorktree: Schema.optional(Schema.Boolean),
 });
 export type VcsStatusResult = typeof VcsStatusResult.Type;
 
