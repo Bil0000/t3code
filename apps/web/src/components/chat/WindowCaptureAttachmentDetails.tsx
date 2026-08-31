@@ -2,6 +2,9 @@ import type { WindowCaptureSource } from "@t3tools/contracts";
 
 import { cn } from "../../lib/utils";
 
+export const WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS =
+  "relative h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80";
+
 export function WindowCaptureAttachmentDetails({
   source,
   className,

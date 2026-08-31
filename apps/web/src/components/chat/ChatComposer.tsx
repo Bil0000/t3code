@@ -163,7 +163,10 @@ import {
   buildExpandedImagePreview,
   type ExpandedImagePreview,
 } from "./ExpandedImagePreview";
-import { WindowCaptureAttachmentDetails } from "./WindowCaptureAttachmentDetails";
+import {
+  WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS,
+  WindowCaptureAttachmentDetails,
+} from "./WindowCaptureAttachmentDetails";
 import {
   getPendingWindowCaptureAnimations,
   pendingWindowCaptureAnimationIdsForTarget,
@@ -3847,10 +3850,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               windowCaptureAnimationPending ? image.source : undefined
                             }
                             className={cn(
-                              "group/attachment relative shrink-0 snap-start overflow-hidden rounded-lg border border-border/80 bg-background",
+                              "group/attachment shrink-0 snap-start bg-background",
                               image.source?.kind === "window-capture"
-                                ? "h-28 w-52 max-w-full"
-                                : "h-16 w-16",
+                                ? WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS
+                                : "relative h-16 w-16 overflow-hidden rounded-lg border border-border/80",
                               windowCaptureAnimationPending && "invisible",
                             )}
                           >
@@ -3965,7 +3968,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 (capture) => capture.id === captureId,
                               )?.source
                             }
-                            className="invisible h-28 w-52 max-w-full shrink-0 snap-start overflow-hidden rounded-lg border border-border/80 bg-background"
+                            className={cn(
+                              WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS,
+                              "invisible shrink-0 snap-start bg-background",
+                            )}
                           />
                         )),
                       )}

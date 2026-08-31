@@ -81,7 +81,10 @@ import {
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
-import { WindowCaptureAttachmentDetails } from "./WindowCaptureAttachmentDetails";
+import {
+  WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS,
+  WindowCaptureAttachmentDetails,
+} from "./WindowCaptureAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
@@ -1047,10 +1050,10 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
               <div
                 key={image.id}
                 className={cn(
-                  "relative overflow-hidden rounded-lg border border-border/80 bg-background/70",
-                  image.source?.kind === "window-capture" &&
-                    image.previewUrl &&
-                    "h-28 w-52 max-w-full",
+                  "bg-background/70",
+                  image.source?.kind === "window-capture" && image.previewUrl
+                    ? WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS
+                    : "relative overflow-hidden rounded-lg border border-border/80",
                 )}
               >
                 {image.previewUrl ? (
