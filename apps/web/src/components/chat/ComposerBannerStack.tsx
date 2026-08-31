@@ -269,7 +269,7 @@ function ComposerBannerStackAlert({
       className={item.className}
     >
       <ComposerBanner.Row layout="wrap-actions">
-        <ComposerBanner.Icon>{item.icon}</ComposerBanner.Icon>
+        <ComposerBanner.Icon className="h-lh self-start">{item.icon}</ComposerBanner.Icon>
         <ComposerBanner.Content className="flex-col items-start gap-0.5">
           <span className="w-full min-w-0 font-medium">{item.title}</span>
           {item.description ? (
