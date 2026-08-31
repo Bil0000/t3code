@@ -1,5 +1,5 @@
-// @effect-diagnostics globalTimers:off
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalTimers:off -- The child-process shutdown watchdog runs at a worker callback boundary outside any Effect fiber.
+// @effect-diagnostics nodeBuiltinImport:off -- This desktop-only helper owns a Node child process for global shortcut capture.
 
 import * as NodeChildProcess from "node:child_process";
 

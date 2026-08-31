@@ -1,4 +1,4 @@
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics nodeBuiltinImport:off -- This macOS platform boundary spawns native capture tools and reads their temporary output with Node.
 
 import * as NodeChildProcess from "node:child_process";
 import * as NodeFSP from "node:fs/promises";

@@ -1,4 +1,4 @@
-// @effect-diagnostics globalTimers:off
+// @effect-diagnostics globalTimers:off -- Capture timeouts and Electron overlay animation timers run at native callback boundaries outside Effect fibers.
 
 import {
   DEFAULT_CLIENT_SETTINGS,

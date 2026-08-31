@@ -1,5 +1,5 @@
-// @effect-diagnostics globalTimers:off
-// @effect-diagnostics nodeBuiltinImport:off
+// @effect-diagnostics globalTimers:off -- The Electron window-blur handshake uses a native timeout outside any Effect fiber.
+// @effect-diagnostics nodeBuiltinImport:off -- This desktop-only platform check reads procfs and resolves Wayland socket paths with Node.
 
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
