@@ -3826,7 +3826,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                     className={cn(
                       "mb-3 flex max-w-full gap-2",
                       hasWindowCaptureAttachments
-                        ? "snap-x snap-proximity overflow-x-auto overscroll-x-contain pb-1 [scrollbar-width:thin] [&::-webkit-scrollbar]:h-1.5"
+                        ? "chat-composer-media-carousel snap-x snap-proximity overflow-x-auto overscroll-x-contain pb-1"
                         : "flex-wrap",
                     )}
                   >
