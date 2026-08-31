@@ -272,7 +272,9 @@ function ComposerBannerStackAlert({
         <ComposerBanner.Icon className={item.description ? "h-lh self-start" : undefined}>
           {item.icon}
         </ComposerBanner.Icon>
-        <ComposerBanner.Content className="flex-col items-start gap-0.5">
+        <ComposerBanner.Content
+          className={item.description ? "flex-col items-start gap-0.5" : undefined}
+        >
           <span className="w-full min-w-0 font-medium">{item.title}</span>
           {item.description ? (
             <span className="text-muted-foreground">{item.description}</span>
