@@ -155,7 +155,7 @@ function Root({
   return (
     <Surface
       className={cn(
-        "min-w-0 px-3 pt-2 pb-[calc(var(--chat-composer-attachment-overlap)+(--spacing(1)))] text-xs/4 [--composer-banner-icon-column:--spacing(7)] sm:px-4 sm:[--composer-banner-icon-column:--spacing(6)]",
+        "min-w-0 px-3 pt-2 pb-[calc(var(--chat-composer-attachment-overlap)+(--spacing(2)))] text-xs/4 [--composer-banner-icon-column:--spacing(7)] sm:px-4 sm:[--composer-banner-icon-column:--spacing(6)]",
         width === "content" ? "w-fit max-w-full flex-none" : "@container",
         className,
       )}
