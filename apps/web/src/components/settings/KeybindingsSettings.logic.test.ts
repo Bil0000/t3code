@@ -84,6 +84,22 @@ describe("KeybindingsSettings.logic", () => {
     ).toBe(expected);
   });
 
+  it("captures Latin layout keys instead of their punctuation position", () => {
+    expect(
+      keybindingFromKeyboardEvent(
+        {
+          key: "m",
+          code: "Semicolon",
+          metaKey: true,
+          ctrlKey: false,
+          altKey: false,
+          shiftKey: false,
+        },
+        "MacIntel",
+      ),
+    ).toBe("mod+m");
+  });
+
   it("serializes shortcuts and when expressions for upserts", () => {
     expect(
       shortcutToKeybindingInput({

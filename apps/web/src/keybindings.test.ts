@@ -781,6 +781,20 @@ describe("resolveShortcutCommand", () => {
     );
   });
 
+  it("does not let a punctuation position shadow a Latin layout key", () => {
+    const keybindings = compile([
+      { shortcut: modShortcut("m"), command: "diff.toggle" },
+      { shortcut: modShortcut(";"), command: "sidebar.toggle" },
+    ]);
+
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "m", code: "Semicolon", metaKey: true }), keybindings, {
+        platform: "MacIntel",
+      }),
+      "diff.toggle",
+    );
+  });
+
   it("matches Option-modified letters using the physical key code on macOS", () => {
     assert.strictEqual(
       resolveShortcutCommand(

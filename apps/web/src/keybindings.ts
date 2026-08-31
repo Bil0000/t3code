@@ -80,8 +80,10 @@ function normalizeEventKey(key: string): string {
 }
 
 export function shortcutKeyFromEvent(event: Pick<ShortcutEventLike, "key" | "code">): string {
+  const layoutKey = normalizeEventKey(event.key);
+  if (/^[a-z]$/.test(layoutKey)) return layoutKey;
   const physicalKey = event.code ? EVENT_CODE_SHORTCUT_KEYS[event.code] : undefined;
-  return physicalKey ?? normalizeEventKey(event.key);
+  return physicalKey ?? layoutKey;
 }
 
 function resolveEventKeys(event: ShortcutEventLike): Set<string> {
