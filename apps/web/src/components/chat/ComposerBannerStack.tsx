@@ -269,20 +269,12 @@ function ComposerBannerStackAlert({
       className={item.className}
     >
       <ComposerBanner.Row layout="wrap-actions">
-        <ComposerBanner.Icon className={item.description ? "min-h-4 self-start" : undefined}>
-          {item.icon}
-        </ComposerBanner.Icon>
-        <ComposerBanner.Content
-          className={item.description ? "flex-col items-start gap-0" : "font-medium"}
-        >
+        <ComposerBanner.Icon>{item.icon}</ComposerBanner.Icon>
+        <ComposerBanner.Content className="flex-col items-start gap-0.5">
+          <span className="w-full min-w-0 font-medium">{item.title}</span>
           {item.description ? (
-            <>
-              <span className="font-medium">{item.title}</span>
-              <span className="text-muted-foreground">{item.description}</span>
-            </>
-          ) : (
-            item.title
-          )}
+            <span className="text-muted-foreground">{item.description}</span>
+          ) : null}
         </ComposerBanner.Content>
         {item.actions || item.onDismiss ? (
           <ComposerBanner.Actions>
