@@ -143,11 +143,13 @@ function Column({ className, ...props }: ComponentProps<"div">) {
 
 function Root({
   className,
+  density = "default",
   placement = "attached",
   variant = "default",
   width = "fill",
   ...props
 }: ComponentProps<"div"> & {
+  density?: "default" | "compact";
   placement?: "attached" | "floating";
   variant?: ComposerBannerVariant;
   width?: "fill" | "content";
@@ -155,7 +157,9 @@ function Root({
   return (
     <Surface
       className={cn(
-        "min-w-0 px-3 pt-2 pb-[calc(var(--chat-composer-attachment-overlap)+(--spacing(2)))] text-xs/4 [--composer-banner-icon-column:--spacing(7)] sm:px-4 sm:[--composer-banner-icon-column:--spacing(6)]",
+        "min-w-0 px-3 pt-(--composer-banner-padding-block) pb-[calc(var(--chat-composer-attachment-overlap)+var(--composer-banner-padding-block))] text-xs/4 [--composer-banner-icon-column:--spacing(7)] [--composer-banner-padding-block:--spacing(2)] sm:px-4 sm:[--composer-banner-icon-column:--spacing(6)]",
+        density === "compact" &&
+          "[--composer-banner-padding-block:5px] sm:[--composer-banner-padding-block:3px]",
         width === "content" ? "w-fit max-w-full flex-none" : "@container",
         className,
       )}

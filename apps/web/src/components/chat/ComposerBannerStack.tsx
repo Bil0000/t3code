@@ -266,10 +266,8 @@ function ComposerBannerStackAlert({
       role="alert"
       placement={attached ? "attached" : "floating"}
       variant={item.variant}
-      className={cn(
-        item.description && "pt-[3px] pb-[calc(var(--chat-composer-attachment-overlap)+3px)]",
-        item.className,
-      )}
+      density={item.description ? "compact" : "default"}
+      className={item.className}
     >
       <ComposerBanner.Row layout="wrap-actions">
         <ComposerBanner.Icon className={item.description ? "h-lh self-start" : undefined}>
