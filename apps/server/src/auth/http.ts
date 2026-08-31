@@ -254,6 +254,7 @@ export const authHttpApiLayer = HttpApiBuilder.group(
               result.expiresAt
             ) {
               yield* appendSessionCookie(sessions.cookieName, credential.token, result.expiresAt);
+              yield* appendCredentialResponseHeaders;
             }
             return result;
           },

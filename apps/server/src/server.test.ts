@@ -1658,6 +1658,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
 
       assert.equal(body.authenticated, true);
       assert.equal(response.headers["set-cookie"], cookie);
+      assert.equal(response.headers["cache-control"], "no-store");
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
