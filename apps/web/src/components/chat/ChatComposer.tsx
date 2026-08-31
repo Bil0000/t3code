@@ -3871,19 +3871,22 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                             </Button>
                           </WindowCaptureAttachmentFrame>
                         );
-                      })}
-                    {uncommittedWindowCaptureIds.map((captureId) => (
-                      <WindowCaptureAttachmentFrame
-                        key={captureId}
-                        aria-hidden="true"
-                        animationId={captureId}
-                        animationSource={
-                          pendingWindowCaptureAnimations.find((capture) => capture.id === captureId)
-                            ?.source
-                        }
-                        className="invisible h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80 bg-background"
-                      />
-                    ))}
+                      })
+                      .concat(
+                        uncommittedWindowCaptureIds.map((captureId) => (
+                          <WindowCaptureAttachmentFrame
+                            key={captureId}
+                            aria-hidden="true"
+                            animationId={captureId}
+                            animationSource={
+                              pendingWindowCaptureAnimations.find(
+                                (capture) => capture.id === captureId,
+                              )?.source
+                            }
+                            className="invisible h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80 bg-background"
+                          />
+                        )),
+                      )}
                   </div>
                 )}
 

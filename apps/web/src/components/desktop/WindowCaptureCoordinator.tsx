@@ -54,6 +54,18 @@ export function resolveExistingWindowCaptureTarget(
 const WINDOW_CAPTURE_STARTED_ACTION_PREFIX = "window-capture-started:";
 const NEXT_PAINT_FALLBACK_MS = 100;
 
+export function resolveWindowCaptureTargetOnce(
+  resolutionRef: { current: Promise<CaptureTarget | null> | null },
+  resolveTarget: () => Promise<CaptureTarget | null>,
+): Promise<CaptureTarget | null> {
+  if (resolutionRef.current) return resolutionRef.current;
+  const resolution = resolveTarget().finally(() => {
+    if (resolutionRef.current === resolution) resolutionRef.current = null;
+  });
+  resolutionRef.current = resolution;
+  return resolution;
+}
+
 async function afterNextPaint(): Promise<void> {
   await new Promise<void>((resolve) => {
     const fallback = window.setTimeout(resolve, NEXT_PAINT_FALLBACK_MS);
@@ -80,6 +92,7 @@ export function WindowCaptureCoordinator() {
   );
   const animateCaptures = useClientSettings((settings) => settings.windowCaptureAnimations);
   const lastTargetRef = useRef<CaptureTarget | null>(null);
+  const targetResolutionRef = useRef<Promise<CaptureTarget | null> | null>(null);
   const drainingRef = useRef<Promise<void> | null>(null);
   const rerunRequestedRef = useRef(false);
   const soundedCaptureIdsRef = useRef(new Set<string>());
@@ -109,6 +122,11 @@ export function WindowCaptureCoordinator() {
     lastTargetRef.current = created.draftId;
     return created.draftId;
   }, [activeDraftThread, activeThread, defaultProjectRef, handleNewThread, routeThreadRef]);
+
+  const resolveCaptureTarget = useCallback(
+    () => resolveWindowCaptureTargetOnce(targetResolutionRef, resolveTarget),
+    [resolveTarget],
+  );
 
   const playCaptureSound = useCallback(
     (id: string) => {
@@ -140,7 +158,7 @@ export function WindowCaptureCoordinator() {
           )?.target;
           const target = animationTarget
             ? resolveExistingWindowCaptureTarget(animationTarget, routeThreadRef)
-            : await resolveTarget();
+            : await resolveCaptureTarget();
           if (!target) {
             await dismissWindowCaptureAnimation(item.id);
             await bridge.acknowledgeWindowCapture(item.id);
@@ -263,7 +281,7 @@ export function WindowCaptureCoordinator() {
       });
     drainingRef.current = operation;
     return operation;
-  }, [playCaptureSound, resolveTarget, routeThreadRef]);
+  }, [playCaptureSound, resolveCaptureTarget, routeThreadRef]);
 
   useEffect(() => {
     const bridge = getDesktopWindowCaptureBridge();
@@ -278,11 +296,9 @@ export function WindowCaptureCoordinator() {
           animateCaptures &&
           !window.matchMedia("(prefers-reduced-motion: reduce)").matches
         ) {
-          const target = lastTargetRef.current;
-          const existingTarget = target
-            ? resolveExistingWindowCaptureTarget(target, routeThreadRef)
-            : null;
-          if (existingTarget) beginWindowCaptureAnimation(captureId, existingTarget);
+          void resolveCaptureTarget().then((target) => {
+            if (target) beginWindowCaptureAnimation(captureId, target);
+          });
         }
       }
       if (action === "window-capture-ready") void drain();
@@ -300,7 +316,7 @@ export function WindowCaptureCoordinator() {
         });
       }
     });
-  }, [animateCaptures, drain, playCaptureSound, routeThreadRef]);
+  }, [animateCaptures, drain, playCaptureSound, resolveCaptureTarget]);
 
   useEffect(() => {
     const dismissOnBlur = () => dismissAllWindowCaptureAnimations();

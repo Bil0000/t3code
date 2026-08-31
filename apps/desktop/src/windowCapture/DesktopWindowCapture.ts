@@ -369,6 +369,9 @@ async function captureSource({
 }) {
   let active: ActiveWindow | undefined;
   const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
+  const destinationWindow =
+    hiddenWindow ?? Electron.BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
+  const destinationWindowBounds = destinationWindow?.getBounds();
   let hiddenWindowRestored = false;
   try {
     if (hiddenWindow) await hideAndWaitForBlur(hiddenWindow);
@@ -428,6 +431,7 @@ async function captureSource({
       settings,
       active,
       platform,
+      destinationWindowBounds,
     );
     const contextPromise =
       mode === "portal"
@@ -556,6 +560,7 @@ async function showCaptureFeedback(
   settings: ClientSettings,
   active: ActiveWindow | undefined,
   platform: NodeJS.Platform,
+  destinationWindowBounds?: Electron.Rectangle,
 ): Promise<boolean> {
   const bounds = windowCaptureFlashBounds(active, platform);
   const animationsEnabled =
@@ -568,6 +573,7 @@ async function showCaptureFeedback(
         bounds,
         snapshotDataUrl,
         settings.windowCaptureFlash && platform !== "win32",
+        destinationWindowBounds,
       );
       if (settings.windowCaptureFlash && platform === "win32") {
         await flash.showAnimated(bounds).catch(() => undefined);
@@ -646,7 +652,7 @@ export const make = Effect.gen(function* () {
   const flash = new WindowCaptureFlash(environment.platform);
   const transition = new WindowCaptureTransition({
     boundOverlayToFlight: environment.platform === "win32",
-    sourceDisplayOnly: environment.platform === "darwin",
+    boundOverlayToCaptureDisplays: environment.platform === "darwin",
     alwaysOnTopLevel: environment.platform === "linux" ? undefined : "pop-up-menu",
   });
 
