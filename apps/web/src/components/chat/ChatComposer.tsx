@@ -225,6 +225,18 @@ function WindowCaptureAttachmentFrame({
   useLayoutEffect(() => {
     const frame = frameRef.current;
     if (!frame || !animationId) return;
+
+    const carousel = frame.closest<HTMLElement>('[data-chat-composer-media-carousel="true"]');
+    if (carousel) {
+      const carouselFrame = carousel.getBoundingClientRect();
+      const attachmentFrame = frame.getBoundingClientRect();
+      if (attachmentFrame.right > carouselFrame.right) {
+        carousel.scrollLeft += attachmentFrame.right - carouselFrame.right;
+      } else if (attachmentFrame.left < carouselFrame.left) {
+        carousel.scrollLeft -= carouselFrame.left - attachmentFrame.left;
+      }
+    }
+
     return scheduleWindowCaptureAnimationDestination(animationId, () =>
       setWindowCaptureAnimationDestination(animationId, frame, animationSource),
     );
@@ -882,6 +894,12 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const uncommittedWindowCaptureIds = pendingWindowCaptureIds.filter(
     (id) => !composerImages.some((image) => image.id === id),
   );
+  const composerMediaImages = composerImages.filter(
+    (image) => !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
+  );
+  const hasWindowCaptureAttachments =
+    uncommittedWindowCaptureIds.length > 0 ||
+    composerMediaImages.some((image) => image.source?.kind === "window-capture");
   const nonPersistedComposerImageIds = composerDraft.nonPersistedImageIds;
   const uploadsByImageId = useAttachmentUploadStore((state) => state.uploadsByImageId);
   const needsReattachFileCount = composerFiles.filter(composerFileNeedsReattach).length;
@@ -3800,18 +3818,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                 pendingUserInputs.length === 0 &&
                 (uncommittedWindowCaptureIds.length > 0 ||
                   composerVideos.length > 0 ||
-                  composerImages.some(
-                    (image) =>
-                      !composerPreviewAnnotations.some((annotation) => annotation.id === image.id),
-                  )) && (
-                  <div className="mb-3 flex flex-wrap gap-2">
-                    {composerImages
-                      .filter(
-                        (image) =>
-                          !composerPreviewAnnotations.some(
-                            (annotation) => annotation.id === image.id,
-                          ),
-                      )
+                  composerMediaImages.length > 0) && (
+                  <div
+                    data-chat-composer-media-carousel={
+                      hasWindowCaptureAttachments ? "true" : undefined
+                    }
+                    className={cn(
+                      "mb-3 flex max-w-full gap-2",
+                      hasWindowCaptureAttachments
+                        ? "chat-composer-media-carousel snap-x snap-proximity overflow-x-auto overscroll-x-contain pb-1"
+                        : "flex-wrap",
+                    )}
+                  >
+                    {composerMediaImages
                       .map((image) => {
                         const upload = supportsAttachmentUploads
                           ? uploadsByImageId[image.id]
@@ -3828,7 +3847,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               windowCaptureAnimationPending ? image.source : undefined
                             }
                             className={cn(
-                              "group/attachment relative overflow-hidden rounded-lg border border-border/80 bg-background",
+                              "group/attachment relative shrink-0 snap-start overflow-hidden rounded-lg border border-border/80 bg-background",
                               image.source?.kind === "window-capture"
                                 ? "h-28 w-52 max-w-full"
                                 : "h-16 w-16",
@@ -3946,7 +3965,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                                 (capture) => capture.id === captureId,
                               )?.source
                             }
-                            className="invisible h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80 bg-background"
+                            className="invisible h-28 w-52 max-w-full shrink-0 snap-start overflow-hidden rounded-lg border border-border/80 bg-background"
                           />
                         )),
                       )}
@@ -3960,7 +3979,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                       return (
                         <div
                           key={file.id}
-                          className="relative h-16 w-16 overflow-hidden rounded-lg border border-border/80 bg-black"
+                          className="relative h-16 w-16 shrink-0 snap-start overflow-hidden rounded-lg border border-border/80 bg-black"
                         >
                           <button
                             type="button"
