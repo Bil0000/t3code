@@ -305,41 +305,42 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-sound")}
-            titleAction={
-              <Button
-                type="button"
-                size="xs"
-                variant="outline"
-                disabled={!captureAvailable || soundSelection === "off"}
-                onClick={() => playWindowCaptureSound(settings.windowCaptureSound)}
-              >
-                Test sound
-              </Button>
-            }
             description="Choose the sound played when capture starts."
             control={
-              <Select
-                disabled={!captureAvailable}
-                onValueChange={(value) =>
-                  value && void save(windowCaptureSoundPatch(value as WindowCaptureSoundSelection))
-                }
-                value={soundSelection}
-              >
-                <SelectTrigger aria-label="Window capture sound" className="w-full sm:w-44">
-                  <SelectValue>
-                    {soundSelection === "off"
-                      ? "Off"
-                      : soundSelection === "soft-pop"
-                        ? "Soft Pop (Default)"
-                        : "Camera Shutter"}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectPopup align="end" alignItemWithTrigger={false}>
-                  <SelectItem value="off">Off</SelectItem>
-                  <SelectItem value="soft-pop">Soft Pop (Default)</SelectItem>
-                  <SelectItem value="camera-shutter">Camera Shutter</SelectItem>
-                </SelectPopup>
-              </Select>
+              <>
+                <Select
+                  disabled={!captureAvailable}
+                  onValueChange={(value) =>
+                    value &&
+                    void save(windowCaptureSoundPatch(value as WindowCaptureSoundSelection))
+                  }
+                  value={soundSelection}
+                >
+                  <SelectTrigger aria-label="Window capture sound" className="w-full sm:w-44">
+                    <SelectValue>
+                      {soundSelection === "off"
+                        ? "Off"
+                        : soundSelection === "soft-pop"
+                          ? "Soft Pop (Default)"
+                          : "Camera Shutter"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectPopup align="end" alignItemWithTrigger={false}>
+                    <SelectItem value="off">Off</SelectItem>
+                    <SelectItem value="soft-pop">Soft Pop (Default)</SelectItem>
+                    <SelectItem value="camera-shutter">Camera Shutter</SelectItem>
+                  </SelectPopup>
+                </Select>
+                <Button
+                  type="button"
+                  size="xs"
+                  variant="outline"
+                  disabled={!captureAvailable || soundSelection === "off"}
+                  onClick={() => playWindowCaptureSound(settings.windowCaptureSound)}
+                >
+                  Test sound
+                </Button>
+              </>
             }
           />
           <SettingsRow
