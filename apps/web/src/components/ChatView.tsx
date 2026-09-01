@@ -2248,6 +2248,7 @@ function ChatViewContent(props: ChatViewProps) {
             <>
               <Button
                 size="xs"
+                variant="ghost"
                 disabled={environmentReconnecting}
                 onClick={() =>
                   void handleReconnectActiveEnvironment(
@@ -2259,7 +2260,7 @@ function ChatViewContent(props: ChatViewProps) {
               </Button>
               <Button
                 size="xs"
-                variant="outline"
+                variant="ghost"
                 onClick={() => void navigate({ to: "/settings/connections" })}
               >
                 Connections
@@ -2329,6 +2330,7 @@ function ChatViewContent(props: ChatViewProps) {
               desktopAppUpdate={versionMismatchDesktopAppUpdate}
               targetVersion={versionMismatch.clientVersion}
               label={updateFailed ? "Retry" : "Update"}
+              variant="ghost"
             />
           ),
         ...(updateInProgress || (!updateFailed && !versionMismatchDismissKey)
@@ -4989,14 +4991,15 @@ function ChatViewContent(props: ChatViewProps) {
           <span className="font-normal text-muted-foreground">Send a message to unsettle</span>
         </>
       ),
+      density: isSnoozed ? "compact" : "comfortable",
+      alignIconToFirstLineOnWrap: !isSnoozed,
       description: isSnoozed
         ? "Sending a message wakes it and moves it back to Active in the sidebar."
         : undefined,
-      className: cn(!isSnoozed && "[--composer-banner-padding-block:--spacing(1.25)]"),
       actions: (
         <Button
           size="xs"
-          variant="outline"
+          variant="ghost"
           disabled={isSnoozed ? isUnsnoozing : isUnsettling}
           onClick={() =>
             void (isSnoozed ? handleUnsnoozeActiveThread() : handleUnsettleActiveThread())
@@ -5080,7 +5083,7 @@ function ChatViewContent(props: ChatViewProps) {
     const compactAction = (
       <Button
         size="xs"
-        variant="outline"
+        variant="ghost"
         disabled={compactDisabled}
         onClick={() => {
           if (compactDisabled) return;

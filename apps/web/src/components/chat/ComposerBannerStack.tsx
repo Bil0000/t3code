@@ -12,6 +12,8 @@ export interface ComposerBannerStackItem {
   readonly priority?: "urgent" | "activity" | "notice";
   readonly icon: ReactNode;
   readonly title: ReactNode;
+  readonly density?: "default" | "compact" | "comfortable";
+  readonly alignIconToFirstLineOnWrap?: boolean;
   readonly description?: ReactNode;
   readonly children?: ReactNode;
   readonly actions?: ReactNode;
@@ -254,7 +256,7 @@ function ComposerBannerStackAlert({
       <ComposerBanner.Root
         placement={attached ? "attached" : "floating"}
         variant={item.variant}
-        className={cn("px-3 sm:px-4", item.className)}
+        className={item.className}
       >
         {item.content}
       </ComposerBanner.Root>
@@ -266,11 +268,19 @@ function ComposerBannerStackAlert({
       role="alert"
       placement={attached ? "attached" : "floating"}
       variant={item.variant}
-      density={item.description ? "compact" : "default"}
-      className={cn("px-3 sm:px-4", item.className)}
+      density={item.density ?? (item.description ? "compact" : "default")}
+      className={item.className}
     >
       <ComposerBanner.Row layout="wrap-actions">
-        <ComposerBanner.Icon className={item.description ? "h-lh self-start" : undefined}>
+        <ComposerBanner.Icon
+          className={
+            item.description
+              ? "h-lh self-start"
+              : item.alignIconToFirstLineOnWrap
+                ? "@max-[400px]:h-lh @max-[400px]:self-start"
+                : undefined
+          }
+        >
           {item.icon}
         </ComposerBanner.Icon>
         <ComposerBanner.Content

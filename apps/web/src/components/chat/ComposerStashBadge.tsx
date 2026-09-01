@@ -35,9 +35,10 @@ export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
 
   return (
     <ComposerBanner.Root
+      density="comfortable"
       width="content"
       data-composer-shoulder-tab
-      className="ml-auto [--composer-banner-padding-block:--spacing(1.25)]"
+      className="ml-auto"
     >
       <ComposerBanner.Row
         render={<button type="button" />}
