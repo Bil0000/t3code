@@ -11,6 +11,9 @@ import {
 } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
+export const WINDOW_CAPTURE_CONTENTS_BUTTON_CLASS =
+  "inline-flex shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring";
+
 export const WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS =
   "relative h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80";
 
@@ -68,10 +71,7 @@ export function WindowCaptureContentsButton({
                   aria-label={
                     includesAccessibility ? "View accessibility details" : "View screenshot details"
                   }
-                  className={cn(
-                    "inline-flex shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
-                    className,
-                  )}
+                  className={cn(WINDOW_CAPTURE_CONTENTS_BUTTON_CLASS, className)}
                   onClick={(event) => event.stopPropagation()}
                   type="button"
                 />

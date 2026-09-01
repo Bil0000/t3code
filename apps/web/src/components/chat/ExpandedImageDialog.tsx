@@ -1,8 +1,20 @@
 import { memo, useCallback, useEffect, useState } from "react";
-import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, XIcon } from "lucide-react";
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  DownloadIcon,
+  ImageIcon,
+  TextIcon,
+  XIcon,
+} from "lucide-react";
 import { Button } from "../ui/button";
 import { downloadVideoPreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
-import { WindowCaptureContentsButton } from "./WindowCaptureAttachmentDetails";
+import {
+  WINDOW_CAPTURE_CONTENTS_BUTTON_CLASS,
+  WindowCaptureContentsButton,
+  windowCaptureAccessibilityText,
+} from "./WindowCaptureAttachmentDetails";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
@@ -17,6 +29,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   const [failedVideoSrc, setFailedVideoSrc] = useState<string | null>(null);
   const [downloadingVideoSrc, setDownloadingVideoSrc] = useState<string | null>(null);
   const [downloadFailedVideoSrc, setDownloadFailedVideoSrc] = useState<string | null>(null);
+  const [accessibilityTextSrc, setAccessibilityTextSrc] = useState<string | null>(null);
   const index = (preview.index + imageOffset + preview.images.length) % preview.images.length;
 
   const navigateImage = useCallback((direction: -1 | 1) => {
@@ -65,6 +78,10 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
 
   const isDownloadingVideo = downloadingVideoSrc === item.src;
   const videoDownloadFailed = downloadFailedVideoSrc === item.src;
+  const accessibilityText = item.source ? windowCaptureAccessibilityText(item.source) : undefined;
+  const showingAccessibilityText = Boolean(accessibilityText) && accessibilityTextSrc === item.src;
+  const contentsLabel = showingAccessibilityText ? "Show screenshot" : "Show extracted text";
+  const ContentsIcon = showingAccessibilityText ? ImageIcon : TextIcon;
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 px-4 py-6 [-webkit-app-region:no-drag]"
@@ -132,11 +149,15 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             onError={() => setFailedVideoSrc(item.src)}
             className="max-h-[86vh] max-w-[92vw] rounded-lg border border-border/70 bg-black object-contain shadow-2xl"
           />
+        ) : showingAccessibilityText ? (
+          <pre className="h-[min(86vh,40rem)] w-[min(92vw,42rem)] animate-[window-capture-contents-enter_140ms_ease-out] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-background p-4 font-mono text-xs leading-5 shadow-2xl motion-reduce:animate-none">
+            {accessibilityText}
+          </pre>
         ) : (
           <img
             src={item.src}
             alt={item.name}
-            className="max-h-[86vh] max-w-[92vw] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl"
+            className="max-h-[86vh] max-w-[92vw] animate-[window-capture-contents-enter_140ms_ease-out] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl motion-reduce:animate-none"
             draggable={false}
           />
         )}
@@ -145,7 +166,28 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             {item.name}
             {preview.images.length > 1 ? ` (${index + 1}/${preview.images.length})` : ""}
           </span>
-          {item.source ? <WindowCaptureContentsButton source={item.source} side="top" /> : null}
+          {accessibilityText && item.source ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <button
+                    aria-label={contentsLabel}
+                    aria-pressed={showingAccessibilityText}
+                    className={WINDOW_CAPTURE_CONTENTS_BUTTON_CLASS}
+                    onClick={() =>
+                      setAccessibilityTextSrc(showingAccessibilityText ? null : item.src)
+                    }
+                    type="button"
+                  />
+                }
+              >
+                <ContentsIcon className="size-3" aria-hidden="true" />
+              </TooltipTrigger>
+              <TooltipPopup side="top">{contentsLabel}</TooltipPopup>
+            </Tooltip>
+          ) : item.source ? (
+            <WindowCaptureContentsButton source={item.source} side="top" />
+          ) : null}
         </div>
       </div>
       {preview.images.length > 1 && (
