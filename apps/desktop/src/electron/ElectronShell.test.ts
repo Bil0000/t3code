@@ -47,6 +47,17 @@ describe("ElectronShell", () => {
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
 
+  it.effect("does not fail when the clipboard write rejects", () =>
+    Effect.gen(function* () {
+      writeTextMock.mockRejectedValue(new Error("write failed"));
+
+      const electronShell = yield* ElectronShell.ElectronShell;
+      yield* electronShell.copyText("https://example.com/path");
+
+      assert.deepEqual(writeTextMock.mock.calls, [["https://example.com/path"]]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
   it.effect("opens remote SSH editor URLs", () =>
     Effect.gen(function* () {
       openExternalMock.mockResolvedValue(undefined);
