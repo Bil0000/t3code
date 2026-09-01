@@ -29,6 +29,25 @@ export function readCommandLineSwitchValue(
   return value.length > 0 ? value : null;
 }
 
+const linuxGlobalShortcutFeatures = [
+  "GlobalShortcutsPortal",
+  "GlobalShortcutsPortalPreferredTrigger",
+] as const;
+
+export function enableLinuxGlobalShortcutFeatures(
+  commandLine: Pick<DesktopPreReadyCommandLineReader, "getSwitchValue"> & {
+    readonly appendSwitch: (switchName: string, value: string) => void;
+  },
+): void {
+  const enabledFeatures = commandLine.getSwitchValue("enable-features").split(",").filter(Boolean);
+  const missingFeatures = linuxGlobalShortcutFeatures.filter(
+    (feature) => !enabledFeatures.includes(feature),
+  );
+  if (missingFeatures.length > 0) {
+    commandLine.appendSwitch("enable-features", [...enabledFeatures, ...missingFeatures].join(","));
+  }
+}
+
 export const resolveEarlyLinuxElectronOptionsFromProcess =
   (): DesktopEarlyElectronStartup.EarlyLinuxElectronOptions =>
     DesktopEarlyElectronStartup.resolveEarlyLinuxElectronOptions({
@@ -54,16 +73,7 @@ export const make = Effect.gen(function* () {
         ? readCommandLineSwitchValue(Electron.app.commandLine, "password-store")
         : null;
     if (platform === "linux") {
-      const enabledFeatures = Electron.app.commandLine
-        .getSwitchValue("enable-features")
-        .split(",")
-        .filter(Boolean);
-      if (!enabledFeatures.includes("GlobalShortcutsPortal")) {
-        Electron.app.commandLine.appendSwitch(
-          "enable-features",
-          [...enabledFeatures, "GlobalShortcutsPortal"].join(","),
-        );
-      }
+      enableLinuxGlobalShortcutFeatures(Electron.app.commandLine);
     }
     const linux = platform === "linux" ? resolveEarlyLinuxElectronOptionsFromProcess() : null;
 
