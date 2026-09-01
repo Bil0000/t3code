@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useState } from "react";
 import { ChevronLeftIcon, ChevronRightIcon, DownloadIcon, XIcon } from "lucide-react";
 import { Button } from "../ui/button";
 import { downloadVideoPreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
+import { WindowCaptureContentsButton } from "./WindowCaptureAttachmentDetails";
 
 interface ExpandedImageDialogProps {
   preview: ExpandedImagePreview;
@@ -139,10 +140,13 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             draggable={false}
           />
         )}
-        <p className="mt-2 max-w-[92vw] truncate text-center text-xs text-muted-foreground/80">
-          {item.name}
-          {preview.images.length > 1 ? ` (${index + 1}/${preview.images.length})` : ""}
-        </p>
+        <div className="mt-2 flex max-w-[92vw] items-center justify-center gap-1.5 text-xs text-muted-foreground/80">
+          <span className="truncate">
+            {item.name}
+            {preview.images.length > 1 ? ` (${index + 1}/${preview.images.length})` : ""}
+          </span>
+          {item.source ? <WindowCaptureContentsButton source={item.source} side="top" /> : null}
+        </div>
       </div>
       {preview.images.length > 1 && (
         <Button
