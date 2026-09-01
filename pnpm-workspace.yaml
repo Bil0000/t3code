@@ -90,6 +90,8 @@ minimumReleaseAgeExclude:
   - electron@44.1.0
 
 overrides:
+  # Window capture uses D-Bus messages/PNG bytes, not native Unix FD passing.
+  "dbus-next>usocket": "-"
   # The SDK always receives the user's Claude executable, so its bundled binaries are unused.
   "@anthropic-ai/claude-agent-sdk>@anthropic-ai/claude-agent-sdk-darwin-arm64": "-"
   "@anthropic-ai/claude-agent-sdk>@anthropic-ai/claude-agent-sdk-darwin-x64": "-"

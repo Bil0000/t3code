@@ -29,6 +29,7 @@ import {
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
+  WindowCaptureAccessibility,
   isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./orchestration.ts";
@@ -65,6 +66,7 @@ const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationComma
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
+const decodeWindowCaptureAccessibility = Schema.decodeUnknownEffect(WindowCaptureAccessibility);
 
 it.effect("decodes a dispatch error after its bootstrap thread was deleted", () =>
   Effect.gen(function* () {
@@ -397,6 +399,25 @@ it.effect("preserves window capture metadata in thread.turn.start", () =>
               appName: "Editor",
               windowTitle: "main.ts",
               accessibleText: "const answer = 42;",
+              accessibility: {
+                format: "element-tree",
+                coordinateSpace: "captured-image",
+                imageSize: { width: 800, height: 600 },
+                truncated: false,
+                root: {
+                  role: "window",
+                  name: "main.ts",
+                  bounds: { x: 0, y: 0, width: 800, height: 600 },
+                  children: [
+                    {
+                      role: "text",
+                      value: "const answer = 42;",
+                      bounds: { x: 20, y: 40, width: 180, height: 20 },
+                      children: [],
+                    },
+                  ],
+                },
+              },
               appIdentifier: "com.example.editor",
               appIconDataUrl: "data:image/png;base64,iVBORw==",
             },
@@ -414,9 +435,53 @@ it.effect("preserves window capture metadata in thread.turn.start", () =>
       appName: "Editor",
       windowTitle: "main.ts",
       accessibleText: "const answer = 42;",
+      accessibility: {
+        format: "element-tree",
+        coordinateSpace: "captured-image",
+        imageSize: { width: 800, height: 600 },
+        truncated: false,
+        root: {
+          role: "window",
+          name: "main.ts",
+          bounds: { x: 0, y: 0, width: 800, height: 600 },
+          children: [
+            {
+              role: "text",
+              value: "const answer = 42;",
+              bounds: { x: 20, y: 40, width: 180, height: 20 },
+              children: [],
+            },
+          ],
+        },
+      },
       appIdentifier: "com.example.editor",
       appIconDataUrl: "data:image/png;base64,iVBORw==",
     });
+  }),
+);
+
+it.effect("rejects accessibility trees above the serialized payload limit", () =>
+  Effect.gen(function* () {
+    const result = yield* Effect.exit(
+      decodeWindowCaptureAccessibility({
+        format: "element-tree",
+        coordinateSpace: "captured-image",
+        imageSize: { width: 800, height: 600 },
+        truncated: false,
+        root: {
+          role: "window",
+          bounds: { x: 0, y: 0, width: 800, height: 600 },
+          children: Array.from({ length: 10 }, () => ({
+            role: "text",
+            value: "x".repeat(8_000),
+            bounds: null,
+            children: [],
+          })),
+        },
+      }),
+    );
+
+    assert.strictEqual(Exit.isFailure(result), true);
   }),
 );
 

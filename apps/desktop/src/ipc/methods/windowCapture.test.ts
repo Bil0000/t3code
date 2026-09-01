@@ -13,6 +13,7 @@ import {
   setWindowCaptureAnimationDestination,
   setWindowCaptureShortcutSuppressed,
   windowCaptureScreenFrame,
+  windowCaptureRelativeFrame,
 } from "./windowCapture.ts";
 
 describe("window capture IPC", () => {
@@ -74,6 +75,7 @@ describe("window capture IPC", () => {
       assert.deepEqual(received, {
         id: "12345678-1234-1234-1234-123456789abc",
         destination: {
+          relativeFrame: { x: 15 / 1000, y: 25 / 662, width: 260 / 1000, height: 140 / 662 },
           frame: { x: 115, y: 143, width: 260, height: 140 },
           backgroundColor: "rgb(20, 20, 20)",
           borderColor: "rgba(80, 80, 80, 0.8)",
@@ -193,4 +195,20 @@ describe("window capture IPC", () => {
       assert.isTrue(suppressed);
     }).pipe(Effect.provide(layer));
   });
+});
+
+it("normalizes Wayland attachment coordinates without trusting Electron's screen origin", () => {
+  const frame = { x: 100, y: 300, width: 200, height: 100 };
+  const bounds = { x: 0, y: 0, width: 1000, height: 600 };
+  assert.deepEqual(windowCaptureRelativeFrame(frame, bounds, 1.25), {
+    x: 0.125,
+    y: 0.625,
+    width: 0.25,
+    height: 125 / 600,
+  });
+  assert.deepEqual(
+    windowCaptureRelativeFrame(frame, { ...bounds, x: -3840, y: 900 }, 1.25),
+    windowCaptureRelativeFrame(frame, bounds, 1.25),
+  );
+  assert.isUndefined(windowCaptureRelativeFrame(frame, { ...bounds, width: 0 }, 1));
 });

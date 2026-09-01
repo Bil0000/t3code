@@ -1,5 +1,9 @@
 import { assert, it } from "@effect/vitest";
-import { DEFAULT_CLIENT_SETTINGS, type ClientSettings } from "@t3tools/contracts";
+import {
+  DEFAULT_CLIENT_SETTINGS,
+  DesktopPendingWindowCapture,
+  type ClientSettings,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -7,6 +11,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as Schema from "effect/Schema";
 import type * as Electron from "electron";
 import { vi } from "vite-plus/test";
 
@@ -22,6 +27,8 @@ const {
   getFileIconMock,
   getSourcesMock,
   macCaptureMock,
+  linuxCaptureMock,
+  linuxBackendMock,
   mediaAccessStatusMock,
   openExternalMock,
   registerShortcutMock,
@@ -66,6 +73,10 @@ const {
   getFileIconMock: vi.fn(),
   getSourcesMock: vi.fn(),
   macCaptureMock: vi.fn(),
+  linuxCaptureMock: vi.fn<
+    () => Promise<import("./LinuxWindowCapture.ts").LinuxWindowSnapshot | undefined>
+  >(async () => undefined),
+  linuxBackendMock: vi.fn(async () => "picker"),
   mediaAccessStatusMock: vi.fn(() => "not-determined"),
   openExternalMock: vi.fn(() => Promise.resolve()),
   registerShortcutMock: vi.fn(),
@@ -105,6 +116,14 @@ vi.mock("@crowecawcaw/xa11y", () => {
 });
 vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
 vi.mock("./MacWindowCapture.ts", () => ({ captureMacWindowSnapshot: macCaptureMock }));
+vi.mock("./LinuxWindowCapture.ts", () => ({
+  captureLinuxWindow: linuxCaptureMock,
+  getLinuxCaptureBackend: linuxBackendMock,
+  getLinuxCaptureSupport: async () => ({
+    linuxBackend: await linuxBackendMock(),
+    linuxFeedbackAvailable: false,
+  }),
+}));
 vi.mock("uiohook-napi", () => ({ uIOhook: uiohookMock }));
 
 vi.mock("node:child_process", () => ({
@@ -297,6 +316,9 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWindowCapture from "./DesktopWindowCapture.ts";
+const decodePendingMetadata = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(DesktopPendingWindowCapture),
+);
 
 import {
   WindowCaptureTransition,
@@ -315,6 +337,7 @@ const testLayer = (
       DesktopEnvironment.DesktopEnvironment.of({
         platform,
         stateDir: "/state",
+        linuxDesktopEntryName: "com.t3tools.T3Code.desktop",
       } as DesktopEnvironment.DesktopEnvironment["Service"]),
     ),
     Layer.succeed(
@@ -389,10 +412,10 @@ it.effect("reads and acknowledges queued captures through Effect services", () =
   ).pipe(Effect.provide(layer));
 });
 
-it.effect("captures the active Linux X11 window without enumerating desktop sources", () => {
+it.effect("captures the active Windows window without enumerating desktop sources", () => {
   const png = Buffer.from([1, 2, 3]);
   const active = {
-    platform: "linux",
+    platform: "windows",
     id: 42,
     title: "Editor",
     owner: { name: "Editor", processId: 123 },
@@ -409,7 +432,7 @@ it.effect("captures the active Linux X11 window without enumerating desktop sour
     },
   ]);
   const writtenFiles: Array<[string, Uint8Array]> = [];
-  const layer = testLayer("linux", {
+  const layer = testLayer("win32", {
     makeDirectory: () => Effect.void,
     rename: () => Effect.void,
     writeFile: (path, bytes) =>
@@ -430,6 +453,219 @@ it.effect("captures the active Linux X11 window without enumerating desktop sour
     }),
   ).pipe(Effect.provide(layer));
 });
+
+it.effect("rejects X11 capture without registering shortcuts or loading capture backends", () => {
+  vi.stubEnv("XDG_SESSION_TYPE", "x11");
+  vi.stubEnv("WAYLAND_DISPLAY", "");
+  linuxCaptureMock.mockClear();
+  activeWindowMock.mockClear();
+  registerShortcutMock.mockClear();
+  shortcutProcesses.length = 0;
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure({ ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true });
+      const state = yield* service.state;
+      assert.equal(state.mode, "unavailable");
+      assert.include(state.message, "Wayland");
+      const result = yield* Effect.flip(service.captureNow);
+      assert.equal(result.operation, "unsupported");
+      assert.lengthOf(registerShortcutMock.mock.calls, 0);
+      assert.lengthOf(shortcutProcesses, 0);
+      assert.lengthOf(linuxCaptureMock.mock.calls, 0);
+      assert.lengthOf(activeWindowMock.mock.calls, 0);
+    }),
+  ).pipe(
+    Effect.provide(testLayer("linux")),
+    Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+  );
+});
+
+it.effect("persists GNOME text when AT-SPI omits the identified window's screen position", () => {
+  vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+  flashWindows.length = 0;
+  const window = {
+    title: "Editor",
+    appName: "Text Editor",
+    appIdentifier: "org.gnome.TextEditor.desktop",
+    processId: 123,
+    bounds: { x: 479, y: 342, width: 700, height: 520 },
+  };
+  linuxCaptureMock.mockResolvedValueOnce({ png: Buffer.from([1, 2, 3]), window });
+  activeWindowMock.mockClear();
+  getSourcesMock.mockClear();
+  accessibilityByPidMock.mockReset().mockResolvedValue({
+    children: async () => [
+      {
+        role: "window",
+        name: "Editor",
+        bounds: { x: 0, y: 0, width: 700, height: 520 },
+        active: true,
+        children: async () => [
+          {
+            role: "button",
+            name: "Save",
+            bounds: { x: 10, y: 20, width: 80, height: 24 },
+            focused: true,
+            actions: ["press"],
+            children: async () => [],
+          },
+        ],
+        tree: async () => ({ name: "Editor", value: "Verified text", children: [] }),
+      },
+    ],
+  });
+  let metadata = "";
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.captureNow;
+      assert.lengthOf(activeWindowMock.mock.calls, 0);
+      assert.lengthOf(getSourcesMock.mock.calls, 0);
+      assert.deepEqual(accessibilityByPidMock.mock.calls, [[123, { timeout: 0 }]]);
+      const saved = yield* decodePendingMetadata(metadata);
+      assert.equal(saved.source.appName, "Text Editor");
+      assert.equal(saved.source.appIdentifier, window.appIdentifier);
+      assert.include(saved.source.accessibleText, "Verified text");
+      assert.deepInclude(saved.source.accessibility, {
+        format: "element-tree",
+        coordinateSpace: "captured-image",
+        imageSize: { width: 700, height: 520 },
+        truncated: false,
+      });
+      assert.deepInclude(
+        saved.source.accessibility?.format === "element-tree"
+          ? saved.source.accessibility.root
+          : undefined,
+        {
+          role: "window",
+          name: "Editor",
+          bounds: { x: 0, y: 0, width: 700, height: 520 },
+          state: { active: true },
+        },
+      );
+      assert.isNull(
+        saved.source.accessibility?.format === "element-tree"
+          ? saved.source.accessibility.root.children[0]?.bounds
+          : undefined,
+      );
+      assert.lengthOf(flashWindows, 0);
+    }),
+  ).pipe(
+    Effect.provide(
+      testLayer("linux", {
+        makeDirectory: () => Effect.void,
+        rename: () => Effect.void,
+        writeFile: () => Effect.void,
+        writeFileString: (_, text) =>
+          Effect.sync(() => {
+            metadata = text;
+          }),
+      }),
+    ),
+    Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+  );
+});
+
+it.effect("does not fall back to the picker when an automatic Wayland capture fails", () => {
+  vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+  linuxCaptureMock.mockRejectedValueOnce(new Error("Capture denied"));
+  getSourcesMock.mockClear();
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      const failure = yield* Effect.flip(service.captureNow);
+      assert.equal(failure.operation, "capture");
+      assert.lengthOf(getSourcesMock.mock.calls, 0);
+    }),
+  ).pipe(
+    Effect.provide(
+      testLayer("linux", {
+        makeDirectory: () => Effect.void,
+        remove: () => Effect.void,
+      }),
+    ),
+    Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+  );
+});
+
+it.effect(
+  "activates GNOME after capture and completes the shell flight before acknowledging the image",
+  () => {
+    vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+    const order: string[] = [];
+    const feedback = {
+      animationStarted: true,
+      activate: async () => {
+        order.push("activate");
+      },
+      animateTo: async () => {
+        order.push("land");
+      },
+      complete: async () => {
+        order.push("complete");
+      },
+      close: () => {
+        order.push("close");
+      },
+    };
+    linuxCaptureMock.mockImplementationOnce(async () => {
+      order.push("snapshot");
+      return { png: Buffer.from([1, 2, 3]), feedback };
+    });
+    focusedWindowMock.mockReturnValue(undefined);
+    const destination = {
+      getBounds: () => ({ x: 0, y: 0, width: 1000, height: 800 }),
+      getTitle: () => "T3 Code",
+      isDestroyed: () => false,
+      isVisible: () => true,
+      isMinimized: () => false,
+    };
+    allWindowsMock.mockReturnValue([destination]);
+    let saved = "";
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* DesktopWindowCapture.make;
+        yield* service.captureNow;
+        assert.deepEqual(order, ["snapshot", "activate"]);
+        const pending = yield* decodePendingMetadata(saved);
+        yield* service.setAnimationDestination(pending.id, {
+          frame: { x: 0, y: 0, width: 10, height: 10 },
+          relativeFrame: { x: 0.1, y: 0.8, width: 0.2, height: 0.1 },
+          backgroundColor: "white",
+          borderColor: "black",
+          borderWidth: 1,
+          cornerRadius: 8,
+          scaleFactor: 1,
+        });
+        yield* service.acknowledge(pending.id);
+        assert.deepEqual(order, ["snapshot", "activate", "land", "complete", "delete", "delete"]);
+      }),
+    ).pipe(
+      Effect.provide(
+        testLayer("linux", {
+          makeDirectory: () => Effect.void,
+          rename: () => Effect.void,
+          writeFile: () => Effect.void,
+          writeFileString: (_, value) =>
+            Effect.sync(() => {
+              saved = value;
+            }),
+          remove: () =>
+            Effect.sync(() => {
+              order.push("delete");
+            }),
+        }),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          allWindowsMock.mockReturnValue([]);
+          vi.unstubAllEnvs();
+        }),
+      ),
+    );
+  },
+);
 
 it.effect("does not read unverified accessibility context for a Wayland portal capture", () => {
   vi.stubEnv("XDG_SESSION_TYPE", "wayland");
@@ -956,7 +1192,165 @@ it("bounds source thumbnails for large windows", () => {
   );
 });
 
-it("does not overlap accessibility reads after a timeout", async () => {
+it.each(["darwin", "win32"] as const)(
+  "still requires matching accessibility screen positions on %s",
+  async (platform) => {
+    vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+    const tree = vi.fn(async () => ({ value: "Wrong window", children: [] }));
+    const window = {
+      name: "Editor",
+      bounds: { x: 0, y: 0, width: 700, height: 520 },
+      tree,
+    };
+    accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [window] });
+    accessibilityListMock.mockReset().mockResolvedValue([{ pid: 123, asElement: () => window }]);
+    try {
+      assert.isUndefined(
+        await DesktopWindowCapture.readAccessibleWindowText(
+          {
+            title: "Editor",
+            bounds: { x: 479, y: 342, width: 700, height: 520 },
+            owner: { processId: 123 },
+          },
+          platform,
+          "Editor",
+        ),
+      );
+      assert.lengthOf(tree.mock.calls, 0);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it.each([
+  { names: ["⠙ t3code"], expected: "Verified text" },
+  { names: ["⠋ t3code", "⠙ t3code"], expected: undefined },
+])("reads a changing Wayland title only when unambiguous: $names", async ({ names, expected }) => {
+  vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+  const tree = vi.fn(async () => ({ value: "Verified text", children: [] }));
+  accessibilityByPidMock.mockReset().mockResolvedValue({
+    children: async () =>
+      names.map((name) => ({
+        name,
+        bounds: { x: 0, y: 0, width: 700, height: 520 },
+        tree,
+      })),
+  });
+  try {
+    assert.strictEqual(
+      await DesktopWindowCapture.readAccessibleWindowText(
+        {
+          title: "⠋ t3code",
+          bounds: { x: 479, y: 342, width: 700, height: 520 },
+          owner: { processId: 123 },
+        },
+        "linux",
+        "⠋ t3code",
+      ),
+      expected,
+    );
+    assert.deepEqual(accessibilityByPidMock.mock.calls, [[123, { timeout: 0 }]]);
+    assert.lengthOf(tree.mock.calls, expected ? 1 : 0);
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it.each([20, 1_350, 2_999])(
+  "includes accessibility text as soon as a %d ms read completes",
+  async (duration) => {
+    vi.useFakeTimers();
+    vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+    const tree = Promise.withResolvers<{ value: string; children: Array<never> }>();
+    const started = Promise.withResolvers<void>();
+    accessibilityByPidMock.mockReset().mockResolvedValue({
+      children: async () => [
+        {
+          name: "Mozilla Firefox",
+          bounds: { x: 0, y: 0, width: 1_373, height: 928 },
+          tree: () => {
+            started.resolve();
+            return tree.promise;
+          },
+        },
+      ],
+    });
+
+    try {
+      const result = DesktopWindowCapture.readAccessibleWindowText(
+        {
+          title: "Mozilla Firefox",
+          owner: { processId: 42 },
+          bounds: { x: 67, y: 32, width: 1_373, height: 928 },
+        },
+        "linux",
+        "Mozilla Firefox",
+      );
+      await started.promise;
+      await vi.advanceTimersByTimeAsync(duration);
+      tree.resolve({ value: "Firefox page text", children: [] });
+
+      assert.strictEqual(await result, "Firefox page text");
+      assert.strictEqual(vi.getTimerCount(), 0);
+    } finally {
+      tree.resolve({ value: "", children: [] });
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+    }
+  },
+);
+
+it("falls back to completed flat text when rich traversal reaches the deadline", async () => {
+  vi.useFakeTimers();
+  const richChildren = Promise.withResolvers<Array<never>>();
+  const richStarted = Promise.withResolvers<void>();
+  accessibilityByPidMock.mockReset().mockResolvedValue({
+    children: async () => [
+      {
+        role: "window",
+        name: "Editor",
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+        tree: async () => ({ value: "Complete flat text", children: [] }),
+        children: () => {
+          richStarted.resolve();
+          return richChildren.promise;
+        },
+      },
+    ],
+  });
+
+  try {
+    const result = DesktopWindowCapture.readAccessibleWindowContext(
+      {
+        title: "Editor",
+        owner: { processId: 42 },
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+      },
+      "darwin",
+      "Editor",
+      { width: 1_600, height: 1_200 },
+    );
+    await richStarted.promise;
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    assert.deepEqual(await result, {
+      accessibleText: "Complete flat text",
+      accessibility: {
+        format: "flat-text",
+        text: "Complete flat text",
+        truncated: false,
+      },
+    });
+  } finally {
+    richChildren.resolve([]);
+    await vi.advanceTimersByTimeAsync(0);
+    vi.useRealTimers();
+  }
+});
+
+it("times out after three seconds without overlapping the outstanding accessibility read", async () => {
   vi.useFakeTimers();
   accessibilityByPidMock.mockReset();
   const read = Promise.withResolvers<{ children: () => Promise<Array<never>> }>();
@@ -973,9 +1367,16 @@ it("does not overlap accessibility reads after a timeout", async () => {
 
   try {
     const first = DesktopWindowCapture.readAccessibleWindowText(active, "darwin", "main.ts");
+    let settled = false;
+    void first.then(() => {
+      settled = true;
+    });
     await started.promise;
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(2_999);
+    assert.isFalse(settled);
+    await vi.advanceTimersByTimeAsync(1);
     assert.isUndefined(await first);
+    assert.strictEqual(vi.getTimerCount(), 0);
     assert.isUndefined(
       await DesktopWindowCapture.readAccessibleWindowText(active, "darwin", "main.ts"),
     );
@@ -989,49 +1390,31 @@ it("does not overlap accessibility reads after a timeout", async () => {
     );
     assert.strictEqual(accessibilityByPidMock.mock.calls.length, 2);
   } finally {
+    read.resolve({ children: async () => [] });
+    await vi.advanceTimersByTimeAsync(0);
     vi.useRealTimers();
   }
 });
 
-it.each(["darwin", "win32"] as const)(
-  "uses native opacity for a short-lived flash on %s",
-  async (platform) => {
-    vi.useFakeTimers();
-    flashWindows.length = 0;
-    const flash = new DesktopWindowCapture.WindowCaptureFlash(platform);
-    const bounds = { x: 10, y: 20, width: 800, height: 600 };
-
-    try {
-      await flash.showAnimated(bounds);
-
-      assert.lengthOf(flashWindows, 1);
-      assert.strictEqual(flashWindows[0]?.kind, "base");
-      assert.strictEqual(flashWindows[0]?.options.transparent, false);
-      assert.strictEqual(flashWindows[0]?.loadCount, 0);
-      assert.deepEqual(flashWindows[0]?.bounds, bounds);
-      assert.strictEqual(flashWindows[0]?.showCount, 1);
-      assert.lengthOf(flashWindows[0]?.scripts ?? [], 0);
-      await vi.advanceTimersByTimeAsync(180);
-      assert.isTrue(flashWindows[0]?.destroyed);
-      assert.isAbove(flashWindows[0]?.opacities.length ?? 0, 1);
-      assert.strictEqual(vi.getTimerCount(), 0);
-    } finally {
-      vi.useRealTimers();
-    }
-  },
-);
-
-it("uses a short-lived renderer flash on Linux", async () => {
+it("uses native opacity for a short-lived flash", async () => {
   vi.useFakeTimers();
   flashWindows.length = 0;
-  const flash = new DesktopWindowCapture.WindowCaptureFlash("linux");
+  const flash = new DesktopWindowCapture.WindowCaptureFlash();
+  const bounds = { x: 10, y: 20, width: 800, height: 600 };
 
   try {
-    await flash.showStatic({ x: 0, y: 0, width: 800, height: 600 });
-    assert.strictEqual(flashWindows[0]?.options.transparent, true);
-    assert.strictEqual(flashWindows[0]?.loadCount, 1);
-    await vi.advanceTimersByTimeAsync(60);
+    await flash.showAnimated(bounds);
+
+    assert.lengthOf(flashWindows, 1);
+    assert.strictEqual(flashWindows[0]?.kind, "base");
+    assert.strictEqual(flashWindows[0]?.options.transparent, false);
+    assert.strictEqual(flashWindows[0]?.loadCount, 0);
+    assert.deepEqual(flashWindows[0]?.bounds, bounds);
+    assert.strictEqual(flashWindows[0]?.showCount, 1);
+    assert.lengthOf(flashWindows[0]?.scripts ?? [], 0);
+    await vi.advanceTimersByTimeAsync(180);
     assert.isTrue(flashWindows[0]?.destroyed);
+    assert.isAbove(flashWindows[0]?.opacities.length ?? 0, 1);
     assert.strictEqual(vi.getTimerCount(), 0);
   } finally {
     vi.useRealTimers();
@@ -1122,7 +1505,7 @@ it.effect("starts the Shift listener outside the Electron main process", () => {
       yield* Effect.promise(() => new Promise<void>((resolve) => queueMicrotask(resolve)));
       assert.isFalse((yield* service.state).shortcutRegistered);
     }),
-  ).pipe(Effect.provide(testLayer("linux")));
+  ).pipe(Effect.provide(testLayer("win32")));
 });
 
 it.effect("passes the configured modifier pair to the listener process", () => {
@@ -1143,7 +1526,7 @@ it.effect("passes the configured modifier pair to the listener process", () => {
       assert.isTrue(state.shortcutRegistered);
       assert.deepEqual(shortcutForkArgs[0], ["meta"]);
     }),
-  ).pipe(Effect.provide(testLayer("linux")));
+  ).pipe(Effect.provide(testLayer("win32")));
 });
 
 it.effect("registers a configured key chord instead of the Shift listener", () => {
@@ -1171,7 +1554,7 @@ it.effect("registers a configured key chord instead of the Shift listener", () =
       assert.strictEqual(registerShortcutMock.mock.calls[0]?.[0], "Control+Alt+K");
       assert.lengthOf(shortcutProcesses, 0);
     }),
-  ).pipe(Effect.provide(testLayer("linux")));
+  ).pipe(Effect.provide(testLayer("win32")));
 });
 
 it.effect("keeps shortcut registration errors off the capture status", () => {
@@ -1201,7 +1584,7 @@ it.effect("keeps shortcut registration errors off the capture status", () => {
         "This shortcut is already used by the system or another app.",
       );
     }),
-  ).pipe(Effect.provide(testLayer("linux")));
+  ).pipe(Effect.provide(testLayer("win32")));
 });
 
 it.effect("defers ordinary Wayland shortcut registration until settings are applied", () => {

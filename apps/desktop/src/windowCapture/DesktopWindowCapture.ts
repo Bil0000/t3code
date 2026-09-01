@@ -11,6 +11,7 @@ import {
   type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
   type ClientSettings,
+  type WindowCaptureAccessibility,
   type WindowCaptureModifier,
   type WindowCaptureModifierPairShortcut,
   type WindowCaptureShortcut,
@@ -37,6 +38,7 @@ import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts";
 import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutProcess.ts";
 import { captureMacWindowSnapshot, type MacWindowCaptureSource } from "./MacWindowCapture.ts";
+import type { LinuxCaptureFeedback, LinuxWindowMetadata } from "./LinuxWindowCapture.ts";
 import {
   captureRegionWindowSnapshot,
   type RegionWindowCaptureSource,
@@ -47,7 +49,9 @@ import {
 } from "./WindowCaptureTransition.ts";
 
 import {
+  accessibleWindowElementTree,
   accessibleWindowText,
+  compactAccessibilityTree,
   findAccessibleWindow,
   hideAndWaitForBlur,
   isWaylandSession,
@@ -58,7 +62,7 @@ import {
 
 const MAX_CAPTURE_WIDTH = 2_560;
 const MAX_CAPTURE_HEIGHT = 1_600;
-const ACCESSIBLE_TEXT_TIMEOUT_MS = 1_000;
+const ACCESSIBILITY_TIMEOUT_MS = 3_000;
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
 const WAYLAND_MODIFIER_PAIR_UNAVAILABLE_MESSAGE =
   "Modifier-pair shortcuts aren't available in this Wayland session. Choose another shortcut or use Capture window from the command palette.";
@@ -162,8 +166,9 @@ type WindowCaptureSystemAnimationSettings = Pick<
 >;
 
 function captureMode(platform: NodeJS.Platform): DesktopWindowCaptureState["mode"] {
-  if (!["darwin", "linux", "win32"].includes(platform)) return "unavailable";
-  return isWaylandSession(platform, process.env) ? "portal" : "direct";
+  if (platform === "linux")
+    return isWaylandSession(platform, process.env) ? "portal" : "unavailable";
+  return platform === "darwin" || platform === "win32" ? "direct" : "unavailable";
 }
 
 export function shouldAnimateWindowCapture(
@@ -261,11 +266,81 @@ async function requestMacWindowCapturePermissions(): Promise<string | null> {
   return screenMessage;
 }
 
-async function readCapturedWindowText(
-  active: ActiveWindow,
+type AccessibleWindowIdentity = {
+  readonly title: string;
+  readonly bounds: Electron.Rectangle;
+  readonly owner: { readonly processId: number };
+};
+
+type CapturedWindowAccessibilityContext = {
+  readonly accessibleText?: string;
+  readonly accessibility?: WindowCaptureAccessibility;
+};
+
+type AccessibilityReadProgress = {
+  accessibleText: string | undefined;
+  flatComplete: boolean;
+  richComplete: boolean;
+  richLocationsReliable: boolean;
+  richRoot?: Extract<WindowCaptureAccessibility, { format: "element-tree" }>["root"];
+  richTruncated: boolean;
+  timedOut: boolean;
+};
+
+function accessibilityReadSnapshot(
+  progress: AccessibilityReadProgress,
+  imageSize: Electron.Size,
+): CapturedWindowAccessibilityContext | undefined {
+  const richTree = progress.richRoot
+    ? compactAccessibilityTree(progress.richRoot, {
+        descendantLocationsReliable: progress.richLocationsReliable,
+      })
+    : undefined;
+  const accessibleText =
+    progress.accessibleText ??
+    (richTree
+      ? accessibleWindowText(richTree.root, WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS)
+      : undefined);
+  const accessibility: WindowCaptureAccessibility | undefined =
+    progress.richComplete && richTree
+      ? {
+          format: "element-tree",
+          coordinateSpace: "captured-image",
+          imageSize,
+          truncated: progress.richTruncated || richTree.truncated,
+          root: richTree.root,
+        }
+      : progress.flatComplete && accessibleText
+        ? {
+            format: "flat-text",
+            text: accessibleText,
+            truncated: accessibleText.length >= WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS,
+          }
+        : richTree
+          ? {
+              format: "element-tree",
+              coordinateSpace: "captured-image",
+              imageSize,
+              truncated: true,
+              root: richTree.root,
+            }
+          : undefined;
+  if (!accessibleText && !accessibility) return undefined;
+  return JSON.parse(
+    JSON.stringify({
+      ...(accessibleText ? { accessibleText } : {}),
+      ...(accessibility ? { accessibility } : {}),
+    }),
+  ) as CapturedWindowAccessibilityContext;
+}
+
+async function readCapturedWindowAccessibility(
+  active: AccessibleWindowIdentity,
   platform: NodeJS.Platform,
   sourceTitle: string,
-): Promise<string | undefined> {
+  imageSize: Electron.Size,
+  progress: AccessibilityReadProgress,
+): Promise<CapturedWindowAccessibilityContext | undefined> {
   const { App } = await import("@crowecawcaw/xa11y");
   const windows =
     platform === "win32"
@@ -273,31 +348,71 @@ async function readCapturedWindowText(
           .filter((app) => app.pid === active.owner.processId)
           .map((app) => app.asElement())
       : await (await App.byPid(active.owner.processId, { timeout: 0 })).children();
-  const window = findAccessibleWindow(windows, {
-    title: active.title,
-    sourceTitle,
-    bounds: active.bounds,
-  });
+  const matchMode = isWaylandSession(platform, process.env) ? "wayland" : "screen-bounds";
+  const window = findAccessibleWindow(
+    windows,
+    { title: active.title, sourceTitle, bounds: active.bounds },
+    matchMode,
+  );
   if (!window) return undefined;
-  const text = accessibleWindowText(await window.tree(), WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS);
-  return text || undefined;
+  const accessibleBounds = window.bounds;
+  const locationsReliable =
+    matchMode === "screen-bounds" ||
+    (accessibleBounds !== null &&
+      Math.abs(accessibleBounds.x - active.bounds.x) <= 2 &&
+      Math.abs(accessibleBounds.y - active.bounds.y) <= 2);
+  const flatRead = window
+    .tree()
+    .then((tree) => {
+      progress.accessibleText =
+        accessibleWindowText(tree, WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS) || undefined;
+      progress.flatComplete = true;
+    })
+    .catch(() => {
+      progress.flatComplete = true;
+    });
+  const richRead = accessibleWindowElementTree(window, window.bounds ?? active.bounds, imageSize, {
+    locationsReliable,
+    onProgress: (root, truncated, descendantLocationsReliable) => {
+      progress.richLocationsReliable = descendantLocationsReliable;
+      progress.richRoot = root;
+      progress.richTruncated = truncated;
+    },
+    shouldContinue: () => !progress.timedOut,
+    verifyDescendantLocations: matchMode === "wayland",
+  })
+    .then((rich) => {
+      progress.richComplete = true;
+      if (rich) {
+        progress.richRoot = rich.root;
+        progress.richTruncated = rich.truncated;
+      }
+    })
+    .catch(() => {
+      progress.richComplete = true;
+    });
+  await Promise.all([flatRead, richRead]);
+  return accessibilityReadSnapshot(progress, imageSize);
 }
 
-let activeAccessibleTextRead: Promise<unknown> | undefined;
+let activeAccessibilityRead: Promise<unknown> | undefined;
 
-async function raceAccessibleRead<T>(run: () => Promise<T>): Promise<T | undefined> {
-  if (activeAccessibleTextRead) return undefined;
+async function raceAccessibleRead<T>(
+  run: () => Promise<T>,
+  timeoutValue: () => T | undefined,
+): Promise<T | undefined> {
+  if (activeAccessibilityRead) return undefined;
   const read = run().catch(() => undefined);
-  activeAccessibleTextRead = read;
+  activeAccessibilityRead = read;
   void read.finally(() => {
-    if (activeAccessibleTextRead === read) activeAccessibleTextRead = undefined;
+    if (activeAccessibilityRead === read) activeAccessibilityRead = undefined;
   });
-  let timeout: number | undefined;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
       read,
-      new Promise<undefined>((resolve) => {
-        timeout = setTimeout(resolve, ACCESSIBLE_TEXT_TIMEOUT_MS);
+      new Promise<T | undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(timeoutValue()), ACCESSIBILITY_TIMEOUT_MS);
       }),
     ]);
   } finally {
@@ -305,12 +420,49 @@ async function raceAccessibleRead<T>(run: () => Promise<T>): Promise<T | undefin
   }
 }
 
-export function readAccessibleWindowText(
-  active: ActiveWindow,
+export function readAccessibleWindowContext(
+  active: AccessibleWindowIdentity,
+  platform: NodeJS.Platform,
+  sourceTitle: string,
+  imageSize: Electron.Size = {
+    width: Math.max(1, Math.round(active.bounds.width)),
+    height: Math.max(1, Math.round(active.bounds.height)),
+  },
+): Promise<CapturedWindowAccessibilityContext | undefined> {
+  const progress: AccessibilityReadProgress = {
+    accessibleText: undefined,
+    flatComplete: false,
+    richComplete: false,
+    richLocationsReliable: false,
+    richTruncated: false,
+    timedOut: false,
+  };
+  return raceAccessibleRead(
+    () => readCapturedWindowAccessibility(active, platform, sourceTitle, imageSize, progress),
+    () => {
+      progress.timedOut = true;
+      return accessibilityReadSnapshot(progress, imageSize);
+    },
+  );
+}
+
+export async function readAccessibleWindowText(
+  active: AccessibleWindowIdentity,
   platform: NodeJS.Platform,
   sourceTitle: string,
 ): Promise<string | undefined> {
-  return raceAccessibleRead(() => readCapturedWindowText(active, platform, sourceTitle));
+  return (await readAccessibleWindowContext(active, platform, sourceTitle))?.accessibleText;
+}
+
+export function windowCaptureImageSize(png: Buffer, fallback: Electron.Rectangle): Electron.Size {
+  try {
+    const size = Electron.nativeImage.createFromBuffer(png).getSize();
+    if (size.width > 0 && size.height > 0) return size;
+  } catch {}
+  return {
+    width: Math.max(1, Math.round(fallback.width)),
+    height: Math.max(1, Math.round(fallback.height)),
+  };
 }
 
 async function captureSource({
@@ -321,6 +473,8 @@ async function captureSource({
   flash,
   transition,
   imageTempPath,
+  linuxAppId,
+  onLinuxFeedback,
 }: {
   mode: DesktopWindowCaptureState["mode"];
   captureId: string;
@@ -329,8 +483,12 @@ async function captureSource({
   flash: WindowCaptureFlash;
   transition: WindowCaptureTransition;
   imageTempPath: string;
+  linuxAppId: string;
+  onLinuxFeedback: (feedback: LinuxCaptureFeedback) => void;
 }) {
   let active: ActiveWindow | undefined;
+  let linuxWindow: LinuxWindowMetadata | undefined;
+  let linuxFeedback: LinuxCaptureFeedback | undefined;
   const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
   const destinationWindow =
     hiddenWindow ?? Electron.BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
@@ -368,48 +526,85 @@ async function captureSource({
         windowCaptureThumbnailSize(active),
       ));
     } else {
-      const [selected] = await Electron.desktopCapturer.getSources({
-        types: ["window", "screen"],
-        thumbnailSize: windowCaptureThumbnailSize(active),
-        fetchWindowIcons: true,
+      const { captureLinuxWindow } = await import("./LinuxWindowCapture.ts");
+      const snapshot = await captureLinuxWindow(linuxAppId, {
+        flash: settings.windowCaptureFlash,
+        animate:
+          settings.windowCaptureAnimations &&
+          shouldAnimateWindowCapture(Electron.systemPreferences.getAnimationSettings()),
       });
-      if (!selected || selected.thumbnail.isEmpty()) {
-        throw new DesktopWindowCaptureError({
-          operation: "no-window-selected",
-          captureId,
+      if (snapshot) {
+        linuxFeedback = snapshot.feedback;
+        if (linuxFeedback) onLinuxFeedback(linuxFeedback);
+        linuxWindow = snapshot.window;
+        source = { name: linuxWindow?.title || "Active window" };
+        png = snapshot.png;
+      } else {
+        const [selected] = await Electron.desktopCapturer.getSources({
+          types: ["window", "screen"],
+          thumbnailSize: windowCaptureThumbnailSize(active),
+          fetchWindowIcons: true,
         });
+        if (!selected || selected.thumbnail.isEmpty()) {
+          throw new DesktopWindowCaptureError({
+            operation: "no-window-selected",
+            captureId,
+          });
+        }
+        source = selected;
+        png = selected.thumbnail.toPNG();
       }
-      source = selected;
-      png = selected.thumbnail.toPNG();
     }
     if (hiddenWindow && !hiddenWindow.isDestroyed()) {
       hiddenWindow.show();
       hiddenWindowRestored = true;
     }
-    const animationStarted = await showCaptureFeedback(
-      transition,
-      flash,
-      captureId,
-      `data:image/png;base64,${png.toString("base64")}`,
-      settings,
-      active,
-      platform,
-      destinationWindowBounds,
-    );
-    const contextPromise = active
-      ? readAccessibleWindowText(active, platform, source.name)
+    if (linuxFeedback && destinationWindow && !destinationWindow.isDestroyed()) {
+      if (destinationWindow.isMinimized()) destinationWindow.restore();
+      if (!destinationWindow.isVisible()) destinationWindow.show();
+      await linuxFeedback.activate(destinationWindow.getTitle()).catch((error: unknown) => {
+        Effect.runSync(
+          Effect.logWarning("GNOME could not activate T3 Code after window capture", error),
+        );
+      });
+    }
+    const animationStarted =
+      linuxFeedback?.animationStarted ??
+      (await showCaptureFeedback(
+        transition,
+        flash,
+        captureId,
+        `data:image/png;base64,${png.toString("base64")}`,
+        settings,
+        active,
+        platform,
+        destinationWindowBounds,
+      ));
+    const accessibleIdentity =
+      active ??
+      (linuxWindow?.processId
+        ? {
+            title: linuxWindow.title,
+            bounds: linuxWindow.bounds,
+            owner: { processId: linuxWindow.processId },
+          }
+        : undefined);
+    const contextPromise = accessibleIdentity
+      ? readAccessibleWindowContext(
+          accessibleIdentity,
+          platform,
+          source.name,
+          windowCaptureImageSize(png, accessibleIdentity.bounds),
+        )
       : Promise.resolve(undefined);
-    return { source, active, contextPromise, animationStarted, png, imageTempReady };
+    return { source, active, linuxWindow, contextPromise, animationStarted, png, imageTempReady };
   } finally {
     if (!hiddenWindowRestored && hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
   }
 }
 
-function createWindowCaptureFlashWindow(
-  bounds: Electron.Rectangle,
-  platform: NodeJS.Platform,
-): Electron.BaseWindow {
-  const options = {
+function createWindowCaptureFlashWindow(bounds: Electron.Rectangle): Electron.BaseWindow {
+  const window = new Electron.BaseWindow({
     ...bounds,
     alwaysOnTop: true,
     focusable: false,
@@ -418,29 +613,18 @@ function createWindowCaptureFlashWindow(
     resizable: false,
     show: false,
     skipTaskbar: true,
-  };
-  const window =
-    platform === "linux"
-      ? new Electron.BrowserWindow({ ...options, transparent: true })
-      : new Electron.BaseWindow({
-          ...options,
-          backgroundColor: "#ffffff",
-          opacity: FLASH_PEAK_OPACITY,
-          transparent: false,
-        });
+    backgroundColor: "#ffffff",
+    opacity: FLASH_PEAK_OPACITY,
+    transparent: false,
+  });
   window.setIgnoreMouseEvents(true);
   return window;
 }
 
 export class WindowCaptureFlash {
-  private readonly platform: NodeJS.Platform;
   private flashWindow: Electron.BaseWindow | undefined;
   private animationTimer: ReturnType<typeof setInterval> | undefined;
   private closeTimer: ReturnType<typeof setTimeout> | undefined;
-
-  constructor(platform: NodeJS.Platform) {
-    this.platform = platform;
-  }
 
   showAnimated(bounds: Electron.Rectangle): Promise<void> {
     return this.show(bounds, true, FLASH_ANIMATION_DURATION_MS);
@@ -465,21 +649,11 @@ export class WindowCaptureFlash {
     durationMs: number,
   ): Promise<void> {
     this.dispose();
-    const window = createWindowCaptureFlashWindow(bounds, this.platform);
+    const window = createWindowCaptureFlashWindow(bounds);
     this.flashWindow = window;
-    if (window instanceof Electron.BrowserWindow) {
-      const animation = animated
-        ? "animation:flash " + FLASH_ANIMATION_DURATION_MS + "ms cubic-bezier(.2,.8,.2,1) both"
-        : "opacity:1";
-      const html =
-        '<!doctype html><style>@keyframes flash{0%{opacity:0}18%{opacity:1}100%{opacity:0}}</style><body style="margin:0;background:rgba(255,255,255,.08);' +
-        animation +
-        '"></body>';
-      await window.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
-    }
     if (window.isDestroyed()) return;
     window.showInactive();
-    if (animated && this.platform !== "linux") {
+    if (animated) {
       let opacity = FLASH_PEAK_OPACITY;
       this.animationTimer = setInterval(() => {
         if (window.isDestroyed()) return this.dispose();
@@ -516,6 +690,8 @@ async function showCaptureFeedback(
   platform: NodeJS.Platform,
   destinationWindowBounds?: Electron.Rectangle,
 ): Promise<boolean> {
+  // Wayland does not let this client position overlays on another app's window.
+  if (platform === "linux") return false;
   const bounds = windowCaptureFlashBounds(active, platform);
   const animationsEnabled =
     settings.windowCaptureAnimations &&
@@ -596,6 +772,7 @@ export const make = Effect.gen(function* () {
   >();
   const runPromise = Effect.runPromiseWith(context);
   const captureDirectory = path.join(environment.stateDir, "window-captures");
+  const linuxAppId = environment.linuxDesktopEntryName.replace(/\.desktop$/, "");
   const shiftShortcutWorkerPath = path.join(
     __dirname,
     "windowCapture",
@@ -604,12 +781,24 @@ export const make = Effect.gen(function* () {
   let registeredAccelerator: string | undefined;
   let shortcutSuppressed = false;
   let stopShiftShortcut: (() => void) | undefined;
-  const flash = new WindowCaptureFlash(environment.platform);
+  const flash = new WindowCaptureFlash();
   const transition = new WindowCaptureTransition({
     boundOverlayToFlight: environment.platform === "win32",
     boundOverlayToCaptureDisplays: environment.platform === "darwin",
     alwaysOnTopLevel: environment.platform === "linux" ? undefined : "pop-up-menu",
   });
+  let linuxFeedback: { id: string; feedback: LinuxCaptureFeedback } | undefined;
+  const closeLinuxFeedback = (id?: string) => {
+    if (!linuxFeedback || (id !== undefined && linuxFeedback.id !== id)) return;
+    linuxFeedback.feedback.close();
+    linuxFeedback = undefined;
+  };
+  const completeLinuxFeedback = async (id: string) => {
+    if (linuxFeedback?.id !== id) return;
+    const pending = linuxFeedback;
+    await pending.feedback.complete().catch(() => undefined);
+    if (linuxFeedback === pending) linuxFeedback = undefined;
+  };
 
   const startPairShortcutProcess = (
     modifier: WindowCaptureModifier,
@@ -661,7 +850,7 @@ export const make = Effect.gen(function* () {
 
     yield* Effect.gen(function* () {
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
-      const { source, active, contextPromise, animationStarted, png, imageTempReady } =
+      const { source, active, linuxWindow, contextPromise, animationStarted, png, imageTempReady } =
         yield* Effect.tryPromise({
           try: () =>
             captureSource({
@@ -672,6 +861,10 @@ export const make = Effect.gen(function* () {
               flash,
               transition,
               imageTempPath,
+              linuxAppId,
+              onLinuxFeedback: (feedback) => {
+                linuxFeedback = { id, feedback };
+              },
             }),
           catch: (cause) => captureFailure(cause, id),
         });
@@ -680,7 +873,7 @@ export const make = Effect.gen(function* () {
           .dispatchMenuAction(`window-capture-started:${id}`)
           .pipe(Effect.catch(() => Effect.void));
       }
-      const accessibleText = yield* Effect.promise(() => contextPromise);
+      const accessibilityContext = yield* Effect.promise(() => contextPromise);
       const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
       const appIconDataUrl = yield* Effect.promise(() =>
         iconDataUrl(source, active, environment.platform),
@@ -693,12 +886,23 @@ export const make = Effect.gen(function* () {
         source: {
           kind: "window-capture",
           capturedAt,
-          appName: active?.owner.name.trim() || source.name.trim() || "Window",
-          windowTitle: active?.title.trim() || source.name.trim(),
-          ...(accessibleText ? { accessibleText } : {}),
+          appName:
+            active?.owner.name.trim() ||
+            linuxWindow?.appName.trim() ||
+            source.name.trim() ||
+            "Window",
+          windowTitle: active?.title.trim() || linuxWindow?.title.trim() || source.name.trim(),
+          ...(accessibilityContext?.accessibleText
+            ? { accessibleText: accessibilityContext.accessibleText }
+            : {}),
+          ...(accessibilityContext?.accessibility
+            ? { accessibility: accessibilityContext.accessibility }
+            : {}),
           ...(active?.platform === "macos" && active.owner.bundleId
             ? { appIdentifier: active.owner.bundleId }
-            : {}),
+            : linuxWindow?.appIdentifier
+              ? { appIdentifier: linuxWindow.appIdentifier }
+              : {}),
           ...(appIconDataUrl ? { appIconDataUrl } : {}),
         },
       });
@@ -712,7 +916,14 @@ export const make = Effect.gen(function* () {
     }).pipe(
       Effect.mapError((cause) => captureFailure(cause, id)),
       Effect.tapError(() =>
-        cleanup.pipe(Effect.andThen(Effect.promise(() => transition.complete(id)))),
+        cleanup.pipe(
+          Effect.andThen(
+            Effect.promise(async () => {
+              closeLinuxFeedback(id);
+              await transition.complete(id);
+            }),
+          ),
+        ),
       ),
     );
     return id;
@@ -721,6 +932,7 @@ export const make = Effect.gen(function* () {
   const captureNow = Effect.gen(function* () {
     const settings = yield* Ref.get(settingsRef);
     if (yield* Ref.getAndSet(busyRef, true)) return;
+    closeLinuxFeedback();
     yield* persistCapture(settings).pipe(
       Effect.tap((id) =>
         Ref.update(stateRef, (state) => ({ ...state, message: null })).pipe(
@@ -805,6 +1017,7 @@ export const make = Effect.gen(function* () {
       mode === "unavailable"
     ) {
       transition.dispose();
+      closeLinuxFeedback();
     }
     if (!settings.windowCaptureEnabled || mode === "unavailable") {
       yield* Ref.set(stateRef, {
@@ -813,7 +1026,11 @@ export const make = Effect.gen(function* () {
         shortcutRegistered: false,
         shortcutMessage: null,
         message:
-          mode === "unavailable" ? "Window capture is not supported on this platform." : null,
+          mode === "unavailable"
+            ? environment.platform === "linux"
+              ? "Window capture requires a Wayland session. X11 capture is not supported."
+              : "Window capture is not supported on this platform."
+            : null,
       });
       return;
     }
@@ -918,6 +1135,7 @@ export const make = Effect.gen(function* () {
       releaseShortcut();
       flash.dispose();
       transition.dispose();
+      closeLinuxFeedback();
     }),
   );
 
@@ -934,7 +1152,19 @@ export const make = Effect.gen(function* () {
     ),
     configure,
     requestPermissions,
-    state: Ref.get(stateRef),
+    state: Ref.get(stateRef).pipe(
+      Effect.flatMap((state) =>
+        state.mode === "portal"
+          ? Effect.tryPromise(async () => {
+              const { getLinuxCaptureSupport } = await import("./LinuxWindowCapture.ts");
+              return getLinuxCaptureSupport(linuxAppId);
+            }).pipe(
+              Effect.map((support) => ({ ...state, ...support })),
+              Effect.orElseSucceed(() => state),
+            )
+          : Effect.succeed(state),
+      ),
+    ),
     checkShortcut,
     setShortcutSuppressed,
     capture,
@@ -981,12 +1211,25 @@ export const make = Effect.gen(function* () {
       ),
     setAnimationDestination: (id, destination) =>
       Effect.promise(async () => {
+        if (linuxFeedback?.id === id && destination.relativeFrame) {
+          await linuxFeedback.feedback
+            .animateTo(destination.relativeFrame)
+            .catch(() => closeLinuxFeedback(id));
+          return;
+        }
         transition.animateTo(id, destination);
         await transition.waitForLanding(id);
       }),
-    dismissAnimation: (id) => Effect.sync(() => transition.dismiss(id)),
+    dismissAnimation: (id) =>
+      Effect.sync(() => {
+        closeLinuxFeedback(id);
+        transition.dismiss(id);
+      }),
     acknowledge: (id) =>
-      Effect.promise(() => transition.complete(id)).pipe(
+      Effect.promise(async () => {
+        await completeLinuxFeedback(id);
+        await transition.complete(id);
+      }).pipe(
         Effect.andThen(
           Effect.all(
             [

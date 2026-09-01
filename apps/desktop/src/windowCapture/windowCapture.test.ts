@@ -6,7 +6,10 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import {
   MODIFIER_PAIR_IDLE,
   UIOHOOK_MODIFIER_KEYCODES,
+  accessibleWindowElementTree,
   accessibleWindowText,
+  capturedImageBounds,
+  compactAccessibilityTree,
   findAccessibleWindow,
   findCaptureSource,
   hideAndWaitForBlur,
@@ -80,6 +83,214 @@ describe("accessibleWindowText", () => {
   });
 });
 
+describe("accessibleWindowElementTree", () => {
+  it("maps element bounds into captured-image pixels and keeps semantic state", async () => {
+    const tree = await accessibleWindowElementTree(
+      {
+        role: "window",
+        name: "Editor",
+        bounds: { x: 100, y: 200, width: 800, height: 600 },
+        active: true,
+        children: async () => [
+          {
+            role: "button",
+            name: "Save",
+            description: "Save the document",
+            bounds: { x: 300, y: 350, width: 100, height: 50 },
+            focused: true,
+            actions: ["press", "press"],
+            children: async () => [],
+          },
+        ],
+      },
+      { x: 100, y: 200, width: 800, height: 600 },
+      { width: 1_600, height: 1_200 },
+    );
+
+    expect(tree).toEqual({
+      truncated: false,
+      root: {
+        role: "window",
+        name: "Editor",
+        bounds: { x: 0, y: 0, width: 1_600, height: 1_200 },
+        state: { active: true },
+        children: [
+          {
+            role: "button",
+            name: "Save",
+            description: "Save the document",
+            bounds: { x: 400, y: 300, width: 200, height: 100 },
+            state: { focused: true },
+            actions: ["press"],
+            children: [],
+          },
+        ],
+      },
+    });
+  });
+
+  it("uses null child bounds when a Wayland provider reports only the root origin", async () => {
+    const tree = await accessibleWindowElementTree(
+      {
+        role: "window",
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+        children: async () => [
+          {
+            role: "button",
+            name: "Save",
+            bounds: { x: 0, y: 0, width: 100, height: 50 },
+            children: async () => [],
+          },
+        ],
+      },
+      { x: 0, y: 0, width: 800, height: 600 },
+      { width: 1_600, height: 1_200 },
+      { locationsReliable: true, verifyDescendantLocations: true },
+    );
+
+    expect(tree?.root.bounds).toEqual({ x: 0, y: 0, width: 1_600, height: 1_200 });
+    expect(tree?.root.children[0]?.bounds).toBeNull();
+  });
+
+  it("keeps Wayland child bounds after observing real position variation", async () => {
+    const tree = await accessibleWindowElementTree(
+      {
+        role: "window",
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+        children: async () => [
+          {
+            role: "button",
+            name: "Save",
+            bounds: { x: 20, y: 30, width: 100, height: 50 },
+            children: async () => [],
+          },
+        ],
+      },
+      { x: 0, y: 0, width: 800, height: 600 },
+      { width: 1_600, height: 1_200 },
+      { locationsReliable: true, verifyDescendantLocations: true },
+    );
+
+    expect(tree?.root.children[0]?.bounds).toEqual({ x: 40, y: 60, width: 200, height: 100 });
+  });
+
+  it("collapses anonymous wrapper chains and removes duplicate text fields", async () => {
+    const tree = await accessibleWindowElementTree(
+      {
+        role: "window",
+        name: "Editor",
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+        children: async () => [
+          {
+            role: "group",
+            bounds: { x: 0, y: 0, width: 800, height: 600 },
+            children: async () => [
+              {
+                role: "group",
+                bounds: { x: 0, y: 0, width: 800, height: 600 },
+                children: async () => [
+                  {
+                    role: "button",
+                    name: "Save",
+                    value: "Save",
+                    description: "Save",
+                    bounds: { x: 20, y: 30, width: 80, height: 24 },
+                    actions: ["press"],
+                    children: async () => [],
+                  },
+                  {
+                    role: "group",
+                    bounds: null,
+                    children: async () => [],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      { x: 0, y: 0, width: 800, height: 600 },
+      { width: 800, height: 600 },
+    );
+
+    expect(tree?.root.children).toEqual([
+      {
+        role: "button",
+        name: "Save",
+        bounds: { x: 20, y: 30, width: 80, height: 24 },
+        actions: ["press"],
+        children: [],
+      },
+    ]);
+  });
+
+  it("marks trees truncated before their serialized payload grows without bound", async () => {
+    const tree = await accessibleWindowElementTree(
+      {
+        role: "window",
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+        children: async () =>
+          Array.from({ length: 10 }, (_, index) => ({
+            role: "text",
+            value: `${index}${"x".repeat(8_000)}`,
+            bounds: null,
+            children: async () => [],
+          })),
+      },
+      { x: 0, y: 0, width: 800, height: 600 },
+      { width: 800, height: 600 },
+    );
+
+    expect(tree?.truncated).toBe(true);
+    expect(tree?.root.children.length).toBeLessThan(10);
+    expect(JSON.stringify(tree).length).toBeLessThanOrEqual(32_000);
+  });
+});
+
+describe("compactAccessibilityTree", () => {
+  it("keeps anonymous groups that organize multiple semantic children", () => {
+    const compacted = compactAccessibilityTree({
+      role: "window",
+      bounds: { x: 0, y: 0, width: 800, height: 600 },
+      children: [
+        {
+          role: "group",
+          bounds: { x: 0, y: 0, width: 800, height: 100 },
+          children: [
+            { role: "button", name: "Back", bounds: null, children: [] },
+            { role: "button", name: "Forward", bounds: null, children: [] },
+          ],
+        },
+      ],
+    });
+
+    expect(compacted.root.children[0]?.role).toBe("group");
+    expect(compacted.root.children[0]?.children).toHaveLength(2);
+  });
+});
+
+describe("capturedImageBounds", () => {
+  it("clips locations to the attached image", () => {
+    expect(
+      capturedImageBounds(
+        { x: 50, y: 150, width: 200, height: 200 },
+        { x: 100, y: 200, width: 800, height: 600 },
+        { width: 1_600, height: 1_200 },
+      ),
+    ).toEqual({ x: 0, y: 0, width: 300, height: 300 });
+  });
+
+  it("returns null when an accessibility provider omits a location", () => {
+    expect(
+      capturedImageBounds(
+        null,
+        { x: 0, y: 0, width: 800, height: 600 },
+        { width: 800, height: 600 },
+      ),
+    ).toBeNull();
+  });
+});
+
 describe("findAccessibleWindow", () => {
   const captured = {
     title: "Editor",
@@ -121,6 +332,112 @@ describe("findAccessibleWindow", () => {
         [{ name: "Editor", bounds: { x: 0, y: 0, width: 800, height: 600 } }],
         captured,
       ),
+    ).toBeUndefined();
+  });
+
+  it("matches a Wayland window whose accessibility provider omits its screen position", () => {
+    const captured = {
+      title: "hello world (Draft) - Text Editor",
+      bounds: { x: 479, y: 342, width: 700, height: 520 },
+    };
+    const windows = [{ name: captured.title, bounds: { x: 0, y: 0, width: 700, height: 520 } }];
+
+    expect(findAccessibleWindow(windows, captured, "wayland")).toBe(windows[0]);
+    expect(findAccessibleWindow(windows, captured)).toBeUndefined();
+  });
+
+  it("distinguishes same-title Wayland windows by size", () => {
+    const windows = [
+      { name: "Editor", bounds: { x: 0, y: 0, width: 400, height: 300 } },
+      { name: "Editor", bounds: { x: 0, y: 0, width: 801, height: 599 } },
+    ];
+
+    expect(findAccessibleWindow(windows, captured, "wayland")).toBe(windows[1]);
+  });
+
+  it.each([
+    { name: "Private", bounds: { x: 0, y: 0, width: 800, height: 600 } },
+    { name: "Editor", bounds: { x: 0, y: 0, width: 400, height: 600 } },
+    { name: "Editor", bounds: { x: 0, y: 0, width: 800, height: 300 } },
+    { name: "Editor", bounds: null },
+  ])("rejects an unverified Wayland window: %j", (window) => {
+    expect(findAccessibleWindow([window], captured, "wayland")).toBeUndefined();
+  });
+
+  it("rejects ambiguous Wayland windows even when one reports the captured screen position", () => {
+    const windows = [
+      { name: "Editor", bounds: captured.bounds },
+      { name: "Editor", bounds: { x: 0, y: 0, width: 800, height: 600 } },
+    ];
+
+    expect(findAccessibleWindow(windows, captured, "wayland")).toBeUndefined();
+  });
+
+  it("does not match an untitled Wayland window by size alone", () => {
+    const windows = [{ name: "", bounds: captured.bounds }];
+
+    expect(findAccessibleWindow(windows, { ...captured, title: "" }, "wayland")).toBeUndefined();
+  });
+
+  it.each(["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"])(
+    "ignores a leading Wayland title spinner frame %s",
+    (frame) => {
+      const windows = [{ name: `${frame} t3code`, bounds: captured.bounds }];
+
+      expect(findAccessibleWindow(windows, { ...captured, title: "⠋ t3code" }, "wayland")).toBe(
+        windows[0],
+      );
+    },
+  );
+
+  it.each([
+    ["⠋ t3code", "t3code"],
+    ["t3code", "⠙ t3code"],
+  ])("matches a Wayland spinner starting or stopping: %s → %s", (title, name) => {
+    const windows = [{ name, bounds: captured.bounds }];
+
+    expect(findAccessibleWindow(windows, { ...captured, title }, "wayland")).toBe(windows[0]);
+  });
+
+  it.each([
+    ["⠋ t3code", "⠙ private"],
+    ["t3code ⠋", "t3code ⠙"],
+    ["⠋t3code", "⠙t3code"],
+    ["⠁ t3code", "⠙ t3code"],
+    ["⠋", "⠋"],
+  ])("does not guess a Wayland title match: %s → %s", (title, name) => {
+    expect(
+      findAccessibleWindow([{ name, bounds: captured.bounds }], { ...captured, title }, "wayland"),
+    ).toBeUndefined();
+  });
+
+  it("rejects matching spinners when the window sizes differ", () => {
+    expect(
+      findAccessibleWindow(
+        [{ name: "⠙ t3code", bounds: { ...captured.bounds, width: 400 } }],
+        { ...captured, title: "⠋ t3code" },
+        "wayland",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("rejects ambiguous normalized titles even if one matches the captured spinner exactly", () => {
+    const windows = [
+      { name: "⠋ t3code", bounds: captured.bounds },
+      { name: "⠙ t3code", bounds: captured.bounds },
+    ];
+
+    expect(
+      findAccessibleWindow(windows, { ...captured, title: "⠋ t3code" }, "wayland"),
+    ).toBeUndefined();
+  });
+
+  it("keeps exact title matching outside Wayland", () => {
+    expect(
+      findAccessibleWindow([{ name: "⠙ t3code", bounds: captured.bounds }], {
+        ...captured,
+        title: "⠋ t3code",
+      }),
     ).toBeUndefined();
   });
 });

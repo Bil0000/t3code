@@ -53,6 +53,20 @@ export function windowCaptureScreenFrame(
   };
 }
 
+export function windowCaptureRelativeFrame(
+  frame: DesktopWindowCaptureAnimationDestination["viewportFrame"],
+  bounds: Electron.Rectangle,
+  zoom: number,
+): Electron.Rectangle | undefined {
+  if (bounds.width <= 0 || bounds.height <= 0) return undefined;
+  return {
+    x: (frame.x * zoom) / bounds.width,
+    y: (frame.y * zoom) / bounds.height,
+    width: (frame.width * zoom) / bounds.width,
+    height: (frame.height * zoom) / bounds.height,
+  };
+}
+
 export const getWindowCaptureState = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.GET_WINDOW_CAPTURE_STATE_CHANNEL,
   payload: Schema.Void,
@@ -142,6 +156,11 @@ export const setWindowCaptureAnimationDestination = DesktopIpc.makeIpcMethod({
       yield* (yield* DesktopWindowCapture.DesktopWindowCapture).setAnimationDestination(
         destination.id,
         {
+          relativeFrame: windowCaptureRelativeFrame(
+            destination.viewportFrame,
+            window.getContentBounds(),
+            window.webContents.getZoomFactor(),
+          ),
           frame: windowCaptureScreenFrame(
             destination.viewportFrame,
             window.getContentBounds(),

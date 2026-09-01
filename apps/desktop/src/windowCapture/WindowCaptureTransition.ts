@@ -18,6 +18,8 @@ type WindowCaptureAnimationDetails = {
 
 export type WindowCaptureAnimationDestination = {
   readonly frame: Electron.Rectangle;
+  /** Unit coordinates in T3's content area; GNOME supplies the real compositor origin. */
+  readonly relativeFrame?: Electron.Rectangle | undefined;
   readonly backgroundColor: string;
   readonly borderColor: string;
   readonly borderWidth: number;

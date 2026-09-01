@@ -24,8 +24,10 @@ import { primaryServerKeybindingsAtom } from "../../state/server";
 import { commandLabel, keybindingFromKeyboardEvent } from "./KeybindingsSettings.logic";
 import {
   createRecordingRequestTracker,
+  windowCaptureStatus,
   windowCaptureUnavailableMessage,
   windowCaptureSoundPatch,
+  windowCaptureFeedbackUnavailableMessage,
   type WindowCaptureSoundSelection,
 } from "./WindowCaptureSettings.logic";
 import {
@@ -73,17 +75,6 @@ type ShortcutCheck =
       readonly availability: DesktopWindowCaptureShortcutAvailability;
     };
 
-function captureStatus(state: DesktopWindowCaptureState | null, enabled: boolean): string {
-  if (!state) return "Checking desktop support...";
-  if (state.mode === "unavailable") return state.message ?? "Not supported on this platform.";
-  if (!enabled) return "Turn this on to register the shortcut.";
-  if (state.message) return state.message;
-  if (!state.shortcutRegistered) return "The shortcut could not be registered.";
-  return state.mode === "portal"
-    ? "Once your desktop approves the shortcut, using it will open the system window picker."
-    : "Ready. The active window will be captured.";
-}
-
 export function WindowCaptureSettings() {
   const settings = useClientSettings();
   const updateSettings = useUpdateClientSettings();
@@ -101,6 +92,7 @@ export function WindowCaptureSettings() {
   const shortcutCheckIdRef = useRef(0);
   const unavailableMessage = windowCaptureUnavailableMessage(Boolean(bridge));
   const captureAvailable = Boolean(bridge) && state !== null && state.mode !== "unavailable";
+  const feedbackUnavailable = windowCaptureFeedbackUnavailableMessage(state);
   const savedShortcut = settings.windowCaptureShortcut;
   const shortcutChanged = !sameWindowCaptureShortcut(candidate, savedShortcut);
   const displayShortcut = shortcutChanged ? candidate : (state?.shortcut ?? savedShortcut);
@@ -117,6 +109,8 @@ export function WindowCaptureSettings() {
 
   useEffect(() => {
     void refreshState();
+    window.addEventListener("focus", refreshState);
+    return () => window.removeEventListener("focus", refreshState);
   }, [refreshState]);
 
   useEffect(() => {
@@ -257,7 +251,7 @@ export function WindowCaptureSettings() {
           <SettingsRow
             {...searchableSetting("window-capture-enabled")}
             description="Capture a window with available text and attach it to your current draft."
-            status={bridge ? captureStatus(state, settings.windowCaptureEnabled) : undefined}
+            status={bridge ? windowCaptureStatus(state, settings.windowCaptureEnabled) : undefined}
             control={
               <Switch
                 checked={settings.windowCaptureEnabled}
@@ -269,7 +263,11 @@ export function WindowCaptureSettings() {
           />
           <SettingsRow
             {...searchableSetting("window-capture-shortcut")}
-            description="Use both Shift keys or another shortcut."
+            description={
+              state?.mode === "portal"
+                ? "Choose a key chord. Modifier-pair shortcuts are not supported on Wayland."
+                : "Use both Shift keys or another shortcut."
+            }
             status={shortcutStatus}
             resetAction={
               captureAvailable &&
@@ -373,10 +371,11 @@ export function WindowCaptureSettings() {
           <SettingsRow
             {...searchableSetting("window-capture-flash")}
             description="Show a gentle cue on the captured window."
+            status={feedbackUnavailable}
             control={
               <Switch
-                checked={settings.windowCaptureFlash}
-                disabled={!captureAvailable}
+                checked={!feedbackUnavailable && settings.windowCaptureFlash}
+                disabled={!captureAvailable || Boolean(feedbackUnavailable)}
                 aria-label="Flash captured window"
                 onCheckedChange={(checked) => void save({ windowCaptureFlash: checked })}
               />
@@ -385,10 +384,11 @@ export function WindowCaptureSettings() {
           <SettingsRow
             {...searchableSetting("window-capture-animations")}
             description="Fly captured windows into the composer and animate capture feedback."
+            status={feedbackUnavailable}
             control={
               <Switch
-                checked={settings.windowCaptureAnimations}
-                disabled={!captureAvailable}
+                checked={!feedbackUnavailable && settings.windowCaptureAnimations}
+                disabled={!captureAvailable || Boolean(feedbackUnavailable)}
                 aria-label="Animate window captures"
                 onCheckedChange={(checked) => void save({ windowCaptureAnimations: checked })}
               />

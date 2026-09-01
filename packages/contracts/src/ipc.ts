@@ -190,6 +190,10 @@ export type DesktopWindowCaptureMode = typeof DesktopWindowCaptureMode.Type;
 
 export const DesktopWindowCaptureState = Schema.Struct({
   mode: DesktopWindowCaptureMode,
+  linuxBackend: Schema.optional(
+    Schema.Literals(["screenshot-portal", "gnome-extension", "picker"]),
+  ),
+  linuxFeedbackAvailable: Schema.optional(Schema.Boolean),
   shortcut: WindowCaptureShortcut,
   shortcutRegistered: Schema.Boolean,
   shortcutMessage: Schema.NullOr(Schema.String),

@@ -5,9 +5,12 @@ import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
 
 import {
+  WINDOW_CAPTURE_ACCESSIBILITY_MAX_NODES,
+  WINDOW_CAPTURE_ACCESSIBILITY_MAX_SERIALIZED_CHARS,
   isModifierPairShortcut,
   windowCaptureModifierPairLabel,
   windowCaptureShortcutModifierPair,
+  type WindowCaptureAccessibilityNode,
   type WindowCaptureKeyChord,
   type WindowCaptureModifier,
   type WindowCaptureShortcut,
@@ -148,6 +151,312 @@ export function accessibleWindowText(root: AccessibilityTreeNode, maxChars: numb
   return text;
 }
 
+type AccessibilityElement = {
+  readonly role?: string;
+  readonly name?: string | null;
+  readonly value?: string | null;
+  readonly description?: string | null;
+  readonly bounds?: WindowBounds | null;
+  readonly actions?: ReadonlyArray<string>;
+  readonly active?: boolean;
+  readonly busy?: boolean;
+  readonly checked?: "on" | "off" | "mixed" | null;
+  readonly editable?: boolean;
+  readonly enabled?: boolean;
+  readonly expanded?: boolean | null;
+  readonly focused?: boolean;
+  readonly selected?: boolean;
+  readonly visible?: boolean;
+  readonly children?: () => Promise<ReadonlyArray<AccessibilityElement>>;
+};
+
+type MutableAccessibilityNode = Omit<WindowCaptureAccessibilityNode, "children"> & {
+  children: Array<MutableAccessibilityNode>;
+};
+
+type CapturedImageSize = { readonly width: number; readonly height: number };
+
+function safeProperty<T>(read: () => T): T | undefined {
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+function boundedAccessibilityString(value: unknown, maxChars: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const candidate = value.replaceAll("\0", "").trim();
+  if (!candidate) return undefined;
+  if (candidate.length <= maxChars) return candidate;
+  const end = /[\uD800-\uDBFF]/.test(candidate[maxChars - 1] ?? "") ? maxChars - 1 : maxChars;
+  return candidate.slice(0, end);
+}
+
+export function capturedImageBounds(
+  bounds: WindowBounds | null | undefined,
+  sourceBounds: WindowBounds,
+  imageSize: CapturedImageSize,
+): WindowCaptureAccessibilityNode["bounds"] {
+  if (
+    bounds === null ||
+    bounds === undefined ||
+    sourceBounds.width <= 0 ||
+    sourceBounds.height <= 0 ||
+    imageSize.width <= 0 ||
+    imageSize.height <= 0 ||
+    ![bounds.x, bounds.y, bounds.width, bounds.height].every(Number.isFinite)
+  ) {
+    return null;
+  }
+  const scaleX = imageSize.width / sourceBounds.width;
+  const scaleY = imageSize.height / sourceBounds.height;
+  const left = Math.max(0, Math.round((bounds.x - sourceBounds.x) * scaleX));
+  const top = Math.max(0, Math.round((bounds.y - sourceBounds.y) * scaleY));
+  const right = Math.min(
+    imageSize.width,
+    Math.round((bounds.x + bounds.width - sourceBounds.x) * scaleX),
+  );
+  const bottom = Math.min(
+    imageSize.height,
+    Math.round((bounds.y + bounds.height - sourceBounds.y) * scaleY),
+  );
+  return right > left && bottom > top
+    ? { x: left, y: top, width: right - left, height: bottom - top }
+    : null;
+}
+
+function accessibilityNode(
+  element: AccessibilityElement,
+  elementBounds: WindowBounds | null | undefined,
+  sourceBounds: WindowBounds,
+  imageSize: CapturedImageSize,
+  isRoot: boolean,
+  locationsReliable: boolean,
+): MutableAccessibilityNode {
+  const name = boundedAccessibilityString(
+    safeProperty(() => element.name),
+    1_000,
+  );
+  const value = boundedAccessibilityString(
+    safeProperty(() => element.value),
+    8_000,
+  );
+  const description = boundedAccessibilityString(
+    safeProperty(() => element.description),
+    2_000,
+  );
+  const checked = safeProperty(() => element.checked);
+  const expanded = safeProperty(() => element.expanded);
+  const state = {
+    ...(safeProperty(() => element.active) === true ? { active: true } : {}),
+    ...(safeProperty(() => element.busy) === true ? { busy: true } : {}),
+    ...(checked === "on" || checked === "off" || checked === "mixed" ? { checked } : {}),
+    ...(safeProperty(() => element.editable) === true ? { editable: true } : {}),
+    ...(safeProperty(() => element.enabled) === false ? { enabled: false } : {}),
+    ...(typeof expanded === "boolean" ? { expanded } : {}),
+    ...(safeProperty(() => element.focused) === true ? { focused: true } : {}),
+    ...(safeProperty(() => element.selected) === true ? { selected: true } : {}),
+    ...(safeProperty(() => element.visible) === false ? { visible: false } : {}),
+  };
+  const actions = Array.from(
+    new Set(
+      (safeProperty(() => element.actions) ?? [])
+        .map((action) => boundedAccessibilityString(action, 100))
+        .filter((action): action is string => action !== undefined),
+    ),
+  ).slice(0, 32);
+  return {
+    role:
+      boundedAccessibilityString(
+        safeProperty(() => element.role),
+        100,
+      ) ?? "unknown",
+    ...(name ? { name } : {}),
+    ...(value && value !== name ? { value } : {}),
+    ...(description && description !== name && description !== value ? { description } : {}),
+    bounds: isRoot
+      ? { x: 0, y: 0, width: imageSize.width, height: imageSize.height }
+      : locationsReliable
+        ? capturedImageBounds(elementBounds, sourceBounds, imageSize)
+        : null,
+    ...(Object.keys(state).length > 0 ? { state } : {}),
+    ...(actions.length > 0 ? { actions } : {}),
+    children: [],
+  };
+}
+
+function isAnonymousGroup(node: WindowCaptureAccessibilityNode): boolean {
+  return (
+    node.role === "group" &&
+    node.name === undefined &&
+    node.value === undefined &&
+    node.description === undefined &&
+    node.state === undefined &&
+    node.actions === undefined
+  );
+}
+
+function compactAccessibilityNodes(
+  node: WindowCaptureAccessibilityNode,
+  isRoot: boolean,
+  descendantLocationsReliable: boolean,
+): Array<MutableAccessibilityNode> {
+  const children = node.children.flatMap((child) =>
+    compactAccessibilityNodes(child, false, descendantLocationsReliable),
+  );
+  const compacted: MutableAccessibilityNode = {
+    ...node,
+    ...(!isRoot && !descendantLocationsReliable ? { bounds: null } : {}),
+    children,
+  };
+  if (!isRoot && isAnonymousGroup(compacted)) {
+    if (children.length === 0) return [];
+    if (children.length === 1) return children;
+  }
+  return [compacted];
+}
+
+export function compactAccessibilityTree(
+  root: WindowCaptureAccessibilityNode,
+  options: { readonly descendantLocationsReliable?: boolean } = {},
+): {
+  readonly root: WindowCaptureAccessibilityNode;
+  readonly truncated: boolean;
+} {
+  const compactedRoot = compactAccessibilityNodes(
+    root,
+    true,
+    options.descendantLocationsReliable !== false,
+  )[0]!;
+  let nodes = 0;
+  let serializedChars = 256;
+  let truncated = false;
+
+  const visit = (
+    node: WindowCaptureAccessibilityNode,
+    required: boolean,
+  ): MutableAccessibilityNode | undefined => {
+    const copy: MutableAccessibilityNode = { ...node, children: [] };
+    const nodeChars = JSON.stringify(copy).length + 1;
+    if (
+      !required &&
+      (nodes >= WINDOW_CAPTURE_ACCESSIBILITY_MAX_NODES ||
+        serializedChars + nodeChars > WINDOW_CAPTURE_ACCESSIBILITY_MAX_SERIALIZED_CHARS)
+    ) {
+      truncated = true;
+      return undefined;
+    }
+    nodes += 1;
+    serializedChars += nodeChars;
+    for (const child of node.children) {
+      const childCopy = visit(child, false);
+      if (!childCopy) break;
+      copy.children.push(childCopy);
+    }
+    return copy;
+  };
+
+  return { root: visit(compactedRoot, true)!, truncated };
+}
+
+type AccessibleWindowElementTreeOptions = {
+  readonly locationsReliable?: boolean;
+  readonly onProgress?: (
+    root: WindowCaptureAccessibilityNode,
+    truncated: boolean,
+    descendantLocationsReliable: boolean,
+  ) => void;
+  readonly shouldContinue?: () => boolean;
+  readonly verifyDescendantLocations?: boolean;
+};
+
+export async function accessibleWindowElementTree(
+  element: AccessibilityElement,
+  sourceBounds: WindowBounds,
+  imageSize: CapturedImageSize,
+  options: AccessibleWindowElementTreeOptions = {},
+): Promise<
+  { readonly root: WindowCaptureAccessibilityNode; readonly truncated: boolean } | undefined
+> {
+  if (typeof element.children !== "function") return undefined;
+  let nodes = 0;
+  let truncated = false;
+  let root: MutableAccessibilityNode | undefined;
+  const shouldContinue = options.shouldContinue ?? (() => true);
+  let descendantLocationVaries = false;
+
+  const descendantLocationsReliable = () =>
+    options.locationsReliable !== false &&
+    (options.verifyDescendantLocations !== true || descendantLocationVaries);
+
+  const visit = async (
+    current: AccessibilityElement,
+    required: boolean,
+  ): Promise<MutableAccessibilityNode | undefined> => {
+    if (!shouldContinue()) {
+      truncated = true;
+      return undefined;
+    }
+    if (nodes >= WINDOW_CAPTURE_ACCESSIBILITY_MAX_NODES) {
+      truncated = true;
+      return undefined;
+    }
+    const elementBounds = safeProperty(() => current.bounds);
+    if (
+      !required &&
+      elementBounds !== null &&
+      elementBounds !== undefined &&
+      (Math.abs(elementBounds.x - sourceBounds.x) > 2 ||
+        Math.abs(elementBounds.y - sourceBounds.y) > 2)
+    ) {
+      descendantLocationVaries = true;
+    }
+    const node = accessibilityNode(
+      current,
+      elementBounds,
+      sourceBounds,
+      imageSize,
+      required,
+      options.locationsReliable !== false,
+    );
+    nodes += 1;
+    root ??= node;
+    options.onProgress?.(root, true, descendantLocationsReliable());
+
+    const readChildren = safeProperty(() => current.children);
+    if (typeof readChildren !== "function") return node;
+    let children: ReadonlyArray<AccessibilityElement>;
+    try {
+      children = await readChildren.call(current);
+    } catch {
+      truncated = true;
+      return node;
+    }
+    if (!shouldContinue()) {
+      truncated = true;
+      return node;
+    }
+    for (const child of children) {
+      const childNode = await visit(child, false);
+      if (!childNode) break;
+      node.children.push(childNode);
+      options.onProgress?.(root, true, descendantLocationsReliable());
+    }
+    return node;
+  };
+
+  const completedRoot = await visit(element, true);
+  if (!completedRoot) return undefined;
+  const locationsReliable = descendantLocationsReliable();
+  const compacted = compactAccessibilityTree(completedRoot, {
+    descendantLocationsReliable: locationsReliable,
+  });
+  const completedTruncated = truncated || compacted.truncated;
+  options.onProgress?.(compacted.root, completedTruncated, locationsReliable);
+  return { root: compacted.root, truncated: completedTruncated };
+}
+
 export function hideAndWaitForBlur(window: {
   readonly hide: () => void;
   readonly once: (event: "blur", listener: () => void) => unknown;
@@ -183,17 +492,26 @@ export function findAccessibleWindow<
     readonly sourceTitle?: string;
     readonly bounds: WindowBounds;
   },
+  matchMode: "screen-bounds" | "wayland" = "screen-bounds",
 ): T | undefined {
-  const title = captured.title.trim() || captured.sourceTitle?.trim() || "";
+  const normalizeTitle = (value: string) => {
+    const title = value.trim();
+    // Terminal apps can animate a leading CLI spinner between capture and AT-SPI lookup.
+    return matchMode === "wayland" ? title.replace(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\s+|$)/u, "") : title;
+  };
+  const title = normalizeTitle(captured.title.trim() || captured.sourceTitle || "");
   if (!title) return undefined;
+  // Wayland accessibility providers can expose window size without a screen position.
+  const boundsKeys =
+    matchMode === "wayland"
+      ? (["width", "height"] as const)
+      : (["x", "y", "width", "height"] as const);
   const matches = windows.filter((window) => {
     const bounds = window.bounds;
     return (
-      window.name?.trim() === title &&
+      normalizeTitle(window.name ?? "") === title &&
       bounds !== null &&
-      (["x", "y", "width", "height"] as const).every(
-        (key) => Math.abs(bounds[key] - captured.bounds[key]) <= 2,
-      )
+      boundsKeys.every((key) => Math.abs(bounds[key] - captured.bounds[key]) <= 2)
     );
   });
   return matches.length === 1 ? matches[0] : undefined;
