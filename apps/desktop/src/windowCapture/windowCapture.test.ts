@@ -317,6 +317,27 @@ describe("findAccessibleWindow", () => {
     ).toBe(windows[0]);
   });
 
+  it("uses the captured source title when the active title changed", () => {
+    const windows = [{ name: "Editor — saved", bounds: captured.bounds }];
+
+    expect(
+      findAccessibleWindow(windows, {
+        ...captured,
+        title: "Editor — saving",
+        sourceTitle: "Editor — saved",
+      }),
+    ).toBe(windows[0]);
+  });
+
+  it("uses the active match to disambiguate equal windows", () => {
+    const windows = [
+      { name: "Editor", bounds: captured.bounds, active: false },
+      { name: "Editor", bounds: captured.bounds, active: true },
+    ];
+
+    expect(findAccessibleWindow(windows, captured)).toBe(windows[1]);
+  });
+
   it("does not match equal bounds with a different title", () => {
     expect(
       findAccessibleWindow(

@@ -32,13 +32,15 @@ apps can change its frame between capture and lookup. The remaining title must b
 exactly. This normalization also applies when checking ambiguity; an exact spinner frame does not
 take precedence over another window with the same normalized title and size.
 AT-SPI can report `(0, 0)` for a window's screen position even when the compositor knows its real
-position, so only width and height are compared (within two logical pixels). Ambiguous matches
-are rejected; macOS and Windows continue to require matching position as well as size. Sandboxed
+position, so only width and height are compared (within two logical pixels). Both captured title
+sources are accepted, and one active match can disambiguate otherwise identical windows. Remaining
+ambiguous matches are rejected; macOS and Windows continue to require matching position as well as
+size. Sandboxed
 apps, scaling differences, and incomplete accessibility providers can make that lookup fail; the image
 still succeeds. Electron does not position window overlays on Wayland; extension v2 uses Shell actors.
 
-Accessibility reads return as soon as they finish, with a shared three-second deadline on all
-desktop platforms. This accommodates larger browser trees without adding a fixed delay to fast
+Accessibility reads begin before T3 Code restores or activates its own window and return as soon
+as they finish, with a shared three-second deadline on all desktop platforms. This accommodates larger browser trees without adding a fixed delay to fast
 reads. On timeout, capture uses completed flat text or a partial bounded tree when available, then
 continues without accessibility data otherwise; no further accessibility read starts until the
 outstanding native read settles.

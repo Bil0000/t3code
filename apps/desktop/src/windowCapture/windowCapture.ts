@@ -484,7 +484,11 @@ type WindowBounds = {
 };
 
 export function findAccessibleWindow<
-  T extends { readonly name: string | null; readonly bounds: WindowBounds | null },
+  T extends {
+    readonly name: string | null;
+    readonly bounds: WindowBounds | null;
+    readonly active?: boolean;
+  },
 >(
   windows: readonly T[],
   captured: {
@@ -499,8 +503,10 @@ export function findAccessibleWindow<
     // Terminal apps can animate a leading CLI spinner between capture and AT-SPI lookup.
     return matchMode === "wayland" ? title.replace(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?:\s+|$)/u, "") : title;
   };
-  const title = normalizeTitle(captured.title.trim() || captured.sourceTitle || "");
-  if (!title) return undefined;
+  const titles = new Set(
+    [captured.title, captured.sourceTitle ?? ""].map(normalizeTitle).filter(Boolean),
+  );
+  if (titles.size === 0) return undefined;
   // Wayland accessibility providers can expose window size without a screen position.
   const boundsKeys =
     matchMode === "wayland"
@@ -509,12 +515,14 @@ export function findAccessibleWindow<
   const matches = windows.filter((window) => {
     const bounds = window.bounds;
     return (
-      normalizeTitle(window.name ?? "") === title &&
+      titles.has(normalizeTitle(window.name ?? "")) &&
       bounds !== null &&
       boundsKeys.every((key) => Math.abs(bounds[key] - captured.bounds[key]) <= 2)
     );
   });
-  return matches.length === 1 ? matches[0] : undefined;
+  if (matches.length === 1) return matches[0];
+  const activeMatches = matches.filter((window) => safeProperty(() => window.active) === true);
+  return activeMatches.length === 1 ? activeMatches[0] : undefined;
 }
 
 const ELECTRON_KEY_NAMES: Readonly<Record<string, string>> = {

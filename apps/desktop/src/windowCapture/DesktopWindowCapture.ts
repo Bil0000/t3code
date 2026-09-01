@@ -277,6 +277,15 @@ type CapturedWindowAccessibilityContext = {
   readonly accessibility?: WindowCaptureAccessibility;
 };
 
+type AccessibilityApp = (typeof import("@crowecawcaw/xa11y"))["App"];
+
+function loadAccessibilityApp(): Promise<AccessibilityApp | undefined> {
+  return import("@crowecawcaw/xa11y").then(
+    (module) => module.App,
+    () => undefined,
+  );
+}
+
 type AccessibilityReadProgress = {
   accessibleText: string | undefined;
   flatComplete: boolean;
@@ -335,13 +344,13 @@ function accessibilityReadSnapshot(
 }
 
 async function readCapturedWindowAccessibility(
+  App: AccessibilityApp,
   active: AccessibleWindowIdentity,
   platform: NodeJS.Platform,
   sourceTitle: string,
   imageSize: Electron.Size,
   progress: AccessibilityReadProgress,
 ): Promise<CapturedWindowAccessibilityContext | undefined> {
-  const { App } = await import("@crowecawcaw/xa11y");
   const windows =
     platform === "win32"
       ? (await App.list())
@@ -420,14 +429,12 @@ async function raceAccessibleRead<T>(
   }
 }
 
-export function readAccessibleWindowContext(
+function readAccessibleWindowContextWithApp(
+  App: AccessibilityApp,
   active: AccessibleWindowIdentity,
   platform: NodeJS.Platform,
   sourceTitle: string,
-  imageSize: Electron.Size = {
-    width: Math.max(1, Math.round(active.bounds.width)),
-    height: Math.max(1, Math.round(active.bounds.height)),
-  },
+  imageSize: Electron.Size,
 ): Promise<CapturedWindowAccessibilityContext | undefined> {
   const progress: AccessibilityReadProgress = {
     accessibleText: undefined,
@@ -438,12 +445,27 @@ export function readAccessibleWindowContext(
     timedOut: false,
   };
   return raceAccessibleRead(
-    () => readCapturedWindowAccessibility(active, platform, sourceTitle, imageSize, progress),
+    () => readCapturedWindowAccessibility(App, active, platform, sourceTitle, imageSize, progress),
     () => {
       progress.timedOut = true;
       return accessibilityReadSnapshot(progress, imageSize);
     },
   );
+}
+
+export async function readAccessibleWindowContext(
+  active: AccessibleWindowIdentity,
+  platform: NodeJS.Platform,
+  sourceTitle: string,
+  imageSize: Electron.Size = {
+    width: Math.max(1, Math.round(active.bounds.width)),
+    height: Math.max(1, Math.round(active.bounds.height)),
+  },
+): Promise<CapturedWindowAccessibilityContext | undefined> {
+  const App = await loadAccessibilityApp();
+  return App
+    ? readAccessibleWindowContextWithApp(App, active, platform, sourceTitle, imageSize)
+    : undefined;
 }
 
 export async function readAccessibleWindowText(
@@ -496,6 +518,7 @@ async function captureSource({
   let hiddenWindowRestored = false;
   try {
     if (hiddenWindow) await hideAndWaitForBlur(hiddenWindow);
+    const accessibilityAppPromise = loadAccessibilityApp();
     if (mode === "direct") {
       active = await activeWindow({
         accessibilityPermission: false,
@@ -555,6 +578,26 @@ async function captureSource({
         png = selected.thumbnail.toPNG();
       }
     }
+    const accessibleIdentity =
+      active ??
+      (linuxWindow?.processId
+        ? {
+            title: linuxWindow.title,
+            bounds: linuxWindow.bounds,
+            owner: { processId: linuxWindow.processId },
+          }
+        : undefined);
+    const AccessibilityApp = accessibleIdentity ? await accessibilityAppPromise : undefined;
+    const contextPromise =
+      accessibleIdentity && AccessibilityApp
+        ? readAccessibleWindowContextWithApp(
+            AccessibilityApp,
+            accessibleIdentity,
+            platform,
+            source.name,
+            windowCaptureImageSize(png, accessibleIdentity.bounds),
+          )
+        : Promise.resolve(undefined);
     if (hiddenWindow && !hiddenWindow.isDestroyed()) {
       hiddenWindow.show();
       hiddenWindowRestored = true;
@@ -580,23 +623,6 @@ async function captureSource({
         platform,
         destinationWindowBounds,
       ));
-    const accessibleIdentity =
-      active ??
-      (linuxWindow?.processId
-        ? {
-            title: linuxWindow.title,
-            bounds: linuxWindow.bounds,
-            owner: { processId: linuxWindow.processId },
-          }
-        : undefined);
-    const contextPromise = accessibleIdentity
-      ? readAccessibleWindowContext(
-          accessibleIdentity,
-          platform,
-          source.name,
-          windowCaptureImageSize(png, accessibleIdentity.bounds),
-        )
-      : Promise.resolve(undefined);
     return { source, active, linuxWindow, contextPromise, animationStarted, png, imageTempReady };
   } finally {
     if (!hiddenWindowRestored && hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();

@@ -768,6 +768,55 @@ it.effect("uses display-local macOS capture surfaces across the source and main 
   ).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(() => focusedWindowMock.mockReset())));
 });
 
+it.effect("starts accessibility lookup before restoring the captured app", () => {
+  const png = Buffer.from([1, 2, 3]);
+  const order: string[] = [];
+  const active = {
+    platform: "macos",
+    id: 42,
+    title: "Terminal",
+    owner: { name: "Terminal", processId: 123 },
+    bounds: { x: 10, y: 20, width: 800, height: 600 },
+  } as const;
+  activeWindowMock.mockReset().mockResolvedValue(active);
+  accessibilityByPidMock.mockReset().mockImplementation(async () => {
+    order.push("accessibility");
+    return { children: async () => [] };
+  });
+  macCaptureMock.mockReset().mockResolvedValue({ source: { name: "Terminal" }, png });
+  let blur: () => void = () => undefined;
+  focusedWindowMock.mockReturnValue({
+    getBounds: () => ({ x: 0, y: 0, width: 1_200, height: 800 }),
+    hide: () => queueMicrotask(blur),
+    once: (_event: string, listener: () => void) => {
+      blur = listener;
+    },
+    removeListener: () => undefined,
+    isDestroyed: () => false,
+    show: () => {
+      order.push("restore");
+    },
+  });
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.captureNow;
+
+      assert.isBelow(order.indexOf("accessibility"), order.indexOf("restore"));
+    }),
+  ).pipe(
+    Effect.provide(
+      testLayer("darwin", {
+        makeDirectory: () => Effect.void,
+        rename: () => Effect.void,
+        writeFileString: () => Effect.void,
+      }),
+    ),
+    Effect.ensuring(Effect.sync(() => focusedWindowMock.mockReset())),
+  );
+});
+
 it.effect("uses the unfocused main window for a macOS cross-display transition", () => {
   const png = Buffer.from([1, 2, 3]);
   const active = {
