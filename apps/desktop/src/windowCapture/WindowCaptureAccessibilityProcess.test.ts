@@ -1,0 +1,68 @@
+import { assert, beforeEach, it } from "@effect/vitest";
+import * as NodeEvents from "node:events";
+import { vi } from "vite-plus/test";
+
+const forkMock = vi.hoisted(() =>
+  vi.fn<
+    (_path: string, _args: ReadonlyArray<string>, _options: { env?: NodeJS.ProcessEnv }) => unknown
+  >(),
+);
+
+vi.mock("node:child_process", () => ({ fork: forkMock }));
+
+import { startWindowCaptureAccessibilityProcess } from "./WindowCaptureAccessibilityProcess.ts";
+
+const worker = Object.assign(new NodeEvents.EventEmitter(), {
+  kill: vi.fn(() => true),
+  send: vi.fn(),
+});
+const request = {
+  active: {
+    title: "Zoom Meeting",
+    bounds: { x: 10, y: 20, width: 800, height: 600 },
+    owner: { processId: 42 },
+  },
+  platform: "darwin" as const,
+  sourceTitle: "Zoom Meeting",
+  imageSize: { width: 1_600, height: 1_200 },
+};
+
+beforeEach(() => {
+  worker.removeAllListeners();
+  worker.kill.mockClear();
+  worker.send.mockClear();
+  forkMock.mockReset().mockReturnValue(worker);
+});
+
+it("keeps T3 alive when Zoom crashes accessibility extraction", async () => {
+  const process = startWindowCaptureAccessibilityProcess("accessibility.cjs");
+  const read = process.read(request);
+  worker.emit("message", "ready");
+  worker.emit("message", "started");
+  await read.started;
+  worker.emit("exit", null, "SIGABRT");
+
+  assert.isUndefined(await read.result);
+});
+
+it("returns immediately when accessibility crashes before the screenshot is ready", async () => {
+  const process = startWindowCaptureAccessibilityProcess("accessibility.cjs");
+  worker.emit("exit", null, "SIGABRT");
+
+  const read = process.read(request);
+  await read.started;
+  assert.isUndefined(await read.result);
+});
+
+it("returns accessibility extracted by the helper", async () => {
+  const process = startWindowCaptureAccessibilityProcess("accessibility.cjs");
+  const read = process.read(request);
+  const context = { accessibleText: "Meeting controls" };
+  worker.emit("message", "ready");
+  worker.emit("message", "started");
+  worker.emit("message", { type: "result", context });
+
+  await read.started;
+  assert.deepEqual(await read.result, context);
+  assert.strictEqual(forkMock.mock.calls[0]?.[2]?.env?.ELECTRON_RUN_AS_NODE, "1");
+});

@@ -1,0 +1,231 @@
+// @effect-diagnostics globalTimers:off -- Accessibility timeouts run outside Effect fibers.
+
+import {
+  WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS,
+  type WindowCaptureAccessibility,
+} from "@t3tools/contracts";
+import type * as Electron from "electron";
+
+import {
+  accessibleWindowElementTree,
+  accessibleWindowText,
+  compactAccessibilityTree,
+  findAccessibleWindow,
+  isWaylandSession,
+} from "./windowCapture.ts";
+
+const ACCESSIBILITY_TIMEOUT_MS = 3_000;
+
+export type AccessibleWindowIdentity = {
+  readonly title: string;
+  readonly bounds: Electron.Rectangle;
+  readonly owner: { readonly processId: number };
+};
+
+export type CapturedWindowAccessibilityContext = {
+  readonly accessibleText?: string;
+  readonly accessibility?: WindowCaptureAccessibility;
+};
+
+export type WindowCaptureAccessibilityRequest = {
+  readonly active: AccessibleWindowIdentity;
+  readonly platform: NodeJS.Platform;
+  readonly sourceTitle: string;
+  readonly imageSize: Electron.Size;
+};
+
+type AccessibilityApp = (typeof import("@crowecawcaw/xa11y"))["App"];
+
+type AccessibilityReadProgress = {
+  accessibleText: string | undefined;
+  flatComplete: boolean;
+  richComplete: boolean;
+  richLocationsReliable: boolean;
+  richRoot?: Extract<WindowCaptureAccessibility, { format: "element-tree" }>["root"];
+  richTruncated: boolean;
+  timedOut: boolean;
+};
+
+function accessibilityReadSnapshot(
+  progress: AccessibilityReadProgress,
+  imageSize: Electron.Size,
+): CapturedWindowAccessibilityContext | undefined {
+  const richTree = progress.richRoot
+    ? compactAccessibilityTree(progress.richRoot, {
+        descendantLocationsReliable: progress.richLocationsReliable,
+      })
+    : undefined;
+  const accessibleText =
+    progress.accessibleText ??
+    (richTree
+      ? accessibleWindowText(richTree.root, WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS)
+      : undefined);
+  const accessibility: WindowCaptureAccessibility | undefined =
+    progress.richComplete && richTree
+      ? {
+          format: "element-tree",
+          coordinateSpace: "captured-image",
+          imageSize,
+          truncated: progress.richTruncated || richTree.truncated,
+          root: richTree.root,
+        }
+      : progress.flatComplete && accessibleText
+        ? {
+            format: "flat-text",
+            text: accessibleText,
+            truncated: accessibleText.length >= WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS,
+          }
+        : richTree
+          ? {
+              format: "element-tree",
+              coordinateSpace: "captured-image",
+              imageSize,
+              truncated: true,
+              root: richTree.root,
+            }
+          : undefined;
+  if (!accessibleText && !accessibility) return undefined;
+  return JSON.parse(
+    JSON.stringify({
+      ...(accessibleText ? { accessibleText } : {}),
+      ...(accessibility ? { accessibility } : {}),
+    }),
+  ) as CapturedWindowAccessibilityContext;
+}
+
+async function readCapturedWindowAccessibility(
+  App: AccessibilityApp,
+  request: WindowCaptureAccessibilityRequest,
+  progress: AccessibilityReadProgress,
+  onStarted: () => void,
+): Promise<CapturedWindowAccessibilityContext | undefined> {
+  const { active, platform, sourceTitle, imageSize } = request;
+  const windows =
+    platform === "win32"
+      ? (await App.list())
+          .filter((app) => app.pid === active.owner.processId)
+          .map((app) => app.asElement())
+      : await (await App.byPid(active.owner.processId, { timeout: 0 })).children();
+  const matchMode = isWaylandSession(platform, process.env) ? "wayland" : "screen-bounds";
+  const window = findAccessibleWindow(
+    windows,
+    { title: active.title, sourceTitle, bounds: active.bounds },
+    matchMode,
+  );
+  if (!window) {
+    onStarted();
+    return undefined;
+  }
+  const accessibleBounds = window.bounds;
+  const locationsReliable =
+    matchMode === "screen-bounds" ||
+    (accessibleBounds !== null &&
+      Math.abs(accessibleBounds.x - active.bounds.x) <= 2 &&
+      Math.abs(accessibleBounds.y - active.bounds.y) <= 2);
+  const flatRead = window
+    .tree()
+    .then((tree) => {
+      progress.accessibleText =
+        accessibleWindowText(tree, WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS) || undefined;
+      progress.flatComplete = true;
+    })
+    .catch(() => {
+      progress.flatComplete = true;
+    });
+  const richRead = accessibleWindowElementTree(window, window.bounds ?? active.bounds, imageSize, {
+    locationsReliable,
+    onProgress: (root, truncated, descendantLocationsReliable) => {
+      progress.richLocationsReliable = descendantLocationsReliable;
+      progress.richRoot = root;
+      progress.richTruncated = truncated;
+    },
+    shouldContinue: () => !progress.timedOut,
+    verifyDescendantLocations: matchMode === "wayland",
+  })
+    .then((rich) => {
+      progress.richComplete = true;
+      if (rich) {
+        progress.richRoot = rich.root;
+        progress.richTruncated = rich.truncated;
+      }
+    })
+    .catch(() => {
+      progress.richComplete = true;
+    });
+  onStarted();
+  await Promise.all([flatRead, richRead]);
+  return accessibilityReadSnapshot(progress, imageSize);
+}
+
+let activeAccessibilityRead: Promise<unknown> | undefined;
+
+async function raceAccessibleRead<T>(
+  run: () => Promise<T>,
+  timeoutValue: () => T | undefined,
+): Promise<T | undefined> {
+  if (activeAccessibilityRead) return undefined;
+  const read = run().catch(() => undefined);
+  activeAccessibilityRead = read;
+  void read.finally(() => {
+    if (activeAccessibilityRead === read) activeAccessibilityRead = undefined;
+  });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      read,
+      new Promise<T | undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(timeoutValue()), ACCESSIBILITY_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+export function readAccessibleWindowContextWithApp(
+  App: AccessibilityApp,
+  request: WindowCaptureAccessibilityRequest,
+  onStarted: () => void = () => undefined,
+): Promise<CapturedWindowAccessibilityContext | undefined> {
+  const progress: AccessibilityReadProgress = {
+    accessibleText: undefined,
+    flatComplete: false,
+    richComplete: false,
+    richLocationsReliable: false,
+    richTruncated: false,
+    timedOut: false,
+  };
+  return raceAccessibleRead(
+    () => readCapturedWindowAccessibility(App, request, progress, onStarted),
+    () => {
+      progress.timedOut = true;
+      return accessibilityReadSnapshot(progress, request.imageSize);
+    },
+  );
+}
+
+export async function readAccessibleWindowContext(
+  active: AccessibleWindowIdentity,
+  platform: NodeJS.Platform,
+  sourceTitle: string,
+  imageSize: Electron.Size = {
+    width: Math.max(1, Math.round(active.bounds.width)),
+    height: Math.max(1, Math.round(active.bounds.height)),
+  },
+): Promise<CapturedWindowAccessibilityContext | undefined> {
+  const App = await import("@crowecawcaw/xa11y").then(
+    (module) => module.App,
+    () => undefined,
+  );
+  return App
+    ? readAccessibleWindowContextWithApp(App, { active, platform, sourceTitle, imageSize })
+    : undefined;
+}
+
+export async function readAccessibleWindowText(
+  active: AccessibleWindowIdentity,
+  platform: NodeJS.Platform,
+  sourceTitle: string,
+): Promise<string | undefined> {
+  return (await readAccessibleWindowContext(active, platform, sourceTitle))?.accessibleText;
+}

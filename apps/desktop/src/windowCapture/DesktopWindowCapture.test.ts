@@ -18,6 +18,8 @@ import { vi } from "vite-plus/test";
 const {
   activeWindowMock,
   animationSettingsMock,
+  accessibilityProcessCloseMock,
+  accessibilityProcessReadMock,
   accessibilityByPidMock,
   accessibilityListMock,
   accessibilityTrustedMock,
@@ -47,6 +49,15 @@ const {
     prefersReducedMotion: true,
     shouldRenderRichAnimation: false,
   })),
+  accessibilityProcessCloseMock: vi.fn(),
+  accessibilityProcessReadMock: vi.fn<
+    (request: import("./WindowCaptureAccessibility.ts").WindowCaptureAccessibilityRequest) => {
+      started: Promise<void>;
+      result: Promise<
+        import("./WindowCaptureAccessibility.ts").CapturedWindowAccessibilityContext | undefined
+      >;
+    }
+  >(),
   accessibilityByPidMock: vi.fn(),
   accessibilityListMock: vi.fn(),
   accessibilityTrustedMock: vi.fn((_prompt = false) => true),
@@ -114,6 +125,12 @@ vi.mock("@crowecawcaw/xa11y", () => {
     App: { byPid: accessibilityByPidMock, list: accessibilityListMock },
   };
 });
+vi.mock("./WindowCaptureAccessibilityProcess.ts", () => ({
+  startWindowCaptureAccessibilityProcess: () => ({
+    read: accessibilityProcessReadMock,
+    close: accessibilityProcessCloseMock,
+  }),
+}));
 vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
 vi.mock("./MacWindowCapture.ts", () => ({ captureMacWindowSnapshot: macCaptureMock }));
 vi.mock("./LinuxWindowCapture.ts", () => ({
@@ -316,6 +333,15 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWindowCapture from "./DesktopWindowCapture.ts";
+accessibilityProcessReadMock.mockImplementation((request) => ({
+  started: Promise.resolve(),
+  result: DesktopWindowCapture.readAccessibleWindowContext(
+    request.active,
+    request.platform,
+    request.sourceTitle,
+    request.imageSize,
+  ),
+}));
 const decodePendingMetadata = Schema.decodeUnknownEffect(
   Schema.fromJsonString(DesktopPendingWindowCapture),
 );
@@ -779,9 +805,13 @@ it.effect("starts accessibility lookup before restoring the captured app", () =>
     bounds: { x: 10, y: 20, width: 800, height: 600 },
   } as const;
   activeWindowMock.mockReset().mockResolvedValue(active);
-  accessibilityByPidMock.mockReset().mockImplementation(async () => {
+  accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [] });
+  accessibilityProcessReadMock.mockImplementationOnce(() => {
     order.push("accessibility");
-    return { children: async () => [] };
+    return {
+      started: Promise.resolve(),
+      result: Promise.resolve(undefined),
+    };
   });
   macCaptureMock.mockReset().mockResolvedValue({ source: { name: "Terminal" }, png });
   let blur: () => void = () => undefined;
