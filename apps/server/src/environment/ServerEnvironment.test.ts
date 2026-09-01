@@ -73,7 +73,11 @@ const makeServerConfig = Effect.fn(function* (baseDir: string) {
 });
 
 it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
-  it.effect("concurrent initializers use the same persisted environment id", () =>
+  it.effect.each([
+    { name: "missing", content: undefined },
+    { name: "empty", content: "" },
+    { name: "whitespace-only", content: " \t\n" },
+  ])("concurrent initializers recover a $name environment id file", ({ content }) =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const crypto = yield* Crypto.Crypto;
@@ -82,14 +86,41 @@ it.layer(NodeServices.layer)("ServerEnvironmentLive", (it) => {
       });
       const serverConfig = yield* makeServerConfig(baseDir);
       yield* fileSystem.makeDirectory(serverConfig.stateDir, { recursive: true });
+      if (content !== undefined) {
+        yield* fileSystem.writeFileString(serverConfig.environmentIdPath, content);
+      }
       const bothGenerated = yield* Deferred.make<void>();
+      const bothReadEmpty = yield* Deferred.make<void>();
+      const firstInitialized = yield* Deferred.make<void>();
       let remaining = 2;
+      let emptyReads = 0;
       const readIdentity = Effect.gen(function* () {
         const identity = yield* ServerEnvironment.ServerEnvironmentIdentity;
         return yield* identity.getEnvironmentId;
       }).pipe(
+        Effect.tap(() => Deferred.succeed(firstInitialized, undefined)),
         Effect.provide(Layer.fresh(ServerEnvironment.identityLayer)),
         Effect.provideService(ServerConfig.ServerConfig, serverConfig),
+        Effect.provideService(FileSystem.FileSystem, {
+          ...fileSystem,
+          readFileString: (path) =>
+            fileSystem.readFileString(path).pipe(
+              Effect.tap(
+                Effect.fn(function* (value) {
+                  if (path !== serverConfig.environmentIdPath || remaining > 0 || value.trim()) {
+                    return;
+                  }
+                  // Both observe the empty file, but one repairs it after the other has finished.
+                  if (++emptyReads === 2) {
+                    yield* Deferred.succeed(bothReadEmpty, undefined);
+                    yield* Deferred.await(firstInitialized);
+                  } else {
+                    yield* Deferred.await(bothReadEmpty);
+                  }
+                }),
+              ),
+            ),
+        }),
         Effect.provideService(Crypto.Crypto, {
           ...crypto,
           randomUUIDv4: Effect.gen(function* () {

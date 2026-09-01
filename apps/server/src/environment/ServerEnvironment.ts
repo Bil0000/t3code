@@ -114,7 +114,11 @@ const makeIdentity = Effect.gen(function* () {
   });
 
   const persistEnvironmentId = Effect.fn("ServerEnvironmentIdentity.persistEnvironmentId")(
-    function* (value: string) {
+    function* (value: string, mode: "create" | "recover") {
+      const destinationPath =
+        mode === "recover"
+          ? `${serverConfig.environmentIdPath}.recovery`
+          : serverConfig.environmentIdPath;
       const tempPath = yield* fileSystem.makeTempFileScoped({
         directory: serverConfig.stateDir,
         prefix: ".environment-id-",
@@ -122,12 +126,18 @@ const makeIdentity = Effect.gen(function* () {
       yield* fileSystem.writeFileString(tempPath, `${value}\n`);
       // Publish the completed file without replacing an ID created by another process.
       yield* fileSystem
-        .link(tempPath, serverConfig.environmentIdPath)
+        .link(tempPath, destinationPath)
         .pipe(
           Effect.catch((cause) =>
             cause.reason._tag === "AlreadyExists" ? Effect.void : Effect.fail(cause),
           ),
         );
+      if (mode === "recover") {
+        // Keep the recovery ID so delayed initializers also publish the same winner.
+        yield* fileSystem.remove(tempPath);
+        yield* fileSystem.copyFile(destinationPath, tempPath);
+        yield* fileSystem.rename(tempPath, serverConfig.environmentIdPath);
+      }
     },
     Effect.scoped,
     Effect.mapError(
@@ -147,8 +157,12 @@ const makeIdentity = Effect.gen(function* () {
     }
 
     const generated = yield* crypto.randomUUIDv4;
-    yield* persistEnvironmentId(generated);
-    const winner = yield* readPersistedEnvironmentId;
+    yield* persistEnvironmentId(generated, "create");
+    let winner = yield* readPersistedEnvironmentId;
+    if (winner === null) {
+      yield* persistEnvironmentId(generated, "recover");
+      winner = yield* readPersistedEnvironmentId;
+    }
     if (winner === null) {
       return yield* new ServerEnvironmentIdPersistenceError({
         operation: "initialize",
