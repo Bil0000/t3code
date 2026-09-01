@@ -105,15 +105,19 @@ export const make = Effect.gen(function* () {
     // Inside the mounted AppImage, process.execPath points at a transient
     // /tmp/.mount_* path — the handler must launch the AppImage itself.
     const execTarget = Option.getOrElse(environment.appImagePath, () => process.execPath);
+    const content = renderUrlHandlerDesktopEntry({
+      displayName: environment.displayName,
+      execTarget,
+      scheme,
+    });
+    // Pre-ready setup normally wrote this already. Avoid truncating a valid
+    // entry while the portal may be reading it during startup.
+    const existing = yield* fileSystem
+      .readFileString(desktopEntryPath)
+      .pipe(Effect.orElseSucceed(() => null));
+    if (existing === content) return;
     yield* fileSystem.makeDirectory(environment.linuxApplicationsDir, { recursive: true });
-    yield* fileSystem.writeFileString(
-      desktopEntryPath,
-      renderUrlHandlerDesktopEntry({
-        displayName: environment.displayName,
-        execTarget,
-        scheme,
-      }),
-    );
+    yield* fileSystem.writeFileString(desktopEntryPath, content);
   }).pipe(
     Effect.mapError(
       (cause) =>
