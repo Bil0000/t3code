@@ -314,19 +314,19 @@ export function WindowCaptureSettings() {
               <Menu>
                 <MenuTrigger
                   aria-label="Window capture sound"
-                  className={cn(selectTriggerVariants({ size: "sm" }), "w-40")}
+                  className={cn(selectTriggerVariants({ size: "sm" }), "w-28 min-w-28")}
                   disabled={!captureAvailable}
                 >
                   <span className="min-w-0 flex-1 truncate text-left">
                     {soundSelection === "off"
                       ? "Off"
                       : soundSelection === "soft-pop"
-                        ? "Whoosh (Default)"
+                        ? "Whoosh"
                         : "Click"}
                   </span>
                   <ChevronDownIcon className="-me-1 size-3 shrink-0 opacity-50" />
                 </MenuTrigger>
-                <MenuPopup align="end" className="w-40">
+                <MenuPopup align="end" className="w-28">
                   <MenuRadioGroup
                     onValueChange={(value) =>
                       void save(windowCaptureSoundPatch(value as WindowCaptureSoundSelection))
@@ -336,7 +336,7 @@ export function WindowCaptureSettings() {
                     <MenuRadioItem value="off">Off</MenuRadioItem>
                     <div className="grid grid-cols-[1fr_auto] rounded-sm has-data-checked:bg-foreground/[0.08]">
                       <MenuRadioItem className="data-checked:bg-transparent" value="soft-pop">
-                        Whoosh (Default)
+                        Whoosh
                       </MenuRadioItem>
                       <MenuItem
                         aria-label="Play Whoosh"
