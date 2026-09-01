@@ -1170,6 +1170,36 @@ it.effect("registers a configured key chord instead of the Shift listener", () =
   ).pipe(Effect.provide(testLayer("linux")));
 });
 
+it.effect("keeps shortcut registration errors off the capture status", () => {
+  registerShortcutMock.mockReset().mockReturnValue(false);
+  const settings = {
+    ...DEFAULT_CLIENT_SETTINGS,
+    windowCaptureEnabled: true,
+    windowCaptureShortcut: {
+      key: "k",
+      metaKey: false,
+      ctrlKey: true,
+      shiftKey: false,
+      altKey: true,
+      modKey: false,
+    },
+  };
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure(settings);
+
+      const state = yield* service.state;
+      assert.isNull(state.message);
+      assert.equal(
+        state.shortcutMessage,
+        "This shortcut is already used by the system or another app.",
+      );
+    }),
+  ).pipe(Effect.provide(testLayer("linux")));
+});
+
 it.effect("defers Wayland shortcut confirmation until settings are applied", () => {
   vi.stubEnv("XDG_SESSION_TYPE", "wayland");
   registerShortcutMock.mockReset().mockReturnValue(false);

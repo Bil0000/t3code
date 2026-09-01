@@ -633,6 +633,7 @@ export const make = Effect.gen(function* () {
     mode: captureMode(environment.platform),
     shortcut: DEFAULT_CLIENT_SETTINGS.windowCaptureShortcut,
     shortcutRegistered: false,
+    shortcutMessage: null,
     message: null,
   });
   const busyRef = yield* Ref.make(false);
@@ -675,14 +676,17 @@ export const make = Effect.gen(function* () {
     stopShiftShortcut = undefined;
   };
 
+  const notifyFailure = desktopWindow
+    .dispatchMenuAction(CAPTURE_FAILED_ACTION)
+    .pipe(Effect.catch(() => Effect.void));
   const setFailure = (message: string) =>
-    Ref.update(stateRef, (state) => ({ ...state, message })).pipe(
-      Effect.andThen(
-        desktopWindow
-          .dispatchMenuAction(CAPTURE_FAILED_ACTION)
-          .pipe(Effect.catch(() => Effect.void)),
-      ),
-    );
+    Ref.update(stateRef, (state) => ({ ...state, message })).pipe(Effect.andThen(notifyFailure));
+  const setShortcutFailure = (shortcutMessage: string) =>
+    Ref.update(stateRef, (state) => ({
+      ...state,
+      shortcutRegistered: false,
+      shortcutMessage,
+    })).pipe(Effect.andThen(notifyFailure));
 
   const persistCapture = Effect.fn("desktop.windowCapture.persistCapture")(function* (
     settings: ClientSettings,
@@ -863,6 +867,7 @@ export const make = Effect.gen(function* () {
         mode,
         shortcut,
         shortcutRegistered: false,
+        shortcutMessage: null,
         message:
           mode === "unavailable" ? "Window capture is not supported on this platform." : null,
       });
@@ -877,6 +882,7 @@ export const make = Effect.gen(function* () {
         mode,
         shortcut,
         shortcutRegistered: false,
+        shortcutMessage: null,
         message: permissionMessage,
       });
       return;
@@ -893,12 +899,8 @@ export const make = Effect.gen(function* () {
           },
           () => {
             void runPromise(
-              Ref.update(stateRef, (state) => ({ ...state, shortcutRegistered: false })).pipe(
-                Effect.andThen(
-                  setFailure(
-                    windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
-                  ),
-                ),
+              setShortcutFailure(
+                windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
               ),
             ).catch(() => undefined);
           },
@@ -925,7 +927,8 @@ export const make = Effect.gen(function* () {
       mode,
       shortcut,
       shortcutRegistered: registered,
-      message: registered
+      message: null,
+      shortcutMessage: registered
         ? mode === "portal" && isModifierPairShortcut(settings.windowCaptureShortcut)
           ? WAYLAND_SUBSTITUTION_MESSAGE
           : isModifierPairShortcut(shortcut)

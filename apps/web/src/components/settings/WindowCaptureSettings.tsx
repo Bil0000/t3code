@@ -7,8 +7,10 @@ import {
   type DesktopWindowCaptureState,
   type WindowCaptureModifier,
   type WindowCaptureShortcut,
+  type WindowCaptureSound,
 } from "@t3tools/contracts";
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
+import { PlayIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
@@ -54,6 +56,15 @@ const MODIFIER_CODES: Readonly<Record<WindowCaptureModifier, readonly [string, s
   control: ["ControlLeft", "ControlRight"],
   alt: ["AltLeft", "AltRight"],
 };
+
+const SOUND_OPTIONS = [
+  { value: "soft-pop", label: "Whoosh (Default)", previewLabel: "Whoosh" },
+  { value: "camera-shutter", label: "Click", previewLabel: "Click" },
+] as const satisfies ReadonlyArray<{
+  value: WindowCaptureSound;
+  label: string;
+  previewLabel: string;
+}>;
 
 type ShortcutCheck =
   | { readonly status: "idle"; readonly availability: null }
@@ -243,7 +254,8 @@ export function WindowCaptureSettings() {
           ? shortcutCheck.availability.available
             ? (shortcutCheck.availability.message ?? "Available. Save to apply.")
             : shortcutCheck.availability.message
-          : (state?.message ?? (state?.shortcutRegistered ? "Available and reserved." : undefined));
+          : (state?.shortcutMessage ??
+            (state?.shortcutRegistered ? "Available and reserved." : undefined));
 
   return (
     <SettingsPageContainer>
@@ -315,40 +327,50 @@ export function WindowCaptureSettings() {
             {...searchableSetting("window-capture-sound")}
             description="Choose the sound played when capture starts."
             control={
-              <>
-                <Select
-                  disabled={!captureAvailable}
-                  onValueChange={(value) =>
-                    value &&
-                    void save(windowCaptureSoundPatch(value as WindowCaptureSoundSelection))
-                  }
-                  value={soundSelection}
-                >
-                  <SelectTrigger aria-label="Window capture sound" className="w-full sm:w-44">
-                    <SelectValue>
-                      {soundSelection === "off"
-                        ? "Off"
-                        : soundSelection === "soft-pop"
-                          ? "Whoosh (Default)"
-                          : "Click"}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup align="end" alignItemWithTrigger={false}>
-                    <SelectItem value="off">Off</SelectItem>
-                    <SelectItem value="soft-pop">Whoosh (Default)</SelectItem>
-                    <SelectItem value="camera-shutter">Click</SelectItem>
-                  </SelectPopup>
-                </Select>
-                <Button
-                  type="button"
-                  size="xs"
-                  variant="outline"
-                  disabled={!captureAvailable || soundSelection === "off"}
-                  onClick={() => playWindowCaptureSound(settings.windowCaptureSound)}
-                >
-                  Test sound
-                </Button>
-              </>
+              <Select
+                disabled={!captureAvailable}
+                onValueChange={(value) =>
+                  value && void save(windowCaptureSoundPatch(value as WindowCaptureSoundSelection))
+                }
+                value={soundSelection}
+              >
+                <SelectTrigger aria-label="Window capture sound" className="w-40" size="sm">
+                  <SelectValue>
+                    {soundSelection === "off"
+                      ? "Off"
+                      : soundSelection === "soft-pop"
+                        ? "Whoosh (Default)"
+                        : "Click"}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectPopup align="end" alignItemWithTrigger={false}>
+                  <SelectItem value="off">Off</SelectItem>
+                  {SOUND_OPTIONS.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      <span className="flex w-full items-center justify-between gap-3">
+                        {option.label}
+                        <Button
+                          aria-label={"Play " + option.previewLabel}
+                          className="-my-1 -me-1"
+                          size="icon-micro"
+                          variant="ghost-muted"
+                          onPointerDown={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }}
+                          onClick={(event) => {
+                            event.preventDefault();
+                            event.stopPropagation();
+                            playWindowCaptureSound(option.value);
+                          }}
+                        >
+                          <PlayIcon />
+                        </Button>
+                      </span>
+                    </SelectItem>
+                  ))}
+                </SelectPopup>
+              </Select>
             }
           />
           <SettingsRow

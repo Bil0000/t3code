@@ -192,6 +192,7 @@ export const DesktopWindowCaptureState = Schema.Struct({
   mode: DesktopWindowCaptureMode,
   shortcut: WindowCaptureShortcut,
   shortcutRegistered: Schema.Boolean,
+  shortcutMessage: Schema.NullOr(Schema.String),
   message: Schema.NullOr(Schema.String),
 });
 export type DesktopWindowCaptureState = typeof DesktopWindowCaptureState.Type;
