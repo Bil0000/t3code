@@ -60,6 +60,13 @@ const MODIFIER_CODES: Readonly<Record<WindowCaptureModifier, readonly [string, s
   alt: ["AltLeft", "AltRight"],
 };
 
+// The sound rows pair a radio item with its preview button, so the checked and
+// highlighted backgrounds live on the wrapper to stay one unbroken row.
+const soundOptionRowClassName =
+  "grid grid-cols-[1fr_auto] rounded-sm has-data-checked:not-has-data-highlighted:bg-foreground/[0.08] has-data-highlighted:bg-accent";
+const soundOptionItemClassName = "data-checked:bg-transparent data-highlighted:bg-transparent";
+const soundPreviewClassName = "min-h-7 w-7 justify-center px-0 data-highlighted:bg-transparent";
+
 type ShortcutCheck =
   | { readonly status: "idle"; readonly availability: null }
   | { readonly status: "checking"; readonly availability: null }
@@ -314,7 +321,7 @@ export function WindowCaptureSettings() {
               <Menu>
                 <MenuTrigger
                   aria-label="Window capture sound"
-                  className={cn(selectTriggerVariants({ size: "sm" }), "w-28 min-w-28")}
+                  className={cn(selectTriggerVariants({ size: "sm" }), "w-auto min-w-0")}
                   disabled={!captureAvailable}
                 >
                   <span className="min-w-0 flex-1 truncate text-left">
@@ -326,7 +333,7 @@ export function WindowCaptureSettings() {
                   </span>
                   <ChevronDownIcon className="-me-1 size-3 shrink-0 opacity-50" />
                 </MenuTrigger>
-                <MenuPopup align="end" className="w-28">
+                <MenuPopup align="end">
                   <MenuRadioGroup
                     onValueChange={(value) =>
                       void save(windowCaptureSoundPatch(value as WindowCaptureSoundSelection))
@@ -334,26 +341,26 @@ export function WindowCaptureSettings() {
                     value={soundSelection}
                   >
                     <MenuRadioItem value="off">Off</MenuRadioItem>
-                    <div className="grid grid-cols-[1fr_auto] rounded-sm has-data-checked:bg-foreground/[0.08]">
-                      <MenuRadioItem className="data-checked:bg-transparent" value="soft-pop">
-                        Whoosh
+                    <div className={soundOptionRowClassName}>
+                      <MenuRadioItem className={soundOptionItemClassName} value="soft-pop">
+                        Whoosh <span className="text-muted-foreground">(Default)</span>
                       </MenuRadioItem>
                       <MenuItem
                         aria-label="Play Whoosh"
-                        className="min-h-7 w-7 justify-center px-0"
+                        className={soundPreviewClassName}
                         closeOnClick={false}
                         onClick={() => playWindowCaptureSound("soft-pop")}
                       >
                         <PlayIcon />
                       </MenuItem>
                     </div>
-                    <div className="grid grid-cols-[1fr_auto] rounded-sm has-data-checked:bg-foreground/[0.08]">
-                      <MenuRadioItem className="data-checked:bg-transparent" value="camera-shutter">
+                    <div className={soundOptionRowClassName}>
+                      <MenuRadioItem className={soundOptionItemClassName} value="camera-shutter">
                         Click
                       </MenuRadioItem>
                       <MenuItem
                         aria-label="Play Click"
-                        className="min-h-7 w-7 justify-center px-0"
+                        className={soundPreviewClassName}
                         closeOnClick={false}
                         onClick={() => playWindowCaptureSound("camera-shutter")}
                       >
