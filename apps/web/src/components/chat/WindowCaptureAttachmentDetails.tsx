@@ -149,7 +149,7 @@ export function WindowCaptureAttachmentDetails({
           <span className="truncate">{source.appName}</span>
           <WindowCaptureContentsButton
             source={source}
-            className="pointer-events-auto text-white/60 hover:text-white focus-visible:ring-white/70"
+            className="pointer-events-auto text-white/60 hover:bg-white/10 hover:text-white focus-visible:ring-white/70"
           />
         </div>
         <div className="truncate text-[9px] leading-3.5 text-white/70">
