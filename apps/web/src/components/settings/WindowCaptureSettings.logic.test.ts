@@ -7,6 +7,7 @@ import {
   windowCaptureUnavailableMessage,
   windowCaptureSoundPatch,
   windowCaptureFeedbackUnavailableMessage,
+  windowCaptureOnboardingContent,
 } from "./WindowCaptureSettings.logic";
 
 it.each([
@@ -70,4 +71,30 @@ it.each([
   };
   expect(windowCaptureStatus(state, true)).toContain(message);
   expect(windowCaptureStatus({ ...state, message: "Capture failed" }, true)).toBe("Capture failed");
+});
+
+it("hides capture onboarding when desktop capture is unavailable", () => {
+  const state: DesktopWindowCaptureState = {
+    mode: "unavailable",
+    shortcut: DEFAULT_CLIENT_SETTINGS.windowCaptureShortcut,
+    shortcutRegistered: false,
+    shortcutMessage: null,
+    message: "Wayland is required.",
+  };
+
+  expect(windowCaptureOnboardingContent(state)).toBeNull();
+});
+
+it("does not advertise a modifier-pair default in Wayland onboarding", () => {
+  const state: DesktopWindowCaptureState = {
+    mode: "portal",
+    linuxBackend: "screenshot-portal",
+    shortcut: DEFAULT_CLIENT_SETTINGS.windowCaptureShortcut,
+    shortcutRegistered: false,
+    shortcutMessage: null,
+    message: null,
+  };
+
+  expect(windowCaptureOnboardingContent(state)).toBe("choose-shortcut");
+  expect(windowCaptureOnboardingContent({ ...state, mode: "direct" })).toBe("show-shortcut");
 });

@@ -37,6 +37,13 @@ export function windowCaptureFeedbackUnavailableMessage(
     : "Capture effects on Wayland require the T3 Code GNOME extension.";
 }
 
+export function windowCaptureOnboardingContent(
+  state: DesktopWindowCaptureState | null,
+): "show-shortcut" | "choose-shortcut" | null {
+  if (!state || state.mode === "unavailable") return null;
+  return state.mode === "portal" ? "choose-shortcut" : "show-shortcut";
+}
+
 export function windowCaptureUnavailableMessage(hasBridge: boolean): string | undefined {
   if (hasBridge) return undefined;
   return typeof window !== "undefined" && window.desktopBridge

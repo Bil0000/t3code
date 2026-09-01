@@ -1,5 +1,7 @@
-import { CameraIcon, SparklesIcon } from "lucide-react";
+import type { DesktopWindowCaptureState } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
+import { CameraIcon, SparklesIcon } from "lucide-react";
+import { useEffect, useState } from "react";
 
 import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
 import {
@@ -17,6 +19,7 @@ import {
   DialogPopup,
   DialogTitle,
 } from "../ui/dialog";
+import { windowCaptureOnboardingContent } from "../settings/WindowCaptureSettings.logic";
 import { WindowCaptureShortcutKeys } from "./WindowCaptureShortcutKeys";
 
 export function WindowCaptureOnboardingDialog() {
@@ -24,9 +27,28 @@ export function WindowCaptureOnboardingDialog() {
   const updateSettings = useUpdateClientSettings();
   const settingsHydrated = useClientSettingsHydrated();
   const navigate = useNavigate();
+  const bridge = getDesktopWindowCaptureBridge();
+  const [captureState, setCaptureState] = useState<DesktopWindowCaptureState | null>(null);
+
+  useEffect(() => {
+    if (!bridge) return;
+    let active = true;
+    void bridge
+      .getWindowCaptureState()
+      .then((state) => {
+        if (active) setCaptureState(state);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [bridge]);
+
+  const content = windowCaptureOnboardingContent(captureState);
   const open =
     settingsHydrated &&
-    Boolean(getDesktopWindowCaptureBridge()) &&
+    Boolean(bridge) &&
+    content !== null &&
     !settings.windowCaptureOnboardingDismissed;
 
   const close = () => {
@@ -55,9 +77,13 @@ export function WindowCaptureOnboardingDialog() {
           <div className="flex items-center justify-between rounded-xl border border-border bg-muted/50 px-4 py-3">
             <span className="flex items-center gap-2 text-sm font-medium">
               <SparklesIcon className="size-4 text-muted-foreground" />
-              Default shortcut
+              {content === "choose-shortcut" ? "Shortcut" : "Default shortcut"}
             </span>
-            <WindowCaptureShortcutKeys shortcut={settings.windowCaptureShortcut} />
+            {content === "show-shortcut" ? (
+              <WindowCaptureShortcutKeys shortcut={settings.windowCaptureShortcut} />
+            ) : (
+              <span className="text-muted-foreground text-xs">Choose in Settings</span>
+            )}
           </div>
         </DialogPanel>
         <DialogFooter>
