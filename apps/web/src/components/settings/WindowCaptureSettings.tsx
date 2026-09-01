@@ -325,11 +325,15 @@ export function WindowCaptureSettings() {
                   disabled={!captureAvailable}
                 >
                   <span className="min-w-0 flex-1 truncate text-left">
-                    {soundSelection === "off"
-                      ? "Off"
-                      : soundSelection === "soft-pop"
-                        ? "Whoosh"
-                        : "Click"}
+                    {soundSelection === "off" ? (
+                      "Off"
+                    ) : soundSelection === "soft-pop" ? (
+                      <>
+                        Whoosh <span className="text-muted-foreground">(Default)</span>
+                      </>
+                    ) : (
+                      "Click"
+                    )}
                   </span>
                   <ChevronDownIcon className="-me-1 size-3 shrink-0 opacity-50" />
                 </MenuTrigger>
