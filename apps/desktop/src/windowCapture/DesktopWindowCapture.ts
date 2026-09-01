@@ -882,11 +882,17 @@ export const make = Effect.gen(function* () {
       shortcut,
       shortcutRegistered: registered,
       message: null,
-      shortcutMessage: registered
-        ? isModifierPairShortcut(shortcut)
-          ? observedPairMessage(shortcut, environment.platform)
-          : null
-        : windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
+      // Electron's portal result only confirms submission, not desktop consent.
+      shortcutMessage:
+        mode === "portal"
+          ? registered
+            ? "Requested from your desktop. Approve the system prompt to enable this shortcut."
+            : "Your desktop could not register this shortcut. Check global shortcut support and permissions."
+          : registered
+            ? isModifierPairShortcut(shortcut)
+              ? observedPairMessage(shortcut, environment.platform)
+              : null
+            : windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
     });
   });
 

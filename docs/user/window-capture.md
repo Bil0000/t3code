@@ -9,9 +9,14 @@ Open **Settings** > **Window Capture** to turn it on. Press both Shift keys toge
 window on macOS, Windows, and Linux with X11. Select the shortcut in Settings to record a different
 binding: press both keys of another modifier such as Command, Ctrl, or Alt together, or press a key
 chord. On Windows and Linux, the Windows or Super key can also open the system's own menu, so prefer
-another modifier there. T3 Code checks its own keybindings and asks the operating system whether the
-shortcut is already reserved before it lets you save. Global shortcuts are not available in
-Wayland sessions with the current Electron runtime; use **Capture window** from the command palette.
+another modifier there. T3 Code checks its own keybindings and, outside Wayland sessions, asks the
+operating system whether the shortcut is already reserved before it lets you save.
+
+On Linux with Wayland, choose a key chord; modifier-pair shortcuts are not supported. Saving submits
+the shortcut to your desktop's global-shortcut portal. Approve the system prompt if one appears.
+T3 Code cannot confirm whether the desktop accepted the binding, so a requested shortcut is not
+necessarily active. If your desktop does not support global shortcuts, use **Capture window** from
+the command palette.
 
 You can also use **Capture window** from the command palette.
 

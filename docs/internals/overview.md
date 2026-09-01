@@ -129,6 +129,14 @@ HTTP listener via `markHttpListening`; publish ready; fork the heartbeat; then e
 output or open the browser. Command readiness precedes the listener, so a socket that opens can
 already dispatch.
 
+The Electron shell acquires `DesktopPreReadyPlatform.layer` synchronously before asynchronous
+services. On Linux this sets the desktop-entry identity and global-shortcut portal flags before
+Chromium initializes its portal connection. Setting the identity later in `DesktopAppIdentity`
+is too late: Chromium caches the first registration, including failures. The identity must match
+the installed entry managed by `DesktopLinuxUrlHandler`. On Wayland, Electron's synchronous
+shortcut-registration result only confirms submission; it does not confirm desktop consent or
+an active binding.
+
 ## Related
 
 - [Workspace layout](./workspace-layout.md), [Glossary](./glossary.md)

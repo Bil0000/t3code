@@ -1267,7 +1267,7 @@ it.effect("does not register a Wayland modifier-pair shortcut when enabled", () 
   );
 });
 
-it.effect("registers an ordinary Wayland shortcut through Electron's portal when enabled", () => {
+it.effect("reports Wayland shortcut submission without claiming the desktop bound it", () => {
   vi.stubEnv("XDG_SESSION_TYPE", "wayland");
   registerShortcutMock.mockReset().mockReturnValue(true);
   const shortcut = {
@@ -1293,7 +1293,19 @@ it.effect("registers an ordinary Wayland shortcut through Electron's portal when
       assert.equal(registerShortcutMock.mock.calls[0]?.[0], "Control+Shift+9");
       assert.isTrue(state.shortcutRegistered);
       assert.deepEqual(state.shortcut, shortcut);
-      assert.isNull(state.shortcutMessage);
+      assert.equal(
+        state.shortcutMessage,
+        "Requested from your desktop. Approve the system prompt to enable this shortcut.",
+      );
+
+      registerShortcutMock.mockReturnValue(false);
+      yield* service.configure(settings);
+      const failed = yield* service.state;
+      assert.isFalse(failed.shortcutRegistered);
+      assert.equal(
+        failed.shortcutMessage,
+        "Your desktop could not register this shortcut. Check global shortcut support and permissions.",
+      );
     }),
   ).pipe(
     Effect.provide(testLayer("linux")),

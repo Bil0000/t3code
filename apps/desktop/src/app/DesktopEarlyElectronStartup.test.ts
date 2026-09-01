@@ -82,6 +82,7 @@ describe("DesktopEarlyElectronStartup", () => {
 
     assert.deepEqual(options, {
       linuxWmClass: "t3code-dev",
+      linuxDesktopEntryName: "com.t3tools.T3Code.Development.desktop",
       passwordStore: "gnome-libsecret",
     });
   });

@@ -5,17 +5,23 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { beforeEach, vi } from "vite-plus/test";
 
-const { appendSwitchMock, getSwitchValueMock, hasSwitchMock, registerSchemesMock } = vi.hoisted(
-  () => ({
-    appendSwitchMock: vi.fn(),
-    getSwitchValueMock: vi.fn(),
-    hasSwitchMock: vi.fn(),
-    registerSchemesMock: vi.fn(),
-  }),
-);
+const {
+  appendSwitchMock,
+  getSwitchValueMock,
+  hasSwitchMock,
+  registerSchemesMock,
+  setDesktopNameMock,
+} = vi.hoisted(() => ({
+  appendSwitchMock: vi.fn(),
+  getSwitchValueMock: vi.fn(),
+  hasSwitchMock: vi.fn(),
+  registerSchemesMock: vi.fn(),
+  setDesktopNameMock: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
   app: {
+    setDesktopName: setDesktopNameMock,
     commandLine: {
       appendSwitch: appendSwitchMock,
       getSwitchValue: getSwitchValueMock,
@@ -27,6 +33,8 @@ vi.mock("electron", () => ({
   },
 }));
 
+vi.mock("node:fs", () => ({ readFileSync: () => "{}" }));
+
 import * as DesktopPreReadyPlatform from "./DesktopPreReadyPlatform.ts";
 
 describe("DesktopPreReadyPlatform", () => {
@@ -35,6 +43,7 @@ describe("DesktopPreReadyPlatform", () => {
     getSwitchValueMock.mockReset();
     hasSwitchMock.mockReset();
     registerSchemesMock.mockReset();
+    setDesktopNameMock.mockReset();
   });
 
   it("reads an explicit Electron command-line switch value", () => {
@@ -107,6 +116,27 @@ describe("DesktopPreReadyPlatform", () => {
     assert.equal(appendSwitchMock.mock.calls.length, 0);
   });
 
+  it.effect("sets the Linux portal identity synchronously before startup can yield", () => {
+    vi.stubEnv("VITE_DEV_SERVER_URL", "");
+    getSwitchValueMock.mockReturnValue("");
+    let desktopName = "t3code.desktop";
+    setDesktopNameMock.mockImplementation((name: string) => {
+      desktopName = name;
+    });
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const portalIdentity = Promise.resolve().then(() => desktopName);
+        yield* Layer.build(
+          DesktopPreReadyPlatform.layer.pipe(
+            Layer.provide(Layer.succeed(HostProcessPlatform, "linux")),
+          ),
+        );
+        assert.equal(yield* Effect.promise(() => portalIdentity), "com.t3tools.T3Code.desktop");
+      }),
+    ).pipe(Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
+  });
+
   it.effect(
     "acquires a synchronous pre-ready layer before an asynchronous Clerk-shaped layer",
     () =>
@@ -154,6 +184,7 @@ describe("DesktopPreReadyPlatform", () => {
         assert.deepEqual(events, ["pre-ready", "clerk"]);
         assert.equal(registerSchemesMock.mock.calls.length, 1);
         assert.equal(appendSwitchMock.mock.calls.length, 0);
+        assert.equal(setDesktopNameMock.mock.calls.length, 0);
       }),
   );
 });

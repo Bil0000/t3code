@@ -80,7 +80,7 @@ function captureStatus(state: DesktopWindowCaptureState | null, enabled: boolean
   if (state.message) return state.message;
   if (!state.shortcutRegistered) return "The shortcut could not be registered.";
   return state.mode === "portal"
-    ? "Ready. Your system will ask you to choose a window."
+    ? "Once your desktop approves the shortcut, using it will open the system window picker."
     : "Ready. The active window will be captured.";
 }
 
