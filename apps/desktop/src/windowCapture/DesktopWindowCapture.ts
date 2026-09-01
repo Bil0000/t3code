@@ -773,6 +773,12 @@ export const make = Effect.gen(function* () {
     }
     const systemConflict = windowCaptureShortcutSystemConflict(shortcut);
     if (systemConflict) return { available: false, message: systemConflict };
+    if (mode === "portal") {
+      return {
+        available: true,
+        message: "Your desktop will confirm this shortcut when you save it.",
+      };
+    }
     const accelerator = toElectronAccelerator(shortcut);
     const available =
       registeredAccelerator === accelerator
