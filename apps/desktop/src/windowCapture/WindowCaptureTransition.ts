@@ -344,7 +344,8 @@ export class WindowCaptureTransition {
     }
     if (this.active !== active) return;
     const durationMs = windowCaptureAnimationDurationMs(active.source, destination.frame);
-    await Promise.all(
+    // One display failing must not cut the flight short on the others.
+    await Promise.allSettled(
       active.overlays.map(async (overlay) => {
         if (overlay.window.isDestroyed()) return;
         await overlay.window.webContents.executeJavaScript(

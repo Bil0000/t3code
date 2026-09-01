@@ -108,7 +108,10 @@ const {
     emitExit: (code: number) => void;
   }>,
   thumbnailFromPathMock: vi.fn(),
-  transitionScriptState: { rejectFlight: false },
+  transitionScriptState: {
+    rejectFlight: false,
+    heldFlights: null as Array<() => void> | null,
+  },
   transitionShowMock: vi.fn(),
   uiohookMock: {
     off: vi.fn(),
@@ -281,12 +284,13 @@ vi.mock("electron", () => {
       this.webContents = {
         executeJavaScript: async (script: string) => {
           this.state.scripts.push(script);
-          if (
-            transitionScriptState.rejectFlight &&
-            script.startsWith("window.startCaptureTransition")
-          ) {
+          if (!script.startsWith("window.startCaptureTransition")) return;
+          if (transitionScriptState.rejectFlight) {
+            transitionScriptState.rejectFlight = false;
             throw new Error("transition failed");
           }
+          const held = transitionScriptState.heldFlights;
+          if (held) await new Promise<void>((resolve) => held.push(resolve));
         },
       };
     }
@@ -1137,6 +1141,49 @@ it("keeps cross-display handoff surfaces local to each display", async () => {
       );
     }
   } finally {
+    transition.dispose();
+  }
+});
+
+it("keeps flying on the destination display when the capture display fails", async () => {
+  flashWindows.length = 0;
+  const transition = new WindowCaptureTransition({
+    boundOverlayToCaptureDisplays: true,
+  });
+
+  try {
+    await transition.begin(
+      "capture-1",
+      { x: -1_800, y: 50, width: 900, height: 600 },
+      "data:image/png;base64,",
+      false,
+      { x: 100, y: 50, width: 1_000, height: 700 },
+    );
+    transitionScriptState.rejectFlight = true;
+    transitionScriptState.heldFlights = [];
+    transition.animateTo("capture-1", {
+      frame: { x: 600, y: 400, width: 208, height: 112 },
+      backgroundColor: "#fff",
+      borderColor: "#ccc",
+      borderWidth: 1,
+      cornerRadius: 8,
+      scaleFactor: 1,
+    });
+
+    let landed = false;
+    const landing = transition.waitForLanding("capture-1").then(() => {
+      landed = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    assert.lengthOf(transitionScriptState.heldFlights, 1);
+    assert.isFalse(landed);
+
+    for (const release of transitionScriptState.heldFlights) release();
+    await landing;
+  } finally {
+    transitionScriptState.rejectFlight = false;
+    transitionScriptState.heldFlights = null;
     transition.dispose();
   }
 });
