@@ -159,7 +159,7 @@ function Root({
       className={cn(
         "min-w-0 px-1 pt-(--composer-banner-padding-block) pb-[calc(var(--chat-composer-attachment-overlap)+var(--composer-banner-padding-block))] text-xs/4 [--composer-banner-icon-column:--spacing(7)] [--composer-banner-padding-block:--spacing(1)] sm:[--composer-banner-icon-column:--spacing(6)]",
         density === "compact" &&
-          "[--composer-banner-padding-block:--spacing(0.5)] sm:[--composer-banner-padding-block:0px]",
+          "[--composer-banner-padding-block:--spacing(0.75)] sm:[--composer-banner-padding-block:--spacing(0.25)]",
         width === "content" ? "w-fit max-w-full flex-none" : "@container",
         className,
       )}

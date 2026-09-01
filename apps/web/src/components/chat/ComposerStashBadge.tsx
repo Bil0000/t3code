@@ -34,7 +34,11 @@ export const ComposerStashBadge = memo(function ComposerStashBadge(props: {
   );
 
   return (
-    <ComposerBanner.Root width="content" data-composer-shoulder-tab className="ml-auto">
+    <ComposerBanner.Root
+      width="content"
+      data-composer-shoulder-tab
+      className="ml-auto [--composer-banner-padding-block:--spacing(1.25)]"
+    >
       <ComposerBanner.Row
         render={<button type="button" />}
         data-prompt-stash-badge="true"

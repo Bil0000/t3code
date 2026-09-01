@@ -4981,10 +4981,18 @@ function ChatViewContent(props: ChatViewProps) {
       id: `thread-${isSnoozed ? "snoozed" : "settled"}:${activeThread?.id ?? "unknown"}`,
       variant: "info",
       icon: isSnoozed ? <AlarmClockIcon /> : <CheckCircle2Icon />,
-      title: `This thread is ${isSnoozed ? "snoozed" : "settled"}`,
+      title: isSnoozed ? (
+        "This thread is snoozed"
+      ) : (
+        <>
+          This thread is settled{" "}
+          <span className="font-normal text-muted-foreground">Send a message to unsettle</span>
+        </>
+      ),
       description: isSnoozed
         ? "Sending a message wakes it and moves it back to Active in the sidebar."
-        : "Sending a message moves it back to Active in the sidebar.",
+        : undefined,
+      className: cn(!isSnoozed && "[--composer-banner-padding-block:--spacing(1.25)]"),
       actions: (
         <Button
           size="xs"
