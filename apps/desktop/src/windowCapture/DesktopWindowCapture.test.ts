@@ -329,6 +329,7 @@ const testLayer = (
       DesktopWindow.DesktopWindow.of({
         activate: Effect.void,
         dispatchMenuAction: () => Effect.void,
+        dispatchWindowCaptureReady: () => Effect.void,
       } as unknown as DesktopWindow.DesktopWindow["Service"]),
     ),
     FileSystem.layerNoop(fileSystemOverrides),
@@ -428,6 +429,44 @@ it.effect("captures the active Linux X11 window without enumerating desktop sour
       assert.deepEqual(writtenFiles[0]?.[1], png);
     }),
   ).pipe(Effect.provide(layer));
+});
+
+it.effect("does not read unverified accessibility context for a Wayland portal capture", () => {
+  vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+  const png = Buffer.from([1, 2, 3]);
+  accessibilityListMock.mockReset().mockResolvedValue([
+    {
+      name: "Unrelated app",
+      children: async () => [
+        {
+          name: "Untitled",
+          tree: async () => ({ name: "Untitled", value: "private text", children: [] }),
+        },
+      ],
+    },
+  ]);
+  getSourcesMock.mockReset().mockResolvedValue([
+    {
+      id: "window:42:0",
+      name: "Untitled",
+      thumbnail: { isEmpty: () => false, toPNG: () => png },
+    },
+  ]);
+  const layer = testLayer("linux", {
+    makeDirectory: () => Effect.void,
+    rename: () => Effect.void,
+    writeFile: () => Effect.void,
+    writeFileString: () => Effect.void,
+  });
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.captureNow;
+
+      assert.lengthOf(accessibilityListMock.mock.calls, 0);
+    }),
+  ).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
 });
 
 it.effect("uses display-local macOS capture surfaces across the source and main displays", () => {
@@ -954,41 +993,6 @@ it("does not overlap accessibility reads after a timeout", async () => {
   }
 });
 
-it("reads app name and text for a picked portal window", async () => {
-  accessibilityListMock.mockReset();
-  accessibilityListMock.mockResolvedValue([
-    {
-      name: "Editor",
-      children: async () => [
-        {
-          name: "main.ts — Editor",
-          tree: async () => ({ name: "main.ts — Editor", value: "let x = 1", children: [] }),
-        },
-      ],
-    },
-    {
-      name: "Broken",
-      children: async () => {
-        throw new Error("no accessibility");
-      },
-    },
-  ]);
-
-  const context = await DesktopWindowCapture.readPortalWindowContext("main.ts — Editor");
-
-  assert.deepEqual(context, {
-    appName: "Editor",
-    accessibleText: "main.ts — Editor\nlet x = 1",
-  });
-});
-
-it("skips portal accessibility for generic screen sources", async () => {
-  accessibilityListMock.mockReset();
-
-  assert.isUndefined(await DesktopWindowCapture.readPortalWindowContext("Entire screen"));
-  assert.strictEqual(accessibilityListMock.mock.calls.length, 0);
-});
-
 it.each(["darwin", "win32"] as const)(
   "uses native opacity for a short-lived flash on %s",
   async (platform) => {
@@ -1200,7 +1204,7 @@ it.effect("keeps shortcut registration errors off the capture status", () => {
   ).pipe(Effect.provide(testLayer("linux")));
 });
 
-it.effect("defers Wayland shortcut confirmation until settings are applied", () => {
+it.effect("reports global shortcuts as unavailable on Wayland without probing", () => {
   vi.stubEnv("XDG_SESSION_TYPE", "wayland");
   registerShortcutMock.mockReset().mockReturnValue(false);
 
@@ -1224,15 +1228,15 @@ it.effect("defers Wayland shortcut confirmation until settings are applied", () 
         modKey: false,
       });
       assert.isFalse(conflict.available);
-      assert.isTrue(available.available);
-      assert.match(available.message ?? "", /desktop will confirm/);
+      assert.isFalse(available.available);
+      assert.match(available.message ?? "", /aren't available in this Wayland session/);
 
       const pair = yield* service.checkShortcut({
         kind: "modifier-pair",
         modifier: "meta",
       });
-      assert.isTrue(pair.available);
-      assert.match(pair.message ?? "", /Wayland uses Ctrl\+Shift\+2/);
+      assert.isFalse(pair.available);
+      assert.match(pair.message ?? "", /aren't available in this Wayland session/);
       assert.lengthOf(registerShortcutMock.mock.calls, 0);
     }),
   ).pipe(
@@ -1241,7 +1245,7 @@ it.effect("defers Wayland shortcut confirmation until settings are applied", () 
   );
 });
 
-it.effect("registers the Wayland modifier-pair fallback chord", () => {
+it.effect("does not register a Wayland shortcut when enabled", () => {
   vi.stubEnv("XDG_SESSION_TYPE", "wayland");
   registerShortcutMock.mockReset().mockReturnValue(true);
   const settings = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true };
@@ -1252,16 +1256,10 @@ it.effect("registers the Wayland modifier-pair fallback chord", () => {
       yield* service.configure(settings);
 
       const state = yield* service.state;
-      assert.strictEqual(registerShortcutMock.mock.calls[0]?.[0], "CommandOrControl+Shift+2");
-      assert.isTrue(state.shortcutRegistered);
-      assert.deepEqual(state.shortcut, {
-        key: "2",
-        metaKey: false,
-        ctrlKey: false,
-        shiftKey: true,
-        altKey: false,
-        modKey: true,
-      });
+      assert.lengthOf(registerShortcutMock.mock.calls, 0);
+      assert.isFalse(state.shortcutRegistered);
+      assert.deepEqual(state.shortcut, DEFAULT_CLIENT_SETTINGS.windowCaptureShortcut);
+      assert.match(state.shortcutMessage ?? "", /aren't available in this Wayland session/);
     }),
   ).pipe(
     Effect.provide(testLayer("linux")),

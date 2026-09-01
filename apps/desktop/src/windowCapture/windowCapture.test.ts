@@ -1,5 +1,4 @@
 import { it as effectIt } from "@effect/vitest";
-import { effectiveWindowCaptureShortcut } from "@t3tools/contracts";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vite-plus/test";
@@ -9,10 +8,8 @@ import {
   UIOHOOK_MODIFIER_KEYCODES,
   accessibleWindowText,
   findAccessibleWindow,
-  findAccessibleWindowByTitle,
   findCaptureSource,
   hideAndWaitForBlur,
-  isPortalWindowSourceName,
   isWaylandSession,
   updateModifierPair,
   windowCaptureShortcutRegistrationFailureMessage,
@@ -208,58 +205,6 @@ describe("toElectronAccelerator", () => {
         modKey: false,
       }),
     ).toBe("Control+Alt+Up");
-  });
-});
-
-describe("effectiveWindowCaptureShortcut", () => {
-  it("keeps Shift + Shift for direct capture and uses an Electron chord on Wayland", () => {
-    const shortcut = { kind: "both-shift-keys" } as const;
-    expect(effectiveWindowCaptureShortcut("direct", shortcut)).toBe(shortcut);
-    expect(effectiveWindowCaptureShortcut("portal", shortcut)).toEqual({
-      key: "2",
-      metaKey: false,
-      ctrlKey: false,
-      shiftKey: true,
-      altKey: false,
-      modKey: true,
-    });
-  });
-
-  it("rewrites any modifier pair to the Wayland chord on portal capture", () => {
-    const shortcut = { kind: "modifier-pair", modifier: "meta" } as const;
-    expect(effectiveWindowCaptureShortcut("direct", shortcut)).toBe(shortcut);
-    expect(effectiveWindowCaptureShortcut("portal", shortcut)).toEqual({
-      key: "2",
-      metaKey: false,
-      ctrlKey: false,
-      shiftKey: true,
-      altKey: false,
-      modKey: true,
-    });
-  });
-});
-
-describe("portal window matching", () => {
-  it("rejects generic portal source names", () => {
-    expect(isPortalWindowSourceName("Entire screen")).toBe(false);
-    expect(isPortalWindowSourceName("Screen 1")).toBe(false);
-    expect(isPortalWindowSourceName("  ")).toBe(false);
-    expect(isPortalWindowSourceName("main.ts — Editor")).toBe(true);
-  });
-
-  it("matches a picked window only when its title is unique", () => {
-    const windows = [
-      { appName: "Editor", window: { name: "main.ts — Editor" } },
-      { appName: "Browser", window: { name: "Docs" } },
-    ];
-    expect(findAccessibleWindowByTitle(windows, " main.ts — Editor ")).toBe(windows[0]);
-    expect(findAccessibleWindowByTitle(windows, "missing")).toBeUndefined();
-    expect(
-      findAccessibleWindowByTitle(
-        [...windows, { appName: "Other", window: { name: "Docs" } }],
-        "Docs",
-      ),
-    ).toBeUndefined();
   });
 });
 

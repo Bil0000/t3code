@@ -2,17 +2,16 @@
 
 Window capture is available in the desktop app on macOS, Windows, and Linux. It captures a window
 from any app and adds the image to the current draft. The attachment includes the app name, window
-title, app icon, and available accessibility text. That text can include content outside the visible
-scroll area when the app exposes it.
+title, and, when available, the app icon and accessibility text. That text can include content
+outside the visible scroll area when the app exposes it.
 
 Open **Settings** > **Window Capture** to turn it on. Press both Shift keys together to capture a
-window on macOS, Windows, and Linux with X11. On Linux with Wayland, T3 Code uses Ctrl+Shift+2
-because Wayland does not expose physical modifier pairs. Select the shortcut in Settings to record
-a different binding: press both keys of another modifier such as Command, Ctrl, or
-Alt together, or press a key chord. On Windows and Linux, the Windows or
-Super key can also open the system's own menu, so prefer another modifier there. On macOS, Windows, and Linux with X11, T3 Code checks its own
-keybindings and asks the operating system whether the shortcut is already reserved before it lets
-you save. On Wayland, the system confirms the shortcut when you turn Window Capture on.
+window on macOS, Windows, and Linux with X11. Select the shortcut in Settings to record a different
+binding: press both keys of another modifier such as Command, Ctrl, or Alt together, or press a key
+chord. On Windows and Linux, the Windows or Super key can also open the system's own menu, so prefer
+another modifier there. T3 Code checks its own keybindings and asks the operating system whether the
+shortcut is already reserved before it lets you save. Global shortcuts are not available in
+Wayland sessions with the current Electron runtime; use **Capture window** from the command palette.
 
 You can also use **Capture window** from the command palette.
 
@@ -22,9 +21,9 @@ You can also use **Capture window** from the command palette.
   on and the permission is not already granted. Modifier-pair shortcuts need no additional
   permission on macOS.
 - On Windows and Linux with X11, the shortcut captures the active window.
-- On Linux with Wayland, the system portal asks you to choose the window or screen to share. When
-  the chosen window's title can be matched to a running app, the capture also carries the app name
-  and accessibility text; screen shares and ambiguous titles attach the image alone.
+- On Linux with Wayland, the system portal asks you to choose the window or screen to share.
+  Portal captures do not include accessibility text because the portal does not expose a stable
+  window identity that T3 Code can verify.
 
 Text availability depends on the captured app and the operating system. T3 Code still attaches the
 image when an app does not expose accessibility text.

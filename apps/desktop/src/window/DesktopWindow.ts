@@ -21,6 +21,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
   MENU_ACTION_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
+  WINDOW_CAPTURE_READY_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -100,6 +101,7 @@ export class DesktopWindow extends Context.Service<
     readonly handleBackendNotReady: Effect.Effect<void>;
     readonly flushMainWindowBounds: Effect.Effect<void>;
     readonly dispatchMenuAction: (action: string) => Effect.Effect<void, DesktopWindowError>;
+    readonly dispatchWindowCaptureReady: (id: string) => Effect.Effect<void, DesktopWindowError>;
     // Zooms the main window's own webContents. The Electron `zoomIn`/`zoomOut`
     // menu roles act on whichever webContents has keyboard focus, so with an
     // embedded preview WebContentsView (or DevTools) focused they zoom the
@@ -833,6 +835,27 @@ export const make = Effect.gen(function* () {
     Effect.withSpan("desktop.window.showConnectingSplash"),
   );
 
+  const dispatchRendererEvent = Effect.fn("desktop.window.dispatchRendererEvent")(function* (
+    channel: string,
+    payload: unknown,
+  ) {
+    const existingWindow = yield* focusedMainWindow;
+    if (Option.isNone(existingWindow) && !(yield* Ref.get(backendReadyRef))) return;
+    const targetWindow = Option.isSome(existingWindow) ? existingWindow.value : yield* ensureMain;
+    const revealAndSend = electronWindow.reveal(targetWindow).pipe(
+      Effect.andThen(
+        Effect.sync(() => {
+          if (!targetWindow.isDestroyed()) targetWindow.webContents.send(channel, payload);
+        }),
+      ),
+    );
+    if (targetWindow.webContents.isLoadingMainFrame()) {
+      targetWindow.webContents.once("did-finish-load", () => void runPromise(revealAndSend));
+      return;
+    }
+    yield* revealAndSend;
+  });
+
   return DesktopWindow.of({
     createMain,
     ensureMain,
@@ -873,30 +896,14 @@ export const make = Effect.gen(function* () {
     ),
     dispatchMenuAction: Effect.fn("desktop.window.dispatchMenuAction")(function* (action) {
       yield* Effect.annotateCurrentSpan({ action });
-      const existingWindow = yield* focusedMainWindow;
-      if (Option.isNone(existingWindow) && !(yield* Ref.get(backendReadyRef))) {
-        return;
-      }
-      const targetWindow = Option.isSome(existingWindow) ? existingWindow.value : yield* ensureMain;
-
-      const revealAndSend = electronWindow.reveal(targetWindow).pipe(
-        Effect.andThen(
-          Effect.sync(() => {
-            if (targetWindow.isDestroyed()) return;
-            targetWindow.webContents.send(MENU_ACTION_CHANNEL, action);
-          }),
-        ),
-      );
-
-      if (targetWindow.webContents.isLoadingMainFrame()) {
-        targetWindow.webContents.once("did-finish-load", () => {
-          void runPromise(revealAndSend);
-        });
-        return;
-      }
-
-      yield* revealAndSend;
+      yield* dispatchRendererEvent(MENU_ACTION_CHANNEL, action);
     }),
+    dispatchWindowCaptureReady: Effect.fn("desktop.window.dispatchWindowCaptureReady")(
+      function* (id) {
+        yield* Effect.annotateCurrentSpan({ captureId: id });
+        yield* dispatchRendererEvent(WINDOW_CAPTURE_READY_CHANNEL, id);
+      },
+    ),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });
       const window = yield* focusedMainWindow;

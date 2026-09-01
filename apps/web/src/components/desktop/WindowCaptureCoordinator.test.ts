@@ -1,12 +1,25 @@
 import { scopeProjectRef, scopeThreadRef } from "@t3tools/client-runtime/environment";
-import { EnvironmentId, ProjectId, ThreadId } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
+import {
+  type DesktopPendingWindowCapture,
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+} from "@t3tools/contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
+import type { DesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
 import {
+  deliverWindowCapture,
   resolveExistingWindowCaptureTarget,
   resolveWindowCaptureTargetOnce,
 } from "./WindowCaptureCoordinator";
+import {
+  beginWindowCaptureAnimation,
+  dismissAllWindowCaptureAnimations,
+  getPendingWindowCaptureAnimations,
+  setWindowCaptureAnimationDestination,
+} from "../../lib/windowCaptureAnimation";
 
 const environmentId = EnvironmentId.make("window-capture-environment");
 const projectRef = scopeProjectRef(environmentId, ProjectId.make("window-capture-project"));
@@ -18,6 +31,100 @@ beforeEach(() => {
     logicalProjectDraftThreadKeyByLogicalProjectKey: {},
     stickyModelSelectionByProvider: {},
     stickyActiveProvider: null,
+  });
+});
+
+afterEach(() => {
+  dismissAllWindowCaptureAnimations();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+
+describe("window capture delivery", () => {
+  it.each([
+    DraftId.make("window-capture-draft"),
+    scopeThreadRef(environmentId, ThreadId.make("window-capture-thread")),
+  ])("attaches to %s before a stalled animation finishes", async (target) => {
+    vi.useFakeTimers();
+    const never = new Promise<void>(() => undefined);
+    const acknowledgeWindowCapture = vi.fn(async () => undefined);
+    const bridge = {
+      requestWindowCapturePermissions: vi.fn(async () => undefined),
+      getWindowCaptureState: vi.fn(),
+      checkWindowCaptureShortcut: vi.fn(),
+      setWindowCaptureShortcutSuppressed: vi.fn(async () => undefined),
+      captureWindow: vi.fn(async () => undefined),
+      listPendingWindowCaptures: vi.fn(async () => []),
+      readWindowCapture: vi.fn(async () => ({
+        id: "12345678-1234-1234-1234-123456789abc",
+        name: "window.png",
+        mimeType: "image/png",
+        sizeBytes: 3,
+        dataUrl: "data:image/png;base64,AQID",
+        source: {
+          kind: "window-capture" as const,
+          capturedAt: "2026-09-01T00:00:00.000Z",
+          appName: "Editor",
+          windowTitle: "main.ts",
+        },
+      })),
+      acknowledgeWindowCapture,
+      setWindowCaptureAnimationDestination: vi.fn(() => never),
+      onMenuAction: vi.fn(() => () => undefined),
+    } as unknown as DesktopWindowCaptureBridge;
+    const item: DesktopPendingWindowCapture = {
+      id: "12345678-1234-1234-1234-123456789abc",
+      name: "window.png",
+      mimeType: "image/png",
+      sizeBytes: 3,
+      source: {
+        kind: "window-capture",
+        capturedAt: "2026-09-01T00:00:00.000Z",
+        appName: "Editor",
+        windowTitle: "main.ts",
+      },
+    };
+    vi.stubGlobal("window", {
+      desktopBridge: bridge,
+      setTimeout,
+      clearTimeout,
+      matchMedia: () => ({ matches: false }),
+      getComputedStyle: () => ({
+        backgroundColor: "rgb(0, 0, 0)",
+        borderTopColor: "rgb(255, 255, 255)",
+        borderTopLeftRadius: "8px",
+        borderTopWidth: "1px",
+      }),
+      dispatchEvent: vi.fn(),
+    });
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
+    });
+
+    if (typeof target === "string") {
+      useComposerDraftStore.getState().setProjectDraftThreadId(projectRef, target, {
+        threadId: ThreadId.make("window-capture-draft-thread"),
+      });
+    }
+    beginWindowCaptureAnimation(item.id, target);
+    setWindowCaptureAnimationDestination(
+      item.id,
+      {
+        isConnected: true,
+        getBoundingClientRect: () => ({ x: 0, y: 0, width: 208, height: 112 }),
+      } as HTMLElement,
+      item.source,
+    );
+
+    await deliverWindowCapture(bridge, item, target);
+
+    expect(useComposerDraftStore.getState().getComposerDraft(target)?.images).toHaveLength(1);
+    expect(acknowledgeWindowCapture).toHaveBeenCalledWith(item.id);
+    expect(getPendingWindowCaptureAnimations()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(getPendingWindowCaptureAnimations()).toHaveLength(0);
   });
 });
 

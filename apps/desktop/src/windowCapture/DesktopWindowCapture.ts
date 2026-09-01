@@ -3,7 +3,6 @@
 import {
   DEFAULT_CLIENT_SETTINGS,
   DesktopPendingWindowCapture,
-  effectiveWindowCaptureShortcut,
   WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS,
   isModifierPairShortcut,
   windowCaptureModifierPairLabel,
@@ -50,11 +49,8 @@ import {
 import {
   accessibleWindowText,
   findAccessibleWindow,
-  findAccessibleWindowByTitle,
   hideAndWaitForBlur,
-  isPortalWindowSourceName,
   isWaylandSession,
-  WAYLAND_SUBSTITUTION_MESSAGE,
   toElectronAccelerator,
   windowCaptureShortcutRegistrationFailureMessage,
   windowCaptureShortcutSystemConflict,
@@ -63,8 +59,9 @@ import {
 const MAX_CAPTURE_WIDTH = 2_560;
 const MAX_CAPTURE_HEIGHT = 1_600;
 const ACCESSIBLE_TEXT_TIMEOUT_MS = 1_000;
-const CAPTURE_READY_ACTION = "window-capture-ready";
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
+const WAYLAND_SHORTCUT_UNAVAILABLE_MESSAGE =
+  "Global shortcuts aren't available in this Wayland session. Use Capture window from the command palette.";
 const FLASH_ANIMATION_DURATION_MS = 180;
 const FLASH_STATIC_DURATION_MS = 60;
 const FLASH_FRAME_INTERVAL_MS = 16;
@@ -286,34 +283,6 @@ async function readCapturedWindowText(
   return text || undefined;
 }
 
-async function readPortalCapturedContext(
-  sourceName: string,
-): Promise<{ readonly appName?: string; readonly accessibleText?: string } | undefined> {
-  const { App } = await import("@crowecawcaw/xa11y");
-  const apps = await App.list();
-  const windows = (
-    await Promise.all(
-      apps.map(async (app) => {
-        try {
-          return (await app.children()).map((window) => ({ appName: app.name, window }));
-        } catch {
-          return [];
-        }
-      }),
-    )
-  ).flat();
-  const match = findAccessibleWindowByTitle(windows, sourceName);
-  if (!match) return undefined;
-  const text = accessibleWindowText(
-    await match.window.tree(),
-    WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS,
-  );
-  return {
-    ...(match.appName.trim() ? { appName: match.appName.trim() } : {}),
-    ...(text ? { accessibleText: text } : {}),
-  };
-}
-
 let activeAccessibleTextRead: Promise<unknown> | undefined;
 
 async function raceAccessibleRead<T>(run: () => Promise<T>): Promise<T | undefined> {
@@ -342,13 +311,6 @@ export function readAccessibleWindowText(
   sourceTitle: string,
 ): Promise<string | undefined> {
   return raceAccessibleRead(() => readCapturedWindowText(active, platform, sourceTitle));
-}
-
-export async function readPortalWindowContext(
-  sourceName: string,
-): Promise<{ readonly appName?: string; readonly accessibleText?: string } | undefined> {
-  if (!isPortalWindowSourceName(sourceName)) return undefined;
-  return await raceAccessibleRead(() => readPortalCapturedContext(sourceName));
 }
 
 async function captureSource({
@@ -434,18 +396,9 @@ async function captureSource({
       platform,
       destinationWindowBounds,
     );
-    const contextPromise =
-      mode === "portal"
-        ? readPortalWindowContext(source.name).then((context) => ({
-            accessibleText: context?.accessibleText,
-            portalAppName: context?.appName,
-          }))
-        : active
-          ? readAccessibleWindowText(active, platform, source.name).then((accessibleText) => ({
-              accessibleText,
-              portalAppName: undefined,
-            }))
-          : Promise.resolve({ accessibleText: undefined, portalAppName: undefined });
+    const contextPromise = active
+      ? readAccessibleWindowText(active, platform, source.name)
+      : Promise.resolve(undefined);
     return { source, active, contextPromise, animationStarted, png, imageTempReady };
   } finally {
     if (!hiddenWindowRestored && hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
@@ -727,7 +680,7 @@ export const make = Effect.gen(function* () {
           .dispatchMenuAction(`window-capture-started:${id}`)
           .pipe(Effect.catch(() => Effect.void));
       }
-      const { accessibleText, portalAppName } = yield* Effect.promise(() => contextPromise);
+      const accessibleText = yield* Effect.promise(() => contextPromise);
       const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
       const appIconDataUrl = yield* Effect.promise(() =>
         iconDataUrl(source, active, environment.platform),
@@ -740,7 +693,7 @@ export const make = Effect.gen(function* () {
         source: {
           kind: "window-capture",
           capturedAt,
-          appName: active?.owner.name.trim() || portalAppName || source.name.trim() || "Window",
+          appName: active?.owner.name.trim() || source.name.trim() || "Window",
           windowTitle: active?.title.trim() || source.name.trim(),
           ...(accessibleText ? { accessibleText } : {}),
           ...(active?.platform === "macos" && active.owner.bundleId
@@ -762,18 +715,17 @@ export const make = Effect.gen(function* () {
         cleanup.pipe(Effect.andThen(Effect.promise(() => transition.complete(id)))),
       ),
     );
+    return id;
   });
 
   const captureNow = Effect.gen(function* () {
     const settings = yield* Ref.get(settingsRef);
     if (yield* Ref.getAndSet(busyRef, true)) return;
     yield* persistCapture(settings).pipe(
-      Effect.tap(() =>
+      Effect.tap((id) =>
         Ref.update(stateRef, (state) => ({ ...state, message: null })).pipe(
           Effect.andThen(
-            desktopWindow
-              .dispatchMenuAction(CAPTURE_READY_ACTION)
-              .pipe(Effect.catch(() => Effect.void)),
+            desktopWindow.dispatchWindowCaptureReady(id).pipe(Effect.catch(() => Effect.void)),
           ),
         ),
       ),
@@ -798,23 +750,12 @@ export const make = Effect.gen(function* () {
       return { available: false, message: "Window capture is not supported on this platform." };
     }
     if (mode === "portal") {
-      const systemConflict = isModifierPairShortcut(shortcut)
-        ? null
-        : windowCaptureShortcutSystemConflict(shortcut);
-      return systemConflict
-        ? { available: false, message: systemConflict }
-        : {
-            available: true,
-            message: isModifierPairShortcut(shortcut)
-              ? WAYLAND_SUBSTITUTION_MESSAGE
-              : "Your desktop will confirm this shortcut when you enable Window Capture.",
-          };
+      return { available: false, message: WAYLAND_SHORTCUT_UNAVAILABLE_MESSAGE };
     }
-    const effectiveShortcut = effectiveWindowCaptureShortcut(mode, shortcut);
-    if (isModifierPairShortcut(effectiveShortcut)) {
+    if (isModifierPairShortcut(shortcut)) {
       const available = yield* Effect.tryPromise(() =>
         startPairShortcutProcess(
-          windowCaptureShortcutModifierPair(effectiveShortcut),
+          windowCaptureShortcutModifierPair(shortcut),
           () => undefined,
           () => undefined,
         ),
@@ -826,16 +767,13 @@ export const make = Effect.gen(function* () {
       return {
         available,
         message: available
-          ? observedPairMessage(effectiveShortcut, environment.platform)
-          : windowCaptureShortcutRegistrationFailureMessage(
-              effectiveShortcut,
-              environment.platform,
-            ),
+          ? observedPairMessage(shortcut, environment.platform)
+          : windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
       };
     }
-    const systemConflict = windowCaptureShortcutSystemConflict(effectiveShortcut);
+    const systemConflict = windowCaptureShortcutSystemConflict(shortcut);
     if (systemConflict) return { available: false, message: systemConflict };
-    const accelerator = toElectronAccelerator(effectiveShortcut);
+    const accelerator = toElectronAccelerator(shortcut);
     const available =
       registeredAccelerator === accelerator
         ? { available: true, message: null }
@@ -851,7 +789,7 @@ export const make = Effect.gen(function* () {
     releaseShortcut();
 
     const mode = captureMode(environment.platform);
-    const shortcut = effectiveWindowCaptureShortcut(mode, settings.windowCaptureShortcut);
+    const shortcut = settings.windowCaptureShortcut;
     if (!settings.windowCaptureEnabled || !settings.windowCaptureFlash || mode === "unavailable") {
       flash.dispose();
     }
@@ -884,6 +822,16 @@ export const make = Effect.gen(function* () {
         shortcutRegistered: false,
         shortcutMessage: null,
         message: permissionMessage,
+      });
+      return;
+    }
+    if (mode === "portal") {
+      yield* Ref.set(stateRef, {
+        mode,
+        shortcut,
+        shortcutRegistered: false,
+        shortcutMessage: WAYLAND_SHORTCUT_UNAVAILABLE_MESSAGE,
+        message: null,
       });
       return;
     }
@@ -929,11 +877,9 @@ export const make = Effect.gen(function* () {
       shortcutRegistered: registered,
       message: null,
       shortcutMessage: registered
-        ? mode === "portal" && isModifierPairShortcut(settings.windowCaptureShortcut)
-          ? WAYLAND_SUBSTITUTION_MESSAGE
-          : isModifierPairShortcut(shortcut)
-            ? observedPairMessage(shortcut, environment.platform)
-            : null
+        ? isModifierPairShortcut(shortcut)
+          ? observedPairMessage(shortcut, environment.platform)
+          : null
         : windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
     });
   });

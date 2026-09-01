@@ -254,6 +254,20 @@ describe("composerDraftStore addImages", () => {
     expect(revokeSpy).toHaveBeenCalledWith("blob:b");
   });
 
+  it("returns false when addImage receives an existing image id", () => {
+    const first = makeImage({ id: "img-same", previewUrl: "blob:first" });
+    const duplicate = makeImage({
+      id: "img-same",
+      previewUrl: "blob:duplicate",
+      name: "different.png",
+    });
+
+    expect(useComposerDraftStore.getState().addImage(threadRef, first)).toBe(true);
+    expect(useComposerDraftStore.getState().addImage(threadRef, duplicate)).toBe(false);
+    expect(draftFor(threadId, TEST_ENVIRONMENT_ID)?.images).toEqual([first]);
+    expect(revokeSpy).toHaveBeenCalledWith("blob:duplicate");
+  });
+
   it("does not revoke blob URLs that are still used by an accepted duplicate image", () => {
     const first = makeImage({
       id: "img-shared",

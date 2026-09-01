@@ -43,7 +43,11 @@ import * as ElectronMenu from "../electron/ElectronMenu.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import { MENU_ACTION_CHANNEL, WINDOW_FULLSCREEN_STATE_CHANNEL } from "../ipc/channels.ts";
+import {
+  MENU_ACTION_CHANNEL,
+  WINDOW_CAPTURE_READY_CHANNEL,
+  WINDOW_FULLSCREEN_STATE_CHANNEL,
+} from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
 import * as DesktopWindow from "./DesktopWindow.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -1237,7 +1241,7 @@ describe("DesktopWindow", () => {
     }),
   );
 
-  it.effect("reveals the main window before dispatching a menu action", () =>
+  it.effect("reveals the main window before dispatching renderer events", () =>
     Effect.gen(function* () {
       const operations: Array<string> = [];
       const fakeWindow = makeFakeBrowserWindow();
@@ -1257,8 +1261,13 @@ describe("DesktopWindow", () => {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
         yield* desktopWindow.dispatchMenuAction("window-capture-started:capture-1");
+        yield* desktopWindow.dispatchWindowCaptureReady("capture-1");
 
-        assert.deepEqual(operations, ["reveal", "send"]);
+        assert.deepEqual(operations, ["reveal", "send", "reveal", "send"]);
+        assert.deepEqual(fakeWindow.send.mock.calls, [
+          [MENU_ACTION_CHANNEL, "window-capture-started:capture-1"],
+          [WINDOW_CAPTURE_READY_CHANNEL, "capture-1"],
+        ]);
       }).pipe(Effect.provide(layer));
     }),
   );

@@ -16,6 +16,7 @@ let pendingAnimations: ReadonlyArray<PendingWindowCaptureAnimation> = [];
 const destinationRequests = new Map<string, Promise<void>>();
 const destinationMountCounts = new Map<string, number>();
 const listeners = new Set<() => void>();
+const DESTINATION_TIMEOUT_MS = 2_000;
 
 function targetKey(target: WindowCaptureTarget): string {
   return typeof target === "string" ? target.trim() : scopedThreadKey(target);
@@ -134,7 +135,19 @@ export function setWindowCaptureAnimationDestination(
 }
 
 export async function waitForWindowCaptureAnimationDestination(id: string): Promise<void> {
-  await destinationRequests.get(id);
+  const request = destinationRequests.get(id);
+  if (!request) return;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      request,
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, DESTINATION_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 export function scheduleWindowCaptureAnimationDestination(

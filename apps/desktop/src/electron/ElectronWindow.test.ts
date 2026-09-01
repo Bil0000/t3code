@@ -211,7 +211,8 @@ describe("ElectronWindow", () => {
         {
           pid: process.pid,
           asElement: () => ({
-            name: "Developer Tools - t3code-dev://app/",
+            name: "T3 Code (Dev)",
+            bounds: { x: 0, y: 0, width: 800, height: 600 },
             focus: async () => {
               operations.push("wrong-native-focus");
             },
@@ -221,6 +222,7 @@ describe("ElectronWindow", () => {
           pid: process.pid,
           asElement: () => ({
             name: "T3 Code (Dev)",
+            bounds: { x: 100, y: 50, width: 1_200, height: 800 },
             focus: async () => {
               operations.push("native-focus");
             },
@@ -244,6 +246,7 @@ describe("ElectronWindow", () => {
         moveTop: vi.fn(() => operations.push("move-top")),
         focus: vi.fn(() => operations.push("focus")),
         getTitle: vi.fn(() => "T3 Code (Dev)"),
+        getBounds: vi.fn(() => ({ x: 100, y: 50, width: 1_200, height: 800 })),
         restore: vi.fn(),
       } as unknown as Electron.BrowserWindow;
 

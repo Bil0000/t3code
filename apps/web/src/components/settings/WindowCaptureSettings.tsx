@@ -1,7 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import {
   DEFAULT_WINDOW_CAPTURE_SHORTCUT,
-  effectiveWindowCaptureShortcut,
   type ClientSettingsPatch,
   type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
@@ -106,10 +105,7 @@ export function WindowCaptureSettings() {
   const shortcutChanged = !sameWindowCaptureShortcut(candidate, savedShortcut);
   const displayShortcut = shortcutChanged ? candidate : (state?.shortcut ?? savedShortcut);
   const candidateConflict = shortcutChanged
-    ? windowCaptureKeybindingConflict(
-        effectiveWindowCaptureShortcut(state?.mode ?? "unavailable", candidate),
-        keybindings,
-      )
+    ? windowCaptureKeybindingConflict(candidate, keybindings)
     : null;
   const canSaveShortcut =
     shortcutChanged && candidateConflict === null && shortcutCheck.availability?.available === true;
@@ -185,10 +181,7 @@ export function WindowCaptureSettings() {
     async (shortcut: WindowCaptureShortcut) => {
       const checkId = ++shortcutCheckIdRef.current;
       setCandidate(shortcut);
-      const conflict = windowCaptureKeybindingConflict(
-        effectiveWindowCaptureShortcut(state?.mode ?? "unavailable", shortcut),
-        keybindings,
-      );
+      const conflict = windowCaptureKeybindingConflict(shortcut, keybindings);
       if (conflict || !bridge) return;
       setShortcutCheck({ status: "checking", availability: null });
       try {
@@ -334,7 +327,11 @@ export function WindowCaptureSettings() {
                 }
                 value={soundSelection}
               >
-                <SelectTrigger aria-label="Window capture sound" className="w-40" size="sm">
+                <SelectTrigger
+                  aria-label="Window capture sound"
+                  className="w-auto min-w-24"
+                  size="sm"
+                >
                   <SelectValue>
                     {soundSelection === "off"
                       ? "Off"

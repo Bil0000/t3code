@@ -1,4 +1,8 @@
-import { PROVIDER_SEND_TURN_MAX_IMAGE_BYTES, type ScopedThreadRef } from "@t3tools/contracts";
+import {
+  type DesktopPendingWindowCapture,
+  PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
+  type ScopedThreadRef,
+} from "@t3tools/contracts";
 import { useCallback, useEffect, useRef } from "react";
 
 import {
@@ -24,6 +28,7 @@ import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
 import {
   dispatchWindowCaptureComposerFocus,
   getDesktopWindowCaptureBridge,
+  type DesktopWindowCaptureBridge,
 } from "../../lib/desktopWindowCapture";
 import { readFileAsDataUrl } from "../ChatView.logic";
 import { stackedThreadToast, toastManager } from "../ui/toast";
@@ -76,6 +81,73 @@ async function afterNextPaint(): Promise<void> {
       });
     });
   });
+}
+
+export async function deliverWindowCapture(
+  bridge: DesktopWindowCaptureBridge,
+  item: DesktopPendingWindowCapture,
+  target: CaptureTarget,
+): Promise<void> {
+  const store = useComposerDraftStore.getState();
+  const existing = store.getComposerDraft(target);
+  if (existing?.persistedAttachments.some((attachment) => attachment.id === item.id)) {
+    await bridge.acknowledgeWindowCapture(item.id);
+    finishWindowCaptureAnimation(item.id);
+    return;
+  }
+
+  updateWindowCaptureAnimationSource(item.id, item.source);
+  const capture = await bridge.readWindowCapture(item.id);
+  const original = dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
+  const compressed = await compressImageToByteLimit(original, PROVIDER_SEND_TURN_MAX_IMAGE_BYTES);
+  if (!compressed.ok) {
+    finishWindowCaptureAnimation(item.id);
+    throw new Error("The captured window is too large to attach.");
+  }
+  const file = compressed.file;
+  const dataUrl = compressed.recompressed ? await readFileAsDataUrl(file) : capture.dataUrl;
+  const alreadyAttached =
+    store.getComposerDraft(target)?.images.some(({ id }) => id === capture.id) ?? false;
+  if (
+    !alreadyAttached &&
+    !store.addImage(target, {
+      type: "image",
+      id: capture.id,
+      name: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      previewUrl: dataUrl,
+      file,
+      source: capture.source,
+    })
+  ) {
+    throw new Error("Remove an attachment, then try this capture again.");
+  }
+  const persisted: PersistedComposerImageAttachment = {
+    id: capture.id,
+    name: file.name,
+    mimeType: file.type,
+    sizeBytes: file.size,
+    dataUrl,
+    source: capture.source,
+  };
+  const persistedAttachments =
+    store
+      .getComposerDraft(target)
+      ?.persistedAttachments.filter((attachment) => attachment.id !== capture.id) ?? [];
+  store.syncPersistedAttachments(target, [...persistedAttachments, persisted]);
+  if (!store.getComposerDraft(target)?.persistedAttachments.some(({ id }) => id === capture.id)) {
+    throw new Error("The captured window could not be saved to the draft.");
+  }
+
+  await bridge.acknowledgeWindowCapture(capture.id);
+  dispatchWindowCaptureComposerFocus();
+  if (getPendingWindowCaptureAnimations().some((animation) => animation.id === capture.id)) {
+    void afterNextPaint()
+      .then(() => waitForWindowCaptureAnimationDestination(capture.id))
+      .catch(() => undefined)
+      .finally(() => finishWindowCaptureAnimation(capture.id));
+  }
 }
 
 export function WindowCaptureCoordinator() {
@@ -161,7 +233,6 @@ export function WindowCaptureCoordinator() {
             : await resolveCaptureTarget();
           if (!target) {
             await dismissWindowCaptureAnimation(item.id);
-            await bridge.acknowledgeWindowCapture(item.id);
             soundedCaptureIdsRef.current.delete(item.id);
             toastManager.add(
               stackedThreadToast({
@@ -174,84 +245,8 @@ export function WindowCaptureCoordinator() {
           }
 
           try {
-            const store = useComposerDraftStore.getState();
-            const existing = store.getComposerDraft(target);
-            if (existing?.persistedAttachments.some((attachment) => attachment.id === item.id)) {
-              await bridge.acknowledgeWindowCapture(item.id);
-              finishWindowCaptureAnimation(item.id);
-              soundedCaptureIdsRef.current.delete(item.id);
-              continue;
-            }
-
-            updateWindowCaptureAnimationSource(item.id, item.source);
-            await afterNextPaint();
-            await waitForWindowCaptureAnimationDestination(item.id);
-
-            const capture = await bridge.readWindowCapture(item.id);
-            const original = dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
-            const compressed = await compressImageToByteLimit(
-              original,
-              PROVIDER_SEND_TURN_MAX_IMAGE_BYTES,
-            );
-            if (!compressed.ok) {
-              await bridge.acknowledgeWindowCapture(item.id);
-              finishWindowCaptureAnimation(item.id);
-              throw new Error("The captured window is too large to attach.");
-            }
-            const file = compressed.file;
-            const dataUrl = compressed.recompressed
-              ? await readFileAsDataUrl(file)
-              : capture.dataUrl;
-            if (
-              !store.addImage(target, {
-                type: "image",
-                id: capture.id,
-                name: file.name,
-                mimeType: file.type,
-                sizeBytes: file.size,
-                previewUrl: dataUrl,
-                file,
-                source: capture.source,
-              })
-            ) {
-              await dismissWindowCaptureAnimation(item.id);
-              await bridge.acknowledgeWindowCapture(item.id);
-              soundedCaptureIdsRef.current.delete(item.id);
-              toastManager.add(
-                stackedThreadToast({
-                  type: "error",
-                  title: "Window capture failed",
-                  description: "Remove an attachment, then capture the window again.",
-                }),
-              );
-              continue;
-            }
-            const persisted: PersistedComposerImageAttachment = {
-              id: capture.id,
-              name: file.name,
-              mimeType: file.type,
-              sizeBytes: file.size,
-              dataUrl,
-              source: capture.source,
-            };
-            const persistedAttachments =
-              store
-                .getComposerDraft(target)
-                ?.persistedAttachments.filter((attachment) => attachment.id !== capture.id) ?? [];
-            store.syncPersistedAttachments(target, [...persistedAttachments, persisted]);
-            await afterNextPaint();
-            if (
-              !store
-                .getComposerDraft(target)
-                ?.persistedAttachments.some(({ id }) => id === capture.id)
-            ) {
-              throw new Error("The captured window could not be saved to the draft.");
-            }
-            finishWindowCaptureAnimation(capture.id);
-            await afterNextPaint();
-            await bridge.acknowledgeWindowCapture(capture.id);
-            soundedCaptureIdsRef.current.delete(capture.id);
-            dispatchWindowCaptureComposerFocus();
+            await deliverWindowCapture(bridge, item, target);
+            soundedCaptureIdsRef.current.delete(item.id);
           } catch (error) {
             await dismissWindowCaptureAnimation(item.id);
             soundedCaptureIdsRef.current.delete(item.id);
@@ -259,7 +254,9 @@ export function WindowCaptureCoordinator() {
               stackedThreadToast({
                 type: "error",
                 title: "Window capture failed",
-                description: error instanceof Error ? error.message : "Try the capture again.",
+                description: `Capture ${item.id}: ${
+                  error instanceof Error ? error.message : "Try the capture again."
+                }`,
               }),
             );
           }
@@ -287,7 +284,8 @@ export function WindowCaptureCoordinator() {
     const bridge = getDesktopWindowCaptureBridge();
     if (!bridge) return;
     void drain();
-    return bridge.onMenuAction((action) => {
+    const unsubscribeCaptureReady = bridge.onWindowCaptureReady?.(() => void drain());
+    const unsubscribeMenuAction = bridge.onMenuAction((action) => {
       if (action.startsWith(WINDOW_CAPTURE_STARTED_ACTION_PREFIX)) {
         const captureId = action.slice(WINDOW_CAPTURE_STARTED_ACTION_PREFIX.length);
         if (captureId) playCaptureSound(captureId);
@@ -301,7 +299,7 @@ export function WindowCaptureCoordinator() {
           });
         }
       }
-      if (action === "window-capture-ready") void drain();
+      if (!bridge.onWindowCaptureReady && action === "window-capture-ready") void drain();
       if (action === "window-capture-failed") {
         dismissAllWindowCaptureAnimations();
         soundedCaptureIdsRef.current.clear();
@@ -316,20 +314,28 @@ export function WindowCaptureCoordinator() {
         });
       }
     });
+    return () => {
+      unsubscribeCaptureReady?.();
+      unsubscribeMenuAction();
+    };
   }, [animateCaptures, drain, playCaptureSound, resolveCaptureTarget]);
 
   useEffect(() => {
     const dismissOnBlur = () => dismissAllWindowCaptureAnimations();
-    const dismissWhenHidden = () => {
+    const drainOnFocus = () => void drain();
+    const handleVisibilityChange = () => {
       if (document.visibilityState === "hidden") dismissAllWindowCaptureAnimations();
+      else void drain();
     };
     window.addEventListener("blur", dismissOnBlur);
-    document.addEventListener("visibilitychange", dismissWhenHidden);
+    window.addEventListener("focus", drainOnFocus);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       window.removeEventListener("blur", dismissOnBlur);
-      document.removeEventListener("visibilitychange", dismissWhenHidden);
+      window.removeEventListener("focus", drainOnFocus);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
-  }, []);
+  }, [drain]);
 
   return null;
 }

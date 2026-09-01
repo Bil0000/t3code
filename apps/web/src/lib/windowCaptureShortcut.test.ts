@@ -1,4 +1,3 @@
-import { effectiveWindowCaptureShortcut } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
@@ -97,30 +96,6 @@ describe("window capture keybinding conflicts", () => {
 
   it("does not conflict with regular keybindings for both Shift keys", () => {
     expect(windowCaptureKeybindingConflict({ kind: "both-shift-keys" }, [], "Linux")).toBeNull();
-  });
-
-  it("finds a conflict for the effective Wayland Shift shortcut", () => {
-    const shortcut = effectiveWindowCaptureShortcut("portal", { kind: "both-shift-keys" });
-
-    expect(
-      windowCaptureKeybindingConflict(
-        shortcut,
-        [
-          {
-            command: "capture.other",
-            shortcut: {
-              key: "2",
-              metaKey: false,
-              ctrlKey: false,
-              shiftKey: true,
-              altKey: false,
-              modKey: true,
-            },
-          },
-        ],
-        "Linux",
-      ),
-    ).toBe("capture.other");
   });
 
   it("keeps symbols on different physical keys distinct", () => {

@@ -190,24 +190,6 @@ export function windowCaptureModifierPairLabel(
 export const DEFAULT_WINDOW_CAPTURE_SHORTCUT: WindowCaptureShortcut = {
   kind: "both-shift-keys",
 };
-export const WAYLAND_WINDOW_CAPTURE_SHORTCUT: WindowCaptureKeyChord = {
-  key: "2",
-  metaKey: false,
-  ctrlKey: false,
-  shiftKey: true,
-  altKey: false,
-  modKey: true,
-};
-
-export function effectiveWindowCaptureShortcut(
-  mode: "direct" | "portal" | "unavailable",
-  shortcut: WindowCaptureShortcut,
-): WindowCaptureShortcut {
-  return mode === "portal" && isModifierPairShortcut(shortcut)
-    ? WAYLAND_WINDOW_CAPTURE_SHORTCUT
-    : shortcut;
-}
-
 /**
  * A user-chosen font family (a single name or a comma-separated list). Empty
  * means "use the app default"; clients compose their own fallback stacks.

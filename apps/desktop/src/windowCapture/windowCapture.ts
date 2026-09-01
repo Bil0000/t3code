@@ -174,23 +174,6 @@ type WindowBounds = {
   readonly height: number;
 };
 
-const GENERIC_PORTAL_SOURCE_NAMES = /^(entire screen|screen( \d+)?|display( \d+)?)$/i;
-
-export function isPortalWindowSourceName(sourceName: string): boolean {
-  const title = sourceName.trim();
-  return title.length > 0 && !GENERIC_PORTAL_SOURCE_NAMES.test(title);
-}
-
-export function findAccessibleWindowByTitle<T extends { readonly name: string | null }>(
-  windows: ReadonlyArray<{ readonly appName: string; readonly window: T }>,
-  sourceName: string,
-): { readonly appName: string; readonly window: T } | undefined {
-  const title = sourceName.trim();
-  if (!title) return undefined;
-  const matches = windows.filter((entry) => entry.window.name?.trim() === title);
-  return matches.length === 1 ? matches[0] : undefined;
-}
-
 export function findAccessibleWindow<
   T extends { readonly name: string | null; readonly bounds: WindowBounds | null },
 >(
@@ -260,9 +243,6 @@ export function findCaptureSource<T extends CaptureSourceLike>(
   const titleMatches = sources.filter((source) => source.name.trim() === title);
   return titleMatches.length === 1 ? titleMatches[0] : undefined;
 }
-
-export const WAYLAND_SUBSTITUTION_MESSAGE =
-  "Wayland uses Ctrl+Shift+2 because it does not expose physical modifier pairs.";
 
 export function isWaylandSession(
   platform: NodeJS.Platform,

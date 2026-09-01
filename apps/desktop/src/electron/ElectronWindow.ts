@@ -13,16 +13,23 @@ import * as Electron from "electron";
 async function focusWindowsBrowserWindow(window: Electron.BrowserWindow): Promise<void> {
   const { App } = await import("@crowecawcaw/xa11y");
   const title = window.getTitle().trim();
+  const bounds = window.getBounds();
   const exactWindow = await App.list().then(
     (apps) =>
       apps
         .filter((app) => app.pid === process.pid)
         .map((app) => app.asElement())
-        .find((element) => (element.name ?? "").trim() === title),
+        .find(
+          (element) =>
+            (element.name ?? "").trim() === title &&
+            element.bounds !== null &&
+            (["x", "y", "width", "height"] as const).every(
+              (key) => Math.abs(element.bounds![key] - bounds[key]) <= 2,
+            ),
+        ),
     () => undefined,
   );
-  const element = exactWindow ?? (await App.byPid(process.pid, { timeout: 0 })).asElement();
-  await element.focus();
+  await exactWindow?.focus();
 }
 
 const ElectronWindowCreateOptions = Schema.Struct({
