@@ -125,6 +125,14 @@ export function WindowCaptureSettings() {
     [refreshState, updateSettings],
   );
 
+  const saveEnabled = useCallback(
+    async (enabled: boolean) => {
+      if (enabled) await bridge?.requestWindowCapturePermissions();
+      await save({ windowCaptureEnabled: enabled });
+    },
+    [bridge, save],
+  );
+
   const stopRecording = useCallback(() => {
     recordingRequests.clear();
     heldModifierCodesRef.current.clear();
@@ -250,13 +258,13 @@ export function WindowCaptureSettings() {
                 checked={settings.windowCaptureEnabled}
                 disabled={!captureAvailable}
                 aria-label="Enable window capture"
-                onCheckedChange={(checked) => void save({ windowCaptureEnabled: checked })}
+                onCheckedChange={(checked) => void saveEnabled(checked)}
               />
             }
           />
           <SettingsRow
             {...searchableSetting("window-capture-shortcut")}
-            description="Press both keys of a modifier like Shift, or choose a key chord. T3 Code checks it before saving."
+            description="Use both Shift keys or another shortcut."
             status={shortcutStatus}
             resetAction={
               captureAvailable &&

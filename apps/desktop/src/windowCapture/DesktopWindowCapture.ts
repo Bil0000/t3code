@@ -135,6 +135,7 @@ export class DesktopWindowCapture extends Context.Service<
   {
     readonly initialize: Effect.Effect<void>;
     readonly configure: (settings: ClientSettings) => Effect.Effect<void>;
+    readonly requestPermissions: Effect.Effect<void>;
     readonly state: Effect.Effect<DesktopWindowCaptureState>;
     readonly checkShortcut: (
       shortcut: WindowCaptureShortcut,
@@ -792,6 +793,19 @@ export const make = Effect.gen(function* () {
     if (mode === "unavailable") {
       return { available: false, message: "Window capture is not supported on this platform." };
     }
+    if (mode === "portal") {
+      const systemConflict = isModifierPairShortcut(shortcut)
+        ? null
+        : windowCaptureShortcutSystemConflict(shortcut);
+      return systemConflict
+        ? { available: false, message: systemConflict }
+        : {
+            available: true,
+            message: isModifierPairShortcut(shortcut)
+              ? WAYLAND_SUBSTITUTION_MESSAGE
+              : "Your desktop will confirm this shortcut when you enable Window Capture.",
+          };
+    }
     const effectiveShortcut = effectiveWindowCaptureShortcut(mode, shortcut);
     if (isModifierPairShortcut(effectiveShortcut)) {
       const available = yield* Effect.tryPromise(() =>
@@ -822,14 +836,6 @@ export const make = Effect.gen(function* () {
       registeredAccelerator === accelerator
         ? { available: true, message: null }
         : probeGlobalShortcut(accelerator);
-    if (mode === "portal" && isModifierPairShortcut(shortcut)) {
-      return available.available
-        ? { available: true, message: WAYLAND_SUBSTITUTION_MESSAGE }
-        : {
-            available: false,
-            message: [WAYLAND_SUBSTITUTION_MESSAGE, available.message].filter(Boolean).join(" "),
-          };
-    }
     return available;
   });
 
@@ -937,19 +943,14 @@ export const make = Effect.gen(function* () {
   const configure = Effect.fn("desktop.windowCapture.configure")(function* (
     settings: ClientSettings,
   ) {
-    yield* configurationMutex.withPermits(1)(
-      Effect.gen(function* () {
-        const previousSettings = yield* Ref.get(settingsRef);
-        const permissionMessage =
-          environment.platform === "darwin" &&
-          !previousSettings.windowCaptureEnabled &&
-          settings.windowCaptureEnabled
-            ? yield* Effect.promise(requestMacWindowCapturePermissions)
-            : null;
-        yield* applySettings(settings, permissionMessage);
-      }),
-    );
+    yield* configurationMutex.withPermits(1)(applySettings(settings, null));
   });
+
+  const requestPermissions = configurationMutex.withPermits(1)(
+    environment.platform === "darwin"
+      ? Effect.promise(requestMacWindowCapturePermissions).pipe(Effect.asVoid)
+      : Effect.void,
+  );
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
@@ -971,6 +972,7 @@ export const make = Effect.gen(function* () {
       ),
     ),
     configure,
+    requestPermissions,
     state: Ref.get(stateRef),
     checkShortcut,
     setShortcutSuppressed,

@@ -62,6 +62,16 @@ export const getWindowCaptureState = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const requestWindowCapturePermissions = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.REQUEST_WINDOW_CAPTURE_PERMISSIONS_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.windowCapture.requestPermissions")(function* (_, event) {
+    yield* ensureTrustedWindowCaptureSender(event);
+    yield* (yield* DesktopWindowCapture.DesktopWindowCapture).requestPermissions;
+  }),
+});
+
 export const checkWindowCaptureShortcut = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.CHECK_WINDOW_CAPTURE_SHORTCUT_CHANNEL,
   payload: WindowCaptureShortcut,

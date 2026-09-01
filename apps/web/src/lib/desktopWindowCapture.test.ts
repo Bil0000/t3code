@@ -27,6 +27,7 @@ describe("getDesktopWindowCaptureBridge", () => {
 
   it("returns a bridge with the complete window capture capability", () => {
     const bridge = {
+      requestWindowCapturePermissions: vi.fn(),
       getWindowCaptureState: vi.fn(),
       checkWindowCaptureShortcut: vi.fn(),
       setWindowCaptureShortcutSuppressed: vi.fn(),

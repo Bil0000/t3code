@@ -22,6 +22,8 @@ export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";
 export const SET_CLIENT_SETTINGS_CHANNEL = "desktop:set-client-settings";
+export const REQUEST_WINDOW_CAPTURE_PERMISSIONS_CHANNEL =
+  "desktop:request-window-capture-permissions";
 export const GET_WINDOW_CAPTURE_STATE_CHANNEL = "desktop:get-window-capture-state";
 export const CHECK_WINDOW_CAPTURE_SHORTCUT_CHANNEL = "desktop:check-window-capture-shortcut";
 export const SET_WINDOW_CAPTURE_SHORTCUT_SUPPRESSED_CHANNEL =

@@ -14,6 +14,7 @@ export function subscribeWindowCaptureComposerFocus(listener: () => void): () =>
 }
 
 type WindowCaptureMethods =
+  | "requestWindowCapturePermissions"
   | "getWindowCaptureState"
   | "checkWindowCaptureShortcut"
   | "setWindowCaptureShortcutSuppressed"
@@ -28,6 +29,7 @@ export type DesktopWindowCaptureBridge = DesktopBridge &
 export function getDesktopWindowCaptureBridge(): DesktopWindowCaptureBridge | undefined {
   const bridge = typeof window === "undefined" ? undefined : window.desktopBridge;
   if (
+    typeof bridge?.requestWindowCapturePermissions !== "function" ||
     typeof bridge?.getWindowCaptureState !== "function" ||
     typeof bridge.checkWindowCaptureShortcut !== "function" ||
     typeof bridge.setWindowCaptureShortcutSuppressed !== "function" ||

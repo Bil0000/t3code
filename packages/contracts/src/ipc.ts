@@ -1165,6 +1165,7 @@ export interface DesktopBridge {
   setConnectionCatalog?: (catalog: string) => Promise<boolean>;
   clearConnectionCatalog?: () => Promise<void>;
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
+  requestWindowCapturePermissions?: () => Promise<void>;
   getWindowCaptureState?: () => Promise<DesktopWindowCaptureState>;
   checkWindowCaptureShortcut?: (
     shortcut: WindowCaptureShortcut,

@@ -42,7 +42,7 @@ const {
   })),
   accessibilityByPidMock: vi.fn(),
   accessibilityListMock: vi.fn(),
-  accessibilityTrustedMock: vi.fn(() => true),
+  accessibilityTrustedMock: vi.fn((_prompt = false) => true),
   allWindowsMock: vi.fn(
     () =>
       [] as Array<{
@@ -288,7 +288,7 @@ vi.mock("electron", () => {
     systemPreferences: {
       getAnimationSettings: () => animationSettingsMock(),
       getMediaAccessStatus: () => mediaAccessStatusMock(),
-      isTrustedAccessibilityClient: () => accessibilityTrustedMock(),
+      isTrustedAccessibilityClient: (prompt: boolean) => accessibilityTrustedMock(prompt),
     },
   };
 });
@@ -1034,8 +1034,12 @@ it("uses a short-lived renderer flash on Linux", async () => {
   }
 });
 
-it.effect("does not create the flash window during desktop startup", () => {
+it.effect("does not request permissions or create the flash during desktop startup", () => {
   flashWindows.length = 0;
+  accessibilityTrustedMock.mockReset().mockReturnValue(false);
+  mediaAccessStatusMock.mockReset().mockReturnValue("not-determined");
+  getSourcesMock.mockReset().mockResolvedValue([]);
+  openExternalMock.mockClear();
   const settings = {
     ...DEFAULT_CLIENT_SETTINGS,
     windowCaptureEnabled: true,
@@ -1047,8 +1051,48 @@ it.effect("does not create the flash window during desktop startup", () => {
       const service = yield* DesktopWindowCapture.make;
       yield* service.initialize;
       assert.lengthOf(flashWindows, 0);
+      assert.deepEqual(accessibilityTrustedMock.mock.calls, [[false]]);
+      assert.lengthOf(getSourcesMock.mock.calls, 0);
+      assert.lengthOf(openExternalMock.mock.calls, 0);
     }),
   ).pipe(Effect.provide(testLayer("darwin", {}, Option.some(settings))));
+});
+
+it.effect("does not request macOS permissions while synchronizing enabled settings", () => {
+  accessibilityTrustedMock.mockReset().mockReturnValue(false);
+  mediaAccessStatusMock.mockReset().mockReturnValue("not-determined");
+  getSourcesMock.mockReset().mockResolvedValue([]);
+  openExternalMock.mockClear();
+  const settings = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true };
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure(settings);
+
+      assert.deepEqual(accessibilityTrustedMock.mock.calls, [[false]]);
+      assert.lengthOf(getSourcesMock.mock.calls, 0);
+      assert.lengthOf(openExternalMock.mock.calls, 0);
+    }),
+  ).pipe(Effect.provide(testLayer("darwin")));
+});
+
+it.effect("requests macOS permissions only for an explicit enable action", () => {
+  accessibilityTrustedMock.mockReset().mockReturnValue(false);
+  mediaAccessStatusMock.mockReset().mockReturnValue("not-determined");
+  getSourcesMock.mockReset().mockResolvedValue([]);
+  openExternalMock.mockClear();
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.requestPermissions;
+
+      assert.deepEqual(accessibilityTrustedMock.mock.calls, [[true]]);
+      assert.lengthOf(getSourcesMock.mock.calls, 1);
+      assert.lengthOf(openExternalMock.mock.calls, 1);
+    }),
+  ).pipe(Effect.provide(testLayer("darwin")));
 });
 
 it.effect("starts the Shift listener outside the Electron main process", () => {
@@ -1126,7 +1170,7 @@ it.effect("registers a configured key chord instead of the Shift listener", () =
   ).pipe(Effect.provide(testLayer("linux")));
 });
 
-it.effect("rejects unavailable Wayland shortcuts before saving", () => {
+it.effect("defers Wayland shortcut confirmation until settings are applied", () => {
   vi.stubEnv("XDG_SESSION_TYPE", "wayland");
   registerShortcutMock.mockReset().mockReturnValue(false);
 
@@ -1141,7 +1185,7 @@ it.effect("rejects unavailable Wayland shortcuts before saving", () => {
         altKey: false,
         modKey: false,
       });
-      const unavailable = yield* service.checkShortcut({
+      const available = yield* service.checkShortcut({
         key: "9",
         metaKey: false,
         ctrlKey: true,
@@ -1150,15 +1194,44 @@ it.effect("rejects unavailable Wayland shortcuts before saving", () => {
         modKey: false,
       });
       assert.isFalse(conflict.available);
-      assert.isFalse(unavailable.available);
+      assert.isTrue(available.available);
+      assert.match(available.message ?? "", /desktop will confirm/);
 
-      const pairUnavailable = yield* service.checkShortcut({
+      const pair = yield* service.checkShortcut({
         kind: "modifier-pair",
         modifier: "meta",
       });
-      assert.isFalse(pairUnavailable.available);
-      assert.match(pairUnavailable.message ?? "", /Wayland uses Ctrl\+Shift\+2/);
-      assert.match(pairUnavailable.message ?? "", /already used/);
+      assert.isTrue(pair.available);
+      assert.match(pair.message ?? "", /Wayland uses Ctrl\+Shift\+2/);
+      assert.lengthOf(registerShortcutMock.mock.calls, 0);
+    }),
+  ).pipe(
+    Effect.provide(testLayer("linux")),
+    Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+  );
+});
+
+it.effect("registers the Wayland modifier-pair fallback chord", () => {
+  vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+  registerShortcutMock.mockReset().mockReturnValue(true);
+  const settings = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true };
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure(settings);
+
+      const state = yield* service.state;
+      assert.strictEqual(registerShortcutMock.mock.calls[0]?.[0], "CommandOrControl+Shift+2");
+      assert.isTrue(state.shortcutRegistered);
+      assert.deepEqual(state.shortcut, {
+        key: "2",
+        metaKey: false,
+        ctrlKey: false,
+        shiftKey: true,
+        altKey: false,
+        modKey: true,
+      });
     }),
   ).pipe(
     Effect.provide(testLayer("linux")),
@@ -1218,8 +1291,9 @@ it.effect("registers macOS modifier pairs through the flags poller", () => {
   ).pipe(Effect.provide(testLayer("darwin")));
 });
 
-it.effect("applies concurrent settings changes in order while permissions are pending", () => {
-  mediaAccessStatusMock.mockReturnValue("not-determined");
+it.effect("waits to apply settings while permissions are pending", () => {
+  accessibilityTrustedMock.mockReturnValue(true);
+  mediaAccessStatusMock.mockReturnValueOnce("not-determined").mockReturnValue("granted");
   let finishPermissionRequest: (() => void) | undefined;
   getSourcesMock.mockImplementationOnce(
     () =>
@@ -1233,22 +1307,20 @@ it.effect("applies concurrent settings changes in order while permissions are pe
     Effect.gen(function* () {
       const service = yield* DesktopWindowCapture.make;
       const enabled = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true };
-      const enableFiber = yield* service.configure(enabled).pipe(Effect.forkScoped);
+      const permissionFiber = yield* service.requestPermissions.pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       if (!finishPermissionRequest) throw new Error("Permission request did not start");
       const finishPermission = finishPermissionRequest;
 
-      const disableFiber = yield* service
-        .configure({ ...enabled, windowCaptureEnabled: false })
-        .pipe(Effect.forkScoped);
+      const configureFiber = yield* service.configure(enabled).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
+      assert.isFalse((yield* service.state).shortcutRegistered);
       finishPermission();
-      yield* Fiber.join(enableFiber);
-      yield* Fiber.join(disableFiber);
+      yield* Fiber.join(permissionFiber);
+      yield* Fiber.join(configureFiber);
 
       const state = yield* service.state;
-      assert.isFalse(state.shortcutRegistered);
-      assert.isNull(state.message);
+      assert.isTrue(state.shortcutRegistered);
     }),
   ).pipe(Effect.provide(layer));
 });
