@@ -140,14 +140,15 @@ export async function deliverWindowCapture(
     throw new Error("The captured window could not be saved to the draft.");
   }
 
+  // Reveal the attachment under the flying capture before the desktop tears the overlay down,
+  // otherwise the tile is missing for the frames between the landing and its first paint.
+  if (getPendingWindowCaptureAnimations().some((animation) => animation.id === capture.id)) {
+    await afterNextPaint();
+    await waitForWindowCaptureAnimationDestination(capture.id).catch(() => undefined);
+    finishWindowCaptureAnimation(capture.id);
+  }
   await bridge.acknowledgeWindowCapture(capture.id);
   dispatchWindowCaptureComposerFocus();
-  if (getPendingWindowCaptureAnimations().some((animation) => animation.id === capture.id)) {
-    void afterNextPaint()
-      .then(() => waitForWindowCaptureAnimationDestination(capture.id))
-      .catch(() => undefined)
-      .finally(() => finishWindowCaptureAnimation(capture.id));
-  }
 }
 
 export function WindowCaptureCoordinator() {

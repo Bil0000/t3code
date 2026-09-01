@@ -129,16 +129,19 @@ describe("window capture delivery", () => {
         item.source,
       );
 
-      await deliverWindowCapture(bridge, item, target);
+      const delivery = deliverWindowCapture(bridge, item, target);
+      await vi.advanceTimersByTimeAsync(0);
 
       const draft = useComposerDraftStore.getState().getComposerDraft(target);
       expect(draft?.images).toHaveLength(1);
       expect(draft?.images[0]?.source).toEqual(item.source);
-      expect(acknowledgeWindowCapture).toHaveBeenCalledWith(item.id);
       expect(getPendingWindowCaptureAnimations()).toHaveLength(1);
+      expect(acknowledgeWindowCapture).not.toHaveBeenCalled();
 
       await vi.advanceTimersByTimeAsync(2_000);
+      await delivery;
       expect(getPendingWindowCaptureAnimations()).toHaveLength(0);
+      expect(acknowledgeWindowCapture).toHaveBeenCalledWith(item.id);
     },
   );
 });
