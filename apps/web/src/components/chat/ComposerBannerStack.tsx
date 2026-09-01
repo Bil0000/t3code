@@ -254,7 +254,7 @@ function ComposerBannerStackAlert({
       <ComposerBanner.Root
         placement={attached ? "attached" : "floating"}
         variant={item.variant}
-        className={item.className}
+        className={cn("px-3 sm:px-4", item.className)}
       >
         {item.content}
       </ComposerBanner.Root>
