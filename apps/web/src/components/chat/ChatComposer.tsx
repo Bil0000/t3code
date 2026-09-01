@@ -223,40 +223,33 @@ function WindowCaptureAttachmentFrame({
   animationId,
   animationSource,
   arrival,
+  animateArrival,
   className,
   ...props
 }: ComponentProps<"div"> & {
   readonly animationId?: string | undefined;
   readonly animationSource?: WindowCaptureSource | undefined;
   readonly arrival?: boolean | undefined;
+  readonly animateArrival?: boolean | undefined;
 }) {
   const frameRef = useRef<HTMLDivElement>(null);
 
   useLayoutEffect(() => {
     const frame = frameRef.current;
-    if (!frame || !animationId) return;
-
-    const carousel = frame.closest<HTMLElement>('[data-chat-composer-media-carousel="true"]');
-    if (carousel) {
-      const carouselFrame = carousel.getBoundingClientRect();
-      const attachmentFrame = frame.getBoundingClientRect();
-      if (attachmentFrame.right > carouselFrame.right) {
-        carousel.scrollLeft += attachmentFrame.right - carouselFrame.right;
-      } else if (attachmentFrame.left < carouselFrame.left) {
-        carousel.scrollLeft -= carouselFrame.left - attachmentFrame.left;
-      }
-    }
+    if (!frame || (!animationId && !arrival)) return;
+    frame.scrollIntoView({ block: "nearest", inline: "nearest" });
+    if (!animationId) return;
 
     return scheduleWindowCaptureAnimationDestination(animationId, () =>
       setWindowCaptureAnimationDestination(animationId, frame, animationSource),
     );
-  }, [animationId, animationSource]);
+  }, [animationId, animationSource, arrival]);
 
   return (
     <div
       ref={frameRef}
       className={cn(
-        arrival &&
+        animateArrival &&
           !animationId &&
           "origin-center transition-[opacity,scale] duration-300 ease-[cubic-bezier(.2,.8,.2,1)] starting:scale-95 starting:opacity-0 motion-reduce:transition-none motion-reduce:starting:scale-100 motion-reduce:starting:opacity-100",
         className,
@@ -3855,16 +3848,19 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                         const windowCaptureAnimationPending =
                           image.source?.kind === "window-capture" &&
                           pendingWindowCaptureIdSet.has(image.id);
+                        const windowCaptureArrival =
+                          image.source?.kind === "window-capture" &&
+                          shouldAnimateWindowCaptureArrival(image.source.capturedAt);
                         return (
                           <WindowCaptureAttachmentFrame
                             key={image.id}
                             aria-hidden={windowCaptureAnimationPending || undefined}
                             inert={windowCaptureAnimationPending || undefined}
-                            arrival={
+                            arrival={windowCaptureArrival}
+                            animateArrival={
                               settings.windowCaptureAnimations &&
                               !windowCaptureAnimationPending &&
-                              image.source?.kind === "window-capture" &&
-                              shouldAnimateWindowCaptureArrival(image.source.capturedAt)
+                              windowCaptureArrival
                             }
                             animationId={windowCaptureAnimationPending ? image.id : undefined}
                             animationSource={
