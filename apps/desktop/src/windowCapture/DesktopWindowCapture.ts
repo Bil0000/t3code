@@ -297,6 +297,7 @@ async function captureSource({
   let active: ActiveWindow | undefined;
   let linuxWindow: LinuxWindowMetadata | undefined;
   let linuxFeedback: LinuxCaptureFeedback | undefined;
+  let linuxActivationFailure: { readonly cause: unknown } | undefined;
   const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
   const destinationWindow =
     hiddenWindow ?? Electron.BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
@@ -397,10 +398,8 @@ async function captureSource({
     if (linuxFeedback && destinationWindow && !destinationWindow.isDestroyed()) {
       if (destinationWindow.isMinimized()) destinationWindow.restore();
       if (!destinationWindow.isVisible()) destinationWindow.show();
-      await linuxFeedback.activate(destinationWindow.getTitle()).catch((error: unknown) => {
-        Effect.runSync(
-          Effect.logWarning("GNOME could not activate T3 Code after window capture", error),
-        );
+      await linuxFeedback.activate(destinationWindow.getTitle()).catch((cause: unknown) => {
+        linuxActivationFailure = { cause };
       });
     }
     const animationStarted =
@@ -415,7 +414,16 @@ async function captureSource({
         platform,
         destinationWindowBounds,
       ));
-    return { source, active, linuxWindow, contextPromise, animationStarted, png, imageTempReady };
+    return {
+      source,
+      active,
+      linuxWindow,
+      linuxActivationFailure,
+      contextPromise,
+      animationStarted,
+      png,
+      imageTempReady,
+    };
   } finally {
     if (accessibilityProcessOwned) accessibilityProcess.close();
     if (!hiddenWindowRestored && hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
@@ -674,25 +682,39 @@ export const make = Effect.gen(function* () {
 
     yield* Effect.gen(function* () {
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
-      const { source, active, linuxWindow, contextPromise, animationStarted, png, imageTempReady } =
-        yield* Effect.tryPromise({
-          try: () =>
-            captureSource({
-              mode,
-              captureId: id,
-              platform: environment.platform,
-              settings,
-              flash,
-              transition,
-              imageTempPath,
-              linuxAppId,
-              accessibilityWorkerPath,
-              onLinuxFeedback: (feedback) => {
-                linuxFeedback = { id, feedback };
-              },
-            }),
-          catch: (cause) => captureFailure(cause, id),
-        });
+      const {
+        source,
+        active,
+        linuxWindow,
+        linuxActivationFailure,
+        contextPromise,
+        animationStarted,
+        png,
+        imageTempReady,
+      } = yield* Effect.tryPromise({
+        try: () =>
+          captureSource({
+            mode,
+            captureId: id,
+            platform: environment.platform,
+            settings,
+            flash,
+            transition,
+            imageTempPath,
+            linuxAppId,
+            accessibilityWorkerPath,
+            onLinuxFeedback: (feedback) => {
+              linuxFeedback = { id, feedback };
+            },
+          }),
+        catch: (cause) => captureFailure(cause, id),
+      });
+      if (linuxActivationFailure) {
+        yield* Effect.logWarning(
+          "GNOME could not activate T3 Code after window capture",
+          linuxActivationFailure.cause,
+        );
+      }
       if (animationStarted) {
         yield* desktopWindow
           .dispatchMenuAction(`window-capture-started:${id}`)

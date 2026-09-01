@@ -9,6 +9,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as Schema from "effect/Schema";
@@ -617,14 +618,18 @@ it.effect("does not fall back to the picker when an automatic Wayland capture fa
 });
 
 it.effect(
-  "activates GNOME after capture and completes the shell flight before acknowledging the image",
+  "logs a GNOME activation failure and completes the shell flight before acknowledging the image",
   () => {
     vi.stubEnv("XDG_SESSION_TYPE", "wayland");
     const order: string[] = [];
+    const activationFailure = new Error("Activation failed");
+    const logs: Array<unknown> = [];
+    const logger = Logger.make(({ message }) => logs.push(message));
     const feedback = {
       animationStarted: true,
       activate: async () => {
         order.push("activate");
+        throw activationFailure;
       },
       animateTo: async () => {
         order.push("land");
@@ -655,6 +660,12 @@ it.effect(
         const service = yield* DesktopWindowCapture.make;
         yield* service.captureNow;
         assert.deepEqual(order, ["snapshot", "activate"]);
+        const warning = logs.find(
+          (message) =>
+            Array.isArray(message) &&
+            message[0] === "GNOME could not activate T3 Code after window capture",
+        );
+        assert.strictEqual(Array.isArray(warning) ? warning[1] : undefined, activationFailure);
         const pending = yield* decodePendingMetadata(saved);
         yield* service.setAnimationDestination(pending.id, {
           frame: { x: 0, y: 0, width: 10, height: 10 },
@@ -670,19 +681,22 @@ it.effect(
       }),
     ).pipe(
       Effect.provide(
-        testLayer("linux", {
-          makeDirectory: () => Effect.void,
-          rename: () => Effect.void,
-          writeFile: () => Effect.void,
-          writeFileString: (_, value) =>
-            Effect.sync(() => {
-              saved = value;
-            }),
-          remove: () =>
-            Effect.sync(() => {
-              order.push("delete");
-            }),
-        }),
+        Layer.mergeAll(
+          testLayer("linux", {
+            makeDirectory: () => Effect.void,
+            rename: () => Effect.void,
+            writeFile: () => Effect.void,
+            writeFileString: (_, value) =>
+              Effect.sync(() => {
+                saved = value;
+              }),
+            remove: () =>
+              Effect.sync(() => {
+                order.push("delete");
+              }),
+          }),
+          Logger.layer([logger], { mergeWithExisting: false }),
+        ),
       ),
       Effect.ensuring(
         Effect.sync(() => {
