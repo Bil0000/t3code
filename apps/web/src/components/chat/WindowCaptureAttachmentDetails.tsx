@@ -1,40 +1,124 @@
-import type { WindowCaptureAccessibilityNode, WindowCaptureSource } from "@t3tools/contracts";
+import type { WindowCaptureSource } from "@t3tools/contracts";
 import { ImageIcon, TextIcon } from "lucide-react";
+import { Suspense, use, useMemo, type CSSProperties } from "react";
 
+import { useTheme } from "../../hooks/useTheme";
+import { resolveDiffThemeName } from "../../lib/diffRendering";
+import { getSyntaxHighlighterPromise } from "../../lib/syntaxHighlighting";
 import { cn } from "../../lib/utils";
+import { RenderErrorBoundary } from "../RenderErrorBoundary";
 import { Button } from "../ui/button";
-import {
-  Popover,
-  PopoverDescription,
-  PopoverPopup,
-  PopoverTitle,
-  PopoverTrigger,
-} from "../ui/popover";
+import { Popover, PopoverPopup, PopoverTitle, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export const WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS =
   "relative h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80";
 
-export function windowCaptureAccessibilityText(source: WindowCaptureSource): string | undefined {
-  const legacyText = source.accessibleText?.trim();
-  if (legacyText) return legacyText;
-  if (!source.accessibility) return undefined;
-  if (source.accessibility.format === "flat-text") return source.accessibility.text;
+export interface WindowCaptureAccessibilityDetails {
+  content: string;
+  format: "json" | "text";
+}
 
-  const lines: string[] = [];
-  const seen = new Set<string>();
-  const stack: WindowCaptureAccessibilityNode[] = [source.accessibility.root];
-  while (stack.length > 0) {
-    const node = stack.pop()!;
-    for (const value of [node.name, node.value, node.description]) {
-      const text = value?.trim();
-      if (!text || seen.has(text)) continue;
-      seen.add(text);
-      lines.push(text);
-    }
-    stack.push(...node.children.toReversed());
+interface SyntaxToken {
+  readonly content: string;
+  readonly offset: number;
+  readonly color?: string;
+  readonly fontStyle?: number;
+}
+
+function syntaxTokenStyle(token: SyntaxToken): CSSProperties {
+  const fontStyle = token.fontStyle ?? 0;
+  return {
+    ...(token.color ? { color: token.color } : {}),
+    ...(fontStyle & 1 ? { fontStyle: "italic" } : {}),
+    ...(fontStyle & 2 ? { fontWeight: 700 } : {}),
+    ...(fontStyle & 4 ? { textDecoration: "underline" } : {}),
+  };
+}
+
+function HighlightedAccessibilityJson({
+  content,
+  theme,
+}: {
+  content: string;
+  theme: "light" | "dark";
+}) {
+  const highlighter = use(getSyntaxHighlighterPromise("json"));
+  const lines = useMemo(
+    () =>
+      highlighter.codeToTokens(content, {
+        lang: "json",
+        theme: resolveDiffThemeName(theme),
+      }).tokens,
+    [content, highlighter, theme],
+  );
+
+  let lineOffset = 0;
+  return lines.map((line) => {
+    const lineContent = line.map((token) => token.content).join("");
+    const lineKey = `${lineOffset}:${lineContent}`;
+    const hasNextLine = lineOffset + lineContent.length < content.length;
+    lineOffset += lineContent.length + 1;
+    return (
+      <span key={lineKey}>
+        {line.map((token) => (
+          <span key={`${token.offset}:${token.content}`} style={syntaxTokenStyle(token)}>
+            {token.content}
+          </span>
+        ))}
+        {hasNextLine ? "\n" : null}
+      </span>
+    );
+  });
+}
+
+export function WindowCaptureAccessibilityData({
+  details,
+  className,
+}: {
+  details: WindowCaptureAccessibilityDetails;
+  className?: string;
+}) {
+  const { resolvedTheme } = useTheme();
+  const content =
+    details.format === "json" ? (
+      <RenderErrorBoundary fallback={details.content}>
+        <Suspense fallback={details.content}>
+          <HighlightedAccessibilityJson content={details.content} theme={resolvedTheme} />
+        </Suspense>
+      </RenderErrorBoundary>
+    ) : (
+      details.content
+    );
+
+  return (
+    <pre
+      className={cn(
+        "overflow-auto whitespace-pre-wrap break-words font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70",
+        className,
+      )}
+      tabIndex={0}
+    >
+      {content}
+    </pre>
+  );
+}
+
+export function windowCaptureAccessibilityDetails(
+  source: WindowCaptureSource,
+): WindowCaptureAccessibilityDetails | undefined {
+  if (source.accessibility?.format === "element-tree") {
+    return {
+      content: JSON.stringify(source.accessibility, null, 2),
+      format: "json",
+    };
   }
-  return lines.length > 0 ? lines.join("\n") : undefined;
+
+  const text =
+    source.accessibility?.format === "flat-text"
+      ? source.accessibility.text.trim()
+      : source.accessibleText?.trim();
+  return text ? { content: text, format: "text" } : undefined;
 }
 
 export function windowCaptureIncludesAccessibility(source: WindowCaptureSource): boolean {
@@ -52,11 +136,8 @@ export function WindowCaptureContentsButton({
 }) {
   const includesAccessibility = windowCaptureIncludesAccessibility(source);
   const ContentsIcon = includesAccessibility ? TextIcon : ImageIcon;
-  const accessibilityText = windowCaptureAccessibilityText(source);
-  const title = includesAccessibility ? "Screenshot + accessibility" : "Screenshot only";
-  const description = includesAccessibility
-    ? "Accessibility data was included with this screenshot."
-    : "The app or capture backend did not provide verified accessibility data.";
+  const accessibilityDetails = windowCaptureAccessibilityDetails(source);
+  const tooltip = includesAccessibility ? "Accessibility data" : "No accessibility data";
 
   return (
     <Popover>
@@ -67,7 +148,7 @@ export function WindowCaptureContentsButton({
               render={
                 <Button
                   aria-label={
-                    includesAccessibility ? "View accessibility details" : "View screenshot details"
+                    includesAccessibility ? "View accessibility data" : "No accessibility data"
                   }
                   className={cn("[--control-icon-color:currentColor]", className)}
                   onClick={(event) => event.stopPropagation()}
@@ -80,7 +161,7 @@ export function WindowCaptureContentsButton({
         >
           <ContentsIcon className="size-3" aria-hidden="true" />
         </TooltipTrigger>
-        <TooltipPopup side={side}>{title}</TooltipPopup>
+        <TooltipPopup side={side}>{tooltip}</TooltipPopup>
       </Tooltip>
       <PopoverPopup
         side={side}
@@ -88,35 +169,23 @@ export function WindowCaptureContentsButton({
         className="w-[min(24rem,calc(100vw-2rem))]"
         viewportClassName="max-h-[min(28rem,70vh)]"
       >
-        <div className="space-y-3">
-          <div className="flex items-start gap-2">
-            <ContentsIcon
-              className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-              aria-hidden="true"
+        <div className="space-y-2">
+          <PopoverTitle className="text-sm leading-5">Accessibility data</PopoverTitle>
+          {accessibilityDetails ? (
+            <WindowCaptureAccessibilityData
+              details={accessibilityDetails}
+              className="max-h-64 rounded-md border border-border/70 bg-muted/45 p-2.5 text-[11px] leading-4"
             />
-            <div className="min-w-0">
-              <PopoverTitle className="text-sm leading-5">{title}</PopoverTitle>
-              <PopoverDescription className="mt-0.5 text-xs leading-4">
-                {description}
-              </PopoverDescription>
-            </div>
-          </div>
-          {accessibilityText ? (
-            <div className="space-y-1.5">
-              <div className="text-xs font-medium">Extracted accessibility data</div>
-              <pre
-                className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted/45 p-2.5 font-mono text-[11px] leading-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
-                tabIndex={0}
-              >
-                {accessibilityText}
-              </pre>
-            </div>
           ) : includesAccessibility ? (
             <div className="rounded-md border border-border/70 bg-muted/45 p-2.5 text-muted-foreground text-xs leading-4">
               Structured accessibility elements were included, but they have no readable names or
               values.
             </div>
-          ) : null}
+          ) : (
+            <div className="rounded-md border border-border/70 bg-muted/45 p-2.5 text-muted-foreground text-xs leading-4">
+              The app or capture backend did not provide verified accessibility data.
+            </div>
+          )}
         </div>
       </PopoverPopup>
     </Popover>

@@ -10,6 +10,7 @@ import * as DesktopWindowCapture from "../../windowCapture/DesktopWindowCapture.
 import {
   captureWindow,
   checkWindowCaptureShortcut,
+  requestWindowCapturePermissions,
   setWindowCaptureAnimationDestination,
   setWindowCaptureShortcutSuppressed,
   windowCaptureScreenFrame,
@@ -119,6 +120,33 @@ describe("window capture IPC", () => {
       yield* captureWindow.handler(undefined, { sender: { id: 7 } });
       assert.strictEqual(globalCaptures, 0);
       assert.strictEqual(manualCaptures, 1);
+    }).pipe(Effect.provide(layer));
+  });
+
+  it.effect("forwards the accessibility permission preference from a trusted renderer", () => {
+    let includeAccessibility: boolean | undefined;
+    const webContents = { id: 7 };
+    const layer = Layer.mergeAll(
+      Layer.succeed(
+        ElectronWindow.ElectronWindow,
+        ElectronWindow.ElectronWindow.of({
+          main: Effect.succeed(Option.some({ webContents })),
+        } as ElectronWindow.ElectronWindow["Service"]),
+      ),
+      Layer.succeed(
+        DesktopWindowCapture.DesktopWindowCapture,
+        DesktopWindowCapture.DesktopWindowCapture.of({
+          requestPermissions: (include: boolean) =>
+            Effect.sync(() => {
+              includeAccessibility = include;
+            }),
+        } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+      ),
+    );
+
+    return Effect.gen(function* () {
+      yield* requestWindowCapturePermissions.handler(false, { sender: webContents });
+      assert.isFalse(includeAccessibility);
     }).pipe(Effect.provide(layer));
   });
 

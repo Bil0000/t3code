@@ -358,6 +358,9 @@ export const ClientSettingsSchema = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_TIMESTAMP_FORMAT)),
   ),
   windowCaptureEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  windowCaptureIncludeAccessibility: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(true)),
+  ),
   windowCaptureShortcut: WindowCaptureShortcut.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_WINDOW_CAPTURE_SHORTCUT)),
   ),
@@ -1085,6 +1088,7 @@ export const ClientSettingsPatch = Schema.Struct({
   sidebarThreadPreviewCount: Schema.optionalKey(SidebarThreadPreviewCount),
   timestampFormat: Schema.optionalKey(TimestampFormat),
   windowCaptureEnabled: Schema.optionalKey(Schema.Boolean),
+  windowCaptureIncludeAccessibility: Schema.optionalKey(Schema.Boolean),
   windowCaptureShortcut: Schema.optionalKey(WindowCaptureShortcut),
   windowCapturePlaySound: Schema.optionalKey(Schema.Boolean),
   windowCaptureSound: Schema.optionalKey(WindowCaptureSound),

@@ -58,6 +58,9 @@ Accessibility-data availability depends on the captured app and the operating sy
 attaches the image when an app does not expose accessibility data. It waits up to three seconds for
 the data; if the app responds too slowly, the screenshot is attached without it. When a complete
 element tree is unavailable but text was read in time, T3 Code includes that text as a fallback.
+Turn off **Capture accessibility data** in Window Capture settings to skip the accessibility lookup
+and attach screenshots without text or UI structure. On macOS, this also removes the Accessibility
+permission requirement for window capture; Screen Recording permission is still required.
 
 On GNOME, browsers may need desktop app accessibility enabled before they expose text. This is
 separate from the speaking screen reader and from screenshot permission. Restart the browser after
@@ -66,8 +69,12 @@ contents; an accessibility indicator does not guarantee that all visible content
 
 A small icon beside the app name on a capture attachment indicates what is included: text lines
 mean accessibility data accompanies the screenshot; an image icon means screenshot only. Select
-the icon to inspect the capture and its extracted accessibility data. The same icon appears beside
-the file name in the expanded screenshot preview.
+the icon to inspect the capture. Structured element trees appear as formatted JSON, including roles,
+hierarchy, states, actions, and any trustworthy image-coordinate bounds. Captures that provide only
+flat or legacy accessibility text show that text instead. The same icon appears beside the file name
+in the expanded screenshot preview. T3 Code sends agents a compact copy that removes unavailable or
+redundant structural fields while preserving meaningful accessibility content; the inspected JSON
+remains the complete captured tree.
 
 The shortcut works while another app is active. T3 Code briefly hides itself, captures the selected
 window, and then returns with the image attached. If no thread is open, it starts a draft in the

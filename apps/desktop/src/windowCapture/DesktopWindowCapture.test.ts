@@ -19,6 +19,7 @@ import { vi } from "vite-plus/test";
 const {
   activeWindowMock,
   animationSettingsMock,
+  accessibilityProcessStartMock,
   accessibilityProcessCloseMock,
   accessibilityProcessReadMock,
   accessibilityByPidMock,
@@ -50,6 +51,7 @@ const {
     prefersReducedMotion: true,
     shouldRenderRichAnimation: false,
   })),
+  accessibilityProcessStartMock: vi.fn(),
   accessibilityProcessCloseMock: vi.fn(),
   accessibilityProcessReadMock: vi.fn<
     (request: import("./WindowCaptureAccessibility.ts").WindowCaptureAccessibilityRequest) => {
@@ -130,10 +132,13 @@ vi.mock("@crowecawcaw/xa11y", () => {
   };
 });
 vi.mock("./WindowCaptureAccessibilityProcess.ts", () => ({
-  startWindowCaptureAccessibilityProcess: () => ({
-    read: accessibilityProcessReadMock,
-    close: accessibilityProcessCloseMock,
-  }),
+  startWindowCaptureAccessibilityProcess: () => {
+    accessibilityProcessStartMock();
+    return {
+      read: accessibilityProcessReadMock,
+      close: accessibilityProcessCloseMock,
+    };
+  },
 }));
 vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
 vi.mock("./MacWindowCapture.ts", () => ({ captureMacWindowSnapshot: macCaptureMock }));
@@ -482,6 +487,43 @@ it.effect("captures the active Windows window without enumerating desktop source
       assert.deepEqual(screenshotMock.mock.calls, [[{ region: active.bounds }]]);
       assert.lengthOf(getSourcesMock.mock.calls, 0);
       assert.deepEqual(writtenFiles[0]?.[1], png);
+    }),
+  ).pipe(Effect.provide(layer));
+});
+
+it.effect("skips accessibility capture when the setting is disabled", () => {
+  const png = Buffer.from([1, 2, 3]);
+  const active = {
+    platform: "windows",
+    id: 42,
+    title: "Editor",
+    owner: { name: "Editor", processId: 123 },
+    bounds: { x: 10, y: 20, width: 800, height: 600 },
+  } as const;
+  activeWindowMock.mockReset().mockResolvedValue(active);
+  screenshotMock.mockReset().mockResolvedValue({ width: 800, height: 600, toPng: () => png });
+  accessibilityProcessStartMock.mockClear();
+  accessibilityProcessReadMock.mockClear();
+  accessibilityByPidMock.mockClear();
+  const layer = testLayer("win32", {
+    makeDirectory: () => Effect.void,
+    rename: () => Effect.void,
+    writeFile: () => Effect.void,
+    writeFileString: () => Effect.void,
+  });
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure({
+        ...DEFAULT_CLIENT_SETTINGS,
+        windowCaptureIncludeAccessibility: false,
+      });
+      yield* service.captureNow;
+
+      assert.lengthOf(accessibilityProcessStartMock.mock.calls, 0);
+      assert.lengthOf(accessibilityProcessReadMock.mock.calls, 0);
+      assert.lengthOf(accessibilityByPidMock.mock.calls, 0);
     }),
   ).pipe(Effect.provide(layer));
 });
@@ -1654,11 +1696,49 @@ it.effect("requests macOS permissions only for an explicit enable action", () =>
   return Effect.scoped(
     Effect.gen(function* () {
       const service = yield* DesktopWindowCapture.make;
-      yield* service.requestPermissions;
+      yield* service.requestPermissions(true);
 
       assert.deepEqual(accessibilityTrustedMock.mock.calls, [[true]]);
       assert.lengthOf(getSourcesMock.mock.calls, 1);
       assert.lengthOf(openExternalMock.mock.calls, 1);
+    }),
+  ).pipe(Effect.provide(testLayer("darwin")));
+});
+
+it.effect("does not request macOS accessibility permission when capture data is disabled", () => {
+  accessibilityTrustedMock.mockReset().mockReturnValue(false);
+  mediaAccessStatusMock.mockReset().mockReturnValue("not-determined");
+  getSourcesMock.mockReset().mockResolvedValue([]);
+  openExternalMock.mockClear();
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.requestPermissions(false);
+
+      assert.lengthOf(accessibilityTrustedMock.mock.calls, 0);
+      assert.lengthOf(getSourcesMock.mock.calls, 1);
+      assert.lengthOf(openExternalMock.mock.calls, 1);
+    }),
+  ).pipe(Effect.provide(testLayer("darwin")));
+});
+
+it.effect("registers macOS capture without accessibility permission when data is disabled", () => {
+  accessibilityTrustedMock.mockReset().mockReturnValue(false);
+  mediaAccessStatusMock.mockReset().mockReturnValue("granted");
+  registerShortcutMock.mockReset().mockReturnValue(true);
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure({
+        ...DEFAULT_CLIENT_SETTINGS,
+        windowCaptureEnabled: true,
+        windowCaptureIncludeAccessibility: false,
+      });
+
+      assert.lengthOf(accessibilityTrustedMock.mock.calls, 0);
+      assert.isTrue((yield* service.state).shortcutRegistered);
     }),
   ).pipe(Effect.provide(testLayer("darwin")));
 });
@@ -1945,7 +2025,7 @@ it.effect("waits to apply settings while permissions are pending", () => {
     Effect.gen(function* () {
       const service = yield* DesktopWindowCapture.make;
       const enabled = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true };
-      const permissionFiber = yield* service.requestPermissions.pipe(Effect.forkScoped);
+      const permissionFiber = yield* service.requestPermissions(true).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
       if (!finishPermissionRequest) throw new Error("Permission request did not start");
       const finishPermission = finishPermissionRequest;

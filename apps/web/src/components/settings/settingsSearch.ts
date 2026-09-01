@@ -287,6 +287,12 @@ export const SETTINGS_SEARCH_ITEMS = [
     to: "/settings/window-capture",
   },
   {
+    id: "window-capture-accessibility",
+    title: "Capture accessibility data",
+    to: "/settings/window-capture",
+    searchTerms: ["text UI structure elements privacy omit agent context"],
+  },
+  {
     id: "window-capture-shortcut",
     title: "Capture shortcut",
     to: "/settings/window-capture",

@@ -128,10 +128,22 @@ export function WindowCaptureSettings() {
 
   const saveEnabled = useCallback(
     async (enabled: boolean) => {
-      if (enabled) await bridge?.requestWindowCapturePermissions();
+      if (enabled) {
+        await bridge?.requestWindowCapturePermissions(settings.windowCaptureIncludeAccessibility);
+      }
       await save({ windowCaptureEnabled: enabled });
     },
-    [bridge, save],
+    [bridge, save, settings.windowCaptureIncludeAccessibility],
+  );
+
+  const saveIncludeAccessibility = useCallback(
+    async (includeAccessibility: boolean) => {
+      if (includeAccessibility && settings.windowCaptureEnabled) {
+        await bridge?.requestWindowCapturePermissions(true);
+      }
+      await save({ windowCaptureIncludeAccessibility: includeAccessibility });
+    },
+    [bridge, save, settings.windowCaptureEnabled],
   );
 
   const stopRecording = useCallback(() => {
@@ -250,7 +262,7 @@ export function WindowCaptureSettings() {
         <SettingsUnavailableGroup message={unavailableMessage}>
           <SettingsRow
             {...searchableSetting("window-capture-enabled")}
-            description="Capture a window with available text and attach it to your current draft."
+            description="Capture a window and attach it to your current draft."
             status={bridge ? windowCaptureStatus(state, settings.windowCaptureEnabled) : undefined}
             control={
               <Switch
@@ -258,6 +270,18 @@ export function WindowCaptureSettings() {
                 disabled={!captureAvailable}
                 aria-label="Enable window capture"
                 onCheckedChange={(checked) => void saveEnabled(checked)}
+              />
+            }
+          />
+          <SettingsRow
+            {...searchableSetting("window-capture-accessibility")}
+            description="Include available accessibility text and UI structure with each screenshot."
+            control={
+              <Switch
+                checked={settings.windowCaptureIncludeAccessibility}
+                disabled={!captureAvailable}
+                aria-label="Include accessibility data in window captures"
+                onCheckedChange={(checked) => void saveIncludeAccessibility(checked)}
               />
             }
           />

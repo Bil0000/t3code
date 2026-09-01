@@ -72,6 +72,7 @@ describe("ClientSettings window capture", () => {
     const settings = decodeClientSettings({});
 
     expect(settings.windowCaptureEnabled).toBe(false);
+    expect(settings.windowCaptureIncludeAccessibility).toBe(true);
     expect(settings.windowCaptureShortcut).toEqual({ kind: "both-shift-keys" });
     expect(settings.windowCapturePlaySound).toBe(true);
     expect(settings.windowCaptureSound).toBe("soft-pop");
@@ -84,6 +85,7 @@ describe("ClientSettings window capture", () => {
     expect(
       decodeClientSettingsPatch({
         windowCaptureEnabled: true,
+        windowCaptureIncludeAccessibility: false,
         windowCaptureShortcut: {
           key: "w",
           metaKey: false,
@@ -100,6 +102,7 @@ describe("ClientSettings window capture", () => {
       }),
     ).toEqual({
       windowCaptureEnabled: true,
+      windowCaptureIncludeAccessibility: false,
       windowCaptureShortcut: {
         key: "w",
         metaKey: false,

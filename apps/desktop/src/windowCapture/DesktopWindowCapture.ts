@@ -130,7 +130,7 @@ export class DesktopWindowCapture extends Context.Service<
   {
     readonly initialize: Effect.Effect<void>;
     readonly configure: (settings: ClientSettings) => Effect.Effect<void>;
-    readonly requestPermissions: Effect.Effect<void>;
+    readonly requestPermissions: (includeAccessibility: boolean) => Effect.Effect<void>;
     readonly state: Effect.Effect<DesktopWindowCaptureState>;
     readonly checkShortcut: (
       shortcut: WindowCaptureShortcut,
@@ -236,8 +236,9 @@ async function requestMacScreenCapturePermission(): Promise<string | null> {
   return MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
 }
 
-function currentMacWindowCapturePermissionMessage(): string | null {
-  const accessibilityGranted = Electron.systemPreferences.isTrustedAccessibilityClient(false);
+function currentMacWindowCapturePermissionMessage(includeAccessibility: boolean): string | null {
+  const accessibilityGranted =
+    !includeAccessibility || Electron.systemPreferences.isTrustedAccessibilityClient(false);
   const screenGranted = Electron.systemPreferences.getMediaAccessStatus("screen") === "granted";
   if (!accessibilityGranted && !screenGranted) {
     return "Allow Accessibility and Screen Recording in System Settings, then restart T3 Code.";
@@ -248,8 +249,11 @@ function currentMacWindowCapturePermissionMessage(): string | null {
   return screenGranted ? null : MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
 }
 
-async function requestMacWindowCapturePermissions(): Promise<string | null> {
-  const accessibilityGranted = Electron.systemPreferences.isTrustedAccessibilityClient(true);
+async function requestMacWindowCapturePermissions(
+  includeAccessibility: boolean,
+): Promise<string | null> {
+  const accessibilityGranted =
+    !includeAccessibility || Electron.systemPreferences.isTrustedAccessibilityClient(true);
   const screenMessage = await requestMacScreenCapturePermission();
   if (!accessibilityGranted && screenMessage) {
     return "Allow Accessibility and Screen Recording in System Settings, then restart T3 Code.";
@@ -303,8 +307,10 @@ async function captureSource({
     hiddenWindow ?? Electron.BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
   const destinationWindowBounds = destinationWindow?.getBounds();
   let hiddenWindowRestored = false;
-  const accessibilityProcess = startWindowCaptureAccessibilityProcess(accessibilityWorkerPath);
-  let accessibilityProcessOwned = true;
+  const accessibilityProcess = settings.windowCaptureIncludeAccessibility
+    ? startWindowCaptureAccessibilityProcess(accessibilityWorkerPath)
+    : undefined;
+  let accessibilityProcessOwned = accessibilityProcess !== undefined;
   try {
     if (hiddenWindow) await hideAndWaitForBlur(hiddenWindow);
     if (mode === "direct") {
@@ -375,19 +381,20 @@ async function captureSource({
             owner: { processId: linuxWindow.processId },
           }
         : undefined);
-    const accessibilityRead = accessibleIdentity
-      ? accessibilityProcess.read({
-          active: accessibleIdentity,
-          platform,
-          sourceTitle: source.name,
-          imageSize: windowCaptureImageSize(png, accessibleIdentity.bounds),
-        })
-      : undefined;
+    const accessibilityRead =
+      accessibleIdentity && accessibilityProcess
+        ? accessibilityProcess.read({
+            active: accessibleIdentity,
+            platform,
+            sourceTitle: source.name,
+            imageSize: windowCaptureImageSize(png, accessibleIdentity.bounds),
+          })
+        : undefined;
     if (accessibilityRead) {
       accessibilityProcessOwned = false;
       await accessibilityRead.started;
     } else {
-      accessibilityProcess.close();
+      accessibilityProcess?.close();
       accessibilityProcessOwned = false;
     }
     const contextPromise = accessibilityRead?.result ?? Promise.resolve(undefined);
@@ -425,7 +432,7 @@ async function captureSource({
       imageTempReady,
     };
   } finally {
-    if (accessibilityProcessOwned) accessibilityProcess.close();
+    if (accessibilityProcessOwned) accessibilityProcess?.close();
     if (!hiddenWindowRestored && hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
   }
 }
@@ -884,7 +891,9 @@ export const make = Effect.gen(function* () {
 
     const permissionMessage =
       requestedPermissionMessage ??
-      (environment.platform === "darwin" ? currentMacWindowCapturePermissionMessage() : null);
+      (environment.platform === "darwin"
+        ? currentMacWindowCapturePermissionMessage(settings.windowCaptureIncludeAccessibility)
+        : null);
     if (permissionMessage) {
       yield* Ref.set(stateRef, {
         mode,
@@ -971,11 +980,14 @@ export const make = Effect.gen(function* () {
     yield* configurationMutex.withPermits(1)(applySettings(settings, null));
   });
 
-  const requestPermissions = configurationMutex.withPermits(1)(
-    environment.platform === "darwin"
-      ? Effect.promise(requestMacWindowCapturePermissions).pipe(Effect.asVoid)
-      : Effect.void,
-  );
+  const requestPermissions = (includeAccessibility: boolean) =>
+    configurationMutex.withPermits(1)(
+      environment.platform === "darwin"
+        ? Effect.promise(() => requestMacWindowCapturePermissions(includeAccessibility)).pipe(
+            Effect.asVoid,
+          )
+        : Effect.void,
+    );
 
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {

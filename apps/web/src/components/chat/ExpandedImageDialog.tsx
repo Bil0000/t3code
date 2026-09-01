@@ -10,8 +10,9 @@ import {
 import { Button } from "../ui/button";
 import { downloadVideoPreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import {
+  WindowCaptureAccessibilityData,
   WindowCaptureContentsButton,
-  windowCaptureAccessibilityText,
+  windowCaptureAccessibilityDetails,
 } from "./WindowCaptureAttachmentDetails";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -28,7 +29,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
   const [failedVideoSrc, setFailedVideoSrc] = useState<string | null>(null);
   const [downloadingVideoSrc, setDownloadingVideoSrc] = useState<string | null>(null);
   const [downloadFailedVideoSrc, setDownloadFailedVideoSrc] = useState<string | null>(null);
-  const [accessibilityTextSrc, setAccessibilityTextSrc] = useState<string | null>(null);
+  const [accessibilityDetailsSrc, setAccessibilityDetailsSrc] = useState<string | null>(null);
   const index = (preview.index + imageOffset + preview.images.length) % preview.images.length;
 
   const navigateImage = useCallback((direction: -1 | 1) => {
@@ -77,10 +78,17 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
 
   const isDownloadingVideo = downloadingVideoSrc === item.src;
   const videoDownloadFailed = downloadFailedVideoSrc === item.src;
-  const accessibilityText = item.source ? windowCaptureAccessibilityText(item.source) : undefined;
-  const showingAccessibilityText = Boolean(accessibilityText) && accessibilityTextSrc === item.src;
-  const contentsLabel = showingAccessibilityText ? "Show screenshot" : "Show extracted text";
-  const ContentsIcon = showingAccessibilityText ? ImageIcon : TextIcon;
+  const accessibilityDetails = item.source
+    ? windowCaptureAccessibilityDetails(item.source)
+    : undefined;
+  const showingAccessibilityDetails =
+    Boolean(accessibilityDetails) && accessibilityDetailsSrc === item.src;
+  const contentsLabel = showingAccessibilityDetails
+    ? "Show screenshot"
+    : accessibilityDetails?.format === "json"
+      ? "Show accessibility JSON"
+      : "Show extracted text";
+  const ContentsIcon = showingAccessibilityDetails ? ImageIcon : TextIcon;
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 px-4 py-6 [-webkit-app-region:no-drag]"
@@ -148,13 +156,13 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             onError={() => setFailedVideoSrc(item.src)}
             className="max-h-[86vh] max-w-[92vw] rounded-lg border border-border/70 bg-black object-contain shadow-2xl"
           />
-        ) : showingAccessibilityText ? (
-          <pre
-            className="h-[min(86vh,40rem)] w-[min(92vw,42rem)] animate-[window-capture-contents-enter_140ms_ease-out] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-background p-4 font-mono text-xs leading-5 shadow-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:animate-none"
-            tabIndex={0}
-          >
-            {accessibilityText}
-          </pre>
+        ) : showingAccessibilityDetails ? (
+          accessibilityDetails ? (
+            <WindowCaptureAccessibilityData
+              details={accessibilityDetails}
+              className="h-[min(86vh,40rem)] w-[min(92vw,42rem)] animate-[window-capture-contents-enter_140ms_ease-out] rounded-lg border border-border/70 bg-background p-4 text-xs leading-5 shadow-2xl motion-reduce:animate-none"
+            />
+          ) : null
         ) : (
           <img
             src={item.src}
@@ -168,16 +176,16 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             {item.name}
             {preview.images.length > 1 ? ` (${index + 1}/${preview.images.length})` : ""}
           </span>
-          {accessibilityText && item.source ? (
+          {accessibilityDetails && item.source ? (
             <Tooltip>
               <TooltipTrigger
                 render={
                   <Button
                     aria-label={contentsLabel}
-                    aria-pressed={showingAccessibilityText}
+                    aria-pressed={showingAccessibilityDetails}
                     className="[--control-icon-color:currentColor] hover:bg-white/10 hover:text-white"
                     onClick={() =>
-                      setAccessibilityTextSrc(showingAccessibilityText ? null : item.src)
+                      setAccessibilityDetailsSrc(showingAccessibilityDetails ? null : item.src)
                     }
                     size="icon-micro"
                     variant="ghost-muted"

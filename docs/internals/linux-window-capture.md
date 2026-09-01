@@ -26,7 +26,12 @@ captured frame and at least one descendant reports a distinct position. Otherwis
 covers the image and descendant bounds are `null` rather than misleading zero-origin rectangles.
 Anonymous empty groups are removed and anonymous single-child group chains are collapsed before
 applying the payload limit. The legacy flattened text is retained for mixed-version clients, while
-new provider prompts prefer the structured tree.
+new provider prompts prefer the structured tree. Provider prompts use a compact projection that
+omits unavailable bounds and default fields, flattens remaining anonymous groups, removes empty
+structural nodes and duplicate labels, and retains meaningful state, actions, and coordinates. The
+stored attachment remains lossless so the client can show the original tree.
+When `windowCaptureIncludeAccessibility` is disabled, capture does not start the accessibility helper
+or perform an AT-SPI lookup. The image capture and feedback paths are otherwise unchanged.
 Title matching ignores a single leading Braille CLI spinner followed by whitespace, since terminal
 apps can change its frame between capture and lookup. The remaining title must be nonempty and match
 exactly. This normalization also applies when checking ambiguity; an exact spinner frame does not
