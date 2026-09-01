@@ -45,10 +45,6 @@ import {
   type WindowCaptureAnimationDestination,
   WindowCaptureTransition,
 } from "./WindowCaptureTransition.ts";
-import {
-  readAccessibleWindowContext,
-  readAccessibleWindowText,
-} from "./WindowCaptureAccessibility.ts";
 import { startWindowCaptureAccessibilityProcess } from "./WindowCaptureAccessibilityProcess.ts";
 
 import {
@@ -263,8 +259,6 @@ async function requestMacWindowCapturePermissions(): Promise<string | null> {
   }
   return screenMessage;
 }
-
-export { readAccessibleWindowContext, readAccessibleWindowText };
 
 export function windowCaptureImageSize(png: Buffer, fallback: Electron.Rectangle): Electron.Size {
   try {

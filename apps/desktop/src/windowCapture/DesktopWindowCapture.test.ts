@@ -333,9 +333,10 @@ import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopWindowCapture from "./DesktopWindowCapture.ts";
+import * as WindowCaptureAccessibility from "./WindowCaptureAccessibility.ts";
 accessibilityProcessReadMock.mockImplementation((request) => ({
   started: Promise.resolve(),
-  result: DesktopWindowCapture.readAccessibleWindowContext(
+  result: WindowCaptureAccessibility.readAccessibleWindowContext(
     request.active,
     request.platform,
     request.sourceTitle,
@@ -1272,6 +1273,46 @@ it("bounds source thumbnails for large windows", () => {
 });
 
 it.each(["darwin", "win32"] as const)(
+  "extracts the same structured accessibility tree on %s",
+  async (platform) => {
+    const bounds = { x: 100, y: 200, width: 800, height: 600 };
+    const window = {
+      role: "window",
+      name: "Editor",
+      bounds,
+      tree: async () => ({ name: "Editor", children: [{ name: "Save", children: [] }] }),
+      children: async () => [
+        {
+          role: "button",
+          name: "Save",
+          bounds: { x: 300, y: 350, width: 100, height: 50 },
+          children: async () => [],
+        },
+      ],
+    };
+    accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [window] });
+    accessibilityListMock.mockReset().mockResolvedValue([{ pid: 123, asElement: () => window }]);
+
+    const result = await WindowCaptureAccessibility.readAccessibleWindowContext(
+      { title: "Editor", bounds, owner: { processId: 123 } },
+      platform,
+      "Editor",
+      { width: 1_600, height: 1_200 },
+    );
+
+    assert.equal(result?.accessibility?.format, "element-tree");
+    assert.equal(
+      result?.accessibility?.format === "element-tree"
+        ? result.accessibility.root.children[0]?.name
+        : undefined,
+      "Save",
+    );
+    assert.lengthOf(accessibilityByPidMock.mock.calls, platform === "win32" ? 0 : 1);
+    assert.lengthOf(accessibilityListMock.mock.calls, platform === "win32" ? 1 : 0);
+  },
+);
+
+it.each(["darwin", "win32"] as const)(
   "still requires matching accessibility screen positions on %s",
   async (platform) => {
     vi.stubEnv("XDG_SESSION_TYPE", "wayland");
@@ -1285,7 +1326,7 @@ it.each(["darwin", "win32"] as const)(
     accessibilityListMock.mockReset().mockResolvedValue([{ pid: 123, asElement: () => window }]);
     try {
       assert.isUndefined(
-        await DesktopWindowCapture.readAccessibleWindowText(
+        await WindowCaptureAccessibility.readAccessibleWindowText(
           {
             title: "Editor",
             bounds: { x: 479, y: 342, width: 700, height: 520 },
@@ -1318,7 +1359,7 @@ it.each([
   });
   try {
     assert.strictEqual(
-      await DesktopWindowCapture.readAccessibleWindowText(
+      await WindowCaptureAccessibility.readAccessibleWindowText(
         {
           title: "⠋ t3code",
           bounds: { x: 479, y: 342, width: 700, height: 520 },
@@ -1357,7 +1398,7 @@ it.each([20, 1_350, 2_999])(
     });
 
     try {
-      const result = DesktopWindowCapture.readAccessibleWindowText(
+      const result = WindowCaptureAccessibility.readAccessibleWindowText(
         {
           title: "Mozilla Firefox",
           owner: { processId: 42 },
@@ -1401,7 +1442,7 @@ it("falls back to completed flat text when rich traversal reaches the deadline",
   });
 
   try {
-    const result = DesktopWindowCapture.readAccessibleWindowContext(
+    const result = WindowCaptureAccessibility.readAccessibleWindowContext(
       {
         title: "Editor",
         owner: { processId: 42 },
@@ -1442,10 +1483,10 @@ it("times out after three seconds without overlapping the outstanding accessibil
     title: "main.ts",
     owner: { processId: 42 },
     bounds: { x: 0, y: 0, width: 800, height: 600 },
-  } as Parameters<typeof DesktopWindowCapture.readAccessibleWindowText>[0];
+  } as Parameters<typeof WindowCaptureAccessibility.readAccessibleWindowText>[0];
 
   try {
-    const first = DesktopWindowCapture.readAccessibleWindowText(active, "darwin", "main.ts");
+    const first = WindowCaptureAccessibility.readAccessibleWindowText(active, "darwin", "main.ts");
     let settled = false;
     void first.then(() => {
       settled = true;
@@ -1457,7 +1498,7 @@ it("times out after three seconds without overlapping the outstanding accessibil
     assert.isUndefined(await first);
     assert.strictEqual(vi.getTimerCount(), 0);
     assert.isUndefined(
-      await DesktopWindowCapture.readAccessibleWindowText(active, "darwin", "main.ts"),
+      await WindowCaptureAccessibility.readAccessibleWindowText(active, "darwin", "main.ts"),
     );
     assert.strictEqual(accessibilityByPidMock.mock.calls.length, 1);
 
@@ -1465,7 +1506,7 @@ it("times out after three seconds without overlapping the outstanding accessibil
     await vi.advanceTimersByTimeAsync(0);
     accessibilityByPidMock.mockResolvedValueOnce({ children: async () => [] });
     assert.isUndefined(
-      await DesktopWindowCapture.readAccessibleWindowText(active, "darwin", "main.ts"),
+      await WindowCaptureAccessibility.readAccessibleWindowText(active, "darwin", "main.ts"),
     );
     assert.strictEqual(accessibilityByPidMock.mock.calls.length, 2);
   } finally {
