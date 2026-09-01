@@ -60,12 +60,10 @@ const MODIFIER_CODES: Readonly<Record<WindowCaptureModifier, readonly [string, s
   alt: ["AltLeft", "AltRight"],
 };
 
-// The sound rows pair a radio item with its preview button, so the checked and
-// highlighted backgrounds live on the wrapper to stay one unbroken row.
 const soundOptionRowClassName =
-  "grid grid-cols-[1fr_auto] rounded-sm has-data-checked:not-has-data-highlighted:bg-foreground/[0.08] has-data-highlighted:bg-accent";
-const soundOptionItemClassName = "data-checked:bg-transparent data-highlighted:bg-transparent";
-const soundPreviewClassName = "min-h-7 w-7 justify-center px-0 data-highlighted:bg-transparent";
+  "grid grid-cols-[1fr_auto] rounded-sm has-data-checked:bg-foreground/[0.08]";
+const soundOptionItemClassName = "data-checked:bg-transparent";
+const soundPreviewClassName = "min-h-7 w-7 justify-center px-0";
 
 type ShortcutCheck =
   | { readonly status: "idle"; readonly availability: null }
@@ -102,6 +100,8 @@ export function WindowCaptureSettings() {
   const canSaveShortcut =
     shortcutChanged && candidateConflict === null && shortcutCheck.availability?.available === true;
   const soundSelection = settings.windowCapturePlaySound ? settings.windowCaptureSound : "off";
+  const soundLabel =
+    soundSelection === "off" ? "Off" : soundSelection === "soft-pop" ? "Whoosh (Default)" : "Click";
 
   const refreshState = useCallback(async () => {
     if (bridge) setState(await bridge.getWindowCaptureState());
@@ -320,7 +320,7 @@ export function WindowCaptureSettings() {
             control={
               <Menu>
                 <MenuTrigger
-                  aria-label="Window capture sound"
+                  aria-label={"Window capture sound: " + soundLabel}
                   className={cn(selectTriggerVariants({ size: "sm" }), "w-auto min-w-0")}
                   disabled={!captureAvailable}
                 >

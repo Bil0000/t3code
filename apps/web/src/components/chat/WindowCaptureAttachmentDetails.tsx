@@ -2,6 +2,7 @@ import type { WindowCaptureAccessibilityNode, WindowCaptureSource } from "@t3too
 import { ImageIcon, TextIcon } from "lucide-react";
 
 import { cn } from "../../lib/utils";
+import { Button } from "../ui/button";
 import {
   Popover,
   PopoverDescription,
@@ -10,9 +11,6 @@ import {
   PopoverTrigger,
 } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-
-export const WINDOW_CAPTURE_CONTENTS_BUTTON_CLASS =
-  "inline-flex shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring";
 
 export const WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS =
   "relative h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80";
@@ -67,13 +65,14 @@ export function WindowCaptureContentsButton({
           render={
             <PopoverTrigger
               render={
-                <button
+                <Button
                   aria-label={
                     includesAccessibility ? "View accessibility details" : "View screenshot details"
                   }
-                  className={cn(WINDOW_CAPTURE_CONTENTS_BUTTON_CLASS, className)}
+                  className={cn("[--control-icon-color:currentColor]", className)}
                   onClick={(event) => event.stopPropagation()}
-                  type="button"
+                  size="icon-micro"
+                  variant="ghost-muted"
                 />
               }
             />
@@ -105,7 +104,10 @@ export function WindowCaptureContentsButton({
           {accessibilityText ? (
             <div className="space-y-1.5">
               <div className="text-xs font-medium">Extracted accessibility data</div>
-              <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted/45 p-2.5 font-mono text-[11px] leading-4">
+              <pre
+                className="max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border/70 bg-muted/45 p-2.5 font-mono text-[11px] leading-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70"
+                tabIndex={0}
+              >
                 {accessibilityText}
               </pre>
             </div>

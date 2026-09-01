@@ -10,7 +10,6 @@ import {
 import { Button } from "../ui/button";
 import { downloadVideoPreview, type ExpandedImagePreview } from "./ExpandedImagePreview";
 import {
-  WINDOW_CAPTURE_CONTENTS_BUTTON_CLASS,
   WindowCaptureContentsButton,
   windowCaptureAccessibilityText,
 } from "./WindowCaptureAttachmentDetails";
@@ -150,7 +149,10 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             className="max-h-[86vh] max-w-[92vw] rounded-lg border border-border/70 bg-black object-contain shadow-2xl"
           />
         ) : showingAccessibilityText ? (
-          <pre className="h-[min(86vh,40rem)] w-[min(92vw,42rem)] animate-[window-capture-contents-enter_140ms_ease-out] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-background p-4 font-mono text-xs leading-5 shadow-2xl motion-reduce:animate-none">
+          <pre
+            className="h-[min(86vh,40rem)] w-[min(92vw,42rem)] animate-[window-capture-contents-enter_140ms_ease-out] overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/70 bg-background p-4 font-mono text-xs leading-5 shadow-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/70 motion-reduce:animate-none"
+            tabIndex={0}
+          >
             {accessibilityText}
           </pre>
         ) : (
@@ -170,14 +172,15 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             <Tooltip>
               <TooltipTrigger
                 render={
-                  <button
+                  <Button
                     aria-label={contentsLabel}
                     aria-pressed={showingAccessibilityText}
-                    className={WINDOW_CAPTURE_CONTENTS_BUTTON_CLASS}
+                    className="[--control-icon-color:currentColor]"
                     onClick={() =>
                       setAccessibilityTextSrc(showingAccessibilityText ? null : item.src)
                     }
-                    type="button"
+                    size="icon-micro"
+                    variant="ghost-muted"
                   />
                 }
               >
