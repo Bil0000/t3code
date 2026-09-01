@@ -129,6 +129,7 @@ overrides:
   expo-router: 57.0.17
   "expo-sharing>@expo/config-plugins": 57.0.9
   "expo-sharing>@expo/config-types": 57.0.2
+  node-abi: 4.33.0
   vite: "catalog:"
   yaml: "catalog:"
 
