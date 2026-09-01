@@ -39,6 +39,7 @@ import {
 import { searchableSetting } from "./settingsSearch";
 import { Button } from "../ui/button";
 import { WindowCaptureShortcutKeys } from "../desktop/WindowCaptureShortcutKeys";
+import { Group } from "../ui/group";
 import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Switch } from "../ui/switch";
 
@@ -308,7 +309,7 @@ export function WindowCaptureSettings() {
             {...searchableSetting("window-capture-sound")}
             description="Choose the sound played when capture starts."
             control={
-              <>
+              <Group>
                 <Select
                   disabled={!captureAvailable}
                   onValueChange={(value) =>
@@ -319,7 +320,7 @@ export function WindowCaptureSettings() {
                 >
                   <SelectTrigger
                     aria-label="Window capture sound"
-                    className="w-full min-w-0 sm:w-40"
+                    className="w-auto min-w-24"
                     size="sm"
                   >
                     <SelectValue>
@@ -345,7 +346,7 @@ export function WindowCaptureSettings() {
                 >
                   <PlayIcon />
                 </Button>
-              </>
+              </Group>
             }
           />
           <SettingsRow
