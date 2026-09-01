@@ -3897,7 +3897,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                               </div>
                             )}
                             {image.source?.kind === "window-capture" ? (
-                              <WindowCaptureAttachmentDetails source={image.source} />
+                              <WindowCaptureAttachmentDetails
+                                source={image.source}
+                                className={cn(
+                                  upload?.status === "uploading" && "bottom-4",
+                                  upload?.status === "failed" && "bottom-8",
+                                )}
+                              />
                             ) : null}
                             {nonPersistedComposerImageIdSet.has(image.id) && (
                               <Tooltip>
