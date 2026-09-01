@@ -8,8 +8,10 @@ import {
   type WindowCaptureShortcut,
 } from "@t3tools/contracts";
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
-import { PlayIcon } from "lucide-react";
+import { ChevronDownIcon, PlayIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+
+import { cn } from "~/lib/utils";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
@@ -39,8 +41,8 @@ import {
 import { searchableSetting } from "./settingsSearch";
 import { Button } from "../ui/button";
 import { WindowCaptureShortcutKeys } from "../desktop/WindowCaptureShortcutKeys";
-import { Group } from "../ui/group";
-import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
+import { Menu, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
+import { selectTriggerVariants } from "../ui/select";
 import { Switch } from "../ui/switch";
 
 const MODIFIER_FROM_KEY: Readonly<Record<string, WindowCaptureModifier>> = {
@@ -309,44 +311,58 @@ export function WindowCaptureSettings() {
             {...searchableSetting("window-capture-sound")}
             description="Choose the sound played when capture starts."
             control={
-              <Group>
-                <Select
+              <Menu>
+                <MenuTrigger
+                  aria-label="Window capture sound"
+                  className={cn(selectTriggerVariants({ size: "sm" }), "w-40")}
                   disabled={!captureAvailable}
-                  onValueChange={(value) =>
-                    value &&
-                    void save(windowCaptureSoundPatch(value as WindowCaptureSoundSelection))
-                  }
-                  value={soundSelection}
                 >
-                  <SelectTrigger
-                    aria-label="Window capture sound"
-                    className="w-auto min-w-24"
-                    size="sm"
+                  <span className="min-w-0 flex-1 truncate text-left">
+                    {soundSelection === "off"
+                      ? "Off"
+                      : soundSelection === "soft-pop"
+                        ? "Whoosh (Default)"
+                        : "Click"}
+                  </span>
+                  <ChevronDownIcon className="-me-1 size-3 shrink-0 opacity-50" />
+                </MenuTrigger>
+                <MenuPopup align="end" className="w-40">
+                  <MenuRadioGroup
+                    onValueChange={(value) =>
+                      void save(windowCaptureSoundPatch(value as WindowCaptureSoundSelection))
+                    }
+                    value={soundSelection}
                   >
-                    <SelectValue>
-                      {soundSelection === "off"
-                        ? "Off"
-                        : soundSelection === "soft-pop"
-                          ? "Whoosh (Default)"
-                          : "Click"}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectPopup align="end" alignItemWithTrigger={false}>
-                    <SelectItem value="off">Off</SelectItem>
-                    <SelectItem value="soft-pop">Whoosh (Default)</SelectItem>
-                    <SelectItem value="camera-shutter">Click</SelectItem>
-                  </SelectPopup>
-                </Select>
-                <Button
-                  aria-label="Play window capture sound"
-                  disabled={!captureAvailable || soundSelection === "off"}
-                  onClick={() => playWindowCaptureSound(settings.windowCaptureSound)}
-                  size="icon-sm"
-                  variant="outline"
-                >
-                  <PlayIcon />
-                </Button>
-              </Group>
+                    <MenuRadioItem value="off">Off</MenuRadioItem>
+                    <div className="grid grid-cols-[1fr_auto] rounded-sm has-data-checked:bg-foreground/[0.08]">
+                      <MenuRadioItem className="data-checked:bg-transparent" value="soft-pop">
+                        Whoosh (Default)
+                      </MenuRadioItem>
+                      <MenuItem
+                        aria-label="Play Whoosh"
+                        className="min-h-7 w-7 justify-center px-0"
+                        closeOnClick={false}
+                        onClick={() => playWindowCaptureSound("soft-pop")}
+                      >
+                        <PlayIcon />
+                      </MenuItem>
+                    </div>
+                    <div className="grid grid-cols-[1fr_auto] rounded-sm has-data-checked:bg-foreground/[0.08]">
+                      <MenuRadioItem className="data-checked:bg-transparent" value="camera-shutter">
+                        Click
+                      </MenuRadioItem>
+                      <MenuItem
+                        aria-label="Play Click"
+                        className="min-h-7 w-7 justify-center px-0"
+                        closeOnClick={false}
+                        onClick={() => playWindowCaptureSound("camera-shutter")}
+                      >
+                        <PlayIcon />
+                      </MenuItem>
+                    </div>
+                  </MenuRadioGroup>
+                </MenuPopup>
+              </Menu>
             }
           />
           <SettingsRow
