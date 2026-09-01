@@ -3830,9 +3830,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   composerVideos.length > 0 ||
                   composerMediaImages.length > 0) && (
                   <div
-                    data-chat-composer-media-carousel={
-                      hasWindowCaptureAttachments ? "true" : undefined
-                    }
                     className={cn(
                       "mb-3 flex max-w-full gap-2",
                       hasWindowCaptureAttachments

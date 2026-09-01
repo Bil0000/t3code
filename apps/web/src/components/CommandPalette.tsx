@@ -23,6 +23,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
+  type DesktopWindowCaptureState,
   type DesktopWslState,
   type EnvironmentId,
   type FilesystemBrowseResult,
@@ -567,6 +568,10 @@ function OpenCommandPaletteDialog(props: {
   const navigate = useNavigate();
   const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
   const [query, setQuery] = useState("");
+  const windowCaptureBridge = getDesktopWindowCaptureBridge();
+  const [windowCaptureState, setWindowCaptureState] = useState<DesktopWindowCaptureState | null>(
+    null,
+  );
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
@@ -648,6 +653,19 @@ function OpenCommandPaletteDialog(props: {
     () => selectProjectGroupingSettings(clientSettings),
     [clientSettings],
   );
+
+  useEffect(() => {
+    let active = true;
+    void windowCaptureBridge
+      ?.getWindowCaptureState()
+      .then((state) => {
+        if (active) setWindowCaptureState(state);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [windowCaptureBridge]);
 
   const environmentLabelById = useMemo(
     () =>
@@ -1553,8 +1571,7 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  const windowCaptureBridge = getDesktopWindowCaptureBridge();
-  if (windowCaptureBridge) {
+  if (windowCaptureBridge && windowCaptureState && windowCaptureState.mode !== "unavailable") {
     actionItems.push({
       kind: "action",
       value: "action:capture-window",
@@ -1562,17 +1579,7 @@ function OpenCommandPaletteDialog(props: {
       title: "Capture window",
       icon: <CameraIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
-        try {
-          await windowCaptureBridge.captureWindow();
-        } catch (error) {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Window capture failed",
-              description: error instanceof Error ? error.message : "Try the capture again.",
-            }),
-          );
-        }
+        await windowCaptureBridge.captureWindow().catch(() => undefined);
       },
     });
   }

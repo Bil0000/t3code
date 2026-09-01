@@ -9,6 +9,7 @@ import {
   PopoverTitle,
   PopoverTrigger,
 } from "../ui/popover";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export const WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS =
   "relative h-28 w-52 max-w-full overflow-hidden rounded-lg border border-border/80";
@@ -58,19 +59,30 @@ export function WindowCaptureContentsButton({
 
   return (
     <Popover>
-      <PopoverTrigger
-        aria-label={
-          includesAccessibility ? "View accessibility details" : "View screenshot details"
-        }
-        title={title}
-        className={cn(
-          "inline-flex shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
-          className,
-        )}
-        onClick={(event) => event.stopPropagation()}
-      >
-        <ContentsIcon className="size-3" aria-hidden="true" />
-      </PopoverTrigger>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              render={
+                <button
+                  aria-label={
+                    includesAccessibility ? "View accessibility details" : "View screenshot details"
+                  }
+                  className={cn(
+                    "inline-flex shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-1 focus-visible:ring-ring",
+                    className,
+                  )}
+                  onClick={(event) => event.stopPropagation()}
+                  type="button"
+                />
+              }
+            />
+          }
+        >
+          <ContentsIcon className="size-3" aria-hidden="true" />
+        </TooltipTrigger>
+        <TooltipPopup side={side}>{title}</TooltipPopup>
+      </Tooltip>
       <PopoverPopup
         side={side}
         align="center"
