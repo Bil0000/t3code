@@ -6,7 +6,6 @@ import {
   type PullRequestReviewThread,
 } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
-
 import {
   buildAddSelectionToAgentHandoff,
   buildAskAboutPullRequestHandoff,
@@ -24,6 +23,7 @@ import {
   mergePullRequestThreadComments,
   orderPullRequestComments,
   pullRequestActionMenuHasGroup,
+  pullRequestMergeButtonPresentation,
   pullRequestActionNeedsHostRefresh,
   pullRequestComposerTarget,
   pullRequestFindingKey,
@@ -125,6 +125,34 @@ describe("review thread comment pages", () => {
 describe("pull request action menu", () => {
   it("keeps the group divider when auto-merge is the only action", () => {
     expect(pullRequestActionMenuHasGroup(false, true, false)).toBe(true);
+  });
+});
+
+describe("pull request merge completion", () => {
+  it("presents a completed merge as a disabled purple button", () => {
+    expect(
+      pullRequestMergeButtonPresentation({
+        pendingAction: null,
+        mergeHold: true,
+        methodLabel: "Squash",
+      }),
+    ).toMatchObject({
+      label: "Merged",
+      disabled: true,
+      toneClassName: expect.stringContaining("bg-purple"),
+    });
+  });
+
+  it.each([
+    ["idle", { pendingAction: null, mergeHold: false, methodLabel: "Squash" }, "Squash", false],
+    [
+      "in-flight",
+      { pendingAction: "merge" as const, mergeHold: false, methodLabel: "Squash" },
+      "Merging...",
+      true,
+    ],
+  ])("keeps the existing %s state", (_state, input, label, disabled) => {
+    expect(pullRequestMergeButtonPresentation(input)).toMatchObject({ label, disabled });
   });
 });
 

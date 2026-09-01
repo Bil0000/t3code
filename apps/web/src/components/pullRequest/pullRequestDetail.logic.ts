@@ -100,6 +100,19 @@ export function pullRequestActionMenuHasGroup(
   return showsDraftToggle || showsAutoMerge || showsMergeMethods;
 }
 
+export function pullRequestMergeButtonPresentation(input: {
+  readonly pendingAction: PullRequestAction | null;
+  readonly mergeHold: boolean;
+  readonly methodLabel: string;
+}) {
+  const merged = input.mergeHold && input.pendingAction === null;
+  return {
+    label: merged ? "Merged" : input.pendingAction === "merge" ? "Merging..." : input.methodLabel,
+    disabled: input.pendingAction !== null || input.mergeHold,
+    toneClassName: merged ? "border-purple-600/80 bg-purple-600 text-white" : undefined,
+  };
+}
+
 export function isStackedPullRequestBase(
   baseBranch: string,
   refs: ReadonlyArray<Pick<VcsRef, "name" | "isDefault" | "isRemote" | "remoteName">>,

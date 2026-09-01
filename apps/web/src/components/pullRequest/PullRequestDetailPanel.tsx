@@ -112,6 +112,7 @@ import {
   isStackedPullRequestBase,
   pullRequestActionMenuHasGroup,
   pullRequestActionNeedsHostRefresh,
+  pullRequestMergeButtonPresentation,
   pullRequestComposerTarget,
   pullRequestFindingKey,
   pullRequestHandoffLabels,
@@ -140,8 +141,8 @@ import {
 
 type DetailTab = "summary" | "timeline" | "code";
 
-const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string> = {
-  merge: "Pull request merged",
+const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string | null> = {
+  merge: null,
   ready: "Marked ready for review",
   draft: "Converted to draft",
   close: "Pull request closed",
@@ -666,7 +667,10 @@ export function PullRequestDetailPanel({
       return;
     }
     completeAction(action);
-    toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
+    const successTitle = ACTION_SUCCESS_LABELS[action];
+    if (successTitle !== null) {
+      toastManager.add({ type: "success", title: successTitle });
+    }
     // A branch update moves the head commit, which leaves the diff atom pointed at a comparison
     // that no longer exists — the same staleness the manual refresh button fixes, so it goes
     // through that path rather than a second one. Every other action here only changes metadata;
@@ -1035,6 +1039,11 @@ export function PullRequestDetailPanel({
     ? mergeMethod
     : (allowedMergeMethods[0] ?? "merge");
   const selectedMergeMethodLabel = MERGE_METHOD_LABELS[selectedMergeMethod];
+  const mergeButtonPresentation = pullRequestMergeButtonPresentation({
+    pendingAction: activePendingAction,
+    mergeHold,
+    methodLabel: selectedMergeMethodLabel,
+  });
   const conflicting = detail?.state === "open" && detail.mergeability === "conflicting";
   // Only an outright yes arms it. A host that reports nothing has not said the merge is already
   // spoken for, and an off switch for something that may not be on says the wrong thing twice.
@@ -1311,12 +1320,11 @@ export function PullRequestDetailPanel({
               ) : primaryAction === "merge" ? (
                 <Button
                   size="xs"
-                  disabled={actionPending || mergeHold}
+                  disabled={mergeButtonPresentation.disabled}
+                  className={mergeButtonPresentation.toneClassName}
                   onClick={() => setConfirmation({ open: true, action: "merge" })}
                 >
-                  {activePendingAction === "merge" || mergeHold
-                    ? "Merging..."
-                    : selectedMergeMethodLabel}
+                  {mergeButtonPresentation.label}
                 </Button>
               ) : null}
               <Menu>
