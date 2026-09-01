@@ -9,6 +9,7 @@ import {
   getPendingWindowCaptureAnimations,
   pendingWindowCaptureAnimationIdsForTarget,
   scheduleWindowCaptureAnimationDestination,
+  shouldAnimateWindowCaptureArrival,
   updateWindowCaptureAnimationSource,
 } from "./windowCaptureAnimation";
 
@@ -55,5 +56,13 @@ describe("window capture animation", () => {
     expect(getPendingWindowCaptureAnimations()).toHaveLength(1);
     finishWindowCaptureAnimation("capture-1");
     stopAttachment();
+  });
+
+  it("uses composer arrival feedback only for a fresh capture", () => {
+    const now = Date.parse("2026-09-01T12:00:05.000Z");
+
+    expect(shouldAnimateWindowCaptureArrival("2026-09-01T12:00:02.000Z", now)).toBe(true);
+    expect(shouldAnimateWindowCaptureArrival("2026-09-01T11:59:00.000Z", now)).toBe(false);
+    expect(shouldAnimateWindowCaptureArrival("invalid", now)).toBe(false);
   });
 });

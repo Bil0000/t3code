@@ -17,6 +17,13 @@ const destinationRequests = new Map<string, Promise<void>>();
 const destinationMountCounts = new Map<string, number>();
 const listeners = new Set<() => void>();
 const DESTINATION_TIMEOUT_MS = 2_000;
+const ARRIVAL_MAX_AGE_MS = 10_000;
+
+export function shouldAnimateWindowCaptureArrival(capturedAt: string, now = Date.now()): boolean {
+  const capturedTime = Date.parse(capturedAt);
+  const age = now - capturedTime;
+  return Number.isFinite(capturedTime) && age >= 0 && age <= ARRIVAL_MAX_AGE_MS;
+}
 
 function targetKey(target: WindowCaptureTarget): string {
   return typeof target === "string" ? target.trim() : scopedThreadKey(target);

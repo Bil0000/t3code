@@ -175,6 +175,7 @@ import {
   pendingWindowCaptureAnimationIdsForTarget,
   scheduleWindowCaptureAnimationDestination,
   setWindowCaptureAnimationDestination,
+  shouldAnimateWindowCaptureArrival,
   subscribeToPendingWindowCaptureAnimations,
 } from "../../lib/windowCaptureAnimation";
 import { basenameOfPath } from "../../pierre-icons";
@@ -221,10 +222,13 @@ type ComposerCommandMenuPosition = {
 function WindowCaptureAttachmentFrame({
   animationId,
   animationSource,
+  arrival,
+  className,
   ...props
 }: ComponentProps<"div"> & {
   readonly animationId?: string | undefined;
   readonly animationSource?: WindowCaptureSource | undefined;
+  readonly arrival?: boolean | undefined;
 }) {
   const frameRef = useRef<HTMLDivElement>(null);
 
@@ -248,7 +252,18 @@ function WindowCaptureAttachmentFrame({
     );
   }, [animationId, animationSource]);
 
-  return <div ref={frameRef} {...props} />;
+  return (
+    <div
+      ref={frameRef}
+      className={cn(
+        arrival &&
+          !animationId &&
+          "origin-center transition-[opacity,scale] duration-300 ease-[cubic-bezier(.2,.8,.2,1)] starting:scale-95 starting:opacity-0 motion-reduce:transition-none motion-reduce:starting:scale-100 motion-reduce:starting:opacity-100",
+        className,
+      )}
+      {...props}
+    />
+  );
 }
 
 function composerCommandMenuPositionsEqual(
@@ -3844,6 +3859,13 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                           <WindowCaptureAttachmentFrame
                             key={image.id}
                             aria-hidden={windowCaptureAnimationPending || undefined}
+                            inert={windowCaptureAnimationPending || undefined}
+                            arrival={
+                              settings.windowCaptureAnimations &&
+                              !windowCaptureAnimationPending &&
+                              image.source?.kind === "window-capture" &&
+                              shouldAnimateWindowCaptureArrival(image.source.capturedAt)
+                            }
                             animationId={windowCaptureAnimationPending ? image.id : undefined}
                             animationSource={
                               windowCaptureAnimationPending ? image.source : undefined
