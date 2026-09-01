@@ -24,12 +24,15 @@ import { resolveServerEnvironmentLabel } from "./ServerEnvironmentLabel.ts";
 export class ServerEnvironmentIdPersistenceError extends Schema.TaggedErrorClass<ServerEnvironmentIdPersistenceError>()(
   "ServerEnvironmentIdPersistenceError",
   {
-    operation: Schema.Literals(["check", "read", "write"]),
+    operation: Schema.Literals(["check", "read", "write", "initialize"]),
     environmentIdPath: Schema.String,
-    cause: Schema.Defect(),
+    cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
+    if (this.operation === "initialize") {
+      return `Server environment ID file is missing or empty after initialization at '${this.environmentIdPath}'.`;
+    }
     return `Server environment ID ${this.operation} failed at '${this.environmentIdPath}'.`;
   }
 }
@@ -148,9 +151,8 @@ const makeIdentity = Effect.gen(function* () {
     const winner = yield* readPersistedEnvironmentId;
     if (winner === null) {
       return yield* new ServerEnvironmentIdPersistenceError({
-        operation: "read",
+        operation: "initialize",
         environmentIdPath: serverConfig.environmentIdPath,
-        cause: new Error("Environment ID file is missing or empty after initialization."),
       });
     }
     return winner;
