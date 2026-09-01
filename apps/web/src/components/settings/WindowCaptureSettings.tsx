@@ -344,9 +344,15 @@ export function WindowCaptureSettings() {
                     }
                     value={soundSelection}
                   >
-                    <MenuRadioItem value="off">Off</MenuRadioItem>
+                    <MenuRadioItem closeOnClick value="off">
+                      Off
+                    </MenuRadioItem>
                     <div className={soundOptionRowClassName}>
-                      <MenuRadioItem className={soundOptionItemClassName} value="soft-pop">
+                      <MenuRadioItem
+                        className={soundOptionItemClassName}
+                        closeOnClick
+                        value="soft-pop"
+                      >
                         Whoosh <span className="text-muted-foreground">(Default)</span>
                       </MenuRadioItem>
                       <MenuItem
@@ -359,7 +365,11 @@ export function WindowCaptureSettings() {
                       </MenuItem>
                     </div>
                     <div className={soundOptionRowClassName}>
-                      <MenuRadioItem className={soundOptionItemClassName} value="camera-shutter">
+                      <MenuRadioItem
+                        className={soundOptionItemClassName}
+                        closeOnClick
+                        value="camera-shutter"
+                      >
                         Click
                       </MenuRadioItem>
                       <MenuItem
