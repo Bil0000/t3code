@@ -60,8 +60,8 @@ const MAX_CAPTURE_WIDTH = 2_560;
 const MAX_CAPTURE_HEIGHT = 1_600;
 const ACCESSIBLE_TEXT_TIMEOUT_MS = 1_000;
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
-const WAYLAND_SHORTCUT_UNAVAILABLE_MESSAGE =
-  "Global shortcuts aren't available in this Wayland session. Use Capture window from the command palette.";
+const WAYLAND_MODIFIER_PAIR_UNAVAILABLE_MESSAGE =
+  "Modifier-pair shortcuts aren't available in this Wayland session. Choose another shortcut or use Capture window from the command palette.";
 const FLASH_ANIMATION_DURATION_MS = 180;
 const FLASH_STATIC_DURATION_MS = 60;
 const FLASH_FRAME_INTERVAL_MS = 16;
@@ -749,10 +749,10 @@ export const make = Effect.gen(function* () {
     if (mode === "unavailable") {
       return { available: false, message: "Window capture is not supported on this platform." };
     }
-    if (mode === "portal") {
-      return { available: false, message: WAYLAND_SHORTCUT_UNAVAILABLE_MESSAGE };
-    }
     if (isModifierPairShortcut(shortcut)) {
+      if (mode === "portal") {
+        return { available: false, message: WAYLAND_MODIFIER_PAIR_UNAVAILABLE_MESSAGE };
+      }
       const available = yield* Effect.tryPromise(() =>
         startPairShortcutProcess(
           windowCaptureShortcutModifierPair(shortcut),
@@ -825,12 +825,12 @@ export const make = Effect.gen(function* () {
       });
       return;
     }
-    if (mode === "portal") {
+    if (mode === "portal" && isModifierPairShortcut(shortcut)) {
       yield* Ref.set(stateRef, {
         mode,
         shortcut,
         shortcutRegistered: false,
-        shortcutMessage: WAYLAND_SHORTCUT_UNAVAILABLE_MESSAGE,
+        shortcutMessage: WAYLAND_MODIFIER_PAIR_UNAVAILABLE_MESSAGE,
         message: null,
       });
       return;

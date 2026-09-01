@@ -1204,7 +1204,7 @@ it.effect("keeps shortcut registration errors off the capture status", () => {
   ).pipe(Effect.provide(testLayer("linux")));
 });
 
-it.effect("reports global shortcuts as unavailable on Wayland without probing", () => {
+it.effect("probes ordinary Wayland shortcuts through Electron's portal", () => {
   vi.stubEnv("XDG_SESSION_TYPE", "wayland");
   registerShortcutMock.mockReset().mockReturnValue(false);
 
@@ -1229,15 +1229,19 @@ it.effect("reports global shortcuts as unavailable on Wayland without probing", 
       });
       assert.isFalse(conflict.available);
       assert.isFalse(available.available);
-      assert.match(available.message ?? "", /aren't available in this Wayland session/);
+      assert.equal(
+        available.message,
+        "This shortcut is already used by the system or another app.",
+      );
 
       const pair = yield* service.checkShortcut({
         kind: "modifier-pair",
         modifier: "meta",
       });
       assert.isFalse(pair.available);
-      assert.match(pair.message ?? "", /aren't available in this Wayland session/);
-      assert.lengthOf(registerShortcutMock.mock.calls, 0);
+      assert.match(pair.message ?? "", /Modifier-pair shortcuts aren't available/);
+      assert.lengthOf(registerShortcutMock.mock.calls, 1);
+      assert.equal(registerShortcutMock.mock.calls[0]?.[0], "Control+Shift+9");
     }),
   ).pipe(
     Effect.provide(testLayer("linux")),
@@ -1245,7 +1249,7 @@ it.effect("reports global shortcuts as unavailable on Wayland without probing", 
   );
 });
 
-it.effect("does not register a Wayland shortcut when enabled", () => {
+it.effect("does not register a Wayland modifier-pair shortcut when enabled", () => {
   vi.stubEnv("XDG_SESSION_TYPE", "wayland");
   registerShortcutMock.mockReset().mockReturnValue(true);
   const settings = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true };
@@ -1259,7 +1263,41 @@ it.effect("does not register a Wayland shortcut when enabled", () => {
       assert.lengthOf(registerShortcutMock.mock.calls, 0);
       assert.isFalse(state.shortcutRegistered);
       assert.deepEqual(state.shortcut, DEFAULT_CLIENT_SETTINGS.windowCaptureShortcut);
-      assert.match(state.shortcutMessage ?? "", /aren't available in this Wayland session/);
+      assert.match(state.shortcutMessage ?? "", /Modifier-pair shortcuts aren't available/);
+    }),
+  ).pipe(
+    Effect.provide(testLayer("linux")),
+    Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+  );
+});
+
+it.effect("registers an ordinary Wayland shortcut through Electron's portal when enabled", () => {
+  vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+  registerShortcutMock.mockReset().mockReturnValue(true);
+  const shortcut = {
+    key: "9",
+    metaKey: false,
+    ctrlKey: true,
+    shiftKey: true,
+    altKey: false,
+    modKey: false,
+  } as const;
+  const settings = {
+    ...DEFAULT_CLIENT_SETTINGS,
+    windowCaptureEnabled: true,
+    windowCaptureShortcut: shortcut,
+  };
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure(settings);
+
+      const state = yield* service.state;
+      assert.equal(registerShortcutMock.mock.calls[0]?.[0], "Control+Shift+9");
+      assert.isTrue(state.shortcutRegistered);
+      assert.deepEqual(state.shortcut, shortcut);
+      assert.isNull(state.shortcutMessage);
     }),
   ).pipe(
     Effect.provide(testLayer("linux")),
