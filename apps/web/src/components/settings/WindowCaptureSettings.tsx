@@ -319,7 +319,7 @@ export function WindowCaptureSettings() {
                 >
                   <SelectTrigger
                     aria-label="Window capture sound"
-                    className="w-auto min-w-24"
+                    className="w-full min-w-0 sm:w-40"
                     size="sm"
                   >
                     <SelectValue>
