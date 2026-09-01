@@ -110,17 +110,32 @@ const makeIdentity = Effect.gen(function* () {
     return raw.length > 0 ? raw : null;
   });
 
-  const persistEnvironmentId = (value: string) =>
-    fileSystem.writeFileString(serverConfig.environmentIdPath, `${value}\n`).pipe(
-      Effect.mapError(
-        (cause) =>
-          new ServerEnvironmentIdPersistenceError({
-            operation: "write",
-            environmentIdPath: serverConfig.environmentIdPath,
-            cause,
-          }),
-      ),
-    );
+  const persistEnvironmentId = Effect.fn("ServerEnvironmentIdentity.persistEnvironmentId")(
+    function* (value: string) {
+      const tempPath = yield* fileSystem.makeTempFileScoped({
+        directory: serverConfig.stateDir,
+        prefix: ".environment-id-",
+      });
+      yield* fileSystem.writeFileString(tempPath, `${value}\n`);
+      // Publish the completed file without replacing an ID created by another process.
+      yield* fileSystem
+        .link(tempPath, serverConfig.environmentIdPath)
+        .pipe(
+          Effect.catch((cause) =>
+            cause.reason._tag === "AlreadyExists" ? Effect.void : Effect.fail(cause),
+          ),
+        );
+    },
+    Effect.scoped,
+    Effect.mapError(
+      (cause) =>
+        new ServerEnvironmentIdPersistenceError({
+          operation: "write",
+          environmentIdPath: serverConfig.environmentIdPath,
+          cause,
+        }),
+    ),
+  );
 
   const environmentIdRaw = yield* Effect.gen(function* () {
     const persisted = yield* readPersistedEnvironmentId;
@@ -130,7 +145,15 @@ const makeIdentity = Effect.gen(function* () {
 
     const generated = yield* crypto.randomUUIDv4;
     yield* persistEnvironmentId(generated);
-    return generated;
+    const winner = yield* readPersistedEnvironmentId;
+    if (winner === null) {
+      return yield* new ServerEnvironmentIdPersistenceError({
+        operation: "read",
+        environmentIdPath: serverConfig.environmentIdPath,
+        cause: new Error("Environment ID file is missing or empty after initialization."),
+      });
+    }
+    return winner;
   });
 
   const environmentId = EnvironmentId.make(environmentIdRaw);
