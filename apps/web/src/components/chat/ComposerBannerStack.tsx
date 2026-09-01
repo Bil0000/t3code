@@ -13,7 +13,7 @@ export interface ComposerBannerStackItem {
   readonly icon: ReactNode;
   readonly title: ReactNode;
   readonly density?: "default" | "compact" | "comfortable";
-  readonly alignIconToFirstLineOnWrap?: boolean;
+  readonly inlineDescription?: ReactNode;
   readonly description?: ReactNode;
   readonly children?: ReactNode;
   readonly actions?: ReactNode;
@@ -262,6 +262,7 @@ function ComposerBannerStackAlert({
       </ComposerBanner.Root>
     );
   }
+  const hasInlineDescription = item.inlineDescription !== undefined;
 
   return (
     <ComposerBanner.Root
@@ -276,17 +277,26 @@ function ComposerBannerStackAlert({
           className={
             item.description
               ? "h-lh self-start"
-              : item.alignIconToFirstLineOnWrap
-                ? "@max-[400px]:h-lh @max-[400px]:self-start"
+              : hasInlineDescription
+                ? "h-(--composer-banner-icon-column) self-start"
                 : undefined
           }
         >
           {item.icon}
         </ComposerBanner.Icon>
         <ComposerBanner.Content
-          className={item.description ? "flex-col items-start gap-0" : undefined}
+          className={cn(
+            item.description && "flex-col items-start gap-0",
+            hasInlineDescription && "flex-wrap gap-y-0 leading-7 sm:leading-6",
+          )}
         >
-          <span className="w-full min-w-0 font-medium">{item.title}</span>
+          <span className={cn("min-w-0 font-medium", !hasInlineDescription && "w-full")}>
+            {item.title}
+          </span>
+          {hasInlineDescription ? " " : null}
+          {hasInlineDescription ? (
+            <span className="min-w-0 text-muted-foreground">{item.inlineDescription}</span>
+          ) : null}
           {item.description ? (
             <span className="text-muted-foreground">{item.description}</span>
           ) : null}
