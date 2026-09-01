@@ -267,14 +267,14 @@ function ComposerBannerStackAlert({
       placement={attached ? "attached" : "floating"}
       variant={item.variant}
       density={item.description ? "compact" : "default"}
-      className={item.className}
+      className={cn("px-3 sm:px-4", item.className)}
     >
       <ComposerBanner.Row layout="wrap-actions">
         <ComposerBanner.Icon className={item.description ? "h-lh self-start" : undefined}>
           {item.icon}
         </ComposerBanner.Icon>
         <ComposerBanner.Content
-          className={item.description ? "flex-col items-start gap-0.5" : undefined}
+          className={item.description ? "flex-col items-start gap-0" : undefined}
         >
           <span className="w-full min-w-0 font-medium">{item.title}</span>
           {item.description ? (
