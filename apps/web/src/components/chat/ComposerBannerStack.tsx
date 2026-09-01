@@ -287,10 +287,15 @@ function ComposerBannerStackAlert({
         <ComposerBanner.Content
           className={cn(
             item.description && "flex-col items-start gap-0",
-            hasInlineDescription && "flex-wrap gap-y-0 leading-7 sm:leading-6",
+            hasInlineDescription && "flex-wrap gap-y-0",
           )}
         >
-          <span className={cn("min-w-0 font-medium", !hasInlineDescription && "w-full")}>
+          <span
+            className={cn(
+              "min-w-0 font-medium",
+              hasInlineDescription ? "leading-7 sm:leading-6" : "w-full",
+            )}
+          >
             {item.title}
           </span>
           {hasInlineDescription ? " " : null}
