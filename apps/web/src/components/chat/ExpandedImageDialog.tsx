@@ -175,7 +175,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
                   <Button
                     aria-label={contentsLabel}
                     aria-pressed={showingAccessibilityText}
-                    className="[--control-icon-color:currentColor]"
+                    className="[--control-icon-color:currentColor] hover:bg-white/10 hover:text-white"
                     onClick={() =>
                       setAccessibilityTextSrc(showingAccessibilityText ? null : item.src)
                     }
@@ -189,7 +189,11 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
               <TooltipPopup side="top">{contentsLabel}</TooltipPopup>
             </Tooltip>
           ) : item.source ? (
-            <WindowCaptureContentsButton source={item.source} side="top" />
+            <WindowCaptureContentsButton
+              source={item.source}
+              side="top"
+              className="hover:bg-white/10 hover:text-white"
+            />
           ) : null}
         </div>
       </div>
