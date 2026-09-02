@@ -2,7 +2,8 @@ import { InfoIcon } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Button } from "../ui/button";
+import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { ComposerBanner, type ComposerBannerVariant } from "./ComposerBanner";
 
 // Match the duration-220 exit transition before removing a dismissed notice.
@@ -283,25 +284,31 @@ function ComposerBannerStackAlert({
           </span>
           {item.description ? (
             <>
-              <span className="min-w-0 shrink-[9999] truncate text-muted-foreground @max-[400px]:hidden">
+              <span className="min-w-0 shrink-[9999] truncate text-muted-foreground @max-[400px]:sr-only">
                 {item.description}
               </span>
-              <Tooltip>
-                <TooltipTrigger
+              <Popover>
+                <PopoverTrigger
+                  openOnHover
                   render={
-                    <button
-                      type="button"
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
                       aria-label="Show notice details"
-                      className="hidden size-6 flex-none items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring @max-[400px]:inline-flex"
-                    >
-                      <InfoIcon className="size-3.5" />
-                    </button>
+                      className="hidden flex-none text-muted-foreground hover:text-foreground @max-[400px]:inline-flex"
+                    />
                   }
-                />
-                <TooltipPopup side="top" className="max-w-72 whitespace-normal text-pretty">
+                >
+                  <InfoIcon className="size-3.5" />
+                </PopoverTrigger>
+                <PopoverPopup
+                  tooltipStyle
+                  side="top"
+                  className="max-w-72 whitespace-normal text-pretty"
+                >
                   {item.description}
-                </TooltipPopup>
-              </Tooltip>
+                </PopoverPopup>
+              </Popover>
             </>
           ) : null}
         </ComposerBanner.Content>

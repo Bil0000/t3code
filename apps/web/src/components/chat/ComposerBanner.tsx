@@ -246,7 +246,7 @@ function Actions({ className, ...props }: ComponentProps<"span">) {
       data-slot="composer-banner-actions"
       className={cn(
         "col-start-3 row-start-1 flex flex-wrap items-center justify-end gap-1",
-        "@max-[400px]:has-[>:nth-child(2)]:col-start-2 @max-[400px]:has-[>:nth-child(2)]:col-end-4 @max-[400px]:has-[>:nth-child(2)]:row-start-2 @max-[400px]:has-[>:nth-child(2)]:-ms-2 @max-[400px]:has-[>:nth-child(2)]:justify-start",
+        "@max-[400px]:group-data-[composer-banner-layout=wrap-actions]/banner-row:has-[>:nth-child(2)]:col-start-2 @max-[400px]:group-data-[composer-banner-layout=wrap-actions]/banner-row:has-[>:nth-child(2)]:col-end-4 @max-[400px]:group-data-[composer-banner-layout=wrap-actions]/banner-row:has-[>:nth-child(2)]:row-start-2 @max-[400px]:group-data-[composer-banner-layout=wrap-actions]/banner-row:has-[>:nth-child(2)]:-ms-2 @max-[400px]:group-data-[composer-banner-layout=wrap-actions]/banner-row:has-[>:nth-child(2)]:justify-start",
         className,
       )}
       {...props}
