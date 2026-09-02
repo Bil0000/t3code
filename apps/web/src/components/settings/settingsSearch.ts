@@ -290,27 +290,32 @@ export const SETTINGS_SEARCH_ITEMS = [
     id: "window-capture-accessibility",
     title: "Capture accessibility data",
     to: "/settings/window-capture",
+    targetId: "window-capture-enabled",
     searchTerms: ["text UI structure elements privacy omit agent context"],
   },
   {
     id: "window-capture-shortcut",
     title: "Capture shortcut",
     to: "/settings/window-capture",
+    targetId: "window-capture-enabled",
   },
   {
     id: "window-capture-sound",
     title: "Capture sound",
     to: "/settings/window-capture",
+    targetId: "window-capture-enabled",
   },
   {
     id: "window-capture-flash",
     title: "Capture flash",
     to: "/settings/window-capture",
+    targetId: "window-capture-enabled",
   },
   {
     id: "window-capture-animations",
     title: "Capture animations",
     to: "/settings/window-capture",
+    targetId: "window-capture-enabled",
   },
   {
     id: "providers",

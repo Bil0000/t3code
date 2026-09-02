@@ -198,6 +198,27 @@ describe("searchSettings", () => {
     });
   });
 
+  it("routes conditional window capture settings to the stable toggle row", () => {
+    const targets = [
+      "capture accessibility data",
+      "capture shortcut",
+      "capture sound",
+      "capture flash",
+      "capture animations",
+    ].map((query) => {
+      const match = searchSettings(query)[0];
+      return [match?.id, match?.targetId];
+    });
+
+    expect(targets).toEqual([
+      ["window-capture-accessibility", "window-capture-enabled"],
+      ["window-capture-shortcut", "window-capture-enabled"],
+      ["window-capture-sound", "window-capture-enabled"],
+      ["window-capture-flash", "window-capture-enabled"],
+      ["window-capture-animations", "window-capture-enabled"],
+    ]);
+  });
+
   it("routes browser recording quality to integrations", () => {
     const result = searchSettings("recording frame rate")[0];
     expect(result).toMatchObject({
