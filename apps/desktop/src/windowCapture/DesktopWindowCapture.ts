@@ -182,7 +182,6 @@ export class DesktopWindowCaptureSetupError extends Schema.TaggedErrorClass<Desk
       return kde
         ? "Helper setup requires a KDE Plasma Wayland session outside a sandbox."
         : "Extension setup requires a GNOME Wayland session outside a sandbox.";
-    if (this.cause instanceof Error) return this.cause.message;
     if (this.reason === "shortcut-permissions") return "Could not open shortcut permissions.";
     return kde ? "Could not set up KDE capture." : "Could not set up the GNOME extension.";
   }

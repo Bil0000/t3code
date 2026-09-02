@@ -479,7 +479,7 @@ it("models capture setup failures with stable context and cause", () => {
   assert.equal(error.action, "enable-extension");
   assert.equal(error.reason, "setup-failed");
   assert.strictEqual(error.cause, cause);
-  assert.equal(error.message, cause.message);
+  assert.equal(error.message, "Could not set up the GNOME extension.");
 });
 
 it.effect("reads and acknowledges queued captures through Effect services", () => {
