@@ -1,6 +1,8 @@
+import { InfoIcon } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { ComposerBanner, type ComposerBannerVariant } from "./ComposerBanner";
 
 // Match the duration-220 exit transition before removing a dismissed notice.
@@ -280,9 +282,27 @@ function ComposerBannerStackAlert({
             {item.title}
           </span>
           {item.description ? (
-            <span className="min-w-0 shrink-[9999] truncate text-muted-foreground">
-              {item.description}
-            </span>
+            <>
+              <span className="min-w-0 shrink-[9999] truncate text-muted-foreground @max-[400px]:hidden">
+                {item.description}
+              </span>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      aria-label="Show notice details"
+                      className="hidden size-6 flex-none items-center justify-center rounded-md text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring @max-[400px]:inline-flex"
+                    >
+                      <InfoIcon className="size-3.5" />
+                    </button>
+                  }
+                />
+                <TooltipPopup side="top" className="max-w-72 whitespace-normal text-pretty">
+                  {item.description}
+                </TooltipPopup>
+              </Tooltip>
+            </>
           ) : null}
         </ComposerBanner.Content>
         {item.actions || item.onDismiss ? (

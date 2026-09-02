@@ -186,7 +186,7 @@ function Row({
       "not-has-[>[data-slot=composer-banner-actions]]:grid-cols-[var(--composer-banner-icon-column)_minmax(0,1fr)]",
       "[&:is(button)]:cursor-pointer [&:is(button)]:rounded-[0.5rem] [&:is(button)]:focus-visible:outline-2 [&:is(button)]:focus-visible:-outline-offset-2 [&:is(button)]:focus-visible:outline-ring",
       layout === "wrap-actions" &&
-        "@max-[400px]:flex @max-[400px]:flex-wrap @max-[400px]:gap-y-1 @max-[400px]:*:data-[slot=composer-banner-actions]:ms-auto @max-[400px]:*:data-[slot=composer-banner-actions]:max-w-full @max-[400px]:has-[>[data-slot=composer-banner-icon]]:*:data-[slot=composer-banner-actions]:max-w-[calc(100%-var(--composer-banner-icon-column)-(--spacing(1)))] @max-[400px]:*:data-[slot=composer-banner-content]:min-h-(--composer-banner-icon-column) @max-[400px]:*:data-[slot=composer-banner-content]:flex-[1_1_10rem]",
+        "@max-[400px]:*:data-[slot=composer-banner-content]:min-h-(--composer-banner-icon-column)",
       className,
     ),
     "data-composer-banner-row": "true",
@@ -246,6 +246,7 @@ function Actions({ className, ...props }: ComponentProps<"span">) {
       data-slot="composer-banner-actions"
       className={cn(
         "col-start-3 row-start-1 flex flex-wrap items-center justify-end gap-1",
+        "@max-[400px]:has-[>:nth-child(2)]:col-start-2 @max-[400px]:has-[>:nth-child(2)]:col-end-4 @max-[400px]:has-[>:nth-child(2)]:row-start-2 @max-[400px]:has-[>:nth-child(2)]:justify-start",
         className,
       )}
       {...props}
