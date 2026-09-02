@@ -12,19 +12,16 @@ export interface ComposerBannerStackItem {
   readonly priority?: "urgent" | "activity" | "notice";
   readonly icon: ReactNode;
   readonly title: ReactNode;
-  readonly density?: "default" | "compact" | "comfortable";
-  readonly inlineDescription?: ReactNode;
   readonly description?: ReactNode;
   readonly children?: ReactNode;
   readonly actions?: ReactNode;
-  readonly className?: string;
   readonly dismissLabel?: string;
   readonly onDismiss?: () => void;
 }
 
 export type ComposerBannerStackContent = Pick<
   ComposerBannerStackItem,
-  "id" | "variant" | "priority" | "className"
+  "id" | "variant" | "priority"
 > & { readonly content: ReactNode };
 
 type ComposerBannerStackEntry = ComposerBannerStackItem | ComposerBannerStackContent;
@@ -254,56 +251,29 @@ function ComposerBannerStackAlert({
   if ("content" in item) {
     return (
       <ComposerBanner.Root
+        density="comfortable"
         placement={attached ? "attached" : "floating"}
         variant={item.variant}
-        className={item.className}
       >
         {item.content}
       </ComposerBanner.Root>
     );
   }
-  const hasInlineDescription = item.inlineDescription !== undefined;
-
   return (
     <ComposerBanner.Root
       role="alert"
       placement={attached ? "attached" : "floating"}
       variant={item.variant}
-      density={item.density ?? (item.description ? "compact" : "default")}
-      className={item.className}
+      density="comfortable"
     >
       <ComposerBanner.Row layout="wrap-actions">
-        <ComposerBanner.Icon
-          className={
-            item.description
-              ? "h-lh self-start"
-              : hasInlineDescription
-                ? "h-(--composer-banner-icon-column) self-start"
-                : undefined
-          }
-        >
+        <ComposerBanner.Icon className="h-(--composer-banner-icon-column) self-start">
           {item.icon}
         </ComposerBanner.Icon>
-        <ComposerBanner.Content
-          className={cn(
-            item.description && "flex-col items-start gap-0",
-            hasInlineDescription && "flex-wrap gap-y-0",
-          )}
-        >
-          <span
-            className={cn(
-              "min-w-0 font-medium",
-              hasInlineDescription ? "leading-7 sm:leading-6" : "w-full",
-            )}
-          >
-            {item.title}
-          </span>
-          {hasInlineDescription ? " " : null}
-          {hasInlineDescription ? (
-            <span className="min-w-0 text-muted-foreground">{item.inlineDescription}</span>
-          ) : null}
+        <ComposerBanner.Content className="overflow-hidden whitespace-nowrap">
+          <span className="min-w-0 truncate font-medium leading-7 sm:leading-6">{item.title}</span>
           {item.description ? (
-            <span className="text-muted-foreground">{item.description}</span>
+            <span className="min-w-0 truncate text-muted-foreground">{item.description}</span>
           ) : null}
         </ComposerBanner.Content>
         {item.actions || item.onDismiss ? (

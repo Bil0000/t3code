@@ -111,20 +111,15 @@ export function manualServerUpdateCommand(targetVersion: string): string {
   return `npx t3@${targetVersion}`;
 }
 
-/** One sentence telling the user how to resolve version skew for a server,
-    matched to the update path it offers. */
-export function serverUpdateGuidance(
-  capability: ServerSelfUpdateCapability | null,
-  serverLabel: string,
-): string {
+export function serverUpdateGuidance(capability: ServerSelfUpdateCapability | null): string {
   switch (capability) {
     case "boot-service":
     case "respawn":
-      return `Update the ${serverLabel} so they stay in sync.`;
+      return "Update to stay in sync";
     case "desktop-managed":
-      return `Update the desktop app that runs the ${serverLabel}.`;
+      return "Update the desktop app";
     default:
-      return `Relaunch the ${serverLabel} with the copied command to sync them.`;
+      return "Copy the update command";
   }
 }
 
