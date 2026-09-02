@@ -29,6 +29,7 @@ import {
   type ProviderRuntimeEvent,
   type ProviderSession,
 } from "@t3tools/contracts";
+import { expandAssistantCitationsForProvider } from "@t3tools/shared/assistantCitations";
 import { causeErrorTag } from "@t3tools/shared/observability";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -867,11 +868,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     });
 
     const attachments = parsed.attachments ?? [];
-    if (!parsed.input && attachments.length === 0) {
+    if (!parsed.input && attachments.length === 0 && parsed.continuation !== true) {
       return yield* toValidationError(
         "ProviderService.sendTurn",
         "Either input text or at least one attachment is required",
       );
+    }
+
+    const inputTextWithCitations =
+      parsed.input === undefined ? undefined : expandAssistantCitationsForProvider(parsed.input);
+    if (inputTextWithCitations !== parsed.input) {
+      yield* decodeInputOrValidationError({
+        operation: "ProviderService.sendTurn",
+        schema: ProviderSendTurnInput.fields.input,
+        payload: inputTextWithCitations,
+      });
     }
 
     // Every attachment gets an on-disk path in the prompt so the model's tools
@@ -880,7 +891,7 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     // sends generic files as file parts, the others send images only and rely
     // on the path line for everything else. Unresolvable ids are skipped here
     // and surface as adapter errors when the file is read.
-    let inputTextWithAttachmentContext = parsed.input;
+    let inputTextWithAttachmentContext = inputTextWithCitations;
     const appendAttachmentContext = (context: string | undefined) => {
       if (context === undefined) return;
       const candidate = inputTextWithAttachmentContext
@@ -952,11 +963,29 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
     let metricProvider = "unknown";
     let metricModel = input.modelSelection?.model;
     return yield* Effect.gen(function* () {
-      const routed = yield* resolveRoutableSession({
+      let routed = yield* resolveRoutableSession({
         threadId: input.threadId,
         operation: "ProviderService.sendTurn",
-        allowRecovery: true,
+        allowRecovery: false,
       });
+      if (
+        input.continuation === true &&
+        !input.input &&
+        attachments.length === 0 &&
+        routed.adapter.capabilities.promptlessTurnContinuation !== true
+      ) {
+        return yield* toValidationError(
+          "ProviderService.sendTurn",
+          `Provider '${routed.adapter.provider}' requires an explicit continuation prompt`,
+        );
+      }
+      if (!routed.isActive) {
+        routed = yield* resolveRoutableSession({
+          threadId: input.threadId,
+          operation: "ProviderService.sendTurn",
+          allowRecovery: true,
+        });
+      }
       metricProvider = routed.adapter.provider;
       metricModel = input.modelSelection?.model;
       yield* Effect.annotateCurrentSpan({
@@ -1182,21 +1211,21 @@ const makeProviderService = Effect.fn("makeProviderService")(function* (
         ),
       );
       const activeSessions = sessionsByProvider.flatMap((sessions) => sessions);
-      const persistedBindings = yield* directory.listThreadIds().pipe(
-        Effect.flatMap((threadIds) =>
-          Effect.forEach(
-            threadIds,
-            (threadId) =>
-              directory
-                .getBinding(threadId)
-                .pipe(
-                  Effect.orElseSucceed(() =>
-                    Option.none<ProviderSessionDirectory.ProviderRuntimeBinding>(),
-                  ),
-                ),
-            { concurrency: "unbounded" },
-          ),
-        ),
+      // Only live adapter sessions appear in this response. Resolving every
+      // historical binding here makes each call scale with the full thread
+      // history instead of the active session set.
+      const persistedBindings = yield* Effect.forEach(
+        [...new Set(activeSessions.map((session) => session.threadId))],
+        (threadId) =>
+          directory
+            .getBinding(threadId)
+            .pipe(
+              Effect.orElseSucceed(() =>
+                Option.none<ProviderSessionDirectory.ProviderRuntimeBinding>(),
+              ),
+            ),
+        { concurrency: "unbounded" },
+      ).pipe(
         Effect.orElseSucceed(
           () => [] as Array<Option.Option<ProviderSessionDirectory.ProviderRuntimeBinding>>,
         ),

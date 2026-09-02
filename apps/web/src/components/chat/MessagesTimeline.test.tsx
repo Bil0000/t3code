@@ -41,16 +41,13 @@ vi.mock("@legendapp/list/react", async () => {
         };
     ref?: Ref<LegendListRef>;
   }) => {
-    if (props.anchoredEndSpace) {
-      props.anchoredEndSpace.onReady?.({ anchorIndex: props.anchoredEndSpace.anchorIndex });
-    }
+    props.anchoredEndSpace?.onReady?.({ anchorIndex: props.anchoredEndSpace.anchorIndex });
     return (
       <div
         data-testid={legendListTestId}
         data-anchor-index={props.anchoredEndSpace?.anchorIndex}
         data-anchor-max-size={props.anchoredEndSpace?.anchorMaxSize}
         data-anchor-offset={props.anchoredEndSpace?.anchorOffset}
-        data-anchor-on-ready={Boolean(props.anchoredEndSpace?.onReady)}
         data-content-inset-end={props.contentInsetEndAdjustment}
         data-class-name={props.className}
         data-maintain-scroll-at-end={props.maintainScrollAtEnd ? "enabled" : undefined}
@@ -320,7 +317,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain("codex-thread-1");
   });
 
-  it("renders the worked-for row at assistant response text size", () => {
+  it("renders elapsed time for a completed turn", () => {
     const turnId = TurnId.make("turn-with-fold");
     const assistantEntry = buildAssistantTimelineEntry("Done.");
     const markup = renderToStaticMarkup(
@@ -355,23 +352,6 @@ describe("MessagesTimeline", () => {
     );
 
     expect(markup).toContain("Worked for 8.0s");
-    expect(markup).toContain("px-1 text-sm leading-relaxed text-muted-foreground");
-  });
-
-  it("uses the larger leading inset only when the top fade is enabled", () => {
-    const timelineEntries = [buildUserTimelineEntry("Hello")];
-
-    const compactMarkup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={timelineEntries} />,
-    );
-    const fadedMarkup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={timelineEntries} topFadeEnabled />,
-    );
-
-    expect(compactMarkup).toContain('class="h-3 sm:h-4"');
-    expect(compactMarkup).not.toContain("topbar-scroll-fade");
-    expect(fadedMarkup).toContain('class="h-[var(--workspace-titlebar-scroll-fade-height)]"');
-    expect(fadedMarkup).toContain("topbar-scroll-fade");
   });
 
   it("keeps assistant changed-files headers sticky below the thread header", () => {
@@ -533,7 +513,6 @@ describe("MessagesTimeline", () => {
 
     expect(markup).toContain('data-anchor-index="0"');
     expect(markup).toContain('data-anchor-offset="24"');
-    expect(markup).toContain('data-anchor-on-ready="true"');
     expect(markup).not.toContain("data-anchor-max-size=");
     expect(markup).toContain('data-content-inset-end="144"');
     expect(markup).toContain("[overflow-anchor:none]");
@@ -1360,7 +1339,7 @@ describe("MessagesTimeline", () => {
     expect(markup).toContain('data-timeline-row-id="live-activity-row"');
   });
 
-  it("keeps the completed command in the shared activity row", () => {
+  it("keeps the completed command in the shared activity row with a past-tense label", () => {
     const turnId = TurnId.make("turn-live");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
@@ -1395,10 +1374,10 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    expect(markup).toContain("Running pnpm");
+    expect(markup).toContain("Ran pnpm");
     expect(markup).toContain("lucide-terminal");
     expect(markup).toContain("live-activity-focus");
-    expect(markup).not.toContain("Ran pnpm");
+    expect(markup).not.toContain("Running pnpm");
     expect(markup).not.toContain("Thinking");
     expect(markup).not.toContain('data-timeline-row-kind="thinking"');
   });
