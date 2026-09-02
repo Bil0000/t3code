@@ -11,7 +11,7 @@ import {
   getProviderOptionCurrentValue,
 } from "@t3tools/shared/model";
 import { Slider } from "@base-ui/react/slider";
-import { memo, useState } from "react";
+import { memo, useRef, useState } from "react";
 import { ChevronRightIcon, ZapIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import type { DraftId } from "../../composerDraftStore";
@@ -105,6 +105,8 @@ export const ComposerModelPill = memo(function ComposerModelPill(
   const { activeEntry, triggerTitle, triggerLabel, showInstanceBadge, isUnavailable } =
     useModelPickerTriggerDisplay(props);
   const [isCardOpen, setIsCardOpen] = useState(false);
+  const [isOptionsOpen, setIsOptionsOpen] = useState(false);
+  const traitsTriggerRef = useRef<HTMLButtonElement>(null);
   const [uncontrolledListOpen, setUncontrolledListOpen] = useState(false);
   const isListOpen = props.open ?? uncontrolledListOpen;
   const setListOpen = (open: boolean) => {
@@ -205,6 +207,7 @@ export const ComposerModelPill = memo(function ComposerModelPill(
         <PopoverTrigger
           render={
             <ComposerControl
+              ref={traitsTriggerRef}
               className={cn(
                 "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap sm:max-w-48",
                 !showTraitsTrigger && "hidden",
@@ -233,7 +236,7 @@ export const ComposerModelPill = memo(function ComposerModelPill(
           className="composer-model-card"
           viewportClassName="p-0"
         >
-          <div className="flex w-72 flex-col gap-2 p-2">
+          <div className="flex w-80 flex-col gap-2 p-2">
             <div className="flex items-center gap-1">
               {fastMode ? (
                 <Tooltip>
@@ -276,58 +279,31 @@ export const ComposerModelPill = memo(function ComposerModelPill(
                   </TooltipPopup>
                 </Tooltip>
               ) : null}
-              <Menu
-                onOpenChange={(open) => {
-                  if (open) setIsCardOpen(false);
+              <button
+                type="button"
+                className="flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-base font-medium outline-none transition-colors hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={`${triggerLabel}${effort ? `, ${effort.label}` : ""}. Show all options`}
+                disabled={props.disabled}
+                onClick={() => {
+                  setIsCardOpen(false);
+                  setIsOptionsOpen(true);
                 }}
               >
-                <MenuTrigger
-                  render={
-                    <button
-                      type="button"
-                      className="flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-lg px-2 text-base font-medium outline-none transition-colors hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
-                      aria-label={`${triggerLabel}${effort ? `, ${effort.label}` : ""}. Show all options`}
-                      disabled={props.disabled}
-                    />
-                  }
-                >
-                  {modelName}
-                  {effort ? (
-                    <span
-                      key={effort.label}
-                      className={cn(
-                        "min-w-0 truncate transition-colors duration-300",
-                        effort.tone !== "ultrathink" && "composer-model-pill-chip-enter",
-                        effortLabelClassName(effort.tone, props.provider),
-                      )}
-                    >
-                      {effort.label}
-                    </span>
-                  ) : null}
-                  <ChevronRightIcon
-                    aria-hidden="true"
-                    className="size-4 shrink-0 text-icon-muted"
-                  />
-                </MenuTrigger>
-                <MenuPopup
-                  align="start"
-                  side="top"
-                  sideOffset={-40}
-                  className="w-72 transition-[scale,opacity,translate] duration-200 ease-out data-ending-style:translate-y-1 data-ending-style:scale-98 data-ending-style:opacity-0 data-starting-style:translate-y-1 data-starting-style:scale-98 data-starting-style:opacity-0"
-                >
-                  <TraitsMenuContent
-                    provider={props.provider}
-                    instanceId={props.activeInstanceId}
-                    models={props.models}
-                    model={props.model}
-                    prompt={props.prompt}
-                    onPromptChange={props.onPromptChange}
-                    modelOptions={props.modelOptions}
-                    planModeEnabled={props.planModeEnabled}
-                    {...persistence}
-                  />
-                </MenuPopup>
-              </Menu>
+                {modelName}
+                {effort ? (
+                  <span
+                    key={effort.label}
+                    className={cn(
+                      "shrink-0 transition-colors duration-300",
+                      effort.tone !== "ultrathink" && "composer-model-pill-chip-enter",
+                      effortLabelClassName(effort.tone, props.provider),
+                    )}
+                  >
+                    {effort.label}
+                  </span>
+                ) : null}
+                <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0 text-icon-muted" />
+              </button>
               {chipDescriptors.map((descriptor) => (
                 <TraitChip
                   key={descriptor.id}
@@ -354,6 +330,27 @@ export const ComposerModelPill = memo(function ComposerModelPill(
           </div>
         </PopoverPopup>
       </Popover>
+      <Menu open={isOptionsOpen} onOpenChange={setIsOptionsOpen}>
+        <MenuPopup
+          align="start"
+          side="top"
+          sideOffset={8}
+          anchor={traitsTriggerRef}
+          className="w-80 transition-[scale,opacity,translate] duration-200 ease-out data-ending-style:translate-y-1 data-ending-style:scale-98 data-ending-style:opacity-0 data-starting-style:translate-y-1 data-starting-style:scale-98 data-starting-style:opacity-0"
+        >
+          <TraitsMenuContent
+            provider={props.provider}
+            instanceId={props.activeInstanceId}
+            models={props.models}
+            model={props.model}
+            prompt={props.prompt}
+            onPromptChange={props.onPromptChange}
+            modelOptions={props.modelOptions}
+            planModeEnabled={props.planModeEnabled}
+            {...persistence}
+          />
+        </MenuPopup>
+      </Menu>
     </>
   );
 });
