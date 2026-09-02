@@ -13,7 +13,7 @@ import {
 import { GNOME_CAPTURE_FILES, GNOME_CAPTURE_UUID } from "./gnomeCaptureBundle.ts";
 
 let dataHome: string;
-const bundle = NodePath.resolve("apps/desktop/gnome-extension");
+const bundle = NodePath.resolve(import.meta.dirname, "../../gnome-extension");
 const installedPath = () => NodePath.join(dataHome, "gnome-shell/extensions", GNOME_CAPTURE_UUID);
 beforeEach(async () => {
   dataHome = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-gnome-setup-test-"));

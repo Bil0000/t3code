@@ -146,7 +146,10 @@ it.runIf(hasDbus)("captures through real D-Bus marshalling on a private bus", as
       return client;
     };
     const setup = new GnomeCaptureSetup(
-      { bundle: NodePath.resolve("apps/desktop/gnome-extension"), dataHome: directory },
+      {
+        bundle: NodePath.resolve(import.meta.dirname, "../../gnome-extension"),
+        dataHome: directory,
+      },
       sessionBus({ busAddress: String(address) }),
     );
     try {
