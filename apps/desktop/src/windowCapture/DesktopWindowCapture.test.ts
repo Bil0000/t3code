@@ -469,6 +469,19 @@ const testLayer = (
     ),
   );
 
+it("models capture setup failures with stable context and cause", () => {
+  const cause = new Error("GNOME has not loaded the extension.");
+  const error = new DesktopWindowCapture.DesktopWindowCaptureSetupError({
+    action: "enable-extension",
+    reason: "setup-failed",
+    cause,
+  });
+  assert.equal(error.action, "enable-extension");
+  assert.equal(error.reason, "setup-failed");
+  assert.strictEqual(error.cause, cause);
+  assert.equal(error.message, cause.message);
+});
+
 it.effect("reads and acknowledges queued captures through Effect services", () => {
   const captureId = "12345678-1234-1234-1234-123456789abc";
   const captureDirectory = "/state/window-captures";

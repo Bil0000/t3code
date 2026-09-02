@@ -9,7 +9,7 @@ import {
   type DesktopWindowCapture as DesktopWindowCaptureValue,
   type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
-  type DesktopWindowCaptureSetupAction,
+  DesktopWindowCaptureSetupAction,
   type ClientSettings,
   type WindowCaptureModifier,
   type WindowCaptureModifierPairShortcut,
@@ -170,8 +170,23 @@ export class DesktopWindowCapture extends Context.Service<
 
 export class DesktopWindowCaptureSetupError extends Schema.TaggedErrorClass<DesktopWindowCaptureSetupError>()(
   "DesktopWindowCaptureSetupError",
-  { message: Schema.String },
-) {}
+  {
+    action: DesktopWindowCaptureSetupAction,
+    reason: Schema.Literals(["unsupported-session", "setup-failed", "shortcut-permissions"]),
+    cause: Schema.optional(Schema.Defect()),
+  },
+) {
+  override get message(): string {
+    const kde = this.action === "install-kde-helper" || this.action === "remove-kde-helper";
+    if (this.reason === "unsupported-session")
+      return kde
+        ? "Helper setup requires a KDE Plasma Wayland session outside a sandbox."
+        : "Extension setup requires a GNOME Wayland session outside a sandbox.";
+    if (this.cause instanceof Error) return this.cause.message;
+    if (this.reason === "shortcut-permissions") return "Could not open shortcut permissions.";
+    return kde ? "Could not set up KDE capture." : "Could not set up the GNOME extension.";
+  }
+}
 
 type WindowCaptureSystemAnimationSettings = Pick<
   ReturnType<typeof Electron.systemPreferences.getAnimationSettings>,
@@ -1151,19 +1166,23 @@ export const make = Effect.gen(function* () {
     if (action === "install-kde-helper" || action === "remove-kde-helper") {
       if (captureMode(environment.platform) !== "portal" || !isKdeCaptureSession())
         return yield* new DesktopWindowCaptureSetupError({
-          message: "Helper setup requires a KDE Plasma Wayland session outside a sandbox.",
+          action,
+          reason: "unsupported-session",
         });
       yield* Effect.tryPromise({
         try: () => new KdeCaptureSetup(kdeCapturePaths).perform(action),
         catch: (error) =>
           new DesktopWindowCaptureSetupError({
-            message: error instanceof Error ? error.message : "Could not set up KDE capture.",
+            action,
+            reason: "setup-failed",
+            cause: error,
           }),
       });
     } else if (action !== "retry-shortcut") {
       if (!hasGnomeSetup())
         return yield* new DesktopWindowCaptureSetupError({
-          message: "Extension setup requires a GNOME Wayland session outside a sandbox.",
+          action,
+          reason: "unsupported-session",
         });
       yield* Effect.tryPromise({
         try: async () => {
@@ -1176,8 +1195,9 @@ export const make = Effect.gen(function* () {
         },
         catch: (error) =>
           new DesktopWindowCaptureSetupError({
-            message:
-              error instanceof Error ? error.message : "Could not set up the GNOME extension.",
+            action,
+            reason: "setup-failed",
+            cause: error,
           }),
       });
     }
@@ -1188,10 +1208,9 @@ export const make = Effect.gen(function* () {
           Effect.mapError(
             (error) =>
               new DesktopWindowCaptureSetupError({
-                message:
-                  error.cause instanceof Error
-                    ? error.cause.message
-                    : "Could not open shortcut permissions.",
+                action,
+                reason: "shortcut-permissions",
+                cause: error.cause,
               }),
           ),
         );
