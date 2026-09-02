@@ -31,7 +31,7 @@ const {
   accessibilityProcessCloseMock,
   accessibilityProcessReadMock,
   accessibilityByPidMock,
-  accessibilityListMock,
+  accessibilityForegroundMock,
   accessibilityTrustedMock,
   allWindowsMock,
   flashWindows,
@@ -75,7 +75,7 @@ const {
     }
   >(),
   accessibilityByPidMock: vi.fn(),
-  accessibilityListMock: vi.fn(),
+  accessibilityForegroundMock: vi.fn(),
   accessibilityTrustedMock: vi.fn((_prompt = false) => true),
   allWindowsMock: vi.fn(
     () =>
@@ -154,7 +154,7 @@ vi.mock("@crowecawcaw/xa11y", () => {
   return {
     ...api,
     default: api,
-    App: { byPid: accessibilityByPidMock, list: accessibilityListMock },
+    App: { byPid: accessibilityByPidMock, foreground: accessibilityForegroundMock },
   };
 });
 vi.mock("./WindowCaptureAccessibilityProcess.ts", () => ({
@@ -583,25 +583,23 @@ it.effect("matches Windows accessibility windows on a scaled display", () => {
   activeWindowMock.mockReset().mockResolvedValue(active);
   screenToDipRectMock.mockImplementation(() => dipBounds);
   screenshotMock.mockReset().mockResolvedValue({ width: 800, height: 600, toPng: () => png });
-  accessibilityListMock.mockReset().mockResolvedValue([
-    {
-      pid: 123,
-      asElement: () => ({
-        role: "window",
-        name: "Editor",
-        bounds: dipBounds,
-        children: async () => [
-          {
-            role: "button",
-            name: "Save",
-            bounds: { x: 105, y: 110, width: 100, height: 50 },
-            children: async () => [],
-          },
-        ],
-        tree: async () => ({ name: "Editor", value: "Scaled text", children: [] }),
-      }),
-    },
-  ]);
+  accessibilityForegroundMock.mockReset().mockResolvedValue({
+    pid: 123,
+    asElement: () => ({
+      role: "window",
+      name: "Editor",
+      bounds: dipBounds,
+      children: async () => [
+        {
+          role: "button",
+          name: "Save",
+          bounds: { x: 105, y: 110, width: 100, height: 50 },
+          children: async () => [],
+        },
+      ],
+      tree: async () => ({ name: "Editor", value: "Scaled text", children: [] }),
+    }),
+  });
   let metadata = "";
   return Effect.scoped(
     Effect.gen(function* () {
@@ -981,17 +979,7 @@ it.effect(
 it.effect("does not read unverified accessibility context for a Wayland portal capture", () => {
   vi.stubEnv("XDG_SESSION_TYPE", "wayland");
   const png = Buffer.from([1, 2, 3]);
-  accessibilityListMock.mockReset().mockResolvedValue([
-    {
-      name: "Unrelated app",
-      children: async () => [
-        {
-          name: "Untitled",
-          tree: async () => ({ name: "Untitled", value: "private text", children: [] }),
-        },
-      ],
-    },
-  ]);
+  accessibilityForegroundMock.mockReset();
   getSourcesMock.mockReset().mockResolvedValue([
     {
       id: "window:42:0",
@@ -1011,7 +999,7 @@ it.effect("does not read unverified accessibility context for a Wayland portal c
       const service = yield* DesktopWindowCapture.make;
       yield* service.captureNow;
 
-      assert.lengthOf(accessibilityListMock.mock.calls, 0);
+      assert.lengthOf(accessibilityForegroundMock.mock.calls, 0);
     }),
   ).pipe(Effect.provide(layer), Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())));
 });
@@ -1662,7 +1650,9 @@ it.each(["darwin", "win32"] as const)(
       ],
     };
     accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [window] });
-    accessibilityListMock.mockReset().mockResolvedValue([{ pid: 123, asElement: () => window }]);
+    accessibilityForegroundMock
+      .mockReset()
+      .mockResolvedValue({ pid: 123, asElement: () => window });
 
     const result = await WindowCaptureAccessibility.readAccessibleWindowContext(
       { title: "Editor", bounds, owner: { processId: 123 } },
@@ -1679,7 +1669,7 @@ it.each(["darwin", "win32"] as const)(
       "Save",
     );
     assert.lengthOf(accessibilityByPidMock.mock.calls, platform === "win32" ? 0 : 1);
-    assert.lengthOf(accessibilityListMock.mock.calls, platform === "win32" ? 1 : 0);
+    assert.lengthOf(accessibilityForegroundMock.mock.calls, platform === "win32" ? 1 : 0);
   },
 );
 
@@ -1694,7 +1684,9 @@ it.each(["darwin", "win32"] as const)(
       tree,
     };
     accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [window] });
-    accessibilityListMock.mockReset().mockResolvedValue([{ pid: 123, asElement: () => window }]);
+    accessibilityForegroundMock
+      .mockReset()
+      .mockResolvedValue({ pid: 123, asElement: () => window });
     try {
       assert.isUndefined(
         await WindowCaptureAccessibility.readAccessibleWindowText(
