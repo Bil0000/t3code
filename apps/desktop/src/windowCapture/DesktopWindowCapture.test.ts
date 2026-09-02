@@ -48,6 +48,7 @@ const {
   registerShortcutMock,
   portalShortcutInstances,
   nextPortalState,
+  screenToDipRectMock,
   screenshotMock,
   shortcutForkArgs,
   shortcutForkOptions,
@@ -118,6 +119,7 @@ const {
     configure: ReturnType<typeof vi.fn>;
     hasSession: boolean;
   }>,
+  screenToDipRectMock: vi.fn((_window: unknown, bounds: Electron.Rectangle) => bounds),
   screenshotMock: vi.fn(),
   shortcutForkArgs: [] as Array<ReadonlyArray<string>>,
   shortcutForkOptions: [] as Array<{ env?: NodeJS.ProcessEnv }>,
@@ -381,7 +383,7 @@ vi.mock("electron", () => {
         bounds: { x: 100, y: 100, width: 800, height: 600 },
       }),
       getPrimaryDisplay: () => ({ bounds: { x: 0, y: 0, width: 1_440, height: 900 } }),
-      screenToDipRect: (_window: unknown, bounds: Electron.Rectangle) => bounds,
+      screenToDipRect: screenToDipRectMock,
     },
     shell: { openExternal: openExternalMock },
     systemPreferences: {
@@ -553,6 +555,72 @@ it.effect("captures the active Windows window without enumerating desktop source
       assert.deepEqual(writtenFiles[0]?.[1], png);
     }),
   ).pipe(Effect.provide(layer));
+});
+
+it.effect("matches Windows accessibility windows on a scaled display", () => {
+  const png = Buffer.from([1, 2, 3]);
+  const active = {
+    platform: "windows",
+    id: 42,
+    title: "Editor",
+    owner: { name: "Editor", processId: 123 },
+    bounds: { x: 10, y: 20, width: 800, height: 600 },
+  } as const;
+  const dipBounds = { x: 5, y: 10, width: 400, height: 300 };
+  activeWindowMock.mockReset().mockResolvedValue(active);
+  screenToDipRectMock.mockImplementation(() => dipBounds);
+  screenshotMock.mockReset().mockResolvedValue({ width: 800, height: 600, toPng: () => png });
+  accessibilityListMock.mockReset().mockResolvedValue([
+    {
+      pid: 123,
+      asElement: () => ({
+        role: "window",
+        name: "Editor",
+        bounds: dipBounds,
+        children: async () => [
+          {
+            role: "button",
+            name: "Save",
+            bounds: { x: 105, y: 110, width: 100, height: 50 },
+            children: async () => [],
+          },
+        ],
+        tree: async () => ({ name: "Editor", value: "Scaled text", children: [] }),
+      }),
+    },
+  ]);
+  let metadata = "";
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.captureNow;
+      const saved = yield* decodePendingMetadata(metadata);
+      assert.include(saved.source.accessibleText, "Scaled text");
+      assert.deepEqual(
+        saved.source.accessibility?.format === "element-tree"
+          ? saved.source.accessibility.root.children[0]?.bounds
+          : undefined,
+        { x: 200, y: 200, width: 200, height: 100 },
+      );
+    }),
+  ).pipe(
+    Effect.provide(
+      testLayer("win32", {
+        makeDirectory: () => Effect.void,
+        rename: () => Effect.void,
+        writeFile: () => Effect.void,
+        writeFileString: (_, text) =>
+          Effect.sync(() => {
+            metadata = text;
+          }),
+      }),
+    ),
+    Effect.ensuring(
+      Effect.sync(() => {
+        screenToDipRectMock.mockImplementation((_window, bounds) => bounds);
+      }),
+    ),
+  );
 });
 
 it.effect("skips accessibility capture when the setting is disabled", () => {

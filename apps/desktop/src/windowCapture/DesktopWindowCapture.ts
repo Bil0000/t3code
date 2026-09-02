@@ -397,9 +397,9 @@ async function captureSource({
         png = selected.thumbnail.toPNG();
       }
     }
-    const accessibleIdentity =
-      active ??
-      (linuxWindow?.processId
+    const accessibleIdentity = active
+      ? { ...active, bounds: windowCaptureFlashBounds(active, platform) }
+      : linuxWindow?.processId
         ? {
             title: linuxWindow.title,
             bounds: linuxWindow.bounds,
@@ -409,14 +409,14 @@ async function captureSource({
               ? { accessibilityBoundsReliable: false }
               : {}),
           }
-        : undefined);
+        : undefined;
     const accessibilityRead =
       accessibleIdentity && accessibilityProcess
         ? accessibilityProcess.read({
             active: accessibleIdentity,
             platform,
             sourceTitle: source.name,
-            imageSize: windowCaptureImageSize(png, accessibleIdentity.bounds),
+            imageSize: windowCaptureImageSize(png, active?.bounds ?? accessibleIdentity.bounds),
           })
         : undefined;
     if (accessibilityRead) {
