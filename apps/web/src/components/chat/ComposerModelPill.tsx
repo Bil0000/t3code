@@ -39,11 +39,12 @@ import {
   buildTraitsTriggerDisplay,
   getTraitsSectionVisibility,
   replaceDescriptorCurrentValue,
+  TraitsMenuContent,
   useUpdateModelOptions,
 } from "./TraitsPicker";
 
 type Traits = ReturnType<typeof getTraitsSectionVisibility>;
-type EffortTone = "normal" | "peak" | "ultracode" | "ultrathink";
+type EffortTone = "normal" | "peak" | "ultrathink";
 
 interface EffortState {
   index: number;
@@ -66,11 +67,9 @@ function resolveEffortState(descriptor: SelectTraitDescriptor, traits: Traits): 
   const tone: EffortTone =
     option?.id === "ultrathink"
       ? "ultrathink"
-      : option?.id === "ultracode"
-        ? "ultracode"
-        : effortFraction(index, descriptor.options.length) >= 1
-          ? "peak"
-          : "normal";
+      : option?.id === "ultracode" || effortFraction(index, descriptor.options.length) >= 1
+        ? "peak"
+        : "normal";
   return {
     index,
     label: option?.label ?? "",
@@ -85,7 +84,6 @@ function accentClassName(provider: ProviderDriverKind): string {
 
 function effortLabelClassName(tone: EffortTone, provider: ProviderDriverKind): string {
   if (tone === "ultrathink") return "ultrathink-word";
-  if (tone === "ultracode") return "composer-effort-ultracode-text";
   if (tone === "peak") return "composer-effort-peak-text";
   return accentClassName(provider);
 }
@@ -112,10 +110,6 @@ export const ComposerModelPill = memo(function ComposerModelPill(
   const setListOpen = (open: boolean) => {
     props.onOpenChange?.(open);
     if (props.open === undefined) setUncontrolledListOpen(open);
-  };
-  const openList = () => {
-    setIsCardOpen(false);
-    setListOpen(true);
   };
 
   const persistence = {
@@ -279,26 +273,58 @@ export const ComposerModelPill = memo(function ComposerModelPill(
                   </TooltipPopup>
                 </Tooltip>
               ) : null}
-              <button
-                type="button"
-                className="flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-base font-medium outline-none transition-colors hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
-                aria-label={`${triggerLabel}. Choose another model`}
-                onClick={openList}
-              >
-                {modelName}
-                {effort ? (
-                  <span
-                    key={effort.label}
-                    className={cn(
-                      "composer-model-pill-chip-enter shrink-0 transition-colors duration-300",
-                      effortLabelClassName(effort.tone, props.provider),
-                    )}
-                  >
-                    {effort.label}
-                  </span>
-                ) : null}
-                <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0 text-icon-muted" />
-              </button>
+              <Menu>
+                <MenuTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-base font-medium outline-none transition-colors hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
+                      aria-label={`${triggerLabel}${effort ? `, ${effort.label}` : ""}. Show all options`}
+                      disabled={props.disabled}
+                    />
+                  }
+                >
+                  {modelName}
+                  {effort ? (
+                    <span
+                      key={effort.label}
+                      className={cn(
+                        "shrink-0 transition-colors duration-300",
+                        effort.tone !== "ultrathink" && "composer-model-pill-chip-enter",
+                        effortLabelClassName(effort.tone, props.provider),
+                      )}
+                    >
+                      {effort.label}
+                    </span>
+                  ) : null}
+                  <ChevronRightIcon
+                    aria-hidden="true"
+                    className="size-4 shrink-0 text-icon-muted"
+                  />
+                </MenuTrigger>
+                <MenuPopup align="start">
+                  <TraitsMenuContent
+                    provider={props.provider}
+                    instanceId={props.activeInstanceId}
+                    models={props.models}
+                    model={props.model}
+                    prompt={props.prompt}
+                    onPromptChange={props.onPromptChange}
+                    modelOptions={props.modelOptions}
+                    planModeEnabled={props.planModeEnabled}
+                    {...persistence}
+                  />
+                </MenuPopup>
+              </Menu>
+              {chipDescriptors.map((descriptor) => (
+                <TraitChip
+                  key={descriptor.id}
+                  descriptor={descriptor}
+                  descriptors={traits.descriptors}
+                  updateDescriptors={updateDescriptors}
+                  disabled={props.disabled}
+                />
+              ))}
             </div>
 
             {effortDescriptor && effort ? (
@@ -312,20 +338,6 @@ export const ComposerModelPill = memo(function ComposerModelPill(
                 updateDescriptors={updateDescriptors}
                 disabled={props.disabled}
               />
-            ) : null}
-
-            {chipDescriptors.length > 0 ? (
-              <div className="flex flex-wrap items-center gap-1 px-0.5">
-                {chipDescriptors.map((descriptor) => (
-                  <TraitChip
-                    key={descriptor.id}
-                    descriptor={descriptor}
-                    descriptors={traits.descriptors}
-                    updateDescriptors={updateDescriptors}
-                    disabled={props.disabled}
-                  />
-                ))}
-              </div>
             ) : null}
           </div>
         </PopoverPopup>
@@ -384,7 +396,13 @@ function EffortSlider(props: {
       >
         <Slider.Control className="flex h-8 items-center">
           <Slider.Track className="composer-effort-track relative h-8 w-full rounded-full">
-            <Slider.Indicator className="composer-effort-fill h-full rounded-full" />
+            <div
+              aria-hidden="true"
+              className="composer-effort-fill absolute inset-y-0 left-0 rounded-full"
+              style={{
+                width: `calc(1.75rem + (100% - 1.75rem) * ${effortFraction(effort.index, options.length)})`,
+              }}
+            />
             {options.map((option, index) => (
               <span
                 key={option.id}
@@ -394,7 +412,7 @@ function EffortSlider(props: {
                   index <= effort.index && "opacity-0",
                 )}
                 style={{
-                  left: `calc(1rem + (100% - 2rem) * ${effortFraction(index, options.length)})`,
+                  left: `calc(0.875rem + (100% - 1.75rem) * ${effortFraction(index, options.length)})`,
                 }}
               />
             ))}
