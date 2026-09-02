@@ -11,7 +11,7 @@ import {
   getProviderOptionCurrentValue,
 } from "@t3tools/shared/model";
 import { Slider } from "@base-ui/react/slider";
-import { memo, useRef, useState } from "react";
+import { memo, useState } from "react";
 import { ChevronRightIcon, ZapIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import type { DraftId } from "../../composerDraftStore";
@@ -43,7 +43,7 @@ import {
 } from "./TraitsPicker";
 
 type Traits = ReturnType<typeof getTraitsSectionVisibility>;
-type EffortTone = "normal" | "peak" | "ultrathink";
+type EffortTone = "normal" | "peak" | "ultracode" | "ultrathink";
 
 interface EffortState {
   index: number;
@@ -66,9 +66,11 @@ function resolveEffortState(descriptor: SelectTraitDescriptor, traits: Traits): 
   const tone: EffortTone =
     option?.id === "ultrathink"
       ? "ultrathink"
-      : effortFraction(index, descriptor.options.length) >= 1
-        ? "peak"
-        : "normal";
+      : option?.id === "ultracode"
+        ? "ultracode"
+        : effortFraction(index, descriptor.options.length) >= 1
+          ? "peak"
+          : "normal";
   return {
     index,
     label: option?.label ?? "",
@@ -83,6 +85,7 @@ function accentClassName(provider: ProviderDriverKind): string {
 
 function effortLabelClassName(tone: EffortTone, provider: ProviderDriverKind): string {
   if (tone === "ultrathink") return "ultrathink-word";
+  if (tone === "ultracode") return "composer-effort-ultracode-text";
   if (tone === "peak") return "composer-effort-peak-text";
   return accentClassName(provider);
 }
@@ -103,7 +106,6 @@ export const ComposerModelPill = memo(function ComposerModelPill(
 ) {
   const { activeEntry, triggerTitle, triggerLabel, showInstanceBadge, isUnavailable } =
     useModelPickerTriggerDisplay(props);
-  const triggerRef = useRef<HTMLButtonElement>(null);
   const [isCardOpen, setIsCardOpen] = useState(false);
   const [uncontrolledListOpen, setUncontrolledListOpen] = useState(false);
   const isListOpen = props.open ?? uncontrolledListOpen;
@@ -186,7 +188,6 @@ export const ComposerModelPill = memo(function ComposerModelPill(
         onOpenChange={setListOpen}
         triggerRender={
           <ComposerControl
-            ref={triggerRef}
             data-chat-provider-model-picker="true"
             className={cn(
               "min-w-0 justify-between whitespace-nowrap",
@@ -232,7 +233,6 @@ export const ComposerModelPill = memo(function ComposerModelPill(
           side="top"
           align="start"
           sideOffset={8}
-          anchor={triggerRef}
           className="composer-model-card"
           viewportClassName="p-0"
         >
@@ -384,7 +384,7 @@ function EffortSlider(props: {
       >
         <Slider.Control className="flex h-8 items-center">
           <Slider.Track className="composer-effort-track relative h-8 w-full rounded-full">
-            <Slider.Indicator className="composer-effort-fill rounded-full" />
+            <Slider.Indicator className="composer-effort-fill h-full rounded-full" />
             {options.map((option, index) => (
               <span
                 key={option.id}
@@ -423,20 +423,13 @@ function TraitChip(props: {
   const isOn = descriptor.type === "boolean" ? descriptor.currentValue === true : true;
   const chipLabel = descriptor.type === "boolean" ? descriptor.label : currentLabel;
   const chipClassName = cn(
-    "flex h-7 cursor-pointer items-center gap-1 rounded-full px-2.5 text-xs font-medium outline-none transition-[background-color,color,opacity] duration-200 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-64",
-    isOn
-      ? "bg-foreground/[0.1] text-foreground hover:bg-foreground/[0.14]"
-      : "bg-foreground/[0.05] text-muted-foreground hover:bg-foreground/[0.08]",
+    "flex h-6 cursor-pointer items-center rounded-md px-1.5 text-xs font-semibold tabular-nums outline-none transition-[background-color,color,transform] duration-200 hover:bg-foreground/[0.08] focus-visible:ring-2 focus-visible:ring-ring active:scale-95 disabled:pointer-events-none disabled:opacity-64",
+    isOn ? "text-foreground" : "text-icon-muted",
   );
   const chipContent = (
-    <>
-      {descriptor.type === "select" ? (
-        <span className="text-muted-foreground">{descriptor.label}</span>
-      ) : null}
-      <span key={chipLabel} className="composer-model-pill-chip-enter">
-        {chipLabel}
-      </span>
-    </>
+    <span key={chipLabel} className="composer-model-pill-chip-enter">
+      {chipLabel}
+    </span>
   );
 
   if (descriptor.type === "select" && descriptor.options.length > 3) {

@@ -1975,7 +1975,16 @@ code {
 }
 
 .ultrathink-word,
-.composer-effort-fill[data-effort-tone="ultrathink"] {
+[data-effort-tone="ultracode"] .composer-effort-fill {
+  background-color: var(--composer-effort-ultracode);
+  background-image: linear-gradient(
+    90deg,
+    var(--composer-effort-accent),
+    var(--composer-effort-ultracode)
+  );
+}
+
+[data-effort-tone="ultrathink"] .composer-effort-fill {
   --ultrathink-spectrum: linear-gradient(
     120deg,
     #ff6b6b 0%,
@@ -2003,6 +2012,7 @@ code {
 .composer-model-card {
   --composer-effort-accent: var(--primary);
   --composer-effort-peak: oklch(0.62 0.25 300);
+  --composer-effort-ultracode: oklch(0.72 0.19 45);
 }
 
 .composer-model-card [data-provider="claudeAgent"] {
@@ -2013,11 +2023,16 @@ code {
   color: var(--composer-effort-peak);
 }
 
+.composer-effort-ultracode-text {
+  color: var(--composer-effort-ultracode);
+}
+
 .composer-effort-track {
   background: color-mix(in srgb, var(--foreground) 10%, transparent);
 }
 
 .composer-effort-fill {
+  min-width: 2rem;
   background-color: var(--composer-effort-accent);
   transition:
     width 260ms cubic-bezier(0.22, 1, 0.36, 1),
@@ -2033,6 +2048,15 @@ code {
   );
 }
 
+[data-effort-tone="ultracode"] .composer-effort-fill {
+  background-color: var(--composer-effort-ultracode);
+  background-image: linear-gradient(
+    90deg,
+    var(--composer-effort-accent),
+    var(--composer-effort-ultracode)
+  );
+}
+
 [data-effort-tone="ultrathink"] .composer-effort-fill {
   background-color: transparent;
   background-size: 220% 220%;
@@ -2041,7 +2065,7 @@ code {
 
 .composer-effort-thumb {
   transition:
-    left 260ms cubic-bezier(0.22, 1, 0.36, 1),
+    inset-inline-start 260ms cubic-bezier(0.22, 1, 0.36, 1),
     transform 150ms ease;
 }
 
