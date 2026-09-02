@@ -10,6 +10,9 @@ import {
   type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
   DesktopWindowCaptureSetupAction,
+  type DesktopCaptureConfigRequest,
+  type DesktopCaptureConfigPreview,
+  type DesktopCaptureConfigApplied,
   type ClientSettings,
   type WindowCaptureModifier,
   type WindowCaptureModifierPairShortcut,
@@ -40,8 +43,16 @@ import { captureMacWindowSnapshot, type MacWindowCaptureSource } from "./MacWind
 import type { LinuxCaptureFeedback, LinuxWindowMetadata } from "./LinuxWindowCapture.ts";
 import { niriSocketPath } from "./NiriWindowCapture.ts";
 import { niriCaptureBinding, startNiriCaptureShortcut } from "./NiriCaptureShortcut.ts";
+import { CaptureShortcutConfig, niriCaptureConfigPath } from "./CaptureShortcutConfig.ts";
 import { GnomeCaptureSetup, isGnomeCaptureSession } from "./GnomeCaptureSetup.ts";
 import { PortalCaptureShortcut, portalShortcutTrigger } from "./PortalCaptureShortcut.ts";
+import {
+  HyprlandCaptureSetup,
+  HYPRLAND_CAPTURE_EXECUTABLE,
+  isHyprlandCaptureSession,
+  hyprlandCaptureShortcut,
+  type HyprlandCapturePaths,
+} from "./HyprlandWindowCapture.ts";
 import {
   KdeCaptureSetup,
   KDE_CAPTURE_EXECUTABLE,
@@ -146,6 +157,13 @@ export class DesktopWindowCapture extends Context.Service<
     readonly setup: (
       action: DesktopWindowCaptureSetupAction,
     ) => Effect.Effect<void, DesktopWindowCaptureSetupError>;
+    readonly previewConfig: (
+      request: DesktopCaptureConfigRequest,
+      selectedPath?: string,
+    ) => Effect.Effect<DesktopCaptureConfigPreview, DesktopWindowCaptureSetupError>;
+    readonly applyConfig: (
+      previewId: string,
+    ) => Effect.Effect<DesktopCaptureConfigApplied, DesktopWindowCaptureSetupError>;
     readonly checkShortcut: (
       shortcut: WindowCaptureShortcut,
     ) => Effect.Effect<DesktopWindowCaptureShortcutAvailability>;
@@ -171,19 +189,37 @@ export class DesktopWindowCapture extends Context.Service<
 export class DesktopWindowCaptureSetupError extends Schema.TaggedErrorClass<DesktopWindowCaptureSetupError>()(
   "DesktopWindowCaptureSetupError",
   {
-    action: DesktopWindowCaptureSetupAction,
+    action: Schema.Union([
+      DesktopWindowCaptureSetupAction,
+      Schema.Literals(["preview-config", "apply-config"]),
+    ]),
     reason: Schema.Literals(["unsupported-session", "setup-failed", "shortcut-permissions"]),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
+    if (this.action === "preview-config" || this.action === "apply-config") {
+      if (this.reason === "unsupported-session")
+        return "Config setup requires a Niri or Hyprland session.";
+      return this.action === "preview-config"
+        ? "Couldn't prepare your capture shortcut changes."
+        : "Couldn't save your capture shortcut.";
+    }
     const kde = this.action === "install-kde-helper" || this.action === "remove-kde-helper";
+    const hyprland =
+      this.action === "install-hyprland-helper" || this.action === "remove-hyprland-helper";
     if (this.reason === "unsupported-session")
-      return kde
-        ? "Helper setup requires a KDE Plasma Wayland session outside a sandbox."
-        : "Extension setup requires a GNOME Wayland session outside a sandbox.";
+      return hyprland
+        ? "Helper setup requires a Hyprland Wayland session outside a sandbox."
+        : kde
+          ? "Helper setup requires a KDE Plasma Wayland session outside a sandbox."
+          : "Extension setup requires a GNOME Wayland session outside a sandbox.";
     if (this.reason === "shortcut-permissions") return "Could not open shortcut permissions.";
-    return kde ? "Could not set up KDE capture." : "Could not set up the GNOME extension.";
+    return hyprland
+      ? "Could not set up Hyprland capture."
+      : kde
+        ? "Could not set up KDE capture."
+        : "Could not set up the GNOME extension.";
   }
 }
 
@@ -318,6 +354,7 @@ async function captureSource({
   imageTempPath,
   linuxAppId,
   kdeCapturePaths,
+  hyprlandCapturePaths,
   accessibilityWorkerPath,
   onLinuxFeedback,
 }: {
@@ -330,6 +367,7 @@ async function captureSource({
   imageTempPath: string;
   linuxAppId: string;
   kdeCapturePaths: KdeCapturePaths;
+  hyprlandCapturePaths: HyprlandCapturePaths;
   accessibilityWorkerPath: string;
   onLinuxFeedback: (feedback: LinuxCaptureFeedback) => void;
 }) {
@@ -388,6 +426,7 @@ async function captureSource({
             shouldAnimateWindowCapture(Electron.systemPreferences.getAnimationSettings()),
         },
         kdeCapturePaths,
+        hyprlandCapturePaths,
       );
       if (snapshot) {
         linuxFeedback = snapshot.feedback;
@@ -669,11 +708,22 @@ export const make = Effect.gen(function* () {
   };
   const hasGnomeSetup = () =>
     captureMode(environment.platform) === "portal" && isGnomeCaptureSession(process.env);
+  const hyprlandCapturePaths = {
+    bundle: environment.isPackaged
+      ? path.join(environment.resourcesPath, "hyprland-capture", HYPRLAND_CAPTURE_EXECUTABLE)
+      : path.join(
+          environment.appRoot,
+          "native/hyprland-window-capture/target/release",
+          HYPRLAND_CAPTURE_EXECUTABLE,
+        ),
+    dataHome: path.dirname(environment.linuxApplicationsDir),
+  };
   const shiftShortcutWorkerPath = path.join(
     __dirname,
     "windowCapture",
     "GlobalShiftShortcutWorker.cjs",
   );
+  const shortcutConfig = new CaptureShortcutConfig();
   const accessibilityWorkerPath = path.join(
     __dirname,
     "windowCapture",
@@ -784,6 +834,7 @@ export const make = Effect.gen(function* () {
             imageTempPath,
             linuxAppId,
             kdeCapturePaths,
+            hyprlandCapturePaths,
             accessibilityWorkerPath,
             onLinuxFeedback: (feedback) => {
               linuxFeedback = { id, feedback };
@@ -903,6 +954,12 @@ export const make = Effect.gen(function* () {
         message: "Configure the capture shortcut in your Niri config, not in T3 Code.",
       };
     }
+    if (mode === "portal" && isHyprlandCaptureSession()) {
+      return {
+        available: false,
+        message: "Change the capture binding in your Hyprland config, then save it.",
+      };
+    }
     if (isModifierPairShortcut(shortcut)) {
       if (mode === "portal") {
         return { available: false, message: WAYLAND_MODIFIER_PAIR_UNAVAILABLE_MESSAGE };
@@ -976,10 +1033,11 @@ export const make = Effect.gen(function* () {
       portalShortcut &&
       settings.windowCaptureEnabled &&
       previousSettings.windowCaptureEnabled &&
-      !isModifierPairShortcut(shortcut) &&
-      !isModifierPairShortcut(previousSettings.windowCaptureShortcut) &&
-      toElectronAccelerator(shortcut) ===
-        toElectronAccelerator(previousSettings.windowCaptureShortcut)
+      (isHyprlandCaptureSession() ||
+        (!isModifierPairShortcut(shortcut) &&
+          !isModifierPairShortcut(previousSettings.windowCaptureShortcut) &&
+          toElectronAccelerator(shortcut) ===
+            toElectronAccelerator(previousSettings.windowCaptureShortcut)))
     ) {
       yield* Ref.update(stateRef, (state) => ({ ...state, shortcut }));
       return;
@@ -1044,14 +1102,17 @@ export const make = Effect.gen(function* () {
         shortcut,
         shortcutRegistered: false,
         shortcutBinding: niriCaptureBinding(linuxAppId),
+        shortcutConfigPath: niriCaptureConfigPath(),
+        shortcutActionRegistered: registered,
         shortcutMessage: registered
-          ? "Managed by Niri. Add the binding inside the binds section of your Niri config. T3 Code cannot verify that it is bound."
+          ? "Set up the shortcut to add it to your Niri config."
           : "Could not start the Niri capture endpoint. Another T3 Code instance may be using it.",
         message: null,
       });
       return;
     }
-    if (mode === "portal" && isModifierPairShortcut(shortcut)) {
+    const hyprland = mode === "portal" && isHyprlandCaptureSession();
+    if (mode === "portal" && isModifierPairShortcut(shortcut) && !hyprland) {
       yield* Ref.set(stateRef, {
         mode,
         shortcut,
@@ -1061,7 +1122,7 @@ export const make = Effect.gen(function* () {
       });
       return;
     }
-    if (mode === "portal" && !isModifierPairShortcut(shortcut)) {
+    if (mode === "portal" && (!isModifierPairShortcut(shortcut) || hyprland)) {
       yield* Ref.set(stateRef, {
         mode,
         shortcut,
@@ -1071,13 +1132,29 @@ export const make = Effect.gen(function* () {
       });
       yield* Effect.try(
         () =>
-          new PortalCaptureShortcut(linuxAppId, shortcut, onCurrentShortcut, () => {
-            if (generation !== shortcutGeneration) return;
-            shortcutVerified = false;
-            void runPromise(
-              desktopWindow.dispatchMenuAction("window-capture-shortcut-changed"),
-            ).catch(() => undefined);
-          }),
+          new PortalCaptureShortcut(
+            linuxAppId,
+            isModifierPairShortcut(shortcut)
+              ? {
+                  key: "2",
+                  ctrlKey: true,
+                  modKey: false,
+                  altKey: false,
+                  shiftKey: true,
+                  metaKey: false,
+                }
+              : shortcut,
+            onCurrentShortcut,
+            () => {
+              if (generation !== shortcutGeneration) return;
+              shortcutVerified = false;
+              void runPromise(
+                desktopWindow.dispatchMenuAction("window-capture-shortcut-changed"),
+              ).catch(() => undefined);
+            },
+            undefined,
+            hyprland,
+          ),
       ).pipe(
         Effect.tap((registration) =>
           Effect.sync(() => {
@@ -1177,6 +1254,21 @@ export const make = Effect.gen(function* () {
             cause: error,
           }),
       });
+    } else if (action === "install-hyprland-helper" || action === "remove-hyprland-helper") {
+      if (captureMode(environment.platform) !== "portal" || !isHyprlandCaptureSession())
+        return yield* new DesktopWindowCaptureSetupError({
+          action,
+          reason: "unsupported-session",
+        });
+      yield* Effect.tryPromise({
+        try: () => new HyprlandCaptureSetup(hyprlandCapturePaths).perform(action),
+        catch: (error) =>
+          new DesktopWindowCaptureSetupError({
+            action,
+            reason: "setup-failed",
+            cause: error,
+          }),
+      });
     } else if (action !== "retry-shortcut") {
       if (!hasGnomeSetup())
         return yield* new DesktopWindowCaptureSetupError({
@@ -1226,6 +1318,55 @@ export const make = Effect.gen(function* () {
     }),
   );
 
+  const configDesktop = Effect.fn("desktop.windowCapture.configDesktop")(function* (
+    action: "preview-config" | "apply-config",
+  ) {
+    if (captureMode(environment.platform) === "portal") {
+      if (niriSocketPath()) return "niri" as const;
+      if (isHyprlandCaptureSession()) return "hyprland" as const;
+    }
+    return yield* new DesktopWindowCaptureSetupError({
+      action,
+      reason: "unsupported-session",
+    });
+  });
+  const previewConfig = Effect.fn("desktop.windowCapture.previewConfig")(function* (
+    request: DesktopCaptureConfigRequest,
+    selectedPath?: string,
+  ) {
+    const desktop = yield* configDesktop("preview-config");
+    return yield* Effect.tryPromise({
+      try: async () => {
+        const configPath =
+          selectedPath ??
+          (desktop === "niri"
+            ? niriCaptureConfigPath()
+            : (await hyprlandCaptureShortcut(linuxAppId)).shortcutConfigPath);
+        return shortcutConfig.preview({ desktop, path: configPath, appId: linuxAppId }, request);
+      },
+      catch: (cause) =>
+        new DesktopWindowCaptureSetupError({
+          action: "preview-config",
+          reason: "setup-failed",
+          cause,
+        }),
+    });
+  });
+  const applyConfig = Effect.fn("desktop.windowCapture.applyConfig")(function* (previewId: string) {
+    const desktop = yield* configDesktop("apply-config");
+    const result = yield* Effect.tryPromise({
+      try: () => shortcutConfig.apply(previewId, desktop),
+      catch: (cause) =>
+        new DesktopWindowCaptureSetupError({
+          action: "apply-config",
+          reason: "setup-failed",
+          cause,
+        }),
+    });
+    if (result.backupPath) shortcutVerified = false;
+    return result;
+  });
+
   return DesktopWindowCapture.of({
     initialize: configurationMutex.withPermits(1)(
       clientSettings.get.pipe(
@@ -1240,6 +1381,8 @@ export const make = Effect.gen(function* () {
     configure,
     requestPermissions,
     setup,
+    previewConfig,
+    applyConfig,
     state: Ref.get(stateRef).pipe(
       Effect.flatMap((state) =>
         state.mode === "portal"
@@ -1267,7 +1410,10 @@ export const make = Effect.gen(function* () {
             state.mode === "portal"
               ? process.env.XDG_CURRENT_DESKTOP?.toLowerCase()
                   .split(":")
-                  .find((name) => name === "gnome" || name === "kde" || name === "niri")
+                  .find(
+                    (name) =>
+                      name === "gnome" || name === "kde" || name === "niri" || name === "hyprland",
+                  )
               : undefined;
           const gnomeExtension = hasGnomeSetup()
             ? yield* Effect.promise(async () => {
@@ -1283,11 +1429,30 @@ export const make = Effect.gen(function* () {
             state.linuxBackend === "kde"
               ? yield* Effect.promise(() => new KdeCaptureSetup(kdeCapturePaths).state())
               : undefined;
+          const hyprlandHelper =
+            state.linuxBackend === "hyprland"
+              ? yield* Effect.promise(() => new HyprlandCaptureSetup(hyprlandCapturePaths).state())
+              : undefined;
+          const hyprlandShortcut =
+            state.linuxBackend === "hyprland"
+              ? yield* Effect.promise(() => hyprlandCaptureShortcut(linuxAppId))
+              : undefined;
           return {
             ...state,
             ...portalShortcut?.state,
             ...(linuxDesktop ? { linuxDesktop } : {}),
             ...(gnomeExtension ? { gnomeExtension } : {}),
+            ...(hyprlandHelper
+              ? {
+                  hyprlandHelper,
+                  linuxFeedbackAvailable:
+                    hyprlandHelper.status === "ready" && hyprlandHelper.feedbackAvailable === true,
+                }
+              : {}),
+            ...hyprlandShortcut,
+            ...(state.linuxBackend === "niri"
+              ? { shortcutConfigPath: niriCaptureConfigPath() }
+              : {}),
             ...(kdeHelper
               ? {
                   kdeHelper,

@@ -21,6 +21,28 @@ const gnome: DesktopWindowCaptureState = {
   gnomeExtension: { status: "enabled", message: "Running" },
 };
 
+it("derives Hyprland setup from its own helper and registered action, not old GNOME approval", () => {
+  const state: DesktopWindowCaptureState = {
+    ...gnome,
+    linuxBackend: "hyprland",
+    linuxDesktop: "hyprland",
+    shortcutRegistered: false,
+    hyprlandHelper: { status: "not-installed", message: "Install" },
+  };
+  expect(captureSetupBackend(state)).toBe("hyprland");
+  expect(captureSetupDesktopName(state)).toBe("Hyprland");
+  expect(captureSetupAccessReady(state)).toBe(false);
+  expect(captureSetupInitialStep(state)).toBe("access");
+  const installed = { ...state, hyprlandHelper: { status: "ready" as const, message: "Ready" } };
+  expect(captureSetupInitialStep(installed)).toBe("shortcut");
+  expect(captureSetupShortcutReady(installed, false)).toBe(false);
+  expect(captureSetupShortcutReady({ ...installed, shortcutPending: true }, false)).toBe(false);
+  expect(captureSetupShortcutReady({ ...installed, shortcutActionRegistered: true }, false)).toBe(
+    true,
+  );
+  expect(captureSetupAccessReady({ ...installed, message: "Check access" })).toBe(false);
+});
+
 it.each([
   "not-installed",
   "disabled",
@@ -96,7 +118,7 @@ it("offers manual capture on an unsupported GNOME version instead of trapping se
   expect(captureSetupBackend(state)).toBe("picker");
   expect(captureSetupAccessReady(state)).toBe(true);
   expect(captureSetupInitialStep(state)).toBe("access");
-  expect(captureSetupCheckMessage(state)).toContain("manual capture");
+  expect(captureSetupCheckMessage(state)).toContain("choose a window each time");
 });
 
 it.each(["not-installed", "update-required", "error"] as const)(
@@ -176,33 +198,33 @@ it("acknowledges an unchanged recheck while GNOME still needs a sign-out", () =>
     ...gnome,
     gnomeExtension: { status: "restart-required" as const, message: "Sign out" },
   };
-  expect(captureSetupCheckMessage(state)).toBe("Checked — sign out and back in to continue.");
+  expect(captureSetupCheckMessage(state)).toBe("Still waiting for you to sign out and back in.");
   expect(captureSetupAccessReady(state)).toBe(false);
 });
 
 it("only confirms capture access when the rechecked extension is running and reachable", () => {
-  expect(captureSetupCheckMessage(gnome)).toBe("Checked — capture access is ready.");
+  expect(captureSetupCheckMessage(gnome)).toBe("Ready. Continue to choose your shortcut.");
   expect(captureSetupCheckMessage({ ...gnome, linuxBackend: "picker" })).toBe(
-    "Checked — finish the step above to continue.",
+    "Not ready yet. Finish the step above.",
   );
   expect(
     captureSetupCheckMessage({
       ...gnome,
       gnomeExtension: { status: "disabled", message: "Enable it" },
     }),
-  ).toBe("Checked — finish the step above to continue.");
+  ).toBe("Not ready yet. Finish the step above.");
 });
 
 it("does not report a successful check when capture support could not be read", () => {
   expect(captureSetupCheckMessage({ ...gnome, message: "Desktop disconnected" })).toContain(
-    "Couldn't confirm",
+    "Still unable to check access",
   );
   expect(
     captureSetupCheckMessage({
       ...gnome,
       gnomeExtension: { status: "error", message: "Could not read extension state" },
     }),
-  ).toContain("Couldn't confirm");
+  ).toContain("Still unable to check access");
 });
 
 it("uses a capable portal without requiring the optional GNOME extension", () => {
@@ -219,7 +241,7 @@ it("uses a capable portal without requiring the optional GNOME extension", () =>
       ...state,
       gnomeExtension: { status: "error", message: "Optional extension failed" },
     }),
-  ).toBe("Checked — capture access is ready.");
+  ).toBe("Ready. Continue to choose your shortcut.");
 });
 
 it("lets Niri setup finish with configuration instructions without claiming the binding was verified", () => {

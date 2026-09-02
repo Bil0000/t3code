@@ -228,15 +228,41 @@ export const DesktopWindowCaptureSetupAction = Schema.Literals([
   "disable-extension",
   "install-kde-helper",
   "remove-kde-helper",
+  "install-hyprland-helper",
+  "remove-hyprland-helper",
   "retry-shortcut",
 ]);
 export type DesktopWindowCaptureSetupAction = typeof DesktopWindowCaptureSetupAction.Type;
 
+export const DesktopCaptureConfigRequest = Schema.Struct({
+  operation: Schema.Literals(["install", "remove"]),
+  chooseFile: Schema.Boolean,
+  shortcut: Schema.optional(Schema.String.check(Schema.isMaxLength(80))),
+});
+export type DesktopCaptureConfigRequest = typeof DesktopCaptureConfigRequest.Type;
+
+export const DesktopCaptureConfigPreview = Schema.Struct({
+  id: Schema.String,
+  path: Schema.String,
+  resolvedPath: Schema.String,
+  before: Schema.String,
+  after: Schema.String,
+  shortcut: Schema.String,
+  operation: Schema.Literals(["install", "remove"]),
+});
+export type DesktopCaptureConfigPreview = typeof DesktopCaptureConfigPreview.Type;
+
+export const DesktopCaptureConfigApplied = Schema.Struct({
+  backupPath: Schema.NullOr(Schema.String),
+  warning: Schema.NullOr(Schema.String),
+});
+export type DesktopCaptureConfigApplied = typeof DesktopCaptureConfigApplied.Type;
+
 export const DesktopWindowCaptureState = Schema.Struct({
   mode: DesktopWindowCaptureMode,
-  linuxDesktop: Schema.optional(Schema.Literals(["gnome", "kde", "niri"])),
+  linuxDesktop: Schema.optional(Schema.Literals(["gnome", "kde", "niri", "hyprland"])),
   linuxBackend: Schema.optional(
-    Schema.Literals(["screenshot-portal", "gnome-extension", "niri", "kde", "picker"]),
+    Schema.Literals(["screenshot-portal", "gnome-extension", "niri", "kde", "hyprland", "picker"]),
   ),
   linuxFeedbackAvailable: Schema.optional(Schema.Boolean),
   shortcut: WindowCaptureShortcut,
@@ -245,8 +271,11 @@ export const DesktopWindowCaptureState = Schema.Struct({
   shortcutLabel: Schema.optional(Schema.String),
   shortcutMessage: Schema.NullOr(Schema.String),
   shortcutBinding: Schema.optional(Schema.String),
+  shortcutConfigPath: Schema.optional(Schema.String),
+  shortcutActionRegistered: Schema.optional(Schema.Boolean),
   gnomeExtension: Schema.optional(DesktopCaptureExtensionState),
   kdeHelper: Schema.optional(DesktopCaptureHelperState),
+  hyprlandHelper: Schema.optional(DesktopCaptureHelperState),
   shortcutVerified: Schema.optional(Schema.Boolean),
   message: Schema.NullOr(Schema.String),
 });
@@ -1166,6 +1195,10 @@ export interface DesktopBridge {
   requestWindowCapturePermissions?: (includeAccessibility: boolean) => Promise<void>;
   getWindowCaptureState?: () => Promise<DesktopWindowCaptureState>;
   setupWindowCapture?: (action: DesktopWindowCaptureSetupAction) => Promise<void>;
+  previewWindowCaptureConfig?: (
+    request: DesktopCaptureConfigRequest,
+  ) => Promise<DesktopCaptureConfigPreview | null>;
+  applyWindowCaptureConfig?: (previewId: string) => Promise<DesktopCaptureConfigApplied>;
   checkWindowCaptureShortcut?: (
     shortcut: WindowCaptureShortcut,
   ) => Promise<DesktopWindowCaptureShortcutAvailability>;

@@ -300,10 +300,12 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "window-capture-accessibility",
-    title: "Capture accessibility data",
+    title: "Include app text",
     to: "/settings/window-capture",
     targetId: "window-capture-enabled",
-    searchTerms: ["text UI structure elements privacy omit agent context"],
+    searchTerms: [
+      "capture accessibility data text UI structure elements privacy omit agent context",
+    ],
   },
   {
     id: "window-capture-shortcut",

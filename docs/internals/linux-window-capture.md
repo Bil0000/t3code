@@ -6,12 +6,13 @@ macOS retains its native capture path.
 
 `apps/desktop/src/windowCapture/LinuxWindowCapture.ts` selects a backend for each capture:
 
-1. A Niri session with `NIRI_SOCKET`: capture through Niri's native IPC (25.11 or newer).
-2. A KDE session with KWin ScreenShot2 version >= 2: use the bundled native capture helper.
-3. Screenshot portal interface version >= 3 **and** `AvailableTargets & 8`: request `target=8`
+1. A Hyprland session: use the installed bundled native window-export helper.
+2. A Niri session with `NIRI_SOCKET`: capture through Niri's native IPC (25.11 or newer).
+3. A KDE session with KWin ScreenShot2 version >= 2: use the bundled native capture helper.
+4. Screenshot portal interface version >= 3 **and** `AvailableTargets & 8`: request `target=8`
    (active window), `interactive=false`. Version alone is insufficient. This does not bypass consent.
-4. In a GNOME session, extension protocol version 1 or 2: capture the focused window actor without a picker.
-5. None available: the existing Electron/PipeWire picker, explicitly described as manual capture.
+5. In a GNOME session, extension protocol version 1 or 2: capture the focused window actor without a picker.
+6. None available: the existing Electron/PipeWire picker, explicitly described as manual capture.
 
 Failures, cancellation, timeouts, and permission denial do not select a different backend. All
 entry points go through `DesktopWindowCapture.captureSource`. The optional `linuxBackend` IPC
@@ -20,7 +21,7 @@ registration. The global-shortcut portal and screenshot permission are independe
 
 Capture preferences are shared across desktops, but access is derived from the current session,
 not a persisted onboarding-completed flag. The optional `linuxDesktop` IPC field identifies GNOME,
-KDE, or Niri independently of a successful capability probe, so setup can name the desktop even
+KDE, Niri, or Hyprland independently of a successful capability probe, so setup can name the desktop even
 on failure. Relaunching resets shortcut verification and rechecks access; it does not remove other
 desktops' helpers or bindings. A stale `NIRI_SOCKET` or reachable GNOME extension must not select
 another desktop's native backend.
@@ -163,6 +164,56 @@ Upstream contracts: [KWin ScreenShot2](https://github.com/KDE/kwin/blob/v6.6.6/s
 [internal-window input/geometry behavior](https://github.com/KDE/kwin/blob/v6.6.6/src/internalwindow.cpp),
 [QML loader and D-Bus calls](https://github.com/KDE/kwin/blob/v6.6.6/src/scripting/scripting.cpp).
 
+## Hyprland
+
+`HyprlandWindowCapture.ts` uses `native/hyprland-window-capture`, built and shipped on Linux for
+x64 and arm64. Setup explicitly installs it at `$XDG_DATA_HOME/t3code/hyprland-capture/` (default
+`~/.local/share`). A stable executable path avoids AppImage mount paths changing its screen-sharing
+permission identity. Discovery checks installed bytes and protocol availability without taking a
+screenshot or claiming permission was granted. Helper install/update/remove never edit Hyprland config;
+shortcut config edits have a separate read/preview/apply consent flow.
+For an unpackaged desktop run, first build it with
+`cargo build --locked --release --manifest-path native/hyprland-window-capture/Cargo.toml`.
+
+The helper reads the active window from the current session's IPC socket. It maps a WLR foreign
+toplevel handle to the **full 64-bit address** with `hyprland-toplevel-mapping-v1`, then requests that
+object through `hyprland-toplevel-export-v1` v2 with `ignore_damage=1`. It never truncates an address,
+guesses a window from a title, or crops a desktop screenshot. Shared-memory buffers are bounded;
+stride, channel ordering, premultiplication, and Y inversion are handled before writing a private PNG.
+It checks session lock state before and after capture. Closed/changed window metadata is discarded,
+so the existing AT-SPI reader never gets the identity of a replacement window.
+
+Activation waits on the IPC event socket for a unique T3 PID/title match and focuses its exact
+address. The overlay uses layer-shell surfaces with empty input regions, no keyboard interaction,
+and no reserved space. A screenshot texture is clipped/scaled with viewports and subsurfaces across
+logical outputs; there is no full-screen CPU repaint per frame and no idle animation loop. Output
+changes cancel effects. Short-lived helper processes, private files, and overlays have bounded
+lifetimes. `NativeCaptureFeedback.ts` owns the shared KDE/Hyprland stdio lifecycle.
+
+Hyprland's GlobalShortcuts portal registers actions, not key chords. `PortalCaptureShortcut` uses
+the stable ID `capture-window` and accepts authenticated activation of the registered action even
+when `trigger_description` is empty. `shortcutActionRegistered` is separate from
+`shortcutRegistered`: no UI claims the keys are reserved. Other desktops still require an assigned
+trigger. The wizard provides a Lua or legacy `.conf` `global` dispatcher binding
+for the current desktop application ID. The default example is Ctrl+Shift+2 and does not overwrite
+the user's saved GNOME/KDE shortcut. Omarchy's user bindings are preferred over its shipped defaults.
+
+Run `cargo test --locked --manifest-path native/hyprland-window-capture/Cargo.toml`, plus the focused
+Hyprland, portal-shortcut, native-feedback, setup-logic, and artifact-staging tests. Real Hyprland
+verification should cover permissions, non-US keyboard layouts, multi-output scaling, cancellation,
+focus return, and AT-SPI in a text editor and browser. It is not interchangeable with Plasma tests.
+
+Upstream protocols: [window export](https://github.com/hyprwm/hyprland-protocols/blob/main/protocols/hyprland-toplevel-export-v1.xml),
+[window mapping](https://github.com/hyprwm/hyprland-protocols/blob/main/protocols/hyprland-toplevel-mapping-v1.xml).
+The official BSD-3-Clause XML and copyright notices ship alongside the helper.
+
+Hyprland 0.56.2 waits while screencopy consent is pending, but can render an access-denied texture
+for a rejected request or `no_screen_share` window rule instead of failing the export frame.
+The export protocol exposes no separate permission-result field. Do not mistake `ready` for an
+explicit permission grant or try another capture API to defeat a denial; do not guess grant state
+from image pixels. Accessibility has its own opt-in and app/AT-SPI availability, independent of
+the screen-sharing permission. See [ScreenshareFrame](https://github.com/hyprwm/Hyprland/blob/v0.56.2/src/managers/screenshare/ScreenshareFrame.cpp).
+
 ## Niri
 
 `NiriWindowCapture.ts` speaks newline-delimited JSON directly to the current session's `NIRI_SOCKET`.
@@ -187,13 +238,39 @@ preferences or patch the compositor.
 
 Niri does not implement the global-shortcut portal. While capture is enabled, `NiriCaptureShortcut.ts`
 owns `<desktop-app-id>.WindowCapture` on the session bus, exporting the no-argument method
-`com.t3tools.WindowCapture.Capture` at `/com/t3tools/WindowCapture`. Settings offers a copyable Niri
-`binds` entry invoking `gdbus`; it never edits the user's compositor configuration or claims the
-key is reserved. This avoids launching or focusing a second Electron instance before capture.
+`com.t3tools.WindowCapture.Capture` at `/com/t3tools/WindowCapture`. Config setup adds a Niri
+`binds` entry invoking `gdbus` only after read and diff approval; it does not claim the key is
+reserved. This avoids launching or focusing a second Electron instance before capture.
 The endpoint respects capture suppression, the existing capture mutex, and the enabled setting;
 disabling capture or shutting down releases it. The session bus is the same-user trust boundary.
 Development and packaged app IDs use separate endpoints. The ordinary command-palette flow remains
 available without configuring a global binding.
+
+## Niri and Hyprland config consent
+
+`CaptureShortcutConfig` runs inside the setup wizard for both desktops. Settings' **Change shortcut**
+reopens the shortcut step rather than expanding config controls inline. Opening setup never reads
+config contents. **Review changes** approves a read (including Niri includes); the renderer receives
+before/after text through trusted desktop IPC and uses the existing Pierre diff viewer. No config
+contents cross the server WebSocket or go to a provider. **Save shortcut** sends only a proposal
+ID; the desktop keeps the exact proposed bytes, path, and original snapshots. It refuses stale,
+replaced, or already-used proposals and checks for edits before writing. Symlinks are preserved by
+writing their resolved target, with both paths available under **Advanced**. Writes preserve mode, create a
+backup, and rename a staged file atomically. Niri validates the staged config before replacement;
+Hyprland reloads after replacement and reports reload/config errors separately from saved bytes.
+
+`captureConfigKdl.ts` reads structure without reformatting KDL; `captureConfigEdit.ts` changes only
+capture bindings. Niri conflicts include statically resolved included files. Hyprland checks live
+bindings, including dynamic Lua bindings, before preview and apply. Unsupported/dynamic syntax
+stays on the manual path rather than guessing. Shortcut selection is always visible in the wizard;
+changing it withdraws any previous diff until a new one is reviewed. The config wizard and inline
+Settings share `useWindowCaptureShortcutRecorder`: keycap display, event normalization, capture
+suppression, and Escape/blur/unmount cleanup. Config edits serialize Linux Ctrl explicitly rather
+than storing the cross-platform `mod` alias. Recording alone never reads or writes a config;
+cancelling recording preserves the existing proposal. Primary copy describes the next user action
+and keeps read consent explicit. **Advanced** holds file paths, detailed diagnostics, native config-file
+selection, manual instructions, and consent-based removal. System/Omarchy defaults are not edit
+targets. Existing capture chords are preserved unless a replacement is explicitly requested.
 
 ## GNOME extension
 
@@ -204,8 +281,8 @@ Source: `apps/desktop/gnome-extension`. UUID: `window-capture@t3.codes`.
 Capture is opt-in. The app shell does not mount a capture onboarding dialog. The Settings toggle
 opens a Settings-owned two-step modal wizard: capture access and shortcut configuration.
 Its `WizardSteps` indicator is shared with T3 Connect onboarding. Everyday preferences
-stay in Settings; shortcut editing records and saves inline without reopening the wizard.
-Niri expands shared config instructions inline instead of offering an in-app recorder.
+stay in Settings. One-step shortcut editing records and saves inline without reopening the wizard;
+Niri and Hyprland reopen the wizard because changing their keys requires config review and approval.
 Setup waits for capture access before enabling registration. When access is already ready, opening
 setup restores registration if needed and resumes at the shortcut step. Closing an unfinished
 first-time setup disables capture again. Closing setup
@@ -262,8 +339,8 @@ Settings refreshes on the shortcut-change event, focus, or explicit Check again,
 
 There is no separate shortcut-test mode or delivery polling. Native activation is observed during
 normal capture; manual capture and renderer key events do not verify a shortcut. Verification
-is session-local and resets when registration changes. Niri's config stays user-managed,
-including custom config paths and conflicts.
+is session-local and resets when registration changes. Applying a Niri or Hyprland config diff
+is not proof that the compositor delivered a shortcut.
 
 The extension exports `org.gnome.Shell.Extensions.T3WindowCapture` at
 `/org/gnome/Shell/Extensions/T3WindowCapture`. `Version` is a read-only uint32. `Capture()` returns

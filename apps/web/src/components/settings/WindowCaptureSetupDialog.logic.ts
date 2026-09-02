@@ -12,6 +12,8 @@ export function captureSetupDesktopName(state: DesktopWindowCaptureState): strin
       return "KDE Plasma";
     case "niri":
       return "Niri";
+    case "hyprland":
+      return "Hyprland";
     default:
       return undefined;
   }
@@ -21,6 +23,7 @@ export function captureSetupBackend(state: DesktopWindowCaptureState) {
   if (state.mode !== "portal") return "direct";
   if (state.linuxBackend === "niri") return "niri";
   if (state.linuxBackend === "kde") return "kde";
+  if (state.linuxBackend === "hyprland") return "hyprland";
   if (state.linuxBackend === "screenshot-portal") return "portal";
   if (state.linuxBackend === "picker" && state.gnomeExtension?.status === "unsupported")
     return "picker";
@@ -33,6 +36,7 @@ export function captureSetupAccessReady(state: DesktopWindowCaptureState): boole
   if (captureSetupBackend(state) === "gnome")
     return state.gnomeExtension?.status === "enabled" && state.linuxBackend === "gnome-extension";
   if (captureSetupBackend(state) === "kde") return state.kdeHelper?.status === "ready";
+  if (captureSetupBackend(state) === "hyprland") return state.hyprlandHelper?.status === "ready";
   return true;
 }
 
@@ -41,16 +45,16 @@ export function captureSetupCheckMessage(state: DesktopWindowCaptureState): stri
   if (
     state.message ||
     (gnome && state.gnomeExtension?.status === "error") ||
-    state.kdeHelper?.status === "error"
+    state.kdeHelper?.status === "error" ||
+    state.hyprlandHelper?.status === "error"
   )
-    return "Couldn't confirm capture access. See the details above.";
-  if (captureSetupBackend(state) === "picker")
-    return "Checked — manual capture is available. You'll choose a window each time.";
+    return "Still unable to check access. See Advanced for help.";
+  if (captureSetupBackend(state) === "picker") return "Ready. You'll choose a window each time.";
   if (gnome && state.gnomeExtension?.status === "restart-required")
-    return "Checked — sign out and back in to continue.";
+    return "Still waiting for you to sign out and back in.";
   return captureSetupAccessReady(state)
-    ? "Checked — capture access is ready."
-    : "Checked — finish the step above to continue.";
+    ? "Ready. Continue to choose your shortcut."
+    : "Not ready yet. Finish the step above.";
 }
 
 export function captureSetupShortcutReady(
@@ -58,6 +62,7 @@ export function captureSetupShortcutReady(
   unsaved: boolean,
 ): boolean {
   if (unsaved || !captureSetupAccessReady(state)) return false;
+  if (state.linuxBackend === "hyprland") return Boolean(state.shortcutActionRegistered);
   return state.linuxBackend === "niri"
     ? Boolean(state.shortcutBinding)
     : state.shortcutRegistered || Boolean(state.shortcutPending);

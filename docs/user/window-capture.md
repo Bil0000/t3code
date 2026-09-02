@@ -14,11 +14,12 @@ After setup, Settings keeps the everyday capture preferences. Select **Manage ca
 access again, or the setup button for your current desktop if something is missing. Setup resumes at the first unfinished
 step: a running GNOME extension skips installation and goes straight to the shortcut step.
 To change your shortcut afterward, select it directly in Settings, press the new keys, then select
-**Save**. **Cancel** keeps your saved shortcut. This does not reopen onboarding, though your desktop
-may ask you to approve the new shortcut. Turning capture off unregisters the
+**Save**. On Niri and Hyprland, **Change shortcut** reopens setup so you can review the changes before
+saving. **Cancel** keeps your saved shortcut. Your desktop may ask you to approve a new shortcut.
+Turning capture off unregisters the
 shortcut; it does not uninstall an extension or capture helper you installed.
 
-When you switch between GNOME, KDE Plasma, and Niri, your capture preferences stay the same.
+When you switch between GNOME, KDE Plasma, Niri, and Hyprland, your capture preferences stay the same.
 Setup names your current desktop and checks its capture access and shortcut separately. You may
 need to install that desktop's helper or approve its shortcut. Your other desktops' extensions and
 bindings stay in place, so switching back does not require starting over. Shortcut permissions
@@ -31,8 +32,8 @@ chord. On Windows and Linux, the Windows or Super key can also open the system's
 another modifier there. T3 Code checks its own keybindings and, outside Wayland sessions, asks the
 operating system whether the shortcut is already reserved before it lets you save.
 
-On Linux with Wayland, choose a key chord; modifier-pair shortcuts are not supported. On Niri,
-configure the shortcut in Niri as described below. On other desktops, saving submits
+On Linux with Wayland, choose a key chord; modifier-pair shortcuts are not supported. On Niri and
+Hyprland, configure the shortcut in the desktop's config as described below. On other desktops, saving submits
 the shortcut to your desktop's global-shortcut portal. Approve the system prompt if one appears.
 Settings shows when permission is pending or denied, then displays the shortcut your desktop
 actually assigned. Your desktop may reuse a previous approval without showing another prompt.
@@ -56,6 +57,8 @@ not support global shortcuts.
 - On KDE Plasma 6, install the bundled capture helper during setup to capture the active window
   without a picker. T3 Code uses matching window metadata for available accessibility data and
   attempts to bring your draft forward after capture.
+- On Hyprland, including Omarchy, install the bundled helper to capture the active window without
+  a picker, include matching accessibility data when available, and animate the image into your draft.
 - On Linux with Wayland, T3 Code uses your desktop's Screenshot portal when it supports version 3
   and advertises active-window capture. Your desktop may still ask for permission.
 - On GNOME, the optional **T3 Code Window Capture** extension enables active-window capture when
@@ -80,7 +83,7 @@ Open **Settings** > **Window Capture** in your Plasma Wayland session and turn i
 
 1. Select **Install helper**. The helper is bundled with T3 Code; nothing is downloaded and you
    don't need to sign out. It allows KDE to recognize T3 Code's capture requests even with an AppImage.
-2. Wait for **KDE capture is ready**, then choose a shortcut such as **Ctrl+Shift+2**. Save it and
+2. Wait for **Capture is ready**, then choose a shortcut such as **Ctrl+Shift+2**. Save it and
    approve the desktop prompt if one appears.
 3. Select **Done** (or **Save and finish** for a changed shortcut). Press the shortcut from another
    app to capture the window you're using.
@@ -91,26 +94,67 @@ capture from the command palette when global shortcuts are unavailable.
 If a shortcut using Shift and a number doesn't fire on your keyboard layout, try a letter chord
 such as **Ctrl+Alt+Y** instead.
 
-Reopen **Manage capture**, select **Access**, and choose **Remove capture helper** to revoke this
+Reopen **Manage capture**, select **Access**, expand **Advanced**, and choose **Remove capture helper** to revoke this
 integration. Only T3 Code's capture helper and its registration are removed. A newer bundled helper
 is installed only when you select **Update helper**. Turning capture off stops the shortcut but keeps
 the helper installed. The current helper also provides window flash and flight animations; control
 them with **Capture flash** and **Capture animations**. No separate desktop effect download is needed.
 
+### Hyprland and Omarchy
+
+Open **Settings** > **Window Capture** inside Hyprland and turn capture on:
+
+1. Select **Install helper**. It is bundled with T3 Code; no download, administrator password,
+   plugin, or sign-out is needed.
+2. Continue to **Shortcut**, click the shortcut, and press your desired keys. Select **Review changes**
+   to let T3 Code read your desktop settings and show the proposed changes here in the app.
+3. Review the changes and select **Save shortcut**. T3 Code saves just those changes, keeps a
+   backup, and reloads Hyprland. The default shortcut is **Ctrl+Shift+2**; existing capture keys
+   are preserved unless you choose different ones.
+4. Use the shortcut from another app. If Hyprland asks for screen-sharing
+   permission for T3 Code's capture helper, approve it, then retry capture if necessary.
+
+Hyprland manages the actual keys. There is no shortcut permission popup, and T3 Code registering
+its capture action does not prove the key binding is configured. **Change shortcut** offers the
+shortcut step in the setup wizard, where you can choose new keys and review the config diff.
+Expand **Advanced** to select a custom config, copy a binding for manual setup, or review
+shortcut removal. Lua and older `.conf` configs are supported. On Omarchy, use your own bindings,
+not its shipped defaults. If the file changes while the diff is open, T3 Code asks you to review it
+again instead of overwriting your edits.
+
+The shortcut needs `xdg-desktop-portal-hyprland` running in the session. If setup cannot connect,
+check that service and restart T3 Code. Capture itself uses Hyprland's native window-export and
+window-mapping protocols. Setup reports when the compositor needs updating; it does not fall back
+to a whole-screen screenshot. Keep Hyprland's permission controls enabled. If capture is denied,
+review its screen-sharing permissions instead of disabling permission enforcement.
+Some Hyprland versions return an access-denied image instead of an error when capture is blocked.
+That image is not a successful capture of the app; review the helper's permission and try again.
+
+**Capture flash** and **Capture animations** control the optional overlay. Accessibility text
+uses the same app-dependent accessibility APIs as GNOME and Plasma; an app that exposes no text
+still produces an image-only capture. Turning capture off unregisters T3 Code's action. Remove
+the config binding to release the keys. **Manage capture** > **Access** > **Advanced** > **Remove capture helper**
+removes only T3 Code's installed helper.
+
 ### Niri
 
-Run T3 Code inside your Niri session, then enable Window Capture. Continue to the shortcut step,
-select **Copy binding**, and paste the line inside the `binds { ... }` section of your active Niri config,
-usually `~/.config/niri/config.kdl`. A custom `--config`, `NIRI_CONFIG`, or `XDG_CONFIG_HOME`
-can change its location. T3 Code does not edit your config. Expand **Using a custom config?**
-for help, or select **Configure shortcut** in Settings to show the instructions inline later.
-The example uses **Ctrl+Shift+2**; change that chord in your Niri config if it is already in use.
-Niri reloads the config when you save it. The binding requires the `gdbus` command, normally
-provided by your distribution's GLib tools package.
+Run T3 Code inside your Niri session, then enable Window Capture. On the shortcut step:
 
-Niri manages this shortcut, not T3 Code's shortcut recorder. There is no portal approval prompt,
-and copying a binding does not confirm it is active. Select **Done** after saving the config,
-then use your shortcut from another app. If it fails, check Niri's config errors with
+1. Click the shortcut and press your desired keys, then select **Review changes** to let T3 Code read
+   your desktop settings. The changes appear here in the app; no editor opens.
+2. Review the changes, then select **Save shortcut**. T3 Code validates the proposed Niri config,
+   saves the approved change, and keeps a backup. Niri reloads it automatically.
+
+The default is **Ctrl+Shift+2**. Existing capture keys are kept unless you choose different ones.
+**Change shortcut** in Settings reopens the wizard at the shortcut step to choose keys and
+review the config change. Expand **Advanced** for custom config selection, manual copy/paste,
+file paths, troubleshooting details, backup location, or shortcut removal.
+The default config is `~/.config/niri/config.kdl`; `NIRI_CONFIG` and `XDG_CONFIG_HOME` are respected.
+If you started Niri with `--config` or switched config files, choose that file in **Advanced**.
+The binding requires `gdbus`, normally provided by your distribution's GLib tools package.
+
+Niri activates this shortcut through its config; the recorder only chooses the keys. There is no portal approval prompt,
+and saving a binding does not confirm delivery. Use your shortcut from another app. If it fails, check Niri's config errors with
 `niri validate` and make sure `gdbus` is installed.
 The shortcut works while T3 Code is running
 with capture enabled. Disable capture in T3 Code to stop accepting it; remove the line from your
@@ -144,7 +188,7 @@ in your user data directory under `t3code/extension-backups` for recovery.
 
 Enabling this extension grants T3 Code access to the focused window without a per-capture picker.
 It captures the rendered window, not an entire scrollable document. It does not work while the
-session is locked. Select **Disable extension** in the first setup step, or disable it in GNOME's Extensions app,
+session is locked. Select **Disable extension** under **Advanced** in the first setup step, or disable it in GNOME's Extensions app,
 to revoke this access; T3 Code
 will return to the portal or picker path. Remove it there to uninstall it.
 
@@ -152,7 +196,7 @@ Accessibility-data availability depends on the captured app and the operating sy
 attaches the image when an app does not expose accessibility data. It waits up to three seconds for
 the data; if the app responds too slowly, the screenshot is attached without it. When a complete
 element tree is unavailable but text was read in time, T3 Code includes that text as a fallback.
-Turn off **Capture accessibility data** in Window Capture settings to skip the accessibility lookup
+Turn off **Include app text** in Window Capture settings to skip the accessibility lookup
 and attach screenshots without text or UI structure. On macOS, this also removes the Accessibility
 permission requirement for window capture; Screen Recording permission is still required.
 
@@ -181,7 +225,7 @@ separately. Choose **Off**, **Whoosh** (the default), or **Click** for the captu
 play button beside the sound selector to preview it. With animations on, the captured window
 flies into its new composer attachment and settles into place. Turn off animations to remove capture motion.
 The operating system's reduced-motion setting also disables the attachment animation.
-On Linux, the full window-to-composer effect uses the current T3 Code GNOME extension or KDE
+On Linux, the full window-to-composer effect uses the current T3 Code GNOME extension or KDE/Hyprland
 capture helper. Niri, portal, and picker capture use a short composer arrival effect instead.
 After updating an older GNOME extension, sign out and back in to load the new version. KDE helper
 updates do not require signing out. Settings tells you when an update is needed.

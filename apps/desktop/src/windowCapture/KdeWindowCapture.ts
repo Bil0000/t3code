@@ -10,7 +10,7 @@ import type { DesktopCaptureHelperState } from "@t3tools/contracts";
 
 import { escapeDesktopEntryExecArgument } from "../app/DesktopLinuxUrlHandler.ts";
 import { readPortalPng, type LinuxWindowSnapshot } from "./LinuxWindowCapture.ts";
-import { startKdeCaptureFeedback } from "./KdeCaptureFeedback.ts";
+import { startNativeCaptureFeedback } from "./NativeCaptureFeedback.ts";
 
 export const KDE_CAPTURE_EXECUTABLE = "t3-kde-window-capture";
 const DESKTOP_FILE = "com.t3tools.T3Code.KdeCapture.desktop";
@@ -239,7 +239,7 @@ export async function captureKdeWindow(
     const feedback = new AbortController();
     const effects =
       state.feedbackAvailable && result.window && options && (options.flash || options.animate)
-        ? await startKdeCaptureFeedback(executable, directory, {
+        ? await startNativeCaptureFeedback(executable, directory, {
             bounds: result.window.bounds,
             pid: process.pid,
             ...options,

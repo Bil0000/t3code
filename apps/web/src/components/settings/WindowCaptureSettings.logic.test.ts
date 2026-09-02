@@ -36,7 +36,7 @@ it("offers effects only with a capable GNOME extension, explaining how to upgrad
     windowCaptureFeedbackUnavailableMessage({ ...state, linuxFeedbackAvailable: true }),
   ).toBeUndefined();
   expect(windowCaptureFeedbackUnavailableMessage({ ...state, linuxBackend: "picker" })).toContain(
-    "doesn't support",
+    "aren't available",
   );
   expect(windowCaptureFeedbackUnavailableMessage({ ...state, mode: "direct" })).toBeUndefined();
 });
@@ -70,7 +70,39 @@ it("describes Niri setup without claiming a global shortcut is registered", () =
   };
   expect(windowCaptureStatus(state, true)).toBe("Finish shortcut setup");
   expect(windowCaptureStatus(state, true)).not.toContain("could not be registered");
-  expect(windowCaptureFeedbackUnavailableMessage(state)).toContain("not supported on Niri");
+  expect(windowCaptureFeedbackUnavailableMessage(state)).toContain("aren't available on Niri");
+});
+
+it("distinguishes Hyprland helper setup, action registration, and verified shortcut delivery", () => {
+  const state: DesktopWindowCaptureState = {
+    mode: "portal",
+    linuxBackend: "hyprland",
+    linuxDesktop: "hyprland",
+    shortcut: DEFAULT_CLIENT_SETTINGS.windowCaptureShortcut,
+    shortcutRegistered: false,
+    shortcutMessage: "Connecting to Hyprland shortcuts…",
+    message: null,
+    hyprlandHelper: { status: "not-installed", message: "Install helper" },
+  };
+  expect(windowCaptureSetupButtonLabel(state)).toBe("Set up Hyprland capture");
+  expect(windowCaptureStatus(state, false)).toBe("Turn this on to set up window capture.");
+  expect(windowCaptureStatus(state, true)).toContain("Install the capture helper");
+  expect(windowCaptureFeedbackUnavailableMessage(state)).toContain("Install or update");
+  const ready = {
+    ...state,
+    hyprlandHelper: { status: "ready" as const, message: "Ready" },
+    linuxFeedbackAvailable: true,
+  };
+  expect(windowCaptureSetupButtonLabel(ready)).toBe("Manage capture");
+  expect(windowCaptureShortcutStatus({ ...ready, shortcutPending: true })).not.toContain(
+    "permission",
+  );
+  expect(windowCaptureStatus({ ...ready, shortcutActionRegistered: true }, true)).toBe(
+    "Use your shortcut from another app",
+  );
+  expect(windowCaptureStatus({ ...ready, shortcutVerified: true }, true)).toBe("Ready to capture");
+  expect(windowCaptureFeedbackUnavailableMessage(ready)).toBeUndefined();
+  expect(windowCaptureAccessibilityUnavailableMessage(ready)).toBeUndefined();
 });
 
 it("keeps unavailable capture distinct from the opt-in setup prompt", () => {
@@ -201,15 +233,17 @@ it("keeps picker limitations visible after shortcut verification without recomme
   expect(windowCaptureStatus(state, true)).toContain("Manual capture only");
   expect(windowCaptureDescription(state)).toContain("Automatic capture isn't available");
   expect(windowCaptureFeedbackUnavailableMessage(state)).not.toContain("GNOME");
-  expect(windowCaptureAccessibilityUnavailableMessage(state)).toContain("image only");
+  expect(windowCaptureAccessibilityUnavailableMessage(state)).toContain(
+    "only provides a screenshot",
+  );
   expect(
     windowCaptureAccessibilityUnavailableMessage({ ...state, linuxBackend: "screenshot-portal" }),
-  ).toContain("image only");
+  ).toContain("only provides a screenshot");
   expect(
     windowCaptureAccessibilityUnavailableMessage({ ...state, linuxBackend: "kde" }),
   ).toBeUndefined();
   expect(windowCaptureFeedbackUnavailableMessage({ ...state, linuxBackend: "kde" })).toContain(
-    "KDE Plasma",
+    "capture helper",
   );
   expect(
     windowCaptureFeedbackUnavailableMessage({
@@ -224,7 +258,7 @@ it("keeps picker limitations visible after shortcut verification without recomme
       { ...state, linuxBackend: "kde", kdeHelper: { status: "not-installed", message: "Install" } },
       true,
     ),
-  ).toContain("Install the KDE capture helper");
+  ).toContain("Install the capture helper");
 });
 
 it("does not ask Niri users to repeat setup when its capture endpoint is available", () => {
@@ -237,7 +271,7 @@ it("does not ask Niri users to repeat setup when its capture endpoint is availab
     shortcutMessage: null,
     message: null,
   };
-  expect(windowCaptureStatus(state, true)).toBe("Shortcut managed by Niri");
+  expect(windowCaptureStatus(state, true)).toBe("Use your shortcut from another app");
   expect(windowCaptureSetupButtonLabel(state)).toBe("Manage capture");
 });
 
@@ -252,7 +286,7 @@ it("reports pending, denied, and assigned shortcuts without inferring consent fr
     message: null,
   };
   expect(windowCaptureStatus(state, true)).toContain("Waiting for shortcut permission");
-  expect(windowCaptureShortcutStatus(state)).toContain("Waiting for shortcut permission");
+  expect(windowCaptureShortcutStatus(state)).toContain("Approve the shortcut permission prompt");
   const denied = { ...state, shortcutPending: false, shortcutMessage: "Permission wasn't granted" };
   expect(windowCaptureShortcutStatus(denied)).toBe("Permission wasn't granted");
   const approved = { ...denied, shortcutRegistered: true, shortcutLabel: "Ctrl+Shift+8" };

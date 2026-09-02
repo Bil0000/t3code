@@ -62,7 +62,7 @@ import {
   stageLinuxIconSize,
   stageDesktopDmgBackground,
   stageResourceMonitor,
-  stageKdeCaptureHelper,
+  stageLinuxCaptureHelper,
   stageWslRuntimeArchive,
   bundlesWslRuntime,
   STAGE_INSTALL_ARGS,
@@ -1028,51 +1028,70 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ),
   );
 
-  it.effect("builds and stages the KDE helper for the selected Linux architecture", () =>
+  it.effect("builds and stages native capture helpers for each Linux architecture", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const repoRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-kde-stage-test-" });
-        for (const [arch, target] of [
-          ["x64", "x86_64-unknown-linux-gnu"],
-          ["arm64", "aarch64-unknown-linux-gnu"],
-        ] as const) {
-          const binary = path.join(
-            repoRoot,
-            "native/kde-window-capture/target",
-            target,
-            "release/t3-kde-window-capture",
-          );
-          const stageResourcesDir = path.join(repoRoot, "stage", arch);
-          const spawner = Layer.succeed(
-            ChildProcessSpawner.ChildProcessSpawner,
-            ChildProcessSpawner.make((command) =>
-              Effect.gen(function* () {
-                assert.equal(command._tag, "StandardCommand");
-                if (command._tag !== "StandardCommand") return mockProcess(1);
-                assert.equal(command.command, "cargo");
-                assert.deepEqual(command.args, [
-                  "build",
-                  "--locked",
-                  "--release",
-                  "--manifest-path",
-                  path.join(repoRoot, "native/kde-window-capture/Cargo.toml"),
-                  "--target",
-                  target,
-                ]);
-                yield* fs.makeDirectory(path.dirname(binary), { recursive: true });
-                yield* fs.writeFileString(binary, `helper-${arch}`);
-                return mockProcess(0);
-              }),
-            ),
-          );
-          yield* stageKdeCaptureHelper({ repoRoot, stageResourcesDir, arch, verbose: false }).pipe(
-            Effect.provide(spawner),
-          );
-          const installed = path.join(stageResourcesDir, "kde-capture/t3-kde-window-capture");
-          assert.equal(yield* fs.readFileString(installed), `helper-${arch}`);
-          assert.equal((yield* fs.stat(installed)).mode & 0o777, 0o755);
+        const protocols = path.join(repoRoot, "native/hyprland-window-capture/protocols");
+        yield* fs.makeDirectory(protocols, { recursive: true });
+        yield* fs.writeFileString(path.join(protocols, "capture.xml"), "BSD protocol notice");
+        for (const backend of ["kde", "hyprland"] as const) {
+          for (const [arch, target] of [
+            ["x64", "x86_64-unknown-linux-gnu"],
+            ["arm64", "aarch64-unknown-linux-gnu"],
+          ] as const) {
+            const binary = path.join(
+              repoRoot,
+              `native/${backend}-window-capture/target`,
+              target,
+              `release/t3-${backend}-window-capture`,
+            );
+            const stageResourcesDir = path.join(repoRoot, "stage", backend, arch);
+            const spawner = Layer.succeed(
+              ChildProcessSpawner.ChildProcessSpawner,
+              ChildProcessSpawner.make((command) =>
+                Effect.gen(function* () {
+                  assert.equal(command._tag, "StandardCommand");
+                  if (command._tag !== "StandardCommand") return mockProcess(1);
+                  assert.equal(command.command, "cargo");
+                  assert.deepEqual(command.args, [
+                    "build",
+                    "--locked",
+                    "--release",
+                    "--manifest-path",
+                    path.join(repoRoot, `native/${backend}-window-capture/Cargo.toml`),
+                    "--target",
+                    target,
+                  ]);
+                  yield* fs.makeDirectory(path.dirname(binary), { recursive: true });
+                  yield* fs.writeFileString(binary, `helper-${arch}`);
+                  return mockProcess(0);
+                }),
+              ),
+            );
+            yield* stageLinuxCaptureHelper({
+              backend,
+              repoRoot,
+              stageResourcesDir,
+              arch,
+              verbose: false,
+            }).pipe(Effect.provide(spawner));
+            const installed = path.join(
+              stageResourcesDir,
+              `${backend}-capture/t3-${backend}-window-capture`,
+            );
+            assert.equal(yield* fs.readFileString(installed), `helper-${arch}`);
+            assert.equal((yield* fs.stat(installed)).mode & 0o777, 0o755);
+            if (backend === "hyprland")
+              assert.equal(
+                yield* fs.readFileString(
+                  path.join(stageResourcesDir, "hyprland-capture/protocols/capture.xml"),
+                ),
+                "BSD protocol notice",
+              );
+          }
         }
       }),
     ),

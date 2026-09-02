@@ -20,6 +20,7 @@ import * as Schema from "effect/Schema";
 import { nativeImage } from "electron";
 import { isKdeCaptureSession, type KdeCapturePaths } from "./KdeWindowCapture.ts";
 import { isGnomeCaptureSession } from "./GnomeCaptureSetup.ts";
+import { isHyprlandCaptureSession, type HyprlandCapturePaths } from "./HyprlandWindowCapture.ts";
 
 const PORTAL = "org.freedesktop.portal.Desktop";
 const PORTAL_PATH = "/org/freedesktop/portal/desktop";
@@ -69,6 +70,7 @@ export type LinuxCaptureBackend =
   | "gnome-extension"
   | "niri"
   | "kde"
+  | "hyprland"
   | "picker";
 export type LinuxWindowSnapshot = {
   readonly png: Buffer;
@@ -405,6 +407,8 @@ export async function readPortalPng(uri: string): Promise<Buffer> {
 }
 
 export async function getLinuxCaptureSupport(appId: string) {
+  if (isHyprlandCaptureSession())
+    return { linuxBackend: "hyprland" as const, linuxFeedbackAvailable: false };
   const { niriSocketPath, checkNiriCaptureSupport } = await import("./NiriWindowCapture.ts");
   const niri = niriSocketPath();
   if (niri) {
@@ -425,7 +429,13 @@ export async function captureLinuxWindow(
   appId: string,
   options?: FeedbackOptions,
   kdePaths?: KdeCapturePaths,
+  hyprlandPaths?: HyprlandCapturePaths,
 ): Promise<LinuxWindowSnapshot | undefined> {
+  if (isHyprlandCaptureSession()) {
+    if (!hyprlandPaths) throw new Error("Hyprland capture setup is unavailable in this build.");
+    const { captureHyprlandWindow } = await import("./HyprlandWindowCapture.ts");
+    return captureHyprlandWindow(hyprlandPaths, options);
+  }
   const { niriSocketPath, captureNiriWindow } = await import("./NiriWindowCapture.ts");
   const niri = niriSocketPath();
   if (niri) return captureNiriWindow(niri);

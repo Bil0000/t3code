@@ -1050,6 +1050,10 @@ export const DESKTOP_EXTRA_RESOURCES = [
 ] as const;
 export const LINUX_CAPTURE_EXTRA_RESOURCES = [
   {
+    from: "apps/desktop/prod-resources/hyprland-capture",
+    to: "hyprland-capture",
+  },
+  {
     from: "apps/desktop/prod-resources/kde-capture",
     to: "kde-capture",
   },
@@ -2037,7 +2041,8 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
   },
 );
 
-export const stageKdeCaptureHelper = Effect.fn("stageKdeCaptureHelper")(function* (input: {
+export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(function* (input: {
+  readonly backend: "kde" | "hyprland";
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
   readonly arch: typeof BuildArch.Type;
@@ -2051,7 +2056,7 @@ export const stageKdeCaptureHelper = Effect.fn("stageKdeCaptureHelper")(function
     "--locked",
     "--release",
     "--manifest-path",
-    path.join(input.repoRoot, "native/kde-window-capture/Cargo.toml"),
+    path.join(input.repoRoot, `native/${input.backend}-window-capture/Cargo.toml`),
     "--target",
     rustTarget!,
   ]);
@@ -2060,21 +2065,31 @@ export const stageKdeCaptureHelper = Effect.fn("stageKdeCaptureHelper")(function
       cwd: input.repoRoot,
       shell: spawnCommand.shell,
     }),
-    { label: `cargo build KDE capture helper (${rustTarget})`, verbose: input.verbose },
+    {
+      label: `cargo build ${input.backend} capture helper (${rustTarget})`,
+      verbose: input.verbose,
+    },
   );
-  const destination = path.join(input.stageResourcesDir, "kde-capture");
+  const destination = path.join(input.stageResourcesDir, `${input.backend}-capture`);
   yield* fs.makeDirectory(destination, { recursive: true });
-  const executable = path.join(destination, "t3-kde-window-capture");
+  const executable = path.join(destination, `t3-${input.backend}-window-capture`);
   yield* fs.copyFile(
     path.join(
       input.repoRoot,
-      "native/kde-window-capture/target",
+      `native/${input.backend}-window-capture/target`,
       rustTarget!,
-      "release/t3-kde-window-capture",
+      `release/t3-${input.backend}-window-capture`,
     ),
     executable,
   );
   yield* fs.chmod(executable, 0o755);
+  if (input.backend === "hyprland") {
+    // The official protocol XML includes the BSD notices required with binary distribution.
+    yield* fs.copy(
+      path.join(input.repoRoot, "native/hyprland-window-capture/protocols"),
+      path.join(destination, "protocols"),
+    );
+  }
 });
 
 export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
@@ -3472,12 +3487,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     verbose: options.verbose,
   });
   if (options.platform === "linux") {
-    yield* stageKdeCaptureHelper({
-      repoRoot,
-      stageResourcesDir,
-      arch: options.arch,
-      verbose: options.verbose,
-    });
+    for (const backend of ["kde", "hyprland"] as const)
+      yield* stageLinuxCaptureHelper({
+        backend,
+        repoRoot,
+        stageResourcesDir,
+        arch: options.arch,
+        verbose: options.verbose,
+      });
   }
 
   yield* assertPlatformBuildResources(

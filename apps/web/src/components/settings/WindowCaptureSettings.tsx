@@ -5,27 +5,23 @@ import {
   type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
   type DesktopWindowCaptureSetupAction,
-  type WindowCaptureModifier,
   type WindowCaptureShortcut,
 } from "@t3tools/contracts";
-import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
 import { ChevronDownIcon, PlayIcon } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { cn } from "~/lib/utils";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
 import {
-  formatWindowCaptureShortcutLabel,
   sameWindowCaptureShortcut,
   windowCaptureKeybindingConflict,
 } from "../../lib/windowCaptureShortcut";
 import { playWindowCaptureSound } from "../../lib/windowCaptureSound";
 import { primaryServerKeybindingsAtom } from "../../state/server";
-import { commandLabel, keybindingFromKeyboardEvent } from "./KeybindingsSettings.logic";
+import { commandLabel } from "./KeybindingsSettings.logic";
 import {
-  createRecordingRequestTracker,
   windowCaptureStatus,
   windowCaptureShortcutStatus,
   windowCaptureSetupButtonLabel,
@@ -44,33 +40,17 @@ import {
 } from "./settingsLayout";
 import { searchableSetting } from "./settingsSearch";
 import { Button } from "../ui/button";
-import { WindowCaptureShortcutKeys } from "../desktop/WindowCaptureShortcutKeys";
 import { Menu, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { selectTriggerVariants } from "../ui/select";
 import { Switch } from "../ui/switch";
 import { WindowCaptureSetupDialog } from "./WindowCaptureSetupDialog";
-import { NiriCaptureShortcutInstructions } from "./NiriCaptureShortcutInstructions";
+import { useWindowCaptureShortcutRecorder } from "./useWindowCaptureShortcutRecorder";
 import {
   captureSetupAccessReady,
   captureSetupInitialStep,
   captureSetupShouldDisableOnClose,
   type CaptureSetupStep,
 } from "./WindowCaptureSetupDialog.logic";
-
-const MODIFIER_FROM_KEY: Readonly<Record<string, WindowCaptureModifier>> = {
-  Shift: "shift",
-  Meta: "meta",
-  OS: "meta",
-  Control: "control",
-  Alt: "alt",
-  AltGraph: "alt",
-};
-const MODIFIER_CODES: Readonly<Record<WindowCaptureModifier, readonly [string, string]>> = {
-  shift: ["ShiftLeft", "ShiftRight"],
-  meta: ["MetaLeft", "MetaRight"],
-  control: ["ControlLeft", "ControlRight"],
-  alt: ["AltLeft", "AltRight"],
-};
 
 const soundOptionRowClassName =
   "grid grid-cols-[1fr_auto] rounded-sm has-data-checked:bg-foreground/[0.08]";
@@ -97,22 +77,19 @@ export function WindowCaptureSettings() {
     initialStep: CaptureSetupStep;
     wasEnabled: boolean;
   } | null>(null);
-  const [recording, setRecording] = useState(false);
-  const [showNiriShortcut, setShowNiriShortcut] = useState(false);
   const [candidate, setCandidate] = useState<WindowCaptureShortcut>(settings.windowCaptureShortcut);
   const [shortcutCheck, setShortcutCheck] = useState<ShortcutCheck>({
     status: "idle",
     availability: null,
   });
-  const heldModifierCodesRef = useRef(new Set<string>());
-  const [recordingRequests] = useState(createRecordingRequestTracker);
   const shortcutCheckIdRef = useRef(0);
   const stateRequestIdRef = useRef(0);
   const unavailableMessage = windowCaptureUnavailableMessage(Boolean(bridge));
   const captureAvailable = Boolean(bridge) && state !== null && state.mode !== "unavailable";
   const feedbackUnavailable = windowCaptureFeedbackUnavailableMessage(state);
   const savedShortcut = settings.windowCaptureShortcut;
-  const shortcutChanged = !sameWindowCaptureShortcut(candidate, savedShortcut);
+  const managedShortcut = state?.linuxBackend === "niri" || state?.linuxBackend === "hyprland";
+  const shortcutChanged = !managedShortcut && !sameWindowCaptureShortcut(candidate, savedShortcut);
   const displayShortcut = shortcutChanged ? candidate : (state?.shortcut ?? savedShortcut);
   const candidateConflict = shortcutChanged
     ? windowCaptureKeybindingConflict(candidate, keybindings)
@@ -202,44 +179,6 @@ export function WindowCaptureSettings() {
     [bridge, save, settings.windowCaptureEnabled],
   );
 
-  const stopRecording = useCallback(() => {
-    recordingRequests.clear();
-    heldModifierCodesRef.current.clear();
-    setRecording(false);
-    void bridge?.setWindowCaptureShortcutSuppressed(false);
-  }, [bridge, recordingRequests]);
-
-  const startRecording = useCallback(async () => {
-    if (!bridge) return;
-    const recordingRequest = recordingRequests.tryBegin();
-    if (!recordingRequest) return;
-    shortcutCheckIdRef.current++;
-    heldModifierCodesRef.current.clear();
-    setShortcutCheck({ status: "idle", availability: null });
-    try {
-      await bridge.setWindowCaptureShortcutSuppressed(true);
-      if (recordingRequests.owns(recordingRequest)) setRecording(true);
-    } catch (error) {
-      if (!recordingRequests.owns(recordingRequest)) return;
-      recordingRequests.clear();
-      setShortcutCheck({
-        status: "checked",
-        availability: {
-          available: false,
-          message: error instanceof Error ? error.message : "Could not start shortcut recording.",
-        },
-      });
-    }
-  }, [bridge, recordingRequests]);
-
-  useEffect(
-    () => () => {
-      recordingRequests.clear();
-      void bridge?.setWindowCaptureShortcutSuppressed(false);
-    },
-    [bridge, recordingRequests],
-  );
-
   const checkShortcut = useCallback(
     async (shortcut: WindowCaptureShortcut) => {
       const checkId = ++shortcutCheckIdRef.current;
@@ -266,39 +205,23 @@ export function WindowCaptureSettings() {
     [bridge, keybindings],
   );
 
-  const recordShortcut = useCallback(
-    (event: KeyboardEvent<HTMLButtonElement>) => {
-      if (!recording || event.key === "Tab" || event.repeat) return;
-      event.preventDefault();
-      event.stopPropagation();
-      if (event.key === "Escape") {
-        stopRecording();
-        return;
-      }
-      const pairModifier = MODIFIER_FROM_KEY[event.key];
-      if (pairModifier) {
-        const held = heldModifierCodesRef.current;
-        held.add(event.code);
-        const [leftCode, rightCode] = MODIFIER_CODES[pairModifier];
-        if (held.has(leftCode) && held.has(rightCode)) {
-          stopRecording();
-          void checkShortcut(
-            pairModifier === "shift"
-              ? { kind: "both-shift-keys" }
-              : { kind: "modifier-pair", modifier: pairModifier },
-          );
-        }
-        return;
-      }
-      const input = keybindingFromKeyboardEvent(event, navigator.platform);
-      if (!input) return;
-      const shortcut = parseKeybindingShortcut(input);
-      if (!shortcut) return;
-      stopRecording();
-      void checkShortcut(shortcut);
+  const {
+    recording,
+    stopRecording,
+    input: shortcutInput,
+  } = useWindowCaptureShortcutRecorder({
+    shortcut: displayShortcut,
+    shortcutLabel: !shortcutChanged ? state?.shortcutLabel : undefined,
+    disabled: setupBusy,
+    allowModifierPairs: state?.mode !== "portal",
+    onRecord: (shortcut) => void checkShortcut(shortcut),
+    onStart: () => {
+      shortcutCheckIdRef.current++;
+      setShortcutCheck({ status: "idle", availability: null });
     },
-    [checkShortcut, recording, stopRecording],
-  );
+    onError: (message) =>
+      setShortcutCheck({ status: "checked", availability: { available: false, message } }),
+  });
 
   const shortcutStatus = recording
     ? "Press your shortcut. Esc cancels."
@@ -400,38 +323,19 @@ export function WindowCaptureSettings() {
     }
   };
 
-  const shortcutInput = (
-    <Button
-      type="button"
-      variant={recording ? "secondary" : "outline"}
-      disabled={setupBusy}
-      aria-label={`Record window capture shortcut, currently ${!shortcutChanged && state?.shortcutLabel ? state.shortcutLabel : formatWindowCaptureShortcutLabel(displayShortcut)}`}
-      aria-pressed={recording}
-      data-keybinding-capture=""
-      onClick={() => void startRecording()}
-      onKeyDown={recordShortcut}
-      onKeyUp={(event) => heldModifierCodesRef.current.delete(event.code)}
-      onBlur={stopRecording}
-    >
-      {recording ? (
-        "Press shortcut…"
-      ) : state?.mode === "portal" && isModifierPairShortcut(displayShortcut) ? (
-        "Choose shortcut"
-      ) : !shortcutChanged && state?.shortcutLabel ? (
-        state.shortcutLabel
-      ) : (
-        <WindowCaptureShortcutKeys shortcut={displayShortcut} />
-      )}
-    </Button>
-  );
-
   return (
     <SettingsPageContainer>
       <SettingsSection id="window-capture" title="Window Capture">
         {setupError && !wizard ? (
-          <p role="alert" className="mb-4 text-sm text-destructive">
-            {setupError}
-          </p>
+          <div className="mb-4 space-y-2 text-sm">
+            <p role="alert" className="text-destructive">
+              Couldn't update window capture. Try again or check Advanced for help.
+            </p>
+            <details className="text-xs text-muted-foreground">
+              <summary className="cursor-pointer">Advanced</summary>
+              <p className="mt-2 break-words">{setupError}</p>
+            </details>
+          </div>
         ) : null}
         <SettingsUnavailableGroup message={unavailableMessage}>
           <SettingsRow
@@ -472,11 +376,8 @@ export function WindowCaptureSettings() {
             <>
               <SettingsRow
                 {...searchableSetting("window-capture-accessibility")}
-                description="Include available accessibility text and UI structure with each screenshot."
-                status={
-                  windowCaptureAccessibilityUnavailableMessage(state) ??
-                  "Available text depends on the app you're capturing."
-                }
+                description="Include text and controls when the app makes them available."
+                status={windowCaptureAccessibilityUnavailableMessage(state)}
                 control={
                   <Switch
                     checked={
@@ -487,7 +388,7 @@ export function WindowCaptureSettings() {
                       !captureAvailable ||
                       Boolean(windowCaptureAccessibilityUnavailableMessage(state))
                     }
-                    aria-label="Include accessibility data in window captures"
+                    aria-label="Include app text in window captures"
                     onCheckedChange={(checked) => void saveIncludeAccessibility(checked)}
                   />
                 }
@@ -495,23 +396,20 @@ export function WindowCaptureSettings() {
               <SettingsRow
                 {...searchableSetting("window-capture-shortcut")}
                 description={
-                  state?.linuxBackend === "niri"
-                    ? "Managed in your Niri config."
-                    : state?.linuxBackend === "picker"
-                      ? "Open the window picker from any app."
-                      : "Capture from any app with a global shortcut."
+                  state?.linuxBackend === "picker"
+                    ? "Choose a window to capture from any app."
+                    : "Capture the window you're using without switching apps."
                 }
-                status={state?.linuxBackend === "niri" ? undefined : shortcutStatus}
+                status={managedShortcut ? undefined : shortcutStatus}
                 control={
-                  state?.linuxBackend === "niri" ? (
+                  managedShortcut ? (
                     <Button
                       size="xs"
                       variant="outline"
-                      aria-expanded={showNiriShortcut}
-                      aria-controls="niri-capture-shortcut"
-                      onClick={() => setShowNiriShortcut((visible) => !visible)}
+                      disabled={setupBusy}
+                      onClick={() => void openSetup("shortcut")}
                     >
-                      {showNiriShortcut ? "Hide instructions" : "Configure shortcut"}
+                      Change shortcut
                     </Button>
                   ) : (
                     <>
@@ -552,13 +450,7 @@ export function WindowCaptureSettings() {
                     </>
                   )
                 }
-              >
-                {state?.linuxBackend === "niri" && showNiriShortcut ? (
-                  <div id="niri-capture-shortcut" className="mt-3 pb-3.5">
-                    <NiriCaptureShortcutInstructions binding={state.shortcutBinding} />
-                  </div>
-                ) : null}
-              </SettingsRow>
+              />
               <SettingsRow
                 {...searchableSetting("window-capture-sound")}
                 description="Choose the sound played when capture starts."
@@ -646,7 +538,7 @@ export function WindowCaptureSettings() {
               />
               <SettingsRow
                 {...searchableSetting("window-capture-animations")}
-                description="Fly captured windows into the composer and animate capture feedback."
+                description="Animate captured windows into your draft."
                 status={feedbackUnavailable}
                 control={
                   <Switch

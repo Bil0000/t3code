@@ -110,7 +110,7 @@ class FakeBus extends NodeEvents.EventEmitter {
   }
 }
 
-function start(bus = new FakeBus(), shortcut = chord) {
+function start(bus = new FakeBus(), shortcut = chord, managedByHyprland = false) {
   const capture = vi.fn();
   const changed = vi.fn();
   const client = new PortalCaptureShortcut(
@@ -119,6 +119,7 @@ function start(bus = new FakeBus(), shortcut = chord) {
     capture,
     changed,
     bus as unknown as MessageBus,
+    managedByHyprland,
   );
   clients.push(client);
   return { bus, client, capture, changed };
@@ -128,6 +129,50 @@ afterEach(() => {
   for (const client of clients.splice(0)) client.close();
   vi.useRealTimers();
   vi.unstubAllEnvs();
+});
+
+it("accepts Hyprland's action-only binding without claiming the keys are reserved", async () => {
+  const bus = new FakeBus();
+  bus.actualLabel = "";
+  const { client, capture } = start(bus, chord, true);
+  await client.ready;
+  expect(client.state).toMatchObject({
+    shortcutRegistered: false,
+    shortcutActionRegistered: true,
+    shortcutPending: false,
+  });
+  expect(bus.boundId).toBe("capture-window");
+  expect(bus.calls.find((call) => call.member === "BindShortcuts")?.body[1]).toEqual([
+    ["capture-window", { description: new Variant("s", "Capture a window") }],
+  ]);
+  bus.activate("wrong");
+  bus.activate(bus.boundId, bus.session, ":1.999");
+  expect(capture).not.toHaveBeenCalled();
+  bus.activate();
+  expect(capture).toHaveBeenCalledOnce();
+  await expect(client.configure()).rejects.toThrow("Hyprland config");
+  bus.signal(portal, "ShortcutsChanged", root, [bus.session, []]);
+  bus.activate();
+  expect(capture).toHaveBeenCalledOnce();
+  expect(client.state.shortcutActionRegistered).toBe(false);
+});
+
+it("keeps the Hyprland action ID stable regardless of a saved key chord", async () => {
+  const first = start(new FakeBus(), chord, true);
+  const second = start(new FakeBus(), { ...chord, key: "7" }, true);
+  await Promise.all([first.client.ready, second.client.ready]);
+  expect(first.bus.boundId).toBe(second.bus.boundId);
+});
+
+it("does not accept an empty trigger as approval on other desktops", async () => {
+  const bus = new FakeBus();
+  bus.actualLabel = "";
+  const { client, capture } = start(bus);
+  await client.ready;
+  expect(client.state.shortcutRegistered).toBe(false);
+  expect(client.state.shortcutActionRegistered).not.toBe(true);
+  bus.activate();
+  expect(capture).not.toHaveBeenCalled();
 });
 
 it.each([

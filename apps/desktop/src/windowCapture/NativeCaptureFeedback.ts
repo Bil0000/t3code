@@ -14,7 +14,7 @@ const decodeEvent = Schema.decodeUnknownSync(
 );
 
 /** Ready and landed are compositor receipts. A requested animation is not proof it started. */
-export async function startKdeCaptureFeedback(
+export async function startNativeCaptureFeedback(
   executable: string,
   directory: string,
   options: { bounds: LinuxWindowMetadata["bounds"]; pid: number; flash: boolean; animate: boolean },
@@ -40,7 +40,7 @@ export async function startKdeCaptureFeedback(
     ready.resolve(undefined);
     landed.resolve();
     child.stdin.end('{"command":"close"}\n');
-    // Kill only our own child if KWin fails to acknowledge cancellation.
+    // Kill only our own child if the compositor fails to acknowledge cancellation.
     killTimer = setTimeout(() => child.kill(), 1000);
     killTimer.unref();
   };

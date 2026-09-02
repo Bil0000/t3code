@@ -214,6 +214,12 @@ it("does not fall through to the picker when KDE needs helper setup", async () =
   expect(bus.calls.some((call) => call.member === "Screenshot")).toBe(false);
   expect(bus.disconnect).toHaveBeenCalledOnce();
 });
+it("selects Hyprland without probing a different desktop or falling back on missing setup", async () => {
+  vi.stubEnv("XDG_CURRENT_DESKTOP", "Hyprland");
+  expect((await getLinuxCaptureSupport(appId)).linuxBackend).toBe("hyprland");
+  await expect(captureLinuxWindow(appId)).rejects.toThrow("Hyprland capture setup");
+  expect(bus.calls).toEqual([]);
+});
 afterEach(async () => {
   vi.useRealTimers();
   vi.unstubAllEnvs();

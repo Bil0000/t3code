@@ -6,12 +6,15 @@ import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
+import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as DesktopWindowCapture from "../../windowCapture/DesktopWindowCapture.ts";
 import {
   captureWindow,
   checkWindowCaptureShortcut,
   requestWindowCapturePermissions,
   setupWindowCapture,
+  previewWindowCaptureConfig,
+  applyWindowCaptureConfig,
   setWindowCaptureAnimationDestination,
   setWindowCaptureShortcutSuppressed,
   windowCaptureScreenFrame,
@@ -19,6 +22,123 @@ import {
 } from "./windowCapture.ts";
 
 describe("window capture IPC", () => {
+  const configPreview = {
+    id: "12345678-1234-1234-1234-123456789abc",
+    path: "/config/niri/config.kdl",
+    resolvedPath: "/config/niri/config.kdl",
+    before: "binds {}\n",
+    after: "binds {\n}\n",
+    shortcut: "Ctrl+Shift+2",
+    operation: "install" as const,
+  };
+  it.effect("requires a trusted renderer for both config read and write approval", () => {
+    const calls: string[] = [];
+    return Effect.gen(function* () {
+      const request = { operation: "install" as const, chooseFile: false };
+      const untrustedRead = yield* Effect.exit(
+        previewWindowCaptureConfig.handler(request, { sender: { id: 8 } }),
+      );
+      const untrustedWrite = yield* Effect.exit(
+        applyWindowCaptureConfig.handler(configPreview.id, { sender: { id: 8 } }),
+      );
+      assert(Exit.isFailure(untrustedRead));
+      assert(Exit.isFailure(untrustedWrite));
+      assert.deepEqual(calls, []);
+      yield* previewWindowCaptureConfig.handler(request, { sender: { id: 7 } });
+      assert.deepEqual(calls, ["read"]);
+      yield* applyWindowCaptureConfig.handler(configPreview.id, { sender: { id: 7 } });
+      assert.deepEqual(calls, ["read", configPreview.id]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
+          } as ElectronWindow.ElectronWindow["Service"]),
+          Layer.succeed(DesktopWindowCapture.DesktopWindowCapture, {
+            previewConfig: () =>
+              Effect.sync(() => {
+                calls.push("read");
+                return configPreview;
+              }),
+            applyConfig: (id: string) =>
+              Effect.sync(() => {
+                calls.push(id);
+                return { backupPath: null, warning: null };
+              }),
+          } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+          Layer.succeed(
+            ElectronDialog.ElectronDialog,
+            {} as ElectronDialog.ElectronDialog["Service"],
+          ),
+        ),
+      ),
+    );
+  });
+
+  it.effect("cancelling custom file selection reads and writes nothing", () => {
+    let read = false;
+    return Effect.gen(function* () {
+      const preview = yield* previewWindowCaptureConfig.handler(
+        { operation: "install", chooseFile: true },
+        { sender: { id: 7 } },
+      );
+      assert.isNull(preview);
+      assert.isFalse(read);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
+          } as ElectronWindow.ElectronWindow["Service"]),
+          Layer.succeed(DesktopWindowCapture.DesktopWindowCapture, {
+            state: Effect.succeed({
+              linuxBackend: "niri",
+              shortcutConfigPath: "/config/niri/config.kdl",
+            }),
+            previewConfig: () =>
+              Effect.sync(() => {
+                read = true;
+                return configPreview;
+              }),
+          } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+          Layer.succeed(ElectronDialog.ElectronDialog, {
+            pickFiles: () => Effect.succeed([]),
+          } as unknown as ElectronDialog.ElectronDialog["Service"]),
+        ),
+      ),
+    );
+  });
+
+  it.effect("uses only the file returned by the native custom config picker", () => {
+    let path: string | undefined;
+    return Effect.gen(function* () {
+      yield* previewWindowCaptureConfig.handler(
+        { operation: "install", chooseFile: true },
+        { sender: { id: 7 } },
+      );
+      assert.equal(path, "/chosen/config.kdl");
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
+          } as ElectronWindow.ElectronWindow["Service"]),
+          Layer.succeed(DesktopWindowCapture.DesktopWindowCapture, {
+            state: Effect.succeed({ linuxBackend: "niri" }),
+            previewConfig: (_: unknown, selected: string) =>
+              Effect.sync(() => {
+                path = selected;
+                return configPreview;
+              }),
+          } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+          Layer.succeed(ElectronDialog.ElectronDialog, {
+            pickFiles: () => Effect.succeed(["/chosen/config.kdl"]),
+          } as unknown as ElectronDialog.ElectronDialog["Service"]),
+        ),
+      ),
+    );
+  });
+
   it("converts renderer viewport coordinates from the content origin using the window zoom", () => {
     assert.deepEqual(
       windowCaptureScreenFrame(

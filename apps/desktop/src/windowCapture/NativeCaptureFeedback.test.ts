@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const spawn = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({ spawn }));
-import { startKdeCaptureFeedback } from "./KdeCaptureFeedback.ts";
+import { startNativeCaptureFeedback } from "./NativeCaptureFeedback.ts";
 
 const options = {
   bounds: { x: -800, y: 0, width: 800, height: 600 },
@@ -39,7 +39,7 @@ function event(value: unknown) {
 }
 
 it("waits for compositor readiness and landing, then waits for cleanup on acknowledgement", async () => {
-  const starting = startKdeCaptureFeedback("/helper", "/private", options);
+  const starting = startNativeCaptureFeedback("/helper", "/private", options);
   let ready = false;
   void starting.then(() => {
     ready = true;
@@ -69,8 +69,8 @@ it("waits for compositor readiness and landing, then waits for cleanup on acknow
   expect(vi.getTimerCount()).toBe(0);
 });
 
-it("doesn't claim a flight when KDE disables motion; flash still works", async () => {
-  const starting = startKdeCaptureFeedback("/helper", "/private", options);
+it("doesn't claim a flight when the compositor disables motion; flash still works", async () => {
+  const starting = startNativeCaptureFeedback("/helper", "/private", options);
   event({ event: "ready", animate: false });
   const feedback = (await starting)!;
   expect(feedback.animationStarted).toBe(false);
@@ -82,7 +82,7 @@ it("doesn't claim a flight when KDE disables motion; flash still works", async (
 });
 
 it("falls back on startup failure, malformed replies, and timeout without leaving timers", async () => {
-  const starting = startKdeCaptureFeedback("/helper", "/private", options);
+  const starting = startNativeCaptureFeedback("/helper", "/private", options);
   child.stdout.write("not JSON\n");
   expect(commands).toEqual(['{"command":"close"}\n']);
   await vi.advanceTimersByTimeAsync(1000);
@@ -93,14 +93,14 @@ it("falls back on startup failure, malformed replies, and timeout without leavin
 });
 
 it("bounds a missing ready receipt and cancels an in-flight animation on compositor failure", async () => {
-  const timed = startKdeCaptureFeedback("/helper", "/private", options);
+  const timed = startNativeCaptureFeedback("/helper", "/private", options);
   await vi.advanceTimersByTimeAsync(2000);
   child.emit("close");
   expect(await timed).toBeUndefined();
 });
 
 it("releases waiters if the overlay closes during flight", async () => {
-  const starting = startKdeCaptureFeedback("/helper", "/private", options);
+  const starting = startNativeCaptureFeedback("/helper", "/private", options);
   event({ event: "ready", animate: true });
   const feedback = (await starting)!;
   const flight = feedback.animateTo("Draft", { x: 0, y: 0, width: 1, height: 1 });

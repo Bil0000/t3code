@@ -7,6 +7,9 @@ import {
   DesktopWindowCaptureState,
   DesktopWindowCaptureSetupAction,
   WindowCaptureShortcut,
+  DesktopCaptureConfigRequest,
+  DesktopCaptureConfigPreview,
+  DesktopCaptureConfigApplied,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -14,6 +17,7 @@ import * as Schema from "effect/Schema";
 import type * as Electron from "electron";
 
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
+import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as DesktopWindowCapture from "../../windowCapture/DesktopWindowCapture.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
@@ -98,6 +102,44 @@ export const setupWindowCapture = DesktopIpc.makeIpcMethod({
   handler: Effect.fn("desktop.ipc.windowCapture.setup")(function* (action, event) {
     yield* ensureTrustedWindowCaptureSender(event);
     yield* (yield* DesktopWindowCapture.DesktopWindowCapture).setup(action);
+  }),
+});
+
+export const previewWindowCaptureConfig = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.PREVIEW_WINDOW_CAPTURE_CONFIG_CHANNEL,
+  payload: DesktopCaptureConfigRequest,
+  result: Schema.NullOr(DesktopCaptureConfigPreview),
+  handler: Effect.fn("desktop.ipc.windowCapture.previewConfig")(function* (request, event) {
+    const window = yield* ensureTrustedWindowCaptureSender(event);
+    const capture = yield* DesktopWindowCapture.DesktopWindowCapture;
+    let selectedPath: string | undefined;
+    if (request.chooseFile) {
+      const state = yield* capture.state;
+      const paths = yield* (yield* ElectronDialog.ElectronDialog).pickFiles({
+        owner: Option.some(window),
+        defaultPath: Option.fromUndefinedOr(state.shortcutConfigPath),
+        filters: [
+          {
+            name: "Desktop config",
+            extensions: state.linuxBackend === "niri" ? ["kdl"] : ["conf", "lua"],
+          },
+        ],
+        multiple: false,
+      });
+      selectedPath = paths[0];
+      if (!selectedPath) return null;
+    }
+    return yield* capture.previewConfig(request, selectedPath);
+  }),
+});
+
+export const applyWindowCaptureConfig = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.APPLY_WINDOW_CAPTURE_CONFIG_CHANNEL,
+  payload: DesktopWindowCaptureId,
+  result: DesktopCaptureConfigApplied,
+  handler: Effect.fn("desktop.ipc.windowCapture.applyConfig")(function* (id, event) {
+    yield* ensureTrustedWindowCaptureSender(event);
+    return yield* (yield* DesktopWindowCapture.DesktopWindowCapture).applyConfig(id);
   }),
 });
 

@@ -20,6 +20,7 @@ const SHORTCUTS = "org.freedesktop.portal.GlobalShortcuts";
 const REQUEST = "org.freedesktop.portal.Request";
 const SESSION = "org.freedesktop.portal.Session";
 const DBUS = "org.freedesktop.DBus";
+export const HYPRLAND_CAPTURE_ACTION = "capture-window";
 const string = Schema.decodeUnknownSync(Schema.String);
 const StringVariant = Schema.Struct({ signature: Schema.Literal("s"), value: Schema.String });
 const Shortcuts = Schema.Array(
@@ -122,6 +123,7 @@ export function portalShortcutTrigger(shortcut: WindowCaptureKeyChord): string {
 }
 
 export interface PortalShortcutState {
+  readonly shortcutActionRegistered?: boolean;
   readonly shortcutRegistered: boolean;
   readonly shortcutPending: boolean;
   readonly shortcutLabel?: string;
@@ -149,6 +151,7 @@ export class PortalCaptureShortcut {
   private readonly onCapture: () => void;
   private readonly onStateChanged: () => void;
   private readonly bus: MessageBus;
+  private readonly managedByHyprland: boolean;
 
   constructor(
     appId: string,
@@ -156,10 +159,18 @@ export class PortalCaptureShortcut {
     onCapture: () => void,
     onStateChanged: () => void,
     bus: MessageBus = sessionBus(),
+    managedByHyprland = false,
   ) {
     this.onCapture = onCapture;
     this.onStateChanged = onStateChanged;
     this.bus = bus;
+    this.managedByHyprland = managedByHyprland;
+    if (managedByHyprland)
+      this.state = {
+        shortcutRegistered: false,
+        shortcutPending: true,
+        shortcutMessage: "Connecting to Hyprland shortcuts…",
+      };
     this.stopped = new Promise((_, reject) => {
       this.rejectStopped = reject;
     });
@@ -190,6 +201,8 @@ export class PortalCaptureShortcut {
   }
 
   async configure() {
+    if (this.managedByHyprland)
+      throw new Error("Change the capture binding in your Hyprland config, then save it.");
     if (!this.hasSession || this.version < 2)
       throw new Error(
         "Open your desktop's shortcut settings and allow T3 Code's capture shortcut.",
@@ -215,8 +228,11 @@ export class PortalCaptureShortcut {
     this.update({
       shortcutRegistered: false,
       shortcutPending: false,
-      shortcutMessage:
-        error instanceof Error ? error.message : "Could not register the capture shortcut.",
+      shortcutMessage: this.managedByHyprland
+        ? "Couldn't connect to Hyprland shortcuts. Make sure xdg-desktop-portal-hyprland is running, then restart T3 Code."
+        : error instanceof Error
+          ? error.message
+          : "Could not register the capture shortcut.",
     });
     this.close();
   };
@@ -301,7 +317,7 @@ export class PortalCaptureShortcut {
       message.member === "Activated" &&
       message.signature === "osta{sv}" &&
       message.body[1] === this.shortcutId &&
-      this.state.shortcutRegistered
+      (this.state.shortcutRegistered || this.state.shortcutActionRegistered)
     )
       this.onCapture();
     if (message.member === "ShortcutsChanged") {
@@ -367,6 +383,17 @@ export class PortalCaptureShortcut {
 
   private bound(shortcuts: typeof Shortcuts.Type) {
     const shortcut = shortcuts.find(([id]) => id === this.shortcutId);
+    if (this.managedByHyprland) {
+      this.update({
+        shortcutRegistered: false,
+        shortcutActionRegistered: Boolean(shortcut),
+        shortcutPending: false,
+        shortcutMessage: shortcut
+          ? "Managed by Hyprland. Add the binding to your config and save it."
+          : "Hyprland did not register the capture action. Check that xdg-desktop-portal-hyprland is running, then restart T3 Code.",
+      });
+      return;
+    }
     const label = shortcut?.[1].trigger_description?.value.trim();
     this.update({
       shortcutRegistered: Boolean(shortcut && label),
@@ -441,7 +468,9 @@ export class PortalCaptureShortcut {
     const sessionNamespace = this.namespace.replace("/request/", "/session/");
     if (!session.startsWith(sessionNamespace)) throw new Error("Invalid shortcut session handle.");
     this.session = session;
-    this.shortcutId = `t3-window-capture-${NodeCrypto.createHash("sha256").update(trigger).digest("hex").slice(0, 16)}`;
+    this.shortcutId = this.managedByHyprland
+      ? HYPRLAND_CAPTURE_ACTION
+      : `t3-window-capture-${NodeCrypto.createHash("sha256").update(trigger).digest("hex").slice(0, 16)}`;
     // Every session must bind, even when the desktop remembers this shortcut's approval.
     const bound = await this.request("BindShortcuts", "oa(sa{sv})s", [
       this.session,
@@ -450,7 +479,7 @@ export class PortalCaptureShortcut {
           this.shortcutId,
           {
             description: new Variant("s", "Capture a window"),
-            preferred_trigger: new Variant("s", trigger),
+            ...(!this.managedByHyprland ? { preferred_trigger: new Variant("s", trigger) } : {}),
           },
         ],
       ],

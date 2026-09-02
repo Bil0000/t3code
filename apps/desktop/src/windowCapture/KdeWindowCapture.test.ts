@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 const execute = vi.hoisted(() => vi.fn());
 const startEffects = vi.hoisted(() => vi.fn());
 vi.mock("node:child_process", () => ({ execFile: execute }));
-vi.mock("./KdeCaptureFeedback.ts", () => ({ startKdeCaptureFeedback: startEffects }));
+vi.mock("./NativeCaptureFeedback.ts", () => ({ startNativeCaptureFeedback: startEffects }));
 vi.mock("electron", () => ({
   nativeImage: {
     createFromBuffer: () => ({ isEmpty: () => false, getSize: () => ({ width: 2, height: 1 }) }),

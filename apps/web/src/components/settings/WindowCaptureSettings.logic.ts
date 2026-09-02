@@ -13,7 +13,7 @@ export function windowCaptureStatus(
   state: DesktopWindowCaptureState | null,
   enabled: boolean,
 ): string {
-  if (!state) return "Checking desktop support...";
+  if (!state) return "Checking window capture…";
   if (state.mode === "unavailable") return state.message ?? "Not supported on this platform.";
   if (!enabled) return "Turn this on to set up window capture.";
   return windowCaptureSetupSummary(state, enabled);
@@ -24,18 +24,28 @@ export function windowCaptureSetupSummary(
   enabled: boolean,
 ): string {
   if (state.message) return "Capture needs attention";
+  if (state.linuxBackend === "hyprland" && state.hyprlandHelper?.status !== "ready")
+    return state.hyprlandHelper?.status === "error"
+      ? "Check capture access in setup"
+      : "Install the capture helper to continue";
   if (captureSetupBackend(state) === "gnome" && state.gnomeExtension?.status !== "enabled")
     return "Set up active-window capture";
   if (captureSetupBackend(state) === "kde" && state.kdeHelper?.status !== "ready")
     return state.kdeHelper?.status === "error"
-      ? "Check KDE capture access in setup"
-      : "Install the KDE capture helper to continue";
+      ? "Check capture access in setup"
+      : "Install the capture helper to continue";
   if (captureSetupBackend(state) === "picker")
     return "Manual capture only — you'll choose a window each time";
   if (!enabled) return "Enable capture to continue";
-  if (state.shortcutPending) return "Waiting for shortcut permission";
+  if (state.shortcutPending)
+    return state.linuxBackend === "hyprland"
+      ? "Connecting your shortcut…"
+      : "Waiting for shortcut permission";
   if (state.shortcutVerified) return "Ready to capture";
-  if (state.linuxBackend === "niri" && state.shortcutBinding) return "Shortcut managed by Niri";
+  if (state.linuxBackend === "niri" && state.shortcutBinding)
+    return "Use your shortcut from another app";
+  if (state.linuxBackend === "hyprland" && state.shortcutActionRegistered)
+    return "Use your shortcut from another app";
   if (state.shortcutRegistered) return state.shortcutLabel ? "Ready to capture" : "Shortcut saved";
   return "Finish shortcut setup";
 }
@@ -44,8 +54,8 @@ export function windowCaptureShortcutStatus(
   state: DesktopWindowCaptureState | null,
 ): string | null {
   if (!state) return null;
-  if (state.shortcutPending)
-    return "Waiting for shortcut permission. Approve the desktop prompt if one appears.";
+  if (state.linuxBackend === "hyprland") return state.shortcutMessage;
+  if (state.shortcutPending) return "Approve the shortcut permission prompt to continue.";
   if (state.shortcutLabel) return `Desktop shortcut: ${state.shortcutLabel}`;
   if (state.mode === "portal" && state.shortcutMessage) return state.shortcutMessage;
   return state.shortcutRegistered ? "Shortcut saved." : state.shortcutMessage;
@@ -64,22 +74,25 @@ export function windowCaptureFeedbackUnavailableMessage(
   state: DesktopWindowCaptureState | null,
 ): string | undefined {
   if (state?.mode !== "portal" || state.linuxFeedbackAvailable) return undefined;
-  if (state.linuxBackend === "niri")
-    return "Window flash and flight animations are not supported on Niri.";
+  if (state.linuxBackend === "hyprland")
+    return state.hyprlandHelper?.status === "ready"
+      ? "Capture effects aren't available on this desktop."
+      : "Install or update the capture helper to enable effects.";
+  if (state.linuxBackend === "niri") return "Capture effects aren't available on Niri.";
   if (state.linuxBackend === "kde")
     return state.kdeHelper?.status === "ready"
-      ? "This KDE Plasma version doesn't support capture effects. You can still capture windows."
-      : "Install or update the KDE Plasma capture helper in setup to use window flash and flight animations.";
+      ? "Capture effects aren't available on this desktop."
+      : "Install or update the capture helper to enable effects.";
   return state.linuxBackend === "gnome-extension"
-    ? "Update the T3 Code GNOME extension and sign out and back in to enable capture effects."
+    ? "Update the GNOME extension, then sign out and back in to enable effects."
     : captureSetupBackend(state) === "gnome"
-      ? "Finish installing and enabling the GNOME extension in capture setup to use effects."
-      : "This capture method doesn't support window flash or flight animations.";
+      ? "Finish extension setup to enable effects."
+      : "Capture effects aren't available on this desktop.";
 }
 
 export function windowCaptureDescription(state: DesktopWindowCaptureState | null): string {
   return state?.mode === "portal" && captureSetupBackend(state) === "picker"
-    ? "Automatic capture isn't available on this desktop. You can still choose a window manually."
+    ? "Automatic capture isn't available here. Choose a window instead."
     : "Capture a window and attach it to your current draft.";
 }
 
@@ -88,7 +101,7 @@ export function windowCaptureAccessibilityUnavailableMessage(
 ): string | undefined {
   if (state?.mode !== "portal") return undefined;
   if (state.linuxBackend === "picker" || state.linuxBackend === "screenshot-portal")
-    return "This capture method provides an image only. Accessibility text isn't available.";
+    return "This desktop only provides a screenshot.";
   return undefined;
 }
 

@@ -482,6 +482,41 @@ it("models capture setup failures with stable context and cause", () => {
   assert.equal(error.message, "Could not set up the GNOME extension.");
 });
 
+it("preserves the cause of Hyprland and shortcut config failures", () => {
+  const cause = new Error("The desktop settings could not be updated.");
+  for (const [action, message] of [
+    ["install-hyprland-helper", "Could not set up Hyprland capture."],
+    ["preview-config", "Couldn't prepare your capture shortcut changes."],
+    ["apply-config", "Couldn't save your capture shortcut."],
+  ] as const) {
+    const error = new DesktopWindowCapture.DesktopWindowCaptureSetupError({
+      action,
+      reason: "setup-failed",
+      cause,
+    });
+    assert.strictEqual(error.cause, cause);
+    assert.equal(error.message, message);
+  }
+});
+
+it.effect("rejects desktop config changes outside Niri or Hyprland", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      const previewError = yield* service
+        .previewConfig({ operation: "install", chooseFile: false })
+        .pipe(Effect.flip);
+      const applyError = yield* service.applyConfig("unapproved-preview").pipe(Effect.flip);
+      assert.equal(previewError.action, "preview-config");
+      assert.equal(applyError.action, "apply-config");
+      for (const error of [previewError, applyError]) {
+        assert.equal(error.reason, "unsupported-session");
+        assert.equal(error.message, "Config setup requires a Niri or Hyprland session.");
+      }
+    }),
+  ).pipe(Effect.provide(testLayer("win32"))),
+);
+
 it.effect("reads and acknowledges queued captures through Effect services", () => {
   const captureId = "12345678-1234-1234-1234-123456789abc";
   const captureDirectory = "/state/window-captures";
@@ -698,7 +733,7 @@ it.effect("rejects X11 capture without registering shortcuts or loading capture 
   );
 });
 
-it.effect.each(["gnome", "niri", "kde"] as const)(
+it.effect.each(["gnome", "niri", "kde", "hyprland"] as const)(
   "persists %s text without inventing AT-SPI screen coordinates",
   (backend) => {
     vi.stubEnv("XDG_SESSION_TYPE", "wayland");
@@ -2124,7 +2159,8 @@ it.effect("uses an external Niri shortcut without registering an Electron accele
       assert.isFalse(state.shortcutRegistered);
       assert.include(state.shortcutBinding, "gdbus");
       assert.match(state.shortcutBinding ?? "", /^Ctrl\+Shift\+2 repeat=false \{/);
-      assert.include(state.shortcutMessage, "Managed by Niri");
+      assert.include(state.shortcutMessage, "Niri config");
+      assert.isTrue(state.shortcutActionRegistered);
       assert.lengthOf(registerShortcutMock.mock.calls, 0);
       assert.lengthOf(niriShortcutMock.mock.calls, 1);
       assert.isFalse((yield* service.checkShortcut(settings.windowCaptureShortcut)).available);
@@ -2183,7 +2219,7 @@ it.effect("defers ordinary Wayland shortcut registration until settings are appl
   );
 });
 
-it.effect.each(["GNOME", "KDE", "niri"] as const)(
+it.effect.each(["GNOME", "KDE", "niri", "Hyprland"] as const)(
   "identifies %s in setup even when its capability check fails",
   (desktop) => {
     vi.stubEnv("XDG_SESSION_TYPE", "wayland");
@@ -2232,6 +2268,7 @@ it.effect(
         ["GNOME", "gnome-extension"],
         ["niri", "niri"],
         ["KDE", "kde"],
+        ["Hyprland", "hyprland"],
         ["GNOME", "gnome-extension"],
       ] as const) {
         vi.stubEnv("XDG_CURRENT_DESKTOP", desktop);
@@ -2247,7 +2284,14 @@ it.effect(
             assert.isFalse(state.shortcutVerified);
             assert.equal(state.gnomeExtension?.status, desktop === "GNOME" ? "enabled" : undefined);
             assert.equal(state.kdeHelper?.status, desktop === "KDE" ? "not-installed" : undefined);
-            assert.equal(Boolean(state.shortcutBinding), desktop === "niri");
+            assert.equal(
+              state.hyprlandHelper?.status,
+              desktop === "Hyprland" ? "not-installed" : undefined,
+            );
+            assert.equal(
+              Boolean(state.shortcutBinding),
+              desktop === "niri" || desktop === "Hyprland",
+            );
             const trigger =
               desktop === "niri"
                 ? niriShortcutMock.mock.calls.at(-1)![1]
@@ -2459,6 +2503,44 @@ it.effect(
         yield* Effect.promise(current.onCapture);
         assert.isFalse((yield* service.state).shortcutVerified);
         assert.isFalse((yield* service.state).shortcutRegistered);
+      }),
+    ).pipe(
+      Effect.provide(testLayer("linux")),
+      Effect.ensuring(Effect.sync(() => vi.unstubAllEnvs())),
+    );
+  },
+);
+
+it.effect(
+  "keeps Hyprland's stable action with a modifier-pair preference and releases it when disabled",
+  () => {
+    vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+    vi.stubEnv("XDG_CURRENT_DESKTOP", "Hyprland");
+    vi.stubEnv("FLATPAK_ID", "");
+    vi.stubEnv("SNAP", "");
+    nextPortalState.value = {
+      shortcutRegistered: false,
+      shortcutActionRegistered: true,
+      shortcutPending: false,
+      shortcutMessage: "Managed by Hyprland",
+    };
+    const settings = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true };
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* DesktopWindowCapture.make;
+        yield* service.configure(settings);
+        assert.lengthOf(portalShortcutInstances, 1);
+        const first = portalShortcutInstances[0]!;
+        assert.isTrue((yield* service.state).shortcutActionRegistered);
+        const check = yield* service.checkShortcut(settings.windowCaptureShortcut);
+        assert.isFalse(check.available);
+        assert.include(check.message, "Hyprland config");
+        yield* service.configure({ ...settings, windowCapturePlaySound: false });
+        assert.lengthOf(portalShortcutInstances, 1);
+        assert.lengthOf(first.close.mock.calls, 0);
+        yield* service.configure({ ...settings, windowCaptureEnabled: false });
+        assert.lengthOf(first.close.mock.calls, 1);
+        assert.notEqual((yield* service.state).shortcutActionRegistered, true);
       }),
     ).pipe(
       Effect.provide(testLayer("linux")),
