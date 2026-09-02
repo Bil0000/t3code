@@ -19,6 +19,7 @@ import { Badge } from "../ui/badge";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { Separator } from "../ui/separator";
 import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
 import {
   effortFraction,
@@ -35,6 +36,7 @@ import {
 import { ProviderInstanceIcon } from "./ProviderInstanceIcon";
 import {
   applyTraitSelectChange,
+  buildTraitsTriggerDisplay,
   getTraitsSectionVisibility,
   replaceDescriptorCurrentValue,
   useUpdateModelOptions,
@@ -168,44 +170,69 @@ export const ComposerModelPill = memo(function ComposerModelPill(
     </span>
   );
 
+  const triggerSummary = buildTraitsTriggerDisplay({
+    provider: props.provider,
+    descriptors: hasTraits ? traits.descriptors : [],
+    primarySelectDescriptorId: traits.primarySelectDescriptor?.id ?? null,
+    ultrathinkPromptControlled: traits.ultrathinkPromptControlled,
+  });
+  const showTraitsTrigger = hasTraits && !props.compact;
+
   return (
     <>
-      <Popover open={isCardOpen} onOpenChange={setIsCardOpen}>
+      <ModelPickerPopover
+        {...props}
+        open={isListOpen}
+        onOpenChange={setListOpen}
+        triggerRender={
+          <ComposerControl
+            ref={triggerRef}
+            data-chat-provider-model-picker="true"
+            className={cn(
+              "min-w-0 justify-between whitespace-nowrap",
+              props.compact ? "max-w-42 shrink-0" : "max-w-48 shrink sm:max-w-56",
+            )}
+            disabled={props.disabled}
+            aria-label={triggerLabel}
+          />
+        }
+        triggerChildren={
+          <>
+            {modelName}
+            <ComposerControlChevron />
+          </>
+        }
+      />
+      {showTraitsTrigger ? (
+        <Separator orientation="vertical" className="mx-0.5 hidden h-4 sm:block" />
+      ) : null}
+      <Popover open={isCardOpen && showTraitsTrigger} onOpenChange={setIsCardOpen}>
         <PopoverTrigger
           render={
             <ComposerControl
-              ref={triggerRef}
-              data-chat-provider-model-picker="true"
               className={cn(
-                "min-w-0 whitespace-nowrap",
-                props.compact ? "max-w-42 shrink-0" : "max-w-64 shrink sm:max-w-80",
+                "min-w-0 max-w-40 shrink justify-start overflow-hidden whitespace-nowrap sm:max-w-48",
+                !showTraitsTrigger && "hidden",
               )}
               disabled={props.disabled}
-              aria-label={triggerLabel}
+              aria-label="Model options"
             />
           }
         >
-          {fastMode?.enabled ? (
+          {triggerSummary.showFastModeIcon ? (
             <ComposerControlIcon
               icon={ZapIcon}
-              className={cn("fill-current", accentClassName(props.provider))}
+              className={cn("fill-current opacity-80", accentClassName(props.provider))}
             />
           ) : null}
-          {modelName}
-          {effort && !props.compact ? (
-            <span
-              key={effort.label}
-              className="composer-model-pill-chip-enter min-w-0 truncate text-secondary-label"
-            >
-              {effort.label}
-            </span>
-          ) : null}
+          <span className="min-w-0 truncate">{triggerSummary.label}</span>
           <ComposerControlChevron />
         </PopoverTrigger>
         <PopoverPopup
           side="top"
           align="start"
           sideOffset={8}
+          anchor={triggerRef}
           className="composer-model-card"
           viewportClassName="p-0"
         >
@@ -254,7 +281,7 @@ export const ComposerModelPill = memo(function ComposerModelPill(
               ) : null}
               <button
                 type="button"
-                className="flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2 text-base font-medium outline-none transition-colors hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
+                className="flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-base font-medium outline-none transition-colors hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label={`${triggerLabel}. Choose another model`}
                 onClick={openList}
               >
@@ -263,7 +290,7 @@ export const ComposerModelPill = memo(function ComposerModelPill(
                   <span
                     key={effort.label}
                     className={cn(
-                      "composer-model-pill-chip-enter transition-colors duration-300",
+                      "composer-model-pill-chip-enter shrink-0 transition-colors duration-300",
                       effortLabelClassName(effort.tone, props.provider),
                     )}
                   >
@@ -303,13 +330,6 @@ export const ComposerModelPill = memo(function ComposerModelPill(
           </div>
         </PopoverPopup>
       </Popover>
-
-      <ModelPickerPopover
-        {...props}
-        open={isListOpen}
-        onOpenChange={setListOpen}
-        anchor={triggerRef}
-      />
     </>
   );
 });
@@ -363,7 +383,7 @@ function EffortSlider(props: {
         data-provider={props.provider}
       >
         <Slider.Control className="flex h-8 items-center">
-          <Slider.Track className="composer-effort-track relative h-8 w-full overflow-hidden rounded-full">
+          <Slider.Track className="composer-effort-track relative h-8 w-full rounded-full">
             <Slider.Indicator className="composer-effort-fill rounded-full" />
             {options.map((option, index) => (
               <span

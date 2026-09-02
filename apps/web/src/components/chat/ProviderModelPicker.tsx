@@ -5,7 +5,6 @@ import {
 } from "@t3tools/contracts";
 import { memo, type ReactElement, type ReactNode, useEffect, useMemo, useState } from "react";
 import type { VariantProps } from "class-variance-authority";
-import type { Popover as PopoverPrimitive } from "@base-ui/react/popover";
 import { Badge } from "../ui/badge";
 import { buttonVariants } from "../ui/button";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
@@ -47,12 +46,7 @@ export interface ModelPickerPopoverProps {
  * trigger so the composer pill and the plain settings trigger share one popup.
  */
 export function ModelPickerPopover(
-  props: ModelPickerPopoverProps & {
-    triggerRender?: ReactElement;
-    triggerChildren?: ReactNode;
-    /** Positions the popup without a trigger, e.g. under the composer pill. */
-    anchor?: PopoverPrimitive.Positioner.Props["anchor"];
-  },
+  props: ModelPickerPopoverProps & { triggerRender: ReactElement; triggerChildren: ReactNode },
 ) {
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
   const isMenuOpen = props.open ?? uncontrolledIsMenuOpen;
@@ -129,12 +123,9 @@ export function ModelPickerPopover(
         setIsMenuOpen(open);
       }}
     >
-      {props.triggerRender ? (
-        <PopoverTrigger render={props.triggerRender}>{props.triggerChildren}</PopoverTrigger>
-      ) : null}
+      <PopoverTrigger render={props.triggerRender}>{props.triggerChildren}</PopoverTrigger>
       <PopoverPopup
         align="start"
-        anchor={props.anchor}
         className="before:hidden [--viewport-inline-padding:0]"
         viewportClassName="!overflow-hidden rounded-[calc(var(--radius-lg)-1px)] p-0 [clip-path:inset(0_round_calc(var(--radius-lg)-1px))]"
       >
