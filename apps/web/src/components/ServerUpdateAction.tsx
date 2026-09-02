@@ -80,7 +80,7 @@ export function ServerUpdateAction({
   desktopAppUpdate = false,
   targetVersion,
   label = "Update",
-  variant,
+  variant = "outline",
 }: {
   readonly environmentId: EnvironmentId;
   readonly serverLabel: string;
@@ -173,11 +173,7 @@ export function ServerUpdateAction({
   if (selfUpdate === null) {
     const command = manualServerUpdateCommand(targetVersion);
     return (
-      <Button
-        size="xs"
-        variant={variant ?? "outline"}
-        onClick={() => copyToClipboard(command, { command })}
-      >
+      <Button size="xs" variant={variant} onClick={() => copyToClipboard(command, { command })}>
         Copy update command
       </Button>
     );
