@@ -9,7 +9,6 @@ import {
   getComposerPromptInjectionState,
   getComposerProviderState,
   renderProviderTraitsMenuContent,
-  renderProviderTraitsPicker,
 } from "./composerProviderState";
 
 // Everything in composerProviderState is now data-driven by the model's
@@ -390,7 +389,6 @@ describe("provider traits render guards", () => {
       planModeEnabled: true,
     };
 
-    expect(renderProviderTraitsPicker(args)).toBeNull();
     expect(renderProviderTraitsMenuContent(args)).toBeNull();
   });
 });

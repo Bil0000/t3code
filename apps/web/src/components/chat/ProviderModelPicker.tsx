@@ -3,7 +3,7 @@ import {
   type ProviderDriverKind,
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
-import { memo, useEffect, useMemo, useState } from "react";
+import { memo, type ReactElement, type ReactNode, useEffect, useMemo, useState } from "react";
 import type { VariantProps } from "class-variance-authority";
 import { Badge } from "../ui/badge";
 import { buttonVariants } from "../ui/button";
@@ -20,7 +20,7 @@ import {
 import { shouldShowInstanceBadge, type ProviderInstanceEntry } from "../../providerInstances";
 import { ComposerControl, ComposerControlChevron } from "./ComposerControl";
 
-export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
+export interface ModelPickerPopoverProps {
   /**
    * The instance currently selected in the composer. Drives the trigger
    * icon, label and the default-highlighted combobox row.
@@ -33,43 +33,23 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
   keybindings?: ResolvedKeybindingsConfig;
   modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
-  activeProviderIconClassName?: string;
-  compact?: boolean;
   disabled?: boolean;
   terminalOpen?: boolean;
   open?: boolean;
-  triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
-  triggerClassName?: string;
-  triggerAriaLabel?: string;
   onOpenChange?: (open: boolean) => void;
   getModelDisabledReason?: (instanceId: ProviderInstanceId, model: string) => string | null;
   onInstanceModelChange: (instanceId: ProviderInstanceId, model: string) => void;
-}) {
+}
+
+/**
+ * The model list popover plus its background scroll lock, decoupled from the
+ * trigger so the composer pill and the plain settings trigger share one popup.
+ */
+export function ModelPickerPopover(
+  props: ModelPickerPopoverProps & { triggerRender: ReactElement; triggerChildren: ReactNode },
+) {
   const [uncontrolledIsMenuOpen, setUncontrolledIsMenuOpen] = useState(false);
   const isMenuOpen = props.open ?? uncontrolledIsMenuOpen;
-
-  // Resolve the active instance entry by exact routing key. The composer
-  // resolves fallbacks before rendering this component; if the selected
-  // instance disappears, do not infer a replacement from its driver kind.
-  const activeEntry = useMemo(() => {
-    return (
-      props.instanceEntries.find((entry) => entry.instanceId === props.activeInstanceId) ?? null
-    );
-  }, [props.activeInstanceId, props.instanceEntries]);
-
-  const activeInstanceId = props.activeInstanceId;
-  const selectedInstanceOptions = props.modelOptionsByInstance.get(activeInstanceId) ?? [];
-  // OpenCode can keep a model through a transient catalog refresh. Other
-  // providers keep the active instance's first option as their normal fallback.
-  const selectedModel =
-    selectedInstanceOptions.find((option) => option.slug === props.model) ??
-    (activeEntry?.driverKind === "opencode" ? undefined : selectedInstanceOptions[0]);
-  const triggerTitle = selectedModel ? getTriggerDisplayModelName(selectedModel) : props.model;
-  const triggerLabel = selectedModel
-    ? `${getTriggerDisplayModelLabel(selectedModel)}${selectedModel.isUnavailable ? " (Unavailable)" : ""}`
-    : props.model;
-  const showInstanceBadge =
-    activeEntry !== null && shouldShowInstanceBadge(activeEntry, props.instanceEntries);
 
   const setIsMenuOpen = (open: boolean) => {
     props.onOpenChange?.(open);
@@ -143,60 +123,14 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         setIsMenuOpen(open);
       }}
     >
-      <PopoverTrigger
-        render={
-          <ComposerControl
-            aria-label={props.triggerAriaLabel}
-            variant={props.triggerVariant ?? "ghost"}
-            data-chat-provider-model-picker="true"
-            className={cn(
-              "min-w-0 justify-between whitespace-nowrap",
-              props.compact ? "max-w-42 shrink-0" : "max-w-48 shrink sm:max-w-56",
-              props.triggerClassName,
-            )}
-            disabled={props.disabled}
-          />
-        }
-      >
-        <span className="flex min-w-0 flex-1 items-center gap-1.5">
-          {activeEntry ? (
-            <ProviderInstanceIcon
-              driverKind={activeEntry.driverKind}
-              displayName={activeEntry.displayName}
-              accentColor={activeEntry.accentColor}
-              showBadge={showInstanceBadge}
-              className="size-4"
-              iconClassName={cn("size-4", props.activeProviderIconClassName)}
-              indicatorBackground="var(--contrast-input)"
-              badgeClassName={cn(
-                "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3",
-                "px-0.5 text-[7px]",
-              )}
-            />
-          ) : null}
-          <Tooltip>
-            <TooltipTrigger render={<span className="min-w-0 flex-1 overflow-hidden truncate" />}>
-              {triggerTitle}
-            </TooltipTrigger>
-            <TooltipPopup side="top">{triggerLabel}</TooltipPopup>
-          </Tooltip>
-          {selectedModel?.isUnavailable ? (
-            <Badge variant="outline" size="sm">
-              Unavailable
-            </Badge>
-          ) : null}
-        </span>
-        <span aria-hidden="true" className="flex items-center">
-          <ComposerControlChevron />
-        </span>
-      </PopoverTrigger>
+      <PopoverTrigger render={props.triggerRender}>{props.triggerChildren}</PopoverTrigger>
       <PopoverPopup
         align="start"
         className="before:hidden [--viewport-inline-padding:0]"
         viewportClassName="!overflow-hidden rounded-[calc(var(--radius-lg)-1px)] p-0 [clip-path:inset(0_round_calc(var(--radius-lg)-1px))]"
       >
         <ModelPickerContent
-          activeInstanceId={activeInstanceId}
+          activeInstanceId={props.activeInstanceId}
           model={props.model}
           lockedProvider={props.lockedProvider}
           lockedContinuationGroupKey={props.lockedContinuationGroupKey ?? null}
@@ -212,5 +146,108 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
         />
       </PopoverPopup>
     </Popover>
+  );
+}
+
+export function useModelPickerTriggerDisplay(props: {
+  activeInstanceId: ProviderInstanceId;
+  model: string;
+  instanceEntries: ReadonlyArray<ProviderInstanceEntry>;
+  modelOptionsByInstance: ReadonlyMap<ProviderInstanceId, ReadonlyArray<ModelEsque>>;
+}) {
+  // Resolve the active instance entry by exact routing key. The composer
+  // resolves fallbacks before rendering this component; if the selected
+  // instance disappears, do not infer a replacement from its driver kind.
+  const activeEntry = useMemo(() => {
+    return (
+      props.instanceEntries.find((entry) => entry.instanceId === props.activeInstanceId) ?? null
+    );
+  }, [props.activeInstanceId, props.instanceEntries]);
+
+  const selectedInstanceOptions = props.modelOptionsByInstance.get(props.activeInstanceId) ?? [];
+  // OpenCode can keep a model through a transient catalog refresh. Other
+  // providers keep the active instance's first option as their normal fallback.
+  const selectedModel =
+    selectedInstanceOptions.find((option) => option.slug === props.model) ??
+    (activeEntry?.driverKind === "opencode" ? undefined : selectedInstanceOptions[0]);
+  const triggerTitle = selectedModel ? getTriggerDisplayModelName(selectedModel) : props.model;
+  const triggerLabel = selectedModel
+    ? `${getTriggerDisplayModelLabel(selectedModel)}${selectedModel.isUnavailable ? " (Unavailable)" : ""}`
+    : props.model;
+  const showInstanceBadge =
+    activeEntry !== null && shouldShowInstanceBadge(activeEntry, props.instanceEntries);
+  return {
+    activeEntry,
+    triggerTitle,
+    triggerLabel,
+    showInstanceBadge,
+    isUnavailable: selectedModel?.isUnavailable === true,
+  };
+}
+
+export const ProviderModelPicker = memo(function ProviderModelPicker(
+  props: ModelPickerPopoverProps & {
+    activeProviderIconClassName?: string;
+    compact?: boolean;
+    triggerVariant?: VariantProps<typeof buttonVariants>["variant"];
+    triggerClassName?: string;
+    triggerAriaLabel?: string;
+  },
+) {
+  const { activeEntry, triggerTitle, triggerLabel, showInstanceBadge, isUnavailable } =
+    useModelPickerTriggerDisplay(props);
+
+  return (
+    <ModelPickerPopover
+      {...props}
+      triggerRender={
+        <ComposerControl
+          aria-label={props.triggerAriaLabel}
+          variant={props.triggerVariant ?? "ghost"}
+          data-chat-provider-model-picker="true"
+          className={cn(
+            "min-w-0 justify-between whitespace-nowrap",
+            props.compact ? "max-w-42 shrink-0" : "max-w-48 shrink sm:max-w-56",
+            props.triggerClassName,
+          )}
+          disabled={props.disabled}
+        />
+      }
+      triggerChildren={
+        <>
+          <span className="flex min-w-0 flex-1 items-center gap-1.5">
+            {activeEntry ? (
+              <ProviderInstanceIcon
+                driverKind={activeEntry.driverKind}
+                displayName={activeEntry.displayName}
+                accentColor={activeEntry.accentColor}
+                showBadge={showInstanceBadge}
+                className="size-4"
+                iconClassName={cn("size-4", props.activeProviderIconClassName)}
+                indicatorBackground="var(--contrast-input)"
+                badgeClassName={cn(
+                  "right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3",
+                  "px-0.5 text-[7px]",
+                )}
+              />
+            ) : null}
+            <Tooltip>
+              <TooltipTrigger render={<span className="min-w-0 flex-1 overflow-hidden truncate" />}>
+                {triggerTitle}
+              </TooltipTrigger>
+              <TooltipPopup side="top">{triggerLabel}</TooltipPopup>
+            </Tooltip>
+            {isUnavailable ? (
+              <Badge variant="outline" size="sm">
+                Unavailable
+              </Badge>
+            ) : null}
+          </span>
+          <span aria-hidden="true" className="flex items-center">
+            <ComposerControlChevron />
+          </span>
+        </>
+      }
+    />
   );
 });

@@ -96,7 +96,7 @@ function DefaultBadge() {
   );
 }
 
-function replaceDescriptorCurrentValue(
+export function replaceDescriptorCurrentValue(
   descriptors: ReadonlyArray<ProviderOptionDescriptor>,
   descriptorId: string,
   currentValue: string | boolean | undefined,
@@ -208,7 +208,7 @@ function getSelectedTraits(
   };
 }
 
-function getTraitsSectionVisibility(input: {
+export function getTraitsSectionVisibility(input: {
   provider: ProviderDriverKind;
   models: ReadonlyArray<ServerProviderModel>;
   model: string | null | undefined;
@@ -262,6 +262,67 @@ export function shouldRenderTraitsControls(input: {
   return getTraitsSectionVisibility(input).hasAnyControls;
 }
 
+export function useUpdateModelOptions(input: {
+  provider: ProviderDriverKind;
+  instanceId: ProviderInstanceId | undefined;
+  model: string | null | undefined;
+  persistence: TraitsPersistence;
+}) {
+  const { provider, instanceId, model, persistence } = input;
+  const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
+  return useCallback(
+    (nextOptions: ProviderOptions | undefined) => {
+      if ("onModelOptionsChange" in persistence) {
+        persistence.onModelOptionsChange(nextOptions);
+        return;
+      }
+      const threadTarget = persistence.threadRef ?? persistence.draftId;
+      if (!threadTarget) {
+        return;
+      }
+      setProviderModelOptions(threadTarget, provider, nextOptions, {
+        ...(instanceId ? { instanceId } : {}),
+        model,
+        persistSticky: true,
+      });
+    },
+    [instanceId, model, persistence, provider, setProviderModelOptions],
+  );
+}
+
+/**
+ * Selecting a prompt-injected value (ultrathink) edits the prompt instead of
+ * the option; leaving it strips the prefix again.
+ */
+export function applyTraitSelectChange(input: {
+  descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>;
+  value: string;
+  descriptors: ReadonlyArray<ProviderOptionDescriptor>;
+  primarySelectDescriptorId: string | null;
+  ultrathinkPromptControlled: boolean;
+  ultrathinkInBodyText: boolean;
+  prompt: string;
+  onPromptChange: (prompt: string) => void;
+  updateDescriptors: (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => void;
+}) {
+  const { descriptor, value, prompt } = input;
+  if (!value) return;
+  if (descriptor.promptInjectedValues?.includes(value)) {
+    const nextPrompt =
+      prompt.trim().length === 0
+        ? ULTRATHINK_PROMPT_PREFIX
+        : applyClaudePromptEffortPrefix(prompt, "ultrathink");
+    input.onPromptChange(nextPrompt);
+    return;
+  }
+  const isPrimary = descriptor.id === input.primarySelectDescriptorId;
+  if (input.ultrathinkInBodyText && isPrimary) return;
+  if (input.ultrathinkPromptControlled && isPrimary) {
+    input.onPromptChange(prompt.replace(/^Ultrathink:\s*/i, ""));
+  }
+  input.updateDescriptors(replaceDescriptorCurrentValue(input.descriptors, descriptor.id, value));
+}
+
 export interface TraitsMenuContentProps {
   provider: ProviderDriverKind;
   instanceId?: ProviderInstanceId;
@@ -288,25 +349,7 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   planModeEnabled,
   ...persistence
 }: TraitsMenuContentProps & TraitsPersistence) {
-  const setProviderModelOptions = useComposerDraftStore((store) => store.setProviderModelOptions);
-  const updateModelOptions = useCallback(
-    (nextOptions: ProviderOptions | undefined) => {
-      if ("onModelOptionsChange" in persistence) {
-        persistence.onModelOptionsChange(nextOptions);
-        return;
-      }
-      const threadTarget = persistence.threadRef ?? persistence.draftId;
-      if (!threadTarget) {
-        return;
-      }
-      setProviderModelOptions(threadTarget, provider, nextOptions, {
-        ...(instanceId ? { instanceId } : {}),
-        model,
-        persistSticky: true,
-      });
-    },
-    [instanceId, model, persistence, provider, setProviderModelOptions],
-  );
+  const updateModelOptions = useUpdateModelOptions({ provider, instanceId, model, persistence });
   const {
     descriptors,
     selectDescriptors,
@@ -332,23 +375,18 @@ export const TraitsMenuContent = memo(function TraitsMenuContentImpl({
   const handleSelectChange = (
     descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
     value: string,
-  ) => {
-    if (!value) return;
-    if (descriptor.promptInjectedValues?.includes(value)) {
-      const nextPrompt =
-        prompt.trim().length === 0
-          ? ULTRATHINK_PROMPT_PREFIX
-          : applyClaudePromptEffortPrefix(prompt, "ultrathink");
-      onPromptChange(nextPrompt);
-      return;
-    }
-    if (ultrathinkInBodyText && descriptor.id === primarySelectDescriptor?.id) return;
-    if (ultrathinkPromptControlled && descriptor.id === primarySelectDescriptor?.id) {
-      const stripped = prompt.replace(/^Ultrathink:\s*/i, "");
-      onPromptChange(stripped);
-    }
-    updateDescriptors(replaceDescriptorCurrentValue(descriptors, descriptor.id, value));
-  };
+  ) =>
+    applyTraitSelectChange({
+      descriptor,
+      value,
+      descriptors,
+      primarySelectDescriptorId: primarySelectDescriptor?.id ?? null,
+      ultrathinkPromptControlled,
+      ultrathinkInBodyText,
+      prompt,
+      onPromptChange,
+      updateDescriptors,
+    });
 
   if (!hasAnyControls) {
     return null;
