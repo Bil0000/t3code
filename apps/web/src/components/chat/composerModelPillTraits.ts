@@ -58,14 +58,6 @@ export function effortFraction(index: number, count: number): number {
   return count <= 1 ? 1 : Math.min(1, Math.max(0, index / (count - 1)));
 }
 
-/** Grey at the bottom, the theme primary in the middle, violet at the top. */
-export function effortColor(fraction: number): string {
-  if (fraction < 0.5) {
-    return `color-mix(in oklch, var(--muted-foreground), var(--primary) ${Math.round(fraction * 200)}%)`;
-  }
-  return `color-mix(in oklch, var(--primary), oklch(0.62 0.25 300) ${Math.round((fraction - 0.5) * 200)}%)`;
-}
-
 export function nextSelectOptionId(descriptor: SelectTraitDescriptor): string | null {
   if (descriptor.options.length === 0) return null;
   const current = getProviderOptionCurrentValue(descriptor);

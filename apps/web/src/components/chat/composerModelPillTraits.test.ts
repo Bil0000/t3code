@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 import { ProviderDriverKind, type ProviderOptionDescriptor } from "@t3tools/contracts";
 import {
-  effortColor,
   effortFraction,
   nextSelectOptionId,
   resolveEffortDescriptor,
@@ -87,12 +86,6 @@ describe("effort scale", () => {
     expect(effortFraction(1, 3)).toBe(0.5);
     expect(effortFraction(2, 3)).toBe(1);
     expect(effortFraction(0, 1)).toBe(1);
-  });
-
-  it("blends towards primary then violet", () => {
-    expect(effortColor(0)).toContain("var(--primary) 0%");
-    expect(effortColor(0.5)).toContain("oklch(0.62 0.25 300) 0%");
-    expect(effortColor(1)).toContain("oklch(0.62 0.25 300) 100%");
   });
 });
 

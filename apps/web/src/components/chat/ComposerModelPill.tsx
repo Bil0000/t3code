@@ -11,17 +11,16 @@ import {
   getProviderOptionCurrentValue,
 } from "@t3tools/shared/model";
 import { Slider } from "@base-ui/react/slider";
-import { memo, useState } from "react";
-import { ZapIcon } from "lucide-react";
+import { memo, useRef, useState } from "react";
+import { ChevronRightIcon, ZapIcon } from "lucide-react";
 import { cn } from "~/lib/utils";
 import type { DraftId } from "../../composerDraftStore";
 import { Badge } from "../ui/badge";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { ComposerControlChevron } from "./ComposerControl";
+import { ComposerControl, ComposerControlChevron, ComposerControlIcon } from "./ComposerControl";
 import {
-  effortColor,
   effortFraction,
   nextSelectOptionId,
   resolveEffortDescriptor,
@@ -41,8 +40,50 @@ import {
   useUpdateModelOptions,
 } from "./TraitsPicker";
 
-const segmentClassName =
-  "flex h-7 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2 text-sm font-medium text-secondary-label outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-64";
+type Traits = ReturnType<typeof getTraitsSectionVisibility>;
+type EffortTone = "normal" | "peak" | "ultrathink";
+
+interface EffortState {
+  index: number;
+  label: string;
+  tone: EffortTone;
+  locked: boolean;
+}
+
+function resolveEffortState(descriptor: SelectTraitDescriptor, traits: Traits): EffortState {
+  const isPrimary = descriptor.id === traits.primarySelectDescriptor?.id;
+  const currentValue =
+    isPrimary && traits.ultrathinkPromptControlled
+      ? "ultrathink"
+      : getProviderOptionCurrentValue(descriptor);
+  const index = Math.max(
+    0,
+    descriptor.options.findIndex((option) => option.id === currentValue),
+  );
+  const option = descriptor.options[index];
+  const tone: EffortTone =
+    option?.id === "ultrathink"
+      ? "ultrathink"
+      : effortFraction(index, descriptor.options.length) >= 1
+        ? "peak"
+        : "normal";
+  return {
+    index,
+    label: option?.label ?? "",
+    tone,
+    locked: isPrimary && traits.ultrathinkInBodyText,
+  };
+}
+
+function accentClassName(provider: ProviderDriverKind): string {
+  return provider === "claudeAgent" ? "text-[#d97757]" : "text-primary";
+}
+
+function effortLabelClassName(tone: EffortTone, provider: ProviderDriverKind): string {
+  if (tone === "ultrathink") return "ultrathink-word";
+  if (tone === "peak") return "composer-effort-peak-text";
+  return accentClassName(provider);
+}
 
 export const ComposerModelPill = memo(function ComposerModelPill(
   props: ModelPickerPopoverProps & {
@@ -55,18 +96,24 @@ export const ComposerModelPill = memo(function ComposerModelPill(
     onPromptChange: (prompt: string) => void;
     planModeEnabled: boolean;
     activeProviderIconClassName?: string;
-    /** Hide effort and trait chips; the compact menu carries them instead. */
     compact?: boolean;
   },
 ) {
   const { activeEntry, triggerTitle, triggerLabel, showInstanceBadge, isUnavailable } =
     useModelPickerTriggerDisplay(props);
-  const [uncontrolledOpen, setUncontrolledOpen] = useState(false);
-  const isListOpen = props.open ?? uncontrolledOpen;
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [isCardOpen, setIsCardOpen] = useState(false);
+  const [uncontrolledListOpen, setUncontrolledListOpen] = useState(false);
+  const isListOpen = props.open ?? uncontrolledListOpen;
   const setListOpen = (open: boolean) => {
     props.onOpenChange?.(open);
-    if (props.open === undefined) setUncontrolledOpen(open);
+    if (props.open === undefined) setUncontrolledListOpen(open);
   };
+  const openList = () => {
+    setIsCardOpen(false);
+    setListOpen(true);
+  };
+
   const persistence = {
     ...(props.threadRef ? { threadRef: props.threadRef } : {}),
     ...(props.draftId ? { draftId: props.draftId } : {}),
@@ -88,159 +135,201 @@ export const ComposerModelPill = memo(function ComposerModelPill(
   const updateDescriptors = (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => {
     updateModelOptions(buildProviderOptionSelectionsFromDescriptors(nextDescriptors));
   };
-  const fastMode = resolveFastMode(props.provider, traits.descriptors);
-  const effortDescriptor = resolveEffortDescriptor(traits.descriptors);
-  const chipDescriptors = traits.descriptors.filter(
-    (descriptor) => descriptor.id !== fastMode?.descriptorId && descriptor !== effortDescriptor,
+  const hasTraits = traits.hasAnyControls && !traits.modelIsUnavailable;
+  const fastMode = hasTraits ? resolveFastMode(props.provider, traits.descriptors) : null;
+  const effortDescriptor = hasTraits ? resolveEffortDescriptor(traits.descriptors) : null;
+  const effort = effortDescriptor ? resolveEffortState(effortDescriptor, traits) : null;
+  const chipDescriptors = hasTraits
+    ? traits.descriptors.filter(
+        (descriptor) => descriptor.id !== fastMode?.descriptorId && descriptor !== effortDescriptor,
+      )
+    : [];
+
+  const modelName = (
+    <span className="flex min-w-0 items-center gap-1.5">
+      {activeEntry ? (
+        <ProviderInstanceIcon
+          driverKind={activeEntry.driverKind}
+          displayName={activeEntry.displayName}
+          accentColor={activeEntry.accentColor}
+          showBadge={showInstanceBadge}
+          className="size-4"
+          iconClassName={cn("size-4", props.activeProviderIconClassName)}
+          indicatorBackground="var(--contrast-input)"
+          badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
+        />
+      ) : null}
+      <span className="min-w-0 truncate text-foreground">{triggerTitle}</span>
+      {isUnavailable ? (
+        <Badge variant="outline" size="sm">
+          Unavailable
+        </Badge>
+      ) : null}
+    </span>
   );
-  const showTraits = !props.compact && traits.hasAnyControls && !traits.modelIsUnavailable;
 
   return (
-    <div
-      className="inline-flex min-w-0 items-stretch overflow-hidden rounded-lg bg-foreground/[0.04] transition-colors hover:bg-foreground/[0.06] dark:bg-foreground/[0.06] dark:hover:bg-foreground/[0.09]"
-      data-chat-composer-model-pill="true"
-    >
-      {fastMode ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
+    <>
+      <Popover open={isCardOpen} onOpenChange={setIsCardOpen}>
+        <PopoverTrigger
+          render={
+            <ComposerControl
+              ref={triggerRef}
+              data-chat-provider-model-picker="true"
+              className={cn(
+                "min-w-0 whitespace-nowrap",
+                props.compact ? "max-w-42 shrink-0" : "max-w-64 shrink sm:max-w-80",
+              )}
+              disabled={props.disabled}
+              aria-label={triggerLabel}
+            />
+          }
+        >
+          {fastMode?.enabled ? (
+            <ComposerControlIcon
+              icon={ZapIcon}
+              className={cn("fill-current", accentClassName(props.provider))}
+            />
+          ) : null}
+          {modelName}
+          {effort && !props.compact ? (
+            <span
+              key={effort.label}
+              className="composer-model-pill-chip-enter min-w-0 truncate text-secondary-label"
+            >
+              {effort.label}
+            </span>
+          ) : null}
+          <ComposerControlChevron />
+        </PopoverTrigger>
+        <PopoverPopup
+          side="top"
+          align="start"
+          sideOffset={8}
+          className="composer-model-card"
+          viewportClassName="p-0"
+        >
+          <div className="flex flex-col gap-2 p-2">
+            <div className="flex items-center gap-1">
+              {fastMode ? (
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <button
+                        type="button"
+                        className={cn(
+                          "flex size-8 shrink-0 cursor-pointer items-center justify-center rounded-lg outline-none transition-[background-color,color,transform] duration-200 hover:bg-foreground/[0.08] focus-visible:ring-2 focus-visible:ring-ring active:scale-90",
+                          fastMode.enabled ? accentClassName(props.provider) : "text-icon-muted",
+                        )}
+                        aria-pressed={fastMode.enabled}
+                        disabled={props.disabled}
+                        onClick={() =>
+                          updateDescriptors(
+                            replaceDescriptorCurrentValue(
+                              traits.descriptors,
+                              fastMode.descriptorId,
+                              fastMode.toggledValue,
+                            ),
+                          )
+                        }
+                      />
+                    }
+                  >
+                    <ZapIcon
+                      aria-hidden="true"
+                      className={cn(
+                        "size-4.5 transition-[fill] duration-200",
+                        fastMode.enabled ? "fill-current" : "fill-transparent",
+                      )}
+                    />
+                    <span className="sr-only">
+                      {fastMode.enabled ? "Fast mode on" : "Fast mode off"}
+                    </span>
+                  </TooltipTrigger>
+                  <TooltipPopup side="top" align="start" className="text-sm leading-snug">
+                    <div>{fastMode.enabled ? "Fast mode on" : "Fast mode"}</div>
+                    <div className="text-muted-foreground">Faster output, more usage</div>
+                  </TooltipPopup>
+                </Tooltip>
+              ) : null}
               <button
                 type="button"
-                className={cn(segmentClassName, "pe-1")}
-                aria-pressed={fastMode.enabled}
+                className="flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded-lg px-2 text-base font-medium outline-none transition-colors hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={`${triggerLabel}. Choose another model`}
+                onClick={openList}
+              >
+                {modelName}
+                {effort ? (
+                  <span
+                    key={effort.label}
+                    className={cn(
+                      "composer-model-pill-chip-enter transition-colors duration-300",
+                      effortLabelClassName(effort.tone, props.provider),
+                    )}
+                  >
+                    {effort.label}
+                  </span>
+                ) : null}
+                <ChevronRightIcon aria-hidden="true" className="size-4 shrink-0 text-icon-muted" />
+              </button>
+            </div>
+
+            {effortDescriptor && effort ? (
+              <EffortSlider
+                descriptor={effortDescriptor}
+                effort={effort}
+                provider={props.provider}
+                traits={traits}
+                prompt={props.prompt}
+                onPromptChange={props.onPromptChange}
+                updateDescriptors={updateDescriptors}
                 disabled={props.disabled}
-                onClick={() =>
-                  updateDescriptors(
-                    replaceDescriptorCurrentValue(
-                      traits.descriptors,
-                      fastMode.descriptorId,
-                      fastMode.toggledValue,
-                    ),
-                  )
-                }
               />
-            }
-          >
-            <ZapIcon
-              aria-hidden="true"
-              className={cn(
-                "size-4 transition-[color,fill,transform] duration-200 active:scale-90",
-                fastMode.enabled
-                  ? cn(
-                      "fill-current",
-                      props.provider === "claudeAgent" ? "text-[#d97757]" : "text-primary",
-                    )
-                  : "fill-transparent text-icon-muted",
-              )}
-            />
-            <span className="sr-only">{fastMode.enabled ? "Fast mode on" : "Fast mode off"}</span>
-          </TooltipTrigger>
-          <TooltipPopup side="top">
-            {fastMode.enabled ? "Fast mode on" : "Fast mode off"} · click to switch
-          </TooltipPopup>
-        </Tooltip>
-      ) : null}
+            ) : null}
+
+            {chipDescriptors.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1 px-0.5">
+                {chipDescriptors.map((descriptor) => (
+                  <TraitChip
+                    key={descriptor.id}
+                    descriptor={descriptor}
+                    descriptors={traits.descriptors}
+                    updateDescriptors={updateDescriptors}
+                    disabled={props.disabled}
+                  />
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </PopoverPopup>
+      </Popover>
 
       <ModelPickerPopover
         {...props}
         open={isListOpen}
         onOpenChange={setListOpen}
-        triggerRender={
-          <button
-            type="button"
-            data-chat-provider-model-picker="true"
-            className={cn(
-              segmentClassName,
-              "min-w-0 shrink text-foreground",
-              props.compact ? "max-w-42" : "max-w-48 sm:max-w-56",
-            )}
-            disabled={props.disabled}
-          />
-        }
-        triggerChildren={
-          <>
-            {activeEntry ? (
-              <ProviderInstanceIcon
-                driverKind={activeEntry.driverKind}
-                displayName={activeEntry.displayName}
-                accentColor={activeEntry.accentColor}
-                showBadge={showInstanceBadge}
-                className="size-4"
-                iconClassName={cn("size-4", props.activeProviderIconClassName)}
-                indicatorBackground="var(--contrast-input)"
-                badgeClassName="right-[-0.125rem] bottom-[-0.125rem] h-3 min-w-3 px-0.5 text-[7px]"
-              />
-            ) : null}
-            <Tooltip>
-              <TooltipTrigger render={<span className="min-w-0 truncate" />}>
-                {triggerTitle}
-              </TooltipTrigger>
-              <TooltipPopup side="top">{triggerLabel}</TooltipPopup>
-            </Tooltip>
-            {isUnavailable ? (
-              <Badge variant="outline" size="sm">
-                Unavailable
-              </Badge>
-            ) : null}
-            {showTraits && effortDescriptor ? null : <ComposerControlChevron />}
-          </>
-        }
+        anchor={triggerRef}
       />
-
-      {showTraits && effortDescriptor ? (
-        <EffortSegment
-          descriptor={effortDescriptor}
-          traits={traits}
-          prompt={props.prompt}
-          onPromptChange={props.onPromptChange}
-          updateDescriptors={updateDescriptors}
-          disabled={props.disabled}
-          onOpenList={() => setListOpen(true)}
-        />
-      ) : null}
-
-      {showTraits
-        ? chipDescriptors.map((descriptor) => (
-            <TraitChip
-              key={descriptor.id}
-              descriptor={descriptor}
-              descriptors={traits.descriptors}
-              updateDescriptors={updateDescriptors}
-              disabled={props.disabled}
-            />
-          ))
-        : null}
-    </div>
+    </>
   );
 });
 
-function EffortSegment(props: {
+function EffortSlider(props: {
   descriptor: SelectTraitDescriptor;
-  traits: ReturnType<typeof getTraitsSectionVisibility>;
+  effort: EffortState;
+  provider: ProviderDriverKind;
+  traits: Traits;
   prompt: string;
   onPromptChange: (prompt: string) => void;
   updateDescriptors: (nextDescriptors: ReadonlyArray<ProviderOptionDescriptor>) => void;
   disabled?: boolean | undefined;
-  onOpenList: () => void;
 }) {
-  const { descriptor, traits } = props;
+  const { descriptor, effort, traits } = props;
   const options = descriptor.options;
-  const isPrimary = descriptor.id === traits.primarySelectDescriptor?.id;
-  const ultrathinkActive = isPrimary && traits.ultrathinkPromptControlled;
-  const currentValue = ultrathinkActive ? "ultrathink" : getProviderOptionCurrentValue(descriptor);
-  const currentIndex = Math.max(
-    0,
-    options.findIndex((option) => option.id === currentValue),
-  );
-  const currentOption = options[currentIndex];
-  const fraction = effortFraction(currentIndex, options.length);
-  const color = effortColor(fraction);
-  const locked = isPrimary && traits.ultrathinkInBodyText;
-  const isUltrathink = currentOption?.id === "ultrathink";
 
   const selectIndex = (index: number) => {
     const option = options[index];
-    if (!option || option.id === currentValue) return;
+    if (!option || index === effort.index) return;
     applyTraitSelectChange({
       descriptor,
       value: option.id,
@@ -255,101 +344,49 @@ function EffortSegment(props: {
   };
 
   return (
-    <Popover>
-      <PopoverTrigger
-        openOnHover
-        delay={120}
-        closeDelay={160}
-        render={
-          <button
-            type="button"
-            className={cn(segmentClassName, "ps-1 hover:text-current")}
-            aria-label={`${descriptor.label}: ${currentOption?.label ?? ""}`}
-            disabled={props.disabled}
-          />
-        }
-      >
-        <span
-          className={cn("transition-colors duration-300", isUltrathink && "ultrathink-word")}
-          style={isUltrathink ? undefined : { color }}
-        >
-          {currentOption?.label}
-        </span>
-        <span
-          role="button"
-          tabIndex={-1}
-          aria-hidden="true"
-          className="-me-1 flex h-full items-center px-0.5"
-          onClick={(event) => {
-            event.stopPropagation();
-            props.onOpenList();
-          }}
-        >
-          <ComposerControlChevron />
-        </span>
-      </PopoverTrigger>
-      <PopoverPopup side="top" align="center" viewportClassName="p-2.5">
-        <div className="mb-2 flex items-center justify-between gap-4 text-xs">
-          <span className="text-muted-foreground">{descriptor.label}</span>
-          <span
-            className={cn(
-              "font-medium transition-colors duration-300",
-              isUltrathink && "ultrathink-word",
-            )}
-            style={isUltrathink ? undefined : { color }}
-          >
-            {currentOption?.label}
-          </span>
+    <div className="px-1 pb-1">
+      {effort.locked ? (
+        <div className="mb-2 max-w-64 text-muted-foreground/80 text-xs">
+          Your prompt contains &quot;ultrathink&quot; in the text. Remove it to change this option.
         </div>
-        {locked ? (
-          <div className="mb-2 max-w-56 text-muted-foreground/80 text-xs">
-            Your prompt contains &quot;ultrathink&quot; in the text. Remove it to change this
-            option.
-          </div>
-        ) : null}
-        <Slider.Root
-          value={currentIndex}
-          min={0}
-          max={Math.max(1, options.length - 1)}
-          step={1}
-          disabled={locked || props.disabled}
-          thumbAlignment="edge"
-          onValueChange={(value) => selectIndex(value)}
-          className="w-56 touch-none select-none"
-        >
-          <Slider.Control className="flex h-6 items-center">
-            <Slider.Track className="relative h-6 w-full overflow-hidden rounded-full bg-foreground/[0.08]">
-              <Slider.Indicator
+      ) : null}
+      <Slider.Root
+        value={effort.index}
+        min={0}
+        max={Math.max(1, options.length - 1)}
+        step={1}
+        disabled={effort.locked || props.disabled}
+        thumbAlignment="edge"
+        onValueChange={(value) => selectIndex(value)}
+        className="w-64 touch-none select-none"
+        data-effort-tone={effort.tone}
+        data-provider={props.provider}
+      >
+        <Slider.Control className="flex h-8 items-center">
+          <Slider.Track className="composer-effort-track relative h-8 w-full overflow-hidden rounded-full">
+            <Slider.Indicator className="composer-effort-fill rounded-full" />
+            {options.map((option, index) => (
+              <span
+                key={option.id}
+                aria-hidden="true"
                 className={cn(
-                  "rounded-full transition-[width,background-color] duration-300 ease-out",
-                  isUltrathink && "ultrathink-pill",
+                  "pointer-events-none absolute top-1/2 size-1 -translate-y-1/2 rounded-full bg-foreground/30 transition-opacity duration-300",
+                  index <= effort.index && "opacity-0",
                 )}
-                style={
-                  isUltrathink
-                    ? undefined
-                    : { background: `linear-gradient(90deg, ${effortColor(0)}, ${color})` }
-                }
+                style={{
+                  left: `calc(1rem + (100% - 2rem) * ${effortFraction(index, options.length)})`,
+                }}
               />
-              {options.map((option, index) => (
-                <span
-                  key={option.id}
-                  aria-hidden="true"
-                  className="pointer-events-none absolute top-1/2 size-1 -translate-y-1/2 rounded-full bg-foreground/25"
-                  style={{
-                    left: `calc(0.75rem + ${effortFraction(index, options.length) * 100}% - ${effortFraction(index, options.length) * 1.5}rem - 0.125rem)`,
-                  }}
-                />
-              ))}
-              <Slider.Thumb
-                className="size-5 rounded-full bg-white shadow-[0_1px_3px_rgba(0,0,0,0.4)] outline-none transition-transform duration-150 focus-visible:ring-2 focus-visible:ring-ring data-dragging:scale-110"
-                getAriaValueText={(_formatted, value) => options[value]?.label ?? ""}
-                aria-label={descriptor.label}
-              />
-            </Slider.Track>
-          </Slider.Control>
-        </Slider.Root>
-      </PopoverPopup>
-    </Popover>
+            ))}
+            <Slider.Thumb
+              className="composer-effort-thumb size-7 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.45)] outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-popover"
+              getAriaValueText={(_formatted, value) => options[value]?.label ?? ""}
+              aria-label={descriptor.label}
+            />
+          </Slider.Track>
+        </Slider.Control>
+      </Slider.Root>
+    </div>
   );
 }
 
@@ -363,11 +400,23 @@ function TraitChip(props: {
   const currentLabel = getProviderOptionCurrentLabel(descriptor) ?? "";
   const setValue = (value: string | boolean) =>
     props.updateDescriptors(replaceDescriptorCurrentValue(props.descriptors, descriptor.id, value));
+  const isOn = descriptor.type === "boolean" ? descriptor.currentValue === true : true;
   const chipLabel = descriptor.type === "boolean" ? descriptor.label : currentLabel;
   const chipClassName = cn(
-    segmentClassName,
-    "text-xs",
-    descriptor.type === "boolean" && descriptor.currentValue !== true && "opacity-60",
+    "flex h-7 cursor-pointer items-center gap-1 rounded-full px-2.5 text-xs font-medium outline-none transition-[background-color,color,opacity] duration-200 focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-64",
+    isOn
+      ? "bg-foreground/[0.1] text-foreground hover:bg-foreground/[0.14]"
+      : "bg-foreground/[0.05] text-muted-foreground hover:bg-foreground/[0.08]",
+  );
+  const chipContent = (
+    <>
+      {descriptor.type === "select" ? (
+        <span className="text-muted-foreground">{descriptor.label}</span>
+      ) : null}
+      <span key={chipLabel} className="composer-model-pill-chip-enter">
+        {chipLabel}
+      </span>
+    </>
   );
 
   if (descriptor.type === "select" && descriptor.options.length > 3) {
@@ -376,12 +425,9 @@ function TraitChip(props: {
         <MenuTrigger
           render={<button type="button" className={chipClassName} disabled={props.disabled} />}
         >
-          {chipLabel}
+          {chipContent}
         </MenuTrigger>
         <MenuPopup align="start">
-          <div className="px-2 pt-1.5 pb-1 font-medium text-muted-foreground text-xs">
-            {descriptor.label}
-          </div>
           <MenuRadioGroup
             value={getProviderOptionCurrentValue(descriptor) ?? ""}
             onValueChange={(value) => {
@@ -401,7 +447,7 @@ function TraitChip(props: {
 
   const onClick = () => {
     if (descriptor.type === "boolean") {
-      setValue(descriptor.currentValue !== true);
+      setValue(!isOn);
       return;
     }
     const next = nextSelectOptionId(descriptor);
@@ -417,16 +463,15 @@ function TraitChip(props: {
             className={chipClassName}
             disabled={props.disabled}
             onClick={onClick}
+            aria-pressed={descriptor.type === "boolean" ? isOn : undefined}
             aria-label={`${descriptor.label}: ${currentLabel}`}
           />
         }
       >
-        <span key={chipLabel} className="composer-model-pill-chip-enter">
-          {chipLabel}
-        </span>
+        {chipContent}
       </TooltipTrigger>
       <TooltipPopup side="top">
-        {descriptor.label}: {currentLabel} · click to switch
+        {descriptor.label}: {currentLabel}. Click to switch.
       </TooltipPopup>
     </Tooltip>
   );
