@@ -25,6 +25,7 @@ import {
   DESKTOP_ELECTRON_LANGUAGES,
   DESKTOP_FILE_EXCLUSIONS,
   DESKTOP_EXTRA_RESOURCES,
+  LINUX_CAPTURE_EXTRA_RESOURCES,
   MAC_FILE_EXCLUSIONS,
   InvalidMacPasskeyRpDomainError,
   InvalidMacPasskeyPublishableKeyError,
@@ -56,6 +57,7 @@ import {
   stageLinuxIconSize,
   stageDesktopDmgBackground,
   stageResourceMonitor,
+  stageKdeCaptureHelper,
   stageWslRuntimeArchive,
   bundlesWslRuntime,
   STAGE_INSTALL_ARGS,
@@ -546,6 +548,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!apps/desktop/prod-resources/windows-server/**/*",
       "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
       "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
+      "!apps/desktop/gnome-extension",
+      "!apps/desktop/gnome-extension/**/*",
     ]);
     assert.equal(WINDOWS_SERVER_RESOURCE_SOURCE_DIR, "apps/desktop/prod-resources/windows-server");
     assert.deepStrictEqual(WINDOWS_SERVER_EXTRA_RESOURCES, [
@@ -604,6 +608,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.notProperty(mac, "asarUnpack");
       assert.notProperty(linux, "asarUnpack");
       assert.notProperty(win, "asarUnpack");
+      assert.deepStrictEqual(linux.extraResources, [
+        ...DESKTOP_EXTRA_RESOURCES,
+        ...LINUX_CAPTURE_EXTRA_RESOURCES,
+      ]);
+      assert.deepStrictEqual(mac.extraResources, [...DESKTOP_EXTRA_RESOURCES]);
       assert.deepStrictEqual(win.extraResources, [
         {
           from: "apps/desktop/prod-resources/resource-monitor",
@@ -808,6 +817,56 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ),
           "cached monitor",
         );
+      }),
+    ),
+  );
+
+  it.effect("builds and stages the KDE helper for the selected Linux architecture", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const repoRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-kde-stage-test-" });
+        for (const [arch, target] of [
+          ["x64", "x86_64-unknown-linux-gnu"],
+          ["arm64", "aarch64-unknown-linux-gnu"],
+        ] as const) {
+          const binary = path.join(
+            repoRoot,
+            "native/kde-window-capture/target",
+            target,
+            "release/t3-kde-window-capture",
+          );
+          const stageResourcesDir = path.join(repoRoot, "stage", arch);
+          const spawner = Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make((command) =>
+              Effect.gen(function* () {
+                assert.equal(command._tag, "StandardCommand");
+                if (command._tag !== "StandardCommand") return mockProcess(1);
+                assert.equal(command.command, "cargo");
+                assert.deepEqual(command.args, [
+                  "build",
+                  "--locked",
+                  "--release",
+                  "--manifest-path",
+                  path.join(repoRoot, "native/kde-window-capture/Cargo.toml"),
+                  "--target",
+                  target,
+                ]);
+                yield* fs.makeDirectory(path.dirname(binary), { recursive: true });
+                yield* fs.writeFileString(binary, `helper-${arch}`);
+                return mockProcess(0);
+              }),
+            ),
+          );
+          yield* stageKdeCaptureHelper({ repoRoot, stageResourcesDir, arch, verbose: false }).pipe(
+            Effect.provide(spawner),
+          );
+          const installed = path.join(stageResourcesDir, "kde-capture/t3-kde-window-capture");
+          assert.equal(yield* fs.readFileString(installed), `helper-${arch}`);
+          assert.equal((yield* fs.stat(installed)).mode & 0o777, 0o755);
+        }
       }),
     ),
   );

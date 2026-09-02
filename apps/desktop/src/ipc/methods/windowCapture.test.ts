@@ -11,6 +11,7 @@ import {
   captureWindow,
   checkWindowCaptureShortcut,
   requestWindowCapturePermissions,
+  setupWindowCapture,
   setWindowCaptureAnimationDestination,
   setWindowCaptureShortcutSuppressed,
   windowCaptureScreenFrame,
@@ -173,6 +174,33 @@ describe("window capture IPC", () => {
       Effect.provideService(DesktopWindowCapture.DesktopWindowCapture, null as never),
     ),
   );
+
+  it.effect("allows capture setup only from the trusted main renderer", () => {
+    const actions: string[] = [];
+    return Effect.gen(function* () {
+      yield* setupWindowCapture.handler("install-extension", { sender: { id: 7 } });
+      assert.deepEqual(actions, ["install-extension"]);
+      const rejected = yield* Effect.exit(
+        setupWindowCapture.handler("enable-extension", { sender: { id: 8 } }),
+      );
+      assert(Exit.isFailure(rejected));
+      assert.deepEqual(actions, ["install-extension"]);
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(ElectronWindow.ElectronWindow, {
+            main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
+          } as ElectronWindow.ElectronWindow["Service"]),
+          Layer.succeed(DesktopWindowCapture.DesktopWindowCapture, {
+            setup: (action: string) =>
+              Effect.sync(() => {
+                actions.push(action);
+              }),
+          } as unknown as DesktopWindowCapture.DesktopWindowCapture["Service"]),
+        ),
+      ),
+    );
+  });
 
   it.effect("checks shortcut availability for a trusted renderer", () => {
     const layer = Layer.mergeAll(

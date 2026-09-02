@@ -5,6 +5,7 @@ import {
   DesktopWindowCaptureId,
   DesktopWindowCaptureShortcutAvailability,
   DesktopWindowCaptureState,
+  DesktopWindowCaptureSetupAction,
   WindowCaptureShortcut,
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
@@ -88,6 +89,16 @@ export const requestWindowCapturePermissions = DesktopIpc.makeIpcMethod({
       );
     },
   ),
+});
+
+export const setupWindowCapture = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.SETUP_WINDOW_CAPTURE_CHANNEL,
+  payload: DesktopWindowCaptureSetupAction,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.windowCapture.setup")(function* (action, event) {
+    yield* ensureTrustedWindowCaptureSender(event);
+    yield* (yield* DesktopWindowCapture.DesktopWindowCapture).setup(action);
+  }),
 });
 
 export const checkWindowCaptureShortcut = DesktopIpc.makeIpcMethod({

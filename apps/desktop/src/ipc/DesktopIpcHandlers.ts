@@ -50,6 +50,7 @@ import {
   checkWindowCaptureShortcut,
   dismissWindowCaptureAnimation,
   getWindowCaptureState,
+  setupWindowCapture,
   listPendingWindowCaptures,
   readWindowCapture,
   requestWindowCapturePermissions,
@@ -73,6 +74,7 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(getConnectionCatalog);
   yield* ipc.handle(getWindowCaptureState);
+  yield* ipc.handle(setupWindowCapture);
   yield* ipc.handle(requestWindowCapturePermissions);
   yield* ipc.handle(checkWindowCaptureShortcut);
   yield* ipc.handle(setWindowCaptureShortcutSuppressed);

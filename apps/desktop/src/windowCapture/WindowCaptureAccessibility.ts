@@ -19,7 +19,9 @@ const ACCESSIBILITY_TIMEOUT_MS = 3_000;
 export type AccessibleWindowIdentity = {
   readonly title: string;
   readonly bounds: Electron.Rectangle;
+  readonly clientBounds?: Electron.Rectangle;
   readonly owner: { readonly processId: number };
+  readonly accessibilityBoundsReliable?: boolean;
 };
 
 export type CapturedWindowAccessibilityContext = {
@@ -109,7 +111,7 @@ async function readCapturedWindowAccessibility(
   const matchMode = isWaylandSession(platform, process.env) ? "wayland" : "screen-bounds";
   const window = findAccessibleWindow(
     windows,
-    { title: active.title, sourceTitle, bounds: active.bounds },
+    { title: active.title, sourceTitle, bounds: active.bounds, clientBounds: active.clientBounds },
     matchMode,
   );
   if (!window) {
@@ -117,11 +119,20 @@ async function readCapturedWindowAccessibility(
     return undefined;
   }
   const accessibleBounds = window.bounds;
+  const matchingBounds =
+    matchMode === "wayland" &&
+    active.clientBounds &&
+    accessibleBounds &&
+    Math.abs(accessibleBounds.width - active.clientBounds.width) <= 2 &&
+    Math.abs(accessibleBounds.height - active.clientBounds.height) <= 2
+      ? active.clientBounds
+      : active.bounds;
   const locationsReliable =
-    matchMode === "screen-bounds" ||
-    (accessibleBounds !== null &&
-      Math.abs(accessibleBounds.x - active.bounds.x) <= 2 &&
-      Math.abs(accessibleBounds.y - active.bounds.y) <= 2);
+    active.accessibilityBoundsReliable !== false &&
+    (matchMode === "screen-bounds" ||
+      (accessibleBounds !== null &&
+        Math.abs(accessibleBounds.x - matchingBounds.x) <= 2 &&
+        Math.abs(accessibleBounds.y - matchingBounds.y) <= 2));
   const flatRead = window
     .tree()
     .then((tree) => {
@@ -132,7 +143,13 @@ async function readCapturedWindowAccessibility(
     .catch(() => {
       progress.flatComplete = true;
     });
-  const richRead = accessibleWindowElementTree(window, window.bounds ?? active.bounds, imageSize, {
+  // A decorated screenshot contains more than the accessibility client area. Keep its
+  // frame origin/scale so element coordinates include the actual decoration offset.
+  const sourceBounds =
+    matchMode === "wayland" && active.clientBounds
+      ? active.bounds
+      : (accessibleBounds ?? active.bounds);
+  const richRead = accessibleWindowElementTree(window, sourceBounds, imageSize, {
     locationsReliable,
     onProgress: (root, truncated, descendantLocationsReliable) => {
       progress.richLocationsReliable = descendantLocationsReliable;

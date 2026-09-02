@@ -78,7 +78,6 @@ describe("ClientSettings window capture", () => {
     expect(settings.windowCaptureSound).toBe("soft-pop");
     expect(settings.windowCaptureFlash).toBe(true);
     expect(settings.windowCaptureAnimations).toBe(true);
-    expect(settings.windowCaptureOnboardingDismissed).toBe(false);
   });
 
   it("accepts capture preference updates", () => {
@@ -98,7 +97,6 @@ describe("ClientSettings window capture", () => {
         windowCaptureSound: "camera-shutter",
         windowCaptureFlash: false,
         windowCaptureAnimations: false,
-        windowCaptureOnboardingDismissed: true,
       }),
     ).toEqual({
       windowCaptureEnabled: true,
@@ -115,7 +113,6 @@ describe("ClientSettings window capture", () => {
       windowCaptureSound: "camera-shutter",
       windowCaptureFlash: false,
       windowCaptureAnimations: false,
-      windowCaptureOnboardingDismissed: true,
     });
   });
 

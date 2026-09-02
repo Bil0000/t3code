@@ -196,15 +196,54 @@ export const DesktopAppBrandingSchema = Schema.Struct({
 export const DesktopWindowCaptureMode = Schema.Literals(["direct", "portal", "unavailable"]);
 export type DesktopWindowCaptureMode = typeof DesktopWindowCaptureMode.Type;
 
+export const DesktopCaptureExtensionState = Schema.Struct({
+  status: Schema.Literals([
+    "not-installed",
+    "disabled",
+    "enabled",
+    "restart-required",
+    "update-required",
+    "extensions-disabled",
+    "unsupported",
+    "error",
+  ]),
+  message: Schema.String,
+});
+export type DesktopCaptureExtensionState = typeof DesktopCaptureExtensionState.Type;
+
+export const DesktopCaptureHelperState = Schema.Struct({
+  status: Schema.Literals(["not-installed", "update-required", "ready", "error"]),
+  message: Schema.String,
+  feedbackAvailable: Schema.optional(Schema.Boolean),
+});
+export type DesktopCaptureHelperState = typeof DesktopCaptureHelperState.Type;
+
+export const DesktopWindowCaptureSetupAction = Schema.Literals([
+  "install-extension",
+  "enable-extension",
+  "disable-extension",
+  "install-kde-helper",
+  "remove-kde-helper",
+  "retry-shortcut",
+]);
+export type DesktopWindowCaptureSetupAction = typeof DesktopWindowCaptureSetupAction.Type;
+
 export const DesktopWindowCaptureState = Schema.Struct({
   mode: DesktopWindowCaptureMode,
+  linuxDesktop: Schema.optional(Schema.Literals(["gnome", "kde", "niri"])),
   linuxBackend: Schema.optional(
-    Schema.Literals(["screenshot-portal", "gnome-extension", "picker"]),
+    Schema.Literals(["screenshot-portal", "gnome-extension", "niri", "kde", "picker"]),
   ),
   linuxFeedbackAvailable: Schema.optional(Schema.Boolean),
   shortcut: WindowCaptureShortcut,
   shortcutRegistered: Schema.Boolean,
+  shortcutPending: Schema.optional(Schema.Boolean),
+  shortcutLabel: Schema.optional(Schema.String),
   shortcutMessage: Schema.NullOr(Schema.String),
+  shortcutBinding: Schema.optional(Schema.String),
+  gnomeExtension: Schema.optional(DesktopCaptureExtensionState),
+  kdeHelper: Schema.optional(DesktopCaptureHelperState),
+  shortcutVerified: Schema.optional(Schema.Boolean),
   message: Schema.NullOr(Schema.String),
 });
 export type DesktopWindowCaptureState = typeof DesktopWindowCaptureState.Type;
@@ -1167,6 +1206,7 @@ export interface DesktopBridge {
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   requestWindowCapturePermissions?: (includeAccessibility: boolean) => Promise<void>;
   getWindowCaptureState?: () => Promise<DesktopWindowCaptureState>;
+  setupWindowCapture?: (action: DesktopWindowCaptureSetupAction) => Promise<void>;
   checkWindowCaptureShortcut?: (
     shortcut: WindowCaptureShortcut,
   ) => Promise<DesktopWindowCaptureShortcutAvailability>;

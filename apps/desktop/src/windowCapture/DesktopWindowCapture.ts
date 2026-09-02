@@ -9,6 +9,7 @@ import {
   type DesktopWindowCapture as DesktopWindowCaptureValue,
   type DesktopWindowCaptureShortcutAvailability,
   type DesktopWindowCaptureState,
+  type DesktopWindowCaptureSetupAction,
   type ClientSettings,
   type WindowCaptureModifier,
   type WindowCaptureModifierPairShortcut,
@@ -37,6 +38,16 @@ import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts
 import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutProcess.ts";
 import { captureMacWindowSnapshot, type MacWindowCaptureSource } from "./MacWindowCapture.ts";
 import type { LinuxCaptureFeedback, LinuxWindowMetadata } from "./LinuxWindowCapture.ts";
+import { niriSocketPath } from "./NiriWindowCapture.ts";
+import { niriCaptureBinding, startNiriCaptureShortcut } from "./NiriCaptureShortcut.ts";
+import { GnomeCaptureSetup, isGnomeCaptureSession } from "./GnomeCaptureSetup.ts";
+import { PortalCaptureShortcut, portalShortcutTrigger } from "./PortalCaptureShortcut.ts";
+import {
+  KdeCaptureSetup,
+  KDE_CAPTURE_EXECUTABLE,
+  isKdeCaptureSession,
+  type KdeCapturePaths,
+} from "./KdeWindowCapture.ts";
 import {
   captureRegionWindowSnapshot,
   type RegionWindowCaptureSource,
@@ -132,6 +143,9 @@ export class DesktopWindowCapture extends Context.Service<
     readonly configure: (settings: ClientSettings) => Effect.Effect<void>;
     readonly requestPermissions: (includeAccessibility: boolean) => Effect.Effect<void>;
     readonly state: Effect.Effect<DesktopWindowCaptureState>;
+    readonly setup: (
+      action: DesktopWindowCaptureSetupAction,
+    ) => Effect.Effect<void, DesktopWindowCaptureSetupError>;
     readonly checkShortcut: (
       shortcut: WindowCaptureShortcut,
     ) => Effect.Effect<DesktopWindowCaptureShortcutAvailability>;
@@ -153,6 +167,11 @@ export class DesktopWindowCapture extends Context.Service<
     readonly acknowledge: (id: string) => Effect.Effect<void, DesktopWindowCaptureError>;
   }
 >()("@t3tools/desktop/windowCapture/DesktopWindowCapture") {}
+
+export class DesktopWindowCaptureSetupError extends Schema.TaggedErrorClass<DesktopWindowCaptureSetupError>()(
+  "DesktopWindowCaptureSetupError",
+  { message: Schema.String },
+) {}
 
 type WindowCaptureSystemAnimationSettings = Pick<
   ReturnType<typeof Electron.systemPreferences.getAnimationSettings>,
@@ -284,6 +303,7 @@ async function captureSource({
   transition,
   imageTempPath,
   linuxAppId,
+  kdeCapturePaths,
   accessibilityWorkerPath,
   onLinuxFeedback,
 }: {
@@ -295,6 +315,7 @@ async function captureSource({
   transition: WindowCaptureTransition;
   imageTempPath: string;
   linuxAppId: string;
+  kdeCapturePaths: KdeCapturePaths;
   accessibilityWorkerPath: string;
   onLinuxFeedback: (feedback: LinuxCaptureFeedback) => void;
 }) {
@@ -344,12 +365,16 @@ async function captureSource({
       ));
     } else {
       const { captureLinuxWindow } = await import("./LinuxWindowCapture.ts");
-      const snapshot = await captureLinuxWindow(linuxAppId, {
-        flash: settings.windowCaptureFlash,
-        animate:
-          settings.windowCaptureAnimations &&
-          shouldAnimateWindowCapture(Electron.systemPreferences.getAnimationSettings()),
-      });
+      const snapshot = await captureLinuxWindow(
+        linuxAppId,
+        {
+          flash: settings.windowCaptureFlash,
+          animate:
+            settings.windowCaptureAnimations &&
+            shouldAnimateWindowCapture(Electron.systemPreferences.getAnimationSettings()),
+        },
+        kdeCapturePaths,
+      );
       if (snapshot) {
         linuxFeedback = snapshot.feedback;
         if (linuxFeedback) onLinuxFeedback(linuxFeedback);
@@ -378,7 +403,11 @@ async function captureSource({
         ? {
             title: linuxWindow.title,
             bounds: linuxWindow.bounds,
+            ...(linuxWindow.clientBounds ? { clientBounds: linuxWindow.clientBounds } : {}),
             owner: { processId: linuxWindow.processId },
+            ...(linuxWindow.accessibilityBoundsReliable === false
+              ? { accessibilityBoundsReliable: false }
+              : {}),
           }
         : undefined);
     const accessibilityRead =
@@ -607,6 +636,25 @@ export const make = Effect.gen(function* () {
   const runPromise = Effect.runPromiseWith(context);
   const captureDirectory = path.join(environment.stateDir, "window-captures");
   const linuxAppId = environment.linuxDesktopEntryName.replace(/\.desktop$/, "");
+  let shortcutVerified = false;
+  const gnomeSetupPaths = {
+    bundle: environment.isPackaged
+      ? path.join(environment.resourcesPath, "gnome-extension")
+      : path.join(environment.appRoot, "apps/desktop/gnome-extension"),
+    dataHome: path.dirname(environment.linuxApplicationsDir),
+  };
+  const kdeCapturePaths = {
+    bundle: environment.isPackaged
+      ? path.join(environment.resourcesPath, "kde-capture", KDE_CAPTURE_EXECUTABLE)
+      : path.join(
+          environment.appRoot,
+          "native/kde-window-capture/target/release",
+          KDE_CAPTURE_EXECUTABLE,
+        ),
+    dataHome: path.dirname(environment.linuxApplicationsDir),
+  };
+  const hasGnomeSetup = () =>
+    captureMode(environment.platform) === "portal" && isGnomeCaptureSession(process.env);
   const shiftShortcutWorkerPath = path.join(
     __dirname,
     "windowCapture",
@@ -618,6 +666,8 @@ export const make = Effect.gen(function* () {
     "WindowCaptureAccessibilityWorker.cjs",
   );
   let registeredAccelerator: string | undefined;
+  let portalShortcut: PortalCaptureShortcut | undefined;
+  let shortcutGeneration = 0;
   let shortcutSuppressed = false;
   let stopShiftShortcut: (() => void) | undefined;
   const flash = new WindowCaptureFlash();
@@ -649,6 +699,9 @@ export const make = Effect.gen(function* () {
       : startGlobalShiftShortcutProcess(shiftShortcutWorkerPath, modifier, onTrigger, onFailure);
 
   const releaseShortcut = () => {
+    shortcutGeneration++;
+    portalShortcut?.close();
+    portalShortcut = undefined;
     if (registeredAccelerator) {
       Electron.globalShortcut.unregister(registeredAccelerator);
       registeredAccelerator = undefined;
@@ -663,11 +716,18 @@ export const make = Effect.gen(function* () {
   const setFailure = (message: string) =>
     Ref.update(stateRef, (state) => ({ ...state, message })).pipe(Effect.andThen(notifyFailure));
   const setShortcutFailure = (shortcutMessage: string) =>
-    Ref.update(stateRef, (state) => ({
-      ...state,
-      shortcutRegistered: false,
-      shortcutMessage,
-    })).pipe(Effect.andThen(notifyFailure));
+    Effect.sync(() => {
+      shortcutVerified = false;
+    }).pipe(
+      Effect.andThen(
+        Ref.update(stateRef, (state) => ({
+          ...state,
+          shortcutRegistered: false,
+          shortcutMessage,
+        })),
+      ),
+      Effect.andThen(notifyFailure),
+    );
 
   const persistCapture = Effect.fn("desktop.windowCapture.persistCapture")(function* (
     settings: ClientSettings,
@@ -709,6 +769,7 @@ export const make = Effect.gen(function* () {
             transition,
             imageTempPath,
             linuxAppId,
+            kdeCapturePaths,
             accessibilityWorkerPath,
             onLinuxFeedback: (feedback) => {
               linuxFeedback = { id, feedback };
@@ -718,7 +779,7 @@ export const make = Effect.gen(function* () {
       });
       if (linuxActivationFailure) {
         yield* Effect.logWarning(
-          "GNOME could not activate T3 Code after window capture",
+          "The compositor could not activate T3 Code after window capture",
           linuxActivationFailure.cause,
         );
       }
@@ -808,12 +869,25 @@ export const make = Effect.gen(function* () {
     yield* captureNow;
   });
 
+  const captureFromShortcut = Effect.gen(function* () {
+    if (shortcutSuppressed) return;
+    shortcutVerified = true;
+    yield* capture;
+  }).pipe(Effect.withSpan("desktop.windowCapture.shortcutActivated"));
+  const onShortcut = () => runPromise(captureFromShortcut).catch(() => undefined);
+
   const checkShortcut = Effect.fn("desktop.windowCapture.checkShortcut")(function* (
     shortcut: WindowCaptureShortcut,
   ) {
     const mode = captureMode(environment.platform);
     if (mode === "unavailable") {
       return { available: false, message: "Window capture is not supported on this platform." };
+    }
+    if (mode === "portal" && niriSocketPath()) {
+      return {
+        available: false,
+        message: "Configure the capture shortcut in your Niri config, not in T3 Code.",
+      };
     }
     if (isModifierPairShortcut(shortcut)) {
       if (mode === "portal") {
@@ -840,10 +914,18 @@ export const make = Effect.gen(function* () {
     const systemConflict = windowCaptureShortcutSystemConflict(shortcut);
     if (systemConflict) return { available: false, message: systemConflict };
     if (mode === "portal") {
-      return {
-        available: true,
-        message: "Your desktop will confirm this shortcut when you save it.",
-      };
+      return yield* Effect.try(() => portalShortcutTrigger(shortcut)).pipe(
+        Effect.match({
+          onSuccess: () => ({
+            available: true,
+            message: "Your desktop will confirm this shortcut when you save it.",
+          }),
+          onFailure: (error) => ({
+            available: false,
+            message: error.cause instanceof Error ? error.cause.message : "Unsupported shortcut.",
+          }),
+        }),
+      );
     }
     const accelerator = toElectronAccelerator(shortcut);
     const available =
@@ -856,9 +938,10 @@ export const make = Effect.gen(function* () {
   const applySettings = Effect.fn("desktop.windowCapture.applySettings")(function* (
     settings: ClientSettings,
     requestedPermissionMessage: string | null,
+    forceShortcut = false,
   ) {
+    const previousSettings = yield* Ref.get(settingsRef);
     yield* Ref.set(settingsRef, settings);
-    releaseShortcut();
 
     const mode = captureMode(environment.platform);
     const shortcut = settings.windowCaptureShortcut;
@@ -873,6 +956,27 @@ export const make = Effect.gen(function* () {
       transition.dispose();
       closeLinuxFeedback();
     }
+    // Cosmetic capture preferences must not tear down an approved portal session.
+    if (
+      !forceShortcut &&
+      portalShortcut &&
+      settings.windowCaptureEnabled &&
+      previousSettings.windowCaptureEnabled &&
+      !isModifierPairShortcut(shortcut) &&
+      !isModifierPairShortcut(previousSettings.windowCaptureShortcut) &&
+      toElectronAccelerator(shortcut) ===
+        toElectronAccelerator(previousSettings.windowCaptureShortcut)
+    ) {
+      yield* Ref.update(stateRef, (state) => ({ ...state, shortcut }));
+      return;
+    }
+    releaseShortcut();
+    shortcutVerified = false;
+    const generation = shortcutGeneration;
+    const onCurrentShortcut = () => {
+      if (generation === shortcutGeneration) return onShortcut();
+      return Promise.resolve();
+    };
     if (!settings.windowCaptureEnabled || mode === "unavailable") {
       yield* Ref.set(stateRef, {
         mode,
@@ -904,6 +1008,35 @@ export const make = Effect.gen(function* () {
       });
       return;
     }
+    if (mode === "portal" && niriSocketPath()) {
+      const registered = yield* Effect.tryPromise(() =>
+        startNiriCaptureShortcut(linuxAppId, onCurrentShortcut, () => {
+          void runPromise(
+            setShortcutFailure("The Niri capture endpoint disconnected. Restart T3 Code."),
+          ).catch(() => undefined);
+        }),
+      ).pipe(
+        Effect.tap((stop) =>
+          Effect.sync(() => {
+            stopShiftShortcut = stop;
+          }),
+        ),
+        Effect.as(true),
+        Effect.orElseSucceed(() => false),
+      );
+      yield* Ref.set(stateRef, {
+        mode,
+        linuxBackend: "niri",
+        shortcut,
+        shortcutRegistered: false,
+        shortcutBinding: niriCaptureBinding(linuxAppId),
+        shortcutMessage: registered
+          ? "Managed by Niri. Add the binding inside the binds section of your Niri config. T3 Code cannot verify that it is bound."
+          : "Could not start the Niri capture endpoint. Another T3 Code instance may be using it.",
+        message: null,
+      });
+      return;
+    }
     if (mode === "portal" && isModifierPairShortcut(shortcut)) {
       yield* Ref.set(stateRef, {
         mode,
@@ -914,16 +1047,48 @@ export const make = Effect.gen(function* () {
       });
       return;
     }
+    if (mode === "portal" && !isModifierPairShortcut(shortcut)) {
+      yield* Ref.set(stateRef, {
+        mode,
+        shortcut,
+        shortcutRegistered: false,
+        shortcutMessage: null,
+        message: null,
+      });
+      yield* Effect.try(
+        () =>
+          new PortalCaptureShortcut(linuxAppId, shortcut, onCurrentShortcut, () => {
+            if (generation !== shortcutGeneration) return;
+            shortcutVerified = false;
+            void runPromise(
+              desktopWindow.dispatchMenuAction("window-capture-shortcut-changed"),
+            ).catch(() => undefined);
+          }),
+      ).pipe(
+        Effect.tap((registration) =>
+          Effect.sync(() => {
+            portalShortcut = registration;
+          }),
+        ),
+        Effect.catch((error) =>
+          Ref.update(stateRef, (state) => ({
+            ...state,
+            shortcutMessage:
+              error.cause instanceof Error
+                ? error.cause.message
+                : "Could not connect to your desktop's shortcut service.",
+          })),
+        ),
+      );
+      return;
+    }
 
     let registered = false;
     if (isModifierPairShortcut(shortcut)) {
       registered = yield* Effect.tryPromise(() =>
         startPairShortcutProcess(
           windowCaptureShortcutModifierPair(shortcut),
-          () => {
-            if (shortcutSuppressed) return;
-            void runPromise(capture).catch(() => undefined);
-          },
+          onCurrentShortcut,
           () => {
             void runPromise(
               setShortcutFailure(
@@ -943,10 +1108,7 @@ export const make = Effect.gen(function* () {
       );
     } else {
       const accelerator = toElectronAccelerator(shortcut);
-      registered = Electron.globalShortcut.register(accelerator, () => {
-        if (shortcutSuppressed) return;
-        void runPromise(capture).catch(() => undefined);
-      });
+      registered = Electron.globalShortcut.register(accelerator, onCurrentShortcut);
       if (registered) registeredAccelerator = accelerator;
     }
 
@@ -955,17 +1117,11 @@ export const make = Effect.gen(function* () {
       shortcut,
       shortcutRegistered: registered,
       message: null,
-      // Electron's portal result only confirms submission, not desktop consent.
-      shortcutMessage:
-        mode === "portal"
-          ? registered
-            ? "Requested from your desktop. Approve the system prompt to enable this shortcut."
-            : "Your desktop could not register this shortcut. Check global shortcut support and permissions."
-          : registered
-            ? isModifierPairShortcut(shortcut)
-              ? observedPairMessage(shortcut, environment.platform)
-              : null
-            : windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
+      shortcutMessage: registered
+        ? isModifierPairShortcut(shortcut)
+          ? observedPairMessage(shortcut, environment.platform)
+          : null
+        : windowCaptureShortcutRegistrationFailureMessage(shortcut, environment.platform),
     });
   });
 
@@ -989,6 +1145,60 @@ export const make = Effect.gen(function* () {
         : Effect.void,
     );
 
+  const setup = Effect.fn("desktop.windowCapture.setup")(function* (
+    action: DesktopWindowCaptureSetupAction,
+  ) {
+    if (action === "install-kde-helper" || action === "remove-kde-helper") {
+      if (captureMode(environment.platform) !== "portal" || !isKdeCaptureSession())
+        return yield* new DesktopWindowCaptureSetupError({
+          message: "Helper setup requires a KDE Plasma Wayland session outside a sandbox.",
+        });
+      yield* Effect.tryPromise({
+        try: () => new KdeCaptureSetup(kdeCapturePaths).perform(action),
+        catch: (error) =>
+          new DesktopWindowCaptureSetupError({
+            message: error instanceof Error ? error.message : "Could not set up KDE capture.",
+          }),
+      });
+    } else if (action !== "retry-shortcut") {
+      if (!hasGnomeSetup())
+        return yield* new DesktopWindowCaptureSetupError({
+          message: "Extension setup requires a GNOME Wayland session outside a sandbox.",
+        });
+      yield* Effect.tryPromise({
+        try: async () => {
+          const setup = new GnomeCaptureSetup(gnomeSetupPaths);
+          try {
+            await setup.perform(action);
+          } finally {
+            setup.close();
+          }
+        },
+        catch: (error) =>
+          new DesktopWindowCaptureSetupError({
+            message:
+              error instanceof Error ? error.message : "Could not set up the GNOME extension.",
+          }),
+      });
+    }
+    if (action === "retry-shortcut") {
+      const currentPortal = portalShortcut;
+      if (currentPortal?.hasSession && !currentPortal.state.shortcutPending) {
+        yield* Effect.tryPromise(() => currentPortal.configure()).pipe(
+          Effect.mapError(
+            (error) =>
+              new DesktopWindowCaptureSetupError({
+                message:
+                  error.cause instanceof Error
+                    ? error.cause.message
+                    : "Could not open shortcut permissions.",
+              }),
+          ),
+        );
+      } else yield* applySettings(yield* Ref.get(settingsRef), null, true);
+    }
+  }, configurationMutex.withPermits(1));
+
   yield* Effect.addFinalizer(() =>
     Effect.sync(() => {
       releaseShortcut();
@@ -1011,6 +1221,7 @@ export const make = Effect.gen(function* () {
     ),
     configure,
     requestPermissions,
+    setup,
     state: Ref.get(stateRef).pipe(
       Effect.flatMap((state) =>
         state.mode === "portal"
@@ -1019,9 +1230,56 @@ export const make = Effect.gen(function* () {
               return getLinuxCaptureSupport(linuxAppId);
             }).pipe(
               Effect.map((support) => ({ ...state, ...support })),
-              Effect.orElseSucceed(() => state),
+              Effect.catch((error) =>
+                Effect.succeed({
+                  ...state,
+                  message:
+                    error.cause instanceof Error
+                      ? error.cause.message
+                      : "Could not check desktop capture support. Check your desktop session and try again.",
+                }),
+              ),
             )
           : Effect.succeed(state),
+      ),
+      Effect.flatMap((state) =>
+        Effect.gen(function* () {
+          // Keep the session identity available even when its capability probe fails.
+          const linuxDesktop =
+            state.mode === "portal"
+              ? process.env.XDG_CURRENT_DESKTOP?.toLowerCase()
+                  .split(":")
+                  .find((name) => name === "gnome" || name === "kde" || name === "niri")
+              : undefined;
+          const gnomeExtension = hasGnomeSetup()
+            ? yield* Effect.promise(async () => {
+                const setup = new GnomeCaptureSetup(gnomeSetupPaths);
+                try {
+                  return await setup.state();
+                } finally {
+                  setup.close();
+                }
+              })
+            : undefined;
+          const kdeHelper =
+            state.linuxBackend === "kde"
+              ? yield* Effect.promise(() => new KdeCaptureSetup(kdeCapturePaths).state())
+              : undefined;
+          return {
+            ...state,
+            ...portalShortcut?.state,
+            ...(linuxDesktop ? { linuxDesktop } : {}),
+            ...(gnomeExtension ? { gnomeExtension } : {}),
+            ...(kdeHelper
+              ? {
+                  kdeHelper,
+                  linuxFeedbackAvailable:
+                    kdeHelper.status === "ready" && kdeHelper.feedbackAvailable === true,
+                }
+              : {}),
+            shortcutVerified,
+          };
+        }),
       ),
     ),
     checkShortcut,

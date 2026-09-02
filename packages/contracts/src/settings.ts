@@ -370,9 +370,6 @@ export const ClientSettingsSchema = Schema.Struct({
   ),
   windowCaptureFlash: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   windowCaptureAnimations: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  windowCaptureOnboardingDismissed: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(false)),
-  ),
   wordWrap: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
 });
 export type ClientSettings = typeof ClientSettingsSchema.Type;
@@ -1094,7 +1091,6 @@ export const ClientSettingsPatch = Schema.Struct({
   windowCaptureSound: Schema.optionalKey(WindowCaptureSound),
   windowCaptureFlash: Schema.optionalKey(Schema.Boolean),
   windowCaptureAnimations: Schema.optionalKey(Schema.Boolean),
-  windowCaptureOnboardingDismissed: Schema.optionalKey(Schema.Boolean),
   wordWrap: Schema.optionalKey(Schema.Boolean),
 });
 export type ClientSettingsPatch = typeof ClientSettingsPatch.Type;

@@ -61,6 +61,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       includeAccessibility,
     ),
   getWindowCaptureState: () => ipcRenderer.invoke(IpcChannels.GET_WINDOW_CAPTURE_STATE_CHANNEL),
+  setupWindowCapture: (action) =>
+    ipcRenderer.invoke(IpcChannels.SETUP_WINDOW_CAPTURE_CHANNEL, action),
   checkWindowCaptureShortcut: (shortcut) =>
     ipcRenderer.invoke(IpcChannels.CHECK_WINDOW_CAPTURE_SHORTCUT_CHANNEL, shortcut),
   setWindowCaptureShortcutSuppressed: (suppressed) =>

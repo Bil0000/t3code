@@ -35,7 +35,6 @@ vi.mock("electron", () => ({
 
 import {
   captureLinuxWindow,
-  getLinuxCaptureBackend,
   getLinuxCaptureSupport,
   readPortalPng,
   resizeLinuxCapture,
@@ -56,6 +55,8 @@ class FakeBus extends NodeEvents.EventEmitter {
   portalVersion = 3;
   targets: number | undefined = 8;
   extensionVersion: number | undefined;
+  kdeVersion: number | undefined = 5;
+  kdeError: Error | undefined;
   status = 0;
   uri = "file:///missing.png";
   registryError: Error | undefined;
@@ -98,6 +99,12 @@ class FakeBus extends NodeEvents.EventEmitter {
         if (this.registryError) throw this.registryError;
         return reply([]);
       case "GetAll":
+        if (message.destination === "org.kde.KWin.ScreenShot2") {
+          if (this.kdeError) throw this.kdeError;
+          if (this.kdeVersion === undefined)
+            throw new DBusError("org.freedesktop.DBus.Error.ServiceUnknown", "Absent");
+          return reply([{ Version: new Variant("u", this.kdeVersion) }]);
+        }
         if (message.destination === "org.freedesktop.portal.Desktop")
           return reply([
             {
@@ -155,6 +162,57 @@ beforeEach(async () => {
   imageSize.height = 600;
   vi.stubEnv("FLATPAK_ID", "");
   vi.stubEnv("SNAP", "");
+  vi.stubEnv("NIRI_SOCKET", "");
+  vi.stubEnv("XDG_CURRENT_DESKTOP", "GNOME");
+});
+
+it("uses native KWin only in an unsandboxed KDE session", async () => {
+  vi.stubEnv("XDG_CURRENT_DESKTOP", "KDE");
+  expect((await getLinuxCaptureSupport(appId)).linuxBackend).toBe("kde");
+  vi.stubEnv("FLATPAK_ID", "com.example.App");
+  expect((await getLinuxCaptureSupport(appId)).linuxBackend).not.toBe("kde");
+});
+
+it("redetects the desktop without using another session's extension or stale Niri socket", async () => {
+  bus.portalVersion = 2;
+  bus.extensionVersion = 2;
+  vi.stubEnv("NIRI_SOCKET", "/previous-session/niri.sock");
+  expect(await getLinuxCaptureSupport(appId)).toEqual({
+    linuxBackend: "gnome-extension",
+    linuxFeedbackAvailable: true,
+  });
+
+  vi.stubEnv("XDG_CURRENT_DESKTOP", "KDE");
+  expect(await getLinuxCaptureSupport(appId)).toEqual({
+    linuxBackend: "kde",
+    linuxFeedbackAvailable: false,
+  });
+  bus.kdeVersion = undefined;
+  expect((await getLinuxCaptureSupport(appId)).linuxBackend).toBe("picker");
+
+  vi.stubEnv("XDG_CURRENT_DESKTOP", "GNOME");
+  expect(await getLinuxCaptureSupport(appId)).toEqual({
+    linuxBackend: "gnome-extension",
+    linuxFeedbackAvailable: true,
+  });
+});
+
+it("uses the standard path when KWin's native capability is missing, but not when denied", async () => {
+  vi.stubEnv("XDG_CURRENT_DESKTOP", "KDE");
+  bus.kdeVersion = undefined;
+  expect((await getLinuxCaptureSupport(appId)).linuxBackend).toBe("screenshot-portal");
+  bus.kdeVersion = 1;
+  bus.portalVersion = 2;
+  expect((await getLinuxCaptureSupport(appId)).linuxBackend).toBe("picker");
+  bus.kdeError = new DBusError("org.freedesktop.DBus.Error.AccessDenied", "Denied");
+  await expect(getLinuxCaptureSupport(appId)).rejects.toThrow("Denied");
+});
+
+it("does not fall through to the picker when KDE needs helper setup", async () => {
+  vi.stubEnv("XDG_CURRENT_DESKTOP", "KDE");
+  await expect(captureLinuxWindow(appId)).rejects.toThrow("KDE capture setup");
+  expect(bus.calls.some((call) => call.member === "Screenshot")).toBe(false);
+  expect(bus.disconnect).toHaveBeenCalledOnce();
 });
 afterEach(async () => {
   vi.useRealTimers();
@@ -176,7 +234,7 @@ it.each([
     bus.portalVersion = version;
     bus.targets = targets;
     bus.extensionVersion = extension;
-    expect(await getLinuxCaptureBackend(appId)).toBe(expected);
+    expect((await getLinuxCaptureSupport(appId)).linuxBackend).toBe(expected);
     expect(bus.calls[0]?.member).toBe("Register");
     expect(bus.disconnect).toHaveBeenCalledOnce();
   },
@@ -322,14 +380,14 @@ it("allows the picker only when both automatic backends are absent", async () =>
 
 it("tolerates an older portal without Registry, but not registration denial", async () => {
   bus.registryError = new DBusError("org.freedesktop.DBus.Error.UnknownMethod", "Old portal");
-  expect(await getLinuxCaptureBackend(appId)).toBe("screenshot-portal");
+  expect((await getLinuxCaptureSupport(appId)).linuxBackend).toBe("screenshot-portal");
   bus.registryError = new DBusError("org.freedesktop.DBus.Error.AccessDenied", "Denied identity");
-  await expect(getLinuxCaptureBackend(appId)).rejects.toThrow("Denied identity");
+  await expect(getLinuxCaptureSupport(appId)).rejects.toThrow("Denied identity");
 });
 
 it("does not register a host identity from inside a sandbox", async () => {
   vi.stubEnv("FLATPAK_ID", appId);
-  await getLinuxCaptureBackend(appId);
+  await getLinuxCaptureSupport(appId);
   expect(bus.calls.some((call) => call.member === "Register")).toBe(false);
 });
 

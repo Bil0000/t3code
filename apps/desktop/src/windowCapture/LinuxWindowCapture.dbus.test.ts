@@ -18,6 +18,9 @@ vi.mock("electron", () => ({
   },
 }));
 import { LinuxCaptureConnection } from "./LinuxWindowCapture.ts";
+import { startNiriCaptureShortcut } from "./NiriCaptureShortcut.ts";
+import { GnomeCaptureSetup } from "./GnomeCaptureSetup.ts";
+import { GNOME_CAPTURE_UUID } from "./gnomeCaptureBundle.ts";
 
 const hasDbus = NodeChildProcess.spawnSync("dbus-daemon", ["--version"]).status === 0;
 
@@ -26,7 +29,11 @@ it.runIf(hasDbus)("captures through real D-Bus marshalling on a private bus", as
   let daemon: NodeChildProcess.ChildProcess | undefined;
   let server: MessageBus | undefined;
   const clients: LinuxCaptureConnection[] = [];
+  let stopNiriShortcut: (() => void) | undefined;
   try {
+    vi.stubEnv("XDG_CURRENT_DESKTOP", "GNOME");
+    vi.stubEnv("FLATPAK_ID", "");
+    vi.stubEnv("SNAP", "");
     daemon = NodeChildProcess.spawn(
       "dbus-daemon",
       [
@@ -50,6 +57,8 @@ it.runIf(hasDbus)("captures through real D-Bus marshalling on a private bus", as
     server.on("error", () => undefined);
     await server.requestName("org.freedesktop.portal.Desktop", NameFlag.DO_NOT_QUEUE);
     await server.requestName("org.gnome.Shell.Extensions.T3WindowCapture", NameFlag.DO_NOT_QUEUE);
+    await server.requestName("org.gnome.Shell", NameFlag.DO_NOT_QUEUE);
+    await server.requestName("org.kde.KWin.ScreenShot2", NameFlag.DO_NOT_QUEUE);
     const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10, 0]);
     const imagePath = NodePath.join(directory, "image.png");
     await NodeFSP.writeFile(imagePath, png);
@@ -60,15 +69,36 @@ it.runIf(hasDbus)("captures through real D-Bus marshalling on a private bus", as
     let animateFrame: unknown[] | undefined;
     let target: unknown;
     let clientName: string | undefined;
+    let shellExtensionState = 2;
     server.addMethodHandler((message: Message) => {
       if (message.member === "Register") {
         server!.send(Message.newMethodReturn(message));
       } else if (message.member === "GetAll") {
         const properties =
-          message.body[0] === "org.freedesktop.portal.Screenshot"
-            ? { version: new Variant("u", portalVersion), AvailableTargets: new Variant("u", 8) }
-            : { Version: new Variant("u", extensionVersion) };
+          message.body[0] === "org.gnome.Shell.Extensions"
+            ? {
+                ShellVersion: new Variant("s", "50.0"),
+                UserExtensionsEnabled: new Variant("b", true),
+              }
+            : message.body[0] === "org.kde.KWin.ScreenShot2"
+              ? { Version: new Variant("u", 5) }
+              : message.body[0] === "org.freedesktop.portal.Screenshot"
+                ? {
+                    version: new Variant("u", portalVersion),
+                    AvailableTargets: new Variant("u", 8),
+                  }
+                : { Version: new Variant("u", extensionVersion) };
         server!.send(Message.newMethodReturn(message, "a{sv}", [properties]));
+      } else if (message.member === "GetExtensionInfo") {
+        server!.send(
+          Message.newMethodReturn(message, "a{sv}", [
+            { state: new Variant("d", shellExtensionState), version: new Variant("d", 2) },
+          ]),
+        );
+      } else if (message.member === "EnableExtension" || message.member === "DisableExtension") {
+        expect(message.body).toEqual([GNOME_CAPTURE_UUID]);
+        shellExtensionState = message.member === "EnableExtension" ? 1 : 2;
+        server!.send(Message.newMethodReturn(message, "b", [true]));
       } else if (message.member === "Screenshot") {
         const options = message.body[1] as Record<string, Variant<unknown>>;
         target = options.target?.value;
@@ -115,6 +145,19 @@ it.runIf(hasDbus)("captures through real D-Bus marshalling on a private bus", as
       clients.push(client);
       return client;
     };
+    const setup = new GnomeCaptureSetup(
+      { bundle: NodePath.resolve("apps/desktop/gnome-extension"), dataHome: directory },
+      sessionBus({ busAddress: String(address) }),
+    );
+    try {
+      expect((await setup.state()).status).toBe("disabled");
+      await setup.perform("enable-extension");
+      expect((await setup.state()).status).toBe("enabled");
+      await setup.perform("disable-extension");
+      expect((await setup.state()).status).toBe("disabled");
+    } finally {
+      setup.close();
+    }
     const portal = connect();
     expect(await portal.backend("com.t3tools.T3Code")).toBe("screenshot-portal");
     expect(await portal.capturePortal()).toEqual({ png });
@@ -152,7 +195,75 @@ it.runIf(hasDbus)("captures through real D-Bus marshalling on a private bus", as
     expect(feedbackArgs).toEqual([true, true]);
     expect(activateTitle).toBe("T3 Code");
     expect(animateFrame).toEqual([0.1, 0.8, 0.2, 0.1]);
+    vi.stubEnv("XDG_CURRENT_DESKTOP", "KDE");
+    const kde = connect();
+    expect(await kde.backend("com.t3tools.T3Code")).toBe("kde");
+    expect(kde.feedbackAvailable).toBe(false);
+    kde.close();
+    const triggered = vi.fn();
+    const failed = vi.fn();
+    const niriBus = sessionBus({ busAddress: String(address) });
+    stopNiriShortcut = await startNiriCaptureShortcut(
+      "com.t3tools.T3Code.NiriTest",
+      triggered,
+      failed,
+      niriBus,
+    );
+    const command = [
+      "call",
+      "--session",
+      "--dest",
+      "com.t3tools.T3Code.NiriTest.WindowCapture",
+      "--object-path",
+      "/com/t3tools/WindowCapture",
+      "--method",
+      "com.t3tools.WindowCapture.Capture",
+    ];
+    // Exercise the actual command copied to Niri's configuration, including gdbus introspection.
+    await new Promise<void>((resolve, reject) => {
+      NodeChildProcess.execFile(
+        "gdbus",
+        command,
+        {
+          env: { ...process.env, DBUS_SESSION_BUS_ADDRESS: String(address) },
+          timeout: 3_000,
+        },
+        (error) => (error ? reject(error) : resolve()),
+      );
+    });
+    expect(triggered).toHaveBeenCalledOnce();
+    expect(failed).not.toHaveBeenCalled();
+    const invalid = server.call(
+      new Message({
+        destination: "com.t3tools.T3Code.NiriTest.WindowCapture",
+        path: "/com/t3tools/WindowCapture",
+        interface: "com.t3tools.WindowCapture",
+        member: "Capture",
+        signature: "s",
+        body: ["not allowed"],
+      }),
+    );
+    await expect(invalid).rejects.toThrow("Capture takes no arguments");
+    expect(triggered).toHaveBeenCalledOnce();
+    await expect(
+      startNiriCaptureShortcut(
+        "com.t3tools.T3Code.NiriTest",
+        triggered,
+        failed,
+        sessionBus({ busAddress: String(address) }),
+      ),
+    ).rejects.toThrow("already owns");
+    stopNiriShortcut();
+    const restarted = await startNiriCaptureShortcut(
+      "com.t3tools.T3Code.NiriTest",
+      triggered,
+      failed,
+      sessionBus({ busAddress: String(address) }),
+    );
+    restarted();
   } finally {
+    vi.unstubAllEnvs();
+    stopNiriShortcut?.();
     for (const client of clients) client.close();
     server?.disconnect();
     if (daemon && daemon.exitCode === null) {

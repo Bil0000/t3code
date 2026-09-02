@@ -6,15 +6,24 @@ macOS retains its native capture path.
 
 `apps/desktop/src/windowCapture/LinuxWindowCapture.ts` selects a backend for each capture:
 
-1. Screenshot portal interface version >= 3 **and** `AvailableTargets & 8`: request `target=8`
+1. A Niri session with `NIRI_SOCKET`: capture through Niri's native IPC (25.11 or newer).
+2. A KDE session with KWin ScreenShot2 version >= 2: use the bundled native capture helper.
+3. Screenshot portal interface version >= 3 **and** `AvailableTargets & 8`: request `target=8`
    (active window), `interactive=false`. Version alone is insufficient. This does not bypass consent.
-2. GNOME extension protocol version 1 or 2: capture the focused window actor without a picker.
-3. Neither available: the existing Electron/PipeWire picker.
+4. In a GNOME session, extension protocol version 1 or 2: capture the focused window actor without a picker.
+5. None available: the existing Electron/PipeWire picker, explicitly described as manual capture.
 
 Failures, cancellation, timeouts, and permission denial do not select a different backend. All
 entry points go through `DesktopWindowCapture.captureSource`. The optional `linuxBackend` IPC
 state distinguishes this choice from `mode=portal`, which continues to control Wayland shortcut
 registration. The global-shortcut portal and screenshot permission are independent.
+
+Capture preferences are shared across desktops, but access is derived from the current session,
+not a persisted onboarding-completed flag. The optional `linuxDesktop` IPC field identifies GNOME,
+KDE, or Niri independently of a successful capability probe, so setup can name the desktop even
+on failure. Relaunching resets shortcut verification and rechecks access; it does not remove other
+desktops' helpers or bindings. A stale `NIRI_SOCKET` or reachable GNOME extension must not select
+another desktop's native backend.
 
 The standard API returns a PNG URI only, not a stable window identity. Do not infer accessibility
 context from the subsequently focused window or a guessed title. Extension metadata contains the
@@ -66,12 +75,195 @@ come from the portal's unique owner and this connection's request namespace. Fai
 requests are closed; disconnecting removes matches and temporary names.
 
 PNG reads accept local file URIs only and are bounded to 32 MiB. Portal-owned files are not removed.
-Images are fitted within 2560×1600 while preserving aspect ratio. D-Bus uses `dbus-next` without
-its optional native Unix-FD dependency; no capture path transfers file descriptors.
+Images are fitted within 2560×1600 while preserving aspect ratio. The Electron D-Bus client uses
+`dbus-next` without its optional native Unix-FD dependency. KDE's dedicated Rust helper uses
+`zbus` to pass a writable Unix descriptor to KWin and read raw pixels, bounded to 128 MiB.
+
+## KDE Plasma
+
+`KdeWindowCapture.ts` integrates `native/kde-window-capture`, built and shipped as a Linux-only
+extra resource. Development builds need `cargo build --locked --release --manifest-path
+native/kde-window-capture/Cargo.toml` first. The helper requests KWin's native ScreenShot2 API,
+not the Screenshot portal; no Spectacle subprocess, shell replacement, or disabled permission
+checks are involved. This integration targets Plasma 6 and its `kbuildsycoca6` registry tool.
+
+The access step explicitly installs the bundled executable below the XDG data home at
+`t3code/kde-capture/t3-kde-window-capture`, and registers a hidden application desktop entry
+declaring only `org.kde.KWin.ScreenShot2` in `X-KDE-DBUS-Restricted-Interfaces`. Its Exec points
+to the installed helper, not an AppImage path or a shared interpreter. KWin resolves the calling
+PID's executable and matches that against its application registry. Setup refreshes that registry
+with `kbuildsycoca6`, then checks authorization without capturing: `CaptureWindow` with an invalid
+window identifier must return `InvalidWindow`, which follows KWin's authorization check.
+Having files on disk alone is never reported as ready. Bundle changes require an explicit update.
+Setup also offers removal, deleting only T3's helper executable and capture desktop entry.
+The restricted-interface property uses KConfig's comma-separated list syntax, not XDG's semicolons.
+For our single interface, write the exact name with no trailing separator; a semicolon becomes
+part of the permission name and KWin rejects it. Existing malformed entries require an explicit
+helper update, even when the bundled executable is unchanged.
+Desktop-entry updates use an atomic rename so directory watchers observe them. Installation and
+removal refresh KService both directly and, when available, through `systemd-run --user` in the
+Plasma session environment. KService's cache key includes search paths and locale; refreshing
+only inside an AppImage can leave KWin reading stale permissions from a different cache. No
+environment is imported into the user manager, and non-systemd sessions retain the direct refresh.
+
+One-shot KWin scripts obtain the focused window's ID/PID/title/frame and later activate only
+the matching T3 process and title. Replies must come from KWin's unique bus owner; scripts are
+unloaded after use. A remapped T3 window is awaited using window/title signals with a deadline,
+not polling. Capture pins the discovered ID, then checks identity again before attaching metadata
+for AT-SPI. This comparison ignores a changing leading CLI spinner, like the AT-SPI title matcher,
+but still requires the same non-spinner title, ID, process, app identity, and frame. The original
+capture-time metadata is preserved for the attachment and compositor effects. If scripting is
+unavailable, the native active-window screenshot still works but
+has no accessibility identity. Changed or closed windows never contribute text from a replacement.
+Focus failure does not discard an image.
+
+KDE metadata includes both `frameGeometry` (the screenshot, including decorations) and
+`clientGeometry` (the app area). AT-SPI matching accepts either verified size, never an arbitrary
+decoration-height tolerance, and rejects ambiguity across both candidates. When accessible screen
+positions are reliable, element coordinates map against the screenshot frame so the title-bar offset
+is preserved. When an app reports only `(0, 0)` or repeats the root origin for every element,
+text/structure can still be included but descendant coordinates remain `null`.
+
+The same executable embeds a short-lived QML capture overlay loaded through KWin's
+`loadDeclarativeScript`; there is no persistent effect package to install or enable. The access
+check reports whether that API exists, and Settings enables effects only with an up-to-date,
+authorized helper. `kreadconfig6` reads KDE's layered `AnimationDurationFactor`; zero disables
+flight, in addition to Electron's reduced-motion policy. An unavailable effect never fails capture.
+
+Each output gets an input-transparent KWin internal window (`outputOnly`, no focus, no shadow),
+showing the frozen PNG, not moving the real application. QML transitions run only for flash and
+flight, with no per-frame JS or idle animation. Source and destination use compositor logical
+coordinates; the normalized composer target maps through the exact PID/title's client geometry.
+An authenticated KWin callback confirms the first painted frame and landing. Private helper stdin
+feeds an asynchronous D-Bus command channel (no polling). The landed image stays until the
+renderer acknowledges the attachment. Cancellation, screen lock, output/desktop changes, owner
+loss, and bounded deadlines hide the overlay, unload its script, and delete private PNG/QML files.
+
+The native helper's tests use a private D-Bus daemon to exercise authorization replies, unsigned
+version properties, Unix-FD pixel transport, PNG conversion, identity changes, and script cleanup.
+KWin's `Version` property is a D-Bus `u` (`uint32`), decoded as `UIntVariant` in the desktop and
+`u32` in the native helper. The desktop transport fixture also sends that unsigned wire type.
+Run `cargo test --locked --manifest-path native/kde-window-capture/Cargo.toml` on Linux with
+`dbus-daemon` installed. These tests do not prove real Plasma authorization, mixed-DPI capture,
+or focus behavior; validate those in a Plasma session before declaring runtime support verified.
+With Qt 6's QML test tools installed, run the overlay state-machine tests without a desktop:
+
+```sh
+QT_QPA_PLATFORM=offscreen QT_QUICK_BACKEND=software qmltestrunner \
+  -import native/kde-window-capture/tests/qml/imports \
+  -input native/kde-window-capture/tests/qml
+```
+
+These execute the shipped QML with a fake KWin module. A live Plasma pass still needs to verify
+placement, stacking, multi-output scaling, focus, and reduced motion with the compositor.
+
+Upstream contracts: [KWin ScreenShot2](https://github.com/KDE/kwin/blob/v6.6.6/src/plugins/screenshot/screenshotdbusinterface2.cpp),
+[executable authorization](https://github.com/KDE/kwin/blob/v6.6.6/src/utils/serviceutils.h),
+[KWin scripting](https://develop.kde.org/docs/plasma/kwin/api/),
+[internal-window input/geometry behavior](https://github.com/KDE/kwin/blob/v6.6.6/src/internalwindow.cpp),
+[QML loader and D-Bus calls](https://github.com/KDE/kwin/blob/v6.6.6/src/scripting/scripting.cpp).
+
+## Niri
+
+`NiriWindowCapture.ts` speaks newline-delimited JSON directly to the current session's `NIRI_SOCKET`.
+It does not shell out to a command or discover sockets belonging to other sessions. Sandboxed
+clients do not use this host API. Requests and event waits have five-second deadlines and bounded
+messages. A private 0700 temporary directory contains the PNG and is removed on success or failure.
+
+Capture subscribes to `EventStream` and waits for initial window state before requesting
+`FocusedWindow`. `ScreenshotWindow` receives that specific window ID and a unique absolute path.
+Only `ScreenshotCaptured` for that path completes the operation; unrelated captures and command
+acknowledgements do not. The adapter preserves the original PID, app ID, title, and logical window
+size only if they still match after capture. A changed/closed window yields image-only context.
+Niri does not supply a global screenshot origin, so AT-SPI matching uses logical size and title,
+while descendant accessibility coordinates remain untrusted. The root still covers the image.
+
+After the accessibility read starts, activation subscribes to window events, waits for a uniquely
+matching T3 title owned by the Electron process, and sends `FocusWindow` by ID. There is no polling
+or focus-by-title fallback to another process. Niri does not provide the GNOME extension's flash
+or window-flight effects. Niri 26.04's native screenshot action also copies the image to the
+clipboard and may show its own screenshot notification; the adapter does not alter clipboard
+preferences or patch the compositor.
+
+Niri does not implement the global-shortcut portal. While capture is enabled, `NiriCaptureShortcut.ts`
+owns `<desktop-app-id>.WindowCapture` on the session bus, exporting the no-argument method
+`com.t3tools.WindowCapture.Capture` at `/com/t3tools/WindowCapture`. Settings offers a copyable Niri
+`binds` entry invoking `gdbus`; it never edits the user's compositor configuration or claims the
+key is reserved. This avoids launching or focusing a second Electron instance before capture.
+The endpoint respects capture suppression, the existing capture mutex, and the enabled setting;
+disabling capture or shutting down releases it. The session bus is the same-user trust boundary.
+Development and packaged app IDs use separate endpoints. The ordinary command-palette flow remains
+available without configuring a global binding.
 
 ## GNOME extension
 
 Source: `apps/desktop/gnome-extension`. UUID: `window-capture@t3.codes`.
+
+### Bundled setup
+
+Capture is opt-in. The app shell does not mount a capture onboarding dialog. The Settings toggle
+opens a Settings-owned two-step modal wizard: capture access and shortcut configuration.
+Its `WizardSteps` indicator is shared with T3 Connect onboarding. Everyday preferences
+stay in Settings; shortcut editing records and saves inline without reopening the wizard.
+Niri expands shared config instructions inline instead of offering an in-app recorder.
+Setup waits for capture access before enabling registration. When access is already ready, opening
+setup restores registration if needed and resumes at the shortcut step. Closing an unfinished
+first-time setup disables capture again. Closing setup
+for an already enabled feature preserves that state. Installed files and saved choices are kept.
+Disabling capture releases the shortcut without uninstalling the extension.
+
+Step guards derive from current desktop state, not a persisted completion flag. GNOME must report
+both an enabled extension and an available capture endpoint; a required logout cannot be bypassed.
+Returning after login rechecks that state and skips completed access instead of restarting the wizard.
+Explicitly selecting the access or shortcut step still allows editing it. Portal requests and Niri
+config snippets are not proof of a working shortcut. Setup can finish after saving/requesting a
+binding; there is no mandatory test. Settings distinguishes a saved/requested shortcut from an
+observed native activation.
+
+Linux artifacts include the files listed in `gnome-extension/bundle.json` at
+`resources/gnome-extension`, outside `app.asar`. The desktop builder stages only that allowlist;
+tests and packaging metadata are not installed. Development reads the same source directory.
+
+`GnomeCaptureSetup` probes GNOME Shell's Extensions D-Bus interface and the installed metadata.
+Installation is an explicit, trusted-main-renderer IPC action. It stages the bundled payload in
+the per-user extensions directory, moves any replaced version to
+`$XDG_DATA_HOME/t3code/extension-backups`, and renames the completed payload into place. Failed
+staging leaves the old install untouched; a failed final rename restores it. No remote extension
+API, elevated installer, global user-extension preference, or unrelated UUID is touched.
+
+New local installs require GNOME to discover them on the next login. Setup distinguishes that
+state from a discovered-but-disabled extension and exposes Enable/Disable for this UUID only.
+Loaded and installed versions are compared so an update cannot be called ready before login.
+The setup is available only in a GNOME Wayland host session, not a sandbox or another desktop.
+
+`PortalCaptureShortcut` owns a dedicated D-Bus connection on Wayland outside Niri. It registers
+the app identity, creates a session, and always binds the desired shortcut, including on restart.
+Electron 44.1.0's restored-session path can skip rebinding and leave callbacks behind on unregister,
+so this adapter does not use Electron's global-shortcut API. Native macOS/Windows shortcuts are unchanged.
+
+Binding submission sets `shortcutPending`; only the portal response with an assigned
+`trigger_description` sets `shortcutRegistered` and `shortcutLabel`. Settings displays that actual
+assignment, including changes reported by `ShortcutsChanged`. Desktop permission controls use
+`ConfigureShortcuts` where available (portal v2). Denial is not bypassed by rotating random IDs:
+IDs are deterministic per requested chord.
+Each session binds only the selected shortcut, allowing Plasma to remove stale bindings. Changing
+keys or disabling capture closes the previous session and invalidates its callback. Sound, flash,
+and other cosmetic changes keep the existing connection and approval.
+
+Shifted-number shortcuts have a known layout-dependent limitation on Plasma: the recorder stores
+the physical digit, while KWin can consume Shift to produce a punctuation keysym. A successful
+binding response does not prove that physical chord will activate it. Letter chords work around
+this; a general fix needs layout-aware encoding, not a hardcoded US punctuation map.
+
+Signals are checked against the portal's unique owner, current session, and shortcut ID. Method
+calls and consent requests are bounded; responses arriving before a method reply are handled.
+Portal restarts, denial, and timeout surface as shortcut status instead of a false ready state.
+Settings refreshes on the shortcut-change event, focus, or explicit Check again, not continuously.
+
+There is no separate shortcut-test mode or delivery polling. Native activation is observed during
+normal capture; manual capture and renderer key events do not verify a shortcut. Verification
+is session-local and resets when registration changes. Niri's config stays user-managed,
+including custom config paths and conflicts.
 
 The extension exports `org.gnome.Shell.Extensions.T3WindowCapture` at
 `/org/gnome/Shell/Extensions/T3WindowCapture`. `Version` is a read-only uint32. `Capture()` returns

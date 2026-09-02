@@ -19,6 +19,7 @@ import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/rela
 import { resolveSpawnCommand } from "@t3tools/shared/shell";
 import rootPackageJson from "../package.json" with { type: "json" };
 import desktopPackageJson from "../apps/desktop/package.json" with { type: "json" };
+import gnomeCaptureBundle from "../apps/desktop/gnome-extension/bundle.json" with { type: "json" };
 import serverPackageJson from "../apps/server/package.json" with { type: "json" };
 
 import { applyWebBrandAssets } from "./apply-web-brand-assets.ts";
@@ -806,6 +807,8 @@ export const DESKTOP_FILE_EXCLUSIONS = [
   "!apps/desktop/prod-resources/windows-server/**/*",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz",
   "!apps/desktop/prod-resources/wsl-runtime.tar.gz.sha256",
+  "!apps/desktop/gnome-extension",
+  "!apps/desktop/gnome-extension/**/*",
 ] as const;
 // Windows terminal helpers cannot run on macOS and slow signing and notarization.
 export const MAC_FILE_EXCLUSIONS = [
@@ -914,6 +917,17 @@ export const DESKTOP_EXTRA_RESOURCES = [
   {
     from: "apps/desktop/prod-resources/resource-monitor",
     to: "resource-monitor",
+  },
+] as const;
+export const LINUX_CAPTURE_EXTRA_RESOURCES = [
+  {
+    from: "apps/desktop/prod-resources/kde-capture",
+    to: "kde-capture",
+  },
+  {
+    from: "apps/desktop/gnome-extension",
+    to: "gnome-extension",
+    filter: gnomeCaptureBundle.files,
   },
 ] as const;
 
@@ -1734,6 +1748,46 @@ const verifyPackagedBundleIsSelfContained = Effect.fn("verifyPackagedBundleIsSel
   },
 );
 
+export const stageKdeCaptureHelper = Effect.fn("stageKdeCaptureHelper")(function* (input: {
+  readonly repoRoot: string;
+  readonly stageResourcesDir: string;
+  readonly arch: typeof BuildArch.Type;
+  readonly verbose: boolean;
+}) {
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const [rustTarget] = resolveResourceMonitorRustTargets("linux", input.arch);
+  const spawnCommand = yield* resolveSpawnCommand("cargo", [
+    "build",
+    "--locked",
+    "--release",
+    "--manifest-path",
+    path.join(input.repoRoot, "native/kde-window-capture/Cargo.toml"),
+    "--target",
+    rustTarget!,
+  ]);
+  yield* runCommand(
+    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+      cwd: input.repoRoot,
+      shell: spawnCommand.shell,
+    }),
+    { label: `cargo build KDE capture helper (${rustTarget})`, verbose: input.verbose },
+  );
+  const destination = path.join(input.stageResourcesDir, "kde-capture");
+  yield* fs.makeDirectory(destination, { recursive: true });
+  const executable = path.join(destination, "t3-kde-window-capture");
+  yield* fs.copyFile(
+    path.join(
+      input.repoRoot,
+      "native/kde-window-capture/target",
+      rustTarget!,
+      "release/t3-kde-window-capture",
+    ),
+    executable,
+  );
+  yield* fs.chmod(executable, 0o755);
+});
+
 export const stageResourceMonitor = Effect.fn("stageResourceMonitor")(function* (input: {
   readonly repoRoot: string;
   readonly stageResourcesDir: string;
@@ -2155,6 +2209,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     // hand-packed server.asar sidecar (see WINDOWS_SERVER_ASAR_RESOURCE).
     extraResources: [
       ...DESKTOP_EXTRA_RESOURCES,
+      ...(platform === "linux" ? LINUX_CAPTURE_EXTRA_RESOURCES : []),
       ...(platform === "win" ? WINDOWS_SERVER_EXTRA_RESOURCES : []),
       ...(platform === "win" && wslRuntimeBundled ? WSL_RUNTIME_EXTRA_RESOURCES : []),
     ],
@@ -3083,6 +3138,16 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   yield* Effect.log("[desktop-artifact] Staging release app...");
   yield* fs.copy(distDirs.desktopDist, path.join(stageAppDir, "apps/desktop/dist-electron"));
   yield* fs.copy(distDirs.desktopResources, stageResourcesDir);
+  if (options.platform === "linux") {
+    const extensionDir = path.join(stageAppDir, "apps/desktop/gnome-extension");
+    yield* fs.makeDirectory(extensionDir, { recursive: true });
+    for (const file of gnomeCaptureBundle.files) {
+      yield* fs.copyFile(
+        path.join(repoRoot, "apps/desktop/gnome-extension", file),
+        path.join(extensionDir, file),
+      );
+    }
+  }
   if (options.platform === "mac" && options.target === "dmg") {
     yield* stageDesktopDmgBackground(
       stageResourcesDir,
@@ -3102,6 +3167,14 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     arch: options.arch,
     verbose: options.verbose,
   });
+  if (options.platform === "linux") {
+    yield* stageKdeCaptureHelper({
+      repoRoot,
+      stageResourcesDir,
+      arch: options.arch,
+      verbose: options.verbose,
+    });
+  }
 
   yield* assertPlatformBuildResources(
     options.platform,

@@ -98,35 +98,6 @@ describe("DesktopPreReadyPlatform", () => {
     assert.isNull(value);
   });
 
-  it("enables both Linux global shortcut portal features", () => {
-    getSwitchValueMock.mockReturnValue("ExistingFeature,GlobalShortcutsPortal");
-
-    DesktopPreReadyPlatform.enableLinuxGlobalShortcutFeatures({
-      appendSwitch: appendSwitchMock,
-      getSwitchValue: getSwitchValueMock,
-    });
-
-    assert.deepEqual(appendSwitchMock.mock.calls, [
-      [
-        "enable-features",
-        "ExistingFeature,GlobalShortcutsPortal,GlobalShortcutsPortalPreferredTrigger",
-      ],
-    ]);
-  });
-
-  it("preserves an existing complete Linux global shortcut portal configuration", () => {
-    getSwitchValueMock.mockReturnValue(
-      "GlobalShortcutsPortal,GlobalShortcutsPortalPreferredTrigger",
-    );
-
-    DesktopPreReadyPlatform.enableLinuxGlobalShortcutFeatures({
-      appendSwitch: appendSwitchMock,
-      getSwitchValue: getSwitchValueMock,
-    });
-
-    assert.equal(appendSwitchMock.mock.calls.length, 0);
-  });
-
   for (const previousEntry of [undefined, 'Exec="/Applications/deleted-previous.AppImage" %U']) {
     it.effect(
       `prepares a ${previousEntry ? "stale" : "missing"} Linux desktop entry before startup yields`,

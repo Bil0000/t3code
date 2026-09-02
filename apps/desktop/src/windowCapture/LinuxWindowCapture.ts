@@ -18,6 +18,8 @@ import {
 } from "dbus-next";
 import * as Schema from "effect/Schema";
 import { nativeImage } from "electron";
+import { isKdeCaptureSession, type KdeCapturePaths } from "./KdeWindowCapture.ts";
+import { isGnomeCaptureSession } from "./GnomeCaptureSetup.ts";
 
 const PORTAL = "org.freedesktop.portal.Desktop";
 const PORTAL_PATH = "/org/freedesktop/portal/desktop";
@@ -48,9 +50,13 @@ const WindowMetadata = Schema.Struct({
     height: Schema.Int.check(Schema.isGreaterThan(0)),
   }),
 });
-export type LinuxWindowMetadata = typeof WindowMetadata.Type;
+export type LinuxWindowMetadata = typeof WindowMetadata.Type & {
+  readonly clientBounds?: typeof WindowMetadata.Type.bounds;
+  readonly accessibilityBoundsReliable?: boolean;
+};
 const decodeProperties = Schema.decodeUnknownSync(PortalProperties);
 const decodeExtension = Schema.decodeUnknownSync(Schema.Struct({ Version: UIntVariant }));
+const decodeKde = Schema.decodeUnknownSync(Schema.Struct({ Version: UIntVariant }));
 const decodeString = Schema.decodeUnknownSync(Schema.String);
 const decodeBoolean = Schema.decodeUnknownSync(Schema.Boolean);
 const decodeResponse = Schema.decodeUnknownSync(
@@ -58,7 +64,12 @@ const decodeResponse = Schema.decodeUnknownSync(
 );
 const decodeUri = Schema.decodeUnknownSync(StringVariant);
 const decodeWindow = Schema.decodeUnknownSync(Schema.fromJsonString(WindowMetadata));
-export type LinuxCaptureBackend = "screenshot-portal" | "gnome-extension" | "picker";
+export type LinuxCaptureBackend =
+  | "screenshot-portal"
+  | "gnome-extension"
+  | "niri"
+  | "kde"
+  | "picker";
 export type LinuxWindowSnapshot = {
   readonly png: Buffer;
   readonly window?: LinuxWindowMetadata;
@@ -152,6 +163,17 @@ export class LinuxCaptureConnection {
   }
 
   async backend(appId: string): Promise<LinuxCaptureBackend> {
+    if (isKdeCaptureSession()) {
+      const kde = await this.properties(
+        "org.kde.KWin.ScreenShot2",
+        "/org/kde/KWin/ScreenShot2",
+        "org.kde.KWin.ScreenShot2",
+      ).catch((error: unknown) => {
+        if (!unavailable(error)) throw error;
+        return undefined;
+      });
+      if (kde !== undefined && decodeKde(kde).Version.value >= 2) return "kde";
+    }
     // Sandboxed apps already have an identity. Host apps register before any portal calls.
     if (!process.env.FLATPAK_ID && !process.env.SNAP) {
       await this.call({
@@ -177,6 +199,7 @@ export class LinuxCaptureConnection {
         return "screenshot-portal";
       }
     }
+    if (!isGnomeCaptureSession(process.env)) return "picker";
     const extension = await this.properties(EXTENSION, EXTENSION_PATH, EXTENSION).catch(
       (error: unknown) => {
         if (!unavailable(error)) throw error;
@@ -381,16 +404,13 @@ export async function readPortalPng(uri: string): Promise<Buffer> {
   }
 }
 
-export async function getLinuxCaptureBackend(appId: string): Promise<LinuxCaptureBackend> {
-  const connection = new LinuxCaptureConnection();
-  try {
-    return await connection.backend(appId);
-  } finally {
-    connection.close();
-  }
-}
-
 export async function getLinuxCaptureSupport(appId: string) {
+  const { niriSocketPath, checkNiriCaptureSupport } = await import("./NiriWindowCapture.ts");
+  const niri = niriSocketPath();
+  if (niri) {
+    await checkNiriCaptureSupport(niri);
+    return { linuxBackend: "niri" as const, linuxFeedbackAvailable: false };
+  }
   const connection = new LinuxCaptureConnection();
   try {
     const linuxBackend = await connection.backend(appId);
@@ -404,11 +424,20 @@ export async function getLinuxCaptureSupport(appId: string) {
 export async function captureLinuxWindow(
   appId: string,
   options?: FeedbackOptions,
+  kdePaths?: KdeCapturePaths,
 ): Promise<LinuxWindowSnapshot | undefined> {
+  const { niriSocketPath, captureNiriWindow } = await import("./NiriWindowCapture.ts");
+  const niri = niriSocketPath();
+  if (niri) return captureNiriWindow(niri);
   const connection = new LinuxCaptureConnection();
   let retained = false;
   try {
     switch (await connection.backend(appId)) {
+      case "kde": {
+        if (!kdePaths) throw new Error("KDE capture setup is unavailable in this build.");
+        const { captureKdeWindow } = await import("./KdeWindowCapture.ts");
+        return await captureKdeWindow(kdePaths, options);
+      }
       case "screenshot-portal":
         return await connection.capturePortal();
       case "gnome-extension": {

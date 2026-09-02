@@ -385,6 +385,7 @@ export async function accessibleWindowElementTree(
   let root: MutableAccessibilityNode | undefined;
   const shouldContinue = options.shouldContinue ?? (() => true);
   let descendantLocationVaries = false;
+  let rootBounds = sourceBounds;
 
   const descendantLocationsReliable = () =>
     options.locationsReliable !== false &&
@@ -403,12 +404,12 @@ export async function accessibleWindowElementTree(
       return undefined;
     }
     const elementBounds = safeProperty(() => current.bounds);
+    if (required && elementBounds) rootBounds = elementBounds;
     if (
       !required &&
       elementBounds !== null &&
       elementBounds !== undefined &&
-      (Math.abs(elementBounds.x - sourceBounds.x) > 2 ||
-        Math.abs(elementBounds.y - sourceBounds.y) > 2)
+      (Math.abs(elementBounds.x - rootBounds.x) > 2 || Math.abs(elementBounds.y - rootBounds.y) > 2)
     ) {
       descendantLocationVaries = true;
     }
@@ -495,6 +496,7 @@ export function findAccessibleWindow<
     readonly title: string;
     readonly sourceTitle?: string;
     readonly bounds: WindowBounds;
+    readonly clientBounds?: WindowBounds | undefined;
   },
   matchMode: "screen-bounds" | "wayland" = "screen-bounds",
 ): T | undefined {
@@ -512,12 +514,18 @@ export function findAccessibleWindow<
     matchMode === "wayland"
       ? (["width", "height"] as const)
       : (["x", "y", "width", "height"] as const);
+  const candidateBounds =
+    matchMode === "wayland" && captured.clientBounds
+      ? [captured.bounds, captured.clientBounds]
+      : [captured.bounds];
   const matches = windows.filter((window) => {
     const bounds = window.bounds;
     return (
       titles.has(normalizeTitle(window.name ?? "")) &&
       bounds !== null &&
-      boundsKeys.every((key) => Math.abs(bounds[key] - captured.bounds[key]) <= 2)
+      candidateBounds.some((candidate) =>
+        boundsKeys.every((key) => Math.abs(bounds[key] - candidate[key]) <= 2),
+      )
     );
   });
   if (matches.length === 1) return matches[0];
