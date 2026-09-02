@@ -102,11 +102,14 @@ async function readCapturedWindowAccessibility(
   onStarted: () => void,
 ): Promise<CapturedWindowAccessibilityContext | undefined> {
   const { active, platform, sourceTitle, imageSize } = request;
+  // T3 is hidden during capture, leaving the source as the Windows foreground window.
+  // App.list() scans every accessible window and can exceed the capture startup timeout.
+  const foreground = platform === "win32" ? await App.foreground({ timeout: 0 }) : undefined;
   const windows =
-    platform === "win32"
-      ? (await App.list())
-          .filter((app) => app.pid === active.owner.processId)
-          .map((app) => app.asElement())
+    foreground !== undefined
+      ? foreground.pid === active.owner.processId
+        ? [foreground.asElement()]
+        : []
       : await (await App.byPid(active.owner.processId, { timeout: 0 })).children();
   const matchMode = isWaylandSession(platform, process.env) ? "wayland" : "screen-bounds";
   const window = findAccessibleWindow(
