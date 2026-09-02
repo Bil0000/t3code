@@ -217,7 +217,10 @@ export const ComposerModelPill = memo(function ComposerModelPill(
           {triggerSummary.showFastModeIcon ? (
             <ComposerControlIcon
               icon={ZapIcon}
-              className={cn("fill-current opacity-80", accentClassName(props.provider))}
+              className={cn(
+                "fill-current opacity-80",
+                props.provider === "claudeAgent" ? "text-[#d97757]" : "text-foreground",
+              )}
             />
           ) : null}
           <span className="min-w-0 truncate">{triggerSummary.label}</span>
@@ -230,7 +233,7 @@ export const ComposerModelPill = memo(function ComposerModelPill(
           className="composer-model-card"
           viewportClassName="p-0"
         >
-          <div className="flex flex-col gap-2 p-2">
+          <div className="flex w-72 flex-col gap-2 p-2">
             <div className="flex items-center gap-1">
               {fastMode ? (
                 <Tooltip>
@@ -273,12 +276,16 @@ export const ComposerModelPill = memo(function ComposerModelPill(
                   </TooltipPopup>
                 </Tooltip>
               ) : null}
-              <Menu>
+              <Menu
+                onOpenChange={(open) => {
+                  if (open) setIsCardOpen(false);
+                }}
+              >
                 <MenuTrigger
                   render={
                     <button
                       type="button"
-                      className="flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-base font-medium outline-none transition-colors hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
+                      className="flex h-8 min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 overflow-hidden whitespace-nowrap rounded-lg px-2 text-base font-medium outline-none transition-colors hover:bg-foreground/[0.06] focus-visible:ring-2 focus-visible:ring-ring"
                       aria-label={`${triggerLabel}${effort ? `, ${effort.label}` : ""}. Show all options`}
                       disabled={props.disabled}
                     />
@@ -289,7 +296,7 @@ export const ComposerModelPill = memo(function ComposerModelPill(
                     <span
                       key={effort.label}
                       className={cn(
-                        "shrink-0 transition-colors duration-300",
+                        "min-w-0 truncate transition-colors duration-300",
                         effort.tone !== "ultrathink" && "composer-model-pill-chip-enter",
                         effortLabelClassName(effort.tone, props.provider),
                       )}
@@ -302,7 +309,12 @@ export const ComposerModelPill = memo(function ComposerModelPill(
                     className="size-4 shrink-0 text-icon-muted"
                   />
                 </MenuTrigger>
-                <MenuPopup align="start">
+                <MenuPopup
+                  align="start"
+                  side="top"
+                  sideOffset={-40}
+                  className="w-72 transition-[scale,opacity,translate] duration-200 ease-out data-ending-style:translate-y-1 data-ending-style:scale-98 data-ending-style:opacity-0 data-starting-style:translate-y-1 data-starting-style:scale-98 data-starting-style:opacity-0"
+                >
                   <TraitsMenuContent
                     provider={props.provider}
                     instanceId={props.activeInstanceId}
@@ -390,7 +402,7 @@ function EffortSlider(props: {
         disabled={effort.locked || props.disabled}
         thumbAlignment="edge"
         onValueChange={(value) => selectIndex(value)}
-        className="w-64 touch-none select-none"
+        className="w-full touch-none select-none"
         data-effort-tone={effort.tone}
         data-provider={props.provider}
       >
@@ -417,7 +429,7 @@ function EffortSlider(props: {
               />
             ))}
             <Slider.Thumb
-              className="composer-effort-thumb size-7 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.45)] outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-popover"
+              className="composer-effort-thumb relative z-10 size-7 rounded-full bg-white shadow-[0_1px_4px_rgba(0,0,0,0.45)] outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-popover"
               getAriaValueText={(_formatted, value) => options[value]?.label ?? ""}
               aria-label={descriptor.label}
             />
