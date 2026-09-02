@@ -27,7 +27,7 @@ import {
   resolveEffortDescriptor,
   resolveFastMode,
   type SelectTraitDescriptor,
-} from "./composerModelPill";
+} from "./composerModelPillTraits";
 import {
   type ModelPickerPopoverProps,
   ModelPickerPopover,

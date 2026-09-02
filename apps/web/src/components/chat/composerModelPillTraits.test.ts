@@ -6,7 +6,7 @@ import {
   nextSelectOptionId,
   resolveEffortDescriptor,
   resolveFastMode,
-} from "./composerModelPill";
+} from "./composerModelPillTraits";
 
 const CODEX = ProviderDriverKind.make("codex");
 const CLAUDE = ProviderDriverKind.make("claudeAgent");
