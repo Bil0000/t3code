@@ -1,10 +1,5 @@
 import type { WindowCaptureShortcut } from "@t3tools/contracts";
-import { Fragment } from "react";
-
-import {
-  formatWindowCaptureShortcutLabel,
-  windowCaptureShortcutKeyLabels,
-} from "../../lib/windowCaptureShortcut";
+import { windowCaptureShortcutKeyLabels } from "../../lib/windowCaptureShortcut";
 import { Kbd, KbdGroup } from "../ui/kbd";
 
 export function WindowCaptureShortcutKeys({
@@ -14,19 +9,18 @@ export function WindowCaptureShortcutKeys({
   shortcut: WindowCaptureShortcut;
   platform?: string;
 }) {
+  const seenLabels = new Map<string, number>();
   return (
     <KbdGroup>
-      <span className="sr-only">{formatWindowCaptureShortcutLabel(shortcut, platform)}</span>
-      {windowCaptureShortcutKeyLabels(shortcut, platform).map((key, index) => (
-        <Fragment key={key + "-" + index}>
-          {index > 0 ? (
-            <span aria-hidden className="text-xs text-muted-foreground">
-              +
-            </span>
-          ) : null}
-          <Kbd aria-hidden>{key}</Kbd>
-        </Fragment>
-      ))}
+      {windowCaptureShortcutKeyLabels(shortcut, platform).map((label) => {
+        const seen = seenLabels.get(label) ?? 0;
+        seenLabels.set(label, seen + 1);
+        return (
+          <Kbd aria-hidden className="min-w-6 justify-center px-1.5" key={`${label}-${seen}`}>
+            {label}
+          </Kbd>
+        );
+      })}
     </KbdGroup>
   );
 }
