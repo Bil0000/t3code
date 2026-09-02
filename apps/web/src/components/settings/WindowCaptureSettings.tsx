@@ -552,12 +552,13 @@ export function WindowCaptureSettings() {
                     </>
                   )
                 }
-              />
-              {state?.linuxBackend === "niri" && showNiriShortcut ? (
-                <div id="niri-capture-shortcut" className="pb-6">
-                  <NiriCaptureShortcutInstructions binding={state.shortcutBinding} />
-                </div>
-              ) : null}
+              >
+                {state?.linuxBackend === "niri" && showNiriShortcut ? (
+                  <div id="niri-capture-shortcut" className="mt-3 pb-3.5">
+                    <NiriCaptureShortcutInstructions binding={state.shortcutBinding} />
+                  </div>
+                ) : null}
+              </SettingsRow>
               <SettingsRow
                 {...searchableSetting("window-capture-sound")}
                 description="Choose the sound played when capture starts."
