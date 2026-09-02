@@ -111,16 +111,8 @@ export function manualServerUpdateCommand(targetVersion: string): string {
   return `npx t3@${targetVersion}`;
 }
 
-export function serverUpdateGuidance(capability: ServerSelfUpdateCapability | null): string {
-  switch (capability) {
-    case "boot-service":
-    case "respawn":
-      return "Update to stay in sync";
-    case "desktop-managed":
-      return "Update the desktop app";
-    default:
-      return "Copy the update command";
-  }
+export function serverUpdateGuidance(capability: ServerSelfUpdateCapability): string {
+  return capability === "desktop-managed" ? "Update the desktop app" : "Update to stay in sync";
 }
 
 export function buildVersionMismatchDismissalKey(

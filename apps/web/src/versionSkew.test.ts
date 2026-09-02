@@ -217,6 +217,5 @@ describe("versionSkew", () => {
   it("matches version-drift guidance to the advertised update path", () => {
     expect(serverUpdateGuidance("respawn")).toBe("Update to stay in sync");
     expect(serverUpdateGuidance("desktop-managed")).toBe("Update the desktop app");
-    expect(serverUpdateGuidance(null)).toBe("Copy the update command");
   });
 });
