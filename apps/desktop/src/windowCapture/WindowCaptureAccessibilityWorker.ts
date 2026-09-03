@@ -3,6 +3,8 @@ import {
   type WindowCaptureAccessibilityRequest,
 } from "./WindowCaptureAccessibility.ts";
 
+process.once("disconnect", () => process.exit(0));
+
 async function readAccessibility() {
   const { App } = await import("@crowecawcaw/xa11y");
   process.send?.("ready");

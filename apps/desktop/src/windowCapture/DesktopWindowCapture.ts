@@ -68,7 +68,10 @@ import {
   type WindowCaptureAnimationDestination,
   WindowCaptureTransition,
 } from "./WindowCaptureTransition.ts";
-import { startWindowCaptureAccessibilityProcess } from "./WindowCaptureAccessibilityProcess.ts";
+import {
+  type AccessibilityProcessPool,
+  makeWindowCaptureAccessibilityProcessPool,
+} from "./WindowCaptureAccessibilityProcess.ts";
 import { showWindowsCaptureOverlay } from "./WindowsCaptureFeedback.ts";
 
 import {
@@ -363,7 +366,7 @@ async function captureSource({
   linuxAppId,
   kdeCapturePaths,
   hyprlandCapturePaths,
-  accessibilityWorkerPath,
+  accessibilityProcessPool,
   onLinuxFeedback,
 }: {
   target: WindowCaptureTarget;
@@ -377,7 +380,7 @@ async function captureSource({
   linuxAppId: string;
   kdeCapturePaths: KdeCapturePaths;
   hyprlandCapturePaths: HyprlandCapturePaths;
-  accessibilityWorkerPath: string;
+  accessibilityProcessPool: AccessibilityProcessPool;
   onLinuxFeedback: (feedback: LinuxCaptureFeedback) => void;
 }) {
   let active: ActiveWindow | undefined;
@@ -390,10 +393,6 @@ async function captureSource({
     focusedWindow ?? Electron.BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
   const destinationWindowBounds = destinationWindow?.getBounds();
   let hiddenWindowRestored = false;
-  const accessibilityProcess = settings.windowCaptureIncludeAccessibility
-    ? startWindowCaptureAccessibilityProcess(accessibilityWorkerPath)
-    : undefined;
-  let accessibilityProcessOwned = accessibilityProcess !== undefined;
   try {
     if (hiddenWindow) await hideAndWaitForBlur(hiddenWindow);
     if (mode === "direct") {
@@ -474,8 +473,8 @@ async function captureSource({
           }
         : undefined;
     const accessibilityRead =
-      accessibleIdentity && accessibilityProcess
-        ? accessibilityProcess.read({
+      accessibleIdentity && settings.windowCaptureIncludeAccessibility
+        ? accessibilityProcessPool.read({
             active: accessibleIdentity,
             platform,
             sourceTitle: source.name,
@@ -483,11 +482,7 @@ async function captureSource({
           })
         : undefined;
     if (accessibilityRead) {
-      accessibilityProcessOwned = false;
       await accessibilityRead.started;
-    } else {
-      accessibilityProcess?.close();
-      accessibilityProcessOwned = false;
     }
     const contextPromise = accessibilityRead?.result ?? Promise.resolve(undefined);
     if (platform !== "win32" && hiddenWindow && !hiddenWindow.isDestroyed()) {
@@ -528,7 +523,6 @@ async function captureSource({
       imageTempReady,
     };
   } finally {
-    if (accessibilityProcessOwned) accessibilityProcess?.close();
     if (!hiddenWindowRestored && hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
   }
 }
@@ -747,6 +741,8 @@ export const make = Effect.gen(function* () {
     "windowCapture",
     "WindowCaptureAccessibilityWorker.cjs",
   );
+  const accessibilityProcessPool =
+    makeWindowCaptureAccessibilityProcessPool(accessibilityWorkerPath);
   let registeredAccelerator: string | undefined;
   let portalShortcut: PortalCaptureShortcut | undefined;
   let shortcutGeneration = 0;
@@ -859,7 +855,7 @@ export const make = Effect.gen(function* () {
             linuxAppId,
             kdeCapturePaths,
             hyprlandCapturePaths,
-            accessibilityWorkerPath,
+            accessibilityProcessPool,
             onLinuxFeedback: (feedback) => {
               linuxFeedback = { id, feedback };
             },
@@ -1070,6 +1066,15 @@ export const make = Effect.gen(function* () {
 
     const mode = captureMode(environment.platform);
     const shortcut = settings.windowCaptureShortcut;
+    if (
+      settings.windowCaptureEnabled &&
+      settings.windowCaptureIncludeAccessibility &&
+      mode !== "unavailable"
+    ) {
+      accessibilityProcessPool.warm();
+    } else {
+      accessibilityProcessPool.cool();
+    }
     if (!settings.windowCaptureEnabled || !settings.windowCaptureFlash || mode === "unavailable") {
       flash.dispose();
     }
@@ -1369,6 +1374,7 @@ export const make = Effect.gen(function* () {
       flash.dispose();
       transition.dispose();
       closeLinuxFeedback();
+      accessibilityProcessPool.close();
     }),
   );
 

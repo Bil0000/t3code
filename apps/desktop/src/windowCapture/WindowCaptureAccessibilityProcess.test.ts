@@ -10,12 +10,17 @@ const forkMock = vi.hoisted(() =>
 
 vi.mock("node:child_process", () => ({ fork: forkMock }));
 
-import { startWindowCaptureAccessibilityProcess } from "./WindowCaptureAccessibilityProcess.ts";
+import {
+  makeWindowCaptureAccessibilityProcessPool,
+  startWindowCaptureAccessibilityProcess,
+} from "./WindowCaptureAccessibilityProcess.ts";
 
-const worker = Object.assign(new NodeEvents.EventEmitter(), {
-  kill: vi.fn(() => true),
-  send: vi.fn(),
-});
+const makeWorker = () =>
+  Object.assign(new NodeEvents.EventEmitter(), {
+    kill: vi.fn(() => true),
+    send: vi.fn(),
+  });
+let worker = makeWorker();
 const request = {
   active: {
     title: "Zoom Meeting",
@@ -28,9 +33,7 @@ const request = {
 };
 
 beforeEach(() => {
-  worker.removeAllListeners();
-  worker.kill.mockClear();
-  worker.send.mockClear();
+  worker = makeWorker();
   forkMock.mockReset().mockReturnValue(worker);
 });
 
@@ -65,4 +68,50 @@ it("returns accessibility extracted by the helper", async () => {
   await read.started;
   assert.deepEqual(await read.result, context);
   assert.strictEqual(forkMock.mock.calls[0]?.[2]?.env?.ELECTRON_RUN_AS_NODE, "1");
+});
+
+it("hands a warm helper to the capture and prewarms its replacement", async () => {
+  const warmWorker = makeWorker();
+  const replacementWorker = makeWorker();
+  forkMock.mockReset().mockReturnValueOnce(warmWorker).mockReturnValueOnce(replacementWorker);
+  const pool = makeWindowCaptureAccessibilityProcessPool("accessibility.cjs");
+
+  pool.warm();
+  warmWorker.emit("message", "ready");
+  const read = pool.read(request);
+
+  assert.lengthOf(forkMock.mock.calls, 2);
+  assert.deepEqual(warmWorker.send.mock.calls[0]?.[0], request);
+  assert.lengthOf(replacementWorker.send.mock.calls, 0);
+
+  warmWorker.emit("message", "started");
+  warmWorker.emit("message", { type: "result", context: { accessibleText: "Ready" } });
+  assert.deepEqual(await read.result, { accessibleText: "Ready" });
+
+  pool.close();
+  assert.lengthOf(replacementWorker.kill.mock.calls, 1);
+});
+
+it("replaces a warm helper that exits before capture", async () => {
+  const exitedWorker = makeWorker();
+  const captureWorker = makeWorker();
+  const replacementWorker = makeWorker();
+  forkMock
+    .mockReset()
+    .mockReturnValueOnce(exitedWorker)
+    .mockReturnValueOnce(captureWorker)
+    .mockReturnValueOnce(replacementWorker);
+  const pool = makeWindowCaptureAccessibilityProcessPool("accessibility.cjs");
+
+  pool.warm();
+  exitedWorker.emit("exit", 1);
+  const read = pool.read(request);
+  captureWorker.emit("message", "ready");
+  captureWorker.emit("message", "started");
+  captureWorker.emit("message", { type: "result", context: { accessibleText: "Recovered" } });
+
+  assert.deepEqual(await read.result, { accessibleText: "Recovered" });
+  assert.lengthOf(forkMock.mock.calls, 3);
+  assert.deepEqual(captureWorker.send.mock.calls[0]?.[0], request);
+  pool.close();
 });

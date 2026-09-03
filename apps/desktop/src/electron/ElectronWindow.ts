@@ -280,9 +280,13 @@ export const make = Effect.gen(function* () {
           window.focus();
 
           if (platform === "win32") {
-            await focusWindowsBrowserWindow(window).catch(() => undefined);
-            if (!window.isDestroyed()) {
+            try {
               await activateWindowsForeground(window.getNativeWindowHandle());
+            } catch {
+              await focusWindowsBrowserWindow(window).catch(() => undefined);
+              if (!window.isDestroyed()) {
+                await activateWindowsForeground(window.getNativeWindowHandle());
+              }
             }
           }
         },

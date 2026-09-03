@@ -11,12 +11,20 @@ import type {
 const START_TIMEOUT_MS = 1_000;
 const RESULT_TIMEOUT_MS = 4_000;
 
-type AccessibilityRead = {
+export type AccessibilityRead = {
   readonly started: Promise<void>;
   readonly result: Promise<CapturedWindowAccessibilityContext | undefined>;
 };
 
-type AccessibilityProcess = {
+export type AccessibilityProcess = {
+  readonly alive: boolean;
+  readonly read: (request: WindowCaptureAccessibilityRequest) => AccessibilityRead;
+  readonly close: () => void;
+};
+
+export type AccessibilityProcessPool = {
+  readonly warm: () => void;
+  readonly cool: () => void;
   readonly read: (request: WindowCaptureAccessibilityRequest) => AccessibilityRead;
   readonly close: () => void;
 };
@@ -32,6 +40,7 @@ const completedRead = (context?: CapturedWindowAccessibilityContext): Accessibil
 });
 
 const unavailableProcess = (): AccessibilityProcess => ({
+  alive: false,
   read: () => completedRead(),
   close: () => undefined,
 });
@@ -100,6 +109,9 @@ export function startWindowCaptureAccessibilityProcess(workerPath: string): Acce
   worker.once("exit", () => finish());
 
   return {
+    get alive() {
+      return !settled;
+    },
     read: (nextRequest) => {
       if (settled) return completedRead(settledContext);
       request = nextRequest;
@@ -115,5 +127,49 @@ export function startWindowCaptureAccessibilityProcess(workerPath: string): Acce
       return { started: started.promise, result: result.promise };
     },
     close: () => finish(),
+  };
+}
+
+export function makeWindowCaptureAccessibilityProcessPool(
+  workerPath: string,
+): AccessibilityProcessPool {
+  let standby: AccessibilityProcess | undefined;
+  const active = new Set<AccessibilityProcess>();
+  let closed = false;
+
+  const warm = () => {
+    if (closed || standby?.alive) return;
+    standby = startWindowCaptureAccessibilityProcess(workerPath);
+  };
+  const cool = () => {
+    standby?.close();
+    standby = undefined;
+  };
+
+  return {
+    warm,
+    cool,
+    read: (request) => {
+      if (closed) return completedRead();
+      const workerProcess = standby?.alive
+        ? standby
+        : startWindowCaptureAccessibilityProcess(workerPath);
+      standby = undefined;
+      warm();
+      active.add(workerProcess);
+      const read = workerProcess.read(request);
+      void read.result.then(
+        () => active.delete(workerProcess),
+        () => active.delete(workerProcess),
+      );
+      return read;
+    },
+    close: () => {
+      if (closed) return;
+      closed = true;
+      cool();
+      for (const workerProcess of active) workerProcess.close();
+      active.clear();
+    },
   };
 }
