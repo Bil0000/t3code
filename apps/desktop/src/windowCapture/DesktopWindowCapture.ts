@@ -18,6 +18,7 @@ import {
   type WindowCaptureModifierPairShortcut,
   type WindowCaptureShortcut,
 } from "@t3tools/contracts";
+import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
@@ -80,6 +81,7 @@ import {
 
 const MAX_CAPTURE_WIDTH = 2_560;
 const MAX_CAPTURE_HEIGHT = 1_600;
+const SHORTCUT_COOLDOWN_NS = 200_000_000n;
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
 const WAYLAND_MODIFIER_PAIR_UNAVAILABLE_MESSAGE =
   "Modifier-pair shortcuts aren't available in this Wayland session. Choose another shortcut or use Capture window from the command palette.";
@@ -749,6 +751,7 @@ export const make = Effect.gen(function* () {
   let portalShortcut: PortalCaptureShortcut | undefined;
   let shortcutGeneration = 0;
   let shortcutSuppressed = false;
+  let lastShortcutAt: bigint | undefined;
   let stopShiftShortcut: (() => void) | undefined;
   const showCaptureWindow =
     environment.platform === "win32" ? showWindowsCaptureOverlay : undefined;
@@ -985,6 +988,9 @@ export const make = Effect.gen(function* () {
   const captureFromShortcut = Effect.gen(function* () {
     if (shortcutSuppressed) return;
     shortcutVerified = true;
+    const now = yield* Clock.currentTimeNanos;
+    if (lastShortcutAt !== undefined && now - lastShortcutAt < SHORTCUT_COOLDOWN_NS) return;
+    lastShortcutAt = now;
     yield* capture;
   }).pipe(Effect.withSpan("desktop.windowCapture.shortcutActivated"));
   const onShortcut = () => runPromise(captureFromShortcut).catch(() => undefined);

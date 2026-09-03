@@ -14,6 +14,7 @@ import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
+import * as TestClock from "effect/testing/TestClock";
 import type * as Electron from "electron";
 import type { PortalShortcutState } from "./PortalCaptureShortcut.ts";
 import { beforeEach, vi } from "vite-plus/test";
@@ -1007,6 +1008,42 @@ it.effect.each(
   },
 );
 
+it.effect.each(["win32", "darwin", "linux"] as const)(
+  "ignores shortcut repeats for 200 ms without delaying the first capture on %s",
+  (platform) => {
+    const fixture = concurrentCaptureFixture(platform, false);
+    fixture.releaseAll();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* DesktopWindowCapture.make;
+        yield* service.configure(fixture.settings);
+        yield* service.setShortcutSuppressed(true);
+        yield* Effect.promise(fixture.trigger);
+        assert.equal(fixture.state.snapshots, 0);
+        yield* service.setShortcutSuppressed(false);
+        yield* Effect.promise(fixture.trigger);
+        assert.equal(fixture.state.snapshots, 1);
+        assert.lengthOf(fixture.readyIds, 1);
+
+        yield* Effect.promise(fixture.trigger);
+        yield* TestClock.adjust("199 millis");
+        yield* Effect.promise(fixture.trigger);
+        assert.equal(fixture.state.snapshots, 1);
+        assert.lengthOf(fixture.readyIds, 1);
+
+        yield* TestClock.adjust("1 millis");
+        yield* Effect.promise(fixture.trigger);
+        assert.equal(fixture.state.snapshots, 2);
+        assert.lengthOf(fixture.readyIds, 2);
+
+        yield* service.captureNow;
+        assert.equal(fixture.state.snapshots, 3);
+        assert.lengthOf(fixture.readyIds, 3);
+      }),
+    ).pipe(Effect.provide(fixture.layer), Effect.ensuring(Effect.sync(fixture.reset)));
+  },
+);
+
 it.effect.each([
   { platform: "win32", animations: true },
   { platform: "darwin", animations: false },
@@ -1026,6 +1063,7 @@ it.effect.each([
         yield* Effect.promise(() => fixture.first.handoff.promise);
         assert.lengthOf(fixture.readyIds, 0);
 
+        yield* TestClock.adjust("200 millis");
         fixture.second.pixels.resolve();
         const second = yield* Effect.promise(fixture.trigger).pipe(
           Effect.forkChild({ startImmediately: true }),
@@ -1084,16 +1122,19 @@ it.effect.each(["succeeds", "fails"] as const)(
           Effect.forkChild({ startImmediately: true }),
         );
         yield* Effect.promise(() => fixture.first.handoff.promise);
+        yield* TestClock.adjust("200 millis");
         const second = yield* Effect.promise(fixture.trigger).pipe(
           Effect.forkChild({ startImmediately: true }),
         );
         yield* Effect.promise(() => fixture.second.started.promise);
 
+        yield* TestClock.adjust("200 millis");
         yield* Effect.promise(fixture.trigger);
         assert.equal(fixture.state.snapshots, 2);
         fixture.first.context.resolve({ accessibleText: "Discord accessibility" });
         yield* Fiber.join(first);
         assert.lengthOf(fixture.readyIds, outcome === "succeeds" ? 1 : 0);
+        yield* TestClock.adjust("200 millis");
         yield* Effect.promise(fixture.trigger);
         assert.equal(fixture.state.snapshots, 2);
 
@@ -1122,6 +1163,7 @@ it.effect("keeps newer native feedback when older accessibility persistence fail
         Effect.forkChild({ startImmediately: true }),
       );
       yield* Effect.promise(() => fixture.first.handoff.promise);
+      yield* TestClock.adjust("200 millis");
       fixture.second.pixels.resolve();
       const second = yield* Effect.promise(fixture.trigger).pipe(
         Effect.forkChild({ startImmediately: true }),

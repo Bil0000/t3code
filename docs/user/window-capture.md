@@ -43,7 +43,8 @@ There is no separate test step: use the assigned shortcut from another app to ca
 Changing the shortcut replaces the active binding without restarting T3 Code.
 
 With automatic capture, the shortcut captures the active window, including T3 Code itself,
-without hiding that window.
+without hiding that window. Repeated shortcut presses within 200 ms are ignored to prevent
+accidental duplicate captures.
 You can also use **Capture window** from the command palette, including when your desktop does
 not support global shortcuts. That action briefly hides T3 Code to capture the app behind it,
 then returns to your draft.
