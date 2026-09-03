@@ -148,6 +148,16 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
       .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.upsert:upsert")));
   });
 
+  const clearCapacityRecovery: ProviderSessionDirectoryShape["clearCapacityRecovery"] = (input) =>
+    repository
+      .clearCapacityRecovery({
+        threadId: input.threadId,
+        providerName: input.provider,
+        providerInstanceId: input.providerInstanceId,
+        eventId: input.eventId,
+      })
+      .pipe(Effect.mapError(toPersistenceError("ProviderSessionDirectory.clearCapacityRecovery")));
+
   const getProvider: ProviderSessionDirectoryShape["getProvider"] = (threadId) =>
     getBinding(threadId).pipe(
       Effect.flatMap((binding) =>
@@ -184,6 +194,7 @@ const makeProviderSessionDirectory = Effect.gen(function* () {
 
   return {
     upsert,
+    clearCapacityRecovery,
     getProvider,
     getBinding,
     listThreadIds,

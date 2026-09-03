@@ -138,6 +138,24 @@ describe("shouldAutoSettleThread", () => {
     ).toBe(false);
   });
 
+  it("does not settle a thread waiting for capacity recovery", () => {
+    expect(
+      decide(
+        makeThread({
+          session: {
+            threadId: ThreadId.make("thread-1"),
+            status: "waiting",
+            providerName: "codex",
+            runtimeMode: "full-access",
+            activeTurnId: null,
+            lastError: null,
+            updatedAt: NOW,
+          },
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("allows a fresh completion to wake snooze before settlement", () => {
     expect(
       decide(

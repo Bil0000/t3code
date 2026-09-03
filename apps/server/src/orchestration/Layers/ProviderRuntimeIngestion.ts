@@ -10,26 +10,37 @@ import {
   classifyTaskAgentKind,
   EventId,
   isToolLifecycleItemType,
+  ProviderInstanceId,
   ThreadId,
   type ThreadTokenUsageSnapshot,
   TurnId,
   type OrchestrationCheckpointSummary,
   type OrchestrationProposedPlan,
   type OrchestrationThread,
+  type OrchestrationThreadShell,
   type OrchestrationThreadActivity,
+  type ProviderSession,
   type ProviderRuntimeEvent,
 } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
+import * as Clock from "effect/Clock";
 import * as Crypto from "effect/Crypto";
+import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
+import * as Exit from "effect/Exit";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
+import type * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 
 import { ProviderService } from "../../provider/Services/ProviderService.ts";
+import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
+import { deriveProviderInstanceConfigMap } from "../../provider/Layers/ProviderInstanceRegistryHydration.ts";
 import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
 import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { isGitRepository } from "../../git/Utils.ts";
@@ -41,6 +52,7 @@ import {
   ProviderRuntimeIngestionService,
   type ProviderRuntimeIngestionShape,
 } from "../Services/ProviderRuntimeIngestion.ts";
+import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { projectActivityPayload } from "../ActivityPayloadProjection.ts";
 import { forkParked } from "../../serverActivation.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
@@ -102,10 +114,24 @@ const TASK_DESCRIPTION_BY_TASK_TTL = Duration.minutes(120);
 const MAX_BUFFERED_ASSISTANT_CHARS = 24_000;
 const STRICT_PROVIDER_LIFECYCLE_GUARD = process.env.T3CODE_STRICT_PROVIDER_LIFECYCLE_GUARD !== "0";
 
-type TurnStartRequestedDomainEvent = Extract<
+type CapacityRecoveryDomainEvent = Extract<
   OrchestrationEvent,
-  { type: "thread.turn-start-requested" }
+  {
+    type:
+      | "thread.turn-start-requested"
+      | "thread.turn-interrupt-requested"
+      | "thread.session-stop-requested"
+      | "thread.archived"
+      | "thread.deleted"
+      | "thread.meta-updated";
+  }
 >;
+
+type CapacityRecoveryTimer = {
+  readonly type: "capacity.recovery";
+  readonly threadId: ThreadId;
+  readonly eventId: EventId;
+};
 
 type RuntimeIngestionInput =
   | {
@@ -114,8 +140,35 @@ type RuntimeIngestionInput =
     }
   | {
       source: "domain";
-      event: TurnStartRequestedDomainEvent;
+      event: CapacityRecoveryDomainEvent | CapacityRecoveryTimer;
     };
+
+const CAPACITY_RECOVERY_KEY = "capacityRecovery";
+const CAPACITY_RECOVERY_PROMPT = "Continue where you left off.";
+const CapacityRecoveryMarker = Schema.Struct({
+  eventId: EventId,
+  providerInstanceId: ProviderInstanceId,
+  attempt: Schema.Number.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0)),
+  retryAtMs: Schema.Number.check(Schema.isGreaterThanOrEqualTo(0)),
+  turnId: Schema.optional(TurnId),
+});
+type CapacityRecoveryMarker = typeof CapacityRecoveryMarker.Type;
+const CapacityRecoveryPayload = Schema.Struct({
+  [CAPACITY_RECOVERY_KEY]: Schema.NullOr(CapacityRecoveryMarker),
+});
+const CapacityRecoveryConfig = Schema.Struct({
+  automaticCapacityRecovery: Schema.optional(Schema.Boolean),
+});
+const decodeCapacityRecoveryPayload = Schema.decodeUnknownOption(CapacityRecoveryPayload);
+const decodeCapacityRecoveryConfig = Schema.decodeUnknownOption(CapacityRecoveryConfig);
+
+function capacityRecoveryDelayMs(attempt: number): number {
+  return Math.min(5_000 * 2 ** Math.min(attempt, 8), 15 * 60_000);
+}
+
+function readCapacityRecoveryMarker(value: unknown): CapacityRecoveryMarker | undefined {
+  return Option.getOrUndefined(decodeCapacityRecoveryPayload(value))?.capacityRecovery ?? undefined;
+}
 
 function toTurnId(value: TurnId | string | undefined): TurnId | undefined {
   return value === undefined ? undefined : TurnId.make(String(value));
@@ -895,8 +948,299 @@ const make = Effect.gen(function* () {
   const orchestrationEngine = yield* OrchestrationEngineService;
   const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const providerService = yield* ProviderService;
+  const providerCommandReactor = yield* ProviderCommandReactor;
+  const providerSessionDirectory = yield* ProviderSessionDirectory;
   const projectionTurnRepository = yield* ProjectionTurnRepository;
   const serverSettingsService = yield* ServerSettingsService;
+  const capacityRecoveryFibers = new Map<string, Fiber.Fiber<void, never>>();
+  let enqueueCapacityRecovery = (_event: CapacityRecoveryTimer) => Effect.void;
+
+  const automaticCapacityRecoveryEnabled = Effect.fn("automaticCapacityRecoveryEnabled")(function* (
+    providerInstanceId: ProviderInstanceId,
+  ) {
+    const settings = yield* serverSettingsService.getSettings;
+    const instance = deriveProviderInstanceConfigMap(settings)[providerInstanceId];
+    const config = Option.getOrUndefined(decodeCapacityRecoveryConfig(instance?.config));
+    return config?.automaticCapacityRecovery === true;
+  });
+
+  const setCapacityRecoverySession = Effect.fn("setCapacityRecoverySession")(function* (
+    threadId: ThreadId,
+    status: "waiting" | "ready" | "running",
+    activeTurnId?: TurnId,
+  ) {
+    const thread = Option.getOrUndefined(
+      yield* projectionSnapshotQuery.getThreadShellById(threadId),
+    );
+    if (
+      !thread?.session ||
+      (thread.session.status === status &&
+        (status !== "running" || sameId(thread.session.activeTurnId, activeTurnId))) ||
+      (status === "ready" && thread.session.status !== "waiting") ||
+      (status === "running" && activeTurnId === undefined)
+    ) {
+      return;
+    }
+    const commandId = CommandId.make(`provider:capacity-recovery:${yield* crypto.randomUUIDv4}`);
+    const updatedAt = DateTime.formatIso(DateTime.makeUnsafe(yield* Clock.currentTimeMillis));
+    yield* orchestrationEngine.dispatch({
+      type: "thread.session.set",
+      commandId,
+      threadId,
+      session: {
+        ...thread.session,
+        status,
+        activeTurnId: status === "running" ? (activeTurnId ?? null) : null,
+        lastError: null,
+        updatedAt,
+      },
+      createdAt: updatedAt,
+    });
+  });
+
+  const clearCapacityRecovery = Effect.fn("clearCapacityRecovery")(function* (
+    threadId: ThreadId,
+    eventId?: EventId,
+  ) {
+    const binding = yield* providerSessionDirectory.getBinding(threadId);
+    const marker = Option.isSome(binding)
+      ? readCapacityRecoveryMarker(binding.value.runtimePayload)
+      : undefined;
+    if (
+      Option.isNone(binding) ||
+      !marker ||
+      (eventId !== undefined && marker.eventId !== eventId)
+    ) {
+      return;
+    }
+    const cleared = yield* providerSessionDirectory.clearCapacityRecovery({
+      threadId,
+      provider: binding.value.provider,
+      providerInstanceId: binding.value.providerInstanceId ?? marker.providerInstanceId,
+      eventId: marker.eventId,
+    });
+    if (cleared) {
+      yield* setCapacityRecoverySession(threadId, "ready");
+    }
+  });
+
+  const cancelCapacityRecovery = Effect.fn("cancelCapacityRecovery")(function* (
+    threadId: ThreadId,
+  ) {
+    const key = String(threadId);
+    const fiber = capacityRecoveryFibers.get(key);
+    capacityRecoveryFibers.delete(key);
+    if (fiber) {
+      yield* Fiber.interrupt(fiber);
+    }
+    yield* clearCapacityRecovery(threadId);
+  });
+
+  const recoveryTarget = Effect.fn("recoveryTarget")(function* (
+    threadId: ThreadId,
+    marker: CapacityRecoveryMarker,
+  ) {
+    const binding = yield* providerSessionDirectory.getBinding(threadId);
+    const currentMarker = Option.isSome(binding)
+      ? readCapacityRecoveryMarker(binding.value.runtimePayload)
+      : undefined;
+    const thread = Option.getOrUndefined(
+      yield* projectionSnapshotQuery.getThreadShellById(threadId),
+    );
+    const pendingTurnStart = yield* projectionTurnRepository.getPendingTurnStartByThreadId({
+      threadId,
+    });
+    const valid =
+      Option.isSome(binding) &&
+      currentMarker?.eventId === marker.eventId &&
+      binding.value.providerInstanceId === marker.providerInstanceId &&
+      thread !== undefined &&
+      thread.archivedAt === null &&
+      thread.hasPendingApprovals === false &&
+      thread.hasPendingUserInput === false &&
+      Option.isNone(pendingTurnStart) &&
+      thread.session?.activeTurnId === null &&
+      thread.modelSelection.instanceId === marker.providerInstanceId &&
+      (yield* automaticCapacityRecoveryEnabled(marker.providerInstanceId));
+    return valid ? { binding: binding.value, thread } : undefined;
+  });
+
+  const recoverCapacity = Effect.fn("recoverCapacity")(function* (
+    threadId: ThreadId,
+    eventId: EventId,
+  ) {
+    const binding = yield* providerSessionDirectory.getBinding(threadId);
+    const marker = Option.isSome(binding)
+      ? readCapacityRecoveryMarker(binding.value.runtimePayload)
+      : undefined;
+    if (!marker || marker.eventId !== eventId || marker.turnId !== undefined) {
+      return;
+    }
+    const target = yield* recoveryTarget(threadId, marker);
+    if (!target) {
+      yield* clearCapacityRecovery(threadId, marker.eventId);
+      return;
+    }
+    const started = yield* Effect.gen(function* () {
+      const capabilities = yield* providerService.getCapabilities(marker.providerInstanceId);
+      return yield* providerCommandReactor.continueTurn({
+        threadId,
+        ...(capabilities.promptlessTurnContinuation === true
+          ? { continuation: true }
+          : { input: CAPACITY_RECOVERY_PROMPT }),
+        interactionMode: target.thread.interactionMode,
+      });
+    }).pipe(Effect.exit);
+    if (Exit.isSuccess(started)) {
+      const currentBinding = yield* providerSessionDirectory.getBinding(threadId);
+      const currentMarker = Option.isSome(currentBinding)
+        ? readCapacityRecoveryMarker(currentBinding.value.runtimePayload)
+        : undefined;
+      if (Option.isNone(currentBinding) || currentMarker?.eventId !== marker.eventId) {
+        return;
+      }
+      yield* providerSessionDirectory.upsert({
+        threadId,
+        provider: currentBinding.value.provider,
+        providerInstanceId: currentBinding.value.providerInstanceId ?? marker.providerInstanceId,
+        runtimePayload: {
+          [CAPACITY_RECOVERY_KEY]: { ...marker, turnId: started.value.turnId },
+        },
+      });
+      return;
+    }
+    if (Cause.hasInterrupts(started.cause)) {
+      return yield* Effect.failCause(started.cause);
+    }
+    yield* Effect.logWarning("provider capacity recovery could not start", {
+      threadId,
+      providerInstanceId: marker.providerInstanceId,
+      cause: Cause.pretty(started.cause),
+    });
+    const retryAtMs =
+      (yield* Clock.currentTimeMillis) + capacityRecoveryDelayMs(marker.attempt + 1);
+    const currentBinding = yield* providerSessionDirectory.getBinding(threadId);
+    const currentMarker = Option.isSome(currentBinding)
+      ? readCapacityRecoveryMarker(currentBinding.value.runtimePayload)
+      : undefined;
+    if (Option.isNone(currentBinding) || currentMarker?.eventId !== marker.eventId) {
+      return;
+    }
+    const nextMarker = { ...marker, attempt: marker.attempt + 1, retryAtMs };
+    yield* providerSessionDirectory.upsert({
+      threadId,
+      provider: currentBinding.value.provider,
+      providerInstanceId: currentBinding.value.providerInstanceId ?? marker.providerInstanceId,
+      runtimePayload: { [CAPACITY_RECOVERY_KEY]: nextMarker },
+    });
+    yield* scheduleCapacityRecovery(threadId, nextMarker);
+  });
+
+  const scheduleCapacityRecovery = Effect.fn("scheduleCapacityRecovery")(function* (
+    threadId: ThreadId,
+    marker: CapacityRecoveryMarker,
+  ) {
+    const key = String(threadId);
+    const existing = capacityRecoveryFibers.get(key);
+    if (existing) {
+      capacityRecoveryFibers.delete(key);
+      yield* Fiber.interrupt(existing);
+    }
+    if (marker.turnId !== undefined) {
+      return;
+    }
+    let fiber: Fiber.Fiber<void, never>;
+    fiber = yield* Effect.forkScoped(
+      Effect.gen(function* () {
+        const now = yield* Clock.currentTimeMillis;
+        if (marker.retryAtMs > now) {
+          yield* Effect.sleep(Duration.millis(marker.retryAtMs - now));
+        }
+        yield* enqueueCapacityRecovery({
+          type: "capacity.recovery",
+          threadId,
+          eventId: marker.eventId,
+        });
+      }).pipe(
+        Effect.catchCause((cause) =>
+          Cause.hasInterruptsOnly(cause)
+            ? Effect.void
+            : Effect.logWarning("provider capacity recovery failed", {
+                threadId,
+                cause: Cause.pretty(cause),
+              }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (capacityRecoveryFibers.get(key) === fiber) {
+              capacityRecoveryFibers.delete(key);
+            }
+          }),
+        ),
+      ),
+    );
+    capacityRecoveryFibers.set(key, fiber);
+  });
+
+  const handleCapacityCompletion = Effect.fn("handleCapacityCompletion")(function* (
+    event: Extract<ProviderRuntimeEvent, { type: "turn.completed" }>,
+    thread: OrchestrationThreadShell,
+  ) {
+    const binding = yield* providerSessionDirectory.getBinding(thread.id);
+    const currentMarker = Option.isSome(binding)
+      ? readCapacityRecoveryMarker(binding.value.runtimePayload)
+      : undefined;
+    const capacityFailure = event.payload.capacityFailure;
+    if (event.payload.state !== "failed" || !capacityFailure) {
+      if (currentMarker?.turnId && sameId(currentMarker.turnId, event.turnId)) {
+        yield* clearCapacityRecovery(thread.id, currentMarker.eventId);
+      }
+      return;
+    }
+
+    const providerInstanceId =
+      event.providerInstanceId ??
+      thread.session?.providerInstanceId ??
+      thread.modelSelection.instanceId;
+    if (
+      (event.provider !== "codex" && event.provider !== "claudeAgent") ||
+      !(yield* automaticCapacityRecoveryEnabled(providerInstanceId))
+    ) {
+      yield* cancelCapacityRecovery(thread.id);
+      return;
+    }
+
+    const attempt =
+      currentMarker?.turnId && sameId(currentMarker.turnId, event.turnId)
+        ? currentMarker.attempt + 1
+        : 0;
+    const now = yield* Clock.currentTimeMillis;
+    const providerRetryAtMs = Date.parse(capacityFailure.retryAt ?? "");
+    const marker: CapacityRecoveryMarker = {
+      eventId: event.eventId,
+      providerInstanceId,
+      attempt,
+      retryAtMs: Number.isFinite(providerRetryAtMs)
+        ? providerRetryAtMs
+        : now + capacityRecoveryDelayMs(attempt),
+    };
+    yield* providerSessionDirectory.upsert({
+      threadId: thread.id,
+      provider: event.provider,
+      providerInstanceId,
+      runtimePayload: { [CAPACITY_RECOVERY_KEY]: marker },
+    });
+    yield* setCapacityRecoverySession(thread.id, "waiting");
+    yield* scheduleCapacityRecovery(thread.id, marker);
+  });
+
+  const hasActiveRecoveryTurn = (
+    session: ProviderSession | undefined,
+    marker: CapacityRecoveryMarker,
+  ) =>
+    session?.status === "running" &&
+    sameId(session.providerInstanceId, marker.providerInstanceId) &&
+    sameId(session.activeTurnId, marker.turnId);
   const providerCommandId = (event: ProviderRuntimeEvent, tag: string) =>
     crypto.randomUUIDv4.pipe(
       Effect.map((uuid) => CommandId.make(`provider:${event.eventId}:${tag}:${uuid}`)),
@@ -2057,18 +2401,35 @@ const make = Effect.gen(function* () {
           ),
         ),
       ).pipe(Effect.asVoid);
+
+      if (event.type === "turn.completed" && shouldApplyThreadLifecycle) {
+        yield* handleCapacityCompletion(event, thread);
+      }
     });
 
-  const processDomainEvent = (_event: TurnStartRequestedDomainEvent) => Effect.void;
+  const processDomainEvent = (event: CapacityRecoveryDomainEvent | CapacityRecoveryTimer) =>
+    event.type === "capacity.recovery"
+      ? recoverCapacity(event.threadId, event.eventId)
+      : event.type === "thread.meta-updated" && event.payload.modelSelection === undefined
+        ? Effect.void
+        : cancelCapacityRecovery(event.payload.threadId);
 
-  const processInput = (input: RuntimeIngestionInput) =>
+  type RuntimeIngestionError =
+    | Effect.Error<ReturnType<typeof processRuntimeEvent>>
+    | Effect.Error<ReturnType<typeof processDomainEvent>>;
+
+  const processInput = (
+    input: RuntimeIngestionInput,
+  ): Effect.Effect<void, RuntimeIngestionError, Scope.Scope> =>
     input.source === "runtime" ? processRuntimeEvent(input.event) : processDomainEvent(input.event);
 
-  const processInputSafely = (input: RuntimeIngestionInput) =>
+  const processInputSafely = (
+    input: RuntimeIngestionInput,
+  ): Effect.Effect<void, never, Scope.Scope> =>
     processInput(input).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
-          return Effect.failCause(cause);
+          return Effect.interrupt;
         }
         return Effect.logWarning("provider runtime ingestion failed to process event", {
           source: input.source,
@@ -2080,6 +2441,7 @@ const make = Effect.gen(function* () {
     );
 
   const worker = yield* makeDrainableWorker(processInputSafely);
+  enqueueCapacityRecovery = (event) => worker.enqueue({ source: "domain", event });
 
   const start: ProviderRuntimeIngestionShape["start"] = () =>
     Effect.gen(function* () {
@@ -2090,11 +2452,68 @@ const make = Effect.gen(function* () {
       );
       yield* forkParked(
         Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) => {
-          if (event.type !== "thread.turn-start-requested") {
-            return Effect.void;
+          switch (event.type) {
+            case "thread.turn-start-requested":
+            case "thread.turn-interrupt-requested":
+            case "thread.session-stop-requested":
+            case "thread.archived":
+            case "thread.deleted":
+            case "thread.meta-updated":
+              return worker.enqueue({ source: "domain", event });
+            default:
+              return Effect.void;
           }
-          return worker.enqueue({ source: "domain", event });
         }),
+      );
+      yield* providerSessionDirectory.listBindings().pipe(
+        Effect.flatMap((bindings) =>
+          Effect.gen(function* () {
+            const markerThreadIds = new Set<ThreadId>();
+            const snapshot = yield* projectionSnapshotQuery.getSnapshot();
+            const sessionsByThreadId = new Map(
+              (yield* providerService.listSessions()).map((session) => [session.threadId, session]),
+            );
+            yield* Effect.forEach(bindings, (binding) => {
+              const marker = readCapacityRecoveryMarker(binding.runtimePayload);
+              if (!marker) return Effect.void;
+              markerThreadIds.add(binding.threadId);
+              if (marker.turnId !== undefined) {
+                if (hasActiveRecoveryTurn(sessionsByThreadId.get(binding.threadId), marker)) {
+                  return setCapacityRecoverySession(binding.threadId, "running", marker.turnId);
+                }
+                const restartedMarker: CapacityRecoveryMarker = {
+                  eventId: marker.eventId,
+                  providerInstanceId: marker.providerInstanceId,
+                  attempt: marker.attempt,
+                  retryAtMs: 0,
+                };
+                return providerSessionDirectory
+                  .upsert({
+                    threadId: binding.threadId,
+                    provider: binding.provider,
+                    providerInstanceId: binding.providerInstanceId ?? marker.providerInstanceId,
+                    runtimePayload: { [CAPACITY_RECOVERY_KEY]: restartedMarker },
+                  })
+                  .pipe(
+                    Effect.andThen(setCapacityRecoverySession(binding.threadId, "waiting")),
+                    Effect.andThen(scheduleCapacityRecovery(binding.threadId, restartedMarker)),
+                  );
+              }
+              return setCapacityRecoverySession(binding.threadId, "waiting").pipe(
+                Effect.andThen(scheduleCapacityRecovery(binding.threadId, marker)),
+              );
+            });
+            yield* Effect.forEach(snapshot.threads, (thread) =>
+              thread.session?.status === "waiting" && !markerThreadIds.has(thread.id)
+                ? setCapacityRecoverySession(thread.id, "ready")
+                : Effect.void,
+            );
+          }),
+        ),
+        Effect.catch((error) =>
+          Effect.logWarning("provider capacity recovery startup scan failed", { error }),
+        ),
+        Effect.asVoid,
       );
     });
 

@@ -1062,6 +1062,13 @@ function mapToRuntimeEvents(
       return [];
     }
     const errorMessage = trimText(payload.turn.error?.message);
+    const codexErrorInfo = payload.turn.error?.codexErrorInfo;
+    const capacityFailure =
+      codexErrorInfo === "usageLimitExceeded"
+        ? { kind: "usage_limit" as const }
+        : codexErrorInfo === "serverOverloaded"
+          ? { kind: "overloaded" as const }
+          : undefined;
     return [
       {
         ...runtimeEventBase(event, canonicalThreadId),
@@ -1069,6 +1076,7 @@ function mapToRuntimeEvents(
         payload: {
           state: toTurnStatus(payload.turn.status),
           ...(errorMessage ? { errorMessage } : {}),
+          ...(capacityFailure ? { capacityFailure } : {}),
         },
       },
     ];

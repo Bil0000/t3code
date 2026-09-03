@@ -222,6 +222,7 @@ function makeScopedRuntimeFactory(options?: { readonly failConstruction?: boolea
 
 const providerSessionDirectoryTestLayer = Layer.succeed(ProviderSessionDirectory, {
   upsert: () => Effect.void,
+  clearCapacityRecovery: () => Effect.succeed(false),
   getProvider: () =>
     Effect.die(new Error("ProviderSessionDirectory.getProvider is not used in test")),
   getBinding: () => Effect.succeed(Option.none()),
@@ -557,6 +558,44 @@ function startLifecycleRuntime() {
 }
 
 lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
+  it.effect("classifies typed Codex limit and overload failures", () =>
+    Effect.gen(function* () {
+      const { adapter, runtime } = yield* startLifecycleRuntime();
+
+      for (const [index, [codexErrorInfo, expected]] of [
+        ["usageLimitExceeded", "usage_limit"],
+        ["serverOverloaded", "overloaded"],
+        ["internalServerError", undefined],
+      ].entries()) {
+        const eventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+        yield* runtime.emit({
+          id: asEventId(`evt-capacity-${index}`),
+          kind: "notification",
+          provider: ProviderDriverKind.make("codex"),
+          createdAt: "2026-01-01T00:00:00.000Z",
+          method: "turn/completed",
+          threadId: asThreadId("thread-1"),
+          turnId: asTurnId(`turn-${index}`),
+          payload: {
+            threadId: "provider-thread-1",
+            turn: {
+              id: `turn-${index}`,
+              items: [],
+              status: "failed",
+              error: { message: "failed", codexErrorInfo },
+            },
+          },
+        } as ProviderEvent);
+
+        const event = yield* Fiber.join(eventFiber);
+        NodeAssert.equal(event._tag, "Some");
+        if (event._tag === "Some" && event.value.type === "turn.completed") {
+          NodeAssert.equal(event.value.payload.capacityFailure?.kind, expected);
+        }
+      }
+    }),
+  );
+
   it.effect("carries child model metadata through every task event", () =>
     Effect.gen(function* () {
       const { adapter, runtime } = yield* startLifecycleRuntime();

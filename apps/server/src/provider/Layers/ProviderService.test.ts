@@ -2465,6 +2465,7 @@ const getBinding = vi.fn((threadId: ThreadId) =>
 const boundedListing = makeProviderServiceLayer({
   directory: {
     upsert: () => Effect.void,
+    clearCapacityRecovery: () => Effect.die("ProviderService.listSessions does not clear recovery"),
     getProvider: () => Effect.die("ProviderService.listSessions does not use getProvider"),
     getBinding,
     listThreadIds,

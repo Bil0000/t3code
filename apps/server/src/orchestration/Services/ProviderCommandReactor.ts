@@ -9,6 +9,8 @@
 import * as Context from "effect/Context";
 import type * as Effect from "effect/Effect";
 import type * as Scope from "effect/Scope";
+import type { ProviderSendTurnInput, ProviderTurnStartResult } from "@t3tools/contracts";
+import type { ProviderServiceError } from "../../provider/Errors.ts";
 
 /**
  * ProviderCommandReactorShape - Service API for provider command reactors.
@@ -25,6 +27,10 @@ export interface ProviderCommandReactorShape {
    * processing.
    */
   readonly start: () => Effect.Effect<void, never, Scope.Scope>;
+
+  readonly continueTurn: (
+    input: ProviderSendTurnInput,
+  ) => Effect.Effect<ProviderTurnStartResult, ProviderServiceError>;
 
   /**
    * Resolves when the internal processing queue is empty and idle.

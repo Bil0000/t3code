@@ -340,6 +340,7 @@ export const OrchestrationSessionStatus = Schema.Literals([
   "idle",
   "starting",
   "running",
+  "waiting",
   "ready",
   "interrupted",
   "stopped",

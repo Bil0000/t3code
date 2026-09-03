@@ -363,6 +363,13 @@ export const CodexSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
+    automaticCapacityRecovery: Schema.optionalKey(Schema.Boolean).pipe(
+      Schema.annotateKey({
+        title: "Automatic capacity recovery",
+        description: "Continue this thread when subscription capacity becomes available again.",
+        providerSettingsForm: { control: "switch", clearWhenEmpty: "omit" },
+      }),
+    ),
     binaryPath: makeBinaryPathSetting("codex").pipe(
       Schema.annotateKey({
         title: "Binary path",
@@ -406,7 +413,7 @@ export const CodexSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "shadowHomePath", "launchArgs"],
+    order: ["automaticCapacityRecovery", "binaryPath", "homePath", "shadowHomePath", "launchArgs"],
   },
 );
 export type CodexSettings = typeof CodexSettings.Type;
@@ -421,6 +428,13 @@ export const ClaudeSettings = makeProviderSettingsSchema(
     enabled: Schema.Boolean.pipe(
       Schema.withDecodingDefault(Effect.succeed(true)),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    automaticCapacityRecovery: Schema.optionalKey(Schema.Boolean).pipe(
+      Schema.annotateKey({
+        title: "Automatic capacity recovery",
+        description: "Continue this thread when subscription capacity becomes available again.",
+        providerSettingsForm: { control: "switch", clearWhenEmpty: "omit" },
+      }),
     ),
     binaryPath: makeBinaryPathSetting("claude").pipe(
       Schema.annotateKey({
@@ -469,7 +483,13 @@ export const ClaudeSettings = makeProviderSettingsSchema(
     ),
   },
   {
-    order: ["binaryPath", "homePath", "autoCompactWindow", "launchArgs"],
+    order: [
+      "automaticCapacityRecovery",
+      "binaryPath",
+      "homePath",
+      "autoCompactWindow",
+      "launchArgs",
+    ],
   },
 );
 export type ClaudeSettings = typeof ClaudeSettings.Type;

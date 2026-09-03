@@ -153,6 +153,10 @@ interface ClaudeTurnState {
   latestAssistantUsage: unknown | undefined;
   compactedSinceLatestAssistantUsage: boolean;
   nextSyntheticAssistantBlockIndex: number;
+  capacityFailure?: {
+    readonly kind: "usage_limit" | "overloaded";
+    readonly retryAt?: string;
+  };
 }
 
 interface AssistantTextBlockState {
@@ -2421,6 +2425,9 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ? { totalCostUsd: result.total_cost_usd }
           : {}),
         ...(errorMessage ? { errorMessage } : {}),
+        ...(status === "failed" && turnState.capacityFailure
+          ? { capacityFailure: turnState.capacityFailure }
+          : {}),
       },
       providerRefs: nativeProviderRefs(context),
     });
@@ -2948,6 +2955,13 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       context.lastAssistantUuid = message.uuid;
       yield* updateResumeCursor(context);
       return;
+    }
+
+    if (context.turnState && (message.error === "rate_limit" || message.error === "overloaded")) {
+      context.turnState.capacityFailure = {
+        ...context.turnState.capacityFailure,
+        kind: message.error === "rate_limit" ? "usage_limit" : "overloaded",
+      };
     }
 
     // Auto-start a synthetic turn for assistant messages that arrive without
@@ -3593,6 +3607,18 @@ export const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (message.type === "rate_limit_event") {
+      if (context.turnState && message.rate_limit_info.status === "rejected") {
+        context.turnState.capacityFailure = {
+          kind: "usage_limit",
+          ...(typeof message.rate_limit_info.resetsAt === "number"
+            ? {
+                retryAt: DateTime.formatIso(
+                  DateTime.makeUnsafe(message.rate_limit_info.resetsAt * 1_000),
+                ),
+              }
+            : {}),
+        };
+      }
       yield* offerRuntimeEvent({
         ...base,
         type: "account.rate-limits.updated",

@@ -676,6 +676,7 @@ function settledTurnStateForSessionStatus(
       return "interrupted";
     case "starting":
     case "running":
+    case "waiting":
       return null;
   }
 }

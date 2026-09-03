@@ -15,6 +15,7 @@ describe("ProviderSettingsForm helpers", () => {
 
     expect(codex).toBeDefined();
     expect(deriveProviderSettingsFields(codex!).map((field) => field.key)).toEqual([
+      "automaticCapacityRecovery",
       "binaryPath",
       "homePath",
       "shadowHomePath",
@@ -42,6 +43,7 @@ describe("ProviderSettingsForm helpers", () => {
     expect(claude).toBeDefined();
 
     expect(deriveProviderSettingsFields(claude!).map((field) => field.key)).toEqual([
+      "automaticCapacityRecovery",
       "binaryPath",
       "homePath",
       "autoCompactWindow",

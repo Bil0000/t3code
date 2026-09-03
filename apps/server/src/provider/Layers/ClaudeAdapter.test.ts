@@ -1815,6 +1815,104 @@ describe("ClaudeAdapterLive", () => {
         assert.equal(turnCompleted.payload.state, "interrupted");
         assert.equal(turnCompleted.payload.errorMessage, "Error: Request was aborted.");
         assert.equal(turnCompleted.payload.stopReason, "tool_use");
+        assert.equal(turnCompleted.payload.capacityFailure, undefined);
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("classifies rejected Claude subscription limits with their reset time", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 8).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "hello", attachments: [] });
+
+      harness.query.emit({
+        type: "rate_limit_event",
+        rate_limit_info: {
+          status: "rejected",
+          rateLimitType: "seven_day",
+          resetsAt: 1_799_000_000,
+        },
+        session_id: "sdk-session-limit",
+        uuid: "rate-limit-1",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["Rate limit reached"],
+        session_id: "sdk-session-limit",
+        uuid: "result-limit",
+      } as unknown as SDKMessage);
+
+      const completed = Array.from(yield* Fiber.join(runtimeEventsFiber)).find(
+        (event) => event.type === "turn.completed",
+      );
+      assert.equal(completed?.type, "turn.completed");
+      if (completed?.type === "turn.completed") {
+        assert.deepEqual(completed.payload.capacityFailure, {
+          kind: "usage_limit",
+          retryAt: "2027-01-03T18:13:20.000Z",
+        });
+      }
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("does not classify a subagent rate limit as the parent capacity failure", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const runtimeEventsFiber = yield* Stream.takeUntil(
+        adapter.streamEvents,
+        (event) => event.type === "turn.completed",
+      ).pipe(Stream.runCollect, Effect.forkChild);
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        runtimeMode: "full-access",
+      });
+      yield* adapter.sendTurn({ threadId: session.threadId, input: "hello", attachments: [] });
+
+      harness.query.emit({
+        type: "assistant",
+        parent_tool_use_id: "toolu_subagent_limit",
+        error: "rate_limit",
+        message: { model: "claude-test", content: [] },
+        session_id: "sdk-session-limit-subagent",
+        uuid: "subagent-limit",
+      } as unknown as SDKMessage);
+      harness.query.emit({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["Parent execution failed"],
+        session_id: "sdk-session-limit-subagent",
+        uuid: "parent-result",
+      } as unknown as SDKMessage);
+
+      const completed = Array.from(yield* Fiber.join(runtimeEventsFiber)).find(
+        (event) => event.type === "turn.completed",
+      );
+      assert.equal(completed?.type, "turn.completed");
+      if (completed?.type === "turn.completed") {
+        assert.equal(completed.payload.capacityFailure, undefined);
       }
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),

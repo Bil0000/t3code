@@ -4,7 +4,7 @@ import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { ProviderDriverKind, ThreadId } from "@t3tools/contracts";
+import { EventId, ProviderDriverKind, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
 import { it, assert } from "@effect/vitest";
 import { assertSome } from "@effect/vitest/utils";
 import * as Effect from "effect/Effect";
@@ -120,6 +120,51 @@ it.layer(makeDirectoryLayer(SqlitePersistenceMemory))("ProviderSessionDirectoryL
           activeTurnId: "turn-1",
         });
       }
+    }));
+
+  it("does not clear a recovery marker after the provider binding changes", () =>
+    Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      const threadId = ThreadId.make("thread-capacity-provider-switch");
+      const eventId = EventId.make("evt-capacity-provider-switch");
+      const codex = ProviderInstanceId.make("codex");
+      const claude = ProviderInstanceId.make("claudeAgent");
+
+      yield* directory.upsert({
+        threadId,
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: codex,
+        runtimePayload: { capacityRecovery: { eventId } },
+      });
+      const initial = yield* directory.getBinding(threadId);
+      if (Option.isNone(initial) || initial.value.providerInstanceId === undefined) {
+        return yield* Effect.die("Expected the initial binding.");
+      }
+
+      yield* directory.upsert({
+        threadId,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: claude,
+        runtimePayload: { providerSwitch: true },
+      });
+      const cleared = yield* directory.clearCapacityRecovery({
+        threadId,
+        provider: initial.value.provider,
+        providerInstanceId: initial.value.providerInstanceId,
+        eventId,
+      });
+
+      assert.equal(cleared, false);
+      const current = yield* directory.getBinding(threadId);
+      if (Option.isNone(current)) {
+        return yield* Effect.die("Expected the switched binding.");
+      }
+      assert.deepEqual(current.value, {
+        ...current.value,
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: claude,
+        runtimePayload: { capacityRecovery: { eventId }, providerSwitch: true },
+      });
     }));
 
   it("lists persisted bindings with metadata in oldest-first order", () =>

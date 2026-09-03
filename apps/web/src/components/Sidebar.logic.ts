@@ -180,6 +180,7 @@ export interface ThreadStatusPill {
     | "Working"
     | "Monitoring"
     | "Connecting"
+    | "Waiting to resume"
     | "Completed"
     | "Pending Approval"
     | "Awaiting Input"
@@ -197,6 +198,7 @@ const THREAD_STATUS_PRIORITY: Record<ThreadStatusPill["label"], number> = {
   "Awaiting Input": 5,
   Working: 4,
   Connecting: 4,
+  "Waiting to resume": 4,
   "Plan Ready": 3,
   Monitoring: 2,
   Completed: 1,
@@ -515,6 +517,7 @@ export type SidebarThreadStatus =
   | "input"
   | "working"
   | "monitoring"
+  | "waiting"
   | "failed"
   | "ready";
 
@@ -532,6 +535,9 @@ export function resolveSidebarThreadStatus(thread: SidebarThreadStatusInput): Si
   }
   if (thread.session?.status === "running" || thread.session?.status === "starting") {
     return "working";
+  }
+  if (thread.session?.status === "waiting") {
+    return "waiting";
   }
   // A failed session outranks lingering background liveness: the user must
   // see the failure, not a stale Working (review finding).
@@ -766,6 +772,15 @@ export function resolveThreadStatusPill(input: {
       colorClass: "text-sky-600 dark:text-sky-300/80",
       dotClass: "bg-sky-500 dark:bg-sky-300/80",
       pulse: true,
+    };
+  }
+
+  if (thread.session?.status === "waiting") {
+    return {
+      label: "Waiting to resume",
+      colorClass: "text-sky-600 dark:text-sky-300/80",
+      dotClass: "bg-sky-500 dark:bg-sky-300/80",
+      pulse: false,
     };
   }
 

@@ -4,12 +4,14 @@ import {
   EventId,
   type ModelSelection,
   type OrchestrationEvent,
+  type ProviderSendTurnInput,
   ProviderDriverKind,
   type ProjectId,
   type OrchestrationSession,
   ThreadId,
   type ProviderSession,
   type RuntimeMode,
+  type ProviderTurnStartResult,
   type TurnId,
 } from "@t3tools/contracts";
 import { assistantCitationsToPlainText } from "@t3tools/shared/assistantCitations";
@@ -18,6 +20,7 @@ import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
 import * as Duration from "effect/Duration";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Equal from "effect/Equal";
 import * as FileSystem from "effect/FileSystem";
@@ -66,6 +69,14 @@ type ProviderIntentEvent = Extract<
       | "thread.settled";
   }
 >;
+
+type CapacityRecoveryTurn = {
+  readonly type: "capacity.recovery";
+  readonly input: ProviderSendTurnInput;
+  readonly result: Deferred.Deferred<ProviderTurnStartResult, ProviderServiceError>;
+};
+
+type ProviderCommandInput = ProviderIntentEvent | CapacityRecoveryTurn;
 
 function toNonEmptyProviderInput(value: string | undefined): string | undefined {
   const normalized = value?.trim();
@@ -1240,7 +1251,7 @@ const make = Effect.gen(function* () {
 
     yield* providerService
       .sendTurn(sendTurnRequest.value)
-      .pipe(Effect.catchCause(recoverTurnStartFailure), Effect.forkScoped);
+      .pipe(Effect.catchCause(recoverTurnStartFailure));
   });
 
   const processTurnInterruptRequested = Effect.fn("processTurnInterruptRequested")(function* (
@@ -1521,20 +1532,37 @@ const make = Effect.gen(function* () {
     }
   });
 
-  const processDomainEventSafely = (event: ProviderIntentEvent) =>
-    processDomainEvent(event).pipe(
+  const processInput = (input: ProviderCommandInput) =>
+    input.type === "capacity.recovery"
+      ? providerService.sendTurn(input.input).pipe(
+          Effect.exit,
+          Effect.flatMap((exit) => Deferred.done(input.result, exit)),
+          Effect.asVoid,
+        )
+      : processDomainEvent(input);
+
+  const processInputSafely = (input: ProviderCommandInput) =>
+    processInput(input).pipe(
       Effect.catchCause((cause) => {
         if (Cause.hasInterruptsOnly(cause)) {
           return Effect.interrupt;
         }
         return Effect.logWarning("provider command reactor failed to process event", {
-          eventType: event.type,
+          eventType: input.type,
           cause: Cause.pretty(cause),
         });
       }),
     );
 
-  const worker = yield* makeDrainableWorker(processDomainEventSafely);
+  const worker = yield* makeDrainableWorker(processInputSafely);
+
+  const continueTurn: ProviderCommandReactorShape["continueTurn"] = Effect.fn("continueTurn")(
+    function* (input) {
+      const result = yield* Deferred.make<ProviderTurnStartResult, ProviderServiceError>();
+      yield* worker.enqueue({ type: "capacity.recovery", input, result });
+      return yield* Deferred.await(result);
+    },
+  );
 
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
     const interruptedTitleRegenerations = yield* findInterruptedThreadTitleRegenerations().pipe(
@@ -1595,6 +1623,7 @@ const make = Effect.gen(function* () {
 
   return {
     start,
+    continueTurn,
     drain: Effect.gen(function* () {
       yield* worker.drain;
       yield* threadTitleRegenerationWorker.drain;

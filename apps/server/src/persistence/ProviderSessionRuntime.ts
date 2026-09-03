@@ -11,6 +11,7 @@ import * as SqlSchema from "effect/unstable/sql/SqlSchema";
 
 import {
   IsoDateTime,
+  EventId,
   ProviderInstanceId,
   ProviderSessionRuntimeStatus,
   RuntimeMode,
@@ -58,6 +59,14 @@ export type GetProviderSessionRuntimeInput = typeof GetProviderSessionRuntimeInp
 export const DeleteProviderSessionRuntimeInput = Schema.Struct({ threadId: ThreadId });
 export type DeleteProviderSessionRuntimeInput = typeof DeleteProviderSessionRuntimeInput.Type;
 
+export const ClearCapacityRecoveryInput = Schema.Struct({
+  threadId: ThreadId,
+  providerName: Schema.String,
+  providerInstanceId: ProviderInstanceId,
+  eventId: EventId,
+});
+export type ClearCapacityRecoveryInput = typeof ClearCapacityRecoveryInput.Type;
+
 /**
  * ProviderSessionRuntimeRepository - Service tag for provider runtime persistence.
  */
@@ -99,6 +108,10 @@ export class ProviderSessionRuntimeRepository extends Context.Service<
     readonly deleteByThreadId: (
       input: DeleteProviderSessionRuntimeInput,
     ) => Effect.Effect<void, ProviderSessionRuntimeRepositoryError>;
+
+    readonly clearCapacityRecovery: (
+      input: ClearCapacityRecoveryInput,
+    ) => Effect.Effect<boolean, ProviderSessionRuntimeRepositoryError>;
   }
 >()("t3/persistence/ProviderSessionRuntime/ProviderSessionRuntimeRepository") {}
 
@@ -235,6 +248,25 @@ export const make = Effect.gen(function* () {
       `,
   });
 
+  const clearCapacityRecoveryRow = SqlSchema.findOneOption({
+    Request: ClearCapacityRecoveryInput,
+    Result: Schema.Struct({ threadId: ThreadId }),
+    execute: ({ threadId, providerName, providerInstanceId, eventId }) =>
+      sql`
+        UPDATE provider_session_runtime
+        SET runtime_payload_json = json_set(
+          runtime_payload_json,
+          '$.capacityRecovery',
+          json('null')
+        )
+        WHERE thread_id = ${threadId}
+          AND provider_name = ${providerName}
+          AND provider_instance_id = ${providerInstanceId}
+          AND json_extract(runtime_payload_json, '$.capacityRecovery.eventId') = ${eventId}
+        RETURNING thread_id AS "threadId"
+      `,
+  });
+
   const upsert: ProviderSessionRuntimeRepository["Service"]["upsert"] = (runtime) =>
     upsertRuntimeRow(runtime).pipe(
       Effect.mapError(
@@ -322,11 +354,25 @@ export const make = Effect.gen(function* () {
       ),
     );
 
+  const clearCapacityRecovery: ProviderSessionRuntimeRepository["Service"]["clearCapacityRecovery"] =
+    (input) =>
+      clearCapacityRecoveryRow(input).pipe(
+        Effect.map(Option.isSome),
+        Effect.mapError(
+          toPersistenceSqlOrDecodeError(
+            "ProviderSessionRuntimeRepository.clearCapacityRecovery:query",
+            "ProviderSessionRuntimeRepository.clearCapacityRecovery:decodeResult",
+            { threadId: input.threadId },
+          ),
+        ),
+      );
+
   return {
     upsert,
     getByThreadId,
     list,
     deleteByThreadId,
+    clearCapacityRecovery,
   } satisfies ProviderSessionRuntimeRepository["Service"];
 });
 

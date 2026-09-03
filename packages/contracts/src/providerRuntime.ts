@@ -371,6 +371,12 @@ const TurnCompletedPayload = Schema.Struct({
   modelUsage: Schema.optional(UnknownRecordSchema),
   totalCostUsd: Schema.optional(Schema.Number),
   errorMessage: Schema.optional(TrimmedNonEmptyStringSchema),
+  capacityFailure: Schema.optional(
+    Schema.Struct({
+      kind: Schema.Literals(["usage_limit", "overloaded"]),
+      retryAt: Schema.optional(IsoDateTime),
+    }),
+  ),
 });
 export type TurnCompletedPayload = typeof TurnCompletedPayload.Type;
 

@@ -172,6 +172,7 @@ describe("ProviderCommandReactor", () => {
     readonly startSessionEffect?: (
       session: ProviderSession,
     ) => Effect.Effect<ProviderSession, ProviderAdapterRequestError>;
+    readonly sendTurnEffect?: ProviderServiceShape["sendTurn"];
   }) {
     const now = "2026-01-01T00:00:00.000Z";
     const baseDir =
@@ -248,11 +249,13 @@ describe("ProviderCommandReactor", () => {
         ),
       );
     });
-    const sendTurn = vi.fn((_: unknown) =>
-      Effect.succeed({
-        threadId: ThreadId.make("thread-1"),
-        turnId: asTurnId("turn-1"),
-      }),
+    const sendTurn = vi.fn(
+      (request: unknown) =>
+        input?.sendTurnEffect?.(request as never) ??
+        Effect.succeed({
+          threadId: ThreadId.make("thread-1"),
+          turnId: asTurnId("turn-1"),
+        }),
     );
     const interruptTurn = vi.fn((_: unknown) => input?.interruptTurnEffect?.() ?? Effect.void);
     const respondToRequest = vi.fn<ProviderServiceShape["respondToRequest"]>(() => Effect.void);
@@ -530,6 +533,7 @@ describe("ProviderCommandReactor", () => {
 
     return {
       engine,
+      reactor,
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       startSession,
       sendTurn,
@@ -591,6 +595,60 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.session?.threadId).toBe("thread-1");
     expect(thread?.session?.status).toBe("starting");
     expect(thread?.session?.runtimeMode).toBe("approval-required");
+  });
+
+  it("serializes a recovery continuation before a queued user turn", async () => {
+    let releaseContinuation: (() => void) | undefined;
+    const continuationReleased = new Promise<void>((resolve) => {
+      releaseContinuation = resolve;
+    });
+    let signalContinuationStarted: (() => void) | undefined;
+    const continuationStarted = new Promise<void>((resolve) => {
+      signalContinuationStarted = resolve;
+    });
+    const harness = await createHarness({
+      sendTurnEffect: (request) =>
+        Effect.promise(async () => {
+          if (request.continuation === true) {
+            signalContinuationStarted?.();
+            await continuationReleased;
+            return { threadId: request.threadId, turnId: asTurnId("turn-recovery") };
+          }
+          return { threadId: request.threadId, turnId: asTurnId("turn-user") };
+        }),
+    });
+
+    const continuation = harness.runEffect(
+      harness.reactor.continueTurn({
+        threadId: ThreadId.make("thread-1"),
+        continuation: true,
+      }),
+    );
+    await continuationStarted;
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.make("cmd-turn-after-recovery"),
+        threadId: ThreadId.make("thread-1"),
+        message: {
+          messageId: asMessageId("message-after-recovery"),
+          role: "user",
+          text: "new user request",
+          attachments: [],
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    await Effect.runPromise(Effect.yieldNow);
+    expect(harness.sendTurn).toHaveBeenCalledTimes(1);
+
+    releaseContinuation?.();
+    await continuation;
+    await harness.drain();
+    expect(harness.sendTurn).toHaveBeenCalledTimes(2);
   });
 
   effectIt.effect("retains a turn dispatched immediately after start until activation", () =>

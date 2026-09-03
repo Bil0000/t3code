@@ -1,4 +1,5 @@
 import type {
+  EventId,
   ProviderInstanceId,
   ProviderDriverKind,
   ProviderSessionRuntimeStatus,
@@ -44,6 +45,13 @@ export interface ProviderSessionDirectoryShape {
   readonly upsert: (
     binding: ProviderRuntimeBinding,
   ) => Effect.Effect<void, ProviderSessionDirectoryWriteError>;
+
+  readonly clearCapacityRecovery: (input: {
+    readonly threadId: ThreadId;
+    readonly provider: ProviderDriverKind;
+    readonly providerInstanceId: ProviderInstanceId;
+    readonly eventId: EventId;
+  }) => Effect.Effect<boolean, ProviderSessionDirectoryPersistenceError>;
 
   readonly getProvider: (
     threadId: ThreadId,

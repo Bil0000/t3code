@@ -7,6 +7,7 @@ export type ThreadStatusKind =
   | "awaiting-input"
   | "working"
   | "connecting"
+  | "waiting"
   | "error"
   | "plan-ready";
 
@@ -83,6 +84,18 @@ export function resolveThreadStatus(
       iconColor: "#0a84ff",
       iconBackground: "rgba(10,132,255,0.22)",
       pulse: true,
+    };
+  }
+
+  if (thread.session?.status === "waiting") {
+    return {
+      kind: "waiting",
+      label: "Waiting to resume",
+      pillClassName: "bg-adaptive-sky-500-a12-a16",
+      textClassName: "text-adaptive-sky-700-300",
+      iconColor: "#0a84ff",
+      iconBackground: "rgba(10,132,255,0.22)",
+      pulse: false,
     };
   }
 

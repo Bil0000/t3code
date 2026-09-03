@@ -28,6 +28,12 @@ Log in with Codex normally:
 codex login
 ```
 
+## Keep Work Running After A Capacity Limit
+
+Turn on **Automatic capacity recovery** in the provider settings. If Codex ends a turn with a
+verified capacity error, T3 Code waits and continues the same session when capacity is available.
+It does not repeat the original prompt, answer approvals, or retry other errors.
+
 ## Send feedback to OpenAI
 
 In an existing Codex thread, send `/feedback` or `/feedback` followed by a description of the

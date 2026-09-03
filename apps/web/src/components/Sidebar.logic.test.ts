@@ -700,6 +700,15 @@ describe("resolveSidebarThreadStatus", () => {
     ).toBe("working");
   });
 
+  it("reports waiting while a capacity recovery is scheduled", () => {
+    expect(
+      resolveSidebarThreadStatus({
+        ...idle,
+        session: { ...session, status: "waiting" as const, activeTurnId: null },
+      }),
+    ).toBe("waiting");
+  });
+
   it("reports failed only while the session status is error", () => {
     expect(
       resolveSidebarThreadStatus({
@@ -1176,6 +1185,17 @@ describe("resolveThreadStatusPill", () => {
         thread: baseThread,
       }),
     ).toMatchObject({ label: "Working", pulse: true });
+  });
+
+  it("shows that a capacity recovery is waiting to resume", () => {
+    expect(
+      resolveThreadStatusPill({
+        thread: {
+          ...baseThread,
+          session: { ...baseThread.session, status: "waiting", activeTurnId: null },
+        },
+      }),
+    ).toMatchObject({ label: "Waiting to resume", pulse: false });
   });
 
   it("shows plan ready when a settled plan turn has a proposed plan ready for follow-up", () => {

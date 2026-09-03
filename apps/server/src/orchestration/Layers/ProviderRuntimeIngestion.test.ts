@@ -7,6 +7,7 @@ import {
   OrchestrationReadModel,
   ProviderDriverKind,
   ProviderRuntimeEvent,
+  type ProviderSendTurnInput,
   ProviderSession,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -24,23 +25,31 @@ import {
   TurnId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Layer from "effect/Layer";
 import * as ManagedRuntime from "effect/ManagedRuntime";
+import * as Option from "effect/Option";
 import * as PubSub from "effect/PubSub";
 import * as Scope from "effect/Scope";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { it as effectIt } from "@effect/vitest";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { OrchestrationEventStoreLive } from "../../persistence/Layers/OrchestrationEventStore.ts";
 import { OrchestrationCommandReceiptRepositoryLive } from "../../persistence/Layers/OrchestrationCommandReceipts.ts";
+import { ProjectionTurnRepositoryLive } from "../../persistence/Layers/ProjectionTurns.ts";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite.ts";
+import * as ProviderSessionRuntime from "../../persistence/ProviderSessionRuntime.ts";
+import { ProjectionTurnRepository } from "../../persistence/Services/ProjectionTurns.ts";
+import { ProviderSessionDirectoryLive } from "../../provider/Layers/ProviderSessionDirectory.ts";
 import {
   ProviderService,
   type ProviderServiceShape,
 } from "../../provider/Services/ProviderService.ts";
+import { ProviderSessionDirectory } from "../../provider/Services/ProviderSessionDirectory.ts";
 import * as RepositoryIdentityResolver from "../../project/RepositoryIdentityResolver.ts";
 import { OrchestrationEngineLive } from "./OrchestrationEngine.ts";
 import { OrchestrationProjectionPipelineLive } from "./ProjectionPipeline.ts";
@@ -50,6 +59,7 @@ import * as ThreadPlanProgress from "../ThreadPlanProgress.ts";
 import { ProviderRuntimeIngestionLive } from "./ProviderRuntimeIngestion.ts";
 import { DEFAULT_THREAD_TITLE } from "../threadTitles.ts";
 import { OrchestrationEngineService } from "../Services/OrchestrationEngine.ts";
+import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ProjectionSnapshotQuery } from "../Services/ProjectionSnapshotQuery.ts";
 import { ServerConfig } from "../../config.ts";
@@ -58,6 +68,17 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 
 function makeTestServerSettingsLayer(overrides: Partial<ServerSettings> = {}) {
   return ServerSettingsService.layerTest(overrides);
+}
+
+function capacityRecoverySettings(provider: "codex" | "claudeAgent"): Partial<ServerSettings> {
+  return {
+    providerInstances: {
+      [ProviderInstanceId.make(provider)]: {
+        driver: ProviderDriverKind.make(provider),
+        config: { automaticCapacityRecovery: true },
+      },
+    },
+  };
 }
 
 const asProjectId = (value: string): ProjectId => ProjectId.make(value);
@@ -97,20 +118,37 @@ function isLegacyTurnCompletedEvent(
   );
 }
 
-function createProviderServiceHarness() {
+function createProviderServiceHarness(options?: {
+  sendTurn?: ProviderServiceShape["sendTurn"];
+  promptlessTurnContinuation?: boolean;
+}) {
   const runtimeEventPubSub = Effect.runSync(PubSub.unbounded<ProviderRuntimeEvent>());
   const runtimeSessions: ProviderSession[] = [];
+  const sentTurns: ProviderSendTurnInput[] = [];
 
   const unsupported = () => Effect.die(new Error("Unsupported provider call in test")) as never;
   const service: ProviderServiceShape = {
     startSession: () => unsupported(),
-    sendTurn: () => unsupported(),
+    sendTurn: (input) => {
+      sentTurns.push(input);
+      return (
+        options?.sendTurn?.(input) ??
+        Effect.succeed({
+          threadId: input.threadId,
+          turnId: TurnId.make(`recovery-${sentTurns.length}`),
+        })
+      );
+    },
     interruptTurn: () => unsupported(),
     respondToRequest: () => unsupported(),
     respondToUserInput: () => unsupported(),
     stopSession: () => unsupported(),
     listSessions: () => Effect.succeed([...runtimeSessions]),
-    getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    getCapabilities: () =>
+      Effect.succeed({
+        sessionModelSwitch: "in-session",
+        ...(options?.promptlessTurnContinuation ? { promptlessTurnContinuation: true } : {}),
+      }),
     getInstanceInfo: (instanceId) => {
       const driverKind = ProviderDriverKind.make(String(instanceId));
       return Effect.succeed({
@@ -163,6 +201,7 @@ function createProviderServiceHarness() {
     service,
     emit,
     setSession,
+    sentTurns,
   };
 }
 
@@ -197,7 +236,11 @@ async function waitForThread(
 
 describe("ProviderRuntimeIngestion", () => {
   let runtime: ManagedRuntime.ManagedRuntime<
-    OrchestrationEngineService | ProviderRuntimeIngestionService | ProjectionSnapshotQuery,
+    | OrchestrationEngineService
+    | ProviderRuntimeIngestionService
+    | ProjectionSnapshotQuery
+    | ProviderSessionDirectory
+    | ProjectionTurnRepository,
     unknown
   > | null = null;
   let scope: Scope.Closeable | null = null;
@@ -226,10 +269,17 @@ describe("ProviderRuntimeIngestion", () => {
   async function createHarness(options?: {
     serverSettings?: Partial<ServerSettings>;
     threadTitle?: string;
+    provider?: "codex" | "claudeAgent";
+    sendTurn?: ProviderServiceShape["sendTurn"];
   }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
-    const provider = createProviderServiceHarness();
+    const providerName = options?.provider ?? "codex";
+    const providerInstanceId = ProviderInstanceId.make(providerName);
+    const provider = createProviderServiceHarness({
+      ...(options?.sendTurn ? { sendTurn: options.sendTurn } : {}),
+      promptlessTurnContinuation: providerName === "codex",
+    });
     const orchestrationLayer = OrchestrationEngineLive.pipe(
       Layer.provide(OrchestrationProjectionSnapshotQueryLive),
       Layer.provide(OrchestrationProjectionPipelineLive),
@@ -242,6 +292,12 @@ describe("ProviderRuntimeIngestion", () => {
       Layer.provide(RepositoryIdentityResolver.layer),
       Layer.provide(SqlitePersistenceMemory),
     );
+    const runtimeRepositoryLayer = ProviderSessionRuntime.layer.pipe(
+      Layer.provide(SqlitePersistenceMemory),
+    );
+    const providerSessionDirectoryLayer = ProviderSessionDirectoryLive.pipe(
+      Layer.provide(runtimeRepositoryLayer),
+    );
     const layer = ProviderRuntimeIngestionLive.pipe(
       Layer.provideMerge(orchestrationLayer),
       Layer.provideMerge(projectionSnapshotLayer),
@@ -249,16 +305,32 @@ describe("ProviderRuntimeIngestion", () => {
       // engine, and the snapshot query (reader).
       Layer.provideMerge(ThreadBackgroundLiveness.layer),
       Layer.provideMerge(ThreadPlanProgress.layer),
+      Layer.provideMerge(ProjectionTurnRepositoryLive),
       Layer.provideMerge(SqlitePersistenceMemory),
+      Layer.provideMerge(providerSessionDirectoryLayer),
       Layer.provideMerge(Layer.succeed(ProviderService, provider.service)),
+      Layer.provideMerge(
+        Layer.succeed(ProviderCommandReactor, {
+          start: () => Effect.void,
+          continueTurn: provider.service.sendTurn,
+          drain: Effect.void,
+        }),
+      ),
       Layer.provideMerge(makeTestServerSettingsLayer(options?.serverSettings)),
       Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
       Layer.provideMerge(NodeServices.layer),
+      Layer.provideMerge(TestClock.layer()),
     );
     runtime = ManagedRuntime.make(layer);
     const engine = await runtime.runPromise(Effect.service(OrchestrationEngineService));
     const snapshotQuery = await runtime.runPromise(Effect.service(ProjectionSnapshotQuery));
     const ingestion = await runtime.runPromise(Effect.service(ProviderRuntimeIngestionService));
+    const providerSessionDirectory = await runtime.runPromise(
+      Effect.service(ProviderSessionDirectory),
+    );
+    const projectionTurnRepository = await runtime.runPromise(
+      Effect.service(ProjectionTurnRepository),
+    );
     scope = await Effect.runPromise(Scope.make("sequential"));
     await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
     const drain = () => Effect.runPromise(ingestion.drain);
@@ -272,7 +344,7 @@ describe("ProviderRuntimeIngestion", () => {
       title: "Provider Project",
       workspaceRoot,
       defaultModelSelection: {
-        instanceId: ProviderInstanceId.make("codex"),
+        instanceId: providerInstanceId,
         model: "gpt-5-codex",
       },
       createdAt,
@@ -284,7 +356,7 @@ describe("ProviderRuntimeIngestion", () => {
       projectId: asProjectId("project-1"),
       title: options?.threadTitle ?? "Thread",
       modelSelection: {
-        instanceId: ProviderInstanceId.make("codex"),
+        instanceId: providerInstanceId,
         model: "gpt-5-codex",
       },
       interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
@@ -300,7 +372,7 @@ describe("ProviderRuntimeIngestion", () => {
       session: {
         threadId: ThreadId.make("thread-1"),
         status: "ready",
-        providerName: "codex",
+        providerName,
         runtimeMode: "approval-required",
         activeTurnId: null,
         updatedAt: createdAt,
@@ -309,7 +381,7 @@ describe("ProviderRuntimeIngestion", () => {
       createdAt,
     });
     provider.setSession({
-      provider: ProviderDriverKind.make("codex"),
+      provider: ProviderDriverKind.make(providerName),
       status: "ready",
       runtimeMode: "approval-required",
       threadId: ThreadId.make("thread-1"),
@@ -323,9 +395,596 @@ describe("ProviderRuntimeIngestion", () => {
       readModel: () => Effect.runPromise(snapshotQuery.getSnapshot()),
       emit: provider.emit,
       setProviderSession: provider.setSession,
+      sentTurns: provider.sentTurns,
+      providerSessionDirectory,
+      projectionTurnRepository,
+      advanceClock: (milliseconds: number) =>
+        runtime!.runPromise(TestClock.adjust(`${milliseconds} millis`)),
+      restartIngestion: async () => {
+        if (scope) {
+          await Effect.runPromise(Scope.close(scope, Exit.void));
+        }
+        scope = await Effect.runPromise(Scope.make("sequential"));
+        await Effect.runPromise(ingestion.start().pipe(Scope.provide(scope)));
+      },
       drain,
     };
   }
+
+  async function emitCapacityFailure(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    provider: "codex" | "claudeAgent",
+    turnId: string,
+    retryAt?: string,
+  ) {
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId(`evt-${turnId}-started`),
+      provider: ProviderDriverKind.make(provider),
+      providerInstanceId: ProviderInstanceId.make(provider),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId: asTurnId(turnId),
+    });
+    await harness.drain();
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId(`evt-${turnId}-completed`),
+      provider: ProviderDriverKind.make(provider),
+      providerInstanceId: ProviderInstanceId.make(provider),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      turnId: asTurnId(turnId),
+      payload: {
+        state: "failed",
+        errorMessage: "usage limit reached",
+        capacityFailure: { kind: "usage_limit", ...(retryAt ? { retryAt } : {}) },
+      },
+    });
+    await harness.drain();
+  }
+
+  function setActiveProviderSession(
+    harness: Awaited<ReturnType<typeof createHarness>>,
+    provider: "codex" | "claudeAgent",
+    turnId: string,
+  ) {
+    harness.setProviderSession({
+      provider: ProviderDriverKind.make(provider),
+      providerInstanceId: ProviderInstanceId.make(provider),
+      status: "running",
+      runtimeMode: "approval-required",
+      threadId: asThreadId("thread-1"),
+      activeTurnId: asTurnId(turnId),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:05.000Z",
+    });
+  }
+
+  it("continues a quota-stopped Codex turn without replaying user input", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-codex");
+    await harness.advanceClock(5_000);
+
+    expect(harness.sentTurns).toEqual([
+      {
+        threadId: asThreadId("thread-1"),
+        continuation: true,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      },
+    ]);
+  });
+
+  it("continues a quota-stopped Claude turn with a continuation prompt", async () => {
+    const harness = await createHarness({
+      provider: "claudeAgent",
+      serverSettings: capacityRecoverySettings("claudeAgent"),
+    });
+
+    await emitCapacityFailure(harness, "claudeAgent", "turn-capacity-claude");
+    await harness.advanceClock(5_000);
+
+    expect(harness.sentTurns).toEqual([
+      {
+        threadId: asThreadId("thread-1"),
+        input: "Continue where you left off.",
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      },
+    ]);
+  });
+
+  it("does not continue a quota-stopped turn when recovery is off", async () => {
+    const harness = await createHarness();
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-off");
+    await harness.advanceClock(5_000);
+
+    expect(harness.sentTurns).toEqual([]);
+  });
+
+  it("keeps unrelated provider runtime state during quota recovery", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+    await Effect.runPromise(
+      harness.providerSessionDirectory.upsert({
+        threadId: asThreadId("thread-1"),
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        status: "stopped",
+        runtimePayload: { existingResumeState: "keep" },
+      }),
+    );
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-payload");
+    await harness.advanceClock(5_000);
+
+    const binding = await Effect.runPromise(
+      harness.providerSessionDirectory.getBinding(asThreadId("thread-1")),
+    );
+    expect(Option.getOrUndefined(binding)?.runtimePayload).toMatchObject({
+      existingResumeState: "keep",
+    });
+  });
+
+  it("backs off for five then ten seconds when recovery cannot start", async () => {
+    let attempts = 0;
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+      sendTurn: (input) => {
+        attempts += 1;
+        return attempts === 1
+          ? Effect.die(new Error("provider still at capacity"))
+          : Effect.succeed({
+              threadId: input.threadId,
+              turnId: asTurnId("recovery-after-backoff"),
+            });
+      },
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-backoff");
+    await harness.advanceClock(5_000);
+    expect(harness.sentTurns).toHaveLength(1);
+
+    await harness.advanceClock(9_999);
+    expect(harness.sentTurns).toHaveLength(1);
+
+    await harness.advanceClock(1);
+    expect(harness.sentTurns).toHaveLength(2);
+  });
+
+  it("backs off after a recovery turn reaches capacity again", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-original");
+    await harness.advanceClock(5_000);
+    expect(harness.sentTurns).toHaveLength(1);
+    expect(
+      Option.getOrUndefined(
+        await Effect.runPromise(
+          harness.providerSessionDirectory.getBinding(asThreadId("thread-1")),
+        ),
+      )?.runtimePayload,
+    ).toMatchObject({ capacityRecovery: { turnId: asTurnId("recovery-1") } });
+
+    await emitCapacityFailure(harness, "codex", "recovery-1");
+    expect(
+      Option.getOrUndefined(
+        await Effect.runPromise(
+          harness.providerSessionDirectory.getBinding(asThreadId("thread-1")),
+        ),
+      )?.runtimePayload,
+    ).toMatchObject({ capacityRecovery: { attempt: 1 } });
+    await harness.advanceClock(9_999);
+    expect(harness.sentTurns).toHaveLength(1);
+
+    await harness.advanceClock(1);
+    expect(harness.sentTurns).toHaveLength(2);
+  });
+
+  it("replaces an existing recovery timer for a repeated capacity failure", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-first");
+    await emitCapacityFailure(harness, "codex", "turn-capacity-second");
+    await harness.advanceClock(5_000);
+
+    expect(harness.sentTurns).toEqual([
+      {
+        threadId: asThreadId("thread-1"),
+        continuation: true,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      },
+    ]);
+  });
+
+  it("uses a provider capacity retry time", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+    const retryAt = DateTime.formatIso(
+      DateTime.makeUnsafe((await runtime!.runPromise(Clock.currentTimeMillis)) + 12_345),
+    );
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-retry-at", retryAt);
+    await harness.advanceClock(12_344);
+    expect(harness.sentTurns).toEqual([]);
+
+    await harness.advanceClock(1);
+    expect(harness.sentTurns).toHaveLength(1);
+  });
+
+  it("uses a provider capacity retry time at epoch zero", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(
+      harness,
+      "codex",
+      "turn-capacity-retry-at-epoch",
+      DateTime.formatIso(DateTime.makeUnsafe(0)),
+    );
+    await harness.advanceClock(0);
+
+    expect(harness.sentTurns).toHaveLength(1);
+  });
+
+  it("does not recover after a user turn is persisted during the timer", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-pending-start");
+    await Effect.runPromise(
+      harness.projectionTurnRepository.replacePendingTurnStart({
+        threadId: asThreadId("thread-1"),
+        messageId: asMessageId("msg-capacity-pending-start"),
+        sourceProposedPlanThreadId: null,
+        sourceProposedPlanId: null,
+        requestedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await harness.advanceClock(5_000);
+
+    expect(harness.sentTurns).toEqual([]);
+  });
+
+  it("does not replace a newer starting session when recovery is cancelled", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-newer-session");
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-capacity-newer-session"),
+      threadId: asThreadId("thread-1"),
+      session: {
+        threadId: asThreadId("thread-1"),
+        status: "starting",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: asTurnId("turn-user-newer-session"),
+        lastError: null,
+        updatedAt: "2026-01-01T00:00:01.000Z",
+      },
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+    await harness.advanceClock(5_000);
+
+    const thread = (await harness.readModel()).threads.find(
+      (entry) => entry.id === asThreadId("thread-1"),
+    );
+    expect(thread?.session?.status).toBe("starting");
+    expect(thread?.session?.activeTurnId).toBe(asTurnId("turn-user-newer-session"));
+  });
+
+  it("preserves a concurrent runtime binding update", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-concurrent-binding");
+    await Effect.runPromise(
+      harness.providerSessionDirectory.upsert({
+        threadId: asThreadId("thread-1"),
+        provider: ProviderDriverKind.make("codex"),
+        providerInstanceId: ProviderInstanceId.make("codex"),
+        status: "stopped",
+        runtimePayload: { concurrentResumeState: "keep" },
+      }),
+    );
+    await harness.advanceClock(5_000);
+
+    const binding = await Effect.runPromise(
+      harness.providerSessionDirectory.getBinding(asThreadId("thread-1")),
+    );
+    expect(Option.getOrUndefined(binding)?.runtimePayload).toMatchObject({
+      concurrentResumeState: "keep",
+      capacityRecovery: { turnId: asTurnId("recovery-1") },
+    });
+  });
+
+  it("does not restore a stale provider instance while clearing recovery", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-instance-change");
+    await Effect.runPromise(
+      harness.providerSessionDirectory.upsert({
+        threadId: asThreadId("thread-1"),
+        provider: ProviderDriverKind.make("claudeAgent"),
+        providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+        status: "stopped",
+        runtimePayload: { resumeState: "new-provider" },
+      }),
+    );
+    await harness.advanceClock(5_000);
+
+    const binding = Option.getOrUndefined(
+      await Effect.runPromise(harness.providerSessionDirectory.getBinding(asThreadId("thread-1"))),
+    );
+    expect(binding).toMatchObject({
+      provider: ProviderDriverKind.make("claudeAgent"),
+      providerInstanceId: ProviderInstanceId.make("claudeAgent"),
+      runtimePayload: { capacityRecovery: null, resumeState: "new-provider" },
+    });
+  });
+
+  it("shows capacity recovery as waiting instead of an error", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-waiting");
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) => entry.session?.status === "waiting" && entry.session.lastError === null,
+    );
+    expect(thread.session?.activeTurnId).toBeNull();
+  });
+
+  it("does not recover while an approval is pending", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-approval");
+    harness.emit({
+      type: "request.opened",
+      eventId: asEventId("evt-capacity-approval-opened"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-capacity-approval"),
+      requestId: ApprovalRequestId.make("req-capacity-approval"),
+      payload: { requestType: "command_execution_approval", detail: "pwd" },
+    });
+    await harness.drain();
+    await harness.advanceClock(5_000);
+
+    expect(harness.sentTurns).toEqual([]);
+  });
+
+  it("does not recover while user input is pending", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-user-input");
+    harness.emit({
+      type: "user-input.requested",
+      eventId: asEventId("evt-capacity-user-input-requested"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: "2026-01-01T00:00:00.000Z",
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-capacity-user-input"),
+      requestId: ApprovalRequestId.make("req-capacity-user-input"),
+      payload: {
+        questions: [
+          {
+            id: "choice",
+            header: "Choice",
+            question: "Pick one",
+            options: [{ label: "A", description: "Option A" }],
+          },
+        ],
+      },
+    });
+    await harness.drain();
+    await harness.advanceClock(5_000);
+
+    expect(harness.sentTurns).toEqual([]);
+  });
+
+  it("resumes a persisted recovery marker after ingestion restarts", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-restart");
+    await harness.restartIngestion();
+    await harness.advanceClock(5_000);
+
+    expect(harness.sentTurns).toEqual([
+      {
+        threadId: asThreadId("thread-1"),
+        continuation: true,
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      },
+    ]);
+  });
+
+  it("repairs a waiting session without a persisted recovery marker on startup", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-capacity-stale-waiting"),
+      threadId: asThreadId("thread-1"),
+      session: {
+        threadId: asThreadId("thread-1"),
+        status: "waiting",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: null,
+        updatedAt: "2026-01-01T00:00:01.000Z",
+      },
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+
+    await harness.restartIngestion();
+
+    expect((await harness.readModel()).threads[0]?.session?.status).toBe("ready");
+  });
+
+  it("repairs an errored session with a persisted recovery marker on startup", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-restart-error");
+    await harness.dispatch({
+      type: "thread.session.set",
+      commandId: CommandId.make("cmd-capacity-restart-error"),
+      threadId: asThreadId("thread-1"),
+      session: {
+        threadId: asThreadId("thread-1"),
+        status: "error",
+        providerName: "codex",
+        runtimeMode: "approval-required",
+        activeTurnId: null,
+        lastError: "capacity failure",
+        updatedAt: "2026-01-01T00:00:01.000Z",
+      },
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+
+    await harness.restartIngestion();
+
+    expect((await harness.readModel()).threads[0]?.session?.status).toBe("waiting");
+  });
+
+  it("restarts an in-flight recovery turn when no live turn remains", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-restart-in-flight");
+    await harness.advanceClock(5_000);
+    await harness.restartIngestion();
+    await harness.advanceClock(0);
+
+    expect(harness.sentTurns).toHaveLength(2);
+    expect(
+      Option.getOrUndefined(
+        await Effect.runPromise(
+          harness.providerSessionDirectory.getBinding(asThreadId("thread-1")),
+        ),
+      )?.runtimePayload,
+    ).toMatchObject({ capacityRecovery: { turnId: asTurnId("recovery-2") } });
+  });
+
+  it("restores a running recovery turn after restart when runtime state is active", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-restart-active");
+    await harness.advanceClock(5_000);
+    setActiveProviderSession(harness, "codex", "recovery-1");
+
+    await harness.restartIngestion();
+
+    const thread = (await harness.readModel()).threads[0];
+    expect(thread?.session).toMatchObject({
+      status: "running",
+      activeTurnId: asTurnId("recovery-1"),
+    });
+    expect(
+      Option.getOrUndefined(
+        await Effect.runPromise(
+          harness.providerSessionDirectory.getBinding(asThreadId("thread-1")),
+        ),
+      )?.runtimePayload,
+    ).toMatchObject({ capacityRecovery: { turnId: asTurnId("recovery-1") } });
+  });
+
+  it("retains the recovery marker until the recovery turn completes", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-clear");
+    await harness.advanceClock(5_000);
+
+    const binding = await Effect.runPromise(
+      harness.providerSessionDirectory.getBinding(asThreadId("thread-1")),
+    );
+    expect(Option.getOrUndefined(binding)?.runtimePayload).toMatchObject({
+      capacityRecovery: { turnId: asTurnId("recovery-1") },
+    });
+    setActiveProviderSession(harness, "codex", "recovery-1");
+    await harness.restartIngestion();
+    await harness.advanceClock(5_000);
+    expect(harness.sentTurns).toHaveLength(1);
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-capacity-recovery-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      providerInstanceId: ProviderInstanceId.make("codex"),
+      threadId: asThreadId("thread-1"),
+      createdAt: "2026-01-01T00:00:10.000Z",
+      turnId: asTurnId("recovery-1"),
+      payload: { state: "completed" },
+    });
+    await harness.drain();
+    expect(
+      Option.getOrUndefined(
+        await Effect.runPromise(
+          harness.providerSessionDirectory.getBinding(asThreadId("thread-1")),
+        ),
+      )?.runtimePayload,
+    ).toMatchObject({ capacityRecovery: null });
+  });
+
+  it("cancels quota recovery when the user starts another turn", async () => {
+    const harness = await createHarness({
+      serverSettings: capacityRecoverySettings("codex"),
+    });
+
+    await emitCapacityFailure(harness, "codex", "turn-capacity-cancel");
+    await harness.dispatch({
+      type: "thread.turn.start",
+      commandId: CommandId.make("cmd-user-turn-after-capacity"),
+      threadId: asThreadId("thread-1"),
+      message: {
+        messageId: asMessageId("msg-user-turn-after-capacity"),
+        role: "user",
+        text: "new user request",
+        attachments: [],
+      },
+      interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+      runtimeMode: "approval-required",
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+    await harness.drain();
+    await harness.advanceClock(5_000);
+
+    expect(harness.sentTurns).toEqual([]);
+  });
 
   it("maps turn started/completed events into thread session updates", async () => {
     const harness = await createHarness();

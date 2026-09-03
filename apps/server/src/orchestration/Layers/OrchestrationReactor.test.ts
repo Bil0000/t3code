@@ -44,6 +44,8 @@ describe("OrchestrationReactor", () => {
               started.push("provider-command-reactor");
               return Effect.void;
             },
+            continueTurn: () =>
+              Effect.die("ProviderCommandReactor.continueTurn is not used in test"),
             drain: Effect.void,
           }),
         ),
