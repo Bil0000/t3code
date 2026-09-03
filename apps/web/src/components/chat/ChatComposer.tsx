@@ -2900,6 +2900,15 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       shouldBlurMobileComposerOnSubmit,
     ],
   );
+  const submitCitationAndSend = useCallback(() => {
+    const intent = composerSubmissionIntentForEnter({
+      isMobileViewport,
+      shiftKey: false,
+      modifierKey: true,
+      isDraftThread: routeKind === "draft",
+    });
+    submitComposer(undefined, intent ?? "foreground");
+  }, [isMobileViewport, routeKind, submitComposer]);
   const compactThreadContext = useCallback(() => {
     if (
       compactDisabled ||
@@ -5392,6 +5401,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   onPageScrollKeyDown={onPageScrollKeyDown}
                   onPageScrollKeyUp={onPageScrollKeyUp}
                   onPageScrollRelease={onPageScrollRelease}
+                  onCitationSubmitAndSend={submitCitationAndSend}
                   onPaste={onComposerPaste}
                   placeholder={
                     isComposerApprovalState
