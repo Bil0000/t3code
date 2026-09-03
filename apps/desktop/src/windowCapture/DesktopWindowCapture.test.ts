@@ -626,6 +626,189 @@ it.effect("captures the active Windows window without enumerating desktop source
   ).pipe(Effect.provide(layer));
 });
 
+it.effect.each(
+  (["win32", "darwin", "linux"] as const).flatMap((platform) =>
+    (["shortcut", "command palette"] as const).map((entryPoint) => ({ platform, entryPoint })),
+  ),
+)(
+  "captures the intended foreground window on $platform from the $entryPoint",
+  ({ platform, entryPoint }) => {
+    vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+    registerShortcutMock.mockReset().mockReturnValue(true);
+    mediaAccessStatusMock.mockReturnValue("granted");
+    animationSettingsMock.mockReturnValue({
+      prefersReducedMotion: false,
+      shouldRenderRichAnimation: true,
+    });
+    const bounds = { x: 10, y: 20, width: 800, height: 600 };
+    const t3 = {
+      id: 42,
+      title: "T3 Code",
+      appIdentifier: "com.t3tools.T3Code.desktop",
+      owner: { name: "T3 Code", processId: 123 },
+      bounds,
+      png: Buffer.from([1, 2, 3]),
+    };
+    const editor = {
+      id: 43,
+      title: "Notes",
+      appIdentifier: "org.gnome.TextEditor.desktop",
+      owner: { name: "Text Editor", processId: 456 },
+      bounds,
+      png: Buffer.from([4, 5, 6, 7]),
+    };
+    const expected = entryPoint === "shortcut" ? t3 : editor;
+    const snapshotStarted = Promise.withResolvers<void>();
+    const snapshotReleased = Promise.withResolvers<void>();
+    let visible = true;
+    let blur: () => void = () => undefined;
+    const mainWindow = {
+      getBounds: () => bounds,
+      getTitle: () => t3.title,
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      isVisible: () => visible,
+      hide: vi.fn(() => {
+        visible = false;
+        queueMicrotask(blur);
+      }),
+      show: vi.fn(() => {
+        visible = true;
+      }),
+      restore: vi.fn(),
+      once: (_event: string, listener: () => void) => {
+        blur = listener;
+      },
+      removeListener: () => undefined,
+    };
+    focusedWindowMock.mockReturnValue(mainWindow);
+    const foreground = () => (visible ? t3 : editor);
+    const images: Uint8Array[] = [];
+    const takeSnapshot = async (source: typeof t3) => {
+      snapshotStarted.resolve();
+      await snapshotReleased.promise;
+      return source;
+    };
+    activeWindowMock.mockReset().mockImplementation(async () => ({
+      ...foreground(),
+      platform: platform === "darwin" ? "macos" : "windows",
+    }));
+    screenshotMock.mockReset().mockImplementation(async () => {
+      const source = await takeSnapshot(foreground());
+      return { width: bounds.width, height: bounds.height, toPng: () => source.png };
+    });
+    macCaptureMock.mockReset().mockImplementation(async (active: { id: number }) => {
+      const source = await takeSnapshot(active.id === t3.id ? t3 : editor);
+      images.push(source.png);
+      return { source: { name: source.title }, png: source.png };
+    });
+    const activate = vi.fn<(title: string) => Promise<void>>().mockResolvedValue(undefined);
+    linuxCaptureMock.mockImplementationOnce(async () => {
+      const source = await takeSnapshot(foreground());
+      return {
+        png: source.png,
+        window: {
+          title: source.title,
+          appName: source.owner.name,
+          appIdentifier: source.appIdentifier,
+          processId: source.owner.processId,
+          bounds,
+        },
+        feedback: {
+          animationStarted: true,
+          activate,
+          animateTo: async () => undefined,
+          complete: async () => undefined,
+          close: () => undefined,
+        },
+      };
+    });
+    const readAccessibility = accessibilityProcessReadMock.getMockImplementation()!;
+    accessibilityProcessReadMock.mockImplementation(({ active }) => ({
+      started: Promise.resolve(),
+      result: Promise.resolve({ accessibleText: `Window from process ${active.owner.processId}` }),
+    }));
+    let metadata = "";
+
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* DesktopWindowCapture.make;
+        yield* service.configure({
+          ...DEFAULT_CLIENT_SETTINGS,
+          windowCaptureEnabled: true,
+          windowCaptureFlash: false,
+          windowCaptureShortcut: {
+            key: "2",
+            ctrlKey: true,
+            shiftKey: true,
+            altKey: false,
+            metaKey: false,
+            modKey: false,
+          },
+        });
+        const trigger =
+          platform === "linux"
+            ? portalShortcutInstances.at(-1)!.onCapture
+            : registerShortcutMock.mock.calls.at(-1)![1];
+        const capture = yield* (
+          entryPoint === "shortcut" ? Effect.promise(trigger) : service.captureNow
+        ).pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.promise(() => snapshotStarted.promise);
+        const visibleDuringSnapshot = visible;
+        snapshotReleased.resolve();
+        yield* Fiber.join(capture);
+
+        assert.equal(visibleDuringSnapshot, entryPoint === "shortcut");
+        const saved = yield* decodePendingMetadata(metadata);
+        assert.equal(saved.source.windowTitle, expected.title);
+        assert.equal(saved.source.appName, expected.owner.name);
+        assert.equal(
+          saved.source.accessibleText,
+          `Window from process ${expected.owner.processId}`,
+        );
+        assert.deepEqual(images, [expected.png]);
+        assert.isTrue(visible);
+        assert.lengthOf(mainWindow.hide.mock.calls, entryPoint === "shortcut" ? 0 : 1);
+        assert.lengthOf(mainWindow.show.mock.calls, entryPoint === "shortcut" ? 0 : 1);
+        assert.lengthOf(mainWindow.restore.mock.calls, 0);
+        if (platform === "linux") {
+          assert.equal(saved.source.appIdentifier, expected.appIdentifier);
+          assert.deepEqual(activate.mock.calls, [[t3.title]]);
+        }
+      }),
+    ).pipe(
+      Effect.provide(
+        testLayer(platform, {
+          makeDirectory: () => Effect.void,
+          rename: () => Effect.void,
+          writeFile: (_, bytes) =>
+            Effect.sync(() => {
+              images.push(bytes);
+            }),
+          writeFileString: (_, text) =>
+            Effect.sync(() => {
+              metadata = text;
+            }),
+        }),
+      ),
+      Effect.ensuring(
+        Effect.sync(() => {
+          snapshotReleased.resolve();
+          focusedWindowMock.mockReset();
+          linuxCaptureMock.mockReset().mockResolvedValue(undefined);
+          accessibilityProcessReadMock.mockReset().mockImplementation(readAccessibility);
+          mediaAccessStatusMock.mockReturnValue("not-determined");
+          animationSettingsMock.mockReturnValue({
+            prefersReducedMotion: true,
+            shouldRenderRichAnimation: false,
+          });
+          vi.unstubAllEnvs();
+        }),
+      ),
+    );
+  },
+);
+
 it.effect("matches Windows accessibility windows on a scaled display", () => {
   const png = Buffer.from([1, 2, 3]);
   const active = {

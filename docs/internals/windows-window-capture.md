@@ -4,6 +4,11 @@ Windows capture runs in the desktop app. The global shortcut and command-palette
 `DesktopWindowCapture.captureSource`; web and mobile receive the resulting attachment through the
 normal thread flow. Provider adapters and remote connection modes do not own the desktop animation.
 
+Source selection is shared desktop policy. Global shortcuts capture the foreground window in place,
+including T3 Code, without hiding it. The command-palette action temporarily hides focused T3 to
+target the previous app. Both use the same capture backend, persistence, and animation path.
+Only the frozen screenshot animates; the real source window is not moved by the feedback.
+
 ## Pixels and coordinates
 
 `get-windows` identifies the foreground window in physical screen pixels. T3 converts its bounds
@@ -73,8 +78,8 @@ work at the start of the animation. Electron also documents
 The screenshot is decoded before showing the overlay. On Windows, showing all overlay surfaces is
 followed by a one-pixel `webContents.capturePage()` readback before restoring or foregrounding T3.
 Otherwise, T3 can become visible while the screenshot surface is still transparent, then disappear
-behind the screenshot as its first frame arrives. Restoring a temporarily hidden T3 window also
-waits for this initial overlay preparation.
+behind the screenshot as its first frame arrives. Restoring T3 after a command-palette capture also
+waits for this initial overlay preparation; shortcut self-capture leaves T3 visible throughout.
 
 Flight animations are prepared and paused at time zero. Two animation-frame callbacks submit the
 layout and paint work, but do not wait for the GPU to finish. A second readback on Windows waits for

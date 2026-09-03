@@ -42,8 +42,11 @@ or different keys. Older desktops may require opening their shortcut settings ma
 There is no separate test step: use the assigned shortcut from another app to capture its window.
 Changing the shortcut replaces the active binding without restarting T3 Code.
 
+With automatic capture, the shortcut captures the active window, including T3 Code itself,
+without hiding that window.
 You can also use **Capture window** from the command palette, including when your desktop does
-not support global shortcuts.
+not support global shortcuts. That action briefly hides T3 Code to capture the app behind it,
+then returns to your draft.
 
 ## Platform behavior
 
@@ -73,9 +76,9 @@ not support global shortcuts.
 - X11 sessions do not support window capture. Apps running through XWayland inside a Wayland
   session can still be captured by the compositor.
 
-Both the shortcut and command-palette action use the same capture path. Cancelling or denying a
-capture does not retry through a different backend. Settings shows which Linux backend is available;
-shortcut approval is separate from capture permission.
+Both the shortcut and command-palette action use the same platform capture method. Cancelling or
+denying a capture does not retry through a different backend. Settings shows which Linux backend is
+available; shortcut approval is separate from capture permission.
 
 ### KDE Plasma
 
@@ -214,16 +217,16 @@ in the expanded screenshot preview. T3 Code sends agents a compact copy that rem
 redundant structural fields while preserving meaningful accessibility content; the inspected JSON
 remains the complete captured tree.
 
-The shortcut works while another app is active. T3 Code briefly hides itself, captures the selected
-window, and then returns with the image attached. If no thread is open, it starts a draft in the
-current project.
+After capture, T3 Code brings your draft forward with the image attached. If no thread is open,
+it starts a draft in the current project.
 
 ## Feedback
 
 The settings page controls the capture sound, gentle window cue, and attachment animation
 separately. Choose **Off**, **Whoosh** (the default), or **Click** for the capture sound. Use the
-play button beside the sound selector to preview it. With animations on, the captured window
-flies into its new composer attachment and settles into place. Turn off animations to remove capture motion.
+play button beside the sound selector to preview it. With animations on, a frozen image of the
+captured window flies into its new composer attachment and settles into place; the real window stays
+in place. Turn off animations to remove capture motion.
 The operating system's reduced-motion setting also disables the attachment animation.
 On Linux, the full window-to-composer effect uses the current T3 Code GNOME extension or KDE/Hyprland
 capture helper. Niri, portal, and picker capture use a short composer arrival effect instead.

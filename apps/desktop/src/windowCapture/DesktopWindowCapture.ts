@@ -169,7 +169,9 @@ export class DesktopWindowCapture extends Context.Service<
       shortcut: WindowCaptureShortcut,
     ) => Effect.Effect<DesktopWindowCaptureShortcutAvailability>;
     readonly setShortcutSuppressed: (suppressed: boolean) => Effect.Effect<void>;
+    /** Capture the foreground window in place, including T3 Code itself. */
     readonly capture: Effect.Effect<void, DesktopWindowCaptureError>;
+    /** Capture from the command palette, revealing the previous app first. */
     readonly captureNow: Effect.Effect<void, DesktopWindowCaptureError>;
     readonly listPending: Effect.Effect<
       ReadonlyArray<DesktopPendingWindowCapture>,
@@ -345,7 +347,10 @@ export function windowCaptureImageSize(png: Buffer, fallback: Electron.Rectangle
   };
 }
 
+type WindowCaptureTarget = "foreground" | "previous-app";
+
 async function captureSource({
+  target,
   mode,
   captureId,
   platform,
@@ -359,6 +364,7 @@ async function captureSource({
   accessibilityWorkerPath,
   onLinuxFeedback,
 }: {
+  target: WindowCaptureTarget;
   mode: DesktopWindowCaptureState["mode"];
   captureId: string;
   platform: NodeJS.Platform;
@@ -376,9 +382,10 @@ async function captureSource({
   let linuxWindow: LinuxWindowMetadata | undefined;
   let linuxFeedback: LinuxCaptureFeedback | undefined;
   let linuxActivationFailure: { readonly cause: unknown } | undefined;
-  const hiddenWindow = Electron.BrowserWindow.getFocusedWindow();
+  const focusedWindow = Electron.BrowserWindow.getFocusedWindow();
+  const hiddenWindow = target === "previous-app" ? focusedWindow : undefined;
   const destinationWindow =
-    hiddenWindow ?? Electron.BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
+    focusedWindow ?? Electron.BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
   const destinationWindowBounds = destinationWindow?.getBounds();
   let hiddenWindowRestored = false;
   const accessibilityProcess = settings.windowCaptureIncludeAccessibility
@@ -808,6 +815,7 @@ export const make = Effect.gen(function* () {
 
   const persistCapture = Effect.fn("desktop.windowCapture.persistCapture")(function* (
     settings: ClientSettings,
+    target: WindowCaptureTarget,
   ) {
     const id = yield* crypto.randomUUIDv4.pipe(Effect.mapError((cause) => captureFailure(cause)));
     const mode = captureMode(environment.platform);
@@ -838,6 +846,7 @@ export const make = Effect.gen(function* () {
       } = yield* Effect.tryPromise({
         try: () =>
           captureSource({
+            target,
             mode,
             captureId: id,
             platform: environment.platform,
@@ -922,11 +931,13 @@ export const make = Effect.gen(function* () {
     return id;
   });
 
-  const captureNow = Effect.gen(function* () {
+  const captureTarget = Effect.fn("desktop.windowCapture.captureTarget")(function* (
+    target: WindowCaptureTarget,
+  ) {
     const settings = yield* Ref.get(settingsRef);
     if (yield* Ref.getAndSet(busyRef, true)) return;
     closeLinuxFeedback();
-    yield* persistCapture(settings).pipe(
+    yield* persistCapture(settings, target).pipe(
       Effect.tap((id) =>
         Ref.update(stateRef, (state) => ({ ...state, message: null })).pipe(
           Effect.andThen(
@@ -937,14 +948,16 @@ export const make = Effect.gen(function* () {
       Effect.tapError((error) => setFailure(error.message)),
       Effect.ensuring(Ref.set(busyRef, false)),
     );
-  }).pipe(Effect.withSpan("desktop.windowCapture.capture"));
+  });
+
+  const captureNow = captureTarget("previous-app");
 
   const capture = Effect.gen(function* () {
     const settings = yield* Ref.get(settingsRef);
     if (!settings.windowCaptureEnabled) {
       return yield* new DesktopWindowCaptureError({ operation: "disabled" });
     }
-    yield* captureNow;
+    yield* captureTarget("foreground");
   });
 
   const captureFromShortcut = Effect.gen(function* () {

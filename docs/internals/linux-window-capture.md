@@ -19,6 +19,12 @@ entry points go through `DesktopWindowCapture.captureSource`. The optional `linu
 state distinguishes this choice from `mode=portal`, which continues to control Wayland shortcut
 registration. The global-shortcut portal and screenshot permission are independent.
 
+Source selection is shared desktop policy. Global shortcuts capture the foreground window in place,
+including T3 Code; they do not hide the real source window. The command-palette action temporarily
+hides focused T3 to target the previous app. Both use the same backend, persistence, and animation
+path. Native helpers do not exclude T3 or hide it to take a screenshot. After capture, call native
+feedback activation even for self-capture: it also establishes the destination for the flight.
+
 Capture preferences are shared across desktops, but access is derived from the current session,
 not a persisted onboarding-completed flag. The optional `linuxDesktop` IPC field identifies GNOME,
 KDE, Niri, or Hyprland independently of a successful capability probe, so setup can name the desktop even
@@ -54,7 +60,7 @@ size. Sandboxed
 apps, scaling differences, and incomplete accessibility providers can make that lookup fail; the image
 still succeeds. Electron does not position window overlays on Wayland; extension v2 uses Shell actors.
 
-Accessibility reads begin before T3 Code restores or activates its own window and return as soon
+Accessibility reads begin before any restoration or activation of T3 Code and return as soon
 as they finish, with a shared three-second deadline on all desktop platforms. This accommodates larger browser trees without adding a fixed delay to fast
 reads. On timeout, capture uses completed flat text or a partial bounded tree when available, then
 continues without accessibility data otherwise; no further accessibility read starts until the
@@ -109,9 +115,9 @@ environment is imported into the user manager, and non-systemd sessions retain t
 
 One-shot KWin scripts obtain the focused window's ID/PID/title/frame and later activate only
 the matching T3 process and title. Replies must come from KWin's unique bus owner; scripts are
-unloaded after use. A remapped T3 window is awaited using window/title signals with a deadline,
-not polling. Capture pins the discovered ID, then checks identity again before attaching metadata
-for AT-SPI. This comparison ignores a changing leading CLI spinner, like the AT-SPI title matcher,
+unloaded after use. If command-palette capture remaps T3, activation awaits it using window/title
+signals with a deadline, not polling. Capture pins the discovered ID, then checks identity again
+before attaching metadata for AT-SPI. This comparison ignores a changing leading CLI spinner, like the AT-SPI title matcher,
 but still requires the same non-spinner title, ID, process, app identity, and frame. The original
 capture-time metadata is preserved for the attachment and compositor effects. If scripting is
 unavailable, the native active-window screenshot still works but
@@ -359,8 +365,10 @@ Only one capture can run at a time. No `unsafe_mode`, Shell evaluation, or globa
 Protocol v2 preserves `Capture()` and adds `CaptureWithFeedback(b flash, b animate) -> (ay, s, b)`.
 The final boolean says whether Shell created an animation actor. The caller retains the same bus
 connection for `Activate(s title)` and `Animate(d x, d y, d width, d height)`. Activation happens
-only after capture, once Electron has restored its window. The bus daemon supplies the caller's
-PID; only a normal window of that process can be activated. Title disambiguates multiple windows;
+only after capture, once Electron has restored its window if the command-palette action hid it.
+`Activate` also records the destination used by `Animate`, so self-capture still calls it.
+The bus daemon supplies the caller's PID; only a normal window of that process can be activated.
+Title disambiguates multiple windows;
 ambiguous matches are rejected. A temporarily hidden window is awaited through Shell's map signal.
 
 Animation coordinates are relative to T3's content area (0–1), including renderer zoom. GNOME
