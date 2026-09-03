@@ -197,8 +197,10 @@ will return to the portal or picker path. Remove it there to uninstall it.
 
 Accessibility-data availability depends on the captured app and the operating system. T3 Code still
 attaches the image when an app does not expose accessibility data. It waits up to three seconds for
-the data; if the app responds too slowly, the screenshot is attached without it. When a complete
-element tree is unavailable but text was read in time, T3 Code includes that text as a fallback.
+the data; if the app responds too slowly, the screenshot is attached without it. You can capture
+another window while that lookup finishes. Finishing an earlier capture does not bring T3 Code
+forward again. When a complete element tree is unavailable but text was read in time, T3 Code
+includes that text as a fallback.
 Turn off **Include app text** in Window Capture settings to skip the accessibility lookup
 and attach screenshots without text or UI structure. On macOS, this also removes the Accessibility
 permission requirement for window capture; Screen Recording permission is still required.

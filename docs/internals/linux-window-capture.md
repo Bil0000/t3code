@@ -25,6 +25,12 @@ hides focused T3 to target the previous app. Both use the same backend, persiste
 path. Native helpers do not exclude T3 or hide it to take a screenshot. After capture, call native
 feedback activation even for self-capture: it also establishes the destination for the flight.
 
+The shared capture gate covers taking pixels and the initial foreground handoff. It releases
+before accessibility results and attachment persistence finish, so those can complete independently
+for each capture ID. Before another snapshot, dismiss the previous native effects so they cannot
+appear in its pixels. Completion notifications are passive; a late persistence failure dismisses
+only its capture's renderer animation and does not refocus T3 or cancel a newer capture.
+
 Capture preferences are shared across desktops, but access is derived from the current session,
 not a persisted onboarding-completed flag. The optional `linuxDesktop` IPC field identifies GNOME,
 KDE, Niri, or Hyprland independently of a successful capability probe, so setup can name the desktop even
@@ -63,8 +69,9 @@ still succeeds. Electron does not position window overlays on Wayland; extension
 Accessibility reads begin before any restoration or activation of T3 Code and return as soon
 as they finish, with a shared three-second deadline on all desktop platforms. This accommodates larger browser trees without adding a fixed delay to fast
 reads. On timeout, capture uses completed flat text or a partial bounded tree when available, then
-continues without accessibility data otherwise; no further accessibility read starts until the
-outstanding native read settles.
+continues without accessibility data otherwise. Within each capture worker, no further accessibility
+read starts until its outstanding native read settles; separate captures have independent workers
+and can read concurrently.
 
 On GNOME, browser accessibility bridges may require `org.gnome.desktop.interface toolkit-accessibility`
 to be enabled before the browser starts. This is separate from `screen-reader-enabled` and screenshot
@@ -360,7 +367,8 @@ replacement or queueing and checked on each call. This follows GNOME's trusted-s
 pattern, not authentication against malicious processes with full access to the user's session
 bus. Installing/enabling the extension is an explicit trust decision. It refuses locked, greeter,
 and non-Wayland sessions; disabling it also prevents in-flight captures from returning pixels.
-Only one capture can run at a time. No `unsafe_mode`, Shell evaluation, or global key hooks are used.
+The extension serializes snapshot requests; it does not wait for the desktop's accessibility read
+or attachment persistence. No `unsafe_mode`, Shell evaluation, or global key hooks are used.
 
 Protocol v2 preserves `Capture()` and adds `CaptureWithFeedback(b flash, b animate) -> (ay, s, b)`.
 The final boolean says whether Shell created an animation actor. The caller retains the same bus

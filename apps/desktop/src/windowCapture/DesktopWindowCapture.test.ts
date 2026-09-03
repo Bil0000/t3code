@@ -12,6 +12,7 @@ import * as Layer from "effect/Layer";
 import * as Logger from "effect/Logger";
 import * as Option from "effect/Option";
 import * as Path from "effect/Path";
+import * as PlatformError from "effect/PlatformError";
 import * as Schema from "effect/Schema";
 import type * as Electron from "electron";
 import type { PortalShortcutState } from "./PortalCaptureShortcut.ts";
@@ -490,6 +491,203 @@ const testLayer = (
     ),
   );
 
+function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean) {
+  vi.stubEnv("XDG_SESSION_TYPE", "wayland");
+  focusedWindowMock.mockReturnValue(undefined);
+  allWindowsMock.mockReturnValue([]);
+  registerShortcutMock.mockReset().mockReturnValue(true);
+  mediaAccessStatusMock.mockReturnValue("granted");
+  animationSettingsMock.mockReturnValue({
+    prefersReducedMotion: false,
+    shouldRenderRichAnimation: true,
+  });
+  flashWindows.length = 0;
+  const captures = ["Discord", "File Explorer", "Terminal"].map((title, index) => ({
+    title,
+    id: index + 42,
+    processId: index + 100,
+    png: Buffer.from([index, index + 1, index + 2]),
+    started: Promise.withResolvers<void>(),
+    pixels: Promise.withResolvers<void>(),
+    handoff: Promise.withResolvers<void>(),
+    context: Promise.withResolvers<WindowCaptureAccessibility.CapturedWindowAccessibilityContext>(),
+    oldOverlaysCleared: false,
+    oldNativeFeedbackClosed: false,
+    feedback: {
+      animationStarted: animations,
+      activate: async () => undefined,
+      animateTo: async () => undefined,
+      complete: vi.fn(async () => undefined),
+      close: vi.fn(),
+    },
+  }));
+  const [first, second, extra] = captures;
+  extra!.pixels.resolve();
+  extra!.context.resolve({ accessibleText: extra!.title });
+  const state = { snapshots: 0, handoffs: 0, failFirstPersistence: false };
+  const images = new Map<string, Uint8Array>();
+  const metadata = new Map<string, string>();
+  const readyIds: string[] = [];
+  const bounds = { x: 10, y: 20, width: 800, height: 600 };
+  const takeSnapshot = async () => {
+    const index = state.snapshots++;
+    const capture = captures[Math.min(index, captures.length - 1)]!;
+    capture.oldOverlaysCleared = flashWindows.every((window) => window.destroyed);
+    capture.oldNativeFeedbackClosed = captures
+      .slice(0, index)
+      .every((previous) => previous.feedback.close.mock.calls.length > 0);
+    capture.started.resolve();
+    await capture.pixels.promise;
+    return capture;
+  };
+  activeWindowMock.mockReset().mockImplementation(async () => {
+    const capture = captures[Math.min(state.snapshots, captures.length - 1)]!;
+    return {
+      platform: platform === "darwin" ? "macos" : "windows",
+      id: capture.id,
+      title: capture.title,
+      owner: { name: capture.title, processId: capture.processId },
+      bounds,
+    };
+  });
+  screenshotMock.mockReset().mockImplementation(async () => {
+    const capture = await takeSnapshot();
+    return { width: bounds.width, height: bounds.height, toPng: () => capture.png };
+  });
+  macCaptureMock.mockReset().mockImplementation(async (_active: unknown, imagePath: string) => {
+    const capture = await takeSnapshot();
+    images.set(imagePath, capture.png);
+    return { source: { name: capture.title }, png: capture.png };
+  });
+  linuxCaptureMock.mockReset().mockImplementation(async () => {
+    const capture = await takeSnapshot();
+    return {
+      png: capture.png,
+      window: {
+        title: capture.title,
+        appName: capture.title,
+        appIdentifier: `test.capture.${capture.id}`,
+        processId: capture.processId,
+        bounds,
+      },
+      feedback: capture.feedback,
+    };
+  });
+  const readAccessibility = accessibilityProcessReadMock.getMockImplementation()!;
+  accessibilityProcessReadMock.mockImplementation(({ active }) => ({
+    started: Promise.resolve(),
+    result: captures.find((capture) => capture.processId === active.owner.processId)!.context
+      .promise,
+  }));
+  const handoff = Effect.sync(() => captures[state.handoffs++]!.handoff.resolve());
+  let randomByte = 0;
+  const layer = Layer.mergeAll(
+    testLayer(platform, {
+      makeDirectory: () => Effect.void,
+      writeFile: (path, bytes) =>
+        Effect.sync(() => {
+          images.set(path, bytes);
+        }),
+      writeFileString: (path, text) => {
+        const pending = JSON.parse(text) as { source: { windowTitle: string } };
+        return state.failFirstPersistence && pending.source.windowTitle === first!.title
+          ? Effect.fail(
+              PlatformError.systemError({
+                _tag: "PermissionDenied",
+                module: "FileSystem",
+                method: "writeFileString",
+              }),
+            )
+          : Effect.sync(() => {
+              metadata.set(path, text);
+            });
+      },
+      rename: (from, to) =>
+        Effect.sync(() => {
+          const image = images.get(from);
+          if (image) {
+            images.set(to, image);
+            images.delete(from);
+          }
+          const text = metadata.get(from);
+          if (text) {
+            metadata.set(to, text);
+            metadata.delete(from);
+          }
+        }),
+      remove: (path) =>
+        Effect.sync(() => {
+          images.delete(path);
+          metadata.delete(path);
+        }),
+      readFile: (path) => Effect.sync(() => images.get(path)!),
+      readFileString: (path) => Effect.sync(() => metadata.get(path)!),
+    }),
+    Layer.succeed(
+      Crypto.Crypto,
+      Crypto.make({
+        randomBytes: (size) => new Uint8Array(size).fill(++randomByte),
+        digest: (_algorithm, data) => Effect.succeed(data),
+      }),
+    ),
+    Layer.succeed(
+      DesktopWindow.DesktopWindow,
+      DesktopWindow.DesktopWindow.of({
+        activate: handoff,
+        dispatchMenuAction: (action: string) =>
+          action.startsWith("window-capture-started:") ? handoff : Effect.void,
+        dispatchWindowCaptureReady: (id: string) =>
+          Effect.sync(() => {
+            readyIds.push(id);
+          }),
+      } as unknown as DesktopWindow.DesktopWindow["Service"]),
+    ),
+  );
+  return {
+    first: first!,
+    second: second!,
+    state,
+    readyIds,
+    layer,
+    settings: {
+      ...DEFAULT_CLIENT_SETTINGS,
+      windowCaptureEnabled: true,
+      windowCaptureIncludeAccessibility: true,
+      windowCaptureAnimations: animations,
+      windowCaptureFlash: true,
+      windowCaptureShortcut: {
+        key: "2",
+        ctrlKey: true,
+        shiftKey: true,
+        altKey: false,
+        metaKey: false,
+        modKey: false,
+      },
+    },
+    trigger: () =>
+      platform === "linux"
+        ? portalShortcutInstances.at(-1)!.onCapture()
+        : (registerShortcutMock.mock.calls.at(-1)![1] as () => Promise<void>)(),
+    releaseAll: () => {
+      for (const capture of captures) {
+        capture.pixels.resolve();
+        capture.context.resolve({ accessibleText: capture.title });
+      }
+    },
+    reset: () => {
+      focusedWindowMock.mockReset();
+      linuxCaptureMock.mockReset().mockResolvedValue(undefined);
+      accessibilityProcessReadMock.mockReset().mockImplementation(readAccessibility);
+      mediaAccessStatusMock.mockReturnValue("not-determined");
+      animationSettingsMock.mockReturnValue({
+        prefersReducedMotion: true,
+        shouldRenderRichAnimation: false,
+      });
+      vi.unstubAllEnvs();
+    },
+  };
+}
+
 it("models capture setup failures with stable context and cause", () => {
   const cause = new Error("GNOME has not loaded the extension.");
   const error = new DesktopWindowCapture.DesktopWindowCaptureSetupError({
@@ -808,6 +1006,143 @@ it.effect.each(
     );
   },
 );
+
+it.effect.each([
+  { platform: "win32", animations: true },
+  { platform: "darwin", animations: false },
+  { platform: "linux", animations: true },
+] as const)(
+  "captures again while accessibility is pending on $platform (animations: $animations)",
+  ({ platform, animations }) => {
+    const fixture = concurrentCaptureFixture(platform, animations);
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* DesktopWindowCapture.make;
+        yield* service.configure(fixture.settings);
+        fixture.first.pixels.resolve();
+        const first = yield* Effect.promise(fixture.trigger).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Effect.promise(() => fixture.first.handoff.promise);
+        assert.lengthOf(fixture.readyIds, 0);
+
+        fixture.second.pixels.resolve();
+        const second = yield* Effect.promise(fixture.trigger).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Effect.promise(() => fixture.second.handoff.promise);
+        assert.equal(fixture.state.snapshots, 2);
+        assert.isTrue(fixture.second.oldOverlaysCleared);
+        if (platform === "linux") assert.isTrue(fixture.second.oldNativeFeedbackClosed);
+        const secondOverlays = flashWindows.filter((window) => !window.destroyed);
+        if (platform !== "linux") assert.isNotEmpty(secondOverlays);
+
+        fixture.second.context.resolve({ accessibleText: "Explorer accessibility" });
+        yield* Fiber.join(second);
+        assert.lengthOf(fixture.readyIds, 1);
+        fixture.first.context.resolve({ accessibleText: "Discord accessibility" });
+        yield* Fiber.join(first);
+        assert.lengthOf(fixture.readyIds, 2);
+        assert.equal(new Set(fixture.readyIds).size, 2);
+        const newer = yield* service.read(fixture.readyIds[0]!);
+        const older = yield* service.read(fixture.readyIds[1]!);
+        assert.equal(newer.source.windowTitle, fixture.second.title);
+        assert.equal(newer.source.accessibleText, "Explorer accessibility");
+        assert.equal(
+          newer.dataUrl,
+          `data:image/png;base64,${fixture.second.png.toString("base64")}`,
+        );
+        assert.equal(older.source.windowTitle, fixture.first.title);
+        assert.equal(older.source.accessibleText, "Discord accessibility");
+        assert.equal(
+          older.dataUrl,
+          `data:image/png;base64,${fixture.first.png.toString("base64")}`,
+        );
+
+        yield* service.acknowledge(fixture.readyIds[1]!);
+        assert.isTrue(secondOverlays.every((window) => !window.destroyed));
+        if (platform === "linux") {
+          assert.lengthOf(fixture.second.feedback.close.mock.calls, 0);
+          assert.lengthOf(fixture.second.feedback.complete.mock.calls, 0);
+        }
+      }).pipe(Effect.ensuring(Effect.sync(fixture.releaseAll))),
+    ).pipe(Effect.provide(fixture.layer), Effect.ensuring(Effect.sync(fixture.reset)));
+  },
+);
+
+it.effect.each(["succeeds", "fails"] as const)(
+  "keeps the newer snapshot exclusive when older persistence %s",
+  (outcome) => {
+    const fixture = concurrentCaptureFixture("win32", true);
+    fixture.state.failFirstPersistence = outcome === "fails";
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* DesktopWindowCapture.make;
+        yield* service.configure(fixture.settings);
+        fixture.first.pixels.resolve();
+        const first = yield* Effect.promise(fixture.trigger).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Effect.promise(() => fixture.first.handoff.promise);
+        const second = yield* Effect.promise(fixture.trigger).pipe(
+          Effect.forkChild({ startImmediately: true }),
+        );
+        yield* Effect.promise(() => fixture.second.started.promise);
+
+        yield* Effect.promise(fixture.trigger);
+        assert.equal(fixture.state.snapshots, 2);
+        fixture.first.context.resolve({ accessibleText: "Discord accessibility" });
+        yield* Fiber.join(first);
+        assert.lengthOf(fixture.readyIds, outcome === "succeeds" ? 1 : 0);
+        yield* Effect.promise(fixture.trigger);
+        assert.equal(fixture.state.snapshots, 2);
+
+        fixture.second.pixels.resolve();
+        yield* Effect.promise(() => fixture.second.handoff.promise);
+        fixture.second.context.resolve({ accessibleText: "Explorer accessibility" });
+        yield* Fiber.join(second);
+        assert.equal(fixture.state.handoffs, 2);
+        const newer = yield* service.read(fixture.readyIds.at(-1)!);
+        assert.equal(newer.source.windowTitle, fixture.second.title);
+        assert.equal(newer.source.accessibleText, "Explorer accessibility");
+      }).pipe(Effect.ensuring(Effect.sync(fixture.releaseAll))),
+    ).pipe(Effect.provide(fixture.layer), Effect.ensuring(Effect.sync(fixture.reset)));
+  },
+);
+
+it.effect("keeps newer native feedback when older accessibility persistence fails", () => {
+  const fixture = concurrentCaptureFixture("linux", true);
+  fixture.state.failFirstPersistence = true;
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure(fixture.settings);
+      fixture.first.pixels.resolve();
+      const first = yield* Effect.promise(fixture.trigger).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Effect.promise(() => fixture.first.handoff.promise);
+      fixture.second.pixels.resolve();
+      const second = yield* Effect.promise(fixture.trigger).pipe(
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Effect.promise(() => fixture.second.handoff.promise);
+      fixture.first.context.resolve({ accessibleText: "Discord accessibility" });
+      yield* Fiber.join(first);
+
+      assert.lengthOf(fixture.readyIds, 0);
+      assert.lengthOf(fixture.second.feedback.close.mock.calls, 0);
+      assert.lengthOf(fixture.second.feedback.complete.mock.calls, 0);
+      fixture.second.context.resolve({ accessibleText: "Explorer accessibility" });
+      yield* Fiber.join(second);
+      assert.lengthOf(fixture.readyIds, 1);
+      const newer = yield* service.read(fixture.readyIds[0]!);
+      assert.equal(newer.source.windowTitle, fixture.second.title);
+      yield* service.acknowledge(fixture.readyIds[0]!);
+      assert.lengthOf(fixture.second.feedback.complete.mock.calls, 1);
+    }).pipe(Effect.ensuring(Effect.sync(fixture.releaseAll))),
+  ).pipe(Effect.provide(fixture.layer), Effect.ensuring(Effect.sync(fixture.reset)));
+});
 
 it.effect("matches Windows accessibility windows on a scaled display", () => {
   const png = Buffer.from([1, 2, 3]);

@@ -57,7 +57,40 @@ export function resolveExistingWindowCaptureTarget(
 }
 
 const WINDOW_CAPTURE_STARTED_ACTION_PREFIX = "window-capture-started:";
+const WINDOW_CAPTURE_FAILED_ACTION_PREFIX = "window-capture-failed:";
 const NEXT_PAINT_FALLBACK_MS = 100;
+
+export async function beginWindowCaptureAnimationWhenReady(
+  id: string,
+  target: Promise<CaptureTarget | null>,
+  pendingStarts: Set<string>,
+): Promise<void> {
+  pendingStarts.add(id);
+  try {
+    const resolvedTarget = await target;
+    if (pendingStarts.delete(id) && resolvedTarget) {
+      beginWindowCaptureAnimation(id, resolvedTarget);
+    }
+  } finally {
+    pendingStarts.delete(id);
+  }
+}
+
+export function dismissFailedWindowCapture(
+  id: string | undefined,
+  soundedIds: Set<string>,
+  pendingStarts: Set<string>,
+): void {
+  if (id) {
+    pendingStarts.delete(id);
+    soundedIds.delete(id);
+    void dismissWindowCaptureAnimation(id);
+  } else {
+    pendingStarts.clear();
+    soundedIds.clear();
+    dismissAllWindowCaptureAnimations();
+  }
+}
 
 export function resolveWindowCaptureTargetOnce(
   resolutionRef: { current: Promise<CaptureTarget | null> | null },
@@ -170,6 +203,7 @@ export function WindowCaptureCoordinator() {
   const drainingRef = useRef<Promise<void> | null>(null);
   const rerunRequestedRef = useRef(false);
   const soundedCaptureIdsRef = useRef(new Set<string>());
+  const pendingAnimationStartsRef = useRef(new Set<string>());
 
   const currentTarget = routeThreadRef ?? routeDraftId;
   if (currentTarget) lastTargetRef.current = currentTarget;
@@ -296,15 +330,23 @@ export function WindowCaptureCoordinator() {
           animateCaptures &&
           !window.matchMedia("(prefers-reduced-motion: reduce)").matches
         ) {
-          void resolveCaptureTarget().then((target) => {
-            if (target) beginWindowCaptureAnimation(captureId, target);
-          });
+          void beginWindowCaptureAnimationWhenReady(
+            captureId,
+            resolveCaptureTarget(),
+            pendingAnimationStartsRef.current,
+          );
         }
       }
       if (!bridge.onWindowCaptureReady && action === "window-capture-ready") void drain();
-      if (action === "window-capture-failed") {
-        dismissAllWindowCaptureAnimations();
-        soundedCaptureIdsRef.current.clear();
+      const failedCaptureId = action.startsWith(WINDOW_CAPTURE_FAILED_ACTION_PREFIX)
+        ? action.slice(WINDOW_CAPTURE_FAILED_ACTION_PREFIX.length)
+        : undefined;
+      if (action === "window-capture-failed" || failedCaptureId) {
+        dismissFailedWindowCapture(
+          failedCaptureId,
+          soundedCaptureIdsRef.current,
+          pendingAnimationStartsRef.current,
+        );
         void bridge.getWindowCaptureState().then((state) => {
           toastManager.add(
             stackedThreadToast({
@@ -323,10 +365,13 @@ export function WindowCaptureCoordinator() {
   }, [animateCaptures, drain, playCaptureSound, resolveCaptureTarget]);
 
   useEffect(() => {
-    const dismissOnBlur = () => dismissAllWindowCaptureAnimations();
+    const dismissOnBlur = () => {
+      pendingAnimationStartsRef.current.clear();
+      dismissAllWindowCaptureAnimations();
+    };
     const drainOnFocus = () => void drain();
     const handleVisibilityChange = () => {
-      if (document.visibilityState === "hidden") dismissAllWindowCaptureAnimations();
+      if (document.visibilityState === "hidden") dismissOnBlur();
       else void drain();
     };
     window.addEventListener("blur", dismissOnBlur);

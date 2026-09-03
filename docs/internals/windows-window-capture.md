@@ -30,8 +30,13 @@ and Electron's native bitmap representation.
 
 ## Feedback and handoff
 
-Capture dispatch awaits `ElectronWindow.reveal` before starting the renderer handoff. On Windows,
-Electron's `isFocused()` ultimately checks
+The initial capture handoff awaits `ElectronWindow.reveal`. The shared capture gate covers pixels
+and that handoff, then releases while accessibility results and attachment persistence finish
+independently for each capture ID. Dispose previous native effects before the next snapshot so they
+cannot appear in its pixels. Ready notifications and late failure notifications are passive; they
+must not bring T3 forward again. A late failure dismisses only its capture's renderer animation.
+
+On Windows, Electron's `isFocused()` ultimately checks
 [`GetActiveWindow`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getactivewindow),
 which describes the calling thread's active window, not the system foreground. Chromium can mark
 the window active even when Windows denies its `SetForegroundWindow` request; see

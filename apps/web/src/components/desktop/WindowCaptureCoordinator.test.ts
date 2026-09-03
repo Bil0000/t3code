@@ -10,7 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { DraftId, useComposerDraftStore } from "../../composerDraftStore";
 import type { DesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
 import {
+  beginWindowCaptureAnimationWhenReady,
   deliverWindowCapture,
+  dismissFailedWindowCapture,
   resolveExistingWindowCaptureTarget,
   resolveWindowCaptureTargetOnce,
 } from "./WindowCaptureCoordinator";
@@ -38,6 +40,76 @@ afterEach(() => {
   dismissAllWindowCaptureAnimations();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+describe("window capture failures", () => {
+  it("dismisses an older failed capture without disturbing a newer capture", async () => {
+    const target = DraftId.make("window-capture-draft");
+    const pendingStarts = new Set<string>();
+    const soundedIds = new Set(["older", "newer"]);
+    const dismissWindowCaptureAnimation = vi.fn(async () => undefined);
+    vi.stubGlobal("window", {
+      desktopBridge: {
+        requestWindowCapturePermissions: vi.fn(),
+        getWindowCaptureState: vi.fn(),
+        checkWindowCaptureShortcut: vi.fn(),
+        setWindowCaptureShortcutSuppressed: vi.fn(),
+        captureWindow: vi.fn(),
+        listPendingWindowCaptures: vi.fn(),
+        readWindowCapture: vi.fn(),
+        acknowledgeWindowCapture: vi.fn(),
+        dismissWindowCaptureAnimation,
+      },
+    });
+    await beginWindowCaptureAnimationWhenReady("older", Promise.resolve(target), pendingStarts);
+    await beginWindowCaptureAnimationWhenReady("newer", Promise.resolve(target), pendingStarts);
+
+    dismissFailedWindowCapture("older", soundedIds, pendingStarts);
+
+    expect(getPendingWindowCaptureAnimations().map(({ id }) => id)).toEqual(["newer"]);
+    expect(soundedIds).toEqual(new Set(["newer"]));
+    expect(dismissWindowCaptureAnimation).toHaveBeenCalledExactlyOnceWith("older");
+  });
+
+  it("does not resurrect a failed capture when its draft becomes ready later", async () => {
+    const target = DraftId.make("window-capture-draft");
+    let resolveTarget: ((target: DraftId) => void) | undefined;
+    const targetReady = new Promise<DraftId>((resolve) => {
+      resolveTarget = resolve;
+    });
+    const pendingStarts = new Set<string>();
+    const soundedIds = new Set(["older", "newer"]);
+    const olderStart = beginWindowCaptureAnimationWhenReady("older", targetReady, pendingStarts);
+    await beginWindowCaptureAnimationWhenReady("newer", Promise.resolve(target), pendingStarts);
+
+    dismissFailedWindowCapture("older", soundedIds, pendingStarts);
+    resolveTarget?.(target);
+    await olderStart;
+
+    expect(getPendingWindowCaptureAnimations().map(({ id }) => id)).toEqual(["newer"]);
+    expect(soundedIds).toEqual(new Set(["newer"]));
+    expect(pendingStarts.size).toBe(0);
+  });
+
+  it("keeps global failures dismissing all active and pending captures", async () => {
+    const target = DraftId.make("window-capture-draft");
+    let resolveTarget: ((target: DraftId) => void) | undefined;
+    const targetReady = new Promise<DraftId>((resolve) => {
+      resolveTarget = resolve;
+    });
+    const pendingStarts = new Set<string>();
+    const soundedIds = new Set(["older", "newer"]);
+    await beginWindowCaptureAnimationWhenReady("older", Promise.resolve(target), pendingStarts);
+    const newerStart = beginWindowCaptureAnimationWhenReady("newer", targetReady, pendingStarts);
+
+    dismissFailedWindowCapture(undefined, soundedIds, pendingStarts);
+    resolveTarget?.(target);
+    await newerStart;
+
+    expect(getPendingWindowCaptureAnimations()).toEqual([]);
+    expect(soundedIds.size).toBe(0);
+    expect(pendingStarts.size).toBe(0);
+  });
 });
 
 describe("window capture delivery", () => {

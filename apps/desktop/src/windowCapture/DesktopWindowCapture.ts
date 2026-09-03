@@ -697,7 +697,7 @@ export const make = Effect.gen(function* () {
     shortcutMessage: null,
     message: null,
   });
-  const busyRef = yield* Ref.make(false);
+  const snapshotMutex = yield* Semaphore.make(1);
   const configurationMutex = yield* Semaphore.make(1);
   const context = yield* Effect.context<
     DesktopEnvironment.DesktopEnvironment | DesktopWindow.DesktopWindow
@@ -813,7 +813,18 @@ export const make = Effect.gen(function* () {
       Effect.andThen(notifyFailure),
     );
 
-  const persistCapture = Effect.fn("desktop.windowCapture.persistCapture")(function* (
+  const discardCapture = Effect.fn("desktop.windowCapture.discardCapture")(function* (id: string) {
+    closeLinuxFeedback(id);
+    transition.dismiss(id);
+    yield* Effect.all(
+      [`${id}.png`, `${id}.tmp.png`, `${id}.json`, `${id}.json.tmp`].map((name) =>
+        fileSystem.remove(path.join(captureDirectory, name), { force: true }),
+      ),
+      { concurrency: "unbounded", discard: true },
+    ).pipe(Effect.ignore);
+  });
+
+  const prepareCapture = Effect.fn("desktop.windowCapture.prepareCapture")(function* (
     settings: ClientSettings,
     target: WindowCaptureTarget,
   ) {
@@ -822,28 +833,16 @@ export const make = Effect.gen(function* () {
     if (mode === "unavailable") {
       return yield* new DesktopWindowCaptureError({ operation: "unsupported", captureId: id });
     }
-    const imagePath = path.join(captureDirectory, `${id}.png`);
     const imageTempPath = path.join(captureDirectory, `${id}.tmp.png`);
-    const metadataPath = path.join(captureDirectory, `${id}.json`);
-    const cleanup = Effect.all(
-      [imagePath, imageTempPath, metadataPath, metadataPath + ".tmp"].map((filePath) =>
-        fileSystem.remove(filePath, { force: true }),
-      ),
-      { concurrency: "unbounded", discard: true },
-    ).pipe(Effect.ignore);
 
-    yield* Effect.gen(function* () {
+    return yield* Effect.gen(function* () {
+      // Retire feedback before reading screen pixels, so a rapid capture cannot
+      // photograph the previous capture's overlay.
+      closeLinuxFeedback();
+      flash.dispose();
+      transition.dispose();
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
-      const {
-        source,
-        active,
-        linuxWindow,
-        linuxActivationFailure,
-        contextPromise,
-        animationStarted,
-        png,
-        imageTempReady,
-      } = yield* Effect.tryPromise({
+      const snapshot = yield* Effect.tryPromise({
         try: () =>
           captureSource({
             target,
@@ -864,19 +863,35 @@ export const make = Effect.gen(function* () {
           }),
         catch: (cause) => captureFailure(cause, id),
       });
-      if (linuxActivationFailure) {
+      const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
+      if (snapshot.linuxActivationFailure) {
         yield* Effect.logWarning(
           "The compositor could not activate T3 Code after window capture",
-          linuxActivationFailure.cause,
+          snapshot.linuxActivationFailure.cause,
         );
       }
-      if (animationStarted) {
+      if (snapshot.animationStarted) {
         yield* desktopWindow
           .dispatchMenuAction(`window-capture-started:${id}`)
           .pipe(Effect.catch(() => Effect.void));
+      } else {
+        yield* desktopWindow.activate.pipe(Effect.catch(() => Effect.void));
       }
+      return { id, capturedAt, ...snapshot };
+    }).pipe(Effect.mapError((cause) => captureFailure(cause, id)));
+  });
+
+  const persistCapture = Effect.fn("desktop.windowCapture.persistCapture")(function* (
+    capture: Effect.Success<ReturnType<typeof prepareCapture>>,
+  ) {
+    const { id, capturedAt, source, active, linuxWindow, contextPromise, png, imageTempReady } =
+      capture;
+    const imagePath = path.join(captureDirectory, `${id}.png`);
+    const imageTempPath = path.join(captureDirectory, `${id}.tmp.png`);
+    const metadataPath = path.join(captureDirectory, `${id}.json`);
+
+    yield* Effect.gen(function* () {
       const accessibilityContext = yield* Effect.promise(() => contextPromise);
-      const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
       const appIconDataUrl = yield* Effect.promise(() =>
         iconDataUrl(source, active, environment.platform),
       );
@@ -915,38 +930,45 @@ export const make = Effect.gen(function* () {
         yield* encodePendingCaptureJson(pending),
       );
       yield* fileSystem.rename(metadataPath + ".tmp", metadataPath);
-    }).pipe(
-      Effect.mapError((cause) => captureFailure(cause, id)),
-      Effect.tapError(() =>
-        cleanup.pipe(
-          Effect.andThen(
-            Effect.promise(async () => {
-              closeLinuxFeedback(id);
-              await transition.complete(id);
-            }),
-          ),
-        ),
-      ),
-    );
-    return id;
+    }).pipe(Effect.mapError((cause) => captureFailure(cause, id)));
   });
 
   const captureTarget = Effect.fn("desktop.windowCapture.captureTarget")(function* (
     target: WindowCaptureTarget,
   ) {
     const settings = yield* Ref.get(settingsRef);
-    if (yield* Ref.getAndSet(busyRef, true)) return;
-    closeLinuxFeedback();
-    yield* persistCapture(settings, target).pipe(
-      Effect.tap((id) =>
+    // Only source acquisition and the initial handoff require exclusive access.
+    // Each captured image can finish its own accessibility read and persistence.
+    const prepared = yield* prepareCapture(settings, target).pipe(
+      Effect.tapError((error) =>
+        (error.captureId ? discardCapture(error.captureId) : Effect.void).pipe(
+          Effect.andThen(setFailure(error.message)),
+        ),
+      ),
+      snapshotMutex.withPermitsIfAvailable(1),
+    );
+    if (Option.isNone(prepared)) return;
+    const capture = prepared.value;
+    yield* persistCapture(capture).pipe(
+      Effect.tap(() =>
         Ref.update(stateRef, (state) => ({ ...state, message: null })).pipe(
           Effect.andThen(
-            desktopWindow.dispatchWindowCaptureReady(id).pipe(Effect.catch(() => Effect.void)),
+            desktopWindow
+              .dispatchWindowCaptureReady(capture.id)
+              .pipe(Effect.catch(() => Effect.void)),
           ),
         ),
       ),
-      Effect.tapError((error) => setFailure(error.message)),
-      Effect.ensuring(Ref.set(busyRef, false)),
+      Effect.tapError((error) =>
+        discardCapture(capture.id).pipe(
+          Effect.andThen(Ref.update(stateRef, (state) => ({ ...state, message: error.message }))),
+          Effect.andThen(
+            desktopWindow
+              .dispatchMenuAction(`${CAPTURE_FAILED_ACTION}:${capture.id}`, { reveal: false })
+              .pipe(Effect.catch(() => Effect.void)),
+          ),
+        ),
+      ),
     );
   });
 
