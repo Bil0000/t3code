@@ -805,13 +805,13 @@ it.effect("reads and acknowledges queued captures through Effect services", () =
   ).pipe(Effect.provide(layer));
 });
 
-it.effect("captures the active Windows window without enumerating desktop sources", () => {
+it.effect("captures the active Windows window and reads its native icon metadata", () => {
   const png = Buffer.from([1, 2, 3]);
   const active = {
     platform: "windows",
     id: 42,
-    title: "Editor",
-    owner: { name: "Editor", processId: 123 },
+    title: "Untitled - Paint",
+    owner: { name: "Paint.exe", processId: 123 },
     bounds: { x: 10, y: 20, width: 800, height: 600 },
   } as const;
   activeWindowMock.mockReset().mockResolvedValue(active);
@@ -820,11 +820,13 @@ it.effect("captures the active Windows window without enumerating desktop source
   getSourcesMock.mockReset().mockResolvedValue([
     {
       id: "window:42:0",
-      name: "Editor",
+      name: "Untitled - Paint",
+      appIcon: fakeIcon("window"),
       thumbnail: { isEmpty: () => false, toPNG: () => png },
     },
   ]);
   const writtenFiles: Array<[string, Uint8Array]> = [];
+  let metadata = "";
   const layer = testLayer("win32", {
     makeDirectory: () => Effect.void,
     rename: () => Effect.void,
@@ -832,7 +834,10 @@ it.effect("captures the active Windows window without enumerating desktop source
       Effect.sync(() => {
         writtenFiles.push([path, bytes]);
       }),
-    writeFileString: () => Effect.void,
+    writeFileString: (_, text) =>
+      Effect.sync(() => {
+        metadata = text;
+      }),
   });
 
   return Effect.scoped(
@@ -841,8 +846,19 @@ it.effect("captures the active Windows window without enumerating desktop source
       yield* service.captureNow;
 
       assert.deepEqual(screenshotMock.mock.calls, [[{ region: active.bounds }]]);
-      assert.lengthOf(getSourcesMock.mock.calls, 0);
+      assert.deepEqual(getSourcesMock.mock.calls, [
+        [
+          {
+            types: ["window"],
+            thumbnailSize: { width: 0, height: 0 },
+            fetchWindowIcons: true,
+          },
+        ],
+      ]);
       assert.deepEqual(writtenFiles[0]?.[1], png);
+      const saved = yield* decodePendingMetadata(metadata);
+      assert.equal(saved.source.appName, "Paint");
+      assert.match(saved.source.appIconDataUrl ?? "", /base64,window:/);
     }),
   ).pipe(Effect.provide(layer));
 });
@@ -1973,13 +1989,22 @@ function fakeIcon(label: string, empty = false): Electron.NativeImage {
 }
 
 it.each([
-  ["OS app", fakeIcon("captured"), fakeIcon("file"), "file"],
-  ["captured app", fakeIcon("captured"), fakeIcon("file", true), "captured"],
-])("exports the %s icon at high density", (_source, capturedIcon, fileIcon, expectedLabel) => {
-  const dataUrl = DesktopWindowCapture.windowCaptureIconDataUrl(capturedIcon, fileIcon);
+  ["OS app", fakeIcon("captured"), fakeIcon("file"), false, "file"],
+  ["captured app", fakeIcon("captured"), fakeIcon("file", true), false, "captured"],
+  ["Windows app", fakeIcon("captured"), fakeIcon("file"), true, "captured"],
+  ["Windows fallback", fakeIcon("captured", true), fakeIcon("file"), true, "file"],
+])(
+  "exports the %s icon at high density",
+  (_source, capturedIcon, fileIcon, preferCapturedIcon, expectedLabel) => {
+    const dataUrl = DesktopWindowCapture.windowCaptureIconDataUrl(
+      capturedIcon,
+      fileIcon,
+      preferCapturedIcon,
+    );
 
-  assert.strictEqual(dataUrl, "data:image/png;base64," + expectedLabel + ":64x64:best@2");
-});
+    assert.strictEqual(dataUrl, "data:image/png;base64," + expectedLabel + ":64x64:best@2");
+  },
+);
 
 const activeEditor = {
   owner: { path: "/Applications/Editor.app" },
@@ -2003,13 +2028,39 @@ it("prefers the bundle thumbnail for macOS app icons", async () => {
   assert.strictEqual(dataUrl, "data:image/png;base64,thumb:64x64:best@2");
 });
 
+it("prefers the Windows window icon over the executable icon", async () => {
+  const active = {
+    platform: "windows",
+    id: 42,
+    title: "T3 Code",
+    owner: { name: "T3 Code", processId: 123, path: "C:\\T3 Code.exe" },
+  } as Parameters<typeof DesktopWindowCapture.iconDataUrl>[1];
+  getSourcesMock
+    .mockReset()
+    .mockResolvedValue([{ id: "window:42:0", name: "T3 Code", appIcon: fakeIcon("window") }]);
+  getFileIconMock.mockReset().mockResolvedValue(fakeIcon("executable"));
+
+  const dataUrl = await DesktopWindowCapture.iconDataUrl({}, active, "win32");
+
+  assert.deepEqual(getSourcesMock.mock.calls, [
+    [
+      {
+        types: ["window"],
+        thumbnailSize: { width: 0, height: 0 },
+        fetchWindowIcons: true,
+      },
+    ],
+  ]);
+  assert.strictEqual(dataUrl, "data:image/png;base64,window:64x64:best@2");
+});
+
 it.each([
   [
     "a failed thumbnail on darwin",
     "darwin" as const,
     () => thumbnailFromPathMock.mockRejectedValue(new Error("no thumbnail")),
   ],
-  ["other platforms", "win32" as const, () => {}],
+  ["other platforms", "linux" as const, () => {}],
 ])(
   "requests the file icon at a size supported on macOS after %s",
   async (_case, platform, arrange) => {

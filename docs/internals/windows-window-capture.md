@@ -22,6 +22,12 @@ The xa11y Windows backend uses a desktop device context, a compatible bitmap,
 It reads the visible desktop region rather than requesting an isolated window texture. The native
 capture runs on a worker; `Screenshot.toPng()` encodes synchronously.
 
+Icon metadata comes from Electron's matching `DesktopCapturerSource`, with thumbnail dimensions set
+to zero so Chromium does not capture the window a second time. Prefer that per-window icon on
+Windows because the process executable can be a generic host or carry a different icon. The
+executable icon remains the fallback. `get-windows` supplies the application name from executable
+version metadata; names that still end in `.exe` have only that suffix removed before display.
+
 `RegionWindowCapture.ts` fits the image within the attachment size limit. When resizing is necessary,
 it converts xa11y's copied RGBA pixels to opaque BGRA for `nativeImage.createFromBitmap`, resizes,
 then encodes one PNG. Do not first encode the full-size image only to decode it for resizing.
