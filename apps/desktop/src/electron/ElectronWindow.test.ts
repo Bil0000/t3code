@@ -9,6 +9,7 @@ import { beforeEach, vi } from "vite-plus/test";
 
 const {
   activeWindowMock,
+  activateWindowsForegroundMock,
   appFocusMock,
   browserWindowMock,
   getAllWindowsMock,
@@ -17,6 +18,7 @@ const {
   nativeAppListMock,
 } = vi.hoisted(() => ({
   activeWindowMock: vi.fn(),
+  activateWindowsForegroundMock: vi.fn(),
   appFocusMock: vi.fn(),
   browserWindowMock: vi.fn(function BrowserWindowMock() {}),
   getAllWindowsMock: vi.fn(),
@@ -26,6 +28,10 @@ const {
 }));
 
 vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
+
+vi.mock("./WindowsForeground.ts", () => ({
+  activateWindowsForeground: activateWindowsForegroundMock,
+}));
 
 vi.mock("@crowecawcaw/xa11y", () => ({
   App: {
@@ -78,6 +84,7 @@ function makeWindowsRevealWindow() {
 describe("ElectronWindow", () => {
   beforeEach(() => {
     activeWindowMock.mockReset().mockResolvedValue(undefined);
+    activateWindowsForegroundMock.mockReset().mockResolvedValue(undefined);
     appFocusMock.mockReset();
     browserWindowMock.mockReset();
     getAllWindowsMock.mockReset();
@@ -395,6 +402,30 @@ describe("ElectronWindow", () => {
       yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
 
       assert.lengthOf(focus.mock.calls, 1);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect("fails reveal when Windows refuses foreground activation", () =>
+    Effect.gen(function* () {
+      const cause = new Error("Windows refused foreground activation");
+      const window = makeWindowsRevealWindow();
+      activateWindowsForegroundMock.mockRejectedValue(cause);
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      const exit = yield* Effect.exit(
+        electronWindow.reveal(window as unknown as Electron.BrowserWindow),
+      );
+
+      assert.equal(exit._tag, "Failure");
+      if (exit._tag === "Failure") {
+        const error = Cause.squash(exit.cause);
+        assert.instanceOf(error, ElectronWindow.ElectronWindowOperationError);
+        assert.equal(error.operation, "reveal-window");
+        assert.strictEqual(error.cause, cause);
+      }
+      assert.deepEqual(activateWindowsForegroundMock.mock.calls, [
+        [window.getNativeWindowHandle.mock.results[0]?.value],
+      ]);
     }).pipe(Effect.provide(testLayer("win32"))),
   );
 
