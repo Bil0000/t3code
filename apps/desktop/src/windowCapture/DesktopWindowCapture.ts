@@ -68,6 +68,7 @@ import {
   WindowCaptureTransition,
 } from "./WindowCaptureTransition.ts";
 import { startWindowCaptureAccessibilityProcess } from "./WindowCaptureAccessibilityProcess.ts";
+import { showWindowsCaptureOverlay } from "./WindowsCaptureFeedback.ts";
 
 import {
   hideAndWaitForBlur,
@@ -480,7 +481,7 @@ async function captureSource({
       accessibilityProcessOwned = false;
     }
     const contextPromise = accessibilityRead?.result ?? Promise.resolve(undefined);
-    if (hiddenWindow && !hiddenWindow.isDestroyed()) {
+    if (platform !== "win32" && hiddenWindow && !hiddenWindow.isDestroyed()) {
       hiddenWindow.show();
       hiddenWindowRestored = true;
     }
@@ -503,6 +504,10 @@ async function captureSource({
         platform,
         destinationWindowBounds,
       ));
+    if (platform === "win32" && hiddenWindow && !hiddenWindow.isDestroyed()) {
+      hiddenWindow.show();
+      hiddenWindowRestored = true;
+    }
     return {
       source,
       active,
@@ -541,6 +546,13 @@ export class WindowCaptureFlash {
   private flashWindow: Electron.BaseWindow | undefined;
   private animationTimer: ReturnType<typeof setInterval> | undefined;
   private closeTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly showWindow: (window: Electron.BaseWindow) => void;
+
+  constructor(
+    showWindow: (window: Electron.BaseWindow) => void = (window) => window.showInactive(),
+  ) {
+    this.showWindow = showWindow;
+  }
 
   showAnimated(bounds: Electron.Rectangle): Promise<void> {
     return this.show(bounds, true, FLASH_ANIMATION_DURATION_MS);
@@ -568,7 +580,7 @@ export class WindowCaptureFlash {
     const window = createWindowCaptureFlashWindow(bounds);
     this.flashWindow = window;
     if (window.isDestroyed()) return;
-    window.showInactive();
+    this.showWindow(window);
     if (animated) {
       let opacity = FLASH_PEAK_OPACITY;
       this.animationTimer = setInterval(() => {
@@ -618,12 +630,9 @@ async function showCaptureFeedback(
         captureId,
         bounds,
         snapshotDataUrl,
-        settings.windowCaptureFlash && platform !== "win32",
+        settings.windowCaptureFlash,
         destinationWindowBounds,
       );
-      if (settings.windowCaptureFlash && platform === "win32") {
-        await flash.showAnimated(bounds).catch(() => undefined);
-      }
       return true;
     } catch {
       transition.dispose();
@@ -734,10 +743,14 @@ export const make = Effect.gen(function* () {
   let shortcutGeneration = 0;
   let shortcutSuppressed = false;
   let stopShiftShortcut: (() => void) | undefined;
-  const flash = new WindowCaptureFlash();
+  const showCaptureWindow =
+    environment.platform === "win32" ? showWindowsCaptureOverlay : undefined;
+  const flash = new WindowCaptureFlash(showCaptureWindow);
   const transition = new WindowCaptureTransition({
-    boundOverlayToFlight: environment.platform === "win32",
-    boundOverlayToCaptureDisplays: environment.platform === "darwin",
+    showWindow: showCaptureWindow,
+    waitForCompositorFrame: environment.platform === "win32",
+    // Transparent Windows surfaces must not resize while their compositor animation is running.
+    boundOverlayToCaptureDisplays: environment.platform !== "linux",
     alwaysOnTopLevel: environment.platform === "linux" ? undefined : "pop-up-menu",
   });
   let linuxFeedback: { id: string; feedback: LinuxCaptureFeedback } | undefined;

@@ -944,6 +944,15 @@ export const MAC_FILE_EXCLUSIONS = [
   "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
   "!**/node_modules/node-pty/third_party/conpty/**/*",
 ] as const;
+// Smart unpack copies these native packages outside app.asar. Their build
+// sources and other platforms' binaries add needless files to each NSIS install.
+export const WINDOWS_CAPTURE_FILE_EXCLUSIONS = [
+  "!**/node_modules/uiohook-napi/src/**/*",
+  "!**/node_modules/uiohook-napi/libuiohook/**/*",
+  "!**/node_modules/uiohook-napi/prebuilds/darwin-*/**/*",
+  "!**/node_modules/uiohook-napi/prebuilds/linux-*/**/*",
+  "!**/node_modules/get-windows/lib/binding/*-darwin-*/**/*",
+] as const;
 // Windows ships the server tree (bundle + node_modules) as a separate
 // resources/server.asar sidecar instead of loose files: the NSIS installer
 // then extracts a handful of large archives instead of thousands of small
@@ -2503,7 +2512,11 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     productName: resolveDesktopProductName(version),
     artifactName: "T3-Code-${version}-${arch}.${ext}",
     electronLanguages: [...DESKTOP_ELECTRON_LANGUAGES],
-    files: [...DESKTOP_FILE_EXCLUSIONS, ...(platform === "mac" ? MAC_FILE_EXCLUSIONS : [])],
+    files: [
+      ...DESKTOP_FILE_EXCLUSIONS,
+      ...(platform === "mac" ? MAC_FILE_EXCLUSIONS : []),
+      ...(platform === "win" ? WINDOWS_CAPTURE_FILE_EXCLUSIONS : []),
+    ],
     directories: {
       buildResources: "apps/desktop/resources",
     },

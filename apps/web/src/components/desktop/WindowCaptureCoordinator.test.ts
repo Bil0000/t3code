@@ -57,6 +57,7 @@ describe("window capture delivery", () => {
     async ({ target, accessibleText }) => {
       vi.useFakeTimers();
       const never = new Promise<void>(() => undefined);
+      const animationFrames: Array<FrameRequestCallback> = [];
       const acknowledgeWindowCapture = vi.fn(async () => undefined);
       const bridge = {
         requestWindowCapturePermissions: vi.fn(async () => undefined),
@@ -110,8 +111,8 @@ describe("window capture delivery", () => {
         dispatchEvent: vi.fn(),
       });
       vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-        callback(0);
-        return 1;
+        animationFrames.push(callback);
+        return animationFrames.length;
       });
 
       if (typeof target === "string") {
@@ -138,9 +139,18 @@ describe("window capture delivery", () => {
       expect(getPendingWindowCaptureAnimations()).toHaveLength(1);
       expect(acknowledgeWindowCapture).not.toHaveBeenCalled();
 
+      expect(animationFrames).toHaveLength(1);
+      animationFrames.shift()?.(0);
+      animationFrames.shift()?.(0);
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(2_000);
-      await delivery;
       expect(getPendingWindowCaptureAnimations()).toHaveLength(0);
+      expect(acknowledgeWindowCapture).not.toHaveBeenCalled();
+      expect(animationFrames).toHaveLength(1);
+      animationFrames.shift()?.(0);
+      expect(acknowledgeWindowCapture).not.toHaveBeenCalled();
+      animationFrames.shift()?.(0);
+      await delivery;
       expect(acknowledgeWindowCapture).toHaveBeenCalledWith(item.id);
     },
   );

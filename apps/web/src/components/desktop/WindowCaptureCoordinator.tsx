@@ -146,6 +146,7 @@ export async function deliverWindowCapture(
     await afterNextPaint();
     await waitForWindowCaptureAnimationDestination(capture.id).catch(() => undefined);
     finishWindowCaptureAnimation(capture.id);
+    await afterNextPaint();
   }
   await bridge.acknowledgeWindowCapture(capture.id);
   dispatchWindowCaptureComposerFocus();

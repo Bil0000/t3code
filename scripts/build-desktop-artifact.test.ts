@@ -1,5 +1,6 @@
 // @effect-diagnostics nodeBuiltinImport:off - packaged-archive fixtures compute the sidecar digest with the same Node primitive as the builder.
 import * as NodeCrypto from "node:crypto";
+import * as NodePath from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
@@ -72,6 +73,7 @@ import {
   WindowsPrimaryNativeProbeError,
   WindowsDesktopBuildPrerequisitesMissingError,
   WindowsPackagedPayloadValidationError,
+  WINDOWS_CAPTURE_FILE_EXCLUSIONS,
   WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
   WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
   WINDOWS_SERVER_EXTRA_RESOURCES,
@@ -668,10 +670,15 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         { name: "T3 Code", schemes: ["t3code", "t3code-dev"] },
       ]);
       assert.deepStrictEqual(mac.files, [...DESKTOP_FILE_EXCLUSIONS, ...MAC_FILE_EXCLUSIONS]);
+      assert.deepStrictEqual(linux.files, DESKTOP_FILE_EXCLUSIONS);
+      assert.deepStrictEqual(win.files, [
+        ...DESKTOP_FILE_EXCLUSIONS,
+        ...WINDOWS_CAPTURE_FILE_EXCLUSIONS,
+      ]);
+      assert.deepStrictEqual(winWithoutWslPrebuild.files, win.files);
       assert.notProperty(mac.mac as Record<string, unknown>, "sign");
       for (const config of [linux, win]) {
         assert.deepStrictEqual(config.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
-        assert.deepStrictEqual(config.files, DESKTOP_FILE_EXCLUSIONS);
       }
       assert.deepStrictEqual(mac.electronLanguages, DESKTOP_ELECTRON_LANGUAGES);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
@@ -682,6 +689,42 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
       "!**/node_modules/node-pty/third_party/conpty/**/*",
     ]);
+  });
+
+  it("omits capture build sources and non-Windows natives while keeping the Windows runtime", () => {
+    const excluded = (file: string) =>
+      WINDOWS_CAPTURE_FILE_EXCLUSIONS.some((pattern) =>
+        NodePath.matchesGlob(file, pattern.slice(1)),
+      );
+
+    for (const file of [
+      "node_modules/uiohook-napi/src/lib/addon.c",
+      "node_modules/uiohook-napi/libuiohook/include/uiohook.h",
+      "node_modules/uiohook-napi/libuiohook/src/windows/input_hook.c",
+      "node_modules/uiohook-napi/prebuilds/darwin-arm64/uiohook-napi.node",
+      "node_modules/uiohook-napi/prebuilds/darwin-x64/uiohook-napi.node",
+      "node_modules/uiohook-napi/prebuilds/linux-x64/uiohook-napi.node",
+      "node_modules/uiohook-napi/prebuilds/linux-loong64/uiohook-napi.node",
+      "node_modules/get-windows/lib/binding/napi-6-darwin-unknown-x64/node-active-win.node",
+      "node_modules/get-windows/lib/binding/napi-9-darwin-unknown-arm64/node-get-windows.node",
+    ]) {
+      assert.isTrue(excluded(file), `${file} should not ship in the Windows installer`);
+    }
+
+    for (const file of [
+      "node_modules/uiohook-napi/package.json",
+      "node_modules/uiohook-napi/LICENSE",
+      "node_modules/uiohook-napi/dist/index.js",
+      "node_modules/uiohook-napi/prebuilds/win32-x64/uiohook-napi.node",
+      "node_modules/uiohook-napi/prebuilds/win32-arm64/uiohook-napi.node",
+      "node_modules/get-windows/package.json",
+      "node_modules/get-windows/index.js",
+      "node_modules/get-windows/lib/windows.js",
+      "node_modules/get-windows/lib/binding/napi-9-win32-unknown-x64/node-get-windows.node",
+      "node_modules/get-windows/lib/binding/napi-9-win32-unknown-arm64/node-get-windows.node",
+    ]) {
+      assert.isFalse(excluded(file), `${file} is part of the Windows runtime`);
+    }
   });
 
   it("stages only server runtime externals in macOS packages", () => {

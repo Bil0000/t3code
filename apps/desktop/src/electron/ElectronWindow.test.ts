@@ -2,11 +2,13 @@ import { assert, describe, it } from "@effect/vitest";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import type * as Electron from "electron";
 import { beforeEach, vi } from "vite-plus/test";
 
 const {
+  activeWindowMock,
   appFocusMock,
   browserWindowMock,
   getAllWindowsMock,
@@ -14,6 +16,7 @@ const {
   nativeAppByPidMock,
   nativeAppListMock,
 } = vi.hoisted(() => ({
+  activeWindowMock: vi.fn(),
   appFocusMock: vi.fn(),
   browserWindowMock: vi.fn(function BrowserWindowMock() {}),
   getAllWindowsMock: vi.fn(),
@@ -21,6 +24,8 @@ const {
   nativeAppByPidMock: vi.fn(),
   nativeAppListMock: vi.fn(),
 }));
+
+vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
 
 vi.mock("@crowecawcaw/xa11y", () => ({
   App: {
@@ -53,14 +58,32 @@ function makeBrowserWindow(input: { readonly id: number; readonly destroyed: boo
   } as unknown as Electron.BrowserWindow;
 }
 
+function makeWindowsRevealWindow() {
+  return {
+    id: 41,
+    isDestroyed: vi.fn(() => false),
+    isFocused: vi.fn(() => false),
+    isMinimized: vi.fn(() => false),
+    isVisible: vi.fn(() => true),
+    show: vi.fn(),
+    moveTop: vi.fn(),
+    focus: vi.fn(),
+    getTitle: vi.fn(() => "T3 Code (Dev)"),
+    getBounds: vi.fn(() => ({ x: 100, y: 50, width: 1_200, height: 800 })),
+    getNativeWindowHandle: vi.fn(() => Buffer.from([41, 0, 0, 0])),
+    restore: vi.fn(),
+  };
+}
+
 describe("ElectronWindow", () => {
   beforeEach(() => {
+    activeWindowMock.mockReset().mockResolvedValue(undefined);
     appFocusMock.mockReset();
     browserWindowMock.mockReset();
     getAllWindowsMock.mockReset();
     getFocusedWindowMock.mockReset();
     nativeAppByPidMock.mockReset();
-    nativeAppListMock.mockReset();
+    nativeAppListMock.mockReset().mockResolvedValue([]);
   });
 
   it.effect("preserves schema-safe creation context and the Electron cause", () =>
@@ -196,9 +219,13 @@ describe("ElectronWindow", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("raises a visible Windows window before focusing it", () =>
+  it.effect("awaits native foreground focus even when Electron reports the window focused", () =>
     Effect.gen(function* () {
       const operations: Array<string> = [];
+      const nativeFocusStarted = Promise.withResolvers<void>();
+      const allowNativeFocus = Promise.withResolvers<void>();
+      const listingStarted = Promise.withResolvers<void>();
+      const readNativeBounds = vi.fn(() => ({ x: 100, y: 50, width: 1_200, height: 800 }));
       const listedApps = Promise.withResolvers<
         Array<{
           pid: number;
@@ -206,7 +233,11 @@ describe("ElectronWindow", () => {
         }>
       >();
       appFocusMock.mockImplementation(() => operations.push("app-focus"));
-      nativeAppListMock.mockReturnValue(listedApps.promise);
+      nativeAppListMock.mockImplementation(() => {
+        listingStarted.resolve();
+        return listedApps.promise;
+      });
+      activeWindowMock.mockResolvedValue({ id: 99, owner: { processId: process.pid + 1 } });
       const apps = [
         {
           pid: process.pid,
@@ -222,9 +253,13 @@ describe("ElectronWindow", () => {
           pid: process.pid,
           asElement: () => ({
             name: "T3 Code (Dev)",
-            bounds: { x: 100, y: 50, width: 1_200, height: 800 },
+            get bounds() {
+              return readNativeBounds();
+            },
             focus: async () => {
               operations.push("native-focus");
+              nativeFocusStarted.resolve();
+              await allowNativeFocus.promise;
             },
           }),
         },
@@ -238,33 +273,184 @@ describe("ElectronWindow", () => {
         }),
       });
       const window = {
-        id: 41,
-        isDestroyed: vi.fn(() => false),
-        isMinimized: vi.fn(() => false),
-        isVisible: vi.fn(() => true),
+        ...makeWindowsRevealWindow(),
+        isFocused: vi.fn(() => true),
         show: vi.fn(() => operations.push("show")),
         moveTop: vi.fn(() => operations.push("move-top")),
         focus: vi.fn(() => operations.push("focus")),
-        getTitle: vi.fn(() => "T3 Code (Dev)"),
-        getBounds: vi.fn(() => ({ x: 100, y: 50, width: 1_200, height: 800 })),
-        restore: vi.fn(),
       } as unknown as Electron.BrowserWindow;
 
       const electronWindow = yield* ElectronWindow.ElectronWindow;
-      yield* electronWindow.reveal(window);
+      const revealFiber = yield* electronWindow.reveal(window).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            operations.push("revealed");
+          }),
+        ),
+        Effect.forkChild({ startImmediately: true }),
+      );
+      yield* Effect.promise(() => listingStarted.promise);
 
       assert.deepEqual(operations, ["app-focus", "show", "move-top", "focus"]);
       assert.equal(vi.mocked(window.restore).mock.calls.length, 0);
       assert.deepEqual(appFocusMock.mock.calls, [[]]);
-      yield* Effect.promise(() => vi.dynamicImportSettled());
       assert.deepEqual(nativeAppListMock.mock.calls, [[]]);
 
       listedApps.resolve(apps);
-      yield* Effect.promise(() => Promise.resolve());
-      yield* Effect.promise(() => Promise.resolve());
+      yield* Effect.promise(() => nativeFocusStarted.promise);
       assert.deepEqual(operations, ["app-focus", "show", "move-top", "focus", "native-focus"]);
+      allowNativeFocus.resolve();
+      yield* Fiber.join(revealFiber);
+      assert.deepEqual(operations, [
+        "app-focus",
+        "show",
+        "move-top",
+        "focus",
+        "native-focus",
+        "revealed",
+      ]);
       assert.lengthOf(nativeAppByPidMock.mock.calls, 0);
+      assert.lengthOf(readNativeBounds.mock.calls, 1);
     }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect.each([4, 8])(
+    "skips native focus only when the foreground matches the %i-byte HWND and process",
+    (handleBytes) =>
+      Effect.gen(function* () {
+        const window = makeWindowsRevealWindow();
+        const hwnd = handleBytes === 4 ? 0xf123_4567 : 0x1_f123_4567;
+        const handle = Buffer.alloc(handleBytes);
+        if (handleBytes === 4) handle.writeUInt32LE(hwnd);
+        else handle.writeBigUInt64LE(BigInt(hwnd));
+        window.getNativeWindowHandle.mockReturnValue(handle);
+        activeWindowMock.mockResolvedValue({ id: hwnd, owner: { processId: process.pid } });
+        const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+        yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
+
+        assert.lengthOf(nativeAppListMock.mock.calls, 0);
+        assert.lengthOf(window.getTitle.mock.calls, 0);
+      }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect.each([
+    { id: 42, processId: process.pid },
+    { id: 41, processId: process.pid + 1 },
+  ])("does not mistake another foreground window for the target: %o", (foreground) =>
+    Effect.gen(function* () {
+      const window = makeWindowsRevealWindow();
+      const focus = vi.fn(async () => undefined);
+      activeWindowMock.mockResolvedValue({
+        id: foreground.id,
+        owner: { processId: foreground.processId },
+      });
+      nativeAppListMock.mockResolvedValue([
+        {
+          pid: process.pid,
+          asElement: () => ({ name: window.getTitle(), bounds: window.getBounds(), focus }),
+        },
+      ]);
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
+
+      assert.lengthOf(focus.mock.calls, 1);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect("continues native focus when the foreground query fails", () =>
+    Effect.gen(function* () {
+      const window = makeWindowsRevealWindow();
+      const focus = vi.fn(async () => undefined);
+      activeWindowMock.mockRejectedValue(new Error("Foreground query unavailable"));
+      nativeAppListMock.mockResolvedValue([
+        {
+          pid: process.pid,
+          asElement: () => ({ name: window.getTitle(), bounds: window.getBounds(), focus }),
+        },
+      ]);
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
+
+      assert.lengthOf(focus.mock.calls, 1);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect("does not fail reveal when native focus rejects", () =>
+    Effect.gen(function* () {
+      const window = makeWindowsRevealWindow();
+      const focus = vi.fn(async () => {
+        throw new Error("Focus rejected");
+      });
+      nativeAppListMock.mockResolvedValue([
+        {
+          pid: process.pid,
+          asElement: () => ({ name: window.getTitle(), bounds: window.getBounds(), focus }),
+        },
+      ]);
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
+
+      assert.lengthOf(focus.mock.calls, 1);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect("cancels native focus when destroyed during the foreground query", () =>
+    Effect.gen(function* () {
+      const window = makeWindowsRevealWindow();
+      const queryStarted = Promise.withResolvers<void>();
+      const foreground = Promise.withResolvers<undefined>();
+      activeWindowMock.mockImplementation(() => {
+        queryStarted.resolve();
+        return foreground.promise;
+      });
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      const revealFiber = yield* electronWindow
+        .reveal(window as unknown as Electron.BrowserWindow)
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Effect.promise(() => queryStarted.promise);
+      window.isDestroyed.mockReturnValue(true);
+      foreground.resolve(undefined);
+      yield* Fiber.join(revealFiber);
+
+      assert.lengthOf(nativeAppListMock.mock.calls, 0);
+      assert.lengthOf(window.getNativeWindowHandle.mock.calls, 0);
+      assert.lengthOf(window.getTitle.mock.calls, 0);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect.each(["foreground", "destroyed"] as const)(
+    "cancels Windows accessibility fallback when the window becomes %s during enumeration",
+    (state) =>
+      Effect.gen(function* () {
+        const asElement = vi.fn();
+        const listedApps =
+          Promise.withResolvers<Array<{ pid: number; asElement: typeof asElement }>>();
+        const listingStarted = Promise.withResolvers<void>();
+        nativeAppListMock.mockImplementation(() => {
+          listingStarted.resolve();
+          return listedApps.promise;
+        });
+        const window = makeWindowsRevealWindow();
+        const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+        const revealFiber = yield* electronWindow
+          .reveal(window as unknown as Electron.BrowserWindow)
+          .pipe(Effect.forkChild({ startImmediately: true }));
+        yield* Effect.promise(() => listingStarted.promise);
+        assert.lengthOf(nativeAppListMock.mock.calls, 1);
+        if (state === "destroyed") window.isDestroyed.mockReturnValue(true);
+        else activeWindowMock.mockResolvedValue({ id: 41, owner: { processId: process.pid } });
+        listedApps.resolve([{ pid: process.pid, asElement }]);
+        yield* Fiber.join(revealFiber);
+
+        assert.lengthOf(asElement.mock.calls, 0);
+        assert.lengthOf(window.getTitle.mock.calls, 0);
+      }).pipe(Effect.provide(testLayer("win32"))),
   );
 
   it.effect("preserves message delivery failures with window and channel context", () =>
