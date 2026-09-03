@@ -126,6 +126,8 @@ export interface PortalShortcutState {
   readonly shortcutActionRegistered?: boolean;
   readonly shortcutRegistered: boolean;
   readonly shortcutPending: boolean;
+  /** Whether retry-shortcut can reopen permissions or start a new session. */
+  readonly shortcutCanRetry?: boolean;
   readonly shortcutLabel?: string;
   readonly shortcutMessage: string | null;
 }
@@ -219,7 +221,10 @@ export class PortalCaptureShortcut {
 
   private update(state: PortalShortcutState) {
     if (this.closed) return;
-    this.state = state;
+    this.state = {
+      shortcutCanRetry: !this.managedByHyprland && (!this.hasSession || this.version >= 2),
+      ...state,
+    };
     this.onStateChanged();
   }
 
@@ -228,6 +233,8 @@ export class PortalCaptureShortcut {
     this.update({
       shortcutRegistered: false,
       shortcutPending: false,
+      // This failed session is closing, so retry can register a fresh one.
+      shortcutCanRetry: !this.managedByHyprland,
       shortcutMessage: this.managedByHyprland
         ? "Couldn't connect to Hyprland shortcuts. Make sure xdg-desktop-portal-hyprland is running, then restart T3 Code."
         : error instanceof Error
@@ -367,7 +374,9 @@ export class PortalCaptureShortcut {
             shortcutRegistered: false,
             shortcutPending: false,
             shortcutMessage:
-              "Shortcut permission wasn't granted. Open shortcut permissions to allow it.",
+              this.version >= 2
+                ? "Shortcut permission wasn't granted. Open shortcut permissions to allow it."
+                : "Shortcut permission wasn't granted. Allow T3 Code in your desktop's shortcut settings.",
           });
           return undefined;
         }
@@ -401,7 +410,9 @@ export class PortalCaptureShortcut {
       ...(label ? { shortcutLabel: label } : {}),
       shortcutMessage: label
         ? `Desktop shortcut: ${label}`
-        : "No shortcut is assigned. Open shortcut permissions to choose one.",
+        : this.version >= 2
+          ? "No shortcut is assigned. Open shortcut permissions to choose one."
+          : "No shortcut is assigned. Choose one in your desktop's shortcut settings.",
     });
   }
 

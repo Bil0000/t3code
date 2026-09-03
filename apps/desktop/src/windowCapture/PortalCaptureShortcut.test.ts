@@ -140,6 +140,7 @@ it("accepts Hyprland's action-only binding without claiming the keys are reserve
     shortcutRegistered: false,
     shortcutActionRegistered: true,
     shortcutPending: false,
+    shortcutCanRetry: false,
   });
   expect(bus.boundId).toBe("capture-window");
   expect(bus.calls.find((call) => call.member === "BindShortcuts")?.body[1]).toEqual([
@@ -281,6 +282,7 @@ it.each([1, 2])(
     await client.ready;
     expect(client.state.shortcutRegistered).toBe(false);
     expect(client.state.shortcutPending).toBe(false);
+    expect(client.state.shortcutCanRetry).toBe(true);
     expect(client.state.shortcutMessage).toContain("wasn't granted");
     bus.activate();
     expect(capture).not.toHaveBeenCalled();
@@ -314,10 +316,33 @@ it("guides users to manual desktop settings when the portal cannot open them", a
   const { client } = start(bus);
   await client.ready;
   expect(client.hasSession).toBe(true);
+  expect(client.state.shortcutCanRetry).toBe(false);
+  expect(client.state.shortcutMessage).toBe(
+    "Shortcut permission wasn't granted. Allow T3 Code in your desktop's shortcut settings.",
+  );
   await expect(client.configure()).rejects.toThrow("Open your desktop's shortcut settings");
   expect(bus.calls.some((message) => message.member === "ConfigureShortcuts")).toBe(false);
   client.close();
   expect(client.hasSession).toBe(false);
+});
+
+it("captures on older portals without offering an unsupported permission dialog", async () => {
+  const bus = new FakeBus();
+  bus.version = 1;
+  const { client, capture } = start(bus);
+  await client.ready;
+  expect(client.state).toMatchObject({ shortcutRegistered: true, shortcutCanRetry: false });
+  bus.activate();
+  expect(capture).toHaveBeenCalledOnce();
+  bus.signal(portal, "ShortcutsChanged", root, [bus.session, []]);
+  expect(client.state).toMatchObject({
+    shortcutRegistered: false,
+    shortcutCanRetry: false,
+    shortcutMessage: "No shortcut is assigned. Choose one in your desktop's shortcut settings.",
+  });
+  bus.signal("org.freedesktop.portal.Session", "Closed", bus.session, []);
+  expect(client.hasSession).toBe(false);
+  expect(client.state.shortcutCanRetry).toBe(true);
 });
 
 it("closes an outstanding consent request and ignores its late response", async () => {

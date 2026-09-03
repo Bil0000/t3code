@@ -277,6 +277,7 @@ export function WindowCaptureSetupDialog({
                 {!shortcutChanged &&
                 !state.shortcutRegistered &&
                 !state.shortcutPending &&
+                state.shortcutCanRetry !== false &&
                 !isModifierPairShortcut(state.shortcut) ? (
                   <Button
                     variant="ghost"

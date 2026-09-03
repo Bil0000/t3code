@@ -268,6 +268,7 @@ export const DesktopWindowCaptureState = Schema.Struct({
   shortcut: WindowCaptureShortcut,
   shortcutRegistered: Schema.Boolean,
   shortcutPending: Schema.optional(Schema.Boolean),
+  shortcutCanRetry: Schema.optional(Schema.Boolean),
   shortcutLabel: Schema.optional(Schema.String),
   shortcutMessage: Schema.NullOr(Schema.String),
   shortcutBinding: Schema.optional(Schema.String),

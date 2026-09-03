@@ -32,8 +32,11 @@ const bridge = vi.hoisted(() => ({
   checkWindowCaptureShortcut: vi.fn(),
   previewWindowCaptureConfig: vi.fn(),
   applyWindowCaptureConfig: vi.fn(),
+  setupWindowCapture: vi.fn(),
   onMenuAction: vi.fn(),
 }));
+const toastManager = vi.hoisted(() => ({ add: vi.fn() }));
+vi.mock("../ui/toast", () => ({ toastManager }));
 vi.mock("../../lib/desktopWindowCapture", () => ({ getDesktopWindowCaptureBridge: () => bridge }));
 const settingsStore = vi.hoisted(() => ({
   current: {} as typeof DEFAULT_CLIENT_SETTINGS,
@@ -53,6 +56,12 @@ let state: DesktopWindowCaptureState;
 function render() {
   hooks.beginRender();
   return WindowCaptureSettings();
+}
+function renderWithEffects() {
+  effects.length = 0;
+  const tree = render();
+  for (const effect of effects.splice(0)) effect();
+  return tree;
 }
 function wizard(tree: ReturnType<typeof render>) {
   return visitElements(tree, (element) => element.type === WindowCaptureSetupDialog);
@@ -95,6 +104,7 @@ beforeEach(() => {
   bridge.getWindowCaptureState.mockImplementation(async () => state);
   bridge.setWindowCaptureShortcutSuppressed.mockResolvedValue(undefined);
   bridge.checkWindowCaptureShortcut.mockResolvedValue({ available: true, message: null });
+  bridge.setupWindowCapture.mockReset().mockResolvedValue(undefined);
   settingsStore.update.mockImplementation(async (patch) => {
     settingsStore.current = { ...settingsStore.current, ...patch };
     state = { ...state, shortcut: settingsStore.current.windowCaptureShortcut };
@@ -172,6 +182,7 @@ it.each(["direct", "gnome-extension", "kde"] as const)(
       stopPropagation: vi.fn(),
     });
     await finish(bridge.checkWindowCaptureShortcut.mock.results[0]!.value);
+    expect(recorder(render()).size).toBe("xs");
     expect(recorder(render())["aria-label"]).toBe(
       "Record window capture shortcut, currently Ctrl+Alt+Y",
     );
@@ -216,4 +227,99 @@ it("keeps the approved desktop shortcut when recording is cancelled in setup", a
   expect(shortcut()["aria-label"]).toBe("Record window capture shortcut, currently Ctrl+Alt+8");
   expect(settingsStore.update).not.toHaveBeenCalled();
   expect(bridge.checkWindowCaptureShortcut).not.toHaveBeenCalled();
+});
+
+function usePortalShortcut(shortcutCanRetry: boolean) {
+  const shortcut = {
+    key: "2",
+    modKey: false,
+    ctrlKey: true,
+    altKey: false,
+    shiftKey: true,
+    metaKey: false,
+  };
+  settingsStore.current = { ...settingsStore.current, windowCaptureShortcut: shortcut };
+  state = {
+    ...state,
+    linuxBackend: "gnome-extension",
+    gnomeExtension: { status: "enabled", message: "Ready" },
+    shortcut,
+    linuxFeedbackAvailable: true,
+    shortcutRegistered: true,
+    shortcutCanRetry,
+  };
+}
+
+it("keeps older portal shortcuts editable without offering unsupported permissions", async () => {
+  usePortalShortcut(false);
+  const tree = await mount();
+  expect(() => button(tree, "Shortcut permissions")).toThrow("Missing button");
+  expect(bridge.setupWindowCapture).not.toHaveBeenCalled();
+  const recorder = visitElements(tree, (element) => "data-keybinding-capture" in element.props);
+  (recorder!.props.onClick as () => void)();
+  await finish(bridge.setWindowCaptureShortcutSuppressed.mock.results.at(-1)!.value);
+  expect(
+    visitElements(render(), (element) => "data-keybinding-capture" in element.props)?.props
+      .children,
+  ).toBe("Press shortcut…");
+});
+
+it("shows permission errors once in a toast and allows retrying", async () => {
+  usePortalShortcut(true);
+  bridge.setupWindowCapture.mockRejectedValueOnce(new Error("The desktop service disconnected."));
+  button(await mount(), "Shortcut permissions").onClick();
+  await finish(bridge.setupWindowCapture.mock.results[0]!.value.catch(() => undefined));
+  const tree = renderWithEffects();
+  expect(toastManager.add).toHaveBeenCalledExactlyOnceWith({
+    type: "error",
+    title: "Couldn't open shortcut permissions",
+    description: "The desktop service disconnected.",
+  });
+  expect(visitElements(tree, (element) => element.props.role === "alert")).toBeNull();
+  expect(state.shortcutRegistered).toBe(true);
+  button(renderWithEffects(), "Shortcut permissions").onClick();
+  await finish(bridge.setupWindowCapture.mock.results[1]!.value);
+  renderWithEffects();
+  expect(bridge.setupWindowCapture).toHaveBeenCalledTimes(2);
+  expect(toastManager.add).toHaveBeenCalledTimes(1);
+});
+
+it("keeps a failed preference unchanged and reports the save error in a toast", async () => {
+  usePortalShortcut(true);
+  const flash = (tree: ReturnType<typeof render>) => {
+    const control = visitElements(
+      tree,
+      (element) => element.props["aria-label"] === "Flash captured window",
+    );
+    if (!control) throw new Error("Missing flash control");
+    return control.props as { onCheckedChange: (checked: boolean) => void; checked: boolean };
+  };
+  settingsStore.update.mockRejectedValueOnce(new Error("The settings file is read-only."));
+  flash(await mount()).onCheckedChange(false);
+  await finish(settingsStore.update.mock.results[0]!.value.catch(() => undefined));
+  expect(flash(renderWithEffects()).checked).toBe(true);
+  expect(toastManager.add).toHaveBeenCalledExactlyOnceWith({
+    type: "error",
+    title: "Couldn't save capture settings",
+    description: "The settings file is read-only.",
+  });
+  flash(renderWithEffects()).onCheckedChange(false);
+  await finish(settingsStore.update.mock.results[1]!.value);
+  expect(flash(renderWithEffects()).checked).toBe(false);
+  expect(toastManager.add).toHaveBeenCalledTimes(1);
+});
+
+it("keeps setup errors in the wizard and does not toast them after closing it", async () => {
+  usePortalShortcut(true);
+  button(await mount(), "Manage capture").onClick();
+  await finish(bridge.getWindowCaptureState.mock.results[1]!.value);
+  bridge.setupWindowCapture.mockRejectedValueOnce(new Error("The desktop service disconnected."));
+  const action = wizard(render())!.props.onAction as (action: "retry-shortcut") => Promise<void>;
+  await action("retry-shortcut");
+  const dialog = wizard(renderWithEffects())!;
+  expect(dialog.props.error).toBe("The desktop service disconnected.");
+  expect(toastManager.add).not.toHaveBeenCalled();
+  await (dialog.props.onClose as (completed: boolean) => Promise<void>)(false);
+  expect(wizard(renderWithEffects())).toBeNull();
+  expect(toastManager.add).not.toHaveBeenCalled();
 });

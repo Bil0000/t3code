@@ -43,6 +43,7 @@ import { Button } from "../ui/button";
 import { Menu, MenuItem, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { selectTriggerVariants } from "../ui/select";
 import { Switch } from "../ui/switch";
+import { toastManager } from "../ui/toast";
 import { WindowCaptureSetupDialog } from "./WindowCaptureSetupDialog";
 import { useWindowCaptureShortcutRecorder } from "./useWindowCaptureShortcutRecorder";
 import {
@@ -56,6 +57,10 @@ const soundOptionRowClassName =
   "grid grid-cols-[1fr_auto] rounded-sm has-data-checked:bg-foreground/[0.08]";
 const soundOptionItemClassName = "data-checked:bg-transparent";
 const soundPreviewClassName = "min-h-7 w-7 justify-center px-0";
+
+function captureSettingsError(title: string, error: unknown) {
+  return { title, message: error instanceof Error ? error.message : "Try again." };
+}
 
 type ShortcutCheck =
   | { readonly status: "idle"; readonly availability: null }
@@ -72,7 +77,9 @@ export function WindowCaptureSettings() {
   const bridge = getDesktopWindowCaptureBridge();
   const [state, setState] = useState<DesktopWindowCaptureState | null>(null);
   const [setupBusy, setSetupBusy] = useState(false);
-  const [setupError, setSetupError] = useState<string | null>(null);
+  const [setupError, setSetupError] = useState<ReturnType<typeof captureSettingsError> | null>(
+    null,
+  );
   const [wizard, setWizard] = useState<{
     initialStep: CaptureSetupStep;
     wasEnabled: boolean;
@@ -110,7 +117,7 @@ export function WindowCaptureSettings() {
       }
     } catch (error) {
       if (requestId === stateRequestIdRef.current)
-        setSetupError(error instanceof Error ? error.message : "Could not check capture setup.");
+        setSetupError(captureSettingsError("Couldn't check capture setup", error));
     }
   }, [bridge]);
 
@@ -123,13 +130,30 @@ export function WindowCaptureSettings() {
         await bridge.setupWindowCapture(action);
         await refreshState();
       } catch (error) {
-        setSetupError(error instanceof Error ? error.message : "Could not complete capture setup.");
+        setSetupError(
+          captureSettingsError(
+            action === "retry-shortcut"
+              ? "Couldn't open shortcut permissions"
+              : "Couldn't complete capture setup",
+            error,
+          ),
+        );
       } finally {
         setSetupBusy(false);
       }
     },
     [bridge, refreshState, setupBusy],
   );
+
+  useEffect(() => {
+    if (!setupError || wizard) return;
+    toastManager.add({
+      type: "error",
+      title: setupError.title,
+      description: setupError.message,
+    });
+    setSetupError(null);
+  }, [setupError, wizard]);
 
   useEffect(() => {
     void refreshState();
@@ -158,7 +182,7 @@ export function WindowCaptureSettings() {
         await updateSettings(patch);
         return await refreshState();
       } catch (error) {
-        setSetupError(error instanceof Error ? error.message : "Could not save capture settings.");
+        setSetupError(captureSettingsError("Couldn't save capture settings", error));
       }
     },
     [refreshState, updateSettings],
@@ -171,9 +195,7 @@ export function WindowCaptureSettings() {
           await bridge?.requestWindowCapturePermissions(true);
         await save({ windowCaptureIncludeAccessibility: includeAccessibility });
       } catch (error) {
-        setSetupError(
-          error instanceof Error ? error.message : "Could not request accessibility permissions.",
-        );
+        setSetupError(captureSettingsError("Couldn't allow app text capture", error));
       }
     },
     [bridge, save, settings.windowCaptureEnabled],
@@ -286,9 +308,7 @@ export function WindowCaptureSettings() {
           : await save({ windowCaptureEnabled: true });
       return nextState !== undefined && captureSetupAccessReady(nextState);
     } catch (error) {
-      setSetupError(
-        error instanceof Error ? error.message : "Could not request capture permissions.",
-      );
+      setSetupError(captureSettingsError("Couldn't request capture permissions", error));
       return false;
     } finally {
       setSetupBusy(false);
@@ -306,9 +326,10 @@ export function WindowCaptureSettings() {
         if (!(await save({ windowCaptureEnabled: false }))) return;
       }
       stopRecording();
+      setSetupError(null);
       setWizard(null);
     } catch (error) {
-      setSetupError(error instanceof Error ? error.message : "Could not close capture setup.");
+      setSetupError(captureSettingsError("Couldn't close capture setup", error));
     } finally {
       setSetupBusy(false);
     }
@@ -328,17 +349,6 @@ export function WindowCaptureSettings() {
   return (
     <SettingsPageContainer>
       <SettingsSection id="window-capture" title="Window Capture">
-        {setupError && !wizard ? (
-          <div className="mb-4 space-y-2 text-sm">
-            <p role="alert" className="text-destructive">
-              Couldn't update window capture. Try again or check Advanced for help.
-            </p>
-            <details className="text-xs text-muted-foreground">
-              <summary className="cursor-pointer">Advanced</summary>
-              <p className="mt-2 break-words">{setupError}</p>
-            </details>
-          </div>
-        ) : null}
         <SettingsUnavailableGroup message={unavailableMessage}>
           <SettingsRow
             {...searchableSetting("window-capture-enabled")}
@@ -439,7 +449,9 @@ export function WindowCaptureSettings() {
                             Cancel
                           </Button>
                         </>
-                      ) : state?.mode === "portal" && !isModifierPairShortcut(savedShortcut) ? (
+                      ) : state?.mode === "portal" &&
+                        state.shortcutCanRetry !== false &&
+                        !isModifierPairShortcut(savedShortcut) ? (
                         <Button
                           size="xs"
                           variant="ghost"
@@ -561,7 +573,7 @@ export function WindowCaptureSettings() {
           initialStep={wizard.initialStep}
           wasEnabled={wizard.wasEnabled}
           busy={setupBusy}
-          error={setupError}
+          error={setupError?.message ?? null}
           shortcutInput={shortcutInput}
           shortcutStatus={shortcutStatus}
           shortcutChanged={shortcutChanged}

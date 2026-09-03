@@ -37,8 +37,8 @@ Hyprland, configure the shortcut in the desktop's config as described below. On 
 the shortcut to your desktop's global-shortcut portal. Approve the system prompt if one appears.
 Settings shows when permission is pending or denied, then displays the shortcut your desktop
 actually assigned. Your desktop may reuse a previous approval without showing another prompt.
-Use **Shortcut permissions** to open your desktop's controls when a shortcut needs permission
-or different keys. Older desktops may require opening their shortcut settings manually.
+When available, **Shortcut permissions** opens your desktop's controls to approve or change a
+shortcut. If your desktop cannot open those controls from T3 Code, use its shortcut settings instead.
 There is no separate test step: use the assigned shortcut from another app to capture its window.
 Changing the shortcut replaces the active binding without restarting T3 Code.
 

@@ -122,6 +122,7 @@ export function useWindowCaptureShortcutRecorder({
     input: (
       <Button
         type="button"
+        size="xs"
         variant={recording ? "secondary" : "outline"}
         disabled={disabled}
         aria-label={
