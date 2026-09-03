@@ -24,6 +24,7 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
+import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -367,6 +368,7 @@ async function captureSource({
   kdeCapturePaths,
   hyprlandCapturePaths,
   accessibilityProcessPool,
+  prepareReveal,
   onLinuxFeedback,
 }: {
   target: WindowCaptureTarget;
@@ -381,6 +383,7 @@ async function captureSource({
   kdeCapturePaths: KdeCapturePaths;
   hyprlandCapturePaths: HyprlandCapturePaths;
   accessibilityProcessPool: AccessibilityProcessPool;
+  prepareReveal: () => Promise<void>;
   onLinuxFeedback: (feedback: LinuxCaptureFeedback) => void;
 }) {
   let active: ActiveWindow | undefined;
@@ -394,6 +397,8 @@ async function captureSource({
   const destinationWindowBounds = destinationWindow?.getBounds();
   let hiddenWindowRestored = false;
   try {
+    const revealPreparation =
+      platform === "win32" ? prepareReveal().catch(() => undefined) : Promise.resolve();
     if (hiddenWindow) await hideAndWaitForBlur(hiddenWindow);
     if (mode === "direct") {
       active = await activeWindow({
@@ -485,6 +490,7 @@ async function captureSource({
       await accessibilityRead.started;
     }
     const contextPromise = accessibilityRead?.result ?? Promise.resolve(undefined);
+    await revealPreparation;
     if (platform !== "win32" && hiddenWindow && !hiddenWindow.isDestroyed()) {
       hiddenWindow.show();
       hiddenWindowRestored = true;
@@ -856,6 +862,7 @@ export const make = Effect.gen(function* () {
             kdeCapturePaths,
             hyprlandCapturePaths,
             accessibilityProcessPool,
+            prepareReveal: () => runPromise(desktopWindow.prepareCaptureReveal),
             onLinuxFeedback: (feedback) => {
               linuxFeedback = { id, feedback };
             },
@@ -870,11 +877,15 @@ export const make = Effect.gen(function* () {
         );
       }
       if (snapshot.animationStarted) {
-        yield* desktopWindow
-          .dispatchMenuAction(`window-capture-started:${id}`)
-          .pipe(Effect.catch(() => Effect.void));
+        const action = `window-capture-started:${id}`;
+        const revealExit = yield* Effect.exit(desktopWindow.dispatchMenuAction(action));
+        if (Exit.isFailure(revealExit)) {
+          yield* desktopWindow
+            .dispatchMenuAction(action, { reveal: false })
+            .pipe(Effect.catchCause(() => Effect.void));
+        }
       } else {
-        yield* desktopWindow.activate.pipe(Effect.catch(() => Effect.void));
+        yield* desktopWindow.activate.pipe(Effect.catchCause(() => Effect.void));
       }
       return { id, capturedAt, ...snapshot };
     }).pipe(Effect.mapError((cause) => captureFailure(cause, id)));

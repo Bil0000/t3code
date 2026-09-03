@@ -18,6 +18,16 @@ import { activeWindow } from "get-windows";
 import { activateWindowsForeground, isWindowsShellHostedForeground } from "./WindowsForeground.ts";
 import { startWindowsForegroundFocusThread } from "./WindowsForegroundFocusThread.ts";
 
+function windowsForegroundFocusTarget(window: Electron.BrowserWindow) {
+  return {
+    windowId: window.id,
+    processId: process.pid,
+    title: window.getTitle(),
+    bounds: window.getBounds(),
+    contentBounds: window.getContentBounds(),
+  };
+}
+
 async function isWindowsBrowserWindowForeground(window: Electron.BrowserWindow): Promise<boolean> {
   const foreground = await activeWindow().catch(() => undefined);
   if (window.isDestroyed() || foreground?.owner.processId !== process.pid) return false;
@@ -134,6 +144,7 @@ export class ElectronWindow extends Context.Service<
     readonly focusedMainOrFirst: Effect.Effect<Option.Option<Electron.BrowserWindow>>;
     readonly setMain: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly clearMain: (window: Option.Option<Electron.BrowserWindow>) => Effect.Effect<void>;
+    readonly prepareReveal: (window: Electron.BrowserWindow) => Effect.Effect<boolean>;
     readonly reveal: (window: Electron.BrowserWindow) => Effect.Effect<void>;
     readonly sendAll: (channel: string, ...args: readonly unknown[]) => Effect.Effect<void>;
     readonly destroyAll: Effect.Effect<void>;
@@ -261,6 +272,15 @@ export const make = Effect.gen(function* () {
         }
         return Option.none();
       }),
+    prepareReveal: (window) =>
+      Effect.promise(async () => {
+        if (platform !== "win32" || !windowsForegroundFocus || window.isDestroyed()) {
+          return false;
+        }
+        return windowsForegroundFocus
+          .prepare(windowsForegroundFocusTarget(window))
+          .catch(() => false);
+      }),
     reveal: (window) =>
       Effect.tryPromise({
         try: async () => {
@@ -296,12 +316,7 @@ export const make = Effect.gen(function* () {
           if (platform === "win32") {
             if (shellHostedForeground) {
               await windowsForegroundFocus
-                ?.focus({
-                  processId: process.pid,
-                  title: window.getTitle(),
-                  bounds: window.getBounds(),
-                  contentBounds: window.getContentBounds(),
-                })
+                ?.focus(windowsForegroundFocusTarget(window))
                 .catch(() => false);
             }
             try {
@@ -311,15 +326,10 @@ export const make = Effect.gen(function* () {
               const focused =
                 needsFocus && !window.isDestroyed()
                   ? await windowsForegroundFocus
-                      ?.focus({
-                        processId: process.pid,
-                        title: window.getTitle(),
-                        bounds: window.getBounds(),
-                        contentBounds: window.getContentBounds(),
-                      })
+                      ?.focus(windowsForegroundFocusTarget(window))
                       .catch(() => false)
                   : false;
-              if (needsFocus && !focused) {
+              if (needsFocus && !focused && !shellHostedForeground) {
                 await focusWindowsBrowserWindow(window).catch(() => undefined);
               }
               if (!window.isDestroyed()) {

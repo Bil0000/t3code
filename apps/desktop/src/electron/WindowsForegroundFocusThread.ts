@@ -8,6 +8,7 @@ import type * as Electron from "electron";
 const FOCUS_TIMEOUT_MS = 1_000;
 
 export type WindowsForegroundFocusTarget = {
+  readonly windowId: number;
   readonly processId: number;
   readonly title: string;
   readonly bounds: Electron.Rectangle;
@@ -15,12 +16,13 @@ export type WindowsForegroundFocusTarget = {
 };
 
 export type WindowsForegroundFocusThread = {
+  readonly prepare: (target: WindowsForegroundFocusTarget) => Promise<boolean>;
   readonly focus: (target: WindowsForegroundFocusTarget) => Promise<boolean>;
   readonly close: () => void;
 };
 
 type FocusRequest = {
-  readonly type: "focus";
+  readonly type: "prepare" | "focus";
   readonly requestId: number;
   readonly target: WindowsForegroundFocusTarget;
 };
@@ -32,6 +34,7 @@ type FocusResult = {
 };
 
 const unavailableThread = (): WindowsForegroundFocusThread => ({
+  prepare: async () => false,
   focus: async () => false,
   close: () => undefined,
 });
@@ -39,78 +42,107 @@ const unavailableThread = (): WindowsForegroundFocusThread => ({
 export function startWindowsForegroundFocusThread(
   workerPath: string,
 ): WindowsForegroundFocusThread {
-  let worker: NodeWorkerThreads.Worker;
-  try {
-    worker = new NodeWorkerThreads.Worker(workerPath);
-    worker.unref();
-  } catch {
-    return unavailableThread();
-  }
-
+  let worker: NodeWorkerThreads.Worker | undefined;
   let ready = false;
   let closed = false;
   let nextRequestId = 1;
-  const queued = new Map<number, FocusRequest>();
   const pending = new Map<
     number,
     {
+      readonly request: FocusRequest;
       readonly resolve: (focused: boolean) => void;
       readonly timeout: ReturnType<typeof setTimeout>;
     }
   >();
 
   const finish = (requestId: number, focused: boolean) => {
-    queued.delete(requestId);
     const request = pending.get(requestId);
     if (!request) return;
     pending.delete(requestId);
     clearTimeout(request.timeout);
     request.resolve(focused);
   };
-  const send = (request: FocusRequest) => {
-    if (!ready || closed) return;
-    queued.delete(request.requestId);
+  const send = (request: FocusRequest, targetWorker: NodeWorkerThreads.Worker) => {
+    if (!ready || closed || worker !== targetWorker) return;
     try {
       // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
-      worker.postMessage(request);
+      targetWorker.postMessage(request);
     } catch {
       finish(request.requestId, false);
     }
   };
-  const stop = () => {
-    if (closed) return;
-    closed = true;
-    for (const requestId of pending.keys()) finish(requestId, false);
-    void worker.terminate();
+  const start = (): boolean => {
+    if (closed) return false;
+    let nextWorker: NodeWorkerThreads.Worker;
+    try {
+      nextWorker = new NodeWorkerThreads.Worker(workerPath);
+      nextWorker.unref();
+    } catch {
+      return false;
+    }
+
+    worker = nextWorker;
+    ready = false;
+    const reset = () => {
+      if (worker !== nextWorker) return;
+      worker = undefined;
+      ready = false;
+      for (const requestId of pending.keys()) finish(requestId, false);
+    };
+    nextWorker.on("message", (rawMessage) => {
+      if (worker !== nextWorker) return;
+      if (rawMessage === "ready") {
+        ready = true;
+        for (const request of pending.values()) send(request.request, nextWorker);
+        return;
+      }
+      const message = rawMessage as FocusResult;
+      if (message.type === "result") finish(message.requestId, message.focused);
+    });
+    nextWorker.once("error", reset);
+    nextWorker.once("exit", reset);
+    return true;
   };
 
-  worker.on("message", (rawMessage) => {
-    if (rawMessage === "ready") {
-      ready = true;
-      for (const request of queued.values()) send(request);
-      return;
-    }
-    const message = rawMessage as FocusResult;
-    if (message.type === "result") finish(message.requestId, message.focused);
-  });
-  worker.once("error", stop);
-  worker.once("exit", stop);
+  if (!start()) return unavailableThread();
+
+  const restart = (timedOutWorker: NodeWorkerThreads.Worker | undefined) => {
+    if (!timedOutWorker || worker !== timedOutWorker) return;
+    worker = undefined;
+    ready = false;
+    for (const requestId of pending.keys()) finish(requestId, false);
+    void timedOutWorker.terminate();
+    start();
+  };
+  const request = (type: FocusRequest["type"], target: WindowsForegroundFocusTarget) =>
+    new Promise<boolean>((resolve) => {
+      if (closed || (!worker && !start())) {
+        resolve(false);
+        return;
+      }
+      const requestId = nextRequestId++;
+      const focusRequest = { type, requestId, target } satisfies FocusRequest;
+      const requestWorker = worker!;
+      const timeout = setTimeout(() => {
+        finish(requestId, false);
+        restart(requestWorker);
+      }, FOCUS_TIMEOUT_MS);
+      timeout.unref();
+      pending.set(requestId, { request: focusRequest, resolve, timeout });
+      send(focusRequest, requestWorker);
+    });
 
   return {
-    focus: (target) =>
-      new Promise<boolean>((resolve) => {
-        if (closed) {
-          resolve(false);
-          return;
-        }
-        const requestId = nextRequestId++;
-        const request = { type: "focus", requestId, target } satisfies FocusRequest;
-        const timeout = setTimeout(() => finish(requestId, false), FOCUS_TIMEOUT_MS);
-        timeout.unref();
-        queued.set(requestId, request);
-        pending.set(requestId, { resolve, timeout });
-        send(request);
-      }),
-    close: stop,
+    prepare: (target) => request("prepare", target),
+    focus: (target) => request("focus", target),
+    close: () => {
+      if (closed) return;
+      closed = true;
+      const activeWorker = worker;
+      worker = undefined;
+      ready = false;
+      for (const requestId of pending.keys()) finish(requestId, false);
+      if (activeWorker) void activeWorker.terminate();
+    },
   };
 }

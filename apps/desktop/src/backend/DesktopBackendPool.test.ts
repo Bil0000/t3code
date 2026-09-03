@@ -96,6 +96,7 @@ function makePoolLayer(
           handleBackendReady: () => Effect.void,
           handleBackendNotReady: Effect.void,
           flushMainWindowBounds: Effect.void,
+          prepareCaptureReveal: Effect.void,
           dispatchMenuAction: () => Effect.die("unexpected menu action"),
           dispatchWindowCaptureReady: () => Effect.void,
           zoomMain: () => Effect.die("unexpected zoom"),

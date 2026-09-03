@@ -18,6 +18,7 @@ const {
   nativeAppListMock,
   shellHostedForegroundMock,
   windowsForegroundFocusMock,
+  windowsForegroundPrepareMock,
 } = vi.hoisted(() => ({
   activeWindowMock: vi.fn(),
   activateWindowsForegroundMock: vi.fn(),
@@ -29,6 +30,7 @@ const {
   nativeAppListMock: vi.fn(),
   shellHostedForegroundMock: vi.fn(),
   windowsForegroundFocusMock: vi.fn(),
+  windowsForegroundPrepareMock: vi.fn(),
 }));
 
 vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
@@ -40,6 +42,7 @@ vi.mock("./WindowsForeground.ts", () => ({
 
 vi.mock("./WindowsForegroundFocusThread.ts", () => ({
   startWindowsForegroundFocusThread: () => ({
+    prepare: windowsForegroundPrepareMock,
     focus: windowsForegroundFocusMock,
     close: () => undefined,
   }),
@@ -106,6 +109,7 @@ describe("ElectronWindow", () => {
     nativeAppListMock.mockReset().mockResolvedValue([]);
     shellHostedForegroundMock.mockReset().mockResolvedValue(false);
     windowsForegroundFocusMock.mockReset().mockResolvedValue(false);
+    windowsForegroundPrepareMock.mockReset().mockResolvedValue(false);
   });
 
   it.effect("preserves schema-safe creation context and the Electron cause", () =>
@@ -400,6 +404,7 @@ describe("ElectronWindow", () => {
       assert.deepEqual(windowsForegroundFocusMock.mock.calls, [
         [
           {
+            windowId: 41,
             processId: process.pid,
             title: "T3 Code (Dev)",
             bounds: { x: 100, y: 50, width: 1_200, height: 800 },
@@ -407,6 +412,33 @@ describe("ElectronWindow", () => {
           },
         ],
       ]);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect("prepares the exact T3 window before a capture overlay", () =>
+    Effect.gen(function* () {
+      windowsForegroundPrepareMock.mockResolvedValue(true);
+      const window = makeWindowsRevealWindow();
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      const prepared = yield* electronWindow.prepareReveal(
+        window as unknown as Electron.BrowserWindow,
+      );
+
+      assert.isTrue(prepared);
+      assert.deepEqual(windowsForegroundPrepareMock.mock.calls, [
+        [
+          {
+            windowId: 41,
+            processId: process.pid,
+            title: "T3 Code (Dev)",
+            bounds: { x: 100, y: 50, width: 1_200, height: 800 },
+            contentBounds: { x: 108, y: 50, width: 1_184, height: 792 },
+          },
+        ],
+      ]);
+      assert.lengthOf(windowsForegroundFocusMock.mock.calls, 0);
+      assert.lengthOf(activateWindowsForegroundMock.mock.calls, 0);
     }).pipe(Effect.provide(testLayer("win32"))),
   );
 

@@ -4,7 +4,7 @@ import type { WindowsForegroundFocusTarget } from "./WindowsForegroundFocusThrea
 import type { Element } from "@crowecawcaw/xa11y";
 
 type FocusRequest = {
-  readonly type: "focus";
+  readonly type: "prepare" | "focus";
   readonly requestId: number;
   readonly target: WindowsForegroundFocusTarget;
 };
@@ -25,34 +25,54 @@ function matchesTarget(
   );
 }
 
-async function focusTarget(
+async function findTarget(
   App: (typeof import("@crowecawcaw/xa11y"))["App"],
   target: WindowsForegroundFocusTarget,
-): Promise<boolean> {
-  const key = JSON.stringify(target);
-  if (cachedElement?.key === key) {
-    try {
-      await cachedElement.element.focus();
-      return true;
-    } catch {
-      cachedElement = undefined;
-    }
-  }
+): Promise<Element | undefined> {
   const app = await App.byPid(target.processId, { timeout: 0 });
   const children = await app.children();
-  const element =
+  return (
     children.find((candidate) => matchesTarget(candidate, target)) ??
     (await App.list())
       .filter((candidate) => candidate.pid === target.processId)
       .map((candidate) => candidate.asElement())
-      .find((candidate) => matchesTarget(candidate, target));
-  if (!element) return false;
-  cachedElement = { key, element };
-  await element.focus();
+      .find((candidate) => matchesTarget(candidate, target))
+  );
+}
+
+const cachedElements = new Map<number, Element>();
+
+async function prepareTarget(
+  App: (typeof import("@crowecawcaw/xa11y"))["App"],
+  target: WindowsForegroundFocusTarget,
+): Promise<boolean> {
+  const element = await findTarget(App, target);
+  if (!element) {
+    cachedElements.delete(target.windowId);
+    return false;
+  }
+  cachedElements.set(target.windowId, element);
   return true;
 }
 
-let cachedElement: { readonly key: string; readonly element: Element } | undefined;
+async function focusTarget(
+  App: (typeof import("@crowecawcaw/xa11y"))["App"],
+  target: WindowsForegroundFocusTarget,
+): Promise<boolean> {
+  let element = cachedElements.get(target.windowId);
+  if (!element) {
+    element = await findTarget(App, target);
+    if (!element) return false;
+    cachedElements.set(target.windowId, element);
+  }
+  try {
+    await element.focus();
+    return true;
+  } catch {
+    cachedElements.delete(target.windowId);
+    return false;
+  }
+}
 
 async function start() {
   const { App } = await import("@crowecawcaw/xa11y");
@@ -60,9 +80,13 @@ async function start() {
   if (!parentPort) return;
   let work = Promise.resolve();
   parentPort.on("message", (message: FocusRequest) => {
-    if (message.type !== "focus") return;
+    if (message.type !== "prepare" && message.type !== "focus") return;
     work = work.then(async () => {
-      const focused = await focusTarget(App, message.target).catch(() => false);
+      const focused = await (
+        message.type === "prepare"
+          ? prepareTarget(App, message.target)
+          : focusTarget(App, message.target)
+      ).catch(() => false);
       // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Node workers do not accept a target origin.
       parentPort.postMessage({ type: "result", requestId: message.requestId, focused });
     });
