@@ -16,6 +16,8 @@ const {
   getFocusedWindowMock,
   nativeAppByPidMock,
   nativeAppListMock,
+  shellHostedForegroundMock,
+  windowsForegroundFocusMock,
 } = vi.hoisted(() => ({
   activeWindowMock: vi.fn(),
   activateWindowsForegroundMock: vi.fn(),
@@ -25,12 +27,22 @@ const {
   getFocusedWindowMock: vi.fn(),
   nativeAppByPidMock: vi.fn(),
   nativeAppListMock: vi.fn(),
+  shellHostedForegroundMock: vi.fn(),
+  windowsForegroundFocusMock: vi.fn(),
 }));
 
 vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
 
 vi.mock("./WindowsForeground.ts", () => ({
   activateWindowsForeground: activateWindowsForegroundMock,
+  isWindowsShellHostedForeground: shellHostedForegroundMock,
+}));
+
+vi.mock("./WindowsForegroundFocusThread.ts", () => ({
+  startWindowsForegroundFocusThread: () => ({
+    focus: windowsForegroundFocusMock,
+    close: () => undefined,
+  }),
 }));
 
 vi.mock("@crowecawcaw/xa11y", () => ({
@@ -76,6 +88,7 @@ function makeWindowsRevealWindow() {
     focus: vi.fn(),
     getTitle: vi.fn(() => "T3 Code (Dev)"),
     getBounds: vi.fn(() => ({ x: 100, y: 50, width: 1_200, height: 800 })),
+    getContentBounds: vi.fn(() => ({ x: 108, y: 50, width: 1_184, height: 792 })),
     getNativeWindowHandle: vi.fn(() => Buffer.from([41, 0, 0, 0])),
     restore: vi.fn(),
   };
@@ -91,6 +104,8 @@ describe("ElectronWindow", () => {
     getFocusedWindowMock.mockReset();
     nativeAppByPidMock.mockReset();
     nativeAppListMock.mockReset().mockResolvedValue([]);
+    shellHostedForegroundMock.mockReset().mockResolvedValue(false);
+    windowsForegroundFocusMock.mockReset().mockResolvedValue(false);
   });
 
   it.effect("preserves schema-safe creation context and the Electron cause", () =>
@@ -351,6 +366,50 @@ describe("ElectronWindow", () => {
     }).pipe(Effect.provide(testLayer("win32"))),
   );
 
+  it.effect("focuses the exact T3 window before activating from a shell-hosted app", () =>
+    Effect.gen(function* () {
+      const operations: Array<string> = [];
+      shellHostedForegroundMock.mockResolvedValue(true);
+      windowsForegroundFocusMock.mockImplementation(async () => {
+        operations.push("native-focus");
+        return true;
+      });
+      activateWindowsForegroundMock.mockImplementation(async () => {
+        operations.push("native-activation");
+      });
+      const window = {
+        ...makeWindowsRevealWindow(),
+        show: vi.fn(() => operations.push("show")),
+        moveTop: vi.fn(() => operations.push("move-top")),
+        focus: vi.fn(() => operations.push("focus")),
+      } as unknown as Electron.BrowserWindow;
+      appFocusMock.mockImplementation(() => operations.push("app-focus"));
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      yield* electronWindow.reveal(window);
+
+      assert.deepEqual(operations, [
+        "app-focus",
+        "show",
+        "move-top",
+        "focus",
+        "native-focus",
+        "native-activation",
+      ]);
+      assert.lengthOf(activateWindowsForegroundMock.mock.calls, 1);
+      assert.deepEqual(windowsForegroundFocusMock.mock.calls, [
+        [
+          {
+            processId: process.pid,
+            title: "T3 Code (Dev)",
+            bounds: { x: 100, y: 50, width: 1_200, height: 800 },
+            contentBounds: { x: 108, y: 50, width: 1_184, height: 792 },
+          },
+        ],
+      ]);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
   it.effect.each([4, 8])(
     "skips native focus only when the foreground matches the %i-byte HWND and process",
     (handleBytes) =>
@@ -529,7 +588,6 @@ describe("ElectronWindow", () => {
         yield* Fiber.join(revealFiber);
 
         assert.lengthOf(asElement.mock.calls, 0);
-        assert.lengthOf(window.getTitle.mock.calls, 0);
       }).pipe(Effect.provide(testLayer("win32"))),
   );
 

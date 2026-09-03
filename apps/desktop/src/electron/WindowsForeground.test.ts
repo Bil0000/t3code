@@ -3,6 +3,7 @@ import { vi } from "vite-plus/test";
 
 import {
   activateWindowsForegroundWithApi,
+  isWindowsShellHostedForegroundWithApi,
   type WindowsForegroundApi,
 } from "./WindowsForeground.ts";
 
@@ -23,6 +24,7 @@ function makeApi(input: {
   return {
     getCurrentThreadId: vi.fn(() => input.currentThreadId ?? 10),
     getForegroundWindow: vi.fn(() => input.foregroundWindow ?? 99n),
+    getWindowClassName: vi.fn(() => "Chrome_WidgetWin_1"),
     getWindowThreadId: vi.fn(() => input.foregroundThreadId ?? 20),
     attachThreadInput: vi.fn((_source, _target, attach) =>
       attach ? (input.attached ?? true) : true,
@@ -89,5 +91,22 @@ describe("Windows foreground activation", () => {
 
     assert.throws(() => activateWindowsForegroundWithApi(Buffer.alloc(6), api));
     assert.lengthOf(api.getForegroundWindow.mock.calls, 0);
+  });
+
+  it("recognizes a shell-hosted foreground window", () => {
+    const api = makeApi({});
+    api.getWindowClassName.mockReturnValue("ApplicationFrameWindow");
+
+    assert.isTrue(isWindowsShellHostedForegroundWithApi(api));
+    assert.deepEqual(api.getWindowClassName.mock.calls, [[99n]]);
+  });
+
+  it("does not classify ordinary or missing foreground windows as shell-hosted", () => {
+    const ordinary = makeApi({});
+    const missing = makeApi({ foregroundWindow: 0n });
+
+    assert.isFalse(isWindowsShellHostedForegroundWithApi(ordinary));
+    assert.isFalse(isWindowsShellHostedForegroundWithApi(missing));
+    assert.lengthOf(missing.getWindowClassName.mock.calls, 0);
   });
 });

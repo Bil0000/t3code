@@ -1,3 +1,7 @@
+// @effect-diagnostics nodeBuiltinImport:off -- This desktop-only service resolves its bundled helper beside the Electron entrypoint.
+
+import * as NodePath from "node:path";
+
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import type * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -11,7 +15,8 @@ import * as Schema from "effect/Schema";
 import * as Electron from "electron";
 import { activeWindow } from "get-windows";
 
-import { activateWindowsForeground } from "./WindowsForeground.ts";
+import { activateWindowsForeground, isWindowsShellHostedForeground } from "./WindowsForeground.ts";
+import { startWindowsForegroundFocusThread } from "./WindowsForegroundFocusThread.ts";
 
 async function isWindowsBrowserWindowForeground(window: Electron.BrowserWindow): Promise<boolean> {
   const foreground = await activeWindow().catch(() => undefined);
@@ -140,6 +145,12 @@ export class ElectronWindow extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
+  const windowsForegroundFocus =
+    platform === "win32"
+      ? startWindowsForegroundFocusThread(
+          NodePath.join(__dirname, "electron", "WindowsForegroundFocusWorker.cjs"),
+        )
+      : undefined;
   const mainWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
 
   const listWindows = Effect.try({
@@ -257,6 +268,9 @@ export const make = Effect.gen(function* () {
             return;
           }
 
+          const shellHostedForeground =
+            platform === "win32" && (await isWindowsShellHostedForeground().catch(() => false));
+
           if (window.isMinimized()) {
             window.restore();
           }
@@ -280,10 +294,34 @@ export const make = Effect.gen(function* () {
           window.focus();
 
           if (platform === "win32") {
+            if (shellHostedForeground) {
+              await windowsForegroundFocus
+                ?.focus({
+                  processId: process.pid,
+                  title: window.getTitle(),
+                  bounds: window.getBounds(),
+                  contentBounds: window.getContentBounds(),
+                })
+                .catch(() => false);
+            }
             try {
               await activateWindowsForeground(window.getNativeWindowHandle());
             } catch {
-              await focusWindowsBrowserWindow(window).catch(() => undefined);
+              const needsFocus = !(await isWindowsBrowserWindowForeground(window));
+              const focused =
+                needsFocus && !window.isDestroyed()
+                  ? await windowsForegroundFocus
+                      ?.focus({
+                        processId: process.pid,
+                        title: window.getTitle(),
+                        bounds: window.getBounds(),
+                        contentBounds: window.getContentBounds(),
+                      })
+                      .catch(() => false)
+                  : false;
+              if (needsFocus && !focused) {
+                await focusWindowsBrowserWindow(window).catch(() => undefined);
+              }
               if (!window.isDestroyed()) {
                 await activateWindowsForeground(window.getNativeWindowHandle());
               }

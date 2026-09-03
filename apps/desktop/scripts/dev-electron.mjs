@@ -23,12 +23,17 @@ if (!Number.isInteger(port) || port <= 0) {
 
 const requiredFiles = [
   "dist-electron/main.cjs",
+  "dist-electron/electron/WindowsForegroundFocusWorker.cjs",
   "dist-electron/preload.cjs",
   "dist-electron/windowCapture/GlobalShiftShortcutWorker.cjs",
   "../server/dist/bin.mjs",
 ];
 const watchedDirectories = [
   { directory: "dist-electron", files: new Set(["main.cjs", "preload.cjs"]) },
+  {
+    directory: "dist-electron/electron",
+    files: new Set(["WindowsForegroundFocusWorker.cjs"]),
+  },
   {
     directory: "dist-electron/windowCapture",
     files: new Set(["GlobalShiftShortcutWorker.cjs"]),
