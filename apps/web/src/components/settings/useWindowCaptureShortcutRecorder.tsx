@@ -6,7 +6,10 @@ import {
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
-import { formatWindowCaptureShortcutLabel } from "../../lib/windowCaptureShortcut";
+import {
+  formatWindowCaptureShortcutLabel,
+  parseDesktopWindowCaptureShortcut,
+} from "../../lib/windowCaptureShortcut";
 import { WindowCaptureShortcutKeys } from "../desktop/WindowCaptureShortcutKeys";
 import { Button } from "../ui/button";
 import { keybindingFromKeyboardEvent } from "./KeybindingsSettings.logic";
@@ -46,6 +49,9 @@ export function useWindowCaptureShortcutRecorder({
   onError: (message: string) => void;
 }) {
   const bridge = getDesktopWindowCaptureBridge();
+  const displayShortcut = shortcutLabel
+    ? parseDesktopWindowCaptureShortcut(shortcutLabel)
+    : shortcut;
   const [recording, setRecording] = useState(false);
   const [requests] = useState(createRecordingRequestTracker);
   const heldModifierCodes = useRef(new Set<string>());
@@ -118,7 +124,11 @@ export function useWindowCaptureShortcutRecorder({
         type="button"
         variant={recording ? "secondary" : "outline"}
         disabled={disabled}
-        aria-label={`Record window capture shortcut, currently ${shortcutLabel ?? formatWindowCaptureShortcutLabel(shortcut)}`}
+        aria-label={
+          displayShortcut
+            ? `Record window capture shortcut, currently ${formatWindowCaptureShortcutLabel(displayShortcut)}`
+            : "Change window capture shortcut"
+        }
         aria-pressed={recording}
         data-keybinding-capture=""
         onClick={() => void startRecording()}
@@ -128,12 +138,12 @@ export function useWindowCaptureShortcutRecorder({
       >
         {recording ? (
           "Press shortcut…"
-        ) : !allowModifierPairs && isModifierPairShortcut(shortcut) ? (
+        ) : !displayShortcut ? (
+          "Change shortcut"
+        ) : !allowModifierPairs && isModifierPairShortcut(displayShortcut) ? (
           "Choose shortcut"
-        ) : shortcutLabel ? (
-          shortcutLabel
         ) : (
-          <WindowCaptureShortcutKeys shortcut={shortcut} />
+          <WindowCaptureShortcutKeys shortcut={displayShortcut} />
         )}
       </Button>
     ),

@@ -289,7 +289,22 @@ it("reports pending, denied, and assigned shortcuts without inferring consent fr
   expect(windowCaptureShortcutStatus(state)).toContain("Approve the shortcut permission prompt");
   const denied = { ...state, shortcutPending: false, shortcutMessage: "Permission wasn't granted" };
   expect(windowCaptureShortcutStatus(denied)).toBe("Permission wasn't granted");
-  const approved = { ...denied, shortcutRegistered: true, shortcutLabel: "Ctrl+Shift+8" };
+  const approved = {
+    ...denied,
+    shortcutRegistered: true,
+    shortcutLabel: "Press <Shift><Control>2",
+    shortcutMessage: "Desktop shortcut: Press <Shift><Control>2",
+  };
   expect(windowCaptureStatus(approved, true)).toBe("Ready to capture");
-  expect(windowCaptureShortcutStatus(approved)).toBe("Desktop shortcut: Ctrl+Shift+8");
+  expect(windowCaptureShortcutStatus(approved)).toBeNull();
+  expect(windowCaptureShortcutStatus({ ...approved, shortcutPending: true })).toContain(
+    "Approve the shortcut permission prompt",
+  );
+  expect(
+    windowCaptureShortcutStatus({
+      ...approved,
+      shortcutRegistered: false,
+      shortcutMessage: "Permission wasn't granted",
+    }),
+  ).toBe("Permission wasn't granted");
 });

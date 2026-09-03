@@ -233,7 +233,9 @@ export function WindowCaptureSettings() {
           ? shortcutCheck.availability.available
             ? "Ready to save."
             : shortcutCheck.availability.message
-          : state?.mode === "portal" && isModifierPairShortcut(displayShortcut)
+          : state?.mode === "portal" &&
+              !state.shortcutLabel &&
+              isModifierPairShortcut(displayShortcut)
             ? "Try a shortcut such as Ctrl+Shift+2."
             : windowCaptureShortcutStatus(state);
 

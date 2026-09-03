@@ -26,10 +26,11 @@ vi.mock("../../lib/desktopWindowCapture", () => ({
 
 const recorded = vi.fn();
 const error = vi.fn();
-function render(allowModifierPairs = false) {
+function render(allowModifierPairs = false, shortcutLabel?: string) {
   hooks.beginRender();
   return useWindowCaptureShortcutRecorder({
     shortcut: DEFAULT_CLIENT_SETTINGS.windowCaptureShortcut,
+    shortcutLabel,
     allowModifierPairs,
     onRecord: recorded,
     onError: error,
@@ -79,6 +80,21 @@ it("suppresses capture while recording and uses the physical key for shifted dig
   });
   expect(suppress).toHaveBeenLastCalledWith(false);
   expect(render().recording).toBe(false);
+});
+it("lets users replace an unrecognized desktop label without displaying guessed keys", async () => {
+  const label = "Use the shortcut assigned in desktop settings";
+  let recorder = render(false, label);
+  expect(recorder.input.props.children).toBe("Change shortcut");
+  expect(recorder.input.props["aria-label"]).toBe("Change window capture shortcut");
+  recorder.input.props.onClick();
+  await suppress.mock.results.at(-1)!.value;
+  recorder = render(false, label);
+  expect(recorder.input.props.children).toBe("Press shortcut…");
+  recorder.input.props.onKeyDown(event("@", "Digit2", { ctrlKey: true, shiftKey: true }));
+  expect(recorded).toHaveBeenCalledWith(
+    expect.objectContaining({ key: "2", modKey: true, shiftKey: true }),
+  );
+  expect(suppress).toHaveBeenLastCalledWith(false);
 });
 it("records macOS Command without treating it as Control", async () => {
   vi.stubGlobal("navigator", { platform: "MacIntel" });

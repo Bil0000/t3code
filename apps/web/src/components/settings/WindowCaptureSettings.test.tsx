@@ -47,6 +47,7 @@ vi.mock("../../hooks/useSettings", () => ({
 import { WindowCaptureSettings } from "./WindowCaptureSettings";
 import { WindowCaptureSetupDialog } from "./WindowCaptureSetupDialog";
 import { CaptureShortcutConfig } from "./CaptureShortcutConfig";
+import { WindowCaptureShortcutKeys } from "../desktop/WindowCaptureShortcutKeys";
 
 let state: DesktopWindowCaptureState;
 function render() {
@@ -137,6 +138,8 @@ it.each(["direct", "gnome-extension", "kde"] as const)(
       mode: backend === "direct" ? "direct" : "portal",
       linuxBackend: backend === "direct" ? undefined : backend,
       shortcutRegistered: true,
+      shortcutLabel: backend === "direct" ? undefined : "Press <Shift><Control>2",
+      shortcutMessage: backend === "direct" ? null : "Desktop shortcut: Press <Shift><Control>2",
     };
     const tree = await mount();
     const recorder = (node: ReturnType<typeof render>) => {
@@ -144,6 +147,17 @@ it.each(["direct", "gnome-extension", "kde"] as const)(
       if (!control) throw new Error("Missing inline shortcut recorder");
       return control.props;
     };
+    if (backend !== "direct") {
+      expect(recorder(tree)["aria-label"]).toBe(
+        "Record window capture shortcut, currently Ctrl+Shift+2",
+      );
+      const keycaps = visitElements(tree, (element) => element.type === WindowCaptureShortcutKeys);
+      expect(keycaps?.props.shortcut).toMatchObject({ key: "2", ctrlKey: true, shiftKey: true });
+      expect(
+        visitElements(tree, (element) => element.props.id === "window-capture-shortcut")?.props
+          .status,
+      ).toBeNull();
+    }
     (recorder(tree).onClick as () => void)();
     await finish(bridge.setWindowCaptureShortcutSuppressed.mock.results.at(-1)!.value);
     (recorder(render()).onKeyDown as (event: object) => void)({
@@ -158,6 +172,9 @@ it.each(["direct", "gnome-extension", "kde"] as const)(
       stopPropagation: vi.fn(),
     });
     await finish(bridge.checkWindowCaptureShortcut.mock.results[0]!.value);
+    expect(recorder(render())["aria-label"]).toBe(
+      "Record window capture shortcut, currently Ctrl+Alt+Y",
+    );
     button(render(), "Save").onClick();
     await finish(settingsStore.update.mock.results[0]!.value);
     expect(settingsStore.update).toHaveBeenCalledWith({
@@ -167,3 +184,36 @@ it.each(["direct", "gnome-extension", "kde"] as const)(
     expect(bridge.previewWindowCaptureConfig).not.toHaveBeenCalled();
   },
 );
+
+it("keeps the approved desktop shortcut when recording is cancelled in setup", async () => {
+  state = {
+    ...state,
+    linuxBackend: "gnome-extension",
+    gnomeExtension: { status: "enabled", message: "Ready" },
+    shortcutRegistered: true,
+    shortcutLabel: "Press <Control><Alt>8",
+  };
+  const tree = await mount();
+  button(tree, "Manage capture").onClick();
+  await finish(bridge.getWindowCaptureState.mock.results[1]!.value);
+  const shortcut = () => {
+    const input = visitElements(
+      wizard(render()),
+      (element) => "data-keybinding-capture" in element.props,
+    );
+    if (!input) throw new Error("Missing setup shortcut recorder");
+    return input.props;
+  };
+  expect(shortcut()["aria-label"]).toBe("Record window capture shortcut, currently Ctrl+Alt+8");
+  (shortcut().onClick as () => void)();
+  await finish(bridge.setWindowCaptureShortcutSuppressed.mock.results.at(-1)!.value);
+  expect(shortcut().children).toBe("Press shortcut…");
+  (shortcut().onKeyDown as (event: object) => void)({
+    key: "Escape",
+    preventDefault: vi.fn(),
+    stopPropagation: vi.fn(),
+  });
+  expect(shortcut()["aria-label"]).toBe("Record window capture shortcut, currently Ctrl+Alt+8");
+  expect(settingsStore.update).not.toHaveBeenCalled();
+  expect(bridge.checkWindowCaptureShortcut).not.toHaveBeenCalled();
+});

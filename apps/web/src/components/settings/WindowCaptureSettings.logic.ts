@@ -56,9 +56,8 @@ export function windowCaptureShortcutStatus(
   if (!state) return null;
   if (state.linuxBackend === "hyprland") return state.shortcutMessage;
   if (state.shortcutPending) return "Approve the shortcut permission prompt to continue.";
-  if (state.shortcutLabel) return `Desktop shortcut: ${state.shortcutLabel}`;
-  if (state.mode === "portal" && state.shortcutMessage) return state.shortcutMessage;
-  return state.shortcutRegistered ? "Shortcut saved." : state.shortcutMessage;
+  if (state.shortcutRegistered) return state.mode === "portal" ? null : "Shortcut saved.";
+  return state.shortcutMessage;
 }
 
 export function windowCaptureSetupButtonLabel(state: DesktopWindowCaptureState | null): string {
