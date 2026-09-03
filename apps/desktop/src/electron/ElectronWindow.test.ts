@@ -9,6 +9,7 @@ import { beforeEach, vi } from "vite-plus/test";
 
 const {
   activeWindowMock,
+  activateWindowsForegroundMock,
   appFocusMock,
   browserWindowMock,
   getAllWindowsMock,
@@ -17,6 +18,7 @@ const {
   nativeAppListMock,
 } = vi.hoisted(() => ({
   activeWindowMock: vi.fn(),
+  activateWindowsForegroundMock: vi.fn(),
   appFocusMock: vi.fn(),
   browserWindowMock: vi.fn(function BrowserWindowMock() {}),
   getAllWindowsMock: vi.fn(),
@@ -26,6 +28,10 @@ const {
 }));
 
 vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
+
+vi.mock("./WindowsForeground.ts", () => ({
+  activateWindowsForeground: activateWindowsForegroundMock,
+}));
 
 vi.mock("@crowecawcaw/xa11y", () => ({
   App: {
@@ -78,6 +84,7 @@ function makeWindowsRevealWindow() {
 describe("ElectronWindow", () => {
   beforeEach(() => {
     activeWindowMock.mockReset().mockResolvedValue(undefined);
+    activateWindowsForegroundMock.mockReset().mockResolvedValue(undefined);
     appFocusMock.mockReset();
     browserWindowMock.mockReset();
     getAllWindowsMock.mockReset();
@@ -219,7 +226,30 @@ describe("ElectronWindow", () => {
     }).pipe(Effect.provide(TestLayer)),
   );
 
-  it.effect("awaits native foreground focus even when Electron reports the window focused", () =>
+  it.effect("uses native Windows activation without starting the accessibility fallback", () =>
+    Effect.gen(function* () {
+      const operations: Array<string> = [];
+      appFocusMock.mockImplementation(() => operations.push("app-focus"));
+      activateWindowsForegroundMock.mockImplementation(async () => {
+        operations.push("native-activation");
+      });
+      const window = {
+        ...makeWindowsRevealWindow(),
+        show: vi.fn(() => operations.push("show")),
+        moveTop: vi.fn(() => operations.push("move-top")),
+        focus: vi.fn(() => operations.push("focus")),
+      } as unknown as Electron.BrowserWindow;
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      yield* electronWindow.reveal(window);
+
+      assert.deepEqual(operations, ["app-focus", "show", "move-top", "focus", "native-activation"]);
+      assert.lengthOf(activeWindowMock.mock.calls, 0);
+      assert.lengthOf(nativeAppListMock.mock.calls, 0);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect("falls back to accessibility before retrying native Windows activation", () =>
     Effect.gen(function* () {
       const operations: Array<string> = [];
       const nativeFocusStarted = Promise.withResolvers<void>();
@@ -233,6 +263,11 @@ describe("ElectronWindow", () => {
         }>
       >();
       appFocusMock.mockImplementation(() => operations.push("app-focus"));
+      activateWindowsForegroundMock
+        .mockRejectedValueOnce(new Error("Windows initially refused foreground activation"))
+        .mockImplementationOnce(async () => {
+          operations.push("native-activation");
+        });
       nativeAppListMock.mockImplementation(() => {
         listingStarted.resolve();
         return listedApps.promise;
@@ -307,8 +342,10 @@ describe("ElectronWindow", () => {
         "move-top",
         "focus",
         "native-focus",
+        "native-activation",
         "revealed",
       ]);
+      assert.lengthOf(activateWindowsForegroundMock.mock.calls, 2);
       assert.lengthOf(nativeAppByPidMock.mock.calls, 0);
       assert.lengthOf(readNativeBounds.mock.calls, 1);
     }).pipe(Effect.provide(testLayer("win32"))),
@@ -319,6 +356,9 @@ describe("ElectronWindow", () => {
     (handleBytes) =>
       Effect.gen(function* () {
         const window = makeWindowsRevealWindow();
+        activateWindowsForegroundMock.mockRejectedValueOnce(
+          new Error("Windows initially refused foreground activation"),
+        );
         const hwnd = handleBytes === 4 ? 0xf123_4567 : 0x1_f123_4567;
         const handle = Buffer.alloc(handleBytes);
         if (handleBytes === 4) handle.writeUInt32LE(hwnd);
@@ -341,6 +381,9 @@ describe("ElectronWindow", () => {
     Effect.gen(function* () {
       const window = makeWindowsRevealWindow();
       const focus = vi.fn(async () => undefined);
+      activateWindowsForegroundMock.mockRejectedValueOnce(
+        new Error("Windows initially refused foreground activation"),
+      );
       activeWindowMock.mockResolvedValue({
         id: foreground.id,
         owner: { processId: foreground.processId },
@@ -363,6 +406,9 @@ describe("ElectronWindow", () => {
     Effect.gen(function* () {
       const window = makeWindowsRevealWindow();
       const focus = vi.fn(async () => undefined);
+      activateWindowsForegroundMock.mockRejectedValueOnce(
+        new Error("Windows initially refused foreground activation"),
+      );
       activeWindowMock.mockRejectedValue(new Error("Foreground query unavailable"));
       nativeAppListMock.mockResolvedValue([
         {
@@ -384,6 +430,9 @@ describe("ElectronWindow", () => {
       const focus = vi.fn(async () => {
         throw new Error("Focus rejected");
       });
+      activateWindowsForegroundMock.mockRejectedValueOnce(
+        new Error("Windows initially refused foreground activation"),
+      );
       nativeAppListMock.mockResolvedValue([
         {
           pid: process.pid,
@@ -398,9 +447,37 @@ describe("ElectronWindow", () => {
     }).pipe(Effect.provide(testLayer("win32"))),
   );
 
+  it.effect("fails reveal when Windows refuses foreground activation", () =>
+    Effect.gen(function* () {
+      const cause = new Error("Windows refused foreground activation");
+      const window = makeWindowsRevealWindow();
+      activateWindowsForegroundMock.mockRejectedValue(cause);
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      const exit = yield* Effect.exit(
+        electronWindow.reveal(window as unknown as Electron.BrowserWindow),
+      );
+
+      assert.equal(exit._tag, "Failure");
+      if (exit._tag === "Failure") {
+        const error = Cause.squash(exit.cause);
+        assert.instanceOf(error, ElectronWindow.ElectronWindowOperationError);
+        assert.equal(error.operation, "reveal-window");
+        assert.strictEqual(error.cause, cause);
+      }
+      assert.deepEqual(activateWindowsForegroundMock.mock.calls, [
+        [window.getNativeWindowHandle.mock.results[0]?.value],
+        [window.getNativeWindowHandle.mock.results[1]?.value],
+      ]);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
   it.effect("cancels native focus when destroyed during the foreground query", () =>
     Effect.gen(function* () {
       const window = makeWindowsRevealWindow();
+      activateWindowsForegroundMock.mockRejectedValueOnce(
+        new Error("Windows initially refused foreground activation"),
+      );
       const queryStarted = Promise.withResolvers<void>();
       const foreground = Promise.withResolvers<undefined>();
       activeWindowMock.mockImplementation(() => {
@@ -418,7 +495,7 @@ describe("ElectronWindow", () => {
       yield* Fiber.join(revealFiber);
 
       assert.lengthOf(nativeAppListMock.mock.calls, 0);
-      assert.lengthOf(window.getNativeWindowHandle.mock.calls, 0);
+      assert.lengthOf(window.getNativeWindowHandle.mock.calls, 1);
       assert.lengthOf(window.getTitle.mock.calls, 0);
     }).pipe(Effect.provide(testLayer("win32"))),
   );
@@ -436,6 +513,9 @@ describe("ElectronWindow", () => {
           return listedApps.promise;
         });
         const window = makeWindowsRevealWindow();
+        activateWindowsForegroundMock.mockRejectedValueOnce(
+          new Error("Windows initially refused foreground activation"),
+        );
         const electronWindow = yield* ElectronWindow.ElectronWindow;
 
         const revealFiber = yield* electronWindow

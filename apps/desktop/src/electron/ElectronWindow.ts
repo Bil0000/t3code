@@ -11,6 +11,8 @@ import * as Schema from "effect/Schema";
 import * as Electron from "electron";
 import { activeWindow } from "get-windows";
 
+import { activateWindowsForeground } from "./WindowsForeground.ts";
+
 async function isWindowsBrowserWindowForeground(window: Electron.BrowserWindow): Promise<boolean> {
   const foreground = await activeWindow().catch(() => undefined);
   if (window.isDestroyed() || foreground?.owner.processId !== process.pid) return false;
@@ -278,7 +280,14 @@ export const make = Effect.gen(function* () {
           window.focus();
 
           if (platform === "win32") {
-            await focusWindowsBrowserWindow(window).catch(() => undefined);
+            try {
+              await activateWindowsForeground(window.getNativeWindowHandle());
+            } catch {
+              await focusWindowsBrowserWindow(window).catch(() => undefined);
+              if (!window.isDestroyed()) {
+                await activateWindowsForeground(window.getNativeWindowHandle());
+              }
+            }
           }
         },
         catch: (cause) =>

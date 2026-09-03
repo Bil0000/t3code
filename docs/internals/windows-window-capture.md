@@ -43,13 +43,14 @@ the window active even when Windows denies its `SetForegroundWindow` request; se
 [`HWNDMessageHandler::Activate` and `IsActive`](https://github.com/chromium/chromium/blob/152.0.7977.65/ui/views/win/hwnd_message_handler.cc).
 Do not use `isFocused()` to skip the native activation fallback.
 
-After Electron's normal show/focus calls, compare `get-windows.activeWindow()` with the destination's
-native HWND and process ID. If it is still behind another window, find its xa11y UI Automation
-element by process, title, and logical bounds, and await `IUIAutomationElement::SetFocus` before
-dispatching the capture. xa11y already converts its UIA bounding rectangle to logical coordinates.
-Recheck foreground ownership after asynchronous enumeration and avoid selecting another window
-belonging to the same Electron process. Verify modifier-pair shortcuts as well as Electron global
-key chords: they arrive through different native input paths.
+UI Automation's `IUIAutomationElement::SetFocus` can focus an element without making its top-level
+window visible or foreground. It remains a compatibility attempt, not the handoff receipt. After
+Electron's normal show/focus calls, Windows reveal attaches T3's UI thread to the current foreground
+thread's input queue, calls `SetForegroundWindow` for T3's native HWND, and detaches the queues. The
+capture-started event is dispatched only when that call reports success, so a rejected activation
+cannot start an animation behind another app. This is the activation operation's native result, not
+a later foreground-window query. Verify modifier-pair shortcuts as well as Electron global key
+chords: they arrive through different native input paths.
 
 `WindowCaptureTransition.ts` presents the frozen screenshot in transparent, non-activating Electron
 windows. Each overlay keeps its native bounds fixed; screenshot movement, scaling, cropping, and

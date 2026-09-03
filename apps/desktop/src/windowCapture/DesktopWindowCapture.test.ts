@@ -31,8 +31,9 @@ beforeEach(() => {
 const {
   activeWindowMock,
   animationSettingsMock,
-  accessibilityProcessStartMock,
+  accessibilityProcessWarmMock,
   accessibilityProcessCloseMock,
+  accessibilityProcessCoolMock,
   accessibilityProcessReadMock,
   accessibilityByPidMock,
   accessibilityForegroundMock,
@@ -70,8 +71,9 @@ const {
     prefersReducedMotion: true,
     shouldRenderRichAnimation: false,
   })),
-  accessibilityProcessStartMock: vi.fn(),
+  accessibilityProcessWarmMock: vi.fn(),
   accessibilityProcessCloseMock: vi.fn(),
+  accessibilityProcessCoolMock: vi.fn(),
   accessibilityProcessReadMock: vi.fn<
     (request: import("./WindowCaptureAccessibility.ts").WindowCaptureAccessibilityRequest) => {
       started: Promise<void>;
@@ -168,13 +170,12 @@ vi.mock("@crowecawcaw/xa11y", () => {
   };
 });
 vi.mock("./WindowCaptureAccessibilityProcess.ts", () => ({
-  startWindowCaptureAccessibilityProcess: () => {
-    accessibilityProcessStartMock();
-    return {
-      read: accessibilityProcessReadMock,
-      close: accessibilityProcessCloseMock,
-    };
-  },
+  makeWindowCaptureAccessibilityProcessPool: () => ({
+    warm: accessibilityProcessWarmMock,
+    cool: accessibilityProcessCoolMock,
+    read: accessibilityProcessReadMock,
+    close: accessibilityProcessCloseMock,
+  }),
 }));
 vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
 vi.mock("./WindowsCaptureFeedback.ts", () => ({
@@ -1261,7 +1262,7 @@ it.effect("skips accessibility capture when the setting is disabled", () => {
   } as const;
   activeWindowMock.mockReset().mockResolvedValue(active);
   screenshotMock.mockReset().mockResolvedValue({ width: 800, height: 600, toPng: () => png });
-  accessibilityProcessStartMock.mockClear();
+  accessibilityProcessWarmMock.mockClear();
   accessibilityProcessReadMock.mockClear();
   accessibilityByPidMock.mockClear();
   const layer = testLayer("win32", {
@@ -1280,11 +1281,38 @@ it.effect("skips accessibility capture when the setting is disabled", () => {
       });
       yield* service.captureNow;
 
-      assert.lengthOf(accessibilityProcessStartMock.mock.calls, 0);
+      assert.lengthOf(accessibilityProcessWarmMock.mock.calls, 0);
       assert.lengthOf(accessibilityProcessReadMock.mock.calls, 0);
       assert.lengthOf(accessibilityByPidMock.mock.calls, 0);
     }),
   ).pipe(Effect.provide(layer));
+});
+
+it.effect("keeps an accessibility helper warm only while capture data is enabled", () => {
+  accessibilityProcessWarmMock.mockClear();
+  accessibilityProcessCoolMock.mockClear();
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure({
+        ...DEFAULT_CLIENT_SETTINGS,
+        windowCaptureEnabled: true,
+        windowCaptureIncludeAccessibility: true,
+      });
+
+      assert.lengthOf(accessibilityProcessWarmMock.mock.calls, 1);
+      assert.lengthOf(accessibilityProcessCoolMock.mock.calls, 0);
+
+      yield* service.configure({
+        ...DEFAULT_CLIENT_SETTINGS,
+        windowCaptureEnabled: false,
+        windowCaptureIncludeAccessibility: true,
+      });
+
+      assert.lengthOf(accessibilityProcessCoolMock.mock.calls, 1);
+    }),
+  ).pipe(Effect.provide(testLayer("win32")));
 });
 
 it.effect("rejects X11 capture without registering shortcuts or loading capture backends", () => {
