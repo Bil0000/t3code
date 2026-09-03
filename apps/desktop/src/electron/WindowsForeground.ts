@@ -1,6 +1,7 @@
 export interface WindowsForegroundApi {
   readonly getCurrentThreadId: () => number;
   readonly getForegroundWindow: () => bigint;
+  readonly getWindowClassName: (windowHandle: bigint) => string;
   readonly getWindowThreadId: (windowHandle: bigint) => number;
   readonly attachThreadInput: (
     sourceThreadId: number,
@@ -9,6 +10,8 @@ export interface WindowsForegroundApi {
   ) => boolean;
   readonly setForegroundWindow: (windowHandle: bigint) => boolean;
 }
+
+const WINDOWS_SHELL_HOSTED_WINDOW_CLASSES = new Set(["ApplicationFrameWindow"]);
 
 function nativeWindowHandle(buffer: Buffer): bigint {
   if (buffer.length === 8) return buffer.readBigUInt64LE();
@@ -39,6 +42,14 @@ export function activateWindowsForegroundWithApi(
   }
 }
 
+export function isWindowsShellHostedForegroundWithApi(api: WindowsForegroundApi): boolean {
+  const foregroundWindow = api.getForegroundWindow();
+  return (
+    foregroundWindow !== 0n &&
+    WINDOWS_SHELL_HOSTED_WINDOW_CLASSES.has(api.getWindowClassName(foregroundWindow))
+  );
+}
+
 let windowsForegroundApiPromise: Promise<WindowsForegroundApi> | undefined;
 
 function loadWindowsForegroundApi(): Promise<WindowsForegroundApi> {
@@ -65,6 +76,17 @@ function loadWindowsForegroundApi(): Promise<WindowsForegroundApi> {
           paramsType: [],
           paramsValue: [],
         }) as bigint,
+      getWindowClassName: (windowHandle) => {
+        const buffer = Buffer.alloc(512);
+        const length = load({
+          library: user32,
+          funcName: "GetClassNameW",
+          retType: DataType.I32,
+          paramsType: [DataType.BigInt, DataType.U8Array, DataType.I32],
+          paramsValue: [windowHandle, buffer, buffer.byteLength / 2],
+        });
+        return length > 0 ? buffer.subarray(0, length * 2).toString("utf16le") : "";
+      },
       getWindowThreadId: (windowHandle) =>
         load({
           library: user32,
@@ -98,4 +120,8 @@ export async function activateWindowsForeground(handleBuffer: Buffer): Promise<v
   const api = await loadWindowsForegroundApi();
   if (activateWindowsForegroundWithApi(handleBuffer, api)) return;
   throw new Error("Windows refused to activate the T3 Code window.");
+}
+
+export async function isWindowsShellHostedForeground(): Promise<boolean> {
+  return isWindowsShellHostedForegroundWithApi(await loadWindowsForegroundApi());
 }

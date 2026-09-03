@@ -26,6 +26,7 @@ beforeEach(() => {
   vi.stubEnv("XDG_CURRENT_DESKTOP", "test-desktop");
   transitionCapturePageMock.mockReset().mockResolvedValue(undefined);
   transitionSnapshotMock.mockReset().mockResolvedValue(undefined);
+  prepareCaptureRevealMock.mockReset();
 });
 
 const {
@@ -52,6 +53,7 @@ const {
   openExternalMock,
   registerShortcutMock,
   portalShortcutInstances,
+  prepareCaptureRevealMock,
   nextPortalState,
   screenToDipRectMock,
   screenshotMock,
@@ -129,6 +131,7 @@ const {
     configure: ReturnType<typeof vi.fn>;
     hasSession: boolean;
   }>,
+  prepareCaptureRevealMock: vi.fn(),
   screenToDipRectMock: vi.fn((_window: unknown, bounds: Electron.Rectangle) => bounds),
   screenshotMock: vi.fn(),
   shortcutForkArgs: [] as Array<ReadonlyArray<string>>,
@@ -478,6 +481,7 @@ const testLayer = (
       DesktopWindow.DesktopWindow,
       DesktopWindow.DesktopWindow.of({
         activate: Effect.void,
+        prepareCaptureReveal: Effect.sync(prepareCaptureRevealMock),
         dispatchMenuAction: () => Effect.void,
         dispatchWindowCaptureReady: () => Effect.void,
       } as unknown as DesktopWindow.DesktopWindow["Service"]),
@@ -526,7 +530,14 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
   const [first, second, extra] = captures;
   extra!.pixels.resolve();
   extra!.context.resolve({ accessibleText: extra!.title });
-  const state = { snapshots: 0, handoffs: 0, failFirstPersistence: false };
+  const state = {
+    snapshots: 0,
+    handoffs: 0,
+    preparations: 0,
+    preparedWithoutOverlay: true,
+    failNextReveal: false,
+    failFirstPersistence: false,
+  };
   const images = new Map<string, Uint8Array>();
   const metadata = new Map<string, string>();
   const readyIds: string[] = [];
@@ -636,8 +647,18 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
       DesktopWindow.DesktopWindow,
       DesktopWindow.DesktopWindow.of({
         activate: handoff,
-        dispatchMenuAction: (action: string) =>
-          action.startsWith("window-capture-started:") ? handoff : Effect.void,
+        prepareCaptureReveal: Effect.sync(() => {
+          state.preparations++;
+          state.preparedWithoutOverlay &&= flashWindows.every((window) => window.destroyed);
+        }),
+        dispatchMenuAction: (action: string, options?: { readonly reveal?: boolean }) => {
+          if (!action.startsWith("window-capture-started:")) return Effect.void;
+          if (state.failNextReveal && options?.reveal !== false) {
+            state.failNextReveal = false;
+            return Effect.die("simulated reveal failure");
+          }
+          return handoff;
+        },
         dispatchWindowCaptureReady: (id: string) =>
           Effect.sync(() => {
             readyIds.push(id);
@@ -861,6 +882,10 @@ it.effect.each(
     const snapshotStarted = Promise.withResolvers<void>();
     const snapshotReleased = Promise.withResolvers<void>();
     let visible = true;
+    let preparedWhileVisible: boolean | undefined;
+    prepareCaptureRevealMock.mockImplementation(() => {
+      preparedWhileVisible = visible;
+    });
     let blur: () => void = () => undefined;
     const mainWindow = {
       getBounds: () => bounds,
@@ -971,6 +996,8 @@ it.effect.each(
         assert.lengthOf(mainWindow.hide.mock.calls, entryPoint === "shortcut" ? 0 : 1);
         assert.lengthOf(mainWindow.show.mock.calls, entryPoint === "shortcut" ? 0 : 1);
         assert.lengthOf(mainWindow.restore.mock.calls, 0);
+        assert.equal(prepareCaptureRevealMock.mock.calls.length, platform === "win32" ? 1 : 0);
+        if (platform === "win32") assert.isTrue(preparedWhileVisible);
         if (platform === "linux") {
           assert.equal(saved.source.appIdentifier, expected.appIdentifier);
           assert.deepEqual(activate.mock.calls, [[t3.title]]);
@@ -1072,6 +1099,8 @@ it.effect.each([
         yield* Effect.promise(() => fixture.second.handoff.promise);
         assert.equal(fixture.state.snapshots, 2);
         assert.isTrue(fixture.second.oldOverlaysCleared);
+        assert.equal(fixture.state.preparations, platform === "win32" ? 2 : 0);
+        assert.isTrue(fixture.state.preparedWithoutOverlay);
         if (platform === "linux") assert.isTrue(fixture.second.oldNativeFeedbackClosed);
         const secondOverlays = flashWindows.filter((window) => !window.destroyed);
         if (platform !== "linux") assert.isNotEmpty(secondOverlays);
@@ -1108,6 +1137,26 @@ it.effect.each([
     ).pipe(Effect.provide(fixture.layer), Effect.ensuring(Effect.sync(fixture.reset)));
   },
 );
+
+it.effect("keeps the capture and animation handoff when reveal defects", () => {
+  const fixture = concurrentCaptureFixture("win32", true);
+  fixture.state.failNextReveal = true;
+  fixture.first.pixels.resolve();
+  fixture.first.context.resolve({ accessibleText: fixture.first.title });
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure(fixture.settings);
+      yield* Effect.promise(fixture.trigger);
+
+      assert.equal(fixture.state.handoffs, 1);
+      assert.lengthOf(fixture.readyIds, 1);
+      const capture = yield* service.read(fixture.readyIds[0]!);
+      assert.equal(capture.source.windowTitle, fixture.first.title);
+    }),
+  ).pipe(Effect.provide(fixture.layer), Effect.ensuring(Effect.sync(fixture.reset)));
+});
 
 it.effect.each(["succeeds", "fails"] as const)(
   "keeps the newer snapshot exclusive when older persistence %s",

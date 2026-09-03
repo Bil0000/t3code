@@ -44,6 +44,7 @@ export default defineConfig({
       define: publicConfigDefine,
       entry: [
         "src/main.ts",
+        "src/electron/WindowsForegroundFocusWorker.ts",
         "src/windowCapture/GlobalShiftShortcutWorker.ts",
         "src/windowCapture/WindowCaptureAccessibilityWorker.ts",
       ],
