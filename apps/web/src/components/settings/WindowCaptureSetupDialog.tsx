@@ -86,9 +86,7 @@ function MacPermissionRow({
 }) {
   return (
     <div className="flex items-center gap-3 rounded-lg border px-3 py-2">
-      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-        {icon}
-      </span>
+      {icon}
       <div className="min-w-0 flex-1">
         <p className="font-medium">{title}</p>
         <p className="text-xs text-muted-foreground">{description}</p>
@@ -284,12 +282,7 @@ export function WindowCaptureSetupDialog({
         </DialogHeader>
         <DialogPanel>
           <div className="space-y-4 text-sm">
-            <div
-              className={
-                macPermissions && step === "access" ? "flex flex-wrap gap-x-2" : "space-y-2"
-              }
-              aria-live="polite"
-            >
+            <div className="flex flex-wrap gap-x-2" aria-live="polite">
               <h3 className="flex items-center gap-2 font-medium">{title}</h3>
               <DialogDescription>{description}</DialogDescription>
             </div>
@@ -307,7 +300,11 @@ export function WindowCaptureSetupDialog({
                 {macPermissions ? (
                   <div className="space-y-2">
                     <MacPermissionRow
-                      icon={<MonitorIcon className="size-4" aria-hidden="true" />}
+                      icon={
+                        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-[#6b6b70] text-white">
+                          <MonitorIcon className="size-4" aria-hidden="true" strokeWidth={2.25} />
+                        </span>
+                      }
                       title="Screen Recording"
                       description="Capture the window you're using."
                       granted={macPermissions.screenRecording}
@@ -315,7 +312,15 @@ export function WindowCaptureSetupDialog({
                       onAllow={() => void onAction("allow-screen-recording")}
                     />
                     <MacPermissionRow
-                      icon={<AccessibilityIcon className="size-4" aria-hidden="true" />}
+                      icon={
+                        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-[#1a7cf5] text-white">
+                          <AccessibilityIcon
+                            className="size-5"
+                            aria-hidden="true"
+                            strokeWidth={2.25}
+                          />
+                        </span>
+                      }
                       title="Accessibility"
                       description={
                         includeAccessibility
