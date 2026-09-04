@@ -27,7 +27,7 @@ class WindowCaptureIpcUnauthorizedSenderError extends Schema.TaggedErrorClass<Wi
   {},
 ) {
   override get message(): string {
-    return "Window capture request was rejected.";
+    return "Snapshot request was rejected.";
   }
 }
 

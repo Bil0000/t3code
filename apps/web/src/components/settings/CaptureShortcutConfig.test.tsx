@@ -118,7 +118,7 @@ it.each(["niri", "hyprland"] as const)(
   async (desktop) => {
     let tree = render(desktop);
     expect(shortcutInput(tree)["aria-label"]).toBe(
-      "Record window capture shortcut, currently Ctrl+Shift+2",
+      "Record snapshot shortcut, currently Ctrl+Shift+2",
     );
     expect(bridge.previewWindowCaptureConfig).not.toHaveBeenCalled();
     expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
@@ -127,7 +127,7 @@ it.each(["niri", "hyprland"] as const)(
     await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
     tree = render(desktop);
     expect(shortcutInput(tree)["aria-label"]).toBe(
-      "Record window capture shortcut, currently Ctrl+Shift+2",
+      "Record snapshot shortcut, currently Ctrl+Shift+2",
     );
     expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
     const diff = visitElements(tree, (element) => "fileDiff" in element.props);
@@ -232,7 +232,7 @@ it("cancelling a reviewed diff does not write or finish setup", async () => {
   await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
   button(render(), "Cancel").onClick();
   expect(shortcutInput(render())["aria-label"]).toBe(
-    "Record window capture shortcut, currently Ctrl+Shift+2",
+    "Record snapshot shortcut, currently Ctrl+Shift+2",
   );
   expect(button(render(), "Review changes")).toBeDefined();
   expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();

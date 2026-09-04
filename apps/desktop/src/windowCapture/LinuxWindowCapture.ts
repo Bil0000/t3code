@@ -137,7 +137,7 @@ export class LinuxCaptureConnection {
         pending,
         this.disconnected,
         new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error("Window capture timed out.")), timeoutMs);
+          timer = setTimeout(() => reject(new Error("Snapshot timed out.")), timeoutMs);
         }),
       ]);
     } finally {
@@ -284,8 +284,8 @@ export class LinuxCaptureConnection {
       );
       const [status, results] = decodeResponse(body);
       completed = true;
-      if (status === 1) throw new Error("Window capture was cancelled.");
-      if (status !== 0) throw new Error("Your desktop did not allow the window capture.");
+      if (status === 1) throw new Error("Snapshot was cancelled.");
+      if (status !== 0) throw new Error("Your desktop did not allow the snapshot.");
       const uri = decodeUri(results.uri).value;
       return { png: await readPortalPng(uri) };
     } finally {

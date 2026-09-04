@@ -103,7 +103,7 @@ describe("electron development launcher", () => {
 
     assert.equal(
       values.NSScreenCaptureUsageDescription,
-      "T3 Code captures the active window when you use the window capture shortcut.",
+      "T3 Code captures the active window when you use the snapshot shortcut.",
     );
     assert.equal(
       values.NSDocumentsFolderUsageDescription,

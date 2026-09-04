@@ -236,6 +236,8 @@ export const DesktopWindowCaptureSetupAction = Schema.Literals([
   "remove-kde-helper",
   "install-hyprland-helper",
   "remove-hyprland-helper",
+  "allow-screen-recording",
+  "allow-accessibility",
   "retry-shortcut",
 ]);
 export type DesktopWindowCaptureSetupAction = typeof DesktopWindowCaptureSetupAction.Type;
@@ -283,6 +285,9 @@ export const DesktopWindowCaptureState = Schema.Struct({
   gnomeExtension: Schema.optional(DesktopCaptureExtensionState),
   kdeHelper: Schema.optional(DesktopCaptureHelperState),
   hyprlandHelper: Schema.optional(DesktopCaptureHelperState),
+  macPermissions: Schema.optional(
+    Schema.Struct({ screenRecording: Schema.Boolean, accessibility: Schema.Boolean }),
+  ),
   shortcutVerified: Schema.optional(Schema.Boolean),
   message: Schema.NullOr(Schema.String),
 });

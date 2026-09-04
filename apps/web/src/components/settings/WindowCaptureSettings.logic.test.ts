@@ -85,7 +85,7 @@ it("distinguishes Hyprland helper setup, action registration, and verified short
     hyprlandHelper: { status: "not-installed", message: "Install helper" },
   };
   expect(windowCaptureSetupButtonLabel(state)).toBe("Set up Hyprland capture");
-  expect(windowCaptureStatus(state, false)).toBe("Turn this on to set up window capture.");
+  expect(windowCaptureStatus(state, false)).toBe("Turn this on to set up snapshots.");
   expect(windowCaptureStatus(state, true)).toContain("Install the capture helper");
   expect(windowCaptureFeedbackUnavailableMessage(state)).toContain("Install or update");
   const ready = {
@@ -131,7 +131,7 @@ it.each(["gnome-extension", "niri", "screenshot-portal", "picker"] as const)(
     };
 
     expect(DEFAULT_CLIENT_SETTINGS.windowCaptureEnabled).toBe(false);
-    expect(windowCaptureStatus(state, false)).toBe("Turn this on to set up window capture.");
+    expect(windowCaptureStatus(state, false)).toBe("Turn this on to set up snapshots.");
     expect(windowCaptureStatus(state, true)).toBe("Capture needs attention");
   },
 );
@@ -175,7 +175,7 @@ it("distinguishes saved shortcuts from observed delivery without making users re
       },
       true,
     ),
-  ).toBe("Set up active-window capture");
+  ).toBe("Set up active-window snapshots");
   expect(
     windowCaptureSetupSummary(
       { ...state, linuxBackend: "niri", gnomeExtension: undefined, shortcutRegistered: false },

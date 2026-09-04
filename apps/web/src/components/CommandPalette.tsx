@@ -1683,7 +1683,7 @@ function OpenCommandPaletteDialog(props: {
       kind: "action",
       value: "action:capture-window",
       searchTerms: ["capture window", "screenshot", "attach", "snap"],
-      title: "Capture window",
+      title: "Take snapshot",
       icon: <CameraIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
         await windowCaptureBridge.captureWindow().catch(() => undefined);

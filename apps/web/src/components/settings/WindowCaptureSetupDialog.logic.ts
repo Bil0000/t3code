@@ -40,6 +40,15 @@ export function captureSetupAccessReady(state: DesktopWindowCaptureState): boole
   return true;
 }
 
+export function captureSetupMacPermissionsReady(
+  state: DesktopWindowCaptureState,
+  includeAccessibility: boolean,
+): boolean {
+  const permissions = state.macPermissions;
+  if (!permissions) return true;
+  return permissions.screenRecording && (!includeAccessibility || permissions.accessibility);
+}
+
 export function captureSetupCheckMessage(state: DesktopWindowCaptureState): string {
   const gnome = captureSetupBackend(state) === "gnome";
   if (

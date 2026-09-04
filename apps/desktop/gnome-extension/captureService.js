@@ -26,13 +26,13 @@ export class CaptureService {
 
   _checkSession() {
     if (!this._enabled || !this._isAvailable()) {
-      throw new Error("Window capture is unavailable in this session.");
+      throw new Error("Snapshots are unavailable in this session.");
     }
   }
 
   async capture(sender, options) {
     this._checkSession();
-    if (this._busy) throw new Error("A window capture is already in progress.");
+    if (this._busy) throw new Error("A snapshot is already in progress.");
     this._busy = true;
     try {
       let allowed = false;
@@ -43,7 +43,7 @@ export class CaptureService {
           break;
         }
       }
-      if (!allowed) throw new Error("Only T3 Code may request a window capture.");
+      if (!allowed) throw new Error("Only T3 Code may request a snapshot.");
       const pid = options ? await this._getProcessId(sender) : undefined;
       this._checkSession();
       const snapshot = await this._takeSnapshot(options?.animate ?? false);

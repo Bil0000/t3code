@@ -99,5 +99,5 @@ it("rejects a successful command that did not produce a PNG", async () => {
 
   await expect(
     captureMacWindowSnapshot(active, "/tmp/window.png", { width: 100, height: 80 }),
-  ).rejects.toThrow("macOS returned an invalid window capture.");
+  ).rejects.toThrow("macOS returned an invalid snapshot.");
 });

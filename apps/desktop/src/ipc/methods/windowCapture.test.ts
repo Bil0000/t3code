@@ -283,7 +283,7 @@ describe("window capture IPC", () => {
         (error as { readonly _tag: string })._tag,
         "WindowCaptureIpcUnauthorizedSenderError",
       );
-      assert.equal((error as Error).message, "Window capture request was rejected.");
+      assert.equal((error as Error).message, "Snapshot request was rejected.");
     }).pipe(
       Effect.provideService(
         ElectronWindow.ElectronWindow,

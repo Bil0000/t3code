@@ -13,9 +13,9 @@ export function windowCaptureStatus(
   state: DesktopWindowCaptureState | null,
   enabled: boolean,
 ): string {
-  if (!state) return "Checking window capture…";
+  if (!state) return "Checking snapshots…";
   if (state.mode === "unavailable") return state.message ?? "Not supported on this platform.";
-  if (!enabled) return "Turn this on to set up window capture.";
+  if (!enabled) return "Turn this on to set up snapshots.";
   return windowCaptureSetupSummary(state, enabled);
 }
 
@@ -29,7 +29,7 @@ export function windowCaptureSetupSummary(
       ? "Check capture access in setup"
       : "Install the capture helper to continue";
   if (captureSetupBackend(state) === "gnome" && state.gnomeExtension?.status !== "enabled")
-    return "Set up active-window capture";
+    return "Set up active-window snapshots";
   if (captureSetupBackend(state) === "kde" && state.kdeHelper?.status !== "ready")
     return state.kdeHelper?.status === "error"
       ? "Check capture access in setup"
@@ -107,7 +107,7 @@ export function windowCaptureAccessibilityUnavailableMessage(
 export function windowCaptureUnavailableMessage(hasBridge: boolean): string | undefined {
   if (hasBridge) return undefined;
   return typeof window !== "undefined" && window.desktopBridge
-    ? "Update the desktop app to use window capture."
+    ? "Update the desktop app to use snapshots."
     : "Only available in the desktop app.";
 }
 

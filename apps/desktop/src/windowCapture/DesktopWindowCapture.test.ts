@@ -1636,7 +1636,7 @@ it.effect(
         const warning = logs.find(
           (message) =>
             Array.isArray(message) &&
-            message[0] === "The compositor could not activate T3 Code after window capture",
+            message[0] === "The compositor could not activate T3 Code after the snapshot",
         );
         assert.strictEqual(Array.isArray(warning) ? warning[1] : undefined, activationFailure);
         const pending = yield* decodePendingMetadata(saved);
@@ -3082,6 +3082,42 @@ it.effect("does not request macOS accessibility permission when capture data is 
       assert.lengthOf(openExternalMock.mock.calls, 1);
     }),
   ).pipe(Effect.provide(testLayer("darwin")));
+});
+
+it.effect("reports macOS permission status and requests each permission on its own", () => {
+  accessibilityTrustedMock.mockReset().mockReturnValue(false);
+  mediaAccessStatusMock.mockReset().mockReturnValue("granted");
+  getSourcesMock.mockReset().mockResolvedValue([]);
+  openExternalMock.mockClear();
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      const state = yield* service.state;
+      assert.deepEqual(state.macPermissions, { screenRecording: true, accessibility: false });
+
+      yield* service.setup("allow-accessibility");
+      assert.deepEqual(accessibilityTrustedMock.mock.calls.at(-1), [true]);
+      assert.lengthOf(getSourcesMock.mock.calls, 0);
+
+      mediaAccessStatusMock.mockReturnValue("not-determined");
+      yield* service.setup("allow-screen-recording");
+      assert.lengthOf(getSourcesMock.mock.calls, 1);
+      assert.lengthOf(openExternalMock.mock.calls, 1);
+    }),
+  ).pipe(Effect.provide(testLayer("darwin")));
+});
+
+it.effect("rejects macOS permission actions off macOS and omits macPermissions there", () => {
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      const state = yield* service.state;
+      assert.isUndefined(state.macPermissions);
+      const error = yield* service.setup("allow-screen-recording").pipe(Effect.flip);
+      assert.equal(error.reason, "unsupported-session");
+    }),
+  ).pipe(Effect.provide(testLayer("win32")));
 });
 
 it.effect("registers macOS capture without accessibility permission when data is disabled", () => {

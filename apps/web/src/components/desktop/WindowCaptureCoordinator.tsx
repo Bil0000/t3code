@@ -273,7 +273,7 @@ export function WindowCaptureCoordinator() {
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "Window captured, but no project is available",
+                title: "Snapshot taken, but no project is available",
                 description: "Add a project, then capture the window again.",
               }),
             );
@@ -289,7 +289,7 @@ export function WindowCaptureCoordinator() {
             toastManager.add(
               stackedThreadToast({
                 type: "error",
-                title: "Window capture failed",
+                title: "Snapshot failed",
                 description: `Capture ${item.id}: ${
                   error instanceof Error ? error.message : "Try the capture again."
                 }`,
@@ -304,7 +304,7 @@ export function WindowCaptureCoordinator() {
         toastManager.add(
           stackedThreadToast({
             type: "error",
-            title: "Window capture failed",
+            title: "Snapshot failed",
             description: error instanceof Error ? error.message : "Try the capture again.",
           }),
         );
@@ -351,7 +351,7 @@ export function WindowCaptureCoordinator() {
           toastManager.add(
             stackedThreadToast({
               type: "error",
-              title: "Window capture failed",
+              title: "Snapshot failed",
               description: state.message ?? "Try the capture again.",
             }),
           );

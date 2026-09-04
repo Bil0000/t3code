@@ -315,6 +315,11 @@ export function WindowCaptureSettings() {
     }
   };
 
+  const refreshSetup = useCallback(() => {
+    setSetupError(null);
+    return refreshState();
+  }, [refreshState]);
+
   const closeSetup = async (completed: boolean) => {
     if (!wizard || setupBusy) return;
     setSetupBusy(true);
@@ -348,7 +353,7 @@ export function WindowCaptureSettings() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="window-capture" title="Window Capture">
+      <SettingsSection id="window-capture" title="Snapshots">
         <SettingsUnavailableGroup message={unavailableMessage}>
           <SettingsRow
             {...searchableSetting("window-capture-enabled")}
@@ -375,7 +380,7 @@ export function WindowCaptureSettings() {
                 <Switch
                   checked={settings.windowCaptureEnabled || Boolean(wizard)}
                   disabled={!captureAvailable || setupBusy}
-                  aria-label="Enable window capture"
+                  aria-label="Enable snapshots"
                   onCheckedChange={(checked) => {
                     if (checked) void openSetup();
                     else void save({ windowCaptureEnabled: false });
@@ -400,7 +405,7 @@ export function WindowCaptureSettings() {
                       !captureAvailable ||
                       Boolean(windowCaptureAccessibilityUnavailableMessage(state))
                     }
-                    aria-label="Include app text in window captures"
+                    aria-label="Include app text in snapshots"
                     onCheckedChange={(checked) => void saveIncludeAccessibility(checked)}
                   />
                 }
@@ -471,7 +476,7 @@ export function WindowCaptureSettings() {
                 control={
                   <Menu>
                     <MenuTrigger
-                      aria-label={"Window capture sound: " + soundLabel}
+                      aria-label={"Snapshot sound: " + soundLabel}
                       className={cn(selectTriggerVariants({ size: "sm" }), "w-auto min-w-0")}
                       disabled={!captureAvailable}
                     >
@@ -558,7 +563,7 @@ export function WindowCaptureSettings() {
                   <Switch
                     checked={!feedbackUnavailable && settings.windowCaptureAnimations}
                     disabled={!captureAvailable || Boolean(feedbackUnavailable)}
-                    aria-label="Animate window captures"
+                    aria-label="Animate snapshots"
                     onCheckedChange={(checked) => void save({ windowCaptureAnimations: checked })}
                   />
                 }
@@ -572,6 +577,7 @@ export function WindowCaptureSettings() {
           state={state}
           initialStep={wizard.initialStep}
           wasEnabled={wizard.wasEnabled}
+          includeAccessibility={settings.windowCaptureIncludeAccessibility}
           busy={setupBusy}
           error={setupError?.message ?? null}
           shortcutInput={shortcutInput}
@@ -581,10 +587,7 @@ export function WindowCaptureSettings() {
           onSaveShortcut={saveShortcut}
           onEnable={enableForSetup}
           onAction={setup}
-          onRefresh={() => {
-            setSetupError(null);
-            return refreshState();
-          }}
+          onRefresh={refreshSetup}
           onClose={closeSetup}
           onLeaveStep={stopRecording}
         />

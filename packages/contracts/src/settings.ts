@@ -149,7 +149,7 @@ export const WindowCaptureKeyChord = KeybindingShortcut.check(
       shortcut.shiftKey ||
       shortcut.altKey ||
       shortcut.modKey ||
-      "Window capture shortcut requires a modifier.",
+      "Snapshot shortcut requires a modifier.",
   ),
 );
 export type WindowCaptureKeyChord = typeof WindowCaptureKeyChord.Type;

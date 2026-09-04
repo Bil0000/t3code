@@ -44,10 +44,10 @@ export async function captureMacWindowSnapshot(
     capturedPng.length < PNG_SIGNATURE.length ||
     !capturedPng.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)
   ) {
-    throw new Error("macOS returned an invalid window capture.");
+    throw new Error("macOS returned an invalid snapshot.");
   }
   const image = Electron.nativeImage.createFromBuffer(capturedPng);
-  if (image.isEmpty()) throw new Error("macOS returned an invalid window capture.");
+  if (image.isEmpty()) throw new Error("macOS returned an invalid snapshot.");
   const size = image.getSize();
   const scale = Math.min(maxSize.width / size.width, maxSize.height / size.height, 1);
   const png =

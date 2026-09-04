@@ -89,7 +89,7 @@ const MAX_CAPTURE_HEIGHT = 1_600;
 const SHORTCUT_COOLDOWN_NS = 200_000_000n;
 const CAPTURE_FAILED_ACTION = "window-capture-failed";
 const WAYLAND_MODIFIER_PAIR_UNAVAILABLE_MESSAGE =
-  "Modifier-pair shortcuts aren't available in this Wayland session. Choose another shortcut or use Capture window from the command palette.";
+  "Modifier-pair shortcuts aren't available in this Wayland session. Choose another shortcut or use Take snapshot from the command palette.";
 const FLASH_ANIMATION_DURATION_MS = 180;
 const FLASH_STATIC_DURATION_MS = 60;
 const FLASH_FRAME_INTERVAL_MS = 16;
@@ -128,15 +128,15 @@ export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWi
   override get message(): string {
     switch (this.operation) {
       case "list-pending":
-        return "Could not list pending window captures.";
+        return "Could not list pending snapshots.";
       case "read":
-        return "Could not read the window capture.";
+        return "Could not read the snapshot.";
       case "acknowledge":
-        return "Could not remove the window capture.";
+        return "Could not remove the snapshot.";
       case "unsupported":
-        return "Window capture is not supported here.";
+        return "Snapshots are not supported here.";
       case "disabled":
-        return "Enable Window Capture in Settings first.";
+        return "Enable Snapshots in Settings first.";
       case "no-window-selected":
         return "No window was selected.";
       case "window-unavailable":
@@ -343,6 +343,13 @@ function currentMacWindowCapturePermissionMessage(includeAccessibility: boolean)
     return MAC_ACCESSIBILITY_PERMISSION_MESSAGE;
   }
   return screenGranted ? null : MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
+}
+
+function currentMacPermissions(): DesktopWindowCaptureState["macPermissions"] {
+  return {
+    screenRecording: Electron.systemPreferences.getMediaAccessStatus("screen") === "granted",
+    accessibility: Electron.systemPreferences.isTrustedAccessibilityClient(false),
+  };
 }
 
 async function requestMacWindowCapturePermissions(
@@ -890,7 +897,7 @@ export const make = Effect.gen(function* () {
       const capturedAt = yield* DateTime.now.pipe(Effect.map(DateTime.formatIso));
       if (snapshot.linuxActivationFailure) {
         yield* Effect.logWarning(
-          "The compositor could not activate T3 Code after window capture",
+          "The compositor could not activate T3 Code after the snapshot",
           snapshot.linuxActivationFailure.cause,
         );
       }
@@ -1021,7 +1028,7 @@ export const make = Effect.gen(function* () {
   ) {
     const mode = captureMode(environment.platform);
     if (mode === "unavailable") {
-      return { available: false, message: "Window capture is not supported on this platform." };
+      return { available: false, message: "Snapshots are not supported on this platform." };
     }
     if (mode === "portal" && niriSocketPath()) {
       return {
@@ -1142,8 +1149,8 @@ export const make = Effect.gen(function* () {
         message:
           mode === "unavailable"
             ? environment.platform === "linux"
-              ? "Window capture requires a Wayland session. X11 capture is not supported."
-              : "Window capture is not supported on this platform."
+              ? "Snapshots require a Wayland session. X11 capture is not supported."
+              : "Snapshots are not supported on this platform."
             : null,
       });
       return;
@@ -1353,6 +1360,15 @@ export const make = Effect.gen(function* () {
             cause: error,
           }),
       });
+    } else if (action === "allow-screen-recording" || action === "allow-accessibility") {
+      if (environment.platform !== "darwin")
+        return yield* new DesktopWindowCaptureSetupError({
+          action,
+          reason: "unsupported-session",
+        });
+      if (action === "allow-accessibility")
+        Electron.systemPreferences.isTrustedAccessibilityClient(true);
+      else yield* Effect.promise(requestMacScreenCapturePermission);
     } else if (action !== "retry-shortcut") {
       if (!hasGnomeSetup())
         return yield* new DesktopWindowCaptureSetupError({
@@ -1486,7 +1502,11 @@ export const make = Effect.gen(function* () {
                 }),
               ),
             )
-          : Effect.succeed(state),
+          : Effect.succeed(
+              environment.platform === "darwin"
+                ? { ...state, macPermissions: currentMacPermissions() }
+                : state,
+            ),
       ),
       Effect.flatMap((state) =>
         Effect.gen(function* () {

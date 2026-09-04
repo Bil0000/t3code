@@ -85,7 +85,7 @@ it("lets users replace an unrecognized desktop label without displaying guessed 
   const label = "Use the shortcut assigned in desktop settings";
   let recorder = render(false, label);
   expect(recorder.input.props.children).toBe("Change shortcut");
-  expect(recorder.input.props["aria-label"]).toBe("Change window capture shortcut");
+  expect(recorder.input.props["aria-label"]).toBe("Change snapshot shortcut");
   recorder.input.props.onClick();
   await suppress.mock.results.at(-1)!.value;
   recorder = render(false, label);

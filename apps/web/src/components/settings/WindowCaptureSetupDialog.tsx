@@ -3,7 +3,8 @@ import {
   type DesktopWindowCaptureSetupAction,
   type DesktopWindowCaptureState,
 } from "@t3tools/contracts";
-import { useState, type ReactNode } from "react";
+import { AccessibilityIcon, CircleCheckIcon, MonitorIcon } from "lucide-react";
+import { useEffect, useState, type ReactNode } from "react";
 import { CaptureShortcutConfig } from "./CaptureShortcutConfig";
 import { Button } from "../ui/button";
 import {
@@ -22,6 +23,7 @@ import {
   captureSetupCheckMessage,
   captureSetupDesktopName,
   captureSetupInitialStep,
+  captureSetupMacPermissionsReady,
   captureSetupShortcutReady,
   type CaptureSetupStep,
 } from "./WindowCaptureSetupDialog.logic";
@@ -51,7 +53,7 @@ const GNOME_ACCESS_COPY = {
   },
   disabled: {
     title: "Enable the extension",
-    description: "Enable T3 Code Window Capture to start capturing windows.",
+    description: "Enable T3 Code Snapshots to start capturing windows.",
   },
   enabled: {
     title: "Capture is ready",
@@ -59,18 +61,57 @@ const GNOME_ACCESS_COPY = {
   },
   unsupported: {
     title: "Automatic capture isn't available",
-    description: "Use Capture window from the command palette to choose a window.",
+    description: "Use Take snapshot from the command palette to choose a window.",
   },
   error: {
     title: "Couldn't set up the extension",
-    description: "Check T3 Code Window Capture in GNOME Extensions, then try again.",
+    description: "Check T3 Code Snapshots in GNOME Extensions, then try again.",
   },
 };
+
+function MacPermissionRow({
+  icon,
+  title,
+  description,
+  granted,
+  busy,
+  onAllow,
+}: {
+  icon: ReactNode;
+  title: string;
+  description: string;
+  granted: boolean;
+  busy: boolean;
+  onAllow: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border px-3 py-2">
+      <span className="grid size-8 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+        {icon}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">{title}</p>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+      {granted ? (
+        <span className="flex items-center gap-1 text-xs text-success">
+          <CircleCheckIcon className="size-4" aria-hidden="true" />
+          Allowed
+        </span>
+      ) : (
+        <Button size="xs" variant="outline" disabled={busy} onClick={onAllow}>
+          Allow
+        </Button>
+      )}
+    </div>
+  );
+}
 
 export function WindowCaptureSetupDialog({
   state,
   initialStep,
   wasEnabled,
+  includeAccessibility,
   busy: actionBusy,
   error,
   shortcutInput,
@@ -87,6 +128,7 @@ export function WindowCaptureSetupDialog({
   state: DesktopWindowCaptureState;
   initialStep: CaptureSetupStep;
   wasEnabled: boolean;
+  includeAccessibility: boolean;
   busy: boolean;
   error: string | null;
   shortcutInput: ReactNode;
@@ -114,9 +156,17 @@ export function WindowCaptureSetupDialog({
   const installHelper = backend === "hyprland" ? "install-hyprland-helper" : "install-kde-helper";
   const removeHelper = backend === "hyprland" ? "remove-hyprland-helper" : "remove-kde-helper";
   const accessReady = captureSetupAccessReady(state);
+  const macPermissions = state.macPermissions;
+  const macPermissionsReady = captureSetupMacPermissionsReady(state, includeAccessibility);
   const shortcutReady = captureSetupShortcutReady(state, shortcutChanged);
   const install = extension?.status === "not-installed" || extension?.status === "update-required";
   const enable = extension?.status === "disabled";
+  useEffect(() => {
+    if (!macPermissions || step !== "access") return;
+    const refresh = () => void onRefresh();
+    window.addEventListener("focus", refresh);
+    return () => window.removeEventListener("focus", refresh);
+  }, [macPermissions, onRefresh, step]);
   const changeStep = (next: CaptureSetupStep) => {
     onLeaveStep();
     setChecked(false);
@@ -135,7 +185,7 @@ export function WindowCaptureSetupDialog({
   const accessCopy = state.message
     ? {
         title: "Let's try that again",
-        description: "Couldn't check window capture. Try again to continue.",
+        description: "Couldn't check snapshots. Try again to continue.",
       }
     : backend === "gnome" && extension
       ? extension.status === "enabled" && !accessReady
@@ -159,7 +209,7 @@ export function WindowCaptureSetupDialog({
                 title:
                   helper?.status === "update-required"
                     ? "Update the capture helper"
-                    : "Allow window capture",
+                    : "Allow snapshots",
                 description:
                   "T3 Code's capture helper lets you capture other apps and return to your draft. It's included with T3 Code.",
               }
@@ -175,11 +225,13 @@ export function WindowCaptureSetupDialog({
                   "Your desktop doesn't support automatic capture. You'll choose the window to capture instead.",
               }
             : {
-                title: "Allow window capture",
+                title: "Allow snapshots",
                 description:
                   backend === "portal"
                     ? "Your desktop may ask for permission when you first capture."
-                    : "Allow access when prompted to start capturing windows.",
+                    : macPermissions
+                      ? "Allow each permission, then continue."
+                      : "Allow access when prompted to start capturing windows.",
               };
   const title = step === "access" ? accessCopy.title : "Choose your shortcut";
   const description =
@@ -219,7 +271,7 @@ export function WindowCaptureSetupDialog({
       <DialogPopup className="max-w-xl" showCloseButton={!busy}>
         <DialogHeader>
           <DialogTitle>
-            {desktop ? `Set up capture for ${desktop}` : "Set up window capture"}
+            {desktop ? `Set up snapshots for ${desktop}` : "Set up snapshots"}
           </DialogTitle>
           <WizardSteps
             steps={SETUP_STEPS.map((item, index) => ({ ...item, disabled: index > stepIndex }))}
@@ -247,6 +299,30 @@ export function WindowCaptureSetupDialog({
                 >
                   {checked && !busy && !error ? captureSetupCheckMessage(state) : null}
                 </p>
+                {macPermissions ? (
+                  <div className="space-y-2">
+                    <MacPermissionRow
+                      icon={<MonitorIcon className="size-4" aria-hidden="true" />}
+                      title="Screen Recording"
+                      description="Capture the window you're using."
+                      granted={macPermissions.screenRecording}
+                      busy={busy}
+                      onAllow={() => void onAction("allow-screen-recording")}
+                    />
+                    <MacPermissionRow
+                      icon={<AccessibilityIcon className="size-4" aria-hidden="true" />}
+                      title="Accessibility"
+                      description={
+                        includeAccessibility
+                          ? "Include text and controls from the captured app."
+                          : "Optional. Include text and controls from the captured app."
+                      }
+                      granted={macPermissions.accessibility}
+                      busy={busy}
+                      onAllow={() => void onAction("allow-accessibility")}
+                    />
+                  </div>
+                ) : null}
                 {helperBackend && helper?.status === "error" ? (
                   <Button
                     size="xs"
@@ -395,16 +471,16 @@ export function WindowCaptureSetupDialog({
               </Button>
             ) : (
               <Button
-                disabled={busy}
+                disabled={busy || !macPermissionsReady}
                 onClick={async () => {
                   if (await onEnable()) changeStep("shortcut");
                 }}
               >
                 {busy
                   ? "Working…"
-                  : backend === "direct"
+                  : backend === "direct" && !macPermissions
                     ? "Allow capture"
-                    : !accessReady
+                    : !accessReady && !macPermissions
                       ? "Try again"
                       : "Continue"}
               </Button>

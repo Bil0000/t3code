@@ -210,7 +210,7 @@ export class GnomeCaptureSetup {
       if (info.state?.value === 1)
         return {
           status: "enabled",
-          message: "The T3 Code extension is running. Active-window capture is available.",
+          message: "The T3 Code extension is running. Active-window snapshots are available.",
         };
       if (info.state?.value === 3 || info.state?.value === 4)
         return {
@@ -222,7 +222,7 @@ export class GnomeCaptureSetup {
       return {
         status: "disabled",
         message:
-          "Enable the T3 Code extension to allow active-window capture. You can disable it here at any time.",
+          "Enable the T3 Code extension to allow active-window snapshots. You can disable it here at any time.",
       };
     } catch (error) {
       return {
