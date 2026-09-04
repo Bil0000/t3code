@@ -4,7 +4,7 @@ import {
   type DesktopSnapShotState,
 } from "@t3tools/contracts";
 import { CircleCheckIcon } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useState, type ReactNode } from "react";
 import { CaptureShortcutConfig } from "./CaptureShortcutConfig";
 import { Button } from "../ui/button";
 import {
@@ -70,26 +70,64 @@ const GNOME_ACCESS_COPY = {
 };
 
 function ScreenRecordingIcon() {
+  const gradientId = useId();
   return (
-    <svg viewBox="0 0 32 32" className="size-8 shrink-0" aria-hidden="true">
-      <rect width="32" height="32" rx="7" fill="#2b2b2e" />
-      <circle cx="16" cy="16" r="8" fill="none" stroke="#ff453a" strokeWidth="2.5" />
-      <circle cx="16" cy="16" r="4" fill="#ff453a" />
+    <svg
+      viewBox="0 0 32 32"
+      className="size-8 shrink-0 drop-shadow-[0_1px_1px_#0005]"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id={gradientId} x2="0" y2="1">
+          <stop stopColor="#ff6972" />
+          <stop offset="1" stopColor="#ff2938" />
+        </linearGradient>
+      </defs>
+      <rect
+        x="0.5"
+        y="0.5"
+        width="31"
+        height="31"
+        rx="7"
+        fill={`url(#${gradientId})`}
+        stroke="#ffffff40"
+      />
+      <circle cx="16" cy="16" r="10" fill="none" stroke="#fff" strokeWidth="2" />
+      <circle cx="16" cy="16" r="4.5" fill="#fff" />
     </svg>
   );
 }
 
 function AccessibilityPermissionIcon() {
+  const gradientId = useId();
   return (
-    <svg viewBox="0 0 32 32" className="size-8 shrink-0" aria-hidden="true">
-      <rect width="32" height="32" rx="7" fill="#1a7cf5" />
-      <circle cx="16" cy="16" r="10.5" fill="none" stroke="#fff" strokeWidth="1.75" />
-      <circle cx="16" cy="9.75" r="1.75" fill="#fff" />
+    <svg
+      viewBox="0 0 32 32"
+      className="size-8 shrink-0 drop-shadow-[0_1px_1px_#0005]"
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id={gradientId} x2="0" y2="1">
+          <stop stopColor="#48b6ff" />
+          <stop offset="1" stopColor="#0085ff" />
+        </linearGradient>
+      </defs>
+      <rect
+        x="0.5"
+        y="0.5"
+        width="31"
+        height="31"
+        rx="7"
+        fill={`url(#${gradientId})`}
+        stroke="#ffffff40"
+      />
+      <circle cx="16" cy="16" r="10" fill="none" stroke="#fff" strokeWidth="1.75" />
+      <circle cx="16" cy="10" r="1.6" fill="#fff" />
       <path
-        d="M9.5 13.25h13M16 13.25v5.25M16 18.5l-3.5 5.75M16 18.5l3.5 5.75"
+        d="m10 13 6 1 6-1M16 14v4m0 0-2.5 6m2.5-6 2.5 6"
         fill="none"
         stroke="#fff"
-        strokeWidth="1.9"
+        strokeWidth="1.6"
         strokeLinecap="round"
         strokeLinejoin="round"
       />
