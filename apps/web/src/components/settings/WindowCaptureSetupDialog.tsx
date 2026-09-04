@@ -284,7 +284,12 @@ export function WindowCaptureSetupDialog({
         </DialogHeader>
         <DialogPanel>
           <div className="space-y-4 text-sm">
-            <div className="space-y-2" aria-live="polite">
+            <div
+              className={
+                macPermissions && step === "access" ? "flex flex-wrap gap-x-2" : "space-y-2"
+              }
+              aria-live="polite"
+            >
               <h3 className="flex items-center gap-2 font-medium">{title}</h3>
               <DialogDescription>{description}</DialogDescription>
             </div>
