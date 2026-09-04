@@ -321,4 +321,10 @@ it("hides macOS setup only while permissions and the shortcut are all in place",
   expect(snapShotStatus(revoked, true)).toBe("Capture needs attention");
   expect(snapShotSetupButtonLabel(revoked)).toBe("Continue setup");
   expect(snapShotSetupComplete({ ...revoked, message: null }, false)).toBe(true);
+  expect(
+    snapShotSetupComplete(
+      { ...ready, windows: true, macPermissions: undefined, shortcutRegistered: false },
+      true,
+    ),
+  ).toBe(true);
 });

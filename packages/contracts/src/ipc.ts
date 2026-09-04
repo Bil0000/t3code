@@ -264,6 +264,7 @@ export type DesktopCaptureConfigApplied = typeof DesktopCaptureConfigApplied.Typ
 
 export const DesktopSnapShotState = Schema.Struct({
   mode: DesktopSnapShotMode,
+  windows: Schema.optional(Schema.Boolean),
   linuxDesktop: Schema.optional(Schema.Literals(["gnome", "kde", "niri", "hyprland"])),
   linuxBackend: Schema.optional(
     Schema.Literals(["screenshot-portal", "gnome-extension", "niri", "kde", "hyprland", "picker"]),

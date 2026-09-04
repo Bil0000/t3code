@@ -191,6 +191,24 @@ it.each(["direct", "gnome-extension", "kde"] as const)(
   },
 );
 
+it("turns capture on directly on Windows without opening setup", async () => {
+  settingsStore.current = { ...settingsStore.current, snapShotEnabled: false };
+  state = { ...state, mode: "direct", linuxBackend: undefined, windows: true };
+  const tree = await mount();
+  const toggle = visitElements(
+    tree,
+    (element) => element.props["aria-label"] === "Enable snapshots",
+  );
+  if (!toggle) throw new Error("Missing capture toggle");
+  (toggle.props.onCheckedChange as (checked: boolean) => void)(true);
+  await finish(settingsStore.update.mock.results[0]!.value);
+  expect(settingsStore.update).toHaveBeenCalledWith({ snapShotEnabled: true });
+  expect(wizard(renderWithEffects())).toBeNull();
+  expect(
+    visitElements(renderWithEffects(), (element) => element.props.children === "Manage capture"),
+  ).toBeNull();
+});
+
 it("keeps the approved desktop shortcut when recording is cancelled in setup", async () => {
   state = {
     ...state,

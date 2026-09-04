@@ -1512,7 +1512,9 @@ export const make = Effect.gen(function* () {
                     : state;
                 return { ...recovered, macPermissions, ...(message ? { message } : {}) };
               })
-            : Effect.succeed(state),
+            : Effect.succeed(
+                environment.platform === "win32" ? { ...state, windows: true } : state,
+              ),
       ),
       Effect.flatMap((state) =>
         Effect.gen(function* () {

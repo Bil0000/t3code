@@ -3154,6 +3154,7 @@ it.effect("rejects macOS permission actions off macOS and omits macPermissions t
       const service = yield* DesktopSnapShot.make;
       const state = yield* service.state;
       assert.isUndefined(state.macPermissions);
+      assert.isTrue(state.windows);
       const error = yield* service.setup("allow-screen-recording").pipe(Effect.flip);
       assert.equal(error.reason, "unsupported-session");
     }),
