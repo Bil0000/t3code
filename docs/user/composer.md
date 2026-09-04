@@ -55,8 +55,9 @@ On web and desktop, an existing thread settles its composer into a single-line r
 the composer loses focus. At wider sizes, scrolling the conversation also rests a focused composer,
 except when scrolling toward the end while already there. When the thread-context strip has room,
 the model and mode controls stay available beside the thread context; otherwise they return when the
-composer is focused. Focus the composer or start typing to expand it again. New-thread layouts keep
-the full composer. **Settings → General → Collapse composer** chooses which triggers rest it:
+composer is focused. Focus the composer or start typing to expand it again. The conversation keeps
+the expanded composer's space clear above its last message while the composer rests, so expanding it
+again never covers what you scrolled to. New-thread layouts keep the full composer. **Settings → General → Collapse composer** chooses which triggers rest it:
 **On unfocus**, **On scroll**, both, or neither. With neither selected the composer stays expanded.
 
 At phone-sized web or desktop window widths, existing threads animate between their compact and
@@ -173,6 +174,8 @@ On web and desktop, loading and syncing statuses fill the available banner width
 stash tab. Task progress appears above the composer, while the timeline's working timer shows
 only elapsed time.
 
+Loading, syncing, and server-update icons are static. Live tool labels do not shimmer.
+
 On web and desktop, additional notices peek out above the attached banner. Hover over the peek
 to reveal them, or focus **Show other notices** with `Tab` and press `Enter` or `Space`. Press
 `Escape` to close the stack and return focus to that control. On a touchscreen, tap the peek to
@@ -181,8 +184,10 @@ open the stack. Interacting with the attached banner or composer does not open t
 ## Prompt stash
 
 Use the default shortcut, `Cmd+S` on macOS or `Ctrl+S` on Windows and Linux, to stash the current
-prompt and its attachments after all file uploads finish. Restore the entry later from the stash
-menu. Stashes that contain files must be restored in the environment where those files were
+prompt and its attachments after all file uploads finish. When the composer is empty and the stash
+has one entry, press the shortcut again to restore it. The shortcut opens the stash menu if there
+are multiple entries or the entry's images are still saving. You can also open the menu from the
+stash badge. Stashes that contain files must be restored in the environment where those files were
 uploaded. Stashed files stay uploaded on the server for 24 hours. If you restore an entry after
 that, the file comes back with **Attach again** next to it. Attach the file again or remove it, then
 send.
@@ -211,6 +216,8 @@ such as System, Personal, Project, or App.
 
 On mobile, these menus are available on the **New task** screen before you start a thread. They
 use the skills and commands from the selected environment and provider.
+
+In a thread with prior conversation context, send `/compact` to reduce context usage. Web and desktop also offer this action from the context meter, and the work log records token counts when the provider reports them.
 
 By default, the `/` menu includes skills. To keep this menu command-only, turn off **Show skills in
 slash menu** in **Settings → General**. Skill results use the `/skill:Skill Name` label and add the

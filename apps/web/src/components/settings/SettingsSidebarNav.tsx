@@ -1,4 +1,6 @@
 import {
+  lazy,
+  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -37,7 +39,6 @@ import {
   SidebarMenuSubItem,
   useSidebar,
 } from "../ui/sidebar";
-import { T3ConnectSidebarAvatar, T3ConnectSidebarSignIn } from "../clerk/T3ConnectSidebarSignIn";
 import { SidebarUtilityMenu } from "../sidebar/SidebarChrome";
 import { scrollToSettingsTarget } from "./settingsLayout";
 import {
@@ -59,6 +60,17 @@ const WindowCaptureIcon = createLucideIcon("window-capture", [
   ["rect", { width: "10", height: "8", x: "7", y: "8", rx: "2", key: "window" }],
   ["circle", { cx: "12", cy: "12", r: "1.5", key: "lens" }],
 ]);
+
+const T3ConnectSidebarSignIn = lazy(() =>
+  import("../clerk/T3ConnectSidebarSignIn").then((module) => ({
+    default: module.T3ConnectSidebarSignIn,
+  })),
+);
+const T3ConnectSidebarAvatar = lazy(() =>
+  import("../clerk/T3ConnectSidebarSignIn").then((module) => ({
+    default: module.T3ConnectSidebarAvatar,
+  })),
+);
 
 const SETTINGS_SECTION_ICONS: Readonly<
   Record<SettingsPath, ComponentType<{ className?: string }>>
@@ -367,7 +379,7 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
                             <SidebarMenuSubButton
                               render={<button type="button" />}
                               size="sm"
-                              className="text-sidebar-muted-foreground/65"
+                              className="w-full text-sidebar-muted-foreground/65"
                               onClick={() => handlePageSectionClick(item.to, section.targetId)}
                             >
                               <span className="ms-0.5">{section.label}</span>
@@ -384,12 +396,16 @@ export function SettingsSidebarNav({ pathname }: { pathname: string }) {
         </SidebarGroup>
       </SidebarContent>
       <SidebarFooter className="p-[var(--sidebar-content-inset)]">
-        <T3ConnectSidebarSignIn />
+        <Suspense fallback={null}>
+          <T3ConnectSidebarSignIn />
+        </Suspense>
         <div className="flex items-center gap-1">
           <div className="min-w-0 flex-1">
             <SidebarUtilityMenu />
           </div>
-          <T3ConnectSidebarAvatar />
+          <Suspense fallback={null}>
+            <T3ConnectSidebarAvatar />
+          </Suspense>
         </div>
       </SidebarFooter>
     </>
