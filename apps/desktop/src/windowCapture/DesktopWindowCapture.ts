@@ -74,9 +74,9 @@ import {
   makeWindowCaptureAccessibilityProcessPool,
 } from "./WindowCaptureAccessibilityProcess.ts";
 import { showWindowsCaptureOverlay } from "./WindowsCaptureFeedback.ts";
+import { windowsWindowIcon } from "./WindowsWindowIcon.ts";
 
 import {
-  findCaptureSource,
   hideAndWaitForBlur,
   isWaylandSession,
   toElectronAccelerator,
@@ -259,14 +259,12 @@ export function windowCaptureThumbnailSize(active: ActiveWindow | undefined): El
 }
 
 export function windowCaptureIconDataUrl(
-  capturedIcon: Electron.NativeImage | null | undefined,
-  fileIcon: Electron.NativeImage | null | undefined,
-  preferCapturedIcon = false,
+  ...icons: ReadonlyArray<Electron.NativeImage | null | undefined>
 ): string | undefined {
-  const primaryIcon = preferCapturedIcon ? capturedIcon : fileIcon;
-  const fallbackIcon = preferCapturedIcon ? fileIcon : capturedIcon;
-  const icon = primaryIcon && !primaryIcon.isEmpty() ? primaryIcon : fallbackIcon;
-  if (!icon || icon.isEmpty()) return undefined;
+  const icon = icons.find((candidate): candidate is Electron.NativeImage =>
+    Boolean(candidate && !candidate.isEmpty()),
+  );
+  if (!icon) return undefined;
   return icon.resize({ width: 64, height: 64, quality: "best" }).toDataURL({ scaleFactor: 2 });
 }
 
@@ -283,32 +281,23 @@ async function appFileIcon(
   return Electron.app.getFileIcon(path, { size: "normal" }).catch(() => undefined);
 }
 
-async function windowsWindowIcon(
-  active: ActiveWindow | undefined,
-): Promise<Electron.NativeImage | undefined> {
-  if (active?.platform !== "windows") return undefined;
-  const sources = await Electron.desktopCapturer
-    .getSources({
-      types: ["window"],
-      thumbnailSize: { width: 0, height: 0 },
-      fetchWindowIcons: true,
-    })
-    .catch(() => []);
-  return findCaptureSource(sources, active)?.appIcon ?? undefined;
-}
-
 export async function iconDataUrl(
   source: { readonly appIcon?: Electron.NativeImage | null },
   active: ActiveWindow | undefined,
   platform: NodeJS.Platform,
 ): Promise<string | undefined> {
   try {
-    const [fileIcon, windowIcon] = await Promise.all([
-      active?.owner.path ? appFileIcon(active.owner.path, platform) : undefined,
-      windowsWindowIcon(active),
-    ]);
-    const capturedIcon = windowIcon ?? source.appIcon;
-    return windowCaptureIconDataUrl(capturedIcon, fileIcon, platform === "win32");
+    // Windows executables are often generic hosts or ship without an icon resource,
+    // so the icon the window advertises for itself wins there.
+    const windowIcon =
+      active?.platform === "windows"
+        ? await windowsWindowIcon(active.id).catch(() => undefined)
+        : undefined;
+    if (windowIcon) return windowCaptureIconDataUrl(windowIcon);
+    const fileIcon = active?.owner.path
+      ? await appFileIcon(active.owner.path, platform)
+      : undefined;
+    return windowCaptureIconDataUrl(fileIcon, source.appIcon);
   } catch {
     return undefined;
   }
@@ -549,14 +538,12 @@ async function captureSource({
       hiddenWindow.show();
       hiddenWindowRestored = true;
     }
-    const appIconDataUrlPromise = iconDataUrl(source, active, platform);
     return {
       source,
       active,
       linuxWindow,
       linuxActivationFailure,
       contextPromise,
-      appIconDataUrlPromise,
       animationStarted,
       png,
       imageTempReady,
@@ -927,24 +914,16 @@ export const make = Effect.gen(function* () {
   const persistCapture = Effect.fn("desktop.windowCapture.persistCapture")(function* (
     capture: Effect.Success<ReturnType<typeof prepareCapture>>,
   ) {
-    const {
-      id,
-      capturedAt,
-      source,
-      active,
-      linuxWindow,
-      contextPromise,
-      appIconDataUrlPromise,
-      png,
-      imageTempReady,
-    } = capture;
+    const { id, capturedAt, source, active, linuxWindow, contextPromise, png, imageTempReady } =
+      capture;
     const imagePath = path.join(captureDirectory, `${id}.png`);
     const imageTempPath = path.join(captureDirectory, `${id}.tmp.png`);
     const metadataPath = path.join(captureDirectory, `${id}.json`);
 
     yield* Effect.gen(function* () {
-      const [accessibilityContext, appIconDataUrl] = yield* Effect.promise(() =>
-        Promise.all([contextPromise, appIconDataUrlPromise]),
+      const accessibilityContext = yield* Effect.promise(() => contextPromise);
+      const appIconDataUrl = yield* Effect.promise(() =>
+        iconDataUrl(source, active, environment.platform),
       );
       const pending = yield* decodePendingCapture({
         id,
