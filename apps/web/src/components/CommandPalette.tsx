@@ -28,7 +28,7 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  type DesktopWindowCaptureState,
+  type DesktopSnapShotState,
   type DesktopWslState,
   type EnvironmentId,
   type EnvironmentMachineKind,
@@ -90,7 +90,7 @@ import { useProject, useProjects, useThreadShells } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import * as ThreadPr from "./ThreadStatusIndicators";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
-import { getDesktopWindowCaptureBridge } from "../lib/desktopWindowCapture";
+import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import {
   appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
@@ -580,10 +580,8 @@ function OpenCommandPaletteDialog(props: {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
   const [query, setQuery] = useState("");
-  const windowCaptureBridge = getDesktopWindowCaptureBridge();
-  const [windowCaptureState, setWindowCaptureState] = useState<DesktopWindowCaptureState | null>(
-    null,
-  );
+  const snapShotBridge = getDesktopSnapShotBridge();
+  const [snapShotState, setSnapShotState] = useState<DesktopSnapShotState | null>(null);
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
@@ -728,16 +726,16 @@ function OpenCommandPaletteDialog(props: {
 
   useEffect(() => {
     let active = true;
-    void windowCaptureBridge
-      ?.getWindowCaptureState()
+    void snapShotBridge
+      ?.getSnapShotState()
       .then((state) => {
-        if (active) setWindowCaptureState(state);
+        if (active) setSnapShotState(state);
       })
       .catch(() => undefined);
     return () => {
       active = false;
     };
-  }, [windowCaptureBridge]);
+  }, [snapShotBridge]);
 
   const environmentLabelById = useMemo(
     () =>
@@ -1678,7 +1676,7 @@ function OpenCommandPaletteDialog(props: {
     },
   });
 
-  if (windowCaptureBridge && windowCaptureState && windowCaptureState.mode !== "unavailable") {
+  if (snapShotBridge && snapShotState && snapShotState.mode !== "unavailable") {
     actionItems.push({
       kind: "action",
       value: "action:capture-window",
@@ -1686,7 +1684,7 @@ function OpenCommandPaletteDialog(props: {
       title: "Take snapshot",
       icon: <CameraIcon className={ITEM_ICON_CLASS} />,
       run: async () => {
-        await windowCaptureBridge.captureWindow().catch(() => undefined);
+        await snapShotBridge.captureWindow().catch(() => undefined);
       },
     });
   }

@@ -51,11 +51,11 @@ describe("persistClientSettingsPatch", () => {
       });
     });
 
-    const firstSettings = { ...DEFAULT_CLIENT_SETTINGS, windowCaptureFlash: false };
-    const secondSettings = { ...firstSettings, windowCapturePlaySound: false };
-    const first = persistClientSettingsPatch({ windowCaptureFlash: false });
+    const firstSettings = { ...DEFAULT_CLIENT_SETTINGS, snapShotFlash: false };
+    const secondSettings = { ...firstSettings, snapShotPlaySound: false };
+    const first = persistClientSettingsPatch({ snapShotFlash: false });
     await firstStarted;
-    const second = persistClientSettingsPatch({ windowCapturePlaySound: false });
+    const second = persistClientSettingsPatch({ snapShotPlaySound: false });
 
     expect(writeClientSettings).toHaveBeenCalledTimes(1);
     expect(getClientSettings()).toEqual(secondSettings);
@@ -73,16 +73,16 @@ describe("persistClientSettingsPatch", () => {
         finishHydration = resolve;
       }),
     );
-    const storedSettings = { ...DEFAULT_CLIENT_SETTINGS, windowCapturePlaySound: false };
+    const storedSettings = { ...DEFAULT_CLIENT_SETTINGS, snapShotPlaySound: false };
 
-    const write = persistClientSettingsPatch({ windowCaptureFlash: false });
+    const write = persistClientSettingsPatch({ snapShotFlash: false });
     expect(writeClientSettings).not.toHaveBeenCalled();
     finishHydration(storedSettings);
     await write;
 
     expect(writeClientSettings).toHaveBeenCalledWith({
       ...storedSettings,
-      windowCaptureFlash: false,
+      snapShotFlash: false,
     });
   });
 });

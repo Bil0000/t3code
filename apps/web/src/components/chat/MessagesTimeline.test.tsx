@@ -236,7 +236,7 @@ function buildAssistantTimelineEntry(text: string) {
   };
 }
 
-function buildWindowCaptureTimelineEntry(previewUrl?: string) {
+function buildSnapShotTimelineEntry(previewUrl?: string) {
   const entry = buildUserTimelineEntry("First prompt.");
   return {
     ...entry,
@@ -251,7 +251,7 @@ function buildWindowCaptureTimelineEntry(previewUrl?: string) {
           sizeBytes: 1,
           ...(previewUrl ? { previewUrl } : {}),
           source: {
-            kind: "window-capture" as const,
+            kind: "snap-shot" as const,
             capturedAt: "2026-03-17T19:12:28.000Z",
             appName: "Terminal",
             windowTitle: "t3code — Tests",
@@ -505,7 +505,7 @@ describe("MessagesTimeline", () => {
 
   it("anchors the first user message using its measured height", () => {
     const onAnchorReady = vi.fn();
-    const firstEntry = buildWindowCaptureTimelineEntry("data:image/png;base64,iVBORw0KGgo=");
+    const firstEntry = buildSnapShotTimelineEntry("data:image/png;base64,iVBORw0KGgo=");
     const markup = renderToStaticMarkup(
       <MessagesTimeline
         {...buildProps()}
@@ -537,7 +537,7 @@ describe("MessagesTimeline", () => {
 
   it("does not render window details before the preview URL resolves", () => {
     const markup = renderToStaticMarkup(
-      <MessagesTimeline {...buildProps()} timelineEntries={[buildWindowCaptureTimelineEntry()]} />,
+      <MessagesTimeline {...buildProps()} timelineEntries={[buildSnapShotTimelineEntry()]} />,
     );
 
     expect(markup).toContain("screenshot.png");

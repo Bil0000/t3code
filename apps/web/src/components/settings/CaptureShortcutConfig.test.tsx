@@ -1,7 +1,7 @@
 import {
   DEFAULT_CLIENT_SETTINGS,
   type DesktopCaptureConfigPreview,
-  type DesktopWindowCaptureState,
+  type DesktopSnapShotState,
 } from "@t3tools/contracts";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
@@ -24,11 +24,11 @@ vi.mock("react/compiler-runtime", async () => {
   return { c: reactHookHarness.useMemoCache };
 });
 const bridge = vi.hoisted(() => ({
-  previewWindowCaptureConfig: vi.fn(),
-  applyWindowCaptureConfig: vi.fn(),
-  setWindowCaptureShortcutSuppressed: vi.fn(),
+  previewSnapShotConfig: vi.fn(),
+  applySnapShotConfig: vi.fn(),
+  setSnapShotShortcutSuppressed: vi.fn(),
 }));
-vi.mock("../../lib/desktopWindowCapture", () => ({ getDesktopWindowCaptureBridge: () => bridge }));
+vi.mock("../../lib/desktopSnapShot", () => ({ getDesktopSnapShotBridge: () => bridge }));
 vi.mock("../../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "light" }) }));
 vi.mock("../../hooks/useCopyToClipboard", () => ({
   useCopyToClipboard: () => ({ copyToClipboard: vi.fn(), isCopied: false }),
@@ -48,10 +48,10 @@ const preview: DesktopCaptureConfigPreview = {
 };
 const complete = vi.fn<() => Promise<void>>();
 function render(desktop: "niri" | "hyprland" = "niri") {
-  const state: DesktopWindowCaptureState = {
+  const state: DesktopSnapShotState = {
     mode: "portal",
     linuxBackend: desktop,
-    shortcut: DEFAULT_CLIENT_SETTINGS.windowCaptureShortcut,
+    shortcut: DEFAULT_CLIENT_SETTINGS.snapShotShortcut,
     shortcutRegistered: false,
     shortcutActionRegistered: true,
     shortcutMessage: null,
@@ -82,7 +82,7 @@ function shortcutInput(tree: ReturnType<typeof render>) {
 }
 async function recordKeys(desktop: "niri" | "hyprland", modifiers: object = {}) {
   shortcutInput(render(desktop)).onClick();
-  await finish(bridge.setWindowCaptureShortcutSuppressed.mock.results.at(-1)!.value);
+  await finish(bridge.setSnapShotShortcutSuppressed.mock.results.at(-1)!.value);
   shortcutInput(render(desktop)).onKeyDown({
     key: "y",
     code: "KeyY",
@@ -103,9 +103,9 @@ async function finish(promise: Promise<unknown>) {
 beforeEach(() => {
   hooks.reset();
   vi.stubGlobal("navigator", { platform: "Linux" });
-  bridge.setWindowCaptureShortcutSuppressed.mockReset().mockResolvedValue(undefined);
-  bridge.previewWindowCaptureConfig.mockReset().mockResolvedValue(preview);
-  bridge.applyWindowCaptureConfig
+  bridge.setSnapShotShortcutSuppressed.mockReset().mockResolvedValue(undefined);
+  bridge.previewSnapShotConfig.mockReset().mockResolvedValue(preview);
+  bridge.applySnapShotConfig
     .mockReset()
     .mockResolvedValue({ backupPath: "/config/backup", warning: null });
   complete.mockReset().mockResolvedValue(undefined);
@@ -120,22 +120,22 @@ it.each(["niri", "hyprland"] as const)(
     expect(shortcutInput(tree)["aria-label"]).toBe(
       "Record snapshot shortcut, currently Ctrl+Shift+2",
     );
-    expect(bridge.previewWindowCaptureConfig).not.toHaveBeenCalled();
-    expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
+    expect(bridge.previewSnapShotConfig).not.toHaveBeenCalled();
+    expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
     expect(visitElements(tree, (element) => element.type === "details")).not.toBeNull();
     button(tree, "Review changes").onClick();
-    await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
+    await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
     tree = render(desktop);
     expect(shortcutInput(tree)["aria-label"]).toBe(
       "Record snapshot shortcut, currently Ctrl+Shift+2",
     );
-    expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
+    expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
     const diff = visitElements(tree, (element) => "fileDiff" in element.props);
     expect(diff).not.toBeNull();
     expect(diff?.props.fileDiff).toMatchObject({ name: preview.path });
     button(tree, "Save shortcut").onClick();
-    await finish(bridge.applyWindowCaptureConfig.mock.results[0]!.value);
-    expect(bridge.applyWindowCaptureConfig).toHaveBeenCalledExactlyOnceWith(preview.id);
+    await finish(bridge.applySnapShotConfig.mock.results[0]!.value);
+    expect(bridge.applySnapShotConfig).toHaveBeenCalledExactlyOnceWith(preview.id);
     expect(complete).toHaveBeenCalledOnce();
     expect(toastManager.add).toHaveBeenCalledWith(expect.objectContaining({ type: "success" }));
   },
@@ -149,37 +149,37 @@ it.each(["niri", "hyprland"] as const)(
       visitElements(advanced, (element) => "data-keybinding-capture" in element.props),
     ).toBeNull();
     await recordKeys(desktop);
-    expect(bridge.setWindowCaptureShortcutSuppressed).toHaveBeenNthCalledWith(1, true);
-    expect(bridge.setWindowCaptureShortcutSuppressed).toHaveBeenLastCalledWith(false);
-    expect(bridge.previewWindowCaptureConfig).not.toHaveBeenCalled();
+    expect(bridge.setSnapShotShortcutSuppressed).toHaveBeenNthCalledWith(1, true);
+    expect(bridge.setSnapShotShortcutSuppressed).toHaveBeenLastCalledWith(false);
+    expect(bridge.previewSnapShotConfig).not.toHaveBeenCalled();
     const custom = {
       ...preview,
       id: "custom-keys",
       shortcut: "Ctrl+Alt+Y",
       after: preview.after.replace("Ctrl+Shift+2", "Ctrl+Alt+Y"),
     };
-    bridge.previewWindowCaptureConfig.mockResolvedValue(custom);
+    bridge.previewSnapShotConfig.mockResolvedValue(custom);
     button(render(desktop), "Review changes").onClick();
-    await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
-    expect(bridge.previewWindowCaptureConfig).toHaveBeenCalledExactlyOnceWith({
+    await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
+    expect(bridge.previewSnapShotConfig).toHaveBeenCalledExactlyOnceWith({
       operation: "install",
       chooseFile: false,
       shortcut: "ctrl+alt+y",
     });
-    expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
+    expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
     button(render(desktop), "Save shortcut").onClick();
-    await finish(bridge.applyWindowCaptureConfig.mock.results[0]!.value);
-    expect(bridge.applyWindowCaptureConfig).toHaveBeenCalledExactlyOnceWith(custom.id);
+    await finish(bridge.applySnapShotConfig.mock.results[0]!.value);
+    expect(bridge.applySnapShotConfig).toHaveBeenCalledExactlyOnceWith(custom.id);
     expect(toastManager.add).toHaveBeenCalledWith(
       expect.objectContaining({ description: "Use Ctrl+Alt+Y from another app." }),
     );
   },
 );
 it("uses the existing config keys when no replacement was chosen", async () => {
-  bridge.previewWindowCaptureConfig.mockResolvedValue({ ...preview, shortcut: "Super+F8" });
+  bridge.previewSnapShotConfig.mockResolvedValue({ ...preview, shortcut: "Super+F8" });
   button(render(), "Review changes").onClick();
-  await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
-  expect(bridge.previewWindowCaptureConfig).toHaveBeenCalledExactlyOnceWith({
+  await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
+  expect(bridge.previewSnapShotConfig).toHaveBeenCalledExactlyOnceWith({
     operation: "install",
     chooseFile: false,
   });
@@ -187,30 +187,30 @@ it("uses the existing config keys when no replacement was chosen", async () => {
 });
 it("requires a new diff after changing keys during review", async () => {
   button(render(), "Review changes").onClick();
-  await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
+  await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
   await recordKeys("niri", { key: "F8", code: "F8", ctrlKey: false, altKey: false, metaKey: true });
   expect(visitElements(render(), (element) => "fileDiff" in element.props)).toBeNull();
-  expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
+  expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
   const replacement = { ...preview, id: "replacement", shortcut: "Super+F8" };
-  bridge.previewWindowCaptureConfig.mockResolvedValue(replacement);
+  bridge.previewSnapShotConfig.mockResolvedValue(replacement);
   button(render(), "Review changes").onClick();
-  await finish(bridge.previewWindowCaptureConfig.mock.results[1]!.value);
-  expect(bridge.previewWindowCaptureConfig).toHaveBeenLastCalledWith({
+  await finish(bridge.previewSnapShotConfig.mock.results[1]!.value);
+  expect(bridge.previewSnapShotConfig).toHaveBeenLastCalledWith({
     operation: "install",
     chooseFile: false,
     shortcut: "meta+f8",
   });
   button(render(), "Save shortcut").onClick();
-  await finish(bridge.applyWindowCaptureConfig.mock.results[0]!.value);
-  expect(bridge.applyWindowCaptureConfig).toHaveBeenCalledExactlyOnceWith(replacement.id);
+  await finish(bridge.applySnapShotConfig.mock.results[0]!.value);
+  expect(bridge.applySnapShotConfig).toHaveBeenCalledExactlyOnceWith(replacement.id);
 });
 it.each(["Escape", "blur"])(
   "keeps the reviewed diff when recording is cancelled with %s",
   async (cancel) => {
     button(render(), "Review changes").onClick();
-    await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
+    await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
     shortcutInput(render()).onClick();
-    await finish(bridge.setWindowCaptureShortcutSuppressed.mock.results.at(-1)!.value);
+    await finish(bridge.setSnapShotShortcutSuppressed.mock.results.at(-1)!.value);
     expect(button(render(), "Save shortcut").disabled).toBe(true);
     if (cancel === "Escape")
       shortcutInput(render()).onKeyDown({
@@ -219,23 +219,23 @@ it.each(["Escape", "blur"])(
         stopPropagation: vi.fn(),
       });
     else shortcutInput(render()).onBlur();
-    expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
+    expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
     expect(button(render(), "Save shortcut").disabled).toBe(false);
-    expect(bridge.previewWindowCaptureConfig).toHaveBeenCalledOnce();
+    expect(bridge.previewSnapShotConfig).toHaveBeenCalledOnce();
     button(render(), "Save shortcut").onClick();
-    await finish(bridge.applyWindowCaptureConfig.mock.results[0]!.value);
-    expect(bridge.applyWindowCaptureConfig).toHaveBeenCalledExactlyOnceWith(preview.id);
+    await finish(bridge.applySnapShotConfig.mock.results[0]!.value);
+    expect(bridge.applySnapShotConfig).toHaveBeenCalledExactlyOnceWith(preview.id);
   },
 );
 it("cancelling a reviewed diff does not write or finish setup", async () => {
   button(render(), "Review changes").onClick();
-  await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
+  await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
   button(render(), "Cancel").onClick();
   expect(shortcutInput(render())["aria-label"]).toBe(
     "Record snapshot shortcut, currently Ctrl+Shift+2",
   );
   expect(button(render(), "Review changes")).toBeDefined();
-  expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
+  expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
   expect(complete).not.toHaveBeenCalled();
 });
 it("shows reading feedback until a proposal arrives", async () => {
@@ -243,20 +243,18 @@ it("shows reading feedback until a proposal arrives", async () => {
   const pending = new Promise<DesktopCaptureConfigPreview>((resolve) => {
     resolvePreview = resolve;
   });
-  bridge.previewWindowCaptureConfig.mockReturnValue(pending);
+  bridge.previewSnapShotConfig.mockReturnValue(pending);
   button(render(), "Review changes").onClick();
   expect(button(render(), "Preparing changes…").disabled).toBe(true);
-  expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
+  expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
   resolvePreview(preview);
   await finish(pending);
   expect(button(render(), "Save shortcut").disabled).toBe(false);
 });
 it("keeps read failures actionable with technical details in Advanced, then permits retry", async () => {
-  bridge.previewWindowCaptureConfig.mockRejectedValueOnce(
-    new Error("EACCES: /config/niri/config.kdl"),
-  );
+  bridge.previewSnapShotConfig.mockRejectedValueOnce(new Error("EACCES: /config/niri/config.kdl"));
   button(render(), "Review changes").onClick();
-  await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
+  await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
   const failed = render();
   expect(visitElements(failed, (element) => element.props.role === "alert")?.props.children).toBe(
     "Couldn't prepare the changes. Check Advanced for help.",
@@ -268,21 +266,21 @@ it("keeps read failures actionable with technical details in Advanced, then perm
       (element) => element.props.children === "EACCES: /config/niri/config.kdl",
     ),
   ).not.toBeNull();
-  expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
+  expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
   button(failed, "Review changes").onClick();
-  await finish(bridge.previewWindowCaptureConfig.mock.results[1]!.value);
+  await finish(bridge.previewSnapShotConfig.mock.results[1]!.value);
   expect(visitElements(render(), (element) => element.props.role === "alert")).toBeNull();
   expect(button(render(), "Save shortcut").disabled).toBe(false);
-  expect(bridge.applyWindowCaptureConfig).not.toHaveBeenCalled();
+  expect(bridge.applySnapShotConfig).not.toHaveBeenCalled();
 });
 it("withdraws a stale diff and requires another read instead of retrying its write", async () => {
   button(render(), "Review changes").onClick();
-  await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
-  bridge.applyWindowCaptureConfig.mockRejectedValue(
+  await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
+  bridge.applySnapShotConfig.mockRejectedValue(
     new Error("Your config changed since this preview."),
   );
   button(render(), "Save shortcut").onClick();
-  await finish(bridge.applyWindowCaptureConfig.mock.results[0]!.value);
+  await finish(bridge.applySnapShotConfig.mock.results[0]!.value);
   const tree = render();
   expect(
     visitElements(tree, (element) => element.props.role === "alert")?.props.children,
@@ -300,13 +298,13 @@ it("withdraws a stale diff and requires another read instead of retrying its wri
 });
 it("does not finish or claim success when the desktop could not reload", async () => {
   button(render(), "Review changes").onClick();
-  await finish(bridge.previewWindowCaptureConfig.mock.results[0]!.value);
-  bridge.applyWindowCaptureConfig.mockResolvedValue({
+  await finish(bridge.previewSnapShotConfig.mock.results[0]!.value);
+  bridge.applySnapShotConfig.mockResolvedValue({
     backupPath: "/config/backup",
     warning: "Config saved, but reload failed.",
   });
   button(render(), "Save shortcut").onClick();
-  await finish(bridge.applyWindowCaptureConfig.mock.results[0]!.value);
+  await finish(bridge.applySnapShotConfig.mock.results[0]!.value);
   expect(
     visitElements(render(), (element) => element.props.role === "status")?.props.children,
   ).toBe("Saved, but the shortcut needs attention. Check Advanced for help.");

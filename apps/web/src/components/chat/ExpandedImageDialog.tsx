@@ -10,10 +10,10 @@ import { MediaActions, type MediaActionSource } from "../media/MediaActions";
 import { MediaVideoPlayer } from "../media/MediaVideoPlayer";
 import { isContextMenuOpen } from "../../contextMenuFallback";
 import {
-  WindowCaptureAccessibilityData,
-  WindowCaptureContentsButton,
-  windowCaptureAccessibilityDetails,
-} from "./WindowCaptureAttachmentDetails";
+  SnapShotAccessibilityData,
+  SnapShotContentsButton,
+  snapShotAccessibilityDetails,
+} from "./SnapShotAttachmentDetails";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { composerFloatingLayerProps } from "./composerEventScope";
 
@@ -134,9 +134,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
     item.originalUrl && resolveExternalWebLinkHost(item.originalUrl) !== null ? (
       <OpenMediaLink originalUrl={item.originalUrl} />
     ) : null;
-  const accessibilityDetails = item.source
-    ? windowCaptureAccessibilityDetails(item.source)
-    : undefined;
+  const accessibilityDetails = item.source ? snapShotAccessibilityDetails(item.source) : undefined;
   const showingAccessibilityDetails =
     Boolean(accessibilityDetails) && accessibilityDetailsSrc === item.src;
   const contentsLabel = showingAccessibilityDetails
@@ -188,9 +186,9 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             <ExpandedVideo key={index} item={item} />
           ) : showingAccessibilityDetails ? (
             accessibilityDetails ? (
-              <WindowCaptureAccessibilityData
+              <SnapShotAccessibilityData
                 details={accessibilityDetails}
-                className="h-[min(86vh,40rem)] w-[min(92vw,42rem)] animate-[window-capture-contents-enter_140ms_ease-out] rounded-lg border border-border/70 bg-background p-4 text-xs leading-5 shadow-2xl motion-reduce:animate-none"
+                className="h-[min(86vh,40rem)] w-[min(92vw,42rem)] animate-[snap-shot-contents-enter_140ms_ease-out] rounded-lg border border-border/70 bg-background p-4 text-xs leading-5 shadow-2xl motion-reduce:animate-none"
               />
             ) : null
           ) : item.src === null || failedImageSrc === item.src ? (
@@ -206,7 +204,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
             <img
               src={item.src}
               alt={item.name}
-              className="max-h-[86vh] max-w-[92vw] animate-[window-capture-contents-enter_140ms_ease-out] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl motion-reduce:animate-none"
+              className="max-h-[86vh] max-w-[92vw] animate-[snap-shot-contents-enter_140ms_ease-out] select-none rounded-lg border border-border/70 bg-background object-contain shadow-2xl motion-reduce:animate-none"
               draggable={false}
               onError={() => setFailedImageSrc(item.src)}
             />
@@ -237,7 +235,7 @@ export const ExpandedImageDialog = memo(function ExpandedImageDialog({
                 <TooltipPopup side="top">{contentsLabel}</TooltipPopup>
               </Tooltip>
             ) : item.source ? (
-              <WindowCaptureContentsButton
+              <SnapShotContentsButton
                 source={item.source}
                 side="top"
                 className="hover:bg-white/10 hover:text-white"

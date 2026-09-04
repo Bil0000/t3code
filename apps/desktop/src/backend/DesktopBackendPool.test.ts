@@ -98,7 +98,7 @@ function makePoolLayer(
           flushMainWindowBounds: Effect.void,
           prepareCaptureReveal: Effect.void,
           dispatchMenuAction: () => Effect.die("unexpected menu action"),
-          dispatchWindowCaptureReady: () => Effect.void,
+          dispatchSnapShotReady: () => Effect.void,
           zoomMain: () => Effect.die("unexpected zoom"),
           syncAppearance: Effect.void,
         } satisfies DesktopWindow.DesktopWindow["Service"]),

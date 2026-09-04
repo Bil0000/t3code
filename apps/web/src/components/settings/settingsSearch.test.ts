@@ -224,11 +224,11 @@ describe("searchSettings", () => {
     });
 
     expect(targets).toEqual([
-      ["window-capture-accessibility", "window-capture-enabled"],
-      ["window-capture-shortcut", "window-capture-enabled"],
-      ["window-capture-sound", "window-capture-enabled"],
-      ["window-capture-flash", "window-capture-enabled"],
-      ["window-capture-animations", "window-capture-enabled"],
+      ["snap-shot-accessibility", "snap-shot-enabled"],
+      ["snap-shot-shortcut", "snap-shot-enabled"],
+      ["snap-shot-sound", "snap-shot-enabled"],
+      ["snap-shot-flash", "snap-shot-enabled"],
+      ["snap-shot-animations", "snap-shot-enabled"],
     ]);
   });
 

@@ -55,32 +55,25 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   getClientSettings: () => ipcRenderer.invoke(IpcChannels.GET_CLIENT_SETTINGS_CHANNEL),
   setClientSettings: (settings) =>
     ipcRenderer.invoke(IpcChannels.SET_CLIENT_SETTINGS_CHANNEL, settings),
-  requestWindowCapturePermissions: (includeAccessibility) =>
-    ipcRenderer.invoke(
-      IpcChannels.REQUEST_WINDOW_CAPTURE_PERMISSIONS_CHANNEL,
-      includeAccessibility,
-    ),
-  getWindowCaptureState: () => ipcRenderer.invoke(IpcChannels.GET_WINDOW_CAPTURE_STATE_CHANNEL),
-  setupWindowCapture: (action) =>
-    ipcRenderer.invoke(IpcChannels.SETUP_WINDOW_CAPTURE_CHANNEL, action),
-  previewWindowCaptureConfig: (request) =>
-    ipcRenderer.invoke(IpcChannels.PREVIEW_WINDOW_CAPTURE_CONFIG_CHANNEL, request),
-  applyWindowCaptureConfig: (id) =>
-    ipcRenderer.invoke(IpcChannels.APPLY_WINDOW_CAPTURE_CONFIG_CHANNEL, id),
-  checkWindowCaptureShortcut: (shortcut) =>
-    ipcRenderer.invoke(IpcChannels.CHECK_WINDOW_CAPTURE_SHORTCUT_CHANNEL, shortcut),
-  setWindowCaptureShortcutSuppressed: (suppressed) =>
-    ipcRenderer.invoke(IpcChannels.SET_WINDOW_CAPTURE_SHORTCUT_SUPPRESSED_CHANNEL, suppressed),
+  requestSnapShotPermissions: (includeAccessibility) =>
+    ipcRenderer.invoke(IpcChannels.REQUEST_SNAP_SHOT_PERMISSIONS_CHANNEL, includeAccessibility),
+  getSnapShotState: () => ipcRenderer.invoke(IpcChannels.GET_SNAP_SHOT_STATE_CHANNEL),
+  setupSnapShot: (action) => ipcRenderer.invoke(IpcChannels.SETUP_SNAP_SHOT_CHANNEL, action),
+  previewSnapShotConfig: (request) =>
+    ipcRenderer.invoke(IpcChannels.PREVIEW_SNAP_SHOT_CONFIG_CHANNEL, request),
+  applySnapShotConfig: (id) => ipcRenderer.invoke(IpcChannels.APPLY_SNAP_SHOT_CONFIG_CHANNEL, id),
+  checkSnapShotShortcut: (shortcut) =>
+    ipcRenderer.invoke(IpcChannels.CHECK_SNAP_SHOT_SHORTCUT_CHANNEL, shortcut),
+  setSnapShotShortcutSuppressed: (suppressed) =>
+    ipcRenderer.invoke(IpcChannels.SET_SNAP_SHOT_SHORTCUT_SUPPRESSED_CHANNEL, suppressed),
   captureWindow: () => ipcRenderer.invoke(IpcChannels.CAPTURE_WINDOW_CHANNEL),
-  listPendingWindowCaptures: () =>
-    ipcRenderer.invoke(IpcChannels.LIST_PENDING_WINDOW_CAPTURES_CHANNEL),
-  readWindowCapture: (id) => ipcRenderer.invoke(IpcChannels.READ_WINDOW_CAPTURE_CHANNEL, id),
-  setWindowCaptureAnimationDestination: (destination) =>
-    ipcRenderer.invoke(IpcChannels.SET_WINDOW_CAPTURE_ANIMATION_DESTINATION_CHANNEL, destination),
-  dismissWindowCaptureAnimation: (id) =>
-    ipcRenderer.invoke(IpcChannels.DISMISS_WINDOW_CAPTURE_ANIMATION_CHANNEL, id),
-  acknowledgeWindowCapture: (id) =>
-    ipcRenderer.invoke(IpcChannels.ACKNOWLEDGE_WINDOW_CAPTURE_CHANNEL, id),
+  listPendingSnapShots: () => ipcRenderer.invoke(IpcChannels.LIST_PENDING_SNAP_SHOTS_CHANNEL),
+  readSnapShot: (id) => ipcRenderer.invoke(IpcChannels.READ_SNAP_SHOT_CHANNEL, id),
+  setSnapShotAnimationDestination: (destination) =>
+    ipcRenderer.invoke(IpcChannels.SET_SNAP_SHOT_ANIMATION_DESTINATION_CHANNEL, destination),
+  dismissSnapShotAnimation: (id) =>
+    ipcRenderer.invoke(IpcChannels.DISMISS_SNAP_SHOT_ANIMATION_CHANNEL, id),
+  acknowledgeSnapShot: (id) => ipcRenderer.invoke(IpcChannels.ACKNOWLEDGE_SNAP_SHOT_CHANNEL, id),
   getConnectionCatalog: () => ipcRenderer.invoke(IpcChannels.GET_CONNECTION_CATALOG_CHANNEL),
   setConnectionCatalog: (catalog) =>
     ipcRenderer.invoke(IpcChannels.SET_CONNECTION_CATALOG_CHANNEL, catalog),
@@ -154,15 +147,15 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.MENU_ACTION_CHANNEL, wrappedListener);
     };
   },
-  onWindowCaptureReady: (listener) => {
+  onSnapShotReady: (listener) => {
     const wrappedListener = (_event: Electron.IpcRendererEvent, id: unknown) => {
       if (typeof id !== "string") return;
       listener(id as Parameters<typeof listener>[0]);
     };
 
-    ipcRenderer.on(IpcChannels.WINDOW_CAPTURE_READY_CHANNEL, wrappedListener);
+    ipcRenderer.on(IpcChannels.SNAP_SHOT_READY_CHANNEL, wrappedListener);
     return () => {
-      ipcRenderer.removeListener(IpcChannels.WINDOW_CAPTURE_READY_CHANNEL, wrappedListener);
+      ipcRenderer.removeListener(IpcChannels.SNAP_SHOT_READY_CHANNEL, wrappedListener);
     };
   },
   onQuitShortcut: (listener) => {

@@ -1806,7 +1806,7 @@ code {
 
 /* Expanded capture preview swaps between the screenshot and its extracted text.
    One-shot fade on whichever panel mounts, so nothing repaints continuously. */
-@keyframes window-capture-contents-enter {
+@keyframes snap-shot-contents-enter {
   from {
     opacity: 0;
   }

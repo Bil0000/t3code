@@ -1,4 +1,4 @@
-import type { WindowCaptureSource } from "@t3tools/contracts";
+import type { SnapShotSource } from "@t3tools/contracts";
 
 import type { ComposerFileAttachment } from "../../composerDraftStore";
 import { type ChatImageAttachment, isVideoAttachment } from "../../types";
@@ -25,7 +25,7 @@ export interface ExpandedImageItem {
   src: string | null;
   name: string;
   type?: "video";
-  source?: WindowCaptureSource;
+  source?: SnapShotSource;
   autoPlay?: boolean;
   /** Authored remote destination to open when embedding fails, never a generated asset URL. */
   originalUrl?: string;
@@ -158,7 +158,7 @@ export function buildExpandedImagePreview(
     images: previewableImages.map((image) => ({
       src: image.src,
       name: image.name,
-      ...(image.source?.kind === "window-capture" ? { source: image.source } : {}),
+      ...(image.source?.kind === "snap-shot" ? { source: image.source } : {}),
     })),
     index: selectedIndex,
   };

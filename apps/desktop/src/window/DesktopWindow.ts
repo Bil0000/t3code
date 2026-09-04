@@ -21,7 +21,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
   MENU_ACTION_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
-  WINDOW_CAPTURE_READY_CHANNEL,
+  SNAP_SHOT_READY_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -106,7 +106,7 @@ export class DesktopWindow extends Context.Service<
       options?: { readonly reveal?: boolean },
     ) => Effect.Effect<void, DesktopWindowError>;
     /** Deliver completed captures without interrupting the app the user has switched to. */
-    readonly dispatchWindowCaptureReady: (id: string) => Effect.Effect<void, DesktopWindowError>;
+    readonly dispatchSnapShotReady: (id: string) => Effect.Effect<void, DesktopWindowError>;
     // Zooms the main window's own webContents. The Electron `zoomIn`/`zoomOut`
     // menu roles act on whichever webContents has keyboard focus, so with an
     // embedded preview WebContentsView (or DevTools) focused they zoom the
@@ -925,12 +925,10 @@ export const make = Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan({ action });
       yield* dispatchRendererEvent(MENU_ACTION_CHANNEL, action, options);
     }),
-    dispatchWindowCaptureReady: Effect.fn("desktop.window.dispatchWindowCaptureReady")(
-      function* (id) {
-        yield* Effect.annotateCurrentSpan({ captureId: id });
-        yield* dispatchRendererEvent(WINDOW_CAPTURE_READY_CHANNEL, id, { reveal: false });
-      },
-    ),
+    dispatchSnapShotReady: Effect.fn("desktop.window.dispatchSnapShotReady")(function* (id) {
+      yield* Effect.annotateCurrentSpan({ captureId: id });
+      yield* dispatchRendererEvent(SNAP_SHOT_READY_CHANNEL, id, { reveal: false });
+    }),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });
       const window = yield* focusedMainWindow;

@@ -2181,7 +2181,7 @@ export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(func
     "--locked",
     "--release",
     "--manifest-path",
-    path.join(input.repoRoot, `native/${input.backend}-window-capture/Cargo.toml`),
+    path.join(input.repoRoot, `native/${input.backend}-snap-shot/Cargo.toml`),
     "--target",
     rustTarget!,
   ]);
@@ -2197,13 +2197,13 @@ export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(func
   );
   const destination = path.join(input.stageResourcesDir, `${input.backend}-capture`);
   yield* fs.makeDirectory(destination, { recursive: true });
-  const executable = path.join(destination, `t3-${input.backend}-window-capture`);
+  const executable = path.join(destination, `t3-${input.backend}-snap-shot`);
   yield* fs.copyFile(
     path.join(
       input.repoRoot,
-      `native/${input.backend}-window-capture/target`,
+      `native/${input.backend}-snap-shot/target`,
       rustTarget!,
-      `release/t3-${input.backend}-window-capture`,
+      `release/t3-${input.backend}-snap-shot`,
     ),
     executable,
   );
@@ -2211,7 +2211,7 @@ export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(func
   if (input.backend === "hyprland") {
     // The official protocol XML includes the BSD notices required with binary distribution.
     yield* fs.copy(
-      path.join(input.repoRoot, "native/hyprland-window-capture/protocols"),
+      path.join(input.repoRoot, "native/hyprland-snap-shot/protocols"),
       path.join(destination, "protocols"),
     );
   }

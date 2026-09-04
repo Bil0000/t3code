@@ -44,7 +44,7 @@ describe("resolveMarkdownMediaPreview", () => {
 describe("buildExpandedImagePreview", () => {
   it("keeps window capture details with the expanded image", () => {
     const source = {
-      kind: "window-capture" as const,
+      kind: "snap-shot" as const,
       capturedAt: "2026-09-01T00:00:00.000Z",
       appName: "Editor",
       windowTitle: "main.ts",

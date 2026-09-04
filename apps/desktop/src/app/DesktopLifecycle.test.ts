@@ -95,7 +95,7 @@ function makeDesktopWindowLayer(
     flushMainWindowBounds: input.flushMainWindowBounds ?? Effect.void,
     prepareCaptureReveal: Effect.void,
     dispatchMenuAction: () => Effect.void,
-    dispatchWindowCaptureReady: () => Effect.void,
+    dispatchSnapShotReady: () => Effect.void,
     zoomMain: () => Effect.void,
     syncAppearance: Effect.void,
   });

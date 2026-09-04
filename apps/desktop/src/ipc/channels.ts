@@ -6,7 +6,7 @@ export const CONTEXT_MENU_CHANNEL = "desktop:context-menu";
 export const OPEN_EXTERNAL_CHANNEL = "desktop:open-external";
 export const PROBE_REMOTE_EDITORS_CHANNEL = "desktop:probe-remote-editors";
 export const MENU_ACTION_CHANNEL = "desktop:menu-action";
-export const WINDOW_CAPTURE_READY_CHANNEL = "desktop:window-capture-ready";
+export const SNAP_SHOT_READY_CHANNEL = "desktop:snap-shot-ready";
 export const QUIT_SHORTCUT_CHANNEL = "desktop:quit-shortcut";
 export const GET_WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:get-window-fullscreen-state";
 export const WINDOW_FULLSCREEN_STATE_CHANNEL = "desktop:window-fullscreen-state";
@@ -26,22 +26,21 @@ export const GET_LOCAL_ENVIRONMENT_BEARER_TOKEN_CHANNEL =
   "desktop:get-local-environment-bearer-token";
 export const GET_CLIENT_SETTINGS_CHANNEL = "desktop:get-client-settings";
 export const SET_CLIENT_SETTINGS_CHANNEL = "desktop:set-client-settings";
-export const SETUP_WINDOW_CAPTURE_CHANNEL = "desktop:setup-window-capture";
-export const PREVIEW_WINDOW_CAPTURE_CONFIG_CHANNEL = "desktop:preview-window-capture-config";
-export const APPLY_WINDOW_CAPTURE_CONFIG_CHANNEL = "desktop:apply-window-capture-config";
-export const REQUEST_WINDOW_CAPTURE_PERMISSIONS_CHANNEL =
-  "desktop:request-window-capture-permissions";
-export const GET_WINDOW_CAPTURE_STATE_CHANNEL = "desktop:get-window-capture-state";
-export const CHECK_WINDOW_CAPTURE_SHORTCUT_CHANNEL = "desktop:check-window-capture-shortcut";
-export const SET_WINDOW_CAPTURE_SHORTCUT_SUPPRESSED_CHANNEL =
-  "desktop:set-window-capture-shortcut-suppressed";
+export const SETUP_SNAP_SHOT_CHANNEL = "desktop:setup-snap-shot";
+export const PREVIEW_SNAP_SHOT_CONFIG_CHANNEL = "desktop:preview-snap-shot-config";
+export const APPLY_SNAP_SHOT_CONFIG_CHANNEL = "desktop:apply-snap-shot-config";
+export const REQUEST_SNAP_SHOT_PERMISSIONS_CHANNEL = "desktop:request-snap-shot-permissions";
+export const GET_SNAP_SHOT_STATE_CHANNEL = "desktop:get-snap-shot-state";
+export const CHECK_SNAP_SHOT_SHORTCUT_CHANNEL = "desktop:check-snap-shot-shortcut";
+export const SET_SNAP_SHOT_SHORTCUT_SUPPRESSED_CHANNEL =
+  "desktop:set-snap-shot-shortcut-suppressed";
 export const CAPTURE_WINDOW_CHANNEL = "desktop:capture-window";
-export const LIST_PENDING_WINDOW_CAPTURES_CHANNEL = "desktop:list-pending-window-captures";
-export const READ_WINDOW_CAPTURE_CHANNEL = "desktop:read-window-capture";
-export const SET_WINDOW_CAPTURE_ANIMATION_DESTINATION_CHANNEL =
-  "desktop:set-window-capture-animation-destination";
-export const DISMISS_WINDOW_CAPTURE_ANIMATION_CHANNEL = "desktop:dismiss-window-capture-animation";
-export const ACKNOWLEDGE_WINDOW_CAPTURE_CHANNEL = "desktop:acknowledge-window-capture";
+export const LIST_PENDING_SNAP_SHOTS_CHANNEL = "desktop:list-pending-snap-shots";
+export const READ_SNAP_SHOT_CHANNEL = "desktop:read-snap-shot";
+export const SET_SNAP_SHOT_ANIMATION_DESTINATION_CHANNEL =
+  "desktop:set-snap-shot-animation-destination";
+export const DISMISS_SNAP_SHOT_ANIMATION_CHANNEL = "desktop:dismiss-snap-shot-animation";
+export const ACKNOWLEDGE_SNAP_SHOT_CHANNEL = "desktop:acknowledge-snap-shot";
 export const GET_CONNECTION_CATALOG_CHANNEL = "desktop:get-connection-catalog";
 export const SET_CONNECTION_CATALOG_CHANNEL = "desktop:set-connection-catalog";
 export const CLEAR_CONNECTION_CATALOG_CHANNEL = "desktop:clear-connection-catalog";

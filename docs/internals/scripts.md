@@ -76,8 +76,8 @@ authenticated.
   to the host, so this produces an arm64 DMG on Apple Silicon. Use `dist:desktop:dmg:arm64` or
   `dist:desktop:dmg:x64`, or pass `--arch <arm64|x64|universal>`, to force one.
 - `vp run dist:desktop:linux`: Builds a Linux AppImage into `./release`.
-- `vp run dist:gnome-extension`: Packages the optional GNOME Shell window-capture extension into
-  `./release` using `gnome-extensions`. See [Linux window capture](linux-window-capture.md) for installation and verification.
+- `vp run dist:gnome-extension`: Packages the optional GNOME Shell snap-shot extension into
+  `./release` using `gnome-extensions`. See [Linux window capture](linux-snap-shot.md) for installation and verification.
 - `vp run dist:desktop:win`: Builds a Windows NSIS installer into `./release`. `:arm64` and `:x64`
   variants exist.
 

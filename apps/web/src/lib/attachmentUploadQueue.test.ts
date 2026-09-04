@@ -187,7 +187,7 @@ describe("attachmentUploadQueue", () => {
     const image = {
       ...makeImage("image-1"),
       source: {
-        kind: "window-capture" as const,
+        kind: "snap-shot" as const,
         capturedAt: "2026-08-24T11:00:00.000Z",
         appName: "Terminal",
         windowTitle: "Tests",
@@ -216,7 +216,7 @@ describe("attachmentUploadQueue", () => {
         mimeType: "image/png",
         sizeBytes: 3,
         source: {
-          kind: "window-capture",
+          kind: "snap-shot",
           capturedAt: "2026-08-24T11:00:00.000Z",
           appName: "Terminal",
           windowTitle: "Tests",

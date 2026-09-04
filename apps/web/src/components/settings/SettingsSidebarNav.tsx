@@ -49,7 +49,7 @@ import {
 } from "./settingsSearch";
 import { useAvailableSettingsSearchItems } from "./useAvailableSettingsSearchItems";
 
-const WindowCaptureIcon = createLucideIcon("window-capture", [
+const SnapShotIcon = createLucideIcon("snap-shot", [
   [
     "path",
     {
@@ -78,7 +78,7 @@ const SETTINGS_SECTION_ICONS: Readonly<
   "/settings/general": Settings2Icon,
   "/settings/appearance": PaletteIcon,
   "/settings/keybindings": KeyboardIcon,
-  "/settings/window-capture": WindowCaptureIcon,
+  "/settings/snap-shot": SnapShotIcon,
   "/settings/providers": BotIcon,
   "/settings/integrations": BlocksIcon,
   "/settings/source-control": GitBranchIcon,

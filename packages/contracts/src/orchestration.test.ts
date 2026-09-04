@@ -29,7 +29,7 @@ import {
   ThreadCreatedPayload,
   ThreadTurnDiff,
   ThreadTurnStartRequestedPayload,
-  WindowCaptureAccessibility,
+  SnapShotAccessibility,
   isProviderSendTurnSupportedImageMimeType,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
 } from "./orchestration.ts";
@@ -66,7 +66,7 @@ const decodeOrchestrationCommand = Schema.decodeUnknownEffect(OrchestrationComma
 const decodeOrchestrationEvent = Schema.decodeUnknownEffect(OrchestrationEvent);
 const decodeThreadMetaUpdatedPayload = Schema.decodeUnknownEffect(ThreadMetaUpdatedPayload);
 const decodeDispatchCommandError = Schema.decodeUnknownEffect(OrchestrationDispatchCommandError);
-const decodeWindowCaptureAccessibility = Schema.decodeUnknownEffect(WindowCaptureAccessibility);
+const decodeSnapShotAccessibility = Schema.decodeUnknownEffect(SnapShotAccessibility);
 
 it.effect("decodes a dispatch error after its bootstrap thread was deleted", () =>
   Effect.gen(function* () {
@@ -380,21 +380,21 @@ it.effect("preserves window capture metadata in thread.turn.start", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeThreadTurnStartCommand({
       type: "thread.turn.start",
-      commandId: "cmd-window-capture",
+      commandId: "cmd-snap-shot",
       threadId: "thread-1",
       message: {
-        messageId: "msg-window-capture",
+        messageId: "msg-snap-shot",
         role: "user",
         text: "Review this window",
         attachments: [
           {
             type: "image",
-            id: "window-capture-1",
+            id: "snap-shot-1",
             name: "editor.png",
             mimeType: "image/png",
             sizeBytes: 4,
             source: {
-              kind: "window-capture",
+              kind: "snap-shot",
               capturedAt: "2026-08-24T11:00:00.000Z",
               appName: "Editor",
               windowTitle: "main.ts",
@@ -430,7 +430,7 @@ it.effect("preserves window capture metadata in thread.turn.start", () =>
     const attachment = parsed.message.attachments[0];
     assert.strictEqual(attachment?.type, "image");
     assert.deepStrictEqual((attachment as ChatImageAttachment).source, {
-      kind: "window-capture",
+      kind: "snap-shot",
       capturedAt: "2026-08-24T11:00:00.000Z",
       appName: "Editor",
       windowTitle: "main.ts",
@@ -463,7 +463,7 @@ it.effect("preserves window capture metadata in thread.turn.start", () =>
 it.effect("rejects accessibility trees above the serialized payload limit", () =>
   Effect.gen(function* () {
     const result = yield* Effect.exit(
-      decodeWindowCaptureAccessibility({
+      decodeSnapShotAccessibility({
         format: "element-tree",
         coordinateSpace: "captured-image",
         imageSize: { width: 800, height: 600 },

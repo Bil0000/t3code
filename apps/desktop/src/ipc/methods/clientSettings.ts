@@ -4,7 +4,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as DesktopClientSettings from "../../settings/DesktopClientSettings.ts";
-import * as DesktopWindowCapture from "../../windowCapture/DesktopWindowCapture.ts";
+import * as DesktopSnapShot from "../../snapShot/DesktopSnapShot.ts";
 import * as IpcChannels from "../channels.ts";
 import * as DesktopIpc from "../DesktopIpc.ts";
 
@@ -24,8 +24,8 @@ export const setClientSettings = DesktopIpc.makeIpcMethod({
   result: Schema.Void,
   handler: Effect.fn("desktop.ipc.clientSettings.set")(function* (settings) {
     const clientSettings = yield* DesktopClientSettings.DesktopClientSettings;
-    const windowCapture = yield* DesktopWindowCapture.DesktopWindowCapture;
+    const snapShot = yield* DesktopSnapShot.DesktopSnapShot;
     yield* clientSettings.set(settings);
-    yield* windowCapture.configure(settings);
+    yield* snapShot.configure(settings);
   }),
 });

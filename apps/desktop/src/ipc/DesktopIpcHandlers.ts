@@ -46,20 +46,20 @@ import {
   showContextMenu,
 } from "./methods/window.ts";
 import {
-  acknowledgeWindowCapture,
+  acknowledgeSnapShot,
   captureWindow,
-  checkWindowCaptureShortcut,
-  dismissWindowCaptureAnimation,
-  getWindowCaptureState,
-  setupWindowCapture,
-  previewWindowCaptureConfig,
-  applyWindowCaptureConfig,
-  listPendingWindowCaptures,
-  readWindowCapture,
-  requestWindowCapturePermissions,
-  setWindowCaptureAnimationDestination,
-  setWindowCaptureShortcutSuppressed,
-} from "./methods/windowCapture.ts";
+  checkSnapShotShortcut,
+  dismissSnapShotAnimation,
+  getSnapShotState,
+  setupSnapShot,
+  previewSnapShotConfig,
+  applySnapShotConfig,
+  listPendingSnapShots,
+  readSnapShot,
+  requestSnapShotPermissions,
+  setSnapShotAnimationDestination,
+  setSnapShotShortcutSuppressed,
+} from "./methods/snapShot.ts";
 import * as PreviewIpc from "./methods/preview.ts";
 import * as AppActivationIpc from "./methods/appActivation.ts";
 import { getWslState, setWslBackendEnabled, setWslDistro, setWslOnly } from "./methods/wsl.ts";
@@ -80,19 +80,19 @@ export const installDesktopIpcHandlers = Effect.fn("desktop.ipc.installHandlers"
   yield* ipc.handle(getClientSettings);
   yield* ipc.handle(setClientSettings);
   yield* ipc.handle(getConnectionCatalog);
-  yield* ipc.handle(getWindowCaptureState);
-  yield* ipc.handle(setupWindowCapture);
-  yield* ipc.handle(previewWindowCaptureConfig);
-  yield* ipc.handle(applyWindowCaptureConfig);
-  yield* ipc.handle(requestWindowCapturePermissions);
-  yield* ipc.handle(checkWindowCaptureShortcut);
-  yield* ipc.handle(setWindowCaptureShortcutSuppressed);
+  yield* ipc.handle(getSnapShotState);
+  yield* ipc.handle(setupSnapShot);
+  yield* ipc.handle(previewSnapShotConfig);
+  yield* ipc.handle(applySnapShotConfig);
+  yield* ipc.handle(requestSnapShotPermissions);
+  yield* ipc.handle(checkSnapShotShortcut);
+  yield* ipc.handle(setSnapShotShortcutSuppressed);
   yield* ipc.handle(captureWindow);
-  yield* ipc.handle(listPendingWindowCaptures);
-  yield* ipc.handle(readWindowCapture);
-  yield* ipc.handle(setWindowCaptureAnimationDestination);
-  yield* ipc.handle(dismissWindowCaptureAnimation);
-  yield* ipc.handle(acknowledgeWindowCapture);
+  yield* ipc.handle(listPendingSnapShots);
+  yield* ipc.handle(readSnapShot);
+  yield* ipc.handle(setSnapShotAnimationDestination);
+  yield* ipc.handle(dismissSnapShotAnimation);
+  yield* ipc.handle(acknowledgeSnapShot);
   yield* ipc.handle(setConnectionCatalog);
   yield* ipc.handle(clearConnectionCatalog);
 

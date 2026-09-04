@@ -20,8 +20,8 @@ import {
   RuntimeRequestId,
   ProviderSendTurnInput,
   type ChatImageAttachment,
-  type WindowCaptureAccessibility,
-  type WindowCaptureAccessibilityNode,
+  type SnapShotAccessibility,
+  type SnapShotAccessibilityNode,
   PROVIDER_SEND_TURN_MAX_INPUT_CHARS,
   ProviderSessionStartInput,
   ProviderStopSessionInput,
@@ -74,18 +74,18 @@ import * as ServerSettings from "../../serverSettings.ts";
 const isModelSelection = Schema.is(ModelSelection);
 const encodePromptJson = Schema.encodeSync(Schema.fromJsonString(Schema.Unknown));
 
-interface WindowCapturePromptAccessibilityNode {
+interface SnapShotPromptAccessibilityNode {
   readonly role: string;
   readonly name?: string;
   readonly value?: string;
   readonly description?: string;
-  readonly bounds?: NonNullable<WindowCaptureAccessibilityNode["bounds"]>;
-  readonly state?: WindowCaptureAccessibilityNode["state"];
+  readonly bounds?: NonNullable<SnapShotAccessibilityNode["bounds"]>;
+  readonly state?: SnapShotAccessibilityNode["state"];
   readonly actions?: ReadonlyArray<string>;
-  readonly children?: ReadonlyArray<WindowCapturePromptAccessibilityNode>;
+  readonly children?: ReadonlyArray<SnapShotPromptAccessibilityNode>;
 }
 
-type WindowCapturePromptAccessibility =
+type SnapShotPromptAccessibility =
   | {
       readonly format: "flat-text";
       readonly text: string;
@@ -96,14 +96,14 @@ type WindowCapturePromptAccessibility =
       readonly coordinateSpace?: "captured-image";
       readonly imageSize?: { readonly width: number; readonly height: number };
       readonly truncated?: true;
-      readonly root: WindowCapturePromptAccessibilityNode;
+      readonly root: SnapShotPromptAccessibilityNode;
     };
 
 function normalizedAccessibilityLabel(value: string): string {
   return value.trim().replaceAll(/\s+/g, " ").toLowerCase();
 }
 
-function isRedundantWindowButtonDescription(node: WindowCaptureAccessibilityNode): boolean {
+function isRedundantWindowButtonDescription(node: SnapShotAccessibilityNode): boolean {
   if (node.role !== "button" || !node.name || !node.description) return false;
   return (
     normalizedAccessibilityLabel(node.description) ===
@@ -112,7 +112,7 @@ function isRedundantWindowButtonDescription(node: WindowCaptureAccessibilityNode
 }
 
 function isFullImageBounds(
-  bounds: NonNullable<WindowCaptureAccessibilityNode["bounds"]>,
+  bounds: NonNullable<SnapShotAccessibilityNode["bounds"]>,
   imageSize: { readonly width: number; readonly height: number },
 ): boolean {
   return (
@@ -124,10 +124,10 @@ function isFullImageBounds(
 }
 
 function compactAccessibilityNodeForPrompt(
-  node: WindowCaptureAccessibilityNode,
+  node: SnapShotAccessibilityNode,
   imageSize: { readonly width: number; readonly height: number },
   options: { readonly isRoot: boolean; readonly parentName?: string },
-): ReadonlyArray<WindowCapturePromptAccessibilityNode> {
+): ReadonlyArray<SnapShotPromptAccessibilityNode> {
   const bounds =
     node.bounds && !(options.isRoot && isFullImageBounds(node.bounds, imageSize))
       ? node.bounds
@@ -145,7 +145,7 @@ function compactAccessibilityNodeForPrompt(
           : {}),
     }),
   );
-  const compacted: WindowCapturePromptAccessibilityNode = {
+  const compacted: SnapShotPromptAccessibilityNode = {
     role: node.role,
     ...(name ? { name } : {}),
     ...(node.value ? { value: node.value } : {}),
@@ -185,13 +185,13 @@ function compactAccessibilityNodeForPrompt(
   return [compacted];
 }
 
-function accessibilityNodeHasBounds(node: WindowCapturePromptAccessibilityNode): boolean {
+function accessibilityNodeHasBounds(node: SnapShotPromptAccessibilityNode): boolean {
   return Boolean(node.bounds || node.children?.some(accessibilityNodeHasBounds));
 }
 
 function compactAccessibilityForPrompt(
-  accessibility: WindowCaptureAccessibility,
-): WindowCapturePromptAccessibility {
+  accessibility: SnapShotAccessibility,
+): SnapShotPromptAccessibility {
   if (accessibility.format === "flat-text") {
     return {
       format: "flat-text",

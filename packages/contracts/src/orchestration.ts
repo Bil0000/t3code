@@ -185,18 +185,18 @@ const ChatAttachmentId = TrimmedNonEmptyString.check(
 );
 export type ChatAttachmentId = typeof ChatAttachmentId.Type;
 
-export const WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS = 32_000;
-export const WINDOW_CAPTURE_ACCESSIBILITY_MAX_NODES = 10_000;
-export const WINDOW_CAPTURE_ACCESSIBILITY_MAX_SERIALIZED_CHARS = 32_000;
+export const SNAP_SHOT_ACCESSIBLE_TEXT_MAX_CHARS = 32_000;
+export const SNAP_SHOT_ACCESSIBILITY_MAX_NODES = 10_000;
+export const SNAP_SHOT_ACCESSIBILITY_MAX_SERIALIZED_CHARS = 32_000;
 
-const WindowCaptureAccessibilityBounds = Schema.Struct({
+const SnapShotAccessibilityBounds = Schema.Struct({
   x: NonNegativeInt,
   y: NonNegativeInt,
   width: PositiveInt,
   height: PositiveInt,
 });
 
-const WindowCaptureAccessibilityState = Schema.Struct({
+const SnapShotAccessibilityState = Schema.Struct({
   active: Schema.optional(Schema.Boolean),
   busy: Schema.optional(Schema.Boolean),
   checked: Schema.optional(Schema.Literals(["on", "off", "mixed"])),
@@ -208,43 +208,40 @@ const WindowCaptureAccessibilityState = Schema.Struct({
   visible: Schema.optional(Schema.Boolean),
 });
 
-export interface WindowCaptureAccessibilityNode {
+export interface SnapShotAccessibilityNode {
   readonly role: string;
   readonly name?: string;
   readonly value?: string;
   readonly description?: string;
-  readonly bounds: typeof WindowCaptureAccessibilityBounds.Type | null;
-  readonly state?: typeof WindowCaptureAccessibilityState.Type;
+  readonly bounds: typeof SnapShotAccessibilityBounds.Type | null;
+  readonly state?: typeof SnapShotAccessibilityState.Type;
   readonly actions?: Array<string>;
-  readonly children: Array<WindowCaptureAccessibilityNode>;
+  readonly children: Array<SnapShotAccessibilityNode>;
 }
 
-export const WindowCaptureAccessibilityNode: Schema.Codec<WindowCaptureAccessibilityNode> =
-  Schema.Struct({
-    role: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
-    name: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(1_000))),
-    value: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(8_000))),
-    description: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2_000))),
-    bounds: Schema.NullOr(WindowCaptureAccessibilityBounds),
-    state: Schema.optionalKey(WindowCaptureAccessibilityState),
-    actions: Schema.optionalKey(
-      Schema.mutable(Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(100)))).check(
-        Schema.isMaxLength(32),
-      ),
+export const SnapShotAccessibilityNode: Schema.Codec<SnapShotAccessibilityNode> = Schema.Struct({
+  role: TrimmedNonEmptyString.check(Schema.isMaxLength(100)),
+  name: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(1_000))),
+  value: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(8_000))),
+  description: Schema.optionalKey(TrimmedNonEmptyString.check(Schema.isMaxLength(2_000))),
+  bounds: Schema.NullOr(SnapShotAccessibilityBounds),
+  state: Schema.optionalKey(SnapShotAccessibilityState),
+  actions: Schema.optionalKey(
+    Schema.mutable(Schema.Array(TrimmedNonEmptyString.check(Schema.isMaxLength(100)))).check(
+      Schema.isMaxLength(32),
     ),
-    children: Schema.mutable(
-      Schema.Array(
-        Schema.suspend(
-          (): Schema.Codec<WindowCaptureAccessibilityNode> => WindowCaptureAccessibilityNode,
-        ),
-      ),
-    ).check(Schema.isMaxLength(WINDOW_CAPTURE_ACCESSIBILITY_MAX_NODES)),
-  });
+  ),
+  children: Schema.mutable(
+    Schema.Array(
+      Schema.suspend((): Schema.Codec<SnapShotAccessibilityNode> => SnapShotAccessibilityNode),
+    ),
+  ).check(Schema.isMaxLength(SNAP_SHOT_ACCESSIBILITY_MAX_NODES)),
+});
 
-const WindowCaptureAccessibilityWire = Schema.Union([
+const SnapShotAccessibilityWire = Schema.Union([
   Schema.Struct({
     format: Schema.Literal("flat-text"),
-    text: TrimmedNonEmptyString.check(Schema.isMaxLength(WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS)),
+    text: TrimmedNonEmptyString.check(Schema.isMaxLength(SNAP_SHOT_ACCESSIBLE_TEXT_MAX_CHARS)),
     truncated: Schema.Boolean,
   }),
   Schema.Struct({
@@ -252,39 +249,39 @@ const WindowCaptureAccessibilityWire = Schema.Union([
     coordinateSpace: Schema.Literal("captured-image"),
     imageSize: Schema.Struct({ width: PositiveInt, height: PositiveInt }),
     truncated: Schema.Boolean,
-    root: WindowCaptureAccessibilityNode,
+    root: SnapShotAccessibilityNode,
   }),
 ]);
-export const WindowCaptureAccessibility = WindowCaptureAccessibilityWire.check(
-  Schema.makeFilter((accessibility: typeof WindowCaptureAccessibilityWire.Type) => {
+export const SnapShotAccessibility = SnapShotAccessibilityWire.check(
+  Schema.makeFilter((accessibility: typeof SnapShotAccessibilityWire.Type) => {
     if (accessibility.format === "flat-text") return undefined;
     let nodes = 0;
     const stack = [accessibility.root];
     while (stack.length > 0) {
       const node = stack.pop()!;
       nodes += 1;
-      if (nodes > WINDOW_CAPTURE_ACCESSIBILITY_MAX_NODES) {
-        return `Accessibility trees must not exceed ${WINDOW_CAPTURE_ACCESSIBILITY_MAX_NODES} nodes.`;
+      if (nodes > SNAP_SHOT_ACCESSIBILITY_MAX_NODES) {
+        return `Accessibility trees must not exceed ${SNAP_SHOT_ACCESSIBILITY_MAX_NODES} nodes.`;
       }
       stack.push(...node.children);
     }
     return (
-      JSON.stringify(accessibility).length <= WINDOW_CAPTURE_ACCESSIBILITY_MAX_SERIALIZED_CHARS ||
-      `Accessibility trees must not exceed ${WINDOW_CAPTURE_ACCESSIBILITY_MAX_SERIALIZED_CHARS} serialized characters.`
+      JSON.stringify(accessibility).length <= SNAP_SHOT_ACCESSIBILITY_MAX_SERIALIZED_CHARS ||
+      `Accessibility trees must not exceed ${SNAP_SHOT_ACCESSIBILITY_MAX_SERIALIZED_CHARS} serialized characters.`
     );
   }),
 );
-export type WindowCaptureAccessibility = typeof WindowCaptureAccessibility.Type;
+export type SnapShotAccessibility = typeof SnapShotAccessibility.Type;
 
-export const WindowCaptureSource = Schema.Struct({
-  kind: Schema.Literal("window-capture"),
+export const SnapShotSource = Schema.Struct({
+  kind: Schema.Literal("snap-shot"),
   capturedAt: IsoDateTime,
   appName: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   windowTitle: TrimmedString.check(Schema.isMaxLength(1_000)),
   accessibleText: Schema.optional(
-    TrimmedNonEmptyString.check(Schema.isMaxLength(WINDOW_CAPTURE_ACCESSIBLE_TEXT_MAX_CHARS)),
+    TrimmedNonEmptyString.check(Schema.isMaxLength(SNAP_SHOT_ACCESSIBLE_TEXT_MAX_CHARS)),
   ),
-  accessibility: Schema.optional(WindowCaptureAccessibility),
+  accessibility: Schema.optional(SnapShotAccessibility),
   appIdentifier: Schema.optional(TrimmedNonEmptyString.check(Schema.isMaxLength(255))),
   appIconDataUrl: Schema.optional(
     TrimmedNonEmptyString.check(
@@ -293,7 +290,7 @@ export const WindowCaptureSource = Schema.Struct({
     ),
   ),
 });
-export type WindowCaptureSource = typeof WindowCaptureSource.Type;
+export type SnapShotSource = typeof SnapShotSource.Type;
 
 export const ChatImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
@@ -301,7 +298,7 @@ export const ChatImageAttachment = Schema.Struct({
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100), Schema.isPattern(/^image\//i)),
   sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)),
-  source: Schema.optional(WindowCaptureSource),
+  source: Schema.optional(SnapShotSource),
 });
 export type ChatImageAttachment = typeof ChatImageAttachment.Type;
 
@@ -347,7 +344,7 @@ const UploadChatImageAttachment = Schema.Struct({
   dataUrl: TrimmedNonEmptyString.check(
     Schema.isMaxLength(PROVIDER_SEND_TURN_MAX_IMAGE_DATA_URL_CHARS),
   ),
-  source: Schema.optional(WindowCaptureSource),
+  source: Schema.optional(SnapShotSource),
 });
 export type UploadChatImageAttachment = typeof UploadChatImageAttachment.Type;
 

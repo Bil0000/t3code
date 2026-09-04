@@ -1131,7 +1131,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         const fs = yield* FileSystem.FileSystem;
         const path = yield* Path.Path;
         const repoRoot = yield* fs.makeTempDirectoryScoped({ prefix: "t3-kde-stage-test-" });
-        const protocols = path.join(repoRoot, "native/hyprland-window-capture/protocols");
+        const protocols = path.join(repoRoot, "native/hyprland-snap-shot/protocols");
         yield* fs.makeDirectory(protocols, { recursive: true });
         yield* fs.writeFileString(path.join(protocols, "capture.xml"), "BSD protocol notice");
         for (const backend of ["kde", "hyprland"] as const) {
@@ -1141,9 +1141,9 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
           ] as const) {
             const binary = path.join(
               repoRoot,
-              `native/${backend}-window-capture/target`,
+              `native/${backend}-snap-shot/target`,
               target,
-              `release/t3-${backend}-window-capture`,
+              `release/t3-${backend}-snap-shot`,
             );
             const stageResourcesDir = path.join(repoRoot, "stage", backend, arch);
             const spawner = Layer.succeed(
@@ -1158,7 +1158,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
                     "--locked",
                     "--release",
                     "--manifest-path",
-                    path.join(repoRoot, `native/${backend}-window-capture/Cargo.toml`),
+                    path.join(repoRoot, `native/${backend}-snap-shot/Cargo.toml`),
                     "--target",
                     target,
                   ]);
@@ -1177,7 +1177,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
             }).pipe(Effect.provide(spawner));
             const installed = path.join(
               stageResourcesDir,
-              `${backend}-capture/t3-${backend}-window-capture`,
+              `${backend}-capture/t3-${backend}-snap-shot`,
             );
             assert.equal(yield* fs.readFileString(installed), `helper-${arch}`);
             assert.equal((yield* fs.stat(installed)).mode & 0o777, 0o755);

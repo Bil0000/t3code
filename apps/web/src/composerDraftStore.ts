@@ -17,7 +17,7 @@ import {
   type ScopedProjectRef,
   type ScopedThreadRef,
   ThreadId,
-  WindowCaptureSource,
+  SnapShotSource,
 } from "@t3tools/contracts";
 import {
   parseScopedProjectKey,
@@ -63,7 +63,7 @@ import { ReviewCommentContextSchema, type ReviewCommentContext } from "./reviewC
 const isRuntimeMode = Schema.is(RuntimeMode);
 const isProviderDriverKind = Schema.is(ProviderDriverKind);
 const isReviewCommentContext = Schema.is(ReviewCommentContextSchema);
-const isWindowCaptureSource = Schema.is(WindowCaptureSource);
+const isSnapShotSource = Schema.is(SnapShotSource);
 
 export const COMPOSER_DRAFT_STORAGE_KEY = "t3code:composer-drafts:v1";
 const COMPOSER_DRAFT_STORAGE_VERSION = 9;
@@ -120,7 +120,7 @@ export const PersistedComposerImageAttachment = Schema.Struct({
   name: Schema.String,
   mimeType: Schema.String,
   sizeBytes: Schema.Number,
-  source: Schema.optional(WindowCaptureSource),
+  source: Schema.optional(SnapShotSource),
   dataUrl: Schema.String,
 });
 export type PersistedComposerImageAttachment = typeof PersistedComposerImageAttachment.Type;
@@ -1280,7 +1280,7 @@ function normalizePersistedAttachment(value: unknown): PersistedComposerImageAtt
     mimeType,
     sizeBytes,
     dataUrl,
-    ...(isWindowCaptureSource(candidate.source) ? { source: candidate.source } : {}),
+    ...(isSnapShotSource(candidate.source) ? { source: candidate.source } : {}),
   };
 }
 

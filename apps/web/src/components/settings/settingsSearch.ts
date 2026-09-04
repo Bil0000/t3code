@@ -5,7 +5,7 @@ export type SettingsPath =
   | "/settings/general"
   | "/settings/appearance"
   | "/settings/keybindings"
-  | "/settings/window-capture"
+  | "/settings/snap-shot"
   | "/settings/providers"
   | "/settings/integrations"
   | "/settings/source-control"
@@ -51,7 +51,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
-  "/settings/window-capture": "SnapShots",
+  "/settings/snap-shot": "SnapShots",
   "/settings/providers": "Providers",
   "/settings/integrations": "Integrations",
   "/settings/source-control": "Source Control",
@@ -319,43 +319,43 @@ export const SETTINGS_SEARCH_ITEMS = [
     searchTerms: ["keyboard shortcuts hotkeys commands bindings json"],
   },
   {
-    id: "window-capture-enabled",
+    id: "snap-shot-enabled",
     title: "SnapShots",
     searchTerms: ["window capture screenshot"],
-    to: "/settings/window-capture",
+    to: "/settings/snap-shot",
   },
   {
-    id: "window-capture-accessibility",
+    id: "snap-shot-accessibility",
     title: "Include app text",
-    to: "/settings/window-capture",
-    targetId: "window-capture-enabled",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
     searchTerms: [
       "capture accessibility data text UI structure elements privacy omit agent context",
     ],
   },
   {
-    id: "window-capture-shortcut",
+    id: "snap-shot-shortcut",
     title: "Capture shortcut",
-    to: "/settings/window-capture",
-    targetId: "window-capture-enabled",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
   },
   {
-    id: "window-capture-sound",
+    id: "snap-shot-sound",
     title: "Capture sound",
-    to: "/settings/window-capture",
-    targetId: "window-capture-enabled",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
   },
   {
-    id: "window-capture-flash",
+    id: "snap-shot-flash",
     title: "Capture flash",
-    to: "/settings/window-capture",
-    targetId: "window-capture-enabled",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
   },
   {
-    id: "window-capture-animations",
+    id: "snap-shot-animations",
     title: "Capture animations",
-    to: "/settings/window-capture",
-    targetId: "window-capture-enabled",
+    to: "/settings/snap-shot",
+    targetId: "snap-shot-enabled",
   },
   {
     id: "providers",

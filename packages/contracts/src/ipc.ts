@@ -87,7 +87,7 @@ import type {
   OrchestrationSubscribeThreadInput,
   OrchestrationThreadStreamItem,
 } from "./orchestration.ts";
-import { WindowCaptureSource } from "./orchestration.ts";
+import { SnapShotSource } from "./orchestration.ts";
 import { EnvironmentId, TrimmedNonEmptyString } from "./baseSchemas.ts";
 import { BrowserProfileId } from "./browserProfile.ts";
 import type {
@@ -98,11 +98,7 @@ import type {
 import { AuthAccessTokenResult, AuthSessionState, AuthWebSocketTicketResult } from "./auth.ts";
 import { AdvertisedEndpoint } from "./remoteAccess.ts";
 import { ExecutionEnvironmentDescriptor } from "./environment.ts";
-import {
-  type ClientSettings,
-  type QuitConfirmationMode,
-  WindowCaptureShortcut,
-} from "./settings.ts";
+import { type ClientSettings, type QuitConfirmationMode, SnapShotShortcut } from "./settings.ts";
 import type { EditorId } from "./editor.ts";
 import type {
   SourceControlCloneRepositoryInput,
@@ -203,8 +199,8 @@ export const DesktopAppBrandingSchema = Schema.Struct({
   displayName: Schema.String,
 });
 
-export const DesktopWindowCaptureMode = Schema.Literals(["direct", "portal", "unavailable"]);
-export type DesktopWindowCaptureMode = typeof DesktopWindowCaptureMode.Type;
+export const DesktopSnapShotMode = Schema.Literals(["direct", "portal", "unavailable"]);
+export type DesktopSnapShotMode = typeof DesktopSnapShotMode.Type;
 
 export const DesktopCaptureExtensionState = Schema.Struct({
   status: Schema.Literals([
@@ -228,7 +224,7 @@ export const DesktopCaptureHelperState = Schema.Struct({
 });
 export type DesktopCaptureHelperState = typeof DesktopCaptureHelperState.Type;
 
-export const DesktopWindowCaptureSetupAction = Schema.Literals([
+export const DesktopSnapShotSetupAction = Schema.Literals([
   "install-extension",
   "enable-extension",
   "disable-extension",
@@ -240,7 +236,7 @@ export const DesktopWindowCaptureSetupAction = Schema.Literals([
   "allow-accessibility",
   "retry-shortcut",
 ]);
-export type DesktopWindowCaptureSetupAction = typeof DesktopWindowCaptureSetupAction.Type;
+export type DesktopSnapShotSetupAction = typeof DesktopSnapShotSetupAction.Type;
 
 export const DesktopCaptureConfigRequest = Schema.Struct({
   operation: Schema.Literals(["install", "remove"]),
@@ -266,14 +262,14 @@ export const DesktopCaptureConfigApplied = Schema.Struct({
 });
 export type DesktopCaptureConfigApplied = typeof DesktopCaptureConfigApplied.Type;
 
-export const DesktopWindowCaptureState = Schema.Struct({
-  mode: DesktopWindowCaptureMode,
+export const DesktopSnapShotState = Schema.Struct({
+  mode: DesktopSnapShotMode,
   linuxDesktop: Schema.optional(Schema.Literals(["gnome", "kde", "niri", "hyprland"])),
   linuxBackend: Schema.optional(
     Schema.Literals(["screenshot-portal", "gnome-extension", "niri", "kde", "hyprland", "picker"]),
   ),
   linuxFeedbackAvailable: Schema.optional(Schema.Boolean),
-  shortcut: WindowCaptureShortcut,
+  shortcut: SnapShotShortcut,
   shortcutRegistered: Schema.Boolean,
   shortcutPending: Schema.optional(Schema.Boolean),
   shortcutCanRetry: Schema.optional(Schema.Boolean),
@@ -291,38 +287,37 @@ export const DesktopWindowCaptureState = Schema.Struct({
   shortcutVerified: Schema.optional(Schema.Boolean),
   message: Schema.NullOr(Schema.String),
 });
-export type DesktopWindowCaptureState = typeof DesktopWindowCaptureState.Type;
+export type DesktopSnapShotState = typeof DesktopSnapShotState.Type;
 
-export const DesktopWindowCaptureShortcutAvailability = Schema.Struct({
+export const DesktopSnapShotShortcutAvailability = Schema.Struct({
   available: Schema.Boolean,
   message: Schema.NullOr(Schema.String),
 });
-export type DesktopWindowCaptureShortcutAvailability =
-  typeof DesktopWindowCaptureShortcutAvailability.Type;
+export type DesktopSnapShotShortcutAvailability = typeof DesktopSnapShotShortcutAvailability.Type;
 
-export const DesktopWindowCaptureId = TrimmedNonEmptyString.check(
+export const DesktopSnapShotId = TrimmedNonEmptyString.check(
   Schema.isMaxLength(64),
   Schema.isPattern(/^[a-f0-9-]+$/i),
 );
-export type DesktopWindowCaptureId = typeof DesktopWindowCaptureId.Type;
+export type DesktopSnapShotId = typeof DesktopSnapShotId.Type;
 
-export const DesktopPendingWindowCapture = Schema.Struct({
-  id: DesktopWindowCaptureId,
+export const DesktopPendingSnapShot = Schema.Struct({
+  id: DesktopSnapShotId,
   name: Schema.String,
   mimeType: Schema.Literal("image/png"),
   sizeBytes: Schema.Int,
-  source: WindowCaptureSource,
+  source: SnapShotSource,
 });
-export type DesktopPendingWindowCapture = typeof DesktopPendingWindowCapture.Type;
+export type DesktopPendingSnapShot = typeof DesktopPendingSnapShot.Type;
 
-export const DesktopWindowCapture = Schema.Struct({
-  ...DesktopPendingWindowCapture.fields,
+export const DesktopSnapShot = Schema.Struct({
+  ...DesktopPendingSnapShot.fields,
   dataUrl: Schema.String,
 });
-export type DesktopWindowCapture = typeof DesktopWindowCapture.Type;
+export type DesktopSnapShot = typeof DesktopSnapShot.Type;
 
-export const DesktopWindowCaptureAnimationDestination = Schema.Struct({
-  id: DesktopWindowCaptureId,
+export const DesktopSnapShotAnimationDestination = Schema.Struct({
+  id: DesktopSnapShotId,
   viewportFrame: Schema.Struct({
     x: Schema.Number,
     y: Schema.Number,
@@ -335,14 +330,13 @@ export const DesktopWindowCaptureAnimationDestination = Schema.Struct({
   cornerRadius: Schema.Number,
   details: Schema.optional(
     Schema.Struct({
-      appName: WindowCaptureSource.fields.appName,
-      windowTitle: WindowCaptureSource.fields.windowTitle,
-      appIconDataUrl: WindowCaptureSource.fields.appIconDataUrl,
+      appName: SnapShotSource.fields.appName,
+      windowTitle: SnapShotSource.fields.windowTitle,
+      appIconDataUrl: SnapShotSource.fields.appIconDataUrl,
     }),
   ),
 });
-export type DesktopWindowCaptureAnimationDestination =
-  typeof DesktopWindowCaptureAnimationDestination.Type;
+export type DesktopSnapShotAnimationDestination = typeof DesktopSnapShotAnimationDestination.Type;
 
 export interface DesktopRuntimeInfo {
   hostArch: DesktopRuntimeArch;
@@ -1222,25 +1216,25 @@ export interface DesktopBridge {
   discoverSshHosts: () => Promise<readonly DesktopDiscoveredSshHost[]>;
   /** Resolves a suggested SSH alias before populating the connection form. */
   resolveSshHost: (alias: string) => Promise<DesktopSshEnvironmentTarget>;
-  requestWindowCapturePermissions?: (includeAccessibility: boolean) => Promise<void>;
-  getWindowCaptureState?: () => Promise<DesktopWindowCaptureState>;
-  setupWindowCapture?: (action: DesktopWindowCaptureSetupAction) => Promise<void>;
-  previewWindowCaptureConfig?: (
+  requestSnapShotPermissions?: (includeAccessibility: boolean) => Promise<void>;
+  getSnapShotState?: () => Promise<DesktopSnapShotState>;
+  setupSnapShot?: (action: DesktopSnapShotSetupAction) => Promise<void>;
+  previewSnapShotConfig?: (
     request: DesktopCaptureConfigRequest,
   ) => Promise<DesktopCaptureConfigPreview | null>;
-  applyWindowCaptureConfig?: (previewId: string) => Promise<DesktopCaptureConfigApplied>;
-  checkWindowCaptureShortcut?: (
-    shortcut: WindowCaptureShortcut,
-  ) => Promise<DesktopWindowCaptureShortcutAvailability>;
-  setWindowCaptureShortcutSuppressed?: (suppressed: boolean) => Promise<void>;
+  applySnapShotConfig?: (previewId: string) => Promise<DesktopCaptureConfigApplied>;
+  checkSnapShotShortcut?: (
+    shortcut: SnapShotShortcut,
+  ) => Promise<DesktopSnapShotShortcutAvailability>;
+  setSnapShotShortcutSuppressed?: (suppressed: boolean) => Promise<void>;
   captureWindow?: () => Promise<void>;
-  listPendingWindowCaptures?: () => Promise<readonly DesktopPendingWindowCapture[]>;
-  readWindowCapture?: (id: string) => Promise<DesktopWindowCapture>;
-  setWindowCaptureAnimationDestination?: (
-    destination: DesktopWindowCaptureAnimationDestination,
+  listPendingSnapShots?: () => Promise<readonly DesktopPendingSnapShot[]>;
+  readSnapShot?: (id: string) => Promise<DesktopSnapShot>;
+  setSnapShotAnimationDestination?: (
+    destination: DesktopSnapShotAnimationDestination,
   ) => Promise<void>;
-  dismissWindowCaptureAnimation?: (id: DesktopWindowCaptureId) => Promise<void>;
-  acknowledgeWindowCapture?: (id: string) => Promise<void>;
+  dismissSnapShotAnimation?: (id: DesktopSnapShotId) => Promise<void>;
+  acknowledgeSnapShot?: (id: string) => Promise<void>;
   ensureSshEnvironment: (
     target: DesktopSshEnvironmentTarget,
     options?: { issuePairingToken?: boolean },
@@ -1291,7 +1285,7 @@ export interface DesktopBridge {
    */
   probeRemoteEditors?: () => Promise<readonly EditorId[]>;
   onMenuAction: (listener: (action: string) => void) => () => void;
-  onWindowCaptureReady?: (listener: (id: DesktopWindowCaptureId) => void) => () => void;
+  onSnapShotReady?: (listener: (id: DesktopSnapShotId) => void) => () => void;
   /**
    * Quit-confirmation hint pushes. Optional: older desktop builds never emit
    * them.

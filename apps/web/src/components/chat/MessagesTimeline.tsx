@@ -108,9 +108,9 @@ import {
   ExpandedImagePreview,
 } from "./ExpandedImagePreview";
 import {
-  WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS,
-  WindowCaptureAttachmentDetails,
-} from "./WindowCaptureAttachmentDetails";
+  SNAP_SHOT_ATTACHMENT_FRAME_CLASS,
+  SnapShotAttachmentDetails,
+} from "./SnapShotAttachmentDetails";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesCard } from "./ChangedFilesTree";
 import { shouldAutoExpandChangedFiles } from "./changedFilesPresentation";
@@ -1269,8 +1269,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                 key={image.id}
                 className={cn(
                   "bg-background/70",
-                  image.source?.kind === "window-capture" && image.previewUrl
-                    ? WINDOW_CAPTURE_ATTACHMENT_FRAME_CLASS
+                  image.source?.kind === "snap-shot" && image.previewUrl
+                    ? SNAP_SHOT_ATTACHMENT_FRAME_CLASS
                     : "aspect-[4/3] overflow-hidden rounded-lg border border-border/80",
                 )}
               >
@@ -1296,8 +1296,8 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
                     {image.name}
                   </div>
                 )}
-                {image.previewUrl && image.source?.kind === "window-capture" ? (
-                  <WindowCaptureAttachmentDetails source={image.source} />
+                {image.previewUrl && image.source?.kind === "snap-shot" ? (
+                  <SnapShotAttachmentDetails source={image.source} />
                 ) : null}
               </div>
             ))}

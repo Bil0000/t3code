@@ -45,7 +45,7 @@ import * as ElectronTheme from "../electron/ElectronTheme.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
   MENU_ACTION_CHANNEL,
-  WINDOW_CAPTURE_READY_CHANNEL,
+  SNAP_SHOT_READY_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import * as DesktopServerExposure from "../backend/DesktopServerExposure.ts";
@@ -1290,20 +1290,20 @@ describe("DesktopWindow", () => {
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
-        yield* desktopWindow.dispatchMenuAction("window-capture-started:capture-1");
+        yield* desktopWindow.dispatchMenuAction("snap-shot-started:capture-1");
         assert.equal(foreground, "T3 Code");
         foreground = "Explorer";
-        yield* desktopWindow.dispatchWindowCaptureReady("capture-1");
-        yield* desktopWindow.dispatchMenuAction("window-capture-failed:capture-2", {
+        yield* desktopWindow.dispatchSnapShotReady("capture-1");
+        yield* desktopWindow.dispatchMenuAction("snap-shot-failed:capture-2", {
           reveal: false,
         });
 
         assert.equal(foreground, "Explorer");
         assert.deepEqual(operations, ["reveal", "send", "send", "send"]);
         assert.deepEqual(fakeWindow.send.mock.calls, [
-          [MENU_ACTION_CHANNEL, "window-capture-started:capture-1"],
-          [WINDOW_CAPTURE_READY_CHANNEL, "capture-1"],
-          [MENU_ACTION_CHANNEL, "window-capture-failed:capture-2"],
+          [MENU_ACTION_CHANNEL, "snap-shot-started:capture-1"],
+          [SNAP_SHOT_READY_CHANNEL, "capture-1"],
+          [MENU_ACTION_CHANNEL, "snap-shot-failed:capture-2"],
         ]);
       }).pipe(Effect.provide(layer));
     }),
@@ -1317,7 +1317,7 @@ describe("DesktopWindow", () => {
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
         yield* desktopWindow.showConnectingSplash;
-        yield* desktopWindow.dispatchWindowCaptureReady("capture-1");
+        yield* desktopWindow.dispatchSnapShotReady("capture-1");
 
         assert.equal(yield* Ref.get(scenario.createCalls), 1);
         assert.equal(splash.send.mock.calls.length, 0);
@@ -1339,7 +1339,7 @@ describe("DesktopWindow", () => {
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
         fakeWindow.isDestroyed.mockReturnValue(true);
         yield* Ref.set(mainWindow, Option.none());
-        yield* desktopWindow.dispatchWindowCaptureReady("capture-1");
+        yield* desktopWindow.dispatchSnapShotReady("capture-1");
 
         assert.equal(yield* Ref.get(createCount), 1);
         assert.equal(fakeWindow.send.mock.calls.length, 0);
@@ -1361,7 +1361,7 @@ describe("DesktopWindow", () => {
 
       yield* Effect.gen(function* () {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
-        yield* desktopWindow.dispatchWindowCaptureReady("capture-1");
+        yield* desktopWindow.dispatchSnapShotReady("capture-1");
         assert.equal(fakeWindow.send.mock.calls.length, 0);
         const onLoad = fakeWindow.webContentsOnce.mock.calls.find(
           ([event]) => event === "did-finish-load",
@@ -1369,7 +1369,7 @@ describe("DesktopWindow", () => {
         assert.isDefined(onLoad);
         onLoad?.();
 
-        assert.deepEqual(fakeWindow.send.mock.calls, [[WINDOW_CAPTURE_READY_CHANNEL, "capture-1"]]);
+        assert.deepEqual(fakeWindow.send.mock.calls, [[SNAP_SHOT_READY_CHANNEL, "capture-1"]]);
         assert.equal(onReveal.mock.calls.length, 0);
         assert.equal(yield* Ref.get(createCount), 0);
       }).pipe(Effect.provide(layer));

@@ -2,20 +2,20 @@ import {
   isModifierPairShortcut,
   type DesktopCaptureConfigApplied,
   type DesktopCaptureConfigPreview,
-  type DesktopWindowCaptureState,
+  type DesktopSnapShotState,
 } from "@t3tools/contracts";
 import { parseKeybindingShortcut } from "@t3tools/shared/keybindings";
 import { FileDiff } from "@pierre/diffs/react";
 import { parseDiffFromFile } from "@pierre/diffs";
 import { useMemo, useState } from "react";
-import { getDesktopWindowCaptureBridge } from "../../lib/desktopWindowCapture";
+import { getDesktopSnapShotBridge } from "../../lib/desktopSnapShot";
 import { resolveDiffThemeName } from "../../lib/diffRendering";
 import { useTheme } from "../../hooks/useTheme";
 import { useCopyToClipboard } from "../../hooks/useCopyToClipboard";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { shortcutToKeybindingInput } from "./KeybindingsSettings.logic";
-import { useWindowCaptureShortcutRecorder } from "./useWindowCaptureShortcutRecorder";
+import { useSnapShotShortcutRecorder } from "./useSnapShotShortcutRecorder";
 
 const DEFAULT_SHORTCUT = parseKeybindingShortcut("Ctrl+Shift+2")!;
 
@@ -27,13 +27,13 @@ export function CaptureShortcutConfig({
   onSaved,
   onComplete,
 }: {
-  state: DesktopWindowCaptureState;
+  state: DesktopSnapShotState;
   disabled?: boolean;
   onBusyChange?: (busy: boolean) => void;
   onSaved?: () => Promise<unknown>;
   onComplete?: () => Promise<void>;
 }) {
-  const bridge = getDesktopWindowCaptureBridge();
+  const bridge = getDesktopSnapShotBridge();
   const { resolvedTheme } = useTheme();
   const { copyToClipboard, isCopied } = useCopyToClipboard();
   const [preview, setPreview] = useState<DesktopCaptureConfigPreview | null>(null);
@@ -43,12 +43,12 @@ export function CaptureShortcutConfig({
   const [keys, setKeys] = useState<string | null>(null);
   const [customFile, setCustomFile] = useState(false);
   const busy = disabled || working !== null;
-  const supported = Boolean(bridge?.previewWindowCaptureConfig && bridge.applyWindowCaptureConfig);
+  const supported = Boolean(bridge?.previewSnapShotConfig && bridge.applySnapShotConfig);
   const changed = preview !== null && preview.before !== preview.after;
   const niri = state.linuxBackend === "niri";
   const desktop = niri ? "Niri" : "Hyprland";
   const shortcutKeys = (keys ?? preview?.shortcut)?.trim();
-  const recorder = useWindowCaptureShortcutRecorder({
+  const recorder = useSnapShotShortcutRecorder({
     shortcut: shortcutKeys
       ? (parseKeybindingShortcut(shortcutKeys.replace(/super/gi, "meta")) ?? DEFAULT_SHORTCUT)
       : DEFAULT_SHORTCUT,
@@ -90,14 +90,14 @@ export function CaptureShortcutConfig({
     onBusyChange?.(false);
   };
   const read = async (chooseFile = customFile, operation: "install" | "remove" = "install") => {
-    if (actionBusy || !bridge?.previewWindowCaptureConfig) return;
+    if (actionBusy || !bridge?.previewSnapShotConfig) return;
     begin("reading");
     setPreview(null);
     setResult(null);
     setCustomFile(chooseFile);
     try {
       setPreview(
-        await bridge.previewWindowCaptureConfig({
+        await bridge.previewSnapShotConfig({
           operation,
           chooseFile,
           ...(keys?.trim() ? { shortcut: keys.trim() } : {}),
@@ -113,10 +113,10 @@ export function CaptureShortcutConfig({
     }
   };
   const apply = async () => {
-    if (actionBusy || !preview || !bridge?.applyWindowCaptureConfig) return;
+    if (actionBusy || !preview || !bridge?.applySnapShotConfig) return;
     begin("writing");
     try {
-      const applied = await bridge.applyWindowCaptureConfig(preview.id);
+      const applied = await bridge.applySnapShotConfig(preview.id);
       setResult(applied);
       await onSaved?.();
       if (!applied.warning && preview.operation === "install" && onComplete) {

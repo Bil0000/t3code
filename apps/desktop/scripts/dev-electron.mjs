@@ -25,7 +25,7 @@ const requiredFiles = [
   "dist-electron/main.cjs",
   "dist-electron/electron/WindowsForegroundFocusWorker.cjs",
   "dist-electron/preload.cjs",
-  "dist-electron/windowCapture/GlobalShiftShortcutWorker.cjs",
+  "dist-electron/snapShot/GlobalShiftShortcutWorker.cjs",
   "../server/dist/bin.mjs",
 ];
 const watchedDirectories = [
@@ -35,7 +35,7 @@ const watchedDirectories = [
     files: new Set(["WindowsForegroundFocusWorker.cjs"]),
   },
   {
-    directory: "dist-electron/windowCapture",
+    directory: "dist-electron/snapShot",
     files: new Set(["GlobalShiftShortcutWorker.cjs"]),
   },
   { directory: "../server/dist", files: new Set(["bin.mjs"]) },
