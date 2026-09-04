@@ -7,6 +7,7 @@ import {
   captureSetupBackend,
   captureSetupDesktopName,
   captureSetupAccessReady,
+  captureSetupMacPermissionsReady,
 } from "./WindowCaptureSetupDialog.logic";
 
 export function windowCaptureStatus(
@@ -65,6 +66,21 @@ export function windowCaptureSetupButtonLabel(state: DesktopWindowCaptureState |
   if (captureSetupAccessReady(state)) return "Manage capture";
   const desktop = captureSetupDesktopName(state);
   return desktop ? `Set up ${desktop} capture` : "Continue setup";
+}
+
+// macOS setup has nothing left to manage once permissions and the shortcut are in
+// place; the shortcut row stays editable inline. Revoking a permission brings the
+// button back as "Continue setup" through the state message.
+export function windowCaptureSetupComplete(
+  state: DesktopWindowCaptureState | null,
+  includeAccessibility: boolean,
+): boolean {
+  return (
+    state?.macPermissions !== undefined &&
+    captureSetupAccessReady(state) &&
+    captureSetupMacPermissionsReady(state, includeAccessibility) &&
+    state.shortcutRegistered
+  );
 }
 
 export type WindowCaptureSoundSelection = WindowCaptureSound | "off";

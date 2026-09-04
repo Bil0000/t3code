@@ -208,57 +208,60 @@ export function WindowCaptureSetupDialog({
       setChecking(false);
     }
   };
-  const accessCopy = state.message
-    ? {
-        title: "Let's try that again",
-        description: "Couldn't check snapshots. Try again to continue.",
-      }
-    : backend === "gnome" && extension
-      ? extension.status === "enabled" && !accessReady
-        ? {
-            title: "Check capture access",
-            description: "The extension isn't ready yet. Try again in a moment.",
-          }
-        : GNOME_ACCESS_COPY[extension.status]
-      : helperBackend
-        ? helper?.status === "ready"
+  const accessCopy =
+    state.message && !macPermissions
+      ? {
+          title: "Let's try that again",
+          description: "Couldn't check snapshots. Try again to continue.",
+        }
+      : backend === "gnome" && extension
+        ? extension.status === "enabled" && !accessReady
           ? {
-              title: "Capture is ready",
-              description: "Next, choose your shortcut.",
+              title: "Check capture access",
+              description: "The extension isn't ready yet. Try again in a moment.",
             }
-          : helper?.status === "error"
+          : GNOME_ACCESS_COPY[extension.status]
+        : helperBackend
+          ? helper?.status === "ready"
             ? {
-                title: "Let's fix capture access",
-                description: "Try reinstalling the capture helper, then check again.",
+                title: "Capture is ready",
+                description: "Next, choose your shortcut.",
               }
-            : {
-                title:
-                  helper?.status === "update-required"
-                    ? "Update the capture helper"
-                    : "Allow snapshots",
-                description:
-                  "T3 Code's capture helper lets you capture other apps and return to your draft. It's included with T3 Code.",
-              }
-        : backend === "niri"
-          ? {
-              title: "Capture is ready",
-              description: "Next, choose your shortcut.",
-            }
-          : backend === "picker"
+            : helper?.status === "error"
+              ? {
+                  title: "Let's fix capture access",
+                  description: "Try reinstalling the capture helper, then check again.",
+                }
+              : {
+                  title:
+                    helper?.status === "update-required"
+                      ? "Update the capture helper"
+                      : "Allow snapshots",
+                  description:
+                    "T3 Code's capture helper lets you capture other apps and return to your draft. It's included with T3 Code.",
+                }
+          : backend === "niri"
             ? {
-                title: "Choose a window each time",
-                description:
-                  "Your desktop doesn't support automatic capture. You'll choose the window to capture instead.",
+                title: "Capture is ready",
+                description: "Next, choose your shortcut.",
               }
-            : {
-                title: "Allow snapshots",
-                description:
-                  backend === "portal"
-                    ? "Your desktop may ask for permission when you first capture."
-                    : macPermissions
-                      ? "Allow each permission, then continue."
-                      : "Allow access when prompted to start capturing windows.",
-              };
+            : backend === "picker"
+              ? {
+                  title: "Choose a window each time",
+                  description:
+                    "Your desktop doesn't support automatic capture. You'll choose the window to capture instead.",
+                }
+              : {
+                  title: "Allow snapshots",
+                  description:
+                    backend === "portal"
+                      ? "Your desktop may ask for permission when you first capture."
+                      : macPermissions
+                        ? macPermissionsReady
+                          ? "Permissions are in place. Continue to choose your shortcut."
+                          : "Allow each permission, then continue."
+                        : "Allow access when prompted to start capturing windows.",
+                };
   const title = step === "access" ? accessCopy.title : "Choose your shortcut";
   const description =
     step === "access"

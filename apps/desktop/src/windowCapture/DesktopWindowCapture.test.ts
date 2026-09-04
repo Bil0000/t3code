@@ -3108,6 +3108,46 @@ it.effect("reports macOS permission status and requests each permission on its o
   ).pipe(Effect.provide(testLayer("darwin")));
 });
 
+it.effect("flags revoked macOS permissions on read and re-registers once they return", () => {
+  accessibilityTrustedMock.mockReset().mockReturnValue(true);
+  mediaAccessStatusMock.mockReset().mockReturnValue("granted");
+  registerShortcutMock.mockReset().mockReturnValue(true);
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopWindowCapture.make;
+      yield* service.configure({ ...DEFAULT_CLIENT_SETTINGS, windowCaptureEnabled: true });
+      assert.isNull((yield* service.state).message);
+
+      mediaAccessStatusMock.mockReturnValue("denied");
+      const revoked = yield* service.state;
+      assert.equal(
+        revoked.message,
+        "Allow Screen Recording in System Settings, then restart T3 Code.",
+      );
+      assert.deepEqual(revoked.macPermissions, { screenRecording: false, accessibility: true });
+
+      accessibilityTrustedMock.mockReturnValue(false);
+      yield* service.configure({
+        ...DEFAULT_CLIENT_SETTINGS,
+        windowCaptureEnabled: true,
+        windowCaptureIncludeAccessibility: false,
+      });
+      const blocked = yield* service.state;
+      assert.equal(
+        blocked.message,
+        "Allow Screen Recording in System Settings, then restart T3 Code.",
+      );
+      assert.isFalse(blocked.shortcutRegistered);
+
+      mediaAccessStatusMock.mockReturnValue("granted");
+      const recovered = yield* service.state;
+      assert.isNull(recovered.message);
+      assert.isTrue(recovered.shortcutRegistered);
+    }),
+  ).pipe(Effect.provide(testLayer("darwin")));
+});
+
 it.effect("rejects macOS permission actions off macOS and omits macPermissions there", () => {
   return Effect.scoped(
     Effect.gen(function* () {

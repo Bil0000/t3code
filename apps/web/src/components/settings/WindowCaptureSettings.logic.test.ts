@@ -10,6 +10,7 @@ import {
   windowCaptureFeedbackUnavailableMessage,
   windowCaptureSetupSummary,
   windowCaptureSetupButtonLabel,
+  windowCaptureSetupComplete,
   windowCaptureDescription,
   windowCaptureAccessibilityUnavailableMessage,
 } from "./WindowCaptureSettings.logic";
@@ -307,4 +308,27 @@ it("reports pending, denied, and assigned shortcuts without inferring consent fr
       shortcutMessage: "Permission wasn't granted",
     }),
   ).toBe("Permission wasn't granted");
+});
+
+it("hides macOS setup only while permissions and the shortcut are all in place", () => {
+  const ready: DesktopWindowCaptureState = {
+    mode: "direct",
+    shortcut: DEFAULT_CLIENT_SETTINGS.windowCaptureShortcut,
+    shortcutRegistered: true,
+    shortcutMessage: null,
+    message: null,
+    macPermissions: { screenRecording: true, accessibility: true },
+  };
+  expect(windowCaptureSetupComplete(ready, true)).toBe(true);
+  expect(windowCaptureSetupComplete({ ...ready, macPermissions: undefined }, true)).toBe(false);
+  expect(windowCaptureSetupComplete({ ...ready, shortcutRegistered: false }, true)).toBe(false);
+  const revoked = {
+    ...ready,
+    macPermissions: { screenRecording: true, accessibility: false },
+    message: "Allow Accessibility in System Settings, then restart T3 Code.",
+  };
+  expect(windowCaptureSetupComplete(revoked, true)).toBe(false);
+  expect(windowCaptureStatus(revoked, true)).toBe("Capture needs attention");
+  expect(windowCaptureSetupButtonLabel(revoked)).toBe("Continue setup");
+  expect(windowCaptureSetupComplete({ ...revoked, message: null }, false)).toBe(true);
 });

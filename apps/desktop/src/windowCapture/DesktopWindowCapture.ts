@@ -100,6 +100,13 @@ const MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE =
   "Allow Screen Recording in System Settings, then restart T3 Code.";
 const MAC_ACCESSIBILITY_PERMISSION_MESSAGE =
   "Allow Accessibility in System Settings, then restart T3 Code.";
+const MAC_BOTH_PERMISSIONS_MESSAGE =
+  "Allow Accessibility and Screen Recording in System Settings, then restart T3 Code.";
+const MAC_PERMISSION_MESSAGES = new Set([
+  MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE,
+  MAC_ACCESSIBILITY_PERMISSION_MESSAGE,
+  MAC_BOTH_PERMISSIONS_MESSAGE,
+]);
 
 const decodePendingCapture = Schema.decodeUnknownEffect(DesktopPendingWindowCapture);
 
@@ -332,24 +339,36 @@ async function requestMacScreenCapturePermission(): Promise<string | null> {
   return MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
 }
 
-function currentMacWindowCapturePermissionMessage(includeAccessibility: boolean): string | null {
-  const accessibilityGranted =
-    !includeAccessibility || Electron.systemPreferences.isTrustedAccessibilityClient(false);
-  const screenGranted = Electron.systemPreferences.getMediaAccessStatus("screen") === "granted";
-  if (!accessibilityGranted && !screenGranted) {
-    return "Allow Accessibility and Screen Recording in System Settings, then restart T3 Code.";
-  }
-  if (!accessibilityGranted) {
-    return MAC_ACCESSIBILITY_PERMISSION_MESSAGE;
-  }
-  return screenGranted ? null : MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
-}
-
-function currentMacPermissions(): DesktopWindowCaptureState["macPermissions"] {
+function currentMacPermissions(): NonNullable<DesktopWindowCaptureState["macPermissions"]> {
   return {
     screenRecording: Electron.systemPreferences.getMediaAccessStatus("screen") === "granted",
     accessibility: Electron.systemPreferences.isTrustedAccessibilityClient(false),
   };
+}
+
+function macPermissionMessage(
+  permissions: NonNullable<DesktopWindowCaptureState["macPermissions"]>,
+  includeAccessibility: boolean,
+): string | null {
+  const accessibilityGranted = !includeAccessibility || permissions.accessibility;
+  if (!accessibilityGranted && !permissions.screenRecording) {
+    return MAC_BOTH_PERMISSIONS_MESSAGE;
+  }
+  if (!accessibilityGranted) {
+    return MAC_ACCESSIBILITY_PERMISSION_MESSAGE;
+  }
+  return permissions.screenRecording ? null : MAC_SCREEN_CAPTURE_PERMISSION_MESSAGE;
+}
+
+function currentMacWindowCapturePermissionMessage(includeAccessibility: boolean): string | null {
+  return macPermissionMessage(
+    {
+      screenRecording: Electron.systemPreferences.getMediaAccessStatus("screen") === "granted",
+      accessibility:
+        !includeAccessibility || Electron.systemPreferences.isTrustedAccessibilityClient(false),
+    },
+    includeAccessibility,
+  );
 }
 
 async function requestMacWindowCapturePermissions(
@@ -359,10 +378,10 @@ async function requestMacWindowCapturePermissions(
     !includeAccessibility || Electron.systemPreferences.isTrustedAccessibilityClient(true);
   const screenMessage = await requestMacScreenCapturePermission();
   if (!accessibilityGranted && screenMessage) {
-    return "Allow Accessibility and Screen Recording in System Settings, then restart T3 Code.";
+    return MAC_BOTH_PERMISSIONS_MESSAGE;
   }
   if (!accessibilityGranted) {
-    return "Allow Accessibility in System Settings, then restart T3 Code.";
+    return MAC_ACCESSIBILITY_PERMISSION_MESSAGE;
   }
   return screenMessage;
 }
@@ -1502,11 +1521,27 @@ export const make = Effect.gen(function* () {
                 }),
               ),
             )
-          : Effect.succeed(
-              environment.platform === "darwin"
-                ? { ...state, macPermissions: currentMacPermissions() }
-                : state,
-            ),
+          : environment.platform === "darwin"
+            ? Effect.gen(function* () {
+                // Permissions can change in System Settings at any time. Surface a
+                // revocation on every read, and re-register the shortcut once a
+                // previously missing permission is granted again.
+                const settings = yield* Ref.get(settingsRef);
+                const macPermissions = currentMacPermissions();
+                const message = settings.windowCaptureEnabled
+                  ? macPermissionMessage(macPermissions, settings.windowCaptureIncludeAccessibility)
+                  : null;
+                const recovered =
+                  message === null &&
+                  state.message !== null &&
+                  MAC_PERMISSION_MESSAGES.has(state.message)
+                    ? yield* configurationMutex
+                        .withPermits(1)(applySettings(settings, null))
+                        .pipe(Effect.andThen(Ref.get(stateRef)))
+                    : state;
+                return { ...recovered, macPermissions, ...(message ? { message } : {}) };
+              })
+            : Effect.succeed(state),
       ),
       Effect.flatMap((state) =>
         Effect.gen(function* () {

@@ -30,6 +30,7 @@ import {
   windowCaptureFeedbackUnavailableMessage,
   windowCaptureDescription,
   windowCaptureAccessibilityUnavailableMessage,
+  windowCaptureSetupComplete,
   type WindowCaptureSoundSelection,
 } from "./WindowCaptureSettings.logic";
 import {
@@ -367,7 +368,8 @@ export function WindowCaptureSettings() {
             }
             control={
               <>
-                {settings.windowCaptureEnabled ? (
+                {settings.windowCaptureEnabled &&
+                !windowCaptureSetupComplete(state, settings.windowCaptureIncludeAccessibility) ? (
                   <Button
                     size="xs"
                     variant="outline"
