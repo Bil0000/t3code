@@ -77,11 +77,11 @@ import {
   WindowsDesktopBuildPrerequisitesMissingError,
   WindowsPackagedPayloadValidationError,
   WINDOWS_CAPTURE_FILE_EXCLUSIONS,
+  WINDOWS_NATIVE_ASAR_UNPACK_GLOB,
   WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
   WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
   WINDOWS_SERVER_EXTRA_RESOURCES,
   WINDOWS_SERVER_ASAR_RESOURCE,
-  WINDOWS_SERVER_ASAR_UNPACK_GLOB,
   WINDOWS_SERVER_RESOURCE_SOURCE_DIR,
   WSL_RUNTIME_ARCHIVE_EXTRA_RESOURCE,
   WSL_RUNTIME_ARCHIVE_HASH_EXTRA_RESOURCE,
@@ -621,12 +621,16 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         false,
       );
 
-      // All platforms keep app.asar fully packed; Windows ships the server
-      // tree as the hand-packed server.asar sidecar in extraResources instead
-      // of unpacking thousands of loose files at install time.
+      // Windows unpacks native files explicitly so their JavaScript and metadata
+      // stay archived. Other platforms retain electron-builder's defaults.
+      assert.notProperty(mac, "asar");
+      assert.notProperty(linux, "asar");
       assert.notProperty(mac, "asarUnpack");
       assert.notProperty(linux, "asarUnpack");
-      assert.notProperty(win, "asarUnpack");
+      assert.deepStrictEqual(win.asar, { smartUnpack: false });
+      assert.deepStrictEqual(win.asarUnpack, [WINDOWS_NATIVE_ASAR_UNPACK_GLOB]);
+      assert.deepStrictEqual(winWithoutWslPrebuild.asar, win.asar);
+      assert.deepStrictEqual(winWithoutWslPrebuild.asarUnpack, win.asarUnpack);
       assert.deepStrictEqual(mac.extraResources, DESKTOP_EXTRA_RESOURCES);
       assert.deepStrictEqual(linux.extraResources, [
         ...DESKTOP_EXTRA_RESOURCES,
@@ -651,13 +655,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         ...WINDOWS_SERVER_EXTRA_RESOURCES,
       ]);
       assert.deepStrictEqual(win.nsis, { differentialPackage: true });
-      // Native binaries and helper executables cannot load from inside an
-      // asar; everything else stays packed. The Claude SDK platform packages
-      // and .bin shims never ship.
-      assert.equal(
-        WINDOWS_SERVER_ASAR_UNPACK_GLOB,
-        "{**/*.node,**/*.dll,**/*.exe,**/*.so,**/*.so.*,**/*.dylib}",
-      );
+      // The Claude SDK platform packages and .bin shims never ship.
       assert.deepStrictEqual(WINDOWS_SERVER_ASAR_IGNORE_GLOBS, [
         "**/node_modules/@anthropic-ai/claude-agent-sdk-*",
         "**/node_modules/@anthropic-ai/claude-agent-sdk-*/**",
@@ -702,6 +700,42 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     ]);
   });
 
+  it("unpacks native binaries while keeping their JavaScript and metadata archived", () => {
+    for (const file of [
+      "node_modules/uiohook-napi/prebuilds/win32-x64/uiohook-napi.node",
+      "node_modules/uiohook-napi/prebuilds/win32-arm64/uiohook-napi.node",
+      "node_modules/get-windows/lib/binding/napi-9-win32-unknown-x64/node-get-windows.node",
+      "node_modules/@napi-rs/keyring/keyring.win32-x64-msvc.node",
+      "node_modules/@clerk/electron-passkeys/electron-passkeys.win32-x64-msvc.node",
+      "node_modules/@ff-labs/fff-bin-win32-x64/fff_c.dll",
+      "node_modules/node-pty/prebuilds/win32-x64/conpty/OpenConsole.exe",
+      "node_modules/native/addon.so",
+      "node_modules/native/addon.so.1",
+      "node_modules/native/addon.dylib",
+    ]) {
+      assert.isTrue(
+        NodePath.matchesGlob(file, WINDOWS_NATIVE_ASAR_UNPACK_GLOB),
+        `${file} must be available as a real file`,
+      );
+    }
+
+    for (const file of [
+      "node_modules/uiohook-napi/dist/index.js",
+      "node_modules/uiohook-napi/dist/index.js.map",
+      "node_modules/uiohook-napi/package.json",
+      "node_modules/uiohook-napi/LICENSE",
+      "node_modules/get-windows/lib/windows.js",
+      "node_modules/@napi-rs/keyring/index.js",
+      "node_modules/@napi-rs/keyring/keytar.js",
+      "node_modules/@clerk/electron-passkeys/index.js",
+    ]) {
+      assert.isFalse(
+        NodePath.matchesGlob(file, WINDOWS_NATIVE_ASAR_UNPACK_GLOB),
+        `${file} should remain inside the archive`,
+      );
+    }
+  });
+
   it("omits capture build sources and non-Windows natives while keeping the Windows runtime", () => {
     const excluded = (file: string) =>
       WINDOWS_CAPTURE_FILE_EXCLUSIONS.some((pattern) =>
@@ -716,6 +750,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "node_modules/uiohook-napi/prebuilds/darwin-x64/uiohook-napi.node",
       "node_modules/uiohook-napi/prebuilds/linux-x64/uiohook-napi.node",
       "node_modules/uiohook-napi/prebuilds/linux-loong64/uiohook-napi.node",
+      "node_modules/get-windows/main",
       "node_modules/get-windows/lib/binding/napi-6-darwin-unknown-x64/node-active-win.node",
       "node_modules/get-windows/lib/binding/napi-9-darwin-unknown-arm64/node-get-windows.node",
     ]) {
@@ -730,6 +765,8 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       "node_modules/uiohook-napi/prebuilds/win32-arm64/uiohook-napi.node",
       "node_modules/get-windows/package.json",
       "node_modules/get-windows/index.js",
+      "node_modules/get-windows/lib/macos.js",
+      "node_modules/get-windows/lib/linux.js",
       "node_modules/get-windows/lib/windows.js",
       "node_modules/get-windows/lib/binding/napi-9-win32-unknown-x64/node-get-windows.node",
       "node_modules/get-windows/lib/binding/napi-9-win32-unknown-arm64/node-get-windows.node",
