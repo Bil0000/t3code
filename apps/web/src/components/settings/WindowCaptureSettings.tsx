@@ -354,7 +354,7 @@ export function WindowCaptureSettings() {
 
   return (
     <SettingsPageContainer>
-      <SettingsSection id="window-capture" title="Snapshots">
+      <SettingsSection id="window-capture" title="SnapShots">
         <SettingsUnavailableGroup message={unavailableMessage}>
           <SettingsRow
             {...searchableSetting("window-capture-enabled")}

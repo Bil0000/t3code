@@ -141,9 +141,9 @@ export class DesktopWindowCaptureError extends Schema.TaggedErrorClass<DesktopWi
       case "acknowledge":
         return "Could not remove the snapshot.";
       case "unsupported":
-        return "Snapshots are not supported here.";
+        return "SnapShots are not supported here.";
       case "disabled":
-        return "Enable Snapshots in Settings first.";
+        return "Enable SnapShots in Settings first.";
       case "no-window-selected":
         return "No window was selected.";
       case "window-unavailable":
@@ -1047,7 +1047,7 @@ export const make = Effect.gen(function* () {
   ) {
     const mode = captureMode(environment.platform);
     if (mode === "unavailable") {
-      return { available: false, message: "Snapshots are not supported on this platform." };
+      return { available: false, message: "SnapShots are not supported on this platform." };
     }
     if (mode === "portal" && niriSocketPath()) {
       return {
@@ -1168,8 +1168,8 @@ export const make = Effect.gen(function* () {
         message:
           mode === "unavailable"
             ? environment.platform === "linux"
-              ? "Snapshots require a Wayland session. X11 capture is not supported."
-              : "Snapshots are not supported on this platform."
+              ? "SnapShots require a Wayland session. X11 capture is not supported."
+              : "SnapShots are not supported on this platform."
             : null,
       });
       return;

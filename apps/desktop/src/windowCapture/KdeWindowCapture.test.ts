@@ -122,7 +122,7 @@ it("does not mistake installed files for KDE authorization, or fall back to a pi
     status: "error",
     message: expect.stringContaining("Reinstall"),
   });
-  await expect(captureKdeWindow(paths)).rejects.toThrow("Settings → Snapshots");
+  await expect(captureKdeWindow(paths)).rejects.toThrow("Settings → SnapShots");
   expect(execute.mock.calls.some(([, args]) => args[0] === "capture")).toBe(false);
 });
 

@@ -51,7 +51,7 @@ export const SETTINGS_SECTION_LABELS: Readonly<Record<SettingsPath, string>> = {
   "/settings/general": "General",
   "/settings/appearance": "Appearance",
   "/settings/keybindings": "Keybindings",
-  "/settings/window-capture": "Snapshots",
+  "/settings/window-capture": "SnapShots",
   "/settings/providers": "Providers",
   "/settings/integrations": "Integrations",
   "/settings/source-control": "Source Control",
@@ -320,7 +320,7 @@ export const SETTINGS_SEARCH_ITEMS = [
   },
   {
     id: "window-capture-enabled",
-    title: "Snapshots",
+    title: "SnapShots",
     searchTerms: ["window capture screenshot"],
     to: "/settings/window-capture",
   },

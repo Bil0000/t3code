@@ -26,7 +26,7 @@ export class CaptureService {
 
   _checkSession() {
     if (!this._enabled || !this._isAvailable()) {
-      throw new Error("Snapshots are unavailable in this session.");
+      throw new Error("SnapShots are unavailable in this session.");
     }
   }
 

@@ -149,7 +149,7 @@ export async function checkNiriCaptureSupport(path: string): Promise<void> {
   // 25.11 introduced both caller-selected screenshot paths and completion events.
   const match = /^(?:niri )?(\d+)\.(\d+)/.exec(version);
   if (!match || Number(match[1]) < 25 || (Number(match[1]) === 25 && Number(match[2]) < 11))
-    throw new Error("Snapshots require Niri 25.11 or newer.");
+    throw new Error("SnapShots require Niri 25.11 or newer.");
 }
 
 async function activateNiriWindow(path: string, title: string, signal: AbortSignal): Promise<void> {

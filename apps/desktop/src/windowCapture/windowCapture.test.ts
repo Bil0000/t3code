@@ -23,8 +23,8 @@ import { DesktopWindowCaptureError } from "./DesktopWindowCapture.ts";
 
 describe("window capture errors", () => {
   it.each([
-    ["unsupported", "Snapshots are not supported here."],
-    ["disabled", "Enable Snapshots in Settings first."],
+    ["unsupported", "SnapShots are not supported here."],
+    ["disabled", "Enable SnapShots in Settings first."],
     ["no-window-selected", "No window was selected."],
     ["window-unavailable", "The active window is not available for capture."],
     ["capture", "Could not capture the active window."],

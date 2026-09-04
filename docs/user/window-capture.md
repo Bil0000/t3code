@@ -1,12 +1,12 @@
-# Snapshots
+# SnapShots
 
-Snapshots are available in the desktop app on macOS, Windows, and Linux with Wayland. It captures a window
+SnapShots are available in the desktop app on macOS, Windows, and Linux with Wayland. It captures a window
 from any app and adds the image to the current draft. The attachment includes the app name, window
 title, and, when available, the app icon and accessibility data. That data can identify controls,
 text, their hierarchy, and their locations in the screenshot. It can include content outside the
 visible scroll area when the app exposes it.
 
-Snapshots are off by default. There is no startup popup. Open **Settings** > **Snapshots**
+SnapShots are off by default. There is no startup popup. Open **Settings** > **SnapShots**
 and turn it on to open a two-step setup dialog: allow capture, then choose a shortcut.
 Each step shows only what your desktop needs. **Finish later** pauses first-time setup and turns
 capture back off; installed extension files and saved choices remain for your next attempt.
@@ -65,7 +65,7 @@ then returns to your draft.
   a picker, include matching accessibility data when available, and animate the image into your draft.
 - On Linux with Wayland, T3 Code uses your desktop's Screenshot portal when it supports version 3
   and advertises active-window capture. Your desktop may still ask for permission.
-- On GNOME, the optional **T3 Code Snapshots** extension enables active-window capture when
+- On GNOME, the optional **T3 Code SnapShots** extension enables active-window capture when
   the portal does not support it. The extension supplies the app and window identity, allowing
   T3 Code to attempt an accessibility lookup. Data is included only when the window matches.
   The current extension also brings T3 Code to the foreground after capture and supports the
@@ -83,7 +83,7 @@ available; shortcut approval is separate from capture permission.
 
 ### KDE Plasma
 
-Open **Settings** > **Snapshots** in your Plasma Wayland session and turn it on:
+Open **Settings** > **SnapShots** in your Plasma Wayland session and turn it on:
 
 1. Select **Install helper**. The helper is bundled with T3 Code; nothing is downloaded and you
    don't need to sign out. It allows KDE to recognize T3 Code's capture requests even with an AppImage.
@@ -106,7 +106,7 @@ them with **Capture flash** and **Capture animations**. No separate desktop effe
 
 ### Hyprland and Omarchy
 
-Open **Settings** > **Snapshots** inside Hyprland and turn capture on:
+Open **Settings** > **SnapShots** inside Hyprland and turn capture on:
 
 1. Select **Install helper**. It is bundled with T3 Code; no download, administrator password,
    plugin, or sign-out is needed.
@@ -142,7 +142,7 @@ removes only T3 Code's installed helper.
 
 ### Niri
 
-Run T3 Code inside your Niri session, then enable Snapshots. On the shortcut step:
+Run T3 Code inside your Niri session, then enable SnapShots. On the shortcut step:
 
 1. Click the shortcut and press your desired keys, then select **Review changes** to let T3 Code read
    your desktop settings. The changes appear here in the app; no editor opens.
@@ -171,13 +171,13 @@ mapped reliably to the screenshot.
 
 ### GNOME extension
 
-Open **Settings** > **Snapshots** in your GNOME Wayland session and turn it on to start setup:
+Open **Settings** > **SnapShots** in your GNOME Wayland session and turn it on to start setup:
 
 1. In the capture-access step, select **Install extension**. The extension ships with the Linux app; installation is
    offline, per-user, and does not require an administrator password. It supports GNOME Shell 45–50.
 2. If setup says to sign out, save your work and sign out of GNOME, then sign back in. Restarting
    T3 Code alone does not make GNOME discover a newly installed extension.
-3. Return to Snapshots and reopen setup. If the extension is already running, setup skips
+3. Return to SnapShots and reopen setup. If the extension is already running, setup skips
    straight to your shortcut. Otherwise select **Enable extension**. Use **Check again** to refresh its
    status. The button shows **Checking…**, then setup confirms the result, even when it is unchanged.
    If GNOME has disabled all user extensions, turn them on in GNOME's Extensions app first;
@@ -202,7 +202,7 @@ the data; if the app responds too slowly, the screenshot is attached without it.
 another window while that lookup finishes. Finishing an earlier capture does not bring T3 Code
 forward again. When a complete element tree is unavailable but text was read in time, T3 Code
 includes that text as a fallback.
-Turn off **Include app text** in Snapshots settings to skip the accessibility lookup
+Turn off **Include app text** in SnapShots settings to skip the accessibility lookup
 and attach screenshots without text or UI structure. On macOS, this also removes the Accessibility
 permission requirement for snapshots; Screen Recording permission is still required.
 

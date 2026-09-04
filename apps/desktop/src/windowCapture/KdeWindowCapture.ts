@@ -39,7 +39,7 @@ export function kdeCaptureDesktopEntry(executable: string): string {
   return [
     "[Desktop Entry]",
     "Type=Application",
-    "Name=T3 Code Snapshots",
+    "Name=T3 Code SnapShots",
     "NoDisplay=true",
     `Exec=${escapeDesktopEntryExecArgument(executable)} check`,
     // KService reads this custom property as a KConfig list, not an XDG ';' list.
@@ -226,7 +226,7 @@ export async function captureKdeWindow(
 ): Promise<LinuxWindowSnapshot> {
   const state = await new KdeCaptureSetup(paths).state();
   if (state.status !== "ready")
-    throw new Error(`${state.message} Open Settings → Snapshots to continue setup.`);
+    throw new Error(`${state.message} Open Settings → SnapShots to continue setup.`);
   const { executable } = kdeCapturePaths(paths);
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-kde-capture-"));
   let retained = false;
