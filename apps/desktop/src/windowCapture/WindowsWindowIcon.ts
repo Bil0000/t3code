@@ -1,9 +1,5 @@
 import * as Electron from "electron";
 
-// Reads the icon a Windows top-level window advertises for itself, the same one
-// Alt-Tab shows. Asking the one captured window costs well under a millisecond;
-// desktopCapturer.getSources would enumerate every window on the desktop instead.
-
 const WM_GETICON = 0x7f;
 const ICON_SMALL = 0;
 const ICON_BIG = 1;
@@ -15,8 +11,11 @@ const SMTO_ABORTIFHUNG = 0x2;
 const GET_ICON_TIMEOUT_MS = 100;
 const DIB_RGB_COLORS = 0;
 const BITMAPINFOHEADER_SIZE = 40;
+const EXECUTABLE_ICON_SIZE = 256;
+const EXTRACT_ICONS_FILE_NOT_FOUND = 0xffffffff;
 
-export interface WindowsWindowIconApi {
+export interface WindowsIconApi {
+  readonly executableIcon: (executablePath: string, size: number) => bigint;
   readonly windowIcon: (windowHandle: bigint, kind: number) => bigint;
   readonly classIcon: (windowHandle: bigint, index: number) => bigint;
   readonly iconBitmaps: (
@@ -27,29 +26,50 @@ export interface WindowsWindowIconApi {
   ) => { readonly width: number; readonly height: number } | undefined;
   readonly bitmapPixels: (bitmap: bigint, width: number, height: number) => Buffer | undefined;
   readonly deleteObject: (object: bigint) => void;
+  readonly destroyIcon: (icon: bigint) => void;
 }
 
-export interface WindowIconBitmap {
+export interface IconBitmap {
   readonly width: number;
   readonly height: number;
   readonly pixels: Buffer;
 }
 
-export function windowIconBitmapWithApi(
+export function appIconBitmapWithApi(
+  executablePath: string | undefined,
   windowHandle: bigint,
-  api: WindowsWindowIconApi,
-): WindowIconBitmap | undefined {
+  api: WindowsIconApi,
+): IconBitmap | undefined {
+  return (
+    (executablePath ? executableIconBitmap(executablePath, api) : undefined) ??
+    windowIconBitmap(windowHandle, api)
+  );
+}
+
+function executableIconBitmap(executablePath: string, api: WindowsIconApi) {
+  const icon = api.executableIcon(executablePath, EXECUTABLE_ICON_SIZE);
+  if (!icon) return undefined;
+  try {
+    return iconBitmap(icon, api);
+  } finally {
+    api.destroyIcon(icon);
+  }
+}
+
+function windowIconBitmap(windowHandle: bigint, api: WindowsIconApi) {
   const icon =
     api.windowIcon(windowHandle, ICON_BIG) ||
     api.windowIcon(windowHandle, ICON_SMALL2) ||
     api.windowIcon(windowHandle, ICON_SMALL) ||
     api.classIcon(windowHandle, GCLP_HICON) ||
     api.classIcon(windowHandle, GCLP_HICONSM);
-  if (!icon) return undefined;
+  return icon ? iconBitmap(icon, api) : undefined;
+}
+
+function iconBitmap(icon: bigint, api: WindowsIconApi): IconBitmap | undefined {
   const bitmaps = api.iconBitmaps(icon);
   if (!bitmaps) return undefined;
   try {
-    // Monochrome icons keep their pixels in the mask alone; the file icon is a better fallback.
     if (!bitmaps.color) return undefined;
     const size = api.bitmapSize(bitmaps.color);
     if (!size || size.width <= 0 || size.height <= 0) return undefined;
@@ -64,9 +84,6 @@ export function windowIconBitmapWithApi(
   }
 }
 
-// GetDIBits returns straight-alpha BGRA, while nativeImage.createFromBitmap expects
-// the premultiplied layout toBitmap produces. Icons drawn before alpha channels
-// existed carry their transparency in the AND mask instead of the alpha byte.
 export function premultipliedIconPixels(
   color: Buffer,
   mask: Buffer | undefined,
@@ -90,7 +107,6 @@ export function premultipliedIconPixels(
   }
   if (!mask || mask.length !== color.length) return undefined;
   for (let offset = 0; offset < color.length; offset += 4) {
-    // The AND mask is black where the icon paints and white where it is transparent.
     if (mask[offset] === 0) {
       color[offset + 3] = 255;
     } else {
@@ -100,16 +116,46 @@ export function premultipliedIconPixels(
   return color;
 }
 
-let windowsWindowIconApiPromise: Promise<WindowsWindowIconApi> | undefined;
+let windowsIconApiPromise: Promise<WindowsIconApi> | undefined;
 
-function loadWindowsWindowIconApi(): Promise<WindowsWindowIconApi> {
-  windowsWindowIconApiPromise ??= import("ffi-rs").then(({ DataType, load, open }) => {
+function loadWindowsIconApi(): Promise<WindowsIconApi> {
+  windowsIconApiPromise ??= import("ffi-rs").then(({ DataType, load, open }) => {
     const user32 = "t3-icon-user32";
     const gdi32 = "t3-icon-gdi32";
     open({ library: user32, path: "user32.dll" });
     open({ library: gdi32, path: "gdi32.dll" });
 
     return {
+      executableIcon: (executablePath, size) => {
+        const icons = Buffer.alloc(8);
+        const iconIds = Buffer.alloc(4);
+        const count = load({
+          library: user32,
+          funcName: "PrivateExtractIconsW",
+          retType: DataType.U32,
+          paramsType: [
+            DataType.U8Array,
+            DataType.I32,
+            DataType.I32,
+            DataType.I32,
+            DataType.U8Array,
+            DataType.U8Array,
+            DataType.U32,
+            DataType.U32,
+          ],
+          paramsValue: [
+            Buffer.from(`${executablePath}\0`, "utf16le"),
+            0,
+            size,
+            size,
+            icons,
+            iconIds,
+            1,
+            0,
+          ],
+        });
+        return count === 0 || count === EXTRACT_ICONS_FILE_NOT_FOUND ? 0n : icons.readBigUInt64LE();
+      },
       windowIcon: (windowHandle, kind) => {
         const result = Buffer.alloc(8);
         const delivered = load({
@@ -146,7 +192,6 @@ function loadWindowsWindowIconApi(): Promise<WindowsWindowIconApi> {
           paramsValue: [windowHandle, index],
         }) as bigint,
       iconBitmaps: (icon) => {
-        // ICONINFO: fIcon, xHotspot, yHotspot, padding, hbmMask, hbmColor.
         const info = Buffer.alloc(32);
         const found = load({
           library: user32,
@@ -160,7 +205,6 @@ function loadWindowsWindowIconApi(): Promise<WindowsWindowIconApi> {
           : undefined;
       },
       bitmapSize: (bitmap) => {
-        // BITMAP: bmType, bmWidth, bmHeight, bmWidthBytes, bmPlanes, bmBitsPixel, padding, bmBits.
         const info = Buffer.alloc(32);
         const written = load({
           library: gdi32,
@@ -174,8 +218,6 @@ function loadWindowsWindowIconApi(): Promise<WindowsWindowIconApi> {
           : undefined;
       },
       bitmapPixels: (bitmap, width, height) => {
-        // BITMAPINFO: a BITMAPINFOHEADER followed by one RGBQUAD. A negative height
-        // asks for top-down rows, which is the order createFromBitmap reads.
         const info = Buffer.alloc(BITMAPINFOHEADER_SIZE + 4);
         info.writeUInt32LE(BITMAPINFOHEADER_SIZE, 0);
         info.writeInt32LE(width, 4);
@@ -227,15 +269,29 @@ function loadWindowsWindowIconApi(): Promise<WindowsWindowIconApi> {
           paramsValue: [object],
         });
       },
-    } satisfies WindowsWindowIconApi;
+      destroyIcon: (icon) => {
+        load({
+          library: user32,
+          funcName: "DestroyIcon",
+          retType: DataType.Boolean,
+          paramsType: [DataType.BigInt],
+          paramsValue: [icon],
+        });
+      },
+    } satisfies WindowsIconApi;
   });
-  return windowsWindowIconApiPromise;
+  return windowsIconApiPromise;
 }
 
-export async function windowsWindowIcon(
+export async function windowsAppIcon(
+  executablePath: string | undefined,
   windowHandle: number,
 ): Promise<Electron.NativeImage | undefined> {
-  const bitmap = windowIconBitmapWithApi(BigInt(windowHandle), await loadWindowsWindowIconApi());
+  const bitmap = appIconBitmapWithApi(
+    executablePath,
+    BigInt(windowHandle),
+    await loadWindowsIconApi(),
+  );
   if (!bitmap) return undefined;
   const image = Electron.nativeImage.createFromBitmap(bitmap.pixels, {
     width: bitmap.width,

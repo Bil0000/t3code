@@ -27,7 +27,7 @@ beforeEach(() => {
   transitionCapturePageMock.mockReset().mockResolvedValue(undefined);
   transitionSnapshotMock.mockReset().mockResolvedValue(undefined);
   prepareCaptureRevealMock.mockReset();
-  windowsWindowIconMock.mockReset();
+  windowsAppIconMock.mockReset();
 });
 
 const {
@@ -68,12 +68,15 @@ const {
   transitionShowMock,
   transitionSnapshotMock,
   uiohookMock,
-  windowsWindowIconMock,
+  windowsAppIconMock,
 } = vi.hoisted(() => ({
   activeWindowMock: vi.fn(),
-  windowsWindowIconMock: vi.fn<(windowHandle: number) => Promise<Electron.NativeImage | undefined>>(
-    async () => undefined,
-  ),
+  windowsAppIconMock: vi.fn<
+    (
+      executablePath: string | undefined,
+      windowHandle: number,
+    ) => Promise<Electron.NativeImage | undefined>
+  >(async () => undefined),
   animationSettingsMock: vi.fn(() => ({
     prefersReducedMotion: true,
     shouldRenderRichAnimation: false,
@@ -186,7 +189,7 @@ vi.mock("./WindowCaptureAccessibilityProcess.ts", () => ({
   }),
 }));
 vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
-vi.mock("./WindowsWindowIcon.ts", () => ({ windowsWindowIcon: windowsWindowIconMock }));
+vi.mock("./WindowsWindowIcon.ts", () => ({ windowsAppIcon: windowsAppIconMock }));
 vi.mock("./WindowsCaptureFeedback.ts", () => ({
   showWindowsCaptureOverlay: (window: Electron.BaseWindow) => window.showInactive(),
 }));
@@ -824,7 +827,7 @@ it.effect("captures the active Windows window without enumerating desktop source
   accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [] });
   screenshotMock.mockReset().mockResolvedValue({ width: 800, height: 600, toPng: () => png });
   getSourcesMock.mockReset();
-  windowsWindowIconMock.mockResolvedValue(fakeIcon("window"));
+  windowsAppIconMock.mockResolvedValue(fakeIcon("window"));
   const writtenFiles: Array<[string, Uint8Array]> = [];
   let metadata = "";
   const layer = testLayer("win32", {
@@ -847,7 +850,7 @@ it.effect("captures the active Windows window without enumerating desktop source
 
       assert.deepEqual(screenshotMock.mock.calls, [[{ region: active.bounds }]]);
       assert.lengthOf(getSourcesMock.mock.calls, 0);
-      assert.deepEqual(windowsWindowIconMock.mock.calls, [[42]]);
+      assert.deepEqual(windowsAppIconMock.mock.calls, [[undefined, 42]]);
       assert.deepEqual(writtenFiles[0]?.[1], png);
       const saved = yield* decodePendingMetadata(metadata);
       assert.equal(saved.source.appName, "Paint");
@@ -2019,18 +2022,19 @@ const activeWindowsApp = {
   owner: { name: "T3 Code", processId: 123, path: "C:\\T3 Code.exe" },
 } as Parameters<typeof DesktopWindowCapture.iconDataUrl>[1];
 
-it("prefers the Windows window icon and skips the executable lookup", async () => {
-  windowsWindowIconMock.mockResolvedValue(fakeIcon("window"));
+it("prefers the native Windows icon and skips Electron's file icon", async () => {
+  windowsAppIconMock.mockResolvedValue(fakeIcon("window"));
   getFileIconMock.mockReset().mockResolvedValue(fakeIcon("executable"));
 
   const dataUrl = await DesktopWindowCapture.iconDataUrl({}, activeWindowsApp, "win32");
 
+  assert.deepEqual(windowsAppIconMock.mock.calls, [["C:\\T3 Code.exe", 42]]);
   assert.lengthOf(getFileIconMock.mock.calls, 0);
   assert.strictEqual(dataUrl, "data:image/png;base64,window:64x64:best@2");
 });
 
-it("falls back to the executable icon when the window advertises none", async () => {
-  windowsWindowIconMock.mockRejectedValue(new Error("ffi unavailable"));
+it("falls back to Electron's file icon when the native lookup fails", async () => {
+  windowsAppIconMock.mockRejectedValue(new Error("ffi unavailable"));
   getFileIconMock.mockReset().mockResolvedValue(fakeIcon("executable"));
 
   const dataUrl = await DesktopWindowCapture.iconDataUrl({}, activeWindowsApp, "win32");

@@ -74,7 +74,7 @@ import {
   makeWindowCaptureAccessibilityProcessPool,
 } from "./WindowCaptureAccessibilityProcess.ts";
 import { showWindowsCaptureOverlay } from "./WindowsCaptureFeedback.ts";
-import { windowsWindowIcon } from "./WindowsWindowIcon.ts";
+import { windowsAppIcon } from "./WindowsWindowIcon.ts";
 
 import {
   hideAndWaitForBlur,
@@ -287,13 +287,11 @@ export async function iconDataUrl(
   platform: NodeJS.Platform,
 ): Promise<string | undefined> {
   try {
-    // Windows executables are often generic hosts or ship without an icon resource,
-    // so the icon the window advertises for itself wins there.
-    const windowIcon =
+    const nativeIcon =
       active?.platform === "windows"
-        ? await windowsWindowIcon(active.id).catch(() => undefined)
+        ? await windowsAppIcon(active.owner.path, active.id).catch(() => undefined)
         : undefined;
-    if (windowIcon) return windowCaptureIconDataUrl(windowIcon);
+    if (nativeIcon) return windowCaptureIconDataUrl(nativeIcon);
     const fileIcon = active?.owner.path
       ? await appFileIcon(active.owner.path, platform)
       : undefined;
