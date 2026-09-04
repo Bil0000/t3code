@@ -3,7 +3,7 @@ import {
   type DesktopWindowCaptureSetupAction,
   type DesktopWindowCaptureState,
 } from "@t3tools/contracts";
-import { AccessibilityIcon, CircleCheckIcon, MonitorIcon } from "lucide-react";
+import { CircleCheckIcon } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { CaptureShortcutConfig } from "./CaptureShortcutConfig";
 import { Button } from "../ui/button";
@@ -68,6 +68,34 @@ const GNOME_ACCESS_COPY = {
     description: "Check T3 Code Snapshots in GNOME Extensions, then try again.",
   },
 };
+
+function ScreenRecordingIcon() {
+  return (
+    <svg viewBox="0 0 32 32" className="size-8 shrink-0" aria-hidden="true">
+      <rect width="32" height="32" rx="7" fill="#2b2b2e" />
+      <circle cx="16" cy="16" r="8" fill="none" stroke="#ff453a" strokeWidth="2.5" />
+      <circle cx="16" cy="16" r="4" fill="#ff453a" />
+    </svg>
+  );
+}
+
+function AccessibilityPermissionIcon() {
+  return (
+    <svg viewBox="0 0 32 32" className="size-8 shrink-0" aria-hidden="true">
+      <rect width="32" height="32" rx="7" fill="#1a7cf5" />
+      <circle cx="16" cy="16" r="10.5" fill="none" stroke="#fff" strokeWidth="1.75" />
+      <circle cx="16" cy="9.75" r="1.75" fill="#fff" />
+      <path
+        d="M9.5 13.25h13M16 13.25v5.25M16 18.5l-3.5 5.75M16 18.5l3.5 5.75"
+        fill="none"
+        stroke="#fff"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 
 function MacPermissionRow({
   icon,
@@ -282,7 +310,7 @@ export function WindowCaptureSetupDialog({
         </DialogHeader>
         <DialogPanel>
           <div className="space-y-4 text-sm">
-            <div className="flex flex-wrap gap-x-2" aria-live="polite">
+            <div className="space-y-2" aria-live="polite">
               <h3 className="flex items-center gap-2 font-medium">{title}</h3>
               <DialogDescription>{description}</DialogDescription>
             </div>
@@ -300,11 +328,7 @@ export function WindowCaptureSetupDialog({
                 {macPermissions ? (
                   <div className="space-y-2">
                     <MacPermissionRow
-                      icon={
-                        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-[#6b6b70] text-white">
-                          <MonitorIcon className="size-4" aria-hidden="true" strokeWidth={2.25} />
-                        </span>
-                      }
+                      icon={<ScreenRecordingIcon />}
                       title="Screen Recording"
                       description="Capture the window you're using."
                       granted={macPermissions.screenRecording}
@@ -312,15 +336,7 @@ export function WindowCaptureSetupDialog({
                       onAllow={() => void onAction("allow-screen-recording")}
                     />
                     <MacPermissionRow
-                      icon={
-                        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-[#1a7cf5] text-white">
-                          <AccessibilityIcon
-                            className="size-5"
-                            aria-hidden="true"
-                            strokeWidth={2.25}
-                          />
-                        </span>
-                      }
+                      icon={<AccessibilityPermissionIcon />}
                       title="Accessibility"
                       description={
                         includeAccessibility
