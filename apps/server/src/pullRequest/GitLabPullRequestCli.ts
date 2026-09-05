@@ -1318,7 +1318,7 @@ export const make = Effect.gen(function* () {
           );
           if (current.source_project_id === null)
             return yield* new PullRequestBranchDeletionError({
-              detail: "The source repository no longer exists.",
+              reason: "source-repository-missing",
             });
           const source = `projects/${current.source_project_id}`;
           const repository = yield* api({ cwd: input.cwd, path: source });
@@ -1339,15 +1339,13 @@ export const make = Effect.gen(function* () {
             path: `${source}/repository/branches/${encodeURIComponent(current.source_branch)}`,
             method: "DELETE",
           }).pipe(
-            Effect.catchTag(
-              "GitLabCliCommandError",
-              (cause) =>
+            Effect.catchTags({
+              GitLabCliCommandError: (cause) =>
                 new PullRequestBranchDeletionError({
-                  detail:
-                    "The source branch could not be deleted. It may already be deleted, protected, or unavailable to this account.",
+                  reason: "delete-refused",
                   cause,
                 }),
-            ),
+            }),
           );
         });
       }

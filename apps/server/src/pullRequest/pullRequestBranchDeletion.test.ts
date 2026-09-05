@@ -10,7 +10,10 @@ import * as GitHubCli from "./GitHubPullRequestCli.ts";
 import * as GitLabCli from "./GitLabPullRequestCli.ts";
 import * as BitbucketApi from "./BitbucketPullRequestApi.ts";
 import * as AzureCli from "./AzureDevOpsPullRequestCli.ts";
-import { assertSourceBranchDeletable } from "./pullRequestBranchDeletion.ts";
+import {
+  assertSourceBranchDeletable,
+  decodeBranchDeletionJson,
+} from "./pullRequestBranchDeletion.ts";
 
 it.effect("allows only finished pull requests and refuses both protected branch identities", () =>
   Effect.gen(function* () {
@@ -27,11 +30,11 @@ it.effect("allows only finished pull requests and refuses both protected branch 
     yield* assertSourceBranchDeletable({ ...input, state: "SUPERSEDED" });
     for (const state of ["open", "active", "unknown"]) {
       const error = yield* Effect.flip(assertSourceBranchDeletable({ ...input, state }));
-      expect(error.detail).toContain("Close or merge");
+      expect(error.reason).toBe("not-finished");
     }
     for (const sourceBranch of ["main", "release"]) {
       const error = yield* Effect.flip(assertSourceBranchDeletable({ ...input, sourceBranch }));
-      expect(error.detail).toContain("cannot be deleted");
+      expect(error.reason).toBe("protected-branch");
     }
   }),
 );
@@ -49,8 +52,18 @@ it.effect("distinguishes the upstream target from a same-named fork branch", () 
     yield* assertSourceBranchDeletable(input);
     for (const overrides of [{ baseRepository: "fork" }, { defaultBranch: "main" }]) {
       const error = yield* Effect.flip(assertSourceBranchDeletable({ ...input, ...overrides }));
-      expect(error.detail).toContain("cannot be deleted");
+      expect(error.reason).toBe("protected-branch");
     }
+  }),
+);
+
+it.effect("keeps the branch response decode failure as the structured error cause", () =>
+  Effect.gen(function* () {
+    const error = yield* Effect.flip(
+      decodeBranchDeletionJson(Schema.Struct({ branch: Schema.String }), '{"branch":1}'),
+    );
+    expect(error.reason).toBe("invalid-response");
+    expect(error.cause).toBeDefined();
   }),
 );
 

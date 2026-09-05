@@ -577,7 +577,7 @@ export const make = Effect.gen(function* () {
           const branch = branches.find((ref) => ref.name === current.sourceRefName);
           if (branch === undefined)
             return yield* new PullRequestBranchDeletionError({
-              detail: "The source branch has already been deleted.",
+              reason: "source-branch-missing",
             });
           const deleted = yield* executeJson({
             cwd: input.cwd,
@@ -602,10 +602,8 @@ export const make = Effect.gen(function* () {
           );
           if (!result.success)
             return yield* new PullRequestBranchDeletionError({
-              detail:
-                result.customMessage ??
-                result.updateStatus ??
-                "Azure DevOps refused to delete the source branch.",
+              reason: "delete-refused",
+              cause: result,
             });
         });
       }

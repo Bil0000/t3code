@@ -120,7 +120,7 @@ layer("BitbucketPullRequestApi.layer", (it) => {
         Effect.succeed(response('{"mainbranch":{"name":"develop"}}')),
       );
       const error = yield* Effect.flip(api.runAction(target));
-      expect(error.message).toContain("cannot be deleted");
+      expect(error.reason).toBe("protected-branch");
       expect(mockedRequest).toHaveBeenCalledTimes(5);
     }),
   );

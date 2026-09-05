@@ -87,7 +87,8 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       const error = yield* Effect.flip(
         cli.runPullRequestAction({ cwd: "/w", number: 7, action: "delete-source-branch" }),
       );
-      expect(error.message).toContain("staleOldObjectId");
+      expect(error.reason).toBe("delete-refused");
+      expect(error.cause).toEqual({ success: false, updateStatus: "staleOldObjectId" });
       expect(argsOfCall(3)).toEqual(
         expect.arrayContaining([
           "delete",

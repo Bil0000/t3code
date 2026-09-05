@@ -2134,7 +2134,7 @@ export const make = Effect.gen(function* () {
           );
           if (current.head.repo === null)
             return yield* new PullRequestBranchDeletionError({
-              detail: "The source repository no longer exists.",
+              reason: "source-repository-missing",
             });
           const source = current.head.repo.full_name;
           const repository = yield* read(`repos/${source}`);
@@ -2162,15 +2162,13 @@ export const make = Effect.gen(function* () {
               beforeOid: current.head.sha,
             },
           }).pipe(
-            Effect.catchTag(
-              "GitHubCliCommandError",
-              (cause) =>
+            Effect.catchTags({
+              GitHubCliCommandError: (cause) =>
                 new PullRequestBranchDeletionError({
-                  detail:
-                    "The source branch could not be deleted. It may have changed, already been deleted, be protected, or be unavailable to this account. Refresh the pull request before trying again.",
+                  reason: "delete-refused",
                   cause,
                 }),
-            ),
+            }),
           );
         });
       }

@@ -776,7 +776,7 @@ export const make = Effect.gen(function* () {
             const sourceRepository = current.source.repository;
             if (sourceRepository === null)
               return yield* new PullRequestBranchDeletionError({
-                detail: "The source repository no longer exists.",
+                reason: "source-repository-missing",
               });
             return yield* withRepository(sourceRepository.full_name, (source) =>
               Effect.gen(function* () {
@@ -799,17 +799,17 @@ export const make = Effect.gen(function* () {
                     url: `${source}/refs/branches/${encodeURIComponent(current.source.branch.name)}`,
                   })
                   .pipe(
-                    Effect.catchTag(
-                      "BitbucketResponseError",
-                      (cause): Effect.Effect<never, BitbucketPullRequestApiError> =>
+                    Effect.catchTags({
+                      BitbucketResponseError: (
+                        cause,
+                      ): Effect.Effect<never, BitbucketPullRequestApiError> =>
                         cause.status === 404
                           ? new PullRequestBranchDeletionError({
-                              detail:
-                                "The source branch has already been deleted or is no longer accessible.",
+                              reason: "source-branch-missing",
                               cause,
                             })
                           : Effect.fail(cause),
-                    ),
+                    }),
                   );
               }),
             );
