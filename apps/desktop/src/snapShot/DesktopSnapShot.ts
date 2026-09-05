@@ -1467,6 +1467,7 @@ export const make = Effect.gen(function* () {
             null,
           ),
         ),
+        Effect.catch(() => Effect.void),
       ),
     ),
     configure,

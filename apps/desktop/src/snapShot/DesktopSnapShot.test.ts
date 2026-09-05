@@ -467,6 +467,10 @@ const testLayer = (
   platform: NodeJS.Platform,
   fileSystemOverrides: Parameters<typeof FileSystem.layerNoop>[0] = {},
   initialSettings: Option.Option<ClientSettings> = Option.none(),
+  settingsGet: Effect.Effect<
+    Option.Option<ClientSettings>,
+    DesktopClientSettings.DesktopClientSettingsReadError
+  > = Effect.succeed(initialSettings),
 ) =>
   Layer.mergeAll(
     Layer.succeed(
@@ -482,7 +486,7 @@ const testLayer = (
     Layer.succeed(
       DesktopClientSettings.DesktopClientSettings,
       DesktopClientSettings.DesktopClientSettings.of({
-        get: Effect.succeed(initialSettings),
+        get: settingsGet,
         set: () => Effect.void,
       }),
     ),
@@ -3027,6 +3031,22 @@ it.effect("does not request permissions or create the flash during desktop start
       assert.lengthOf(openExternalMock.mock.calls, 0);
     }),
   ).pipe(Effect.provide(testLayer("darwin", {}, Option.some(settings))));
+});
+
+it.effect("keeps snapshots disabled when client settings cannot be read at startup", () => {
+  const readError = new DesktopClientSettings.DesktopClientSettingsReadError({
+    operation: "read-file",
+    path: "/state/client-settings.json",
+    cause: new Error("unavailable"),
+  });
+
+  return Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopSnapShot.make;
+      yield* service.initialize;
+      assert.isFalse((yield* service.state).shortcutRegistered);
+    }),
+  ).pipe(Effect.provide(testLayer("win32", {}, Option.none(), Effect.fail(readError))));
 });
 
 it.effect("does not request macOS permissions while synchronizing enabled settings", () => {
