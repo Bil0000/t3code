@@ -396,6 +396,7 @@ export function buildPullRequestTimeline(
     "createdAt" | "author" | "commits" | "comments" | "mergedAt" | "closedAt" | "timelineEvents"
   >,
 ): ReadonlyArray<PullRequestTimelineEvent> {
+  const { closedAt } = detail;
   return [
     {
       id: "created",
@@ -484,13 +485,15 @@ export function buildPullRequestTimeline(
           },
         ]
       : []),
-    ...(detail.closedAt &&
+    ...(closedAt &&
     !detail.mergedAt &&
-    !detail.timelineEvents?.some((event) => event.kind === "closed")
+    !detail.timelineEvents?.some(
+      (event) => event.kind === "closed" && instant(event.createdAt) === instant(closedAt),
+    )
       ? [
           {
             id: "closed",
-            at: detail.closedAt,
+            at: closedAt,
             kind: "closed" as const,
             title: "Pull request closed",
             body: null,

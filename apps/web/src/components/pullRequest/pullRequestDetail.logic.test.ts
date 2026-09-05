@@ -1484,6 +1484,39 @@ describe("host timeline events", () => {
       { id: "activity:host-merge", actor: { login: "maintainer" } },
     ]);
   });
+  it("keeps the current close when only an older close is loaded", () => {
+    const closedAt = "2026-07-06T00:00:00Z";
+    const source = {
+      ...TIMELINE_SOURCE,
+      closedAt,
+      timelineEvents: [
+        {
+          id: "host-close",
+          kind: "closed",
+          body: "closed",
+          createdAt: "2026-07-04T00:00:00Z",
+          actor: null,
+          url: null,
+        },
+      ],
+    };
+    expect(
+      buildPullRequestTimeline(source)
+        .filter((event) => event.kind === "closed")
+        .map((event) => event.at),
+    ).toEqual([closedAt, "2026-07-04T00:00:00Z"]);
+    expect(
+      buildPullRequestTimeline({
+        ...source,
+        timelineEvents: source.timelineEvents.map((event) => ({
+          ...event,
+          createdAt: "2026-07-06T02:00:00+02:00",
+        })),
+      })
+        .filter((event) => event.kind === "closed")
+        .map((event) => event.id),
+    ).toEqual(["activity:host-close"]);
+  });
   it("keeps close and reopen history in time order", () => {
     const events = buildPullRequestTimeline({
       ...TIMELINE_SOURCE,
