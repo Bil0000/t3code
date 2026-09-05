@@ -70,7 +70,7 @@ const CAPABILITIES: PullRequestCapabilities = {
  */
 export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequestViewerPermissions {
   return {
-    deleteSourceBranch: access.canWrite || access.didAuthor,
+    deleteSourceBranch: access.canWriteSource === true,
     actions: [
       // Arming a merge and taking the arming back are the merge, deferred: whoever may not
       // merge here may not leave an instruction to merge later either.
@@ -397,7 +397,9 @@ export const make = Effect.gen(function* () {
       Effect.all(
         [
           cli.getPullRequestActivity(input),
-          cli.listTimelineEvents(input),
+          cli
+            .listTimelineEvents(input)
+            .pipe(Effect.orElseSucceed(() => ({ events: [], truncated: true }))),
           // Line comments live on review threads, which `gh pr view --json` cannot reach. A
           // GraphQL hiccup degrades to a truncated conversation rather than blanking activity.
           cli.listReviewThreadComments(input).pipe(

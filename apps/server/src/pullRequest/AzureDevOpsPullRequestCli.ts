@@ -1,3 +1,4 @@
+import * as NodeBuffer from "node:buffer";
 import {
   assertSourceBranchDeletable,
   decodeBranchDeletionJson,
@@ -149,6 +150,13 @@ export class AzureDevOpsPullRequestCli extends Context.Service<
       AzureDevOpsPullRequestCliError
     >;
 
+    readonly getSourceBranchPermission: (input: {
+      readonly cwd: string;
+      readonly projectId: string;
+      readonly repositoryId: string;
+      readonly branch: string;
+    }) => Effect.Effect<boolean, AzureDevOpsPullRequestCliError>;
+
     readonly getPullRequest: (input: {
       readonly cwd: string;
       readonly number: number;
@@ -275,6 +283,10 @@ function isReviewerName(value: string): boolean {
   const name = value.trim();
   return name.length > 0 && !name.startsWith("-");
 }
+
+const decodeSourceBranchPermission = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ value: Schema.Array(Schema.Boolean) })),
+);
 
 export const make = Effect.gen(function* () {
   const azure = yield* AzureDevOpsCli.AzureDevOpsCli;
@@ -427,6 +439,50 @@ export const make = Effect.gen(function* () {
         cursorAdvance: 0,
         items: [],
       }),
+
+    getSourceBranchPermission: (input) => {
+      const branch = input.branch
+        .split("/")
+        .map((part) => NodeBuffer.Buffer.from(part, "utf16le").toString("hex"))
+        .join("/");
+      return executeJson({
+        cwd: input.cwd,
+        args: [
+          "devops",
+          "invoke",
+          ...detectArgs,
+          "--area",
+          "security",
+          "--resource",
+          "permissions",
+          "--route-parameters",
+          "securityNamespaceId=2e9eb7ed-3c0a-47d4-87c1-0ffdd275fd87",
+          "permissions=8",
+          "--query-parameters",
+          `tokens=repoV2/${input.projectId}/${input.repositoryId}/refs/heads/${branch}/`,
+          "alwaysAllowAdministrators=true",
+          "--api-version",
+          "7.1",
+          "--http-method",
+          "GET",
+        ],
+      }).pipe(
+        Effect.flatMap((response) =>
+          decodeSourceBranchPermission(response.stdout).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AzureDevOpsPullRequestReadError({
+                  command: "az",
+                  cwd: input.cwd,
+                  operation: "getSourceBranchPermission",
+                  cause,
+                }),
+            ),
+          ),
+        ),
+        Effect.map((response) => response.value.length === 1 && response.value[0] === true),
+      );
+    },
 
     getPullRequest: (input) =>
       executeJson({

@@ -2434,6 +2434,7 @@ export function buildLabelRequestJson(labels: ReadonlyArray<string>): string {
  * only read access can still be told apart from a passer-by.
  */
 export interface GitHubViewerAccess {
+  readonly canWriteSource?: boolean;
   readonly canWrite: boolean;
   /**
    * The viewer's role reaches triage, which is the least that may label. Everyone who can write
@@ -2460,7 +2461,7 @@ export interface GitHubViewerAccess {
 export const VIEWER_PERMISSIONS_GRAPHQL_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
   repository(owner: $owner, name: $name) {
     viewerPermission
-    pullRequest(number: $number) { viewerCanUpdate viewerDidAuthor }
+    pullRequest(number: $number) { viewerCanUpdate viewerDidAuthor headRepository { viewerPermission } }
   }
 }`;
 
@@ -2469,7 +2470,18 @@ const RawViewerPermissionsSchema = Schema.Struct({
     repository: Schema.Struct({
       viewerPermission: Schema.optional(Schema.NullOr(Schema.String)),
       /** Null for a number that names no pull request the viewer can see. */
-      pullRequest: Schema.NullOr(RawViewerFieldsSchema),
+      pullRequest: Schema.NullOr(
+        Schema.Struct({
+          ...RawViewerFieldsSchema.fields,
+          headRepository: Schema.optional(
+            Schema.NullOr(
+              Schema.Struct({
+                viewerPermission: Schema.optional(Schema.NullOr(Schema.String)),
+              }),
+            ),
+          ),
+        }),
+      ),
     }),
   }),
 });
@@ -2486,6 +2498,7 @@ export function decodeViewerPermissionsJson(
   const repository = decoded.success.data.repository;
   return Result.succeed({
     canWrite: toCanWrite(repository.viewerPermission),
+    canWriteSource: toCanWrite(repository.pullRequest?.headRepository?.viewerPermission),
     canTriage: toCanTriage(repository.viewerPermission),
     ...toPullRequestViewerFields(repository.pullRequest),
   });

@@ -524,6 +524,13 @@ function actionArgs(
   }
 }
 
+const decodeSourceProject = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ path_with_namespace: Schema.String })),
+);
+const decodeSourceBranchPermission = Schema.decodeUnknownEffect(
+  Schema.fromJsonString(Schema.Struct({ can_push: Schema.optional(Schema.Boolean) })),
+);
+
 export const make = Effect.gen(function* () {
   const gitlab = yield* GitLabCli.GitLabCli;
 
@@ -1085,12 +1092,7 @@ export const make = Effect.gen(function* () {
           if (detail.sourceProjectId === detail.targetProjectId)
             return Effect.succeed({ ...detail, headRepositoryNameWithOwner: input.repository });
           return api({ cwd: input.cwd, path: `projects/${detail.sourceProjectId}` }).pipe(
-            Effect.flatMap((response) =>
-              decodeBranchDeletionJson(
-                Schema.Struct({ path_with_namespace: Schema.String }),
-                response.stdout,
-              ),
-            ),
+            Effect.flatMap((response) => decodeSourceProject(response.stdout)),
             Effect.map((source) => ({
               ...detail,
               headRepositoryNameWithOwner: source.path_with_namespace,
@@ -1098,6 +1100,24 @@ export const make = Effect.gen(function* () {
             Effect.orElseSucceed(() => detail),
           );
         }),
+        Effect.flatMap((detail) =>
+          (detail.sourceProjectId == null || detail.headRepositoryNameWithOwner == null
+            ? Effect.succeed(false)
+            : api({
+                cwd: input.cwd,
+                path: `projects/${detail.sourceProjectId}/repository/branches/${encodeURIComponent(detail.headBranch)}`,
+              }).pipe(
+                Effect.flatMap((response) => decodeSourceBranchPermission(response.stdout)),
+                Effect.map((branch) => branch.can_push === true),
+                Effect.orElseSucceed(() => false),
+              )
+          ).pipe(
+            Effect.map((viewerCanDeleteSourceBranch) => ({
+              ...detail,
+              viewerCanDeleteSourceBranch,
+            })),
+          ),
+        ),
       ),
 
     listNotes: (input) => notesPage({ ...input, page: 1, collected: [] }),

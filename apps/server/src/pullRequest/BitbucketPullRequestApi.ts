@@ -170,6 +170,10 @@ export class BitbucketPullRequestApi extends Context.Service<
       readonly number: number;
     }) => Effect.Effect<BitbucketPullRequest, BitbucketPullRequestApiError>;
 
+    readonly getSourceRepositoryPermission: (input: {
+      readonly repository: string;
+    }) => Effect.Effect<boolean, BitbucketPullRequestApiError>;
+
     /** True where the credentials can write to the repository, which is what merging needs. */
     readonly getRepositoryPermission: (input: {
       readonly repository: string;
@@ -607,6 +611,15 @@ export const make = Effect.gen(function* () {
           decode: decodeRepositoryPermissionJson,
         }),
       ).pipe(Effect.catchIf(isRepositoryPermissionRemovedError, () => Effect.succeed(true))),
+
+    getSourceRepositoryPermission: (input) =>
+      withRepository(input.repository, () =>
+        readPage({
+          operation: "getSourceRepositoryPermission",
+          url: `/user/workspaces/${encodeURIComponent(input.repository.trim().split("/")[0]!)}/permissions/repositories?q=${encodeURIComponent(`repository.full_name="${filterLiteral(input.repository.trim())}"`)}`,
+          decode: (raw) => decodeRepositoryPermissionJson(raw, false),
+        }),
+      ),
 
     getPullRequestDiff: (input) =>
       input.commit !== undefined && !isCommitSha(input.commit)

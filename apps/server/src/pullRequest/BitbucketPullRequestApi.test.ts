@@ -83,6 +83,21 @@ afterEach(() => {
 });
 
 layer("BitbucketPullRequestApi.layer", (it) => {
+  it.effect.each([
+    ['{"values":[{"permission":"write"}]}', true],
+    ['{"values":[{"permission":"admin"}]}', true],
+    ['{"values":[{"permission":"read"}]}', false],
+    ['{"values":[]}', false],
+    ['{"values":[{}]}', false],
+  ] as const)("reads explicit source permission from %s", ([body, allowed]) =>
+    Effect.gen(function* () {
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(body)));
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+      expect(yield* api.getSourceRepositoryPermission({ repository: "fork/web" })).toBe(allowed);
+      expect(callAt(0).url).toMatch(/^\/user\/workspaces\/fork\/permissions\/repositories\?/);
+      expect(filterOfCall(0)).toBe('repository.full_name="fork/web"');
+    }),
+  );
   it.effect("deletes the fork source branch and refuses the pull request target branch", () =>
     Effect.gen(function* () {
       const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;

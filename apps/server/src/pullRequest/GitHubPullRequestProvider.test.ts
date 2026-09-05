@@ -8,7 +8,7 @@ import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullRequestProvider.ts";
 import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
 
-it.effect("reports a timeline failure instead of returning complete activity without events", () =>
+it.effect("preserves GitHub activity and marks the timeline incomplete when its read fails", () =>
   Effect.gen(function* () {
     const failure = new GitHubPullRequestCli.GitHubPullRequestReadError({
       command: "gh",
@@ -16,25 +16,41 @@ it.effect("reports a timeline failure instead of returning complete activity wit
       operation: "listTimelineEvents",
       cause: new Error("unreadable page"),
     });
+    const comment = {
+      id: "comment",
+      kind: "issue-comment" as const,
+      author: null,
+      body: "Keep this",
+      createdAt: "2026-09-05T12:00:00Z",
+      url: null,
+      path: null,
+      reviewState: null,
+    };
+    const commit = {
+      oid: "abc123",
+      messageHeadline: "Keep this commit",
+      committedDate: comment.createdAt,
+    };
     const provider = yield* make.pipe(
       Effect.provide(
         Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
-          getPullRequestActivity: () => Effect.succeed({ author: null, comments: [], commits: [] }),
+          getPullRequestActivity: () =>
+            Effect.succeed({ author: null, comments: [comment], commits: [commit] }),
           listTimelineEvents: () => Effect.fail(failure),
           listReviewThreadComments: () => Effect.fail(failure),
         }),
       ),
     );
-    const error = yield* Effect.flip(
-      provider.getChangeRequestActivity({
-        cwd: "/w",
-        host: "github.com",
-        repository: "acme/web",
-        number: 7,
-      }),
-    );
-    expect(error.operation).toBe("getChangeRequestActivity");
-    expect(error.cause).toBe(failure);
+    const activity = yield* provider.getChangeRequestActivity({
+      cwd: "/w",
+      host: "github.com",
+      repository: "acme/web",
+      number: 7,
+    });
+    expect(activity.timelineTruncated).toBe(true);
+    expect(activity.timelineEvents).toEqual([]);
+    expect(activity.comments).toEqual([{ ...comment, reactions: [] }]);
+    expect(activity.commits).toMatchObject([commit]);
   }),
 );
 
@@ -85,7 +101,7 @@ describe("gitHubViewerPermissions", () => {
         didAuthor: false,
       }),
     ).toEqual({
-      deleteSourceBranch: true,
+      deleteSourceBranch: false,
       // Arming a merge for later is the merge, so it travels with it.
       actions: [
         "merge",
@@ -149,7 +165,7 @@ describe("gitHubViewerPermissions", () => {
         didAuthor: true,
       }),
     ).toEqual({
-      deleteSourceBranch: true,
+      deleteSourceBranch: false,
       // Merging is the one thing writing is needed for, now or later; the rest an author may do.
       actions: ["ready", "draft", "close", "reopen"],
       comment: true,
@@ -821,3 +837,18 @@ describe("loginAvatarUrl", () => {
     }
   });
 });
+
+it.each([true, false, undefined])(
+  "requires known source access for deletion (%s)",
+  (sourceAccess) => {
+    expect(
+      gitHubViewerPermissions({
+        canWrite: true,
+        canTriage: true,
+        canUpdate: true,
+        didAuthor: true,
+        ...(sourceAccess === undefined ? {} : { canWriteSource: sourceAccess }),
+      }).deleteSourceBranch,
+    ).toBe(sourceAccess === true);
+  },
+);

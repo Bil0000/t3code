@@ -92,15 +92,6 @@ it.effect(
         expect(provider.capabilities.deleteSourceBranch).toBe(true);
         yield* Schema.decodeUnknownEffect(legacyCapabilities)(provider.capabilities);
       }
-      const azure = providers[3];
-      const viewer = yield* azure.getViewerPermissions({
-        cwd: "/w",
-        host: "dev.azure.com",
-        repository: "web",
-        number: 1,
-      });
-      expect(viewer.deleteSourceBranch).toBe(true);
-      yield* Schema.decodeUnknownEffect(legacyCapabilities)(viewer);
     }).pipe(
       Effect.provide(
         Layer.mergeAll(

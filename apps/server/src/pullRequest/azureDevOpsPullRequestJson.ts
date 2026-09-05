@@ -61,8 +61,9 @@ const RawPullRequestSchema = Schema.Struct({
     Schema.NullOr(
       Schema.Struct({
         repository: Schema.Struct({
+          id: Schema.optional(Schema.String),
           name: Schema.String,
-          project: Schema.Struct({ name: Schema.String }),
+          project: Schema.Struct({ id: Schema.optional(Schema.String), name: Schema.String }),
         }),
       }),
     ),
@@ -75,10 +76,16 @@ const RawPullRequestSchema = Schema.Struct({
   repository: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
+        id: Schema.optional(Schema.String),
         name: Schema.optional(Schema.NullOr(Schema.String)),
         webUrl: Schema.optional(Schema.NullOr(Schema.String)),
         project: Schema.optional(
-          Schema.NullOr(Schema.Struct({ name: Schema.optional(Schema.NullOr(Schema.String)) })),
+          Schema.NullOr(
+            Schema.Struct({
+              id: Schema.optional(Schema.String),
+              name: Schema.optional(Schema.NullOr(Schema.String)),
+            }),
+          ),
         ),
       }),
     ),
@@ -137,6 +144,8 @@ const RawViewerSchema = Schema.Struct({
 });
 
 export interface AzureDevOpsPullRequest {
+  readonly sourceRepositoryId?: string;
+  readonly sourceProjectId?: string;
   readonly headRepositoryNameWithOwner?: string | null;
   readonly number: number;
   readonly title: string;
@@ -263,7 +272,12 @@ function toPullRequest(
   const headBranch = trimmed(normalizeRefName(raw.sourceRefName));
   const baseBranch = trimmed(normalizeRefName(raw.targetRefName));
   if (url === null || headBranch === null || baseBranch === null) return null;
+  const sourceRepository = raw.forkSource?.repository ?? raw.repository;
   return {
+    ...(sourceRepository?.id === undefined ? {} : { sourceRepositoryId: sourceRepository.id }),
+    ...(sourceRepository?.project?.id === undefined
+      ? {}
+      : { sourceProjectId: sourceRepository.project.id }),
     number: raw.pullRequestId,
     title: raw.title,
     url,

@@ -2890,6 +2890,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         assert.strictEqual(mockedExecute.mock.calls.length, 1);
         expect(callAt(0).args).toContain("number=7");
         expect(access).toEqual({
+          canWriteSource: false,
           canWrite: false,
           canTriage: false,
           canUpdate: true,
@@ -3058,6 +3059,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
 
       assert.strictEqual(mockedExecute.mock.calls.length, 2);
       expect(access).toEqual({
+        canWriteSource: false,
         canWrite: false,
         canTriage: false,
         canUpdate: true,

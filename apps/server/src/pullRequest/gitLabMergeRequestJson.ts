@@ -223,6 +223,7 @@ export interface GitLabMergeRequestListItem {
 }
 
 export interface GitLabMergeRequestDetail extends GitLabMergeRequestListItem {
+  readonly viewerCanDeleteSourceBranch?: boolean;
   readonly sourceProjectId?: number | null;
   readonly targetProjectId?: number;
   readonly headRepositoryNameWithOwner?: string | null;

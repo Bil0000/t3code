@@ -454,13 +454,18 @@ export function decodeViewerJson(raw: string): Result.Result<string | null, Deco
  * Bitbucket answers `admin`, `write` or `read`, and an empty page means it named no permission at
  * all for this account — an unknown standing, which is granted rather than guessed away.
  */
-export function decodeRepositoryPermissionJson(raw: string): Result.Result<boolean, DecodeFailure> {
+export function decodeRepositoryPermissionJson(
+  raw: string,
+  allowUnknown = true,
+): Result.Result<boolean, DecodeFailure> {
   const decoded = decodeRepositoryPermissions(raw);
   if (!Result.isSuccess(decoded)) {
     return Result.fail(decoded.failure);
   }
   const permission = trimmed(decoded.success.values?.[0]?.permission)?.toLowerCase() ?? null;
-  return Result.succeed(permission === null || permission === "admin" || permission === "write");
+  return Result.succeed(
+    (allowUnknown && permission === null) || permission === "admin" || permission === "write",
+  );
 }
 
 /**

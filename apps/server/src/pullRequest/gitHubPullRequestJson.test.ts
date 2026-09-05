@@ -841,6 +841,26 @@ describe("viewer permission decoding", () => {
   const viewerJson = (repository: Record<string, unknown>) =>
     JSON.stringify({ data: { repository } });
 
+  it.each(["WRITE", "MAINTAIN", "ADMIN", "READ", "TRIAGE", undefined])(
+    "uses source role %s independently of target write or authorship",
+    (permission) => {
+      const access = expectSuccess(
+        decodeViewerPermissionsJson(
+          viewerJson({
+            viewerPermission: "ADMIN",
+            pullRequest: {
+              viewerDidAuthor: true,
+              headRepository: { viewerPermission: permission },
+            },
+          }),
+        ),
+      );
+      expect(access.canWriteSource).toBe(
+        permission === "WRITE" || permission === "MAINTAIN" || permission === "ADMIN",
+      );
+    },
+  );
+
   it("reads the repository's role and the pull request's own viewer fields together", () => {
     expect(
       expectSuccess(
@@ -851,7 +871,13 @@ describe("viewer permission decoding", () => {
           }),
         ),
       ),
-    ).toEqual({ canWrite: false, canTriage: false, canUpdate: true, didAuthor: true });
+    ).toEqual({
+      canWrite: false,
+      canWriteSource: false,
+      canTriage: false,
+      canUpdate: true,
+      didAuthor: true,
+    });
   });
 
   it("says no to a passer-by on a repository they can only read", () => {
@@ -864,7 +890,13 @@ describe("viewer permission decoding", () => {
           }),
         ),
       ),
-    ).toEqual({ canWrite: false, canTriage: false, canUpdate: false, didAuthor: false });
+    ).toEqual({
+      canWrite: false,
+      canWriteSource: false,
+      canTriage: false,
+      canUpdate: false,
+      didAuthor: false,
+    });
   });
 
   it("reads silence as permission, but not as authorship", () => {
@@ -873,6 +905,7 @@ describe("viewer permission decoding", () => {
     // and claiming it for someone who did not is how an author's own rules get handed out.
     expect(expectSuccess(decodeViewerPermissionsJson(viewerJson({ pullRequest: null })))).toEqual({
       canWrite: false,
+      canWriteSource: false,
       canTriage: false,
       canUpdate: true,
       didAuthor: false,
