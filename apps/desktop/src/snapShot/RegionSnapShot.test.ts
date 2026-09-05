@@ -1,5 +1,5 @@
 import type { Result as ActiveWindow } from "get-windows";
-import { assert, beforeEach, it, vi } from "vite-plus/test";
+import { assert, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const { createFromBitmapMock, resizeMock, screenshotMock } = vi.hoisted(() => ({
   createFromBitmapMock: vi.fn(),
@@ -100,4 +100,37 @@ it("preserves screen colors when converting RGBA to an opaque Windows bitmap", a
   );
   assert.strictEqual(bitmap, pixels);
   assert.deepEqual(size, { width: 4, height: 1 });
+});
+
+it("times out a stalled capture without starting overlapping native work", async () => {
+  vi.useFakeTimers();
+  const native = Promise.withResolvers<unknown>();
+  screenshotMock.mockReturnValueOnce(native.promise);
+  const active = { title: "Editor", owner: { name: "Editor" } } as ActiveWindow;
+  const region = { x: 0, y: 0, width: 1, height: 1 };
+  try {
+    let error: unknown;
+    const capture = captureRegionWindowSnapshot(active, region, region).catch((cause) => {
+      error = cause;
+    });
+    await vi.dynamicImportSettled();
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(error).toMatchObject({ message: "Windows window capture timed out. Try again." });
+    await capture;
+    await expect(captureRegionWindowSnapshot(active, region, region)).rejects.toThrow(
+      /still in progress/,
+    );
+    assert.lengthOf(screenshotMock.mock.calls, 1);
+    const image = { width: 1, height: 1, toPng: () => Buffer.from([1]) };
+    native.resolve(image);
+    await vi.runAllTimersAsync();
+    screenshotMock.mockResolvedValue(image);
+    await expect(captureRegionWindowSnapshot(active, region, region)).resolves.toMatchObject({
+      png: Buffer.from([1]),
+    });
+  } finally {
+    native.resolve({ width: 1, height: 1, toPng: () => Buffer.from([1]) });
+    await vi.runAllTimersAsync();
+    vi.useRealTimers();
+  }
 });

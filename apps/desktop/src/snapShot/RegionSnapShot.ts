@@ -1,5 +1,8 @@
+// @effect-diagnostics globalTimers:off -- The native capture deadline runs outside Effect fibers.
 import * as Electron from "electron";
 import type { Result as ActiveWindow } from "get-windows";
+
+let captureInProgress = false;
 
 export type RegionSnapShotSource = {
   readonly appIcon?: Electron.NativeImage;
@@ -13,7 +16,24 @@ export async function captureRegionWindowSnapshot(
 ): Promise<{ readonly source: RegionSnapShotSource; readonly png: Buffer }> {
   const imported = await import("@crowecawcaw/xa11y");
   const xa11y = (imported as unknown as { readonly default?: typeof imported }).default ?? imported;
-  const snapshot = await xa11y.screenshot({ region });
+  if (captureInProgress) throw new Error("Windows window capture is still in progress. Try again.");
+  captureInProgress = true;
+  const capture = Promise.resolve()
+    .then(() => xa11y.screenshot({ region }))
+    .finally(() => {
+      captureInProgress = false;
+    });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const snapshot = await Promise.race([
+    capture,
+    new Promise<never>((_, reject) => {
+      timeout = setTimeout(
+        () => reject(new Error("Windows window capture timed out. Try again.")),
+        15_000,
+      );
+      timeout.unref();
+    }),
+  ]).finally(() => clearTimeout(timeout));
   const { width, height } = snapshot;
   const scale = Math.min(maxSize.width / width, maxSize.height / height, 1);
   let png: Buffer;
