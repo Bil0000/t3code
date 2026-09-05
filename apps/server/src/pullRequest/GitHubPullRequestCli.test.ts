@@ -305,7 +305,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         mockedExecute.mockReturnValueOnce(Effect.succeed(output(current)));
         mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"default_branch":"main"}')));
         const error = yield* Effect.flip(cli.runPullRequestAction(target));
-        expect(error.reason).toBe("protected-branch");
+        expect(error).toMatchObject({ reason: "protected-branch" });
         expect(mockedExecute).toHaveBeenCalledTimes(5);
       }),
   );
@@ -339,7 +339,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           action: "delete-source-branch",
         }),
       );
-      expect(error.reason).toBe("delete-refused");
+      expect(error).toMatchObject({ reason: "delete-refused" });
       expect(mockedExecute).toHaveBeenCalledTimes(3);
       expect(callAt(2).stdin).toContain('"beforeOid":"abcdef0123456789abcdef0123456789abcdef01"');
       expect(callAt(2).args).not.toContain("DELETE");

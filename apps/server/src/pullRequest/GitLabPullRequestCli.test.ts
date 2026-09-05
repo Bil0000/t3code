@@ -130,7 +130,7 @@ layer("GitLabPullRequestCli.layer", (it) => {
       );
       mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"default_branch":"main"}')));
       const error = yield* Effect.flip(cli.runMergeRequestAction(target));
-      expect(error.reason).toBe("not-finished");
+      expect(error).toMatchObject({ reason: "not-finished" });
       expect(mockedExecute).toHaveBeenCalledTimes(5);
     }),
   );
