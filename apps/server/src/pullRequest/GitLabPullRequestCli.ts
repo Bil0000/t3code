@@ -1312,6 +1312,7 @@ export const make = Effect.gen(function* () {
               source_branch: Schema.String,
               target_branch: Schema.String,
               source_project_id: Schema.NullOr(Schema.Int),
+              target_project_id: Schema.Int,
             }),
             response.stdout,
           );
@@ -1327,6 +1328,8 @@ export const make = Effect.gen(function* () {
           );
           yield* assertSourceBranchDeletable({
             state: current.state,
+            sourceRepository: String(current.source_project_id),
+            baseRepository: String(current.target_project_id),
             sourceBranch: current.source_branch,
             baseBranch: current.target_branch,
             defaultBranch: config.default_branch,

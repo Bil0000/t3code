@@ -89,26 +89,36 @@ layer("BitbucketPullRequestApi.layer", (it) => {
       const target = { repository: "acme/web", number: 7, action: "delete-source-branch" as const };
       const current = {
         state: "MERGED",
-        source: { branch: { name: "feature/topic" }, repository: { full_name: "fork/renamed" } },
-        destination: { branch: { name: "release" } },
+        source: {
+          branch: { name: "main" },
+          repository: { uuid: "{fork}", full_name: "fork/renamed" },
+        },
+        destination: { branch: { name: "main" }, repository: { uuid: "{base}" } },
       };
       mockedRequest.mockReturnValueOnce(Effect.succeed(response(pullRequestJson(current))));
-      mockedRequest.mockReturnValueOnce(Effect.succeed(response('{"mainbranch":{"name":"main"}}')));
+      mockedRequest.mockReturnValueOnce(
+        Effect.succeed(response('{"mainbranch":{"name":"develop"}}')),
+      );
       mockedRequest.mockReturnValueOnce(Effect.succeed(response("")));
       yield* api.runAction(target);
       expect(callAt(1).url).toBe("/repositories/fork/renamed");
       expect(callAt(2)).toEqual({
         method: "DELETE",
-        url: "/repositories/fork/renamed/refs/branches/feature%2Ftopic",
+        url: "/repositories/fork/renamed/refs/branches/main",
       });
       mockedRequest.mockReturnValueOnce(
         Effect.succeed(
           response(
-            pullRequestJson({ ...current, destination: { branch: { name: "feature/topic" } } }),
+            pullRequestJson({
+              ...current,
+              destination: { branch: { name: "main" }, repository: { uuid: "{fork}" } },
+            }),
           ),
         ),
       );
-      mockedRequest.mockReturnValueOnce(Effect.succeed(response('{"mainbranch":{"name":"main"}}')));
+      mockedRequest.mockReturnValueOnce(
+        Effect.succeed(response('{"mainbranch":{"name":"develop"}}')),
+      );
       const error = yield* Effect.flip(api.runAction(target));
       expect(error.message).toContain("cannot be deleted");
       expect(mockedRequest).toHaveBeenCalledTimes(5);

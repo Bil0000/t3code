@@ -16,6 +16,8 @@ it.effect("allows only finished pull requests and refuses both protected branch 
   Effect.gen(function* () {
     const input = {
       state: "merged",
+      sourceRepository: "42",
+      baseRepository: "42",
       sourceBranch: "feat/change",
       baseBranch: "release",
       defaultBranch: "main",
@@ -29,6 +31,24 @@ it.effect("allows only finished pull requests and refuses both protected branch 
     }
     for (const sourceBranch of ["main", "release"]) {
       const error = yield* Effect.flip(assertSourceBranchDeletable({ ...input, sourceBranch }));
+      expect(error.detail).toContain("cannot be deleted");
+    }
+  }),
+);
+
+it.effect("distinguishes the upstream target from a same-named fork branch", () =>
+  Effect.gen(function* () {
+    const input = {
+      state: "closed",
+      sourceRepository: "fork",
+      baseRepository: "upstream",
+      sourceBranch: "main",
+      baseBranch: "main",
+      defaultBranch: "develop",
+    };
+    yield* assertSourceBranchDeletable(input);
+    for (const overrides of [{ baseRepository: "fork" }, { defaultBranch: "main" }]) {
+      const error = yield* Effect.flip(assertSourceBranchDeletable({ ...input, ...overrides }));
       expect(error.detail).toContain("cannot be deleted");
     }
   }),

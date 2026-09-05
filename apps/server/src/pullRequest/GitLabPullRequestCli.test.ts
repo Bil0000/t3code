@@ -113,16 +113,17 @@ layer("GitLabPullRequestCli.layer", (it) => {
       };
       const current = {
         state: "merged",
-        source_branch: "feature/topic",
-        target_branch: "release",
+        source_branch: "main",
+        target_branch: "main",
         source_project_id: 42,
+        target_project_id: 7,
       };
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(mergeRequestJson(current))));
-      mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"default_branch":"main"}')));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"default_branch":"develop"}')));
       mockedExecute.mockReturnValueOnce(Effect.succeed(output("")));
       yield* cli.runMergeRequestAction(target);
       expect(argsOfCall(1)).toContain("projects/42");
-      expect(argsOfCall(2)).toContain("projects/42/repository/branches/feature%2Ftopic");
+      expect(argsOfCall(2)).toContain("projects/42/repository/branches/main");
       expect(argsOfCall(2)).toContain("DELETE");
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(output(mergeRequestJson({ ...current, state: "opened" }))),

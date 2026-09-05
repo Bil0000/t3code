@@ -257,22 +257,68 @@ layer("GitHubPullRequestCli.layer", (it) => {
           action: "delete-source-branch" as const,
         };
         const current =
-          '{"state":"closed","head":{"ref":"feature/topic","repo":{"full_name":"fork/renamed"}},"base":{"ref":"release"}}';
+          '{"state":"closed","head":{"ref":"main","sha":"abcdef0123456789abcdef0123456789abcdef01","repo":{"id":42,"node_id":"R_fork","full_name":"fork/renamed"}},"base":{"ref":"main","repo":{"id":7}}}';
         mockedExecute.mockReturnValueOnce(Effect.succeed(output(current)));
-        mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"default_branch":"main"}')));
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"default_branch":"develop"}')));
         mockedExecute.mockReturnValueOnce(Effect.succeed(output("")));
         yield* cli.runPullRequestAction(target);
         expect(callAt(1).args).toContain("repos/fork/renamed");
-        expect(callAt(2).args).toContain("repos/fork/renamed/git/refs/heads/feature%2Ftopic");
-        expect(callAt(2).args).toContain("DELETE");
+        expect(callAt(2).args).toEqual([
+          "api",
+          "graphql",
+          "--hostname",
+          "github.com",
+          "--input",
+          "-",
+        ]);
+        expect(callAt(2).stdin).toContain("updateRefs");
+        expect(callAt(2).stdin).toContain("beforeOid: $beforeOid");
+        expect(callAt(2).stdin).toContain('"repositoryId":"R_fork"');
+        expect(callAt(2).stdin).toContain('"name":"refs/heads/main"');
+        expect(callAt(2).stdin).toContain('"beforeOid":"abcdef0123456789abcdef0123456789abcdef01"');
+        expect(callAt(2).stdin).toContain("0000000000000000000000000000000000000000");
         mockedExecute.mockReturnValueOnce(Effect.succeed(output(current)));
-        mockedExecute.mockReturnValueOnce(
-          Effect.succeed(output('{"default_branch":"feature/topic"}')),
-        );
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"default_branch":"main"}')));
         const error = yield* Effect.flip(cli.runPullRequestAction(target));
         expect(error.message).toContain("cannot be deleted");
         expect(mockedExecute).toHaveBeenCalledTimes(5);
       }),
+  );
+
+  it.effect("refuses a moved source tip without retrying an unconditional deletion", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            '{"state":"closed","head":{"ref":"topic","sha":"abcdef0123456789abcdef0123456789abcdef01","repo":{"id":42,"node_id":"R_fork","full_name":"fork/web"}},"base":{"ref":"main","repo":{"id":7}}}',
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"default_branch":"main"}')));
+      mockedExecute.mockReturnValueOnce(
+        Effect.fail(
+          new GitHubCli.GitHubCliCommandError({
+            command: "gh",
+            cwd: "/w",
+            cause: new Error("beforeOid does not match the current ref"),
+          }),
+        ),
+      );
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const error = yield* Effect.flip(
+        cli.runPullRequestAction({
+          cwd: "/w",
+          host: "github.com",
+          repository: "acme/web",
+          number: 7,
+          action: "delete-source-branch",
+        }),
+      );
+      expect(error.message).toContain("may have changed");
+      expect(mockedExecute).toHaveBeenCalledTimes(3);
+      expect(callAt(2).stdin).toContain('"beforeOid":"abcdef0123456789abcdef0123456789abcdef01"');
+      expect(callAt(2).args).not.toContain("DELETE");
+    }),
   );
 
   it.effect("reads linked pull request status through one narrow request", () =>

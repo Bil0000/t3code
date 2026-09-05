@@ -553,6 +553,8 @@ export const make = Effect.gen(function* () {
           );
           yield* assertSourceBranchDeletable({
             state: current.status,
+            sourceRepository: source.id,
+            baseRepository: current.repository.id,
             sourceBranch: current.sourceRefName,
             baseBranch: current.targetRefName,
             defaultBranch: config.defaultBranch,

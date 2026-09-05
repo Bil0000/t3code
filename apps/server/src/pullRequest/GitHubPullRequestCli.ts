@@ -2114,9 +2114,16 @@ export const make = Effect.gen(function* () {
               state: Schema.String,
               head: Schema.Struct({
                 ref: Schema.String,
-                repo: Schema.NullOr(Schema.Struct({ full_name: Schema.String })),
+                sha: Schema.String,
+                repo: Schema.NullOr(
+                  Schema.Struct({
+                    id: Schema.Int,
+                    node_id: Schema.String,
+                    full_name: Schema.String,
+                  }),
+                ),
               }),
-              base: Schema.Struct({ ref: Schema.String }),
+              base: Schema.Struct({ ref: Schema.String, repo: Schema.Struct({ id: Schema.Int }) }),
             }),
             response.stdout,
           );
@@ -2132,33 +2139,34 @@ export const make = Effect.gen(function* () {
           );
           yield* assertSourceBranchDeletable({
             state: current.state,
+            sourceRepository: String(current.head.repo.id),
+            baseRepository: String(current.base.repo.id),
             sourceBranch: current.head.ref,
             baseBranch: current.base.ref,
             defaultBranch: config.default_branch,
           });
-          yield* github
-            .execute({
-              cwd: input.cwd,
-              args: [
-                "api",
-                "--hostname",
-                input.host,
-                "--method",
-                "DELETE",
-                `repos/${source}/git/refs/heads/${encodeURIComponent(current.head.ref)}`,
-              ],
-            })
-            .pipe(
-              Effect.catchTag(
-                "GitHubCliCommandError",
-                (cause) =>
-                  new PullRequestBranchDeletionError({
-                    detail:
-                      "The source branch could not be deleted. It may already be deleted, protected, or unavailable to this account.",
-                    cause,
-                  }),
-              ),
-            );
+          yield* graphql({
+            cwd: input.cwd,
+            host: input.host,
+            query: `mutation DeleteSourceBranch($repositoryId: ID!, $name: GitRefname!, $beforeOid: GitObjectID!) {
+                updateRefs(input: {repositoryId: $repositoryId, refUpdates: [{name: $name, beforeOid: $beforeOid, afterOid: "0000000000000000000000000000000000000000"}]}) { clientMutationId }
+              }`,
+            variables: {
+              repositoryId: current.head.repo.node_id,
+              name: `refs/heads/${current.head.ref}`,
+              beforeOid: current.head.sha,
+            },
+          }).pipe(
+            Effect.catchTag(
+              "GitHubCliCommandError",
+              (cause) =>
+                new PullRequestBranchDeletionError({
+                  detail:
+                    "The source branch could not be deleted. It may have changed, already been deleted, be protected, or be unavailable to this account. Refresh the pull request before trying again.",
+                  cause,
+                }),
+            ),
+          );
         });
       }
       if (input.action === "revert") {

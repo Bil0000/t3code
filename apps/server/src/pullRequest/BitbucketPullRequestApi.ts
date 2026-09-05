@@ -762,17 +762,23 @@ export const make = Effect.gen(function* () {
                 state: Schema.String,
                 source: Schema.Struct({
                   branch: Schema.Struct({ name: Schema.String }),
-                  repository: Schema.NullOr(Schema.Struct({ full_name: Schema.String })),
+                  repository: Schema.NullOr(
+                    Schema.Struct({ uuid: Schema.String, full_name: Schema.String }),
+                  ),
                 }),
-                destination: Schema.Struct({ branch: Schema.Struct({ name: Schema.String }) }),
+                destination: Schema.Struct({
+                  branch: Schema.Struct({ name: Schema.String }),
+                  repository: Schema.Struct({ uuid: Schema.String }),
+                }),
               }),
               response.body,
             );
-            if (current.source.repository === null)
+            const sourceRepository = current.source.repository;
+            if (sourceRepository === null)
               return yield* new PullRequestBranchDeletionError({
                 detail: "The source repository no longer exists.",
               });
-            return yield* withRepository(current.source.repository.full_name, (source) =>
+            return yield* withRepository(sourceRepository.full_name, (source) =>
               Effect.gen(function* () {
                 const repository = yield* bitbucket.request({ method: "GET", url: source });
                 const config = yield* decodeBranchDeletionJson(
@@ -781,6 +787,8 @@ export const make = Effect.gen(function* () {
                 );
                 yield* assertSourceBranchDeletable({
                   state: current.state,
+                  sourceRepository: sourceRepository.uuid,
+                  baseRepository: current.destination.repository.uuid,
                   sourceBranch: current.source.branch.name,
                   baseBranch: current.destination.branch.name,
                   defaultBranch: config.mainbranch.name,

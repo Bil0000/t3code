@@ -61,33 +61,33 @@ afterEach(() => {
 });
 
 layer("AzureDevOpsPullRequestCli.layer", (it) => {
-  it.effect("deletes an Azure fork ref at its current object ID and reports host refusal", () =>
+  it.effect("checks the Azure fork ref tip and reports concurrent changes", () =>
     Effect.gen(function* () {
       const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(
           output(
-            '{"status":"completed","sourceRefName":"refs/heads/topic","targetRefName":"refs/heads/main","repository":{"id":"base","project":{"id":"base-project"}},"forkSource":{"repository":{"id":"fork","project":{"id":"fork-project"}}}}',
+            '{"status":"completed","sourceRefName":"refs/heads/main","targetRefName":"refs/heads/main","repository":{"id":"base","project":{"id":"base-project"}},"forkSource":{"repository":{"id":"fork","project":{"id":"fork-project"}}}}',
           ),
         ),
       );
       mockedExecute.mockReturnValueOnce(
-        Effect.succeed(output('{"defaultBranch":"refs/heads/main"}')),
+        Effect.succeed(output('{"defaultBranch":"refs/heads/develop"}')),
       );
       mockedExecute.mockReturnValueOnce(
         Effect.succeed(
           output(
-            '[{"name":"refs/heads/topic-extra","objectId":"wrong"},{"name":"refs/heads/topic","objectId":"abc123"}]',
+            '[{"name":"refs/heads/main-extra","objectId":"wrong"},{"name":"refs/heads/main","objectId":"abc123"}]',
           ),
         ),
       );
       mockedExecute.mockReturnValueOnce(
-        Effect.succeed(output('{"success":false,"customMessage":"Permission denied"}')),
+        Effect.succeed(output('{"success":false,"updateStatus":"staleOldObjectId"}')),
       );
       const error = yield* Effect.flip(
         cli.runPullRequestAction({ cwd: "/w", number: 7, action: "delete-source-branch" }),
       );
-      expect(error.message).toContain("Permission denied");
+      expect(error.message).toContain("staleOldObjectId");
       expect(argsOfCall(3)).toEqual(
         expect.arrayContaining([
           "delete",
@@ -96,11 +96,12 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
           "--project",
           "fork-project",
           "--name",
-          "refs/heads/topic",
+          "refs/heads/main",
           "--object-id",
           "abc123",
         ]),
       );
+      expect(mockedExecute).toHaveBeenCalledTimes(4);
     }),
   );
 

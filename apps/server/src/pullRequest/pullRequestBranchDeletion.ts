@@ -12,17 +12,25 @@ export class PullRequestBranchDeletionError extends Schema.TaggedErrorClass<Pull
 
 export const assertSourceBranchDeletable = (input: {
   readonly state: string;
+  readonly sourceRepository: string;
+  readonly baseRepository: string;
   readonly sourceBranch: string;
   readonly baseBranch: string;
   readonly defaultBranch: string;
 }) => {
   const state = input.state.toLowerCase();
   const detail =
-    !input.sourceBranch.trim() || !input.baseBranch.trim() || !input.defaultBranch.trim()
-      ? "The host did not identify the source, target, and default branches."
+    !input.sourceRepository.trim() ||
+    !input.baseRepository.trim() ||
+    !input.sourceBranch.trim() ||
+    !input.baseBranch.trim() ||
+    !input.defaultBranch.trim()
+      ? "The host did not identify the source and target repositories and their branches."
       : !["closed", "merged", "declined", "superseded", "completed", "abandoned"].includes(state)
         ? "Close or merge the pull request before deleting its source branch."
-        : input.sourceBranch === input.baseBranch || input.sourceBranch === input.defaultBranch
+        : (input.sourceRepository === input.baseRepository &&
+              input.sourceBranch === input.baseBranch) ||
+            input.sourceBranch === input.defaultBranch
           ? "The default branch or target branch cannot be deleted."
           : null;
   return detail === null
