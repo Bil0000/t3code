@@ -51,9 +51,9 @@ then returns to your draft.
 
 ## Platform behavior
 
-- On macOS, T3 Code asks for Accessibility and Screen Recording when you select **Allow capture**
-  during setup and the permission is not already granted. Modifier-pair shortcuts need no additional
-  permission on macOS.
+- On macOS, T3 Code asks for Screen Recording when you select **Allow capture** during setup
+  and the permission is not already granted. It asks for Accessibility only when **Include app text**
+  is enabled. Modifier-pair shortcuts need no additional permission on macOS.
 - On Windows, no setup or permission is needed. Turn SnapShots on and the shortcut captures the active window.
 - On Niri 25.11 or newer, T3 Code captures the active window through Niri directly, without an
   extension or picker. It uses the captured window's identity for available accessibility data

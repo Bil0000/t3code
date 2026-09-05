@@ -354,7 +354,8 @@ fn run() -> Result<()> {
         }
         _ => {
             return Err(
-                "Expected check, capture <directory>, or activate <directory> <pid> <title>".into(),
+                "Expected check, capture <directory>, feedback <directory> <options>, or activate <directory> <pid> <title>"
+                    .into(),
             );
         }
     }

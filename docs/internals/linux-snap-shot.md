@@ -1,7 +1,8 @@
 # Linux window capture
 
 Linux window capture supports Wayland sessions only. This does not remove X11 support from the
-Electron app itself. Windows still uses the region-capture and native modifier-hook adapters;
+Electron app itself. Windows captures the active window through the native region-capture adapter,
+using the window bounds without enumerating desktop thumbnails, and uses native modifier hooks.
 macOS retains its native capture path.
 
 `apps/desktop/src/snapShot/LinuxSnapShot.ts` selects a backend for each capture:
