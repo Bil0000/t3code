@@ -138,7 +138,7 @@ it("validates symlinked configs from their original directory so relative includ
   });
   const preview = await setup.preview({ ...target(), path: link }, install);
   await setup.apply(preview.id, "niri");
-  expect(await NodeFSP.readdir(active)).toEqual(["config.kdl", "keys.kdl"]);
+  expect((await NodeFSP.readdir(active)).sort()).toEqual(["config.kdl", "keys.kdl"]);
   expect((await NodeFSP.lstat(link)).isSymbolicLink()).toBe(true);
 });
 it("does not apply invalid Niri configs", async () => {
@@ -160,7 +160,7 @@ it("detects conflicts in included Niri configs without changing either file", as
   await NodeFSP.appendFile(path, 'include "keys.kdl"\n');
   await NodeFSP.writeFile(NodePath.join(directory, "keys.kdl"), "binds { Shift+Ctrl+2 { quit; } }");
   await expect(setup.preview(target(), install)).rejects.toThrow("already used");
-  expect(await NodeFSP.readdir(directory)).toEqual(["config.kdl", "keys.kdl"]);
+  expect((await NodeFSP.readdir(directory)).sort()).toEqual(["config.kdl", "keys.kdl"]);
 });
 it("detects included config changes before applying", async () => {
   await NodeFSP.appendFile(path, 'include "keys.kdl"\n');

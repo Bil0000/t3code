@@ -22,7 +22,9 @@ import { startNiriCaptureShortcut } from "./NiriCaptureShortcut.ts";
 import { GnomeCaptureSetup } from "./GnomeCaptureSetup.ts";
 import { GNOME_CAPTURE_UUID } from "./gnomeCaptureBundle.ts";
 
-const hasDbus = NodeChildProcess.spawnSync("dbus-daemon", ["--version"]).status === 0;
+const hasDbus =
+  NodeChildProcess.spawnSync("dbus-daemon", ["--version"]).status === 0 &&
+  NodeChildProcess.spawnSync("gdbus", ["help"]).status === 0;
 
 it.runIf(hasDbus)("captures through real D-Bus marshalling on a private bus", async () => {
   const directory = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-private-dbus-"));
