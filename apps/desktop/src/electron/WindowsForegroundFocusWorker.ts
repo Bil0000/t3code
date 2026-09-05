@@ -29,8 +29,9 @@ async function findTarget(
   App: (typeof import("@crowecawcaw/xa11y"))["App"],
   target: WindowsForegroundFocusTarget,
 ): Promise<Element | undefined> {
-  const app = await App.byPid(target.processId, { timeout: 0 });
-  const children = await app.children();
+  const children = await App.byPid(target.processId, { timeout: 0 })
+    .then((app) => app.children())
+    .catch(() => []);
   return (
     children.find((candidate) => matchesTarget(candidate, target)) ??
     (await App.list())
