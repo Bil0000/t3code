@@ -40,6 +40,14 @@ describe("Niri capture config edits", () => {
       `\uFEFFbinds {\r\n    ${binding}\r\n}\r\n`,
     );
   });
+  it("preserves Unicode spacing around nodes and line continuations", () => {
+    const spaces =
+      "\u00A0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u3000";
+    const before = `binds${spaces}\\${spaces}\n{\n}\n`;
+    expect(editCaptureConfig(before, "niri", app, "install").after).toBe(
+      before.replace("}\n", `    ${binding}\n}\n`),
+    );
+  });
   it("does not duplicate an existing binding, including a custom chord", () => {
     const before = `binds {\n    ${binding.replace("Ctrl+Shift+2", "Alt+Ctrl+Y")}\n}\n`;
     const result = editCaptureConfig(before, "niri", app, "install");

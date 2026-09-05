@@ -21,7 +21,7 @@ export function readKdlNodes(source: string): KdlNode[] {
   while (offset < source.length) {
     const start = offset;
     const rest = source.slice(offset);
-    if (/^[\t \r\uFEFF]/.test(rest)) {
+    if (/^[\t \r\uFEFF\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/.test(rest)) {
       offset++;
       continue;
     }
@@ -45,7 +45,7 @@ export function readKdlNodes(source: string): KdlNode[] {
       if (depth) throw invalid();
       continue;
     }
-    const continuation = /^\\[\t \r]*\n/.exec(rest);
+    const continuation = /^\\[\t \r\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]*\n/.exec(rest);
     if (continuation) {
       offset += continuation[0].length;
       continue;
