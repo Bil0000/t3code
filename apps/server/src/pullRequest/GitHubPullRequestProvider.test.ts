@@ -8,6 +8,36 @@ import * as GitHubPullRequestCli from "./GitHubPullRequestCli.ts";
 import { gitHubViewerPermissions, loginAvatarUrl, make } from "./GitHubPullRequestProvider.ts";
 import type { GitHubReviewThreadComments } from "./gitHubPullRequestJson.ts";
 
+it.effect("reports a timeline failure instead of returning complete activity without events", () =>
+  Effect.gen(function* () {
+    const failure = new GitHubPullRequestCli.GitHubPullRequestReadError({
+      command: "gh",
+      cwd: "/w",
+      operation: "listTimelineEvents",
+      cause: new Error("unreadable page"),
+    });
+    const provider = yield* make.pipe(
+      Effect.provide(
+        Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+          getPullRequestActivity: () => Effect.succeed({ author: null, comments: [], commits: [] }),
+          listTimelineEvents: () => Effect.fail(failure),
+          listReviewThreadComments: () => Effect.fail(failure),
+        }),
+      ),
+    );
+    const error = yield* Effect.flip(
+      provider.getChangeRequestActivity({
+        cwd: "/w",
+        host: "github.com",
+        repository: "acme/web",
+        number: 7,
+      }),
+    );
+    expect(error.operation).toBe("getChangeRequestActivity");
+    expect(error.cause).toBe(failure);
+  }),
+);
+
 it.effect("uses one narrow read for a linked pull request summary", () =>
   Effect.gen(function* () {
     let summaryReads = 0;
@@ -55,6 +85,7 @@ describe("gitHubViewerPermissions", () => {
         didAuthor: false,
       }),
     ).toEqual({
+      deleteSourceBranch: true,
       // Arming a merge for later is the merge, so it travels with it.
       actions: [
         "merge",
@@ -86,6 +117,7 @@ describe("gitHubViewerPermissions", () => {
         didAuthor: false,
       }),
     ).toEqual({
+      deleteSourceBranch: false,
       actions: [],
       comment: true,
       resolve: false,
@@ -117,6 +149,7 @@ describe("gitHubViewerPermissions", () => {
         didAuthor: true,
       }),
     ).toEqual({
+      deleteSourceBranch: true,
       // Merging is the one thing writing is needed for, now or later; the rest an author may do.
       actions: ["ready", "draft", "close", "reopen"],
       comment: true,
@@ -139,6 +172,7 @@ describe("gitHubViewerPermissions", () => {
       });
 
       expect(detail.viewerPermissions).toEqual({
+        deleteSourceBranch: false,
         actions: ["ready", "draft", "close", "reopen"],
         comment: true,
         resolve: false,
@@ -593,6 +627,7 @@ describe("getChangeRequest commits", () => {
 
   const layerWith = (commits: GitHubReviewThreadComments["commits"]) =>
     Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+      listTimelineEvents: () => Effect.succeed([]),
       getPullRequestActivity: () =>
         Effect.succeed({
           author: baseDetail.author,
@@ -676,6 +711,7 @@ describe("getChangeRequestActivity dismissed reviews", () => {
   };
   const layerFor = (body: string) =>
     Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
+      listTimelineEvents: () => Effect.succeed([]),
       getPullRequestActivity: () =>
         Effect.succeed({ author: null, comments: [dismissedReview(body)], commits: [] }),
       listReviewThreadComments: () => Effect.succeed(threadComments),

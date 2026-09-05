@@ -21,6 +21,7 @@ import {
 import type { GitHubViewerAccess, GitHubWorkflowRunApproval } from "./gitHubPullRequestJson.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
+  deleteSourceBranch: true,
   diff: true,
   comment: true,
   actions: [
@@ -69,6 +70,7 @@ const CAPABILITIES: PullRequestCapabilities = {
  */
 export function gitHubViewerPermissions(access: GitHubViewerAccess): PullRequestViewerPermissions {
   return {
+    deleteSourceBranch: access.canWrite || access.didAuthor,
     actions: [
       // Arming a merge and taking the arming back are the merge, deferred: whoever may not
       // merge here may not leave an instruction to merge later either.
@@ -395,6 +397,7 @@ export const make = Effect.gen(function* () {
       Effect.all(
         [
           cli.getPullRequestActivity(input),
+          cli.listTimelineEvents(input),
           // Line comments live on review threads, which `gh pr view --json` cannot reach. A
           // GraphQL hiccup degrades to a truncated conversation rather than blanking activity.
           cli.listReviewThreadComments(input).pipe(
@@ -417,54 +420,52 @@ export const make = Effect.gen(function* () {
             })),
           ),
         ],
-        { concurrency: 2 },
+        { concurrency: 3 },
       ).pipe(
         Effect.mapError(fail("getChangeRequestActivity")),
-        Effect.map(([pullRequest, reviewThreads]): ProviderChangeRequestActivity => ({
-          author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin, input.host),
-          reviewers: reviewThreads.reviewers,
-          reactions: reviewThreads.reactions,
-          commits: (reviewThreads.commits.length > 0
-            ? reviewThreads.commits
-            : pullRequest.commits
-          ).map((commit) => ({
-            ...commit,
-            ...reviewThreads.commitStats.get(commit.oid),
-            authors: commit.authors?.map(
-              (author) => withAvatar(author, reviewThreads.avatarsByLogin, input.host) ?? author,
-            ),
-          })),
-          comments: [...pullRequest.comments, ...reviewThreads.comments]
-            .map((comment) => ({
-              ...comment,
-              // GitHub keeps the dismissal reason on the timeline event, not on the review,
-              // so a dismissed review with nothing visible of its own reads its words from
-              // there. "Visible" and not "empty": bot reviews often carry only an HTML
-              // marker comment, which markdown renders as nothing.
-              body:
-                comment.kind === "review" &&
-                comment.reviewState?.toUpperCase() === "DISMISSED" &&
-                rendersEmpty(comment.body)
-                  ? (reviewThreads.dismissalsByReviewId.get(comment.id) ?? comment.body)
-                  : comment.body,
-              author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
-              // A comment out of `gh pr view --json` carries none of its own: that read
-              // reports no reaction at all, so they arrive from the GraphQL page by node id.
-              reactions: comment.reactions ?? reviewThreads.reactionsById.get(comment.id) ?? [],
-            }))
-            .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
-          // `gh pr view --json comments,reviews` follows GitHub's cursors itself, so those two
-          // are always whole and only the thread walk can stop short of the host.
-          commentCount: pullRequest.comments.length + reviewThreads.commentCount,
-          commentsTruncated: reviewThreads.truncated,
-          reviewThreads: reviewThreads.reviewThreads.map((thread) => ({
-            ...thread,
-            comments: thread.comments.map((comment) => ({
-              ...comment,
-              author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
+        Effect.map(
+          ([pullRequest, timelineEvents, reviewThreads]): ProviderChangeRequestActivity => ({
+            timelineEvents: timelineEvents.map((event) => ({
+              ...event,
+              url: event.url ?? `https://${input.host}/${input.repository}/pull/${input.number}`,
             })),
-          })),
-        })),
+            author: withAvatar(pullRequest.author, reviewThreads.avatarsByLogin, input.host),
+            reviewers: reviewThreads.reviewers,
+            reactions: reviewThreads.reactions,
+            commits: (reviewThreads.commits.length > 0
+              ? reviewThreads.commits
+              : pullRequest.commits
+            ).map((commit) => ({
+              ...commit,
+              ...reviewThreads.commitStats.get(commit.oid),
+              authors: commit.authors?.map(
+                (author) => withAvatar(author, reviewThreads.avatarsByLogin, input.host) ?? author,
+              ),
+            })),
+            comments: [...pullRequest.comments, ...reviewThreads.comments]
+              .map((comment) => ({
+                ...comment,
+                body:
+                  comment.kind === "review" &&
+                  comment.reviewState?.toUpperCase() === "DISMISSED" &&
+                  rendersEmpty(comment.body)
+                    ? (reviewThreads.dismissalsByReviewId.get(comment.id) ?? comment.body)
+                    : comment.body,
+                author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
+                reactions: comment.reactions ?? reviewThreads.reactionsById.get(comment.id) ?? [],
+              }))
+              .toSorted((left, right) => left.createdAt.localeCompare(right.createdAt)),
+            commentCount: pullRequest.comments.length + reviewThreads.commentCount,
+            commentsTruncated: reviewThreads.truncated,
+            reviewThreads: reviewThreads.reviewThreads.map((thread) => ({
+              ...thread,
+              comments: thread.comments.map((comment) => ({
+                ...comment,
+                author: withAvatar(comment.author, reviewThreads.avatarsByLogin, input.host),
+              })),
+            })),
+          }),
+        ),
       ),
 
     getReviewThreadComments: (input) =>

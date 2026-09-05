@@ -225,6 +225,24 @@ describe("pull request detail decoding", () => {
     ]);
   });
 
+  it("reads the fork repository name and owner returned by gh pr view", () => {
+    const detail = expectSuccess(
+      decodePullRequestDetailJson(
+        JSON.stringify({
+          ...JSON.parse(detailJson),
+          headRepository: { id: "R_kgDOTkYJ5w", name: "t3code" },
+          headRepositoryOwner: {
+            id: "MDQ6VXNlcjYyMzM3MDAz",
+            name: "Bilal Bakr",
+            login: "Bil0000",
+          },
+          isCrossRepository: true,
+        }),
+      ),
+    );
+    expect(detail.headRepositoryNameWithOwner).toBe("Bil0000/t3code");
+  });
+
   it("keeps a workflow waiting for approval out of the passing state", () => {
     const raw = JSON.parse(detailJson) as Record<string, unknown>;
     const detail = expectSuccess(

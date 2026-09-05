@@ -1,6 +1,7 @@
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Schema from "effect/Schema";
 import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 
@@ -11,6 +12,7 @@ import { BASE_COMPARISON_GRAPHQL_QUERY } from "./gitHubPullRequestJson.ts";
 
 const mockedExecute = vi.fn<GitHubCli.GitHubCli["Service"]["execute"]>();
 const mockedGetPullRequest = vi.fn<GitHubCli.GitHubCli["Service"]["getPullRequest"]>();
+const encodeTimelinePage = Schema.encodeEffect(Schema.fromJsonString(Schema.Unknown));
 
 const layer = it.layer(
   GitHubPullRequestCli.layer.pipe(
@@ -183,6 +185,96 @@ afterEach(() => {
 });
 
 layer("GitHubPullRequestCli.layer", (it) => {
+  it.effect("reads every timeline page with older gh and retains the native close actor", () =>
+    Effect.gen(function* () {
+      const closed = {
+        id: 30487715814,
+        event: "closed",
+        created_at: "2026-09-03T12:28:17Z",
+        actor: { login: "Bil0000" },
+      };
+      const firstPage = yield* encodeTimelinePage(
+        Array.from({ length: 100 }, () => ({ event: "committed" })),
+      );
+      const secondPage = yield* encodeTimelinePage([closed, closed]);
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(firstPage)));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(output(secondPage)));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const events = yield* cli.listTimelineEvents({
+        cwd: "/w",
+        host: "github.com",
+        repository: "pingdotgg/t3code",
+        number: 9256,
+      });
+      expect(events).toMatchObject([
+        {
+          id: "github:30487715814",
+          kind: "closed",
+          actor: { login: "Bil0000" },
+          createdAt: "2026-09-03T12:28:17Z",
+        },
+      ]);
+      expect(mockedExecute).toHaveBeenCalledTimes(2);
+      for (const page of [1, 2]) {
+        expect(callAt(page - 1).args).toEqual([
+          "api",
+          "--hostname",
+          "github.com",
+          `repos/pingdotgg/t3code/issues/9256/timeline?per_page=100&page=${page}`,
+        ]);
+      }
+    }),
+  );
+
+  it.effect("fails unreadable or truncated timeline pages instead of reporting no events", () =>
+    Effect.gen(function* () {
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      for (const result of [output("broken"), output("[]", true), output("[]", false, true)]) {
+        mockedExecute.mockReturnValueOnce(Effect.succeed(result));
+        const error = yield* Effect.flip(
+          cli.listTimelineEvents({
+            cwd: "/w",
+            host: "github.com",
+            repository: "acme/web",
+            number: 7,
+          }),
+        );
+        expect(error._tag).toBe("GitHubPullRequestReadError");
+      }
+    }),
+  );
+
+  it.effect(
+    "deletes a finished PR branch from its fork and refuses the source default branch",
+    () =>
+      Effect.gen(function* () {
+        const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+        const target = {
+          cwd: "/w",
+          host: "github.com",
+          repository: "acme/web",
+          number: 7,
+          action: "delete-source-branch" as const,
+        };
+        const current =
+          '{"state":"closed","head":{"ref":"feature/topic","repo":{"full_name":"fork/renamed"}},"base":{"ref":"release"}}';
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output(current)));
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output('{"default_branch":"main"}')));
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output("")));
+        yield* cli.runPullRequestAction(target);
+        expect(callAt(1).args).toContain("repos/fork/renamed");
+        expect(callAt(2).args).toContain("repos/fork/renamed/git/refs/heads/feature%2Ftopic");
+        expect(callAt(2).args).toContain("DELETE");
+        mockedExecute.mockReturnValueOnce(Effect.succeed(output(current)));
+        mockedExecute.mockReturnValueOnce(
+          Effect.succeed(output('{"default_branch":"feature/topic"}')),
+        );
+        const error = yield* Effect.flip(cli.runPullRequestAction(target));
+        expect(error.message).toContain("cannot be deleted");
+        expect(mockedExecute).toHaveBeenCalledTimes(5);
+      }),
+  );
+
   it.effect("reads linked pull request status through one narrow request", () =>
     Effect.gen(function* () {
       mockedGetPullRequest.mockReturnValueOnce(
@@ -2519,7 +2611,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
       expect(detail.body).toBe("Core body");
       expect(activity.author?.login).toBe("octocat");
       expect(callAt(0).args.at(-1)).toBe(
-        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,statusCheckRollup,body,changedFiles,closedAt,isCrossRepository,headRepositoryOwner,headRefOid,autoMergeRequest",
+        "number,title,url,author,headRefName,baseRefName,state,isDraft,mergeable,reviewDecision,additions,deletions,createdAt,updatedAt,mergedAt,reviewRequests,labels,statusCheckRollup,body,changedFiles,closedAt,isCrossRepository,headRepositoryOwner,headRepository,headRefOid,autoMergeRequest",
       );
       expect(callAt(1).args.at(-1)).toBe("author,comments,reviews,commits");
     }),

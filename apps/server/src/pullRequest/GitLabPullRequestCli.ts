@@ -1,3 +1,8 @@
+import {
+  assertSourceBranchDeletable,
+  decodeBranchDeletionJson,
+  PullRequestBranchDeletionError,
+} from "./pullRequestBranchDeletion.ts";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -6,6 +11,7 @@ import * as Schema from "effect/Schema";
 import type {
   PullRequestAction,
   PullRequestComment,
+  PullRequestTimelineEvent,
   PullRequestCommit,
   PullRequestInvolvement,
   PullRequestListState,
@@ -176,6 +182,7 @@ export class GitLabDiffFileContentsUnavailableError extends Schema.TaggedErrorCl
 }
 
 export type GitLabPullRequestCliError =
+  | PullRequestBranchDeletionError
   | GitLabCli.GitLabCliError
   | GitLabMergeRequestReadError
   | GitLabDiffCursorError
@@ -245,7 +252,11 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly number: number;
     }) => Effect.Effect<
-      { readonly comments: ReadonlyArray<PullRequestComment>; readonly truncated: boolean },
+      {
+        readonly comments: ReadonlyArray<PullRequestComment>;
+        readonly timelineEvents?: ReadonlyArray<PullRequestTimelineEvent>;
+        readonly truncated: boolean;
+      },
       GitLabPullRequestCliError
     >;
 
@@ -469,6 +480,8 @@ function actionArgs(
   mergeMethod: PullRequestMergeMethod | undefined,
 ): ReadonlyArray<string> {
   switch (action) {
+    case "delete-source-branch":
+      throw new Error("Source branch deletion requires a fresh branch lookup");
     case "merge":
       return [
         "merge",
@@ -736,8 +749,13 @@ export const make = Effect.gen(function* () {
     readonly number: number;
     readonly page: number;
     readonly collected: ReadonlyArray<PullRequestComment>;
+    readonly timelineEvents?: ReadonlyArray<PullRequestTimelineEvent>;
   }): Effect.Effect<
-    { readonly comments: ReadonlyArray<PullRequestComment>; readonly truncated: boolean },
+    {
+      readonly comments: ReadonlyArray<PullRequestComment>;
+      readonly timelineEvents?: ReadonlyArray<PullRequestTimelineEvent>;
+      readonly truncated: boolean;
+    },
     GitLabPullRequestCliError
   > =>
     api({
@@ -764,12 +782,13 @@ export const make = Effect.gen(function* () {
           );
         }
         const collected = [...input.collected, ...decoded.success.comments];
+        const timelineEvents = [...(input.timelineEvents ?? []), ...decoded.success.timelineEvents];
         if (decoded.success.rawCount < MAX_PAGE_SIZE) {
-          return Effect.succeed({ comments: collected, truncated: false });
+          return Effect.succeed({ comments: collected, timelineEvents, truncated: false });
         }
         return input.page >= CONVERSATION_PAGES
-          ? Effect.succeed({ comments: collected, truncated: true })
-          : notesPage({ ...input, page: input.page + 1, collected });
+          ? Effect.succeed({ comments: collected, timelineEvents, truncated: true })
+          : notesPage({ ...input, page: input.page + 1, collected, timelineEvents });
       }),
     );
 
@@ -1059,7 +1078,27 @@ export const make = Effect.gen(function* () {
       return listPage({ ...input, page, collected: [], cursorAdvance: 0 });
     },
 
-    getMergeRequestDetail: mergeRequestDetail,
+    getMergeRequestDetail: (input) =>
+      mergeRequestDetail(input).pipe(
+        Effect.flatMap((detail) => {
+          if (detail.sourceProjectId == null) return Effect.succeed(detail);
+          if (detail.sourceProjectId === detail.targetProjectId)
+            return Effect.succeed({ ...detail, headRepositoryNameWithOwner: input.repository });
+          return api({ cwd: input.cwd, path: `projects/${detail.sourceProjectId}` }).pipe(
+            Effect.flatMap((response) =>
+              decodeBranchDeletionJson(
+                Schema.Struct({ path_with_namespace: Schema.String }),
+                response.stdout,
+              ),
+            ),
+            Effect.map((source) => ({
+              ...detail,
+              headRepositoryNameWithOwner: source.path_with_namespace,
+            })),
+            Effect.orElseSucceed(() => detail),
+          );
+        }),
+      ),
 
     listNotes: (input) => notesPage({ ...input, page: 1, collected: [] }),
 
@@ -1261,6 +1300,54 @@ export const make = Effect.gen(function* () {
       ),
 
     runMergeRequestAction: (input) => {
+      if (input.action === "delete-source-branch") {
+        return Effect.gen(function* () {
+          const response = yield* api({
+            cwd: input.cwd,
+            path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}`,
+          });
+          const current = yield* decodeBranchDeletionJson(
+            Schema.Struct({
+              state: Schema.String,
+              source_branch: Schema.String,
+              target_branch: Schema.String,
+              source_project_id: Schema.NullOr(Schema.Int),
+            }),
+            response.stdout,
+          );
+          if (current.source_project_id === null)
+            return yield* new PullRequestBranchDeletionError({
+              detail: "The source repository no longer exists.",
+            });
+          const source = `projects/${current.source_project_id}`;
+          const repository = yield* api({ cwd: input.cwd, path: source });
+          const config = yield* decodeBranchDeletionJson(
+            Schema.Struct({ default_branch: Schema.String }),
+            repository.stdout,
+          );
+          yield* assertSourceBranchDeletable({
+            state: current.state,
+            sourceBranch: current.source_branch,
+            baseBranch: current.target_branch,
+            defaultBranch: config.default_branch,
+          });
+          yield* api({
+            cwd: input.cwd,
+            path: `${source}/repository/branches/${encodeURIComponent(current.source_branch)}`,
+            method: "DELETE",
+          }).pipe(
+            Effect.catchTag(
+              "GitLabCliCommandError",
+              (cause) =>
+                new PullRequestBranchDeletionError({
+                  detail:
+                    "The source branch could not be deleted. It may already be deleted, protected, or unavailable to this account.",
+                  cause,
+                }),
+            ),
+          );
+        });
+      }
       // `glab mr merge` arms auto-merge and never disarms it, so the one direction the CLI has
       // no flag for is asked of GitLab directly through the same `api` passthrough the rest of
       // this module writes with.

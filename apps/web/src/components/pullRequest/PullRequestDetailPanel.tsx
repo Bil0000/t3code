@@ -154,6 +154,7 @@ import {
 type DetailTab = "summary" | "timeline" | "code";
 
 const ACTION_SUCCESS_LABELS: Record<PullRequestAction, string> = {
+  "delete-source-branch": "Source branch deleted",
   merge: "Pull request merged",
   ready: "Marked ready for review",
   draft: "Converted to draft",
@@ -177,6 +178,7 @@ const MERGE_METHOD_LABELS: Record<PullRequestMergeMethod, string> = {
 
 /** Said as the thing that did not happen, rather than as the operation that returned an error. */
 const ACTION_FAILURE_LABELS: Record<PullRequestAction, string> = {
+  "delete-source-branch": "Could not delete the source branch",
   merge: "Could not merge this pull request",
   ready: "Could not mark this ready for review",
   draft: "Could not convert this to a draft",
@@ -191,6 +193,8 @@ const ACTION_FAILURE_LABELS: Record<PullRequestAction, string> = {
 
 /** What to try, for the times the host says only that it refused. */
 const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
+  "delete-source-branch":
+    "Check that you have write access to the source repository and that the branch is not protected.",
   merge:
     "The host refused the merge. Check that you have write access, that the checks it requires have passed, and that the branch is not conflicting.",
   ready: "The host refused it. Check that you have write access to this repository.",

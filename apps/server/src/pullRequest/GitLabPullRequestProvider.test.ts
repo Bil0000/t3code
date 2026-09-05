@@ -8,6 +8,7 @@ import { gitLabViewerPermissions, make } from "./GitLabPullRequestProvider.ts";
 describe("gitLabViewerPermissions", () => {
   it("offers everything to a viewer GitLab says can merge", () => {
     expect(gitLabViewerPermissions({ viewerCanMerge: true })).toEqual({
+      deleteSourceBranch: true,
       // Arming a merge for later and taking the arming back answer to the same `can_merge`.
       actions: [
         "merge",
@@ -34,6 +35,7 @@ describe("gitLabViewerPermissions", () => {
     // `user.can_merge` already accounts for the role, the approval rules and a protected target
     // branch, so it is the one answer here that does not have to be inferred.
     expect(gitLabViewerPermissions({ viewerCanMerge: false })).toEqual({
+      deleteSourceBranch: true,
       actions: ["ready", "draft", "close", "reopen"],
       comment: true,
       resolve: true,

@@ -13,6 +13,7 @@ import {
 import type { AzureDevOpsPullRequest } from "./azureDevOpsPullRequestJson.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
+  deleteSourceBranch: true,
   // `az repos pr` has no diff command, and the REST route reports changed files without their
   // contents, so there is no patch to show. The Code tab is hidden rather than empty.
   diff: false,
@@ -57,6 +58,7 @@ const CAPABILITIES: PullRequestCapabilities = {
  * leaves them no way through and no reason given.
  */
 const AZURE_DEVOPS_VIEWER_PERMISSIONS: PullRequestViewerPermissions = {
+  deleteSourceBranch: true,
   actions: CAPABILITIES.actions,
   comment: CAPABILITIES.comment,
   resolve: CAPABILITIES.review.resolve,
@@ -81,6 +83,9 @@ function toChangeRequest(pullRequest: AzureDevOpsPullRequest): ProviderChangeReq
     url: pullRequest.url,
     author: pullRequest.author,
     headBranch: pullRequest.headBranch,
+    ...(pullRequest.headRepositoryNameWithOwner === undefined
+      ? {}
+      : { headRepositoryNameWithOwner: pullRequest.headRepositoryNameWithOwner }),
     baseBranch: pullRequest.baseBranch,
     state: pullRequest.state,
     isDraft: pullRequest.isDraft,
@@ -181,11 +186,15 @@ export const make = Effect.gen(function* () {
           (pullRequest.threadsUrl === null
             ? Effect.succeed({ comments: [], truncated: true })
             : cli.listThreads({ cwd: input.cwd, threadsUrl: pullRequest.threadsUrl }).pipe(
-                Effect.map((comments) => ({ comments, truncated: false })),
+                Effect.map((activity) => ({ ...activity, truncated: false })),
                 Effect.orElseSucceed(() => ({ comments: [], truncated: true })),
               )
           ).pipe(
             Effect.map((conversation): ProviderChangeRequestActivity => ({
+              timelineEvents: ("timelineEvents" in conversation
+                ? conversation.timelineEvents
+                : []
+              ).map((event) => ({ ...event, url: pullRequest.url })),
               comments: conversation.comments,
               commentCount: conversation.comments.length,
               commentsTruncated: conversation.truncated,

@@ -13,6 +13,7 @@ import {
 import type { BitbucketPullRequest } from "./bitbucketPullRequestJson.ts";
 
 const CAPABILITIES: PullRequestCapabilities = {
+  deleteSourceBranch: true,
   diff: true,
   comment: true,
   // Bitbucket has no endpoint that reopens a declined pull request, and nothing documented that
@@ -51,6 +52,7 @@ export function bitbucketViewerPermissions(input: {
   readonly canWrite: boolean;
 }): PullRequestViewerPermissions {
   return {
+    deleteSourceBranch: true,
     actions: CAPABILITIES.actions.filter((action) => action !== "merge" || input.canWrite),
     comment: true,
     resolve: true,
@@ -199,19 +201,34 @@ export const make = Effect.gen(function* () {
             .listComments(target)
             .pipe(Effect.orElseSucceed(() => ({ comments: [], threads: [], truncated: true }))),
           api.listCommits(target).pipe(Effect.orElseSucceed(() => [])),
+          api.listTimelineEvents(target).pipe(Effect.orElseSucceed(() => [])),
         ],
-        { concurrency: 3 },
+        { concurrency: 4 },
       ).pipe(
         Effect.mapError(fail("getChangeRequestActivity")),
-        Effect.map(([pullRequest, comments, commits]): ProviderChangeRequestActivity => ({
-          comments: [...comments.comments, ...pullRequest.reviews].toSorted((left, right) =>
-            left.createdAt.localeCompare(right.createdAt),
-          ),
-          commentCount: comments.comments.length + pullRequest.reviews.length,
-          commentsTruncated: comments.truncated,
-          reviewThreads: comments.threads,
-          commits,
-        })),
+        Effect.map(
+          ([pullRequest, comments, commits, timelineEvents]): ProviderChangeRequestActivity => ({
+            timelineEvents: timelineEvents
+              .filter(
+                (event) =>
+                  event.kind !== "approved" ||
+                  !pullRequest.reviews.some(
+                    (review) =>
+                      review.author?.login === event.actor?.login &&
+                      review.createdAt === event.createdAt &&
+                      review.reviewState?.toLowerCase() === "approved",
+                  ),
+              )
+              .map((event) => ({ ...event, url: event.url ?? pullRequest.url })),
+            comments: [...comments.comments, ...pullRequest.reviews].toSorted((left, right) =>
+              left.createdAt.localeCompare(right.createdAt),
+            ),
+            commentCount: comments.comments.length + pullRequest.reviews.length,
+            commentsTruncated: comments.truncated,
+            reviewThreads: comments.threads,
+            commits,
+          }),
+        ),
       );
     },
 

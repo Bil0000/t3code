@@ -83,6 +83,38 @@ afterEach(() => {
 });
 
 layer("BitbucketPullRequestApi.layer", (it) => {
+  it.effect("deletes the fork source branch and refuses the pull request target branch", () =>
+    Effect.gen(function* () {
+      const api = yield* BitbucketPullRequestApi.BitbucketPullRequestApi;
+      const target = { repository: "acme/web", number: 7, action: "delete-source-branch" as const };
+      const current = {
+        state: "MERGED",
+        source: { branch: { name: "feature/topic" }, repository: { full_name: "fork/renamed" } },
+        destination: { branch: { name: "release" } },
+      };
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response(pullRequestJson(current))));
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response('{"mainbranch":{"name":"main"}}')));
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response("")));
+      yield* api.runAction(target);
+      expect(callAt(1).url).toBe("/repositories/fork/renamed");
+      expect(callAt(2)).toEqual({
+        method: "DELETE",
+        url: "/repositories/fork/renamed/refs/branches/feature%2Ftopic",
+      });
+      mockedRequest.mockReturnValueOnce(
+        Effect.succeed(
+          response(
+            pullRequestJson({ ...current, destination: { branch: { name: "feature/topic" } } }),
+          ),
+        ),
+      );
+      mockedRequest.mockReturnValueOnce(Effect.succeed(response('{"mainbranch":{"name":"main"}}')));
+      const error = yield* Effect.flip(api.runAction(target));
+      expect(error.message).toContain("cannot be deleted");
+      expect(mockedRequest).toHaveBeenCalledTimes(5);
+    }),
+  );
+
   it.effect("asks for reviewers, newest first, at Bitbucket's page ceiling", () =>
     Effect.gen(function* () {
       mockedRequest.mockReturnValueOnce(Effect.succeed(response(page(3, 1))));

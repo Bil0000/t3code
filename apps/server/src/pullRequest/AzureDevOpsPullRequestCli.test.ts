@@ -61,6 +61,49 @@ afterEach(() => {
 });
 
 layer("AzureDevOpsPullRequestCli.layer", (it) => {
+  it.effect("deletes an Azure fork ref at its current object ID and reports host refusal", () =>
+    Effect.gen(function* () {
+      const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            '{"status":"completed","sourceRefName":"refs/heads/topic","targetRefName":"refs/heads/main","repository":{"id":"base","project":{"id":"base-project"}},"forkSource":{"repository":{"id":"fork","project":{"id":"fork-project"}}}}',
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output('{"defaultBranch":"refs/heads/main"}')),
+      );
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(
+          output(
+            '[{"name":"refs/heads/topic-extra","objectId":"wrong"},{"name":"refs/heads/topic","objectId":"abc123"}]',
+          ),
+        ),
+      );
+      mockedExecute.mockReturnValueOnce(
+        Effect.succeed(output('{"success":false,"customMessage":"Permission denied"}')),
+      );
+      const error = yield* Effect.flip(
+        cli.runPullRequestAction({ cwd: "/w", number: 7, action: "delete-source-branch" }),
+      );
+      expect(error.message).toContain("Permission denied");
+      expect(argsOfCall(3)).toEqual(
+        expect.arrayContaining([
+          "delete",
+          "--repository",
+          "fork",
+          "--project",
+          "fork-project",
+          "--name",
+          "refs/heads/topic",
+          "--object-id",
+          "abc123",
+        ]),
+      );
+    }),
+  );
+
   it.effect("asks for one row more than the page, to probe for a next page", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(pullRequests(3, 1))));
@@ -537,7 +580,7 @@ layer("AzureDevOpsPullRequestCli.layer", (it) => {
       );
       const cli = yield* AzureDevOpsPullRequestCli.AzureDevOpsPullRequestCli;
 
-      const comments = yield* cli.listThreads({
+      const { comments } = yield* cli.listThreads({
         cwd: "/w",
         threadsUrl: "https://dev.azure.com/acme/platform/_apis/git/r/web/pullRequests/42/threads",
       });

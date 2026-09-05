@@ -23,6 +23,7 @@ describe("bitbucketProviderFailure", () => {
 describe("bitbucketViewerPermissions", () => {
   it("offers both actions to credentials with write access", () => {
     expect(bitbucketViewerPermissions({ canWrite: true })).toEqual({
+      deleteSourceBranch: true,
       actions: ["merge", "close"],
       comment: true,
       resolve: true,
@@ -35,6 +36,7 @@ describe("bitbucketViewerPermissions", () => {
 
   it("keeps merge from credentials that can only read the repository", () => {
     expect(bitbucketViewerPermissions({ canWrite: false })).toEqual({
+      deleteSourceBranch: true,
       actions: ["close"],
       comment: true,
       resolve: true,
