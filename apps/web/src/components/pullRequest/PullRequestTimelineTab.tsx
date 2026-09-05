@@ -26,6 +26,7 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { Alert, AlertDescription } from "../ui/alert";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { toastManager } from "../ui/toast";
@@ -662,12 +663,16 @@ export function PullRequestTimelineTab({
     <div className="h-full overflow-y-auto px-4 py-5">
       <div className="mx-auto max-w-3xl">
         {detail.timelineTruncated ? (
-          <p className="mb-4 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
-            Some host events are not loaded.{" "}
-            <a className="underline" href={detail.url} target="_blank" rel="noreferrer">
-              Open the full history on the host.
-            </a>
-          </p>
+          <Alert variant="warning" className="mb-4">
+            <AlertDescription>
+              <p>
+                Some host events are not loaded.{" "}
+                <a className="underline" href={detail.url} target="_blank" rel="noreferrer">
+                  Open the full history on the host.
+                </a>
+              </p>
+            </AlertDescription>
+          </Alert>
         ) : null}
         <div className="relative">
           <span aria-hidden className="absolute bottom-5 left-[15px] top-1 w-px bg-border/45" />
