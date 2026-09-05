@@ -84,6 +84,8 @@ export function startSnapShotAccessibilityProcess(workerPath: string): Accessibi
   };
   const sendRequest = () => {
     if (!ready || !request || settled) return;
+    startTimeout ??= setTimeout(() => finish(), START_TIMEOUT_MS);
+    startTimeout.unref();
     try {
       worker.send(request, (error) => {
         if (error) finish();
@@ -119,9 +121,7 @@ export function startSnapShotAccessibilityProcess(workerPath: string): Accessibi
       const result = Promise.withResolvers<CapturedWindowAccessibilityContext | undefined>();
       startedResolve = started.resolve;
       resultResolve = result.resolve;
-      startTimeout = setTimeout(() => finish(), START_TIMEOUT_MS);
       resultTimeout = setTimeout(() => finish(), RESULT_TIMEOUT_MS);
-      startTimeout.unref();
       resultTimeout.unref();
       sendRequest();
       return { started: started.promise, result: result.promise };

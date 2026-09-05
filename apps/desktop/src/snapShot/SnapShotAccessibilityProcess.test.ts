@@ -115,3 +115,21 @@ it("replaces a warm helper that exits before capture", async () => {
   assert.deepEqual(captureWorker.send.mock.calls[0]?.[0], request);
   pool.close();
 });
+
+it("allows cold startup to exceed the request-start budget", async () => {
+  vi.useFakeTimers();
+  const process = startSnapShotAccessibilityProcess("accessibility.cjs");
+  try {
+    const read = process.read(request);
+    await vi.advanceTimersByTimeAsync(1_500);
+    assert.lengthOf(worker.kill.mock.calls, 0);
+    worker.emit("message", "ready");
+    assert.deepEqual(worker.send.mock.calls[0]?.[0], request);
+    worker.emit("message", "started");
+    worker.emit("message", { type: "result", context: { accessibleText: "Ready" } });
+    assert.deepEqual(await read.result, { accessibleText: "Ready" });
+  } finally {
+    process.close();
+    vi.useRealTimers();
+  }
+});
