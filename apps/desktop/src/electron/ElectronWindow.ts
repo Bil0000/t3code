@@ -162,6 +162,9 @@ export const make = Effect.gen(function* () {
           NodePath.join(__dirname, "electron", "WindowsForegroundFocusWorker.cjs"),
         )
       : undefined;
+  if (windowsForegroundFocus) {
+    yield* Effect.addFinalizer(() => Effect.sync(() => windowsForegroundFocus.close()));
+  }
   const mainWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
 
   const listWindows = Effect.try({

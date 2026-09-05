@@ -19,6 +19,7 @@ const {
   shellHostedForegroundMock,
   windowsForegroundFocusMock,
   windowsForegroundPrepareMock,
+  windowsForegroundCloseMock,
 } = vi.hoisted(() => ({
   activeWindowMock: vi.fn(),
   activateWindowsForegroundMock: vi.fn(),
@@ -31,6 +32,7 @@ const {
   shellHostedForegroundMock: vi.fn(),
   windowsForegroundFocusMock: vi.fn(),
   windowsForegroundPrepareMock: vi.fn(),
+  windowsForegroundCloseMock: vi.fn(),
 }));
 
 vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
@@ -44,7 +46,7 @@ vi.mock("./WindowsForegroundFocusThread.ts", () => ({
   startWindowsForegroundFocusThread: () => ({
     prepare: windowsForegroundPrepareMock,
     focus: windowsForegroundFocusMock,
-    close: () => undefined,
+    close: windowsForegroundCloseMock,
   }),
 }));
 
@@ -110,6 +112,7 @@ describe("ElectronWindow", () => {
     shellHostedForegroundMock.mockReset().mockResolvedValue(false);
     windowsForegroundFocusMock.mockReset().mockResolvedValue(false);
     windowsForegroundPrepareMock.mockReset().mockResolvedValue(false);
+    windowsForegroundCloseMock.mockReset();
   });
 
   it.effect("preserves schema-safe creation context and the Electron cause", () =>
@@ -681,5 +684,11 @@ describe("ElectronWindow", () => {
       }
       assert.equal(vi.mocked(laterWindow.destroy).mock.calls.length, 1);
     }).pipe(Effect.provide(TestLayer)),
+  );
+  it.effect("closes the Windows focus worker when its layer is released", () =>
+    Effect.gen(function* () {
+      yield* ElectronWindow.ElectronWindow.pipe(Effect.provide(testLayer("win32")));
+      assert.lengthOf(windowsForegroundCloseMock.mock.calls, 1);
+    }),
   );
 });
