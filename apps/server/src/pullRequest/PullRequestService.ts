@@ -1460,6 +1460,7 @@ export const make = Effect.gen(function* () {
         // provider maps an unrecognised method to its own default, so asking Azure DevOps to
         // rebase would quietly merge instead of failing.
         if (
+          (input.action === "merge" || input.action === "enable-auto-merge") &&
           input.mergeMethod !== undefined &&
           !project.api.capabilities.mergeMethods.includes(input.mergeMethod)
         ) {
@@ -1473,6 +1474,7 @@ export const make = Effect.gen(function* () {
         // The same for the way a stale branch is brought up to date: a host that only merges
         // must not be asked to rebase and left to pick something else.
         if (
+          input.action === "update-branch" &&
           input.updateMethod !== undefined &&
           !(project.api.capabilities.updateMethods ?? []).includes(input.updateMethod)
         ) {
@@ -1501,6 +1503,7 @@ export const make = Effect.gen(function* () {
               );
             }
             if (
+              input.action === "update-branch" &&
               input.updateMethod !== undefined &&
               !(viewer.updateMethods ?? []).includes(input.updateMethod)
             ) {

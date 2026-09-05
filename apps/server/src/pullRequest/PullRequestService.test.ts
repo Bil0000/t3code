@@ -4158,15 +4158,24 @@ it.effect("names the signed-in account in the detail, and says nothing where the
   }),
 );
 
-it.effect("accepts source branch deletion only when both optional permission flags allow it", () =>
+it.effect("accepts Azure source branch deletion and ignores unrelated methods", () =>
   Effect.gen(function* () {
-    const provider = fakeProvider("github");
+    const provider = fakeProvider("azure-devops");
     let canDelete = false;
     let deletions = 0;
     const service = yield* makeService({
-      projects: [project({ id: "p1", title: "web", workspaceRoot: "/a", repository: "acme/web" })],
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/a",
+          repository: "web",
+          provider: "azure-devops",
+          host: "dev.azure.com",
+        }),
+      ],
       providers: [
-        fakeProvider("github", {
+        fakeProvider("azure-devops", {
           capabilities: { ...provider.capabilities, deleteSourceBranch: true },
           getViewerPermissions: (input) =>
             provider
@@ -4182,7 +4191,7 @@ it.effect("accepts source branch deletion only when both optional permission fla
     });
     const input = {
       projectId: "p1" as ProjectId,
-      repository: "acme/web",
+      repository: "web",
       number: 1,
       action: "delete-source-branch" as const,
     };
@@ -4190,7 +4199,7 @@ it.effect("accepts source branch deletion only when both optional permission fla
     assert.include(error.message, "write access on the source repository");
     assert.strictEqual(deletions, 0);
     canDelete = true;
-    yield* service.runAction(input);
+    yield* service.runAction({ ...input, mergeMethod: "rebase", updateMethod: "rebase" });
     assert.strictEqual(deletions, 1);
   }),
 );
