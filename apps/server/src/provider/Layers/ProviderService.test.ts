@@ -204,18 +204,20 @@ function makeFakeCodexAdapter(
     ): Effect.Effect<void, ProviderAdapterError> => Effect.void,
   );
 
-  const stopSession = vi.fn((threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> =>
-    Effect.sync(() => {
-      sessions.delete(threadId);
-    }),
+  const stopSession = vi.fn(
+    (threadId: ThreadId): Effect.Effect<void, ProviderAdapterError> =>
+      Effect.sync(() => {
+        sessions.delete(threadId);
+      }),
   );
 
-  const listSessions = vi.fn((): Effect.Effect<ReadonlyArray<ProviderSession>> =>
-    Effect.sync(() => Array.from(sessions.values())),
+  const listSessions = vi.fn(
+    (): Effect.Effect<ReadonlyArray<ProviderSession>> =>
+      Effect.sync(() => Array.from(sessions.values())),
   );
 
-  const hasSession = vi.fn((threadId: ThreadId): Effect.Effect<boolean> =>
-    Effect.succeed(sessions.has(threadId)),
+  const hasSession = vi.fn(
+    (threadId: ThreadId): Effect.Effect<boolean> => Effect.succeed(sessions.has(threadId)),
   );
 
   const readThread = vi.fn(
@@ -249,10 +251,11 @@ function makeFakeCodexAdapter(
       Effect.succeed({ feedbackId: `feedback-${input.threadId}` }),
   );
 
-  const stopAll = vi.fn((): Effect.Effect<void, ProviderAdapterError> =>
-    Effect.sync(() => {
-      sessions.clear();
-    }),
+  const stopAll = vi.fn(
+    (): Effect.Effect<void, ProviderAdapterError> =>
+      Effect.sync(() => {
+        sessions.clear();
+      }),
   );
 
   const adapter: ProviderAdapterShape<ProviderAdapterError> = {
@@ -451,6 +454,125 @@ function makeProviderServiceLayer(
     cursor,
     layer,
   };
+}
+
+for (const [enabled, completed] of [
+  [false, false],
+  [true, false],
+  [true, true],
+] as const) {
+  it.effect(
+    `persists shutdown recovery before stopping providers when enabled=${enabled}, completed=${completed}`,
+    () =>
+      Effect.gen(function* () {
+        const codex = makeFakeCodexAdapter();
+        const persistence = yield* Layer.build(
+          ProviderSessionDirectoryLive.pipe(
+            Layer.provide(
+              ProviderSessionRuntime.layer.pipe(Layer.provide(SqlitePersistenceMemory)),
+            ),
+          ),
+        );
+        const directory = yield* ProviderSessionDirectory.ProviderSessionDirectory.pipe(
+          Effect.provide(persistence),
+        );
+        const threadId = asThreadId("shutdown-recovery");
+        const turnId = asTurnId("shutdown-recovery-turn");
+        const scope = yield* Scope.make();
+        const services = yield* Layer.build(
+          makeProviderServiceLive().pipe(
+            Layer.provide(
+              Layer.succeed(ProviderSessionDirectory.ProviderSessionDirectory, directory),
+            ),
+            Layer.provide(
+              Layer.succeed(
+                ProviderAdapterRegistry.ProviderAdapterRegistry,
+                makeStaticInstanceRegistry([[codexInstanceId, codex.adapter]]),
+              ),
+            ),
+            Layer.provide(ServerSettings.layerTest({ continueThreadsAfterServerUpdate: enabled })),
+            Layer.provide(serverConfigTestLayer),
+            Layer.provide(AnalyticsService.layerTest),
+            Layer.provide(
+              Layer.succeed(
+                ProviderEventLoggers.ProviderEventLoggers,
+                ProviderEventLoggers.NoOpProviderEventLoggers,
+              ),
+            ),
+          ),
+        ).pipe(Scope.provide(scope));
+        const provider = yield* ProviderService.ProviderService.pipe(Effect.provide(services));
+        const session = yield* provider.startSession(threadId, {
+          provider: CODEX_DRIVER,
+          providerInstanceId: codexInstanceId,
+          threadId,
+          runtimeMode: "full-access",
+        });
+        codex.listSessions.mockReturnValue(
+          Effect.succeed([
+            {
+              ...session,
+              status: completed ? "ready" : "running",
+              activeTurnId: completed ? undefined : turnId,
+            },
+          ]),
+        );
+        const pending = yield* directory.getBinding(threadId);
+        assert(Option.isSome(pending));
+        yield* directory.upsert({
+          ...pending.value,
+          runtimePayload: { activeTurnId: null, continueAfterServerUpdate: turnId },
+        });
+        const accepted = yield* provider.sendTurn({ threadId, continuation: true });
+        const admitted = yield* directory.getBinding(threadId);
+        assert(Option.isSome(admitted));
+        assert.propertyVal(admitted.value.runtimePayload, "activeTurnId", accepted.turnId);
+        assert.propertyVal(admitted.value.runtimePayload, "continueAfterServerUpdate", null);
+        if (completed) {
+          // Updates can mark an already-admitted turn immediately before it finishes.
+          yield* directory.upsert({
+            ...admitted.value,
+            runtimePayload: {
+              continueAfterServerUpdate: accepted.turnId,
+              continueAfterServerUpdatePrepared: null,
+            },
+          });
+        }
+        const markers: unknown[] = [];
+        codex.stopAll.mockImplementation(() =>
+          Effect.gen(function* () {
+            const binding = yield* directory.getBinding(threadId);
+            assert(Option.isSome(binding));
+            markers.push(binding.value.runtimePayload);
+          }).pipe(Effect.orDie),
+        );
+        yield* Scope.close(scope, Exit.void);
+        const binding = yield* directory.getBinding(threadId);
+        assert(Option.isSome(binding));
+        assert.equal(codex.stopAll.mock.calls.length, 1);
+        assert.deepStrictEqual(binding.value.resumeCursor, session.resumeCursor);
+        assert.equal(binding.value.status, "stopped");
+        assert.propertyVal(markers[0], "activeTurnId", completed ? null : turnId);
+        if (enabled && !completed) {
+          assert.propertyVal(markers[0], "continueAfterServerUpdate", turnId);
+          assert.propertyVal(binding.value.runtimePayload, "continueAfterServerUpdate", turnId);
+        } else if (completed) {
+          assert.propertyVal(
+            binding.value.runtimePayload,
+            "continueAfterServerUpdate",
+            accepted.turnId,
+          );
+          assert.propertyVal(
+            binding.value.runtimePayload,
+            "continueAfterServerUpdatePrepared",
+            null,
+          );
+        } else {
+          assert.propertyVal(markers[0], "continueAfterServerUpdate", null);
+          assert.propertyVal(binding.value.runtimePayload, "continueAfterServerUpdate", null);
+        }
+      }).pipe(Effect.provide(NodeServices.layer)),
+  );
 }
 
 it.effect("ProviderServiceLive catches stopAll failures during shutdown", () =>
