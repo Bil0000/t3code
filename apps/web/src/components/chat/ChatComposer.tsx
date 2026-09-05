@@ -87,6 +87,7 @@ import {
 import { ComposerStashBadge } from "./ComposerStashBadge";
 import { ComposerStashMenu } from "./ComposerStashMenu";
 import { useComposerMenuState } from "./useComposerMenuState";
+import { useComposerFocusState } from "./useComposerFocusState";
 import {
   ComposerTasksBadge,
   ComposerTasksContent,
@@ -1112,7 +1113,7 @@ const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryActions(
 export interface ChatComposerHandle {
   focusAtEnd: () => void;
   focusAt: (cursor: number) => void;
-  /** Undo only a scroll-triggered collapse when the timeline returns to its live edge. */
+  /** Expand the desktop composer at the timeline end without taking focus. */
   restoreAfterTimelineReachedEnd: () => void;
   addDroppedFiles: (files: File[]) => void;
   insertTextAtEnd: (text: string, options?: { ensureLeadingBoundary?: boolean }) => boolean;
@@ -1820,8 +1821,14 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
   const [isComposerFooterCompact, setIsComposerFooterCompact] = useState(false);
   const [isComposerPrimaryActionsCompact, setIsComposerPrimaryActionsCompact] = useState(false);
   const [isComposerModelPickerOpen, setIsComposerModelPickerOpen] = useState(false);
-  const [isComposerFocused, setIsComposerFocused] = useState(false);
-  const [isComposerScrollCollapsed, setIsComposerScrollCollapsed] = useState(false);
+  const isMobileViewport = useMediaQuery("max-sm");
+  const {
+    isComposerFocused,
+    setIsComposerFocused,
+    isComposerScrollCollapsed,
+    setIsComposerScrollCollapsed,
+    restoreAfterTimelineReachedEnd,
+  } = useComposerFocusState(isMobileViewport);
   const [composerSubmissionError, setComposerSubmissionError] = useState<string | null>(null);
   const [providerInputSubmissionError, setProviderInputSubmissionError] = useState<string | null>(
     null,
@@ -1833,7 +1840,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     key: 0,
     active: false,
   });
-  const isMobileViewport = useMediaQuery("max-sm");
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
   const isComposerCollapsedMobile =
@@ -2389,7 +2395,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     setComposerTrigger(detectComposerTrigger(promptRef.current, promptRef.current.length));
     setIsDragOverComposer(false);
     setIsComposerScrollCollapsed(false);
-  }, [draftId, activeThreadId, promptRef]);
+  }, [draftId, activeThreadId, promptRef, setIsComposerScrollCollapsed]);
 
   // ------------------------------------------------------------------
   // Footer compact layout observation
@@ -2540,7 +2546,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       COMPOSER_SCROLL_GESTURE_RESET_MS,
     );
     setIsComposerScrollCollapsed(false);
-  }, []);
+  }, [setIsComposerScrollCollapsed]);
 
   const onPromptChange = useCallback(
     (
@@ -3770,7 +3776,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     if (!canScrollCollapseComposer) {
       setIsComposerScrollCollapsed(false);
     }
-  }, [canScrollCollapseComposer]);
+  }, [canScrollCollapseComposer, setIsComposerScrollCollapsed]);
 
   // Returning to the window re-fires focus on the element that already held
   // it. That focus arrives after the window's own event, so a window focus
@@ -3859,6 +3865,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     canTrackComposerScrollGesture,
     getTimelineScrollableNode,
     isTimelineAtLogicalEnd,
+    setIsComposerScrollCollapsed,
   ]);
 
   const restingHiddenBlockCount = composerControlsInStrip ? restingControlsHiddenBlockCount : 0;
@@ -4462,7 +4469,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       setIsComposerFocused(false);
     });
-  }, [getTimelineScrollableNode, isMobileViewport]);
+  }, [getTimelineScrollableNode, isMobileViewport, setIsComposerFocused]);
 
   // A held collapse settles when the selection goes away, whether the user
   // clicked elsewhere, pressed Escape, or used the selection toolbar.
@@ -4554,7 +4561,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       }
       desktopOutsidePointerInFlightRef.current = false;
     };
-  }, [isComposerFocused, isMobileViewport, scheduleComposerCollapseCheck]);
+  }, [isComposerFocused, isMobileViewport, scheduleComposerCollapseCheck, setIsComposerFocused]);
 
   useEffect(() => {
     return () => {
@@ -4583,7 +4590,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setIsComposerFocused(true);
     }
     setIsComposerModelPickerOpen(true);
-  }, [composerControlsHidden]);
+  }, [composerControlsHidden, setIsComposerFocused, setIsComposerScrollCollapsed]);
 
   useImperativeHandle(
     composerRef,
@@ -4594,9 +4601,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       focusAt: (cursor: number) => {
         composerEditorRef.current?.focusAt(cursor);
       },
-      restoreAfterTimelineReachedEnd: () => {
-        setIsComposerScrollCollapsed(false);
-      },
+      restoreAfterTimelineReachedEnd,
       addDroppedFiles: (files: File[]) => {
         void addComposerAttachments(files);
         focusComposer();
@@ -4743,6 +4748,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       interactionMode,
       planModeUiEnabled,
       compactThreadContext,
+      restoreAfterTimelineReachedEnd,
     ],
   );
 
