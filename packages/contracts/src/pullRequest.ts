@@ -775,6 +775,7 @@ export type PullRequestTimelineEvent = typeof PullRequestTimelineEvent.Type;
  */
 export const PullRequestActivity = Schema.Struct({
   timelineEvents: Schema.optional(Schema.Array(PullRequestTimelineEvent)),
+  timelineTruncated: Schema.optional(Schema.Boolean),
   author: Schema.optional(Schema.NullOr(PullRequestActor)),
   reviewers: Schema.optional(Schema.Array(PullRequestActor)),
   comments: Schema.Array(PullRequestComment),

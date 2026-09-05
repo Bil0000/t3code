@@ -1353,6 +1353,9 @@ export const make = Effect.gen(function* () {
               ...(activity.timelineEvents === undefined
                 ? {}
                 : { timelineEvents: activity.timelineEvents }),
+              ...(activity.timelineTruncated === undefined
+                ? {}
+                : { timelineTruncated: activity.timelineTruncated }),
               comments: activity.comments,
               commentCount: activity.commentCount,
               commentsTruncated: activity.commentsTruncated,

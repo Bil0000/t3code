@@ -209,16 +209,23 @@ export const make = Effect.gen(function* () {
         Effect.map(
           ([pullRequest, comments, commits, timelineEvents]): ProviderChangeRequestActivity => ({
             timelineEvents: timelineEvents
-              .filter(
-                (event) =>
-                  event.kind !== "approved" ||
+              .filter((event) => {
+                const reviewState =
+                  event.kind === "approved"
+                    ? "approved"
+                    : event.kind === "changes-requested"
+                      ? "changes-requested"
+                      : null;
+                return (
+                  reviewState === null ||
                   !pullRequest.reviews.some(
                     (review) =>
                       review.author?.login === event.actor?.login &&
                       review.createdAt === event.createdAt &&
-                      review.reviewState?.toLowerCase() === "approved",
-                  ),
-              )
+                      review.reviewState?.toLowerCase().replaceAll("_", "-") === reviewState,
+                  )
+                );
+              })
               .map((event) => ({ ...event, url: event.url ?? pullRequest.url })),
             comments: [...comments.comments, ...pullRequest.reviews].toSorted((left, right) =>
               left.createdAt.localeCompare(right.createdAt),

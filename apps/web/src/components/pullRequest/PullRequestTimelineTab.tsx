@@ -32,6 +32,7 @@ import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   buildPullRequestTimeline,
+  comparePullRequestTimelineEvents,
   groupPullRequestTimelineConversations,
   isPullRequestVerdictStale,
   newestPullRequestCommitAt,
@@ -634,9 +635,7 @@ export function PullRequestTimelineTab({
         ]
       : [];
   });
-  const timeline = [...events, ...conversationEvents].toSorted((left, right) =>
-    right.at.localeCompare(left.at),
-  );
+  const timeline = [...events, ...conversationEvents].toSorted(comparePullRequestTimelineEvents);
   const newestCommitAt = newestPullRequestCommitAt(detail.commits);
   const reactions: ReactionSurface = {
     canReact: detail.capabilities.reactions === true,
@@ -662,6 +661,14 @@ export function PullRequestTimelineTab({
   return (
     <div className="h-full overflow-y-auto px-4 py-5">
       <div className="mx-auto max-w-3xl">
+        {detail.timelineTruncated ? (
+          <p className="mb-4 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs">
+            Some host events are not loaded.{" "}
+            <a className="underline" href={detail.url} target="_blank" rel="noreferrer">
+              Open the full history on the host.
+            </a>
+          </p>
+        ) : null}
         <div className="relative">
           <span aria-hidden className="absolute bottom-5 left-[15px] top-1 w-px bg-border/45" />
           {rows.map((row) => {

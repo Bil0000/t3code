@@ -149,6 +149,31 @@ it("reads Bitbucket updates and past approvals without repeating comments", () =
   expect(decoded.success.next).toBe("/activity?page=2");
 });
 
+it("reads Bitbucket change requests with their actor and time", () => {
+  const decoded = bitbucket(
+    JSON.stringify({
+      values: [
+        {
+          request_changes: { date, user: { nickname: "julius" } },
+          pull_request: {
+            links: { html: { href: "https://bitbucket.org/acme/web/pull-requests/7" } },
+          },
+        },
+      ],
+    }),
+  );
+  expect(Result.isSuccess(decoded)).toBe(true);
+  if (!Result.isSuccess(decoded)) return;
+  expect(decoded.success.items).toMatchObject([
+    {
+      kind: "changes-requested",
+      actor: { login: "julius" },
+      createdAt: "2026-09-05T12:00:00.000Z",
+      url: "https://bitbucket.org/acme/web/pull-requests/7",
+    },
+  ]);
+});
+
 it.each([
   ["MERGED", "merged"],
   ["DECLINED", "closed"],

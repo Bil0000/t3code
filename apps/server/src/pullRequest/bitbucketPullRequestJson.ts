@@ -321,6 +321,9 @@ const decodeActivityEntry = Schema.decodeUnknownExit(
     approval: Schema.optional(
       Schema.Struct({ date: Schema.String, user: Schema.optional(Schema.NullOr(RawUserSchema)) }),
     ),
+    request_changes: Schema.optional(
+      Schema.Struct({ date: Schema.String, user: Schema.optional(Schema.NullOr(RawUserSchema)) }),
+    ),
     update: Schema.optional(
       Schema.Struct({
         date: Schema.String,
@@ -357,6 +360,18 @@ export function decodeTimelineEventsJson(raw: string): Result.Result<
         createdAt: toIsoUtc(approval.date),
         url,
         body: "approved this pull request",
+      });
+    }
+    const requestChanges = decoded.value.request_changes;
+    if (requestChanges !== undefined) {
+      const actor = toActor(requestChanges.user);
+      events.push({
+        id: `bitbucket:changes-requested:${requestChanges.date}:${actor?.login ?? ""}`,
+        kind: "changes-requested",
+        actor,
+        createdAt: toIsoUtc(requestChanges.date),
+        url,
+        body: "requested changes",
       });
     }
     if (decoded.value.update === undefined) continue;

@@ -972,7 +972,7 @@ export function PullRequestSummaryTab({
           {conversations.length === 0 ? (
             <p className="text-xs text-muted-foreground">All conversations are resolved.</p>
           ) : null}
-          <div className="space-y-3 [&>div]:mx-0 [&>div]:my-0 [&>div]:shadow-none">
+          <div className="space-y-3">
             {conversations.map((thread) => (
               <PullRequestConversation
                 key={`${environmentId}:${detail.url}:${thread.id}`}

@@ -506,7 +506,7 @@ export function buildPullRequestTimeline(
           },
         ]
       : []),
-  ].toSorted((left, right) => right.at.localeCompare(left.at));
+  ].toSorted(comparePullRequestTimelineEvents);
 }
 
 const FINDING_LIMIT = 20;
@@ -1158,7 +1158,12 @@ export function mergePullRequestActivity(
         commentsTruncated: activity?.commentsTruncated ?? false,
         reviewThreads: activity?.reviewThreads ?? [],
         timelineEvents: activity?.timelineEvents ?? [],
+        timelineTruncated: activity?.timelineTruncated ?? false,
         commits: activity?.commits ?? [],
         reactions: activity?.reactions ?? [],
       };
+}
+
+export function comparePullRequestTimelineEvents(left: { at: string }, right: { at: string }) {
+  return instant(right.at) - instant(left.at);
 }

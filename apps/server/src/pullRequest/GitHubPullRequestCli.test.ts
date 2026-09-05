@@ -206,7 +206,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
         repository: "pingdotgg/t3code",
         number: 9256,
       });
-      expect(events).toMatchObject([
+      expect(events.events).toMatchObject([
         {
           id: "github:30487715814",
           kind: "closed",
@@ -214,6 +214,7 @@ layer("GitHubPullRequestCli.layer", (it) => {
           createdAt: "2026-09-03T12:28:17Z",
         },
       ]);
+      expect(events.truncated).toBe(false);
       expect(mockedExecute).toHaveBeenCalledTimes(2);
       for (const page of [1, 2]) {
         expect(callAt(page - 1).args).toEqual([
@@ -223,6 +224,30 @@ layer("GitHubPullRequestCli.layer", (it) => {
           `repos/pingdotgg/t3code/issues/9256/timeline?per_page=100&page=${page}`,
         ]);
       }
+    }),
+  );
+
+  it.effect("bounds long native timelines and reports incomplete history", () =>
+    Effect.gen(function* () {
+      const page = yield* encodeTimelinePage(
+        Array.from({ length: 100 }, () => ({
+          id: 1,
+          event: "reopened",
+          created_at: "2026-09-05T00:00:00Z",
+          actor: null,
+        })),
+      );
+      mockedExecute.mockReturnValue(Effect.succeed(output(page)));
+      const cli = yield* GitHubPullRequestCli.GitHubPullRequestCli;
+      const result = yield* cli.listTimelineEvents({
+        cwd: "/w",
+        host: "github.com",
+        repository: "acme/web",
+        number: 7,
+      });
+      expect(result.truncated).toBe(true);
+      expect(result.events).toHaveLength(1);
+      expect(mockedExecute).toHaveBeenCalledTimes(10);
     }),
   );
 

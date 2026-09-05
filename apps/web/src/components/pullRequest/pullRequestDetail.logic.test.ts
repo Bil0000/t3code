@@ -11,6 +11,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   pullRequestGeneralComments,
   mergePullRequestActivity,
+  comparePullRequestTimelineEvents,
   buildAddSelectionToAgentHandoff,
   buildAskAboutPullRequestHandoff,
   buildExplainPullRequestHandoff,
@@ -1395,8 +1396,11 @@ describe("cached pull request detail", () => {
       reviewThreads: [],
       commits: [],
       timelineEvents,
+      timelineTruncated: true,
     };
     expect(mergePullRequestActivity(detail(), activity)?.timelineEvents).toEqual(timelineEvents);
+    expect(mergePullRequestActivity(detail(), activity)?.timelineTruncated).toBe(true);
+    expect(mergePullRequestActivity(detail(), undefined)?.timelineTruncated).toBe(false);
     expect(mergePullRequestActivity(detail(), undefined)?.timelineEvents).toEqual([]);
     expect(mergePullRequestActivity(null, activity)).toBeNull();
   });
@@ -1440,6 +1444,27 @@ describe("cached pull request detail", () => {
 });
 
 describe("host timeline events", () => {
+  it("orders native events and conversation rows by instant across timezone offsets", () => {
+    const earlier = { at: "2026-07-05T01:00:00+02:00" };
+    const later = { at: "2026-07-05T00:30:00Z" };
+    expect([earlier, later].toSorted(comparePullRequestTimelineEvents)).toEqual([later, earlier]);
+    const events = buildPullRequestTimeline({
+      ...TIMELINE_SOURCE,
+      timelineEvents: [earlier, later].map((event, index) => ({
+        id: String(index),
+        kind: "reopened",
+        body: "",
+        actor: null,
+        url: null,
+        createdAt: event.at,
+      })),
+    });
+    expect(events.filter((event) => event.kind === "reopened").map((event) => event.at)).toEqual([
+      later.at,
+      earlier.at,
+    ]);
+  });
+
   it("uses the host actor without adding a second merge event", () => {
     const events = buildPullRequestTimeline({
       ...TIMELINE_SOURCE,

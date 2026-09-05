@@ -3226,6 +3226,7 @@ it.effect(
             getChangeRequestActivity: () => {
               activityCalls += 1;
               return Effect.succeed({
+                timelineTruncated: true,
                 timelineEvents: [
                   {
                     id: "event:1",
@@ -3270,6 +3271,7 @@ it.effect(
         },
       );
       assert.strictEqual(activity.timelineEvents?.[0]?.body, "closed this pull request");
+      assert.strictEqual(activity.timelineTruncated, true);
       assert.strictEqual(activityCalls, 1);
 
       yield* service.invalidate({ reference });

@@ -521,7 +521,10 @@ export class GitHubPullRequestCli extends Context.Service<
       readonly repository: string;
       readonly host: string;
       readonly number: number;
-    }) => Effect.Effect<ReadonlyArray<PullRequestTimelineEvent>, GitHubPullRequestCliError>;
+    }) => Effect.Effect<
+      { events: ReadonlyArray<PullRequestTimelineEvent>; truncated: boolean },
+      GitHubPullRequestCliError
+    >;
 
     readonly getPullRequestActivity: (input: {
       readonly cwd: string;
@@ -1698,7 +1701,7 @@ export const make = Effect.gen(function* () {
     listTimelineEvents: (input) =>
       Effect.gen(function* () {
         const events = new Map<string, PullRequestTimelineEvent>();
-        for (let page = 1; ; page += 1) {
+        for (let page = 1; page <= 10; page += 1) {
           const response = yield* github.execute({
             cwd: input.cwd,
             args: [
@@ -1726,8 +1729,10 @@ export const make = Effect.gen(function* () {
             });
           }
           for (const event of decoded.success.events) events.set(event.id, event);
-          if (decoded.success.rawCount < 100) return [...events.values()];
+          if (decoded.success.rawCount < 100)
+            return { events: [...events.values()], truncated: false };
         }
+        return { events: [...events.values()], truncated: true };
       }),
 
     getPullRequestActivity: (input) =>

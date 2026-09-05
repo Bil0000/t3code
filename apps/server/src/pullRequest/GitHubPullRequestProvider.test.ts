@@ -627,7 +627,7 @@ describe("getChangeRequest commits", () => {
 
   const layerWith = (commits: GitHubReviewThreadComments["commits"]) =>
     Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
-      listTimelineEvents: () => Effect.succeed([]),
+      listTimelineEvents: () => Effect.succeed({ events: [], truncated: false }),
       getPullRequestActivity: () =>
         Effect.succeed({
           author: baseDetail.author,
@@ -711,7 +711,7 @@ describe("getChangeRequestActivity dismissed reviews", () => {
   };
   const layerFor = (body: string) =>
     Layer.mock(GitHubPullRequestCli.GitHubPullRequestCli)({
-      listTimelineEvents: () => Effect.succeed([]),
+      listTimelineEvents: () => Effect.succeed({ events: [], truncated: false }),
       getPullRequestActivity: () =>
         Effect.succeed({ author: null, comments: [dismissedReview(body)], commits: [] }),
       listReviewThreadComments: () => Effect.succeed(threadComments),
