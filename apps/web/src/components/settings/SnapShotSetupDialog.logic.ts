@@ -50,12 +50,13 @@ export function captureSetupMacPermissionsReady(
 }
 
 export function captureSetupCheckMessage(state: DesktopSnapShotState): string {
-  const gnome = captureSetupBackend(state) === "gnome";
+  const backend = captureSetupBackend(state);
+  const gnome = backend === "gnome";
   if (
     state.message ||
     (gnome && state.gnomeExtension?.status === "error") ||
-    state.kdeHelper?.status === "error" ||
-    state.hyprlandHelper?.status === "error"
+    (backend === "kde" && state.kdeHelper?.status === "error") ||
+    (backend === "hyprland" && state.hyprlandHelper?.status === "error")
   )
     return "Still unable to check access. See Advanced for help.";
   if (captureSetupBackend(state) === "picker") return "Ready. You'll choose a window each time.";

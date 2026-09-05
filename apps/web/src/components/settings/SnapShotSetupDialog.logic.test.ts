@@ -328,3 +328,14 @@ it("gates Continue on macOS permissions, requiring accessibility only when app t
   ).toBe(false);
   expect(captureSetupMacPermissionsReady({ ...mac, macPermissions: undefined }, true)).toBe(true);
 });
+
+it.each(["kde", "hyprland"] as const)("ignores errors from inactive helpers on %s", (backend) => {
+  const state: DesktopSnapShotState = {
+    ...gnome,
+    linuxBackend: backend,
+    kdeHelper: { status: backend === "kde" ? "ready" : "error", message: "KDE" },
+    hyprlandHelper: { status: backend === "hyprland" ? "ready" : "error", message: "Hyprland" },
+  };
+  expect(captureSetupAccessReady(state)).toBe(true);
+  expect(captureSetupCheckMessage(state)).toBe("Ready. Continue to choose your shortcut.");
+});
