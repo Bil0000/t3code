@@ -1014,10 +1014,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     gitStatus.data,
   );
   const pr = linkedPullRequestStatus?.pr ?? null;
-  const attachedPullRequestCount = getThreadPullRequestLinks(thread).filter(
+  const attachedPullRequests = getThreadPullRequestLinks(thread).filter(
     (link, index, links) =>
       links.findIndex((candidate) => sameThreadPullRequest(candidate, link)) === index,
-  ).length;
+  );
+  const attachedPullRequestCount = attachedPullRequests.length;
 
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
@@ -1394,35 +1395,54 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // browser. A plain click still opens T3's pull request view.
   const prBadge =
     prStatus && pr ? (
-      <a
-        href={pr.url}
-        target="_blank"
-        rel="noopener noreferrer"
-        onPointerDown={(event) => event.stopPropagation()}
-        onClick={handlePrClick}
-        className={cn(
-          // Sidebar chrome follows the interface font; tabular digits keep the
-          // number from reflowing as PR states stream in.
-          "shrink-0 text-xs tabular-nums hover:underline",
-          variant === "slim" && variantAction === "unsettle"
-            ? props.isActive
-              ? "text-secondary-label"
-              : cn("text-secondary-label transition-colors", settledPrHoverClass)
-            : prStatus.colorClass,
-        )}
-        aria-label={
-          attachedPullRequestCount > 1
-            ? `${prStatus.tooltip}, ${attachedPullRequestCount} attached pull requests`
-            : prStatus.tooltip
-        }
-      >
-        #{pr.number}
-        {attachedPullRequestCount > 1 ? (
-          <span aria-hidden="true" className="ml-1 text-muted-foreground">
-            +{attachedPullRequestCount - 1}
-          </span>
-        ) : null}
-      </a>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <a
+              href={pr.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={handlePrClick}
+              className={cn(
+                // Sidebar chrome follows the interface font; tabular digits keep the
+                // number from reflowing as PR states stream in.
+                "shrink-0 text-xs tabular-nums hover:underline",
+                variant === "slim" && variantAction === "unsettle"
+                  ? props.isActive
+                    ? "text-secondary-label"
+                    : cn("text-secondary-label transition-colors", settledPrHoverClass)
+                  : prStatus.colorClass,
+              )}
+              aria-label={
+                attachedPullRequestCount > 1
+                  ? `${prStatus.tooltip}, ${attachedPullRequestCount} attached pull requests`
+                  : prStatus.tooltip
+              }
+            />
+          }
+        >
+          #{pr.number}
+          {attachedPullRequestCount > 1 ? (
+            <span aria-hidden="true" className="ml-1 text-muted-foreground">
+              +{attachedPullRequestCount - 1}
+            </span>
+          ) : null}
+        </TooltipTrigger>
+        <TooltipPopup side="right" align="start">
+          <div className="space-y-1 py-1">
+            {attachedPullRequests.map((pullRequest) => (
+              <div
+                key={`${pullRequest.projectId}:${pullRequest.repository}:${pullRequest.number}`}
+                className="flex items-center gap-3"
+              >
+                <span className="text-muted-foreground">{pullRequest.repository}</span>
+                <span className="ml-auto tabular-nums">#{pullRequest.number}</span>
+              </div>
+            ))}
+          </div>
+        </TooltipPopup>
+      </Tooltip>
     ) : null;
   const terminalStatusIcon = terminalStatus ? (
     <span
