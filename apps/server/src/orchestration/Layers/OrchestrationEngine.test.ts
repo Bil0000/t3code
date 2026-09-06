@@ -994,7 +994,7 @@ describe("OrchestrationEngine", () => {
     await system.dispose();
   });
 
-  it.each(["unlink", "relink", "branch", "worktree", "project", "delete"] as const)(
+  it.each(["unlink", "relink", "add", "branch", "worktree", "project", "delete"] as const)(
     "rejects PR discovery completed after a newer %s command",
     async (change) => {
       const system = await createOrchestrationSystem();
@@ -1055,6 +1055,9 @@ describe("OrchestrationEngine", () => {
               url: "https://example.test/owner/repository/pull/3",
             },
           },
+          add: {
+            pullRequestLink: { action: "link" as const, pullRequest: replacement },
+          },
           branch: { branch: "another-feature" },
           worktree: { worktreePath: "/tmp/another-worktree" },
           project: {},
@@ -1078,6 +1081,16 @@ describe("OrchestrationEngine", () => {
                   },
           ),
         );
+        if (change === "add") {
+          await system.run(
+            system.engine.dispatch({
+              type: "thread.meta.update",
+              commandId: CommandId.make("pr-race-keep-primary"),
+              threadId,
+              pullRequestLink: { action: "link", pullRequest: previous },
+            }),
+          );
+        }
         const command = {
           type: "thread.pull-request.sync",
           commandId: CommandId.make("pr-race-stale-sync"),
@@ -1090,6 +1103,7 @@ describe("OrchestrationEngine", () => {
             worktreePath: null,
             linkedPullRequest: previous,
             branchPullRequest: null,
+            pullRequestLinks: [{ ...previous, source: "linked" }],
           },
           branchPullRequest: replacement,
           linkedPullRequest: replacement,
@@ -1199,6 +1213,97 @@ describe("OrchestrationEngine", () => {
       expect(current?.branchPullRequest).toEqual(reference);
       expect(current?.linkedPullRequest ?? null).toBeNull();
       expect(current?.updatedAt).toBe(beforeSync?.updatedAt);
+      const second = {
+        ...reference,
+        number: 43,
+        url: "https://example.test/owner/repository/pull/43",
+      };
+      for (const pullRequest of [
+        reference,
+        second,
+        { ...reference, repository: "OWNER/REPOSITORY" },
+      ]) {
+        await system.run(
+          system.engine.dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.make(`link-${pullRequest.repository}-${pullRequest.number}`),
+            threadId,
+            pullRequestLink: { action: "link", pullRequest },
+          }),
+        );
+      }
+      const linked = (await system.readModel()).threads[0];
+      expect(linked?.pullRequestLinks?.map((link) => [link.source, link.number])).toEqual([
+        ["linked", 42],
+        ["linked", 43],
+        ["branch", 42],
+      ]);
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("legacy-unlink-primary"),
+          threadId,
+          linkedPullRequest: null,
+        }),
+      );
+      expect((await system.readModel()).threads[0]?.linkedPullRequest).toEqual(second);
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("restore-primary"),
+          threadId,
+          pullRequestLink: { action: "link", pullRequest: reference },
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("unlink-one-pr"),
+          threadId,
+          pullRequestLink: { action: "unlink", pullRequest: reference },
+        }),
+      );
+      const unlinked = (await system.readModel()).threads[0];
+      expect(unlinked?.pullRequestLinks?.map((link) => [link.source, link.number])).toEqual([
+        ["linked", 43],
+        ["branch", 42],
+      ]);
+      expect(unlinked?.linkedPullRequest).toEqual(second);
+      expect(unlinked?.branchPullRequest).toEqual(reference);
+      expect(Option.getOrThrow(await system.readThread(threadId)).pullRequestLinks).toEqual(
+        unlinked?.pullRequestLinks,
+      );
+      const orphan = { ...reference, projectId: ProjectId.make("missing-project") };
+      const invalidLink = await system.run(
+        system.engine
+          .dispatch({
+            type: "thread.meta.update",
+            commandId: CommandId.make("invalid-link"),
+            threadId,
+            pullRequestLink: { action: "link", pullRequest: orphan },
+          })
+          .pipe(Effect.flip),
+      );
+      expect(invalidLink._tag).toBe("OrchestrationCommandInvariantError");
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("legacy-orphan"),
+          threadId,
+          linkedPullRequest: orphan,
+        }),
+      );
+      await system.run(
+        system.engine.dispatch({
+          type: "thread.meta.update",
+          commandId: CommandId.make("unlink-orphan"),
+          threadId,
+          pullRequestLink: { action: "unlink", pullRequest: orphan },
+        }),
+      );
+      expect((await system.readModel()).threads[0]?.pullRequestLinks).toEqual([
+        { ...reference, source: "branch" },
+      ]);
     } finally {
       await system.dispose();
     }

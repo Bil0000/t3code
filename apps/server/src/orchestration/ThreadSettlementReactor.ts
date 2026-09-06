@@ -1,4 +1,4 @@
-import { CommandId } from "@t3tools/contracts";
+import { CommandId, getThreadPullRequestLinks } from "@t3tools/contracts";
 import { makeDrainableWorker } from "@t3tools/shared/DrainableWorker";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
@@ -54,12 +54,15 @@ export const make = Effect.gen(function* () {
     // Return the thread when it still needs a pull request decision. A rejected
     // dispatch skips it for this snapshot instead of retrying through a lookup.
     const settleThread = Effect.fn("ThreadSettlementReactor.settleThread")(
-      function* (thread: (typeof candidates)[number], pullRequest: SettlementPullRequest | null) {
+      function* (
+        thread: (typeof candidates)[number],
+        summaries: ReadonlyArray<SettlementPullRequest>,
+      ) {
         const settings = yield* settingsService.getSettings;
         const decisionNow = DateTime.formatIso(yield* DateTime.now);
         const settledAt = resolveAutoSettlementAt({
           thread,
-          pullRequest,
+          pullRequests: summaries,
           now: decisionNow,
           autoSettleAfterDays: settings.sidebarAutoSettleAfterDays,
           autoSettleOnMerge: settings.sidebarAutoSettleOnMerge,
@@ -94,7 +97,7 @@ export const make = Effect.gen(function* () {
     // can fail or wait on the network, including lookups shared by recent threads.
     const lookupCandidates = (yield* Effect.forEach(
       candidates,
-      (thread) => settleThread(thread, null),
+      (thread) => settleThread(thread, []),
       {
         concurrency: 8,
       },
@@ -129,14 +132,21 @@ export const make = Effect.gen(function* () {
         discard: true,
       });
     }
+    const referencesFor = (thread: (typeof candidates)[number]) => {
+      const links = getThreadPullRequestLinks(thread);
+      const linked = links.filter((link) => link.source === "linked");
+      return linked.length > 0 ? linked : links;
+    };
     const lookupKey = (thread: (typeof candidates)[number]) => {
-      const reference = thread.linkedPullRequest ?? thread.branchPullRequest;
-      if (reference != null) {
+      const references = referencesFor(thread);
+      if (references.length > 0) {
         return JSON.stringify([
           "linked",
-          reference.projectId,
-          reference.repository,
-          reference.number,
+          references.map((reference) => [
+            reference.projectId,
+            reference.repository,
+            reference.number,
+          ]),
           lookupCwdByThreadId.get(thread.id),
           thread.branch,
         ]);
@@ -152,32 +162,44 @@ export const make = Effect.gen(function* () {
     const pullRequestFor = Effect.fn("ThreadSettlementReactor.pullRequestFor")(function* (
       thread: (typeof candidates)[number],
     ) {
-      const reference = thread.linkedPullRequest ?? thread.branchPullRequest;
-      if (reference != null) {
-        const matchesMerge =
-          mergedPullRequest !== null &&
-          reference.projectId === mergedPullRequest.projectId &&
-          reference.repository.toLowerCase() === mergedPullRequest.repository.toLowerCase() &&
-          reference.number === mergedPullRequest.number;
-        if (!matchesMerge && !projects.has(reference.projectId)) {
-          return yield* Effect.die(new Error("linked pull request project not found"));
-        }
-        const summary = matchesMerge
-          ? ({
-              state: "merged",
-              closedAt: null,
-              mergedAt: mergedPullRequest.mergedAt,
-            } satisfies SettlementPullRequest)
-          : yield* pullRequests.summary(
-              {
-                projectId: reference.projectId,
-                repository: reference.repository,
-                number: reference.number,
-              },
-              { recoverTransientFailure: false },
-            );
+      const references = referencesFor(thread);
+      if (references.length > 0) {
+        const summaries = yield* Effect.forEach(
+          references,
+          (reference) =>
+            Effect.gen(function* () {
+              const matchesMerge =
+                mergedPullRequest !== null &&
+                reference.projectId === mergedPullRequest.projectId &&
+                reference.repository.toLowerCase() === mergedPullRequest.repository.toLowerCase() &&
+                reference.number === mergedPullRequest.number;
+              if (!matchesMerge && !projects.has(reference.projectId)) {
+                return yield* Effect.die(new Error("linked pull request project not found"));
+              }
+              const summary = matchesMerge
+                ? ({
+                    state: "merged",
+                    closedAt: null,
+                    mergedAt: mergedPullRequest.mergedAt,
+                  } satisfies SettlementPullRequest)
+                : yield* pullRequests.summary(
+                    {
+                      projectId: reference.projectId,
+                      repository: reference.repository,
+                      number: reference.number,
+                    },
+                    { recoverTransientFailure: false },
+                  );
+              return summary;
+            }),
+          { concurrency: 8 },
+        );
         const cwd = lookupCwdByThreadId.get(thread.id);
-        if (summary.state !== "open" && thread.branch !== null && cwd !== undefined) {
+        if (
+          summaries.every((summary) => summary.state !== "open") &&
+          thread.branch !== null &&
+          cwd !== undefined
+        ) {
           // A reused branch can already have a new open PR while discovery
           // is replacing its old link. Do not let settlement win that race.
           const current = yield* git.branchPullRequest(
@@ -190,21 +212,18 @@ export const make = Effect.gen(function* () {
             project !== undefined &&
             pullRequestMatchesProject(current, project)
           ) {
-            return current;
+            return [current];
           }
         }
-        return {
-          state: summary.state,
-          closedAt: summary.closedAt ?? null,
-          mergedAt: summary.mergedAt ?? null,
-        } satisfies SettlementPullRequest;
+        return summaries;
       }
-      if (thread.branch === null) return null;
+      if (thread.branch === null) return [];
       const cwd = lookupCwdByThreadId.get(thread.id);
       if (cwd === undefined) {
         return yield* Effect.die(new Error("thread project not found"));
       }
-      return yield* git.branchPullRequest({ cwd, branch: thread.branch });
+      const current = yield* git.branchPullRequest({ cwd, branch: thread.branch });
+      return current === null ? [] : [current];
     });
 
     yield* Effect.forEach(

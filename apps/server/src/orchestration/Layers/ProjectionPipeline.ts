@@ -1,3 +1,4 @@
+import { applyThreadPullRequestUpdate } from "@t3tools/contracts";
 import {
   ApprovalRequestId,
   isImportedAgentSessionMessageId,
@@ -803,12 +804,7 @@ const makeOrchestrationProjectionPipeline = Effect.fn("makeOrchestrationProjecti
             ...(event.payload.worktreePath !== undefined
               ? { worktreePath: event.payload.worktreePath }
               : {}),
-            ...(event.payload.linkedPullRequest !== undefined
-              ? { linkedPullRequest: event.payload.linkedPullRequest }
-              : {}),
-            ...(event.payload.branchPullRequest !== undefined
-              ? { branchPullRequest: event.payload.branchPullRequest }
-              : {}),
+            ...applyThreadPullRequestUpdate(existingRow.value, event.payload),
             updatedAt: event.payload.updatedAt,
           });
           return;

@@ -32,6 +32,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import {
   resolveEnvironmentMachineKind,
+  getThreadPullRequest,
   type EnvironmentMachineKind,
   type ProjectIconOverride,
   type ScopedThreadRef,
@@ -844,7 +845,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   const gitCwd = thread.worktreePath ?? props.projectCwd;
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
     thread.environmentId,
-    thread.linkedPullRequest ?? thread.branchPullRequest,
+    getThreadPullRequest(thread),
     leaseLiveStatus,
   );
   const gitStatus = useEnvironmentQuery(

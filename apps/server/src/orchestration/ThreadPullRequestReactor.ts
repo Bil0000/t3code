@@ -1,5 +1,7 @@
 import {
   CommandId,
+  getThreadPullRequestLinks,
+  threadPullRequestFields,
   type OrchestrationEvent,
   type OrchestrationProjectShell,
   type ThreadId,
@@ -104,7 +106,14 @@ export const make = Effect.gen(function* () {
   const synchronize = Effect.fn("ThreadPullRequestReactor.synchronize")(function* (
     request: RefreshRequest,
   ) {
-    const snapshot = yield* snapshots.getShellSnapshot();
+    const currentSnapshot = yield* snapshots.getShellSnapshot();
+    const snapshot = {
+      ...currentSnapshot,
+      threads: currentSnapshot.threads.map((thread) => ({
+        ...thread,
+        ...threadPullRequestFields(getThreadPullRequestLinks(thread)),
+      })),
+    };
     const projects = new Map(snapshot.projects.map((project) => [project.id, project]));
     if (request.backfill) {
       for (const thread of snapshot.threads) {
@@ -188,6 +197,8 @@ export const make = Effect.gen(function* () {
 
               let replacement: ThreadLinkedPullRequest | undefined;
               if (
+                getThreadPullRequestLinks(thread).filter((link) => link.source === "linked")
+                  .length === 1 &&
                 thread.linkedPullRequest != null &&
                 detected?.state === "open" &&
                 detectedReference !== null &&
@@ -265,6 +276,7 @@ export const make = Effect.gen(function* () {
                     worktreePath: thread.worktreePath,
                     linkedPullRequest: thread.linkedPullRequest ?? null,
                     branchPullRequest: thread.branchPullRequest ?? null,
+                    pullRequestLinks: getThreadPullRequestLinks(thread),
                   },
                   branchPullRequest,
                   ...(replacement !== undefined ? { linkedPullRequest: replacement } : {}),
@@ -323,7 +335,8 @@ export const make = Effect.gen(function* () {
           event.payload.branchPullRequest === undefined &&
           (event.payload.branch !== undefined ||
             event.payload.worktreePath !== undefined ||
-            event.payload.linkedPullRequest !== undefined)
+            event.payload.linkedPullRequest !== undefined ||
+            event.payload.pullRequestLinks !== undefined)
         ) {
           return worker.enqueue({ threadId: event.payload.threadId, refresh: false });
         }

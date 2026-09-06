@@ -103,6 +103,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           worktree_path,
           linked_pull_request_json,
           branch_pull_request_json,
+          pull_request_links_json,
           latest_turn_id,
           latest_user_message_at,
           pending_approval_count,
@@ -125,6 +126,7 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
           NULL,
           '{"projectId":"project-1","repository":"pingdotgg/t3code","number":42,"url":"https://github.com/pingdotgg/t3code/pull/42"}',
           ${encodeThreadLinkedPullRequest(branchPullRequest)},
+          '[{"projectId":"project-1","repository":"pingdotgg/t3code","number":42,"url":"https://github.com/pingdotgg/t3code/pull/42","source":"linked"},{"projectId":"project-1","repository":"pingdotgg/t3code","number":43,"url":"https://github.com/pingdotgg/t3code/pull/43","source":"branch"}]',
           'turn-1',
           '2026-02-24T00:00:04.000Z',
           1,
@@ -336,6 +338,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             url: "https://github.com/pingdotgg/t3code/pull/42",
           },
           branchPullRequest,
+          pullRequestLinks: [
+            {
+              projectId: asProjectId("project-1"),
+              repository: "pingdotgg/t3code",
+              number: 42,
+              url: "https://github.com/pingdotgg/t3code/pull/42",
+              source: "linked",
+            },
+            { ...branchPullRequest, source: "branch" },
+          ],
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",
@@ -465,6 +477,16 @@ projectionSnapshotLayer("ProjectionSnapshotQuery", (it) => {
             url: "https://github.com/pingdotgg/t3code/pull/42",
           },
           branchPullRequest,
+          pullRequestLinks: [
+            {
+              projectId: asProjectId("project-1"),
+              repository: "pingdotgg/t3code",
+              number: 42,
+              url: "https://github.com/pingdotgg/t3code/pull/42",
+              source: "linked",
+            },
+            { ...branchPullRequest, source: "branch" },
+          ],
           latestTurn: {
             turnId: asTurnId("turn-1"),
             state: "completed",

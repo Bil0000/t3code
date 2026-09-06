@@ -482,6 +482,12 @@ export const ThreadLinkedPullRequest = Schema.Struct({
 });
 export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
 
+export const ThreadPullRequestLink = Schema.Struct({
+  ...ThreadLinkedPullRequest.fields,
+  source: Schema.Literals(["linked", "branch"]),
+});
+export type ThreadPullRequestLink = typeof ThreadPullRequestLink.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -495,6 +501,7 @@ export const OrchestrationThread = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  pullRequestLinks: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -574,6 +581,7 @@ export const OrchestrationThreadShell = Schema.Struct({
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  pullRequestLinks: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
@@ -906,7 +914,18 @@ const ThreadMetaUpdateCommand = Schema.Struct({
   expectedBranch: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  pullRequestLink: Schema.optional(
+    Schema.Struct({
+      action: Schema.Literals(["link", "unlink"]),
+      pullRequest: ThreadLinkedPullRequest,
+    }),
+  ),
 }).check(
+  Schema.makeFilter(
+    (input) =>
+      !(input.linkedPullRequest !== undefined && input.pullRequestLink !== undefined) ||
+      "linkedPullRequest and pullRequestLink cannot be specified together",
+  ),
   Schema.makeFilter(
     (input) =>
       !(input.title !== undefined && input.regenerateTitle === true) ||
@@ -1197,6 +1216,7 @@ const ThreadPullRequestSyncCommand = Schema.Struct({
     worktreePath: Schema.NullOr(TrimmedNonEmptyString),
     linkedPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
     branchPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
+    pullRequestLinks: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   }),
   branchPullRequest: Schema.NullOr(ThreadLinkedPullRequest),
   linkedPullRequest: Schema.optional(ThreadLinkedPullRequest),
@@ -1388,6 +1408,7 @@ export const ThreadMetaUpdatedPayload = Schema.Struct({
   worktreePath: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   linkedPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
   branchPullRequest: Schema.optional(Schema.NullOr(ThreadLinkedPullRequest)),
+  pullRequestLinks: Schema.optional(Schema.Array(ThreadPullRequestLink)),
   updatedAt: IsoDateTime,
 });
 

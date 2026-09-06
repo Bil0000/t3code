@@ -1,3 +1,4 @@
+import { getThreadPullRequestLinks } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import {
   CheckIcon,
@@ -2354,25 +2355,30 @@ function useChatMarkdownState({
   const updateThreadPullRequestLink = useCallback(
     async (href: string, linked: boolean) => {
       if (threadRef === undefined) return;
-      const linkedPullRequest = linked ? resolveThreadPullRequest(href) : null;
-      if (linked && linkedPullRequest === null) {
+      const thread = readThreadShell(threadRef);
+      if (thread === null) return;
+      const currentPullRequest = getThreadPullRequestLinks(thread).find(
+        (link) => link.source === "linked" && matchesLinkedPullRequestUrl(link, href),
+      );
+      const pullRequest = linked ? resolveThreadPullRequest(href) : currentPullRequest;
+      if (pullRequest == null) {
+        if (!linked) return;
         throw new Error("The pull request is not available in this environment.");
-      }
-      if (!linked) {
-        const currentPullRequest = readThreadShell(threadRef)?.linkedPullRequest;
-        if (currentPullRequest == null || !matchesLinkedPullRequestUrl(currentPullRequest, href)) {
-          return;
-        }
       }
       const result = await updateThreadMetadata({
         environmentId: threadRef.environmentId,
-        input: { threadId: threadRef.threadId, linkedPullRequest },
+        input: {
+          threadId: threadRef.threadId,
+          ...(threadServerConfig?.environment.capabilities.threadPullRequestLinks === true
+            ? { pullRequestLink: { action: linked ? "link" : "unlink", pullRequest } }
+            : { linkedPullRequest: linked ? pullRequest : null }),
+        },
       });
       if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
         throw squashAtomCommandFailure(result);
       }
     },
-    [resolveThreadPullRequest, threadRef, updateThreadMetadata],
+    [resolveThreadPullRequest, threadRef, threadServerConfig, updateThreadMetadata],
   );
   const openExternalLinkInPreview = useCallback(
     (url: string) => {
@@ -2851,14 +2857,17 @@ const CHAT_MARKDOWN_COMPONENTS = {
             const api = readLocalApi();
             if (!api) return;
             const pullRequest = resolveThreadPullRequest(href);
-            const currentPullRequest =
-              threadRef === undefined ? null : readThreadShell(threadRef)?.linkedPullRequest;
-            const threadLinkAction =
-              currentPullRequest != null && matchesLinkedPullRequestUrl(currentPullRequest, href)
-                ? "unlink-from-thread"
-                : pullRequest === null
-                  ? undefined
-                  : "link-to-thread";
+            const thread = threadRef === undefined ? null : readThreadShell(threadRef);
+            const isLinked =
+              thread !== null &&
+              getThreadPullRequestLinks(thread).some(
+                (link) => link.source === "linked" && matchesLinkedPullRequestUrl(link, href),
+              );
+            const threadLinkAction = isLinked
+              ? "unlink-from-thread"
+              : pullRequest === null
+                ? undefined
+                : "link-to-thread";
             void showExternalLinkContextMenu({
               href,
               canOpenInPreview,

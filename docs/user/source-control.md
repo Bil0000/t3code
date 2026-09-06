@@ -70,6 +70,11 @@ messages, review titles, and descriptions from your changes.
 Choose the writing style and model in **Settings → Source Control**. **Repository conventions**
 uses the project's instructions and recent commit subjects.
 
+A thread can link to several pull requests. In web or desktop chat, right-click a pull request
+link and choose **Link to thread**. The linked PR menu lets you open a PR, choose the primary PR
+shown in thread status, or remove a link. On mobile, manage linked PRs from the source control overview.
+Removing a manual link does not remove a PR detected from the thread's branch.
+
 ## Review and merge
 
 Open **Pull requests** to review changes and comments, request reviewers, check out a branch,

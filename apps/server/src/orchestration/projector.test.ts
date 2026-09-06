@@ -164,6 +164,48 @@ describe("orchestration projector", () => {
         expect(model.threads[0]?.branchPullRequest).toEqual(update.expected);
         expect(model.threads[0]?.linkedPullRequest).toEqual(linkedPullRequest);
       }
+
+      model = yield* projectEvent(
+        model,
+        makeEvent({
+          ...eventFields,
+          sequence: 5,
+          type: "thread.meta-updated",
+          payload: {
+            threadId: "thread-1",
+            linkedPullRequest,
+            branchPullRequest: linkedPullRequest,
+            updatedAt: now,
+          },
+        }),
+      );
+      model = yield* projectEvent(
+        model,
+        makeEvent({
+          ...eventFields,
+          sequence: 6,
+          type: "thread.meta-updated",
+          payload: { threadId: "thread-1", linkedPullRequest: null, updatedAt: now },
+        }),
+      );
+      expect(model.threads[0]?.pullRequestLinks).toEqual([
+        { ...linkedPullRequest, source: "branch" },
+      ]);
+
+      const pullRequestLinks = [
+        { ...linkedPullRequest, source: "linked" as const },
+        { ...branchPullRequest, source: "linked" as const },
+      ];
+      model = yield* projectEvent(
+        model,
+        makeEvent({
+          ...eventFields,
+          sequence: 7,
+          type: "thread.meta-updated",
+          payload: { threadId: "thread-1", pullRequestLinks, updatedAt: now },
+        }),
+      );
+      expect(model.threads[0]?.pullRequestLinks).toEqual(pullRequestLinks);
     }),
   );
 

@@ -2,6 +2,7 @@ import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environ
 import { pullRequestDetailToVcsStatus } from "@t3tools/client-runtime/state/pull-requests";
 import {
   type EnvironmentId,
+  getThreadPullRequest,
   resolveEnvironmentMachineKind,
   type ThreadLinkedPullRequest,
   type VcsStatusResult,
@@ -282,7 +283,7 @@ export function ThreadRowLeadingStatus({ thread }: { thread: SidebarThreadSummar
   );
   const pullRequest = useLinkedThreadPullRequest(
     thread.environmentId,
-    thread.linkedPullRequest ?? thread.branchPullRequest,
+    getThreadPullRequest(thread),
   );
   const pr = pullRequest?.pr ?? null;
   const prStatus = prStatusIndicator(pr, pullRequest?.sourceControlProvider);

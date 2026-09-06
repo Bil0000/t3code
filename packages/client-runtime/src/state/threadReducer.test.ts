@@ -367,6 +367,61 @@ describe("applyThreadDetailEvent", () => {
     );
   });
 
+  it("applies multi-link pull request updates and clears them", () => {
+    const first = {
+      projectId: ProjectId.make("project-1"),
+      repository: "pingdotgg/t3code",
+      number: 42,
+      url: "https://github.com/pingdotgg/t3code/pull/42",
+      source: "linked" as const,
+    };
+    const second = { ...first, number: 43, url: "https://github.com/pingdotgg/t3code/pull/43" };
+    const updated = applyThreadDetailEvent(baseThread, {
+      ...baseEventFields,
+      sequence: 7,
+      occurredAt: "2026-04-01T07:00:00.000Z",
+      aggregateKind: "thread",
+      aggregateId: ThreadId.make("thread-1"),
+      type: "thread.meta-updated",
+      payload: {
+        threadId: ThreadId.make("thread-1"),
+        pullRequestLinks: [first, second],
+        updatedAt: "2026-04-01T07:00:00.000Z",
+      },
+    });
+
+    expect(updated.kind).toBe("updated");
+    if (updated.kind !== "updated") return;
+    expect(updated.thread.pullRequestLinks).toEqual([first, second]);
+    expect(updated.thread.linkedPullRequest).toEqual({
+      projectId: first.projectId,
+      repository: first.repository,
+      number: first.number,
+      url: first.url,
+    });
+    expect(updated.thread.branchPullRequest).toBeNull();
+
+    const cleared = applyThreadDetailEvent(updated.thread, {
+      ...baseEventFields,
+      sequence: 8,
+      occurredAt: "2026-04-01T08:00:00.000Z",
+      aggregateKind: "thread",
+      aggregateId: ThreadId.make("thread-1"),
+      type: "thread.meta-updated",
+      payload: {
+        threadId: ThreadId.make("thread-1"),
+        pullRequestLinks: [],
+        updatedAt: "2026-04-01T08:00:00.000Z",
+      },
+    });
+
+    expect(cleared.kind).toBe("updated");
+    if (cleared.kind !== "updated") return;
+    expect(cleared.thread.pullRequestLinks).toEqual([]);
+    expect(cleared.thread.linkedPullRequest).toBeNull();
+    expect(cleared.thread.branchPullRequest).toBeNull();
+  });
+
   describe("thread.message-sent", () => {
     it("appends a new message", () => {
       const result = applyThreadDetailEvent(baseThread, {

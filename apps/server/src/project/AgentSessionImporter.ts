@@ -1,3 +1,4 @@
+import { getThreadPullRequestLinks } from "@t3tools/contracts";
 import {
   CommandId,
   DEFAULT_MODEL,
@@ -88,7 +89,7 @@ function hasImportBlockingActivity(
     thread.pinnedAt != null ||
     thread.pinOrderKey != null ||
     thread.titleRegeneration != null ||
-    thread.linkedPullRequest != null ||
+    getThreadPullRequestLinks(thread).some((link) => link.source === "linked") ||
     thread.unsettledAt != null ||
     (importedHistoryPresent
       ? thread.settledOverride !== "settled"

@@ -2,9 +2,9 @@ import type { OrchestrationThreadShell } from "@t3tools/contracts";
 
 export interface SettlementPullRequest {
   readonly state: "open" | "closed" | "merged";
-  readonly closedAt?: string | null;
-  readonly mergedAt?: string | null;
-  readonly updatedAt?: string | null;
+  readonly closedAt?: string | null | undefined;
+  readonly mergedAt?: string | null | undefined;
+  readonly updatedAt?: string | null | undefined;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -67,12 +67,12 @@ function pullRequestSettles(
 
 export function resolveAutoSettlementAt(input: {
   readonly thread: OrchestrationThreadShell;
-  readonly pullRequest: SettlementPullRequest | null;
+  readonly pullRequests: ReadonlyArray<SettlementPullRequest>;
   readonly now: string;
   readonly autoSettleAfterDays: number | null;
   readonly autoSettleOnMerge: boolean;
 }): string | null {
-  const { thread, pullRequest } = input;
+  const { thread, pullRequests } = input;
   if (!isAutoSettlementCandidate(thread, input.now)) return null;
   const activityAt = latestTimestamp([
     thread.latestUserMessageAt,
@@ -80,10 +80,18 @@ export function resolveAutoSettlementAt(input: {
     thread.latestTurn?.startedAt,
     thread.latestTurn?.completedAt,
   ]);
-  if (pullRequest !== null) {
-    if (pullRequestSettles(thread, pullRequest, input.autoSettleOnMerge)) {
-      return activityAt ?? thread.createdAt;
-    }
+  if (
+    pullRequests.length > 0 &&
+    pullRequests.every(
+      (pullRequest) =>
+        pullRequest.state === "closed" ||
+        (pullRequest.state === "merged" && input.autoSettleOnMerge),
+    ) &&
+    pullRequests.some((pullRequest) =>
+      pullRequestSettles(thread, pullRequest, input.autoSettleOnMerge),
+    )
+  ) {
+    return activityAt ?? thread.createdAt;
   }
   if (input.autoSettleAfterDays === null || activityAt === null) return null;
   return Date.parse(activityAt) < Date.parse(input.now) - input.autoSettleAfterDays * DAY_MS

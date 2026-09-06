@@ -1,6 +1,7 @@
 import { useAtomValue } from "@effect/atom-react";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { getThreadPullRequest } from "@t3tools/contracts";
 import {
   createLinkedPullRequestSummaryAtomFamily,
   pullRequestDetailToVcsStatus,
@@ -39,7 +40,7 @@ export {
  * request for the same PR in the same environment.
  */
 export function useThreadPr(thread: EnvironmentThreadShell): ThreadPrPresentation | null {
-  const pullRequestRef = thread.linkedPullRequest ?? thread.branchPullRequest ?? null;
+  const pullRequestRef = getThreadPullRequest(thread);
   const threadKey = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
   const snapshotIdentity = JSON.stringify(pullRequestRef);
   // Select this row's entry so writes for other rows do not re-render it.

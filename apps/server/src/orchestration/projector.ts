@@ -1,3 +1,4 @@
+import { applyThreadPullRequestUpdate } from "@t3tools/contracts";
 import type { OrchestrationEvent, OrchestrationReadModel, ThreadId } from "@t3tools/contracts";
 import {
   isImportedAgentSessionMessageId,
@@ -508,12 +509,10 @@ export function projectEvent(
               : {}),
             ...(payload.branch !== undefined ? { branch: payload.branch } : {}),
             ...(payload.worktreePath !== undefined ? { worktreePath: payload.worktreePath } : {}),
-            ...(payload.linkedPullRequest !== undefined
-              ? { linkedPullRequest: payload.linkedPullRequest }
-              : {}),
-            ...(payload.branchPullRequest !== undefined
-              ? { branchPullRequest: payload.branchPullRequest }
-              : {}),
+            ...applyThreadPullRequestUpdate(
+              nextBase.threads.find((thread) => thread.id === payload.threadId) ?? {},
+              payload,
+            ),
             updatedAt: payload.updatedAt,
           }),
         })),

@@ -12,7 +12,7 @@ import type {
   OrchestrationThreadActivity,
   TurnId,
 } from "@t3tools/contracts";
-import { isImportedAgentSessionMessageId } from "@t3tools/contracts";
+import { isImportedAgentSessionMessageId, applyThreadPullRequestUpdate } from "@t3tools/contracts";
 import { compareDateTimeStrings } from "@t3tools/shared/dateTime";
 
 export type ThreadDetailReducerResult =
@@ -238,12 +238,7 @@ export function applyThreadDetailEvent(
           ...(event.payload.worktreePath !== undefined
             ? { worktreePath: event.payload.worktreePath }
             : {}),
-          ...(event.payload.linkedPullRequest !== undefined
-            ? { linkedPullRequest: event.payload.linkedPullRequest }
-            : {}),
-          ...(event.payload.branchPullRequest !== undefined
-            ? { branchPullRequest: event.payload.branchPullRequest }
-            : {}),
+          ...applyThreadPullRequestUpdate(thread, event.payload),
           updatedAt: event.payload.updatedAt,
         },
       };

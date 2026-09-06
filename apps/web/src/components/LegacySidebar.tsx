@@ -47,6 +47,7 @@ import {
   type ResolvedKeybindingsConfig,
   type SidebarProjectGroupingMode,
   resolveEnvironmentMachineKind,
+  getThreadPullRequest,
   ThreadId,
 } from "@t3tools/contracts";
 import {
@@ -444,7 +445,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
   });
   const linkedPullRequestStatus = useLinkedThreadPullRequest(
     thread.environmentId,
-    thread.linkedPullRequest ?? thread.branchPullRequest,
+    getThreadPullRequest(thread),
     leaseLiveStatus,
   );
   const pr = linkedPullRequestStatus?.pr ?? null;

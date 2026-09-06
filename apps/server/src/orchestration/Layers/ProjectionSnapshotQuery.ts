@@ -28,6 +28,7 @@ import {
   ModelSelection,
   ProjectId,
   ThreadLinkedPullRequest,
+  ThreadPullRequestLink,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Arr from "effect/Array";
@@ -117,6 +118,7 @@ const ProjectionThreadDbRowSchema = ProjectionThread.mapFields(
     modelSelection: Schema.fromJsonString(ModelSelection),
     linkedPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
     branchPullRequest: Schema.NullOr(Schema.fromJsonString(ThreadLinkedPullRequest)),
+    pullRequestLinks: Schema.fromJsonString(Schema.Array(ThreadPullRequestLink)),
   }),
 );
 const ProjectionThreadActivityDbRowSchema = ProjectionThreadActivity.mapFields(
@@ -502,6 +504,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
+          pull_request_links_json AS "pullRequestLinks",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -541,6 +544,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
+          pull_request_links_json AS "pullRequestLinks",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -582,6 +586,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
+          pull_request_links_json AS "pullRequestLinks",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -1072,6 +1077,7 @@ const makeProjectionSnapshotQuery = Effect.gen(function* () {
           worktree_path AS "worktreePath",
           linked_pull_request_json AS "linkedPullRequest",
           branch_pull_request_json AS "branchPullRequest",
+          pull_request_links_json AS "pullRequestLinks",
           latest_turn_id AS "latestTurnId",
           created_at AS "createdAt",
           updated_at AS "updatedAt",
@@ -2068,6 +2074,7 @@ pending_approval_requests AS (
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 branchPullRequest: row.branchPullRequest,
+                pullRequestLinks: row.pullRequestLinks,
                 ...(row.linkedPullRequest === null
                   ? {}
                   : { linkedPullRequest: row.linkedPullRequest }),
@@ -2282,6 +2289,7 @@ pending_approval_requests AS (
                   branch: row.branch,
                   worktreePath: row.worktreePath,
                   branchPullRequest: row.branchPullRequest,
+                  pullRequestLinks: row.pullRequestLinks,
                   ...(row.linkedPullRequest === null
                     ? {}
                     : { linkedPullRequest: row.linkedPullRequest }),
@@ -2423,6 +2431,7 @@ pending_approval_requests AS (
                       branch: row.branch,
                       worktreePath: row.worktreePath,
                       branchPullRequest: row.branchPullRequest,
+                      pullRequestLinks: row.pullRequestLinks,
                       ...(row.linkedPullRequest === null
                         ? {}
                         : { linkedPullRequest: row.linkedPullRequest }),
@@ -2572,6 +2581,7 @@ pending_approval_requests AS (
                 branch: row.branch,
                 worktreePath: row.worktreePath,
                 branchPullRequest: row.branchPullRequest,
+                pullRequestLinks: row.pullRequestLinks,
                 ...(row.linkedPullRequest === null
                   ? {}
                   : { linkedPullRequest: row.linkedPullRequest }),
@@ -2894,6 +2904,7 @@ pending_approval_requests AS (
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         branchPullRequest: threadRow.value.branchPullRequest,
+        pullRequestLinks: threadRow.value.pullRequestLinks,
         ...(threadRow.value.linkedPullRequest === null
           ? {}
           : { linkedPullRequest: threadRow.value.linkedPullRequest }),
@@ -3176,6 +3187,7 @@ pending_approval_requests AS (
         branch: threadRow.value.branch,
         worktreePath: threadRow.value.worktreePath,
         branchPullRequest: threadRow.value.branchPullRequest,
+        pullRequestLinks: threadRow.value.pullRequestLinks,
         ...(threadRow.value.linkedPullRequest === null
           ? {}
           : { linkedPullRequest: threadRow.value.linkedPullRequest }),

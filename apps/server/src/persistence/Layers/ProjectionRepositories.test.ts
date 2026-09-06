@@ -476,6 +476,10 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         number: 43,
         url: "https://github.com/pingdotgg/t3code/pull/43",
       };
+      const pullRequestLinks = [
+        { ...linkedPullRequest, source: "linked" as const },
+        { ...branchPullRequest, source: "branch" as const },
+      ];
 
       yield* threads.upsert({
         threadId: ThreadId.make("thread-linked-pr"),
@@ -491,6 +495,7 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
         worktreePath: null,
         linkedPullRequest,
         branchPullRequest,
+        pullRequestLinks,
         latestTurnId: null,
         createdAt: "2026-03-24T00:00:00.000Z",
         updatedAt: "2026-03-24T00:00:00.000Z",
@@ -511,9 +516,11 @@ projectionRepositoriesLayer("Projection repositories", (it) => {
       const persisted = yield* threads.getById({ threadId: ThreadId.make("thread-linked-pr") });
       assert.deepStrictEqual(Option.getOrNull(persisted)?.linkedPullRequest, linkedPullRequest);
       assert.deepStrictEqual(Option.getOrNull(persisted)?.branchPullRequest, branchPullRequest);
+      assert.deepStrictEqual(Option.getOrNull(persisted)?.pullRequestLinks, pullRequestLinks);
 
       const listed = yield* threads.listByProjectId({ projectId: linkedPullRequest.projectId });
       assert.deepStrictEqual(listed[0]?.branchPullRequest, branchPullRequest);
+      assert.deepStrictEqual(listed[0]?.pullRequestLinks, pullRequestLinks);
 
       const row = Option.getOrNull(persisted);
       if (row === null) return yield* Effect.die("Expected linked thread row to exist.");

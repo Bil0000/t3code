@@ -1,5 +1,6 @@
 import {
   EventId,
+  applyThreadPullRequestUpdate,
   GitManagerError,
   ProjectId,
   ProviderInstanceId,
@@ -191,10 +192,12 @@ const makeHarness = Effect.fn("makeThreadPullRequestHarness")(function* (options
                 current.id === command.threadId
                   ? {
                       ...current,
-                      branchPullRequest: command.branchPullRequest,
-                      ...(command.linkedPullRequest !== undefined
-                        ? { linkedPullRequest: command.linkedPullRequest }
-                        : {}),
+                      ...applyThreadPullRequestUpdate(current, {
+                        branchPullRequest: command.branchPullRequest,
+                        ...(command.linkedPullRequest !== undefined
+                          ? { linkedPullRequest: command.linkedPullRequest }
+                          : {}),
+                      }),
                     }
                   : current,
               ),
@@ -305,6 +308,28 @@ describe("ThreadPullRequestReactor", () => {
           expect(
             snapshot.threads.every((current) => current.branchPullRequest?.number === 42),
           ).toBe(true);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
+  it.effect("preserves multiple linked pull requests while refreshing the branch link", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const first = { ...reference(1), source: "linked" as const };
+        const second = { ...reference(2), source: "linked" as const };
+        const fixture = yield* makeHarness({
+          threads: [thread("multiple", { pullRequestLinks: [first, second] })],
+          branchPullRequest: () => Effect.succeed(branchPullRequest(42)),
+        });
+        yield* Effect.gen(function* () {
+          yield* fixture.start();
+          expect((yield* Ref.get(fixture.snapshots)).threads[0]?.pullRequestLinks).toEqual([
+            first,
+            second,
+            { ...reference(42), source: "branch" },
+          ]);
+          expect(yield* Ref.get(fixture.summaryCalls)).toEqual([]);
         }).pipe(Effect.provide(fixture.layer));
       }),
     ),

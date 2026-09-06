@@ -1,4 +1,5 @@
 import { StackActions, useNavigation } from "@react-navigation/native";
+import { getThreadPullRequest } from "@t3tools/contracts";
 import { resolveThreadReferenceCopyTarget } from "@t3tools/shared/threadReference";
 import {
   useCallback,
@@ -44,8 +45,7 @@ export function HardwareKeyboardCommandProvider({
         ? null
         : resolveThreadReferenceCopyTarget({
             threadId: activeThread?.id ?? activeThreadRef.threadId,
-            linkedPullRequestUrl:
-              (activeThread?.linkedPullRequest ?? activeThread?.branchPullRequest)?.url ?? null,
+            linkedPullRequestUrl: getThreadPullRequest(activeThread)?.url ?? null,
           }),
     [activeThread, activeThreadRef],
   );

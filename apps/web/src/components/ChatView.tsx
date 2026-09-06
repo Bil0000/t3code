@@ -32,6 +32,7 @@ import {
   ProviderInteractionMode,
   ProviderDriverKind,
   resolveEnvironmentMachineKind,
+  getThreadPullRequest,
   RuntimeMode,
   TerminalOpenInput,
 } from "@t3tools/contracts";
@@ -3964,8 +3965,7 @@ export default function ChatView(props: ChatViewProps) {
   );
   // The shell carries server PR updates even while thread detail is still loading.
   const activeThreadMetadata = activeThreadShell ?? activeThread;
-  const linkedThreadPullRequest =
-    activeThreadMetadata?.linkedPullRequest ?? activeThreadMetadata?.branchPullRequest ?? null;
+  const linkedThreadPullRequest = getThreadPullRequest(activeThreadMetadata);
   const activeProjectRepository = activeProject?.repositoryIdentity?.displayName ?? null;
   const linkedThreadPullRequestKey = linkedThreadPullRequest
     ? JSON.stringify([

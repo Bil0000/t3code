@@ -818,6 +818,24 @@ it.effect("accepts a linked pull request in thread.meta.update", () =>
     if (parsed.type === "thread.meta.update") {
       assert.deepStrictEqual(parsed.linkedPullRequest, linkedPullRequest);
     }
+    for (const action of ["link", "unlink"] as const) {
+      const command = {
+        type: "thread.meta.update" as const,
+        commandId: CommandId.make(`cmd-${action}-one-pr`),
+        threadId: ThreadId.make("thread-1"),
+        pullRequestLink: {
+          action,
+          pullRequest: { ...linkedPullRequest, projectId: ProjectId.make("project-1") },
+        },
+      };
+      assert.deepStrictEqual(yield* decodeClientOrchestrationCommand(command), command);
+      assert.ok(
+        yield* decodeClientOrchestrationCommand({
+          ...command,
+          linkedPullRequest: null,
+        }).pipe(Effect.flip),
+      );
+    }
   }),
 );
 

@@ -9,6 +9,7 @@ import {
   ProjectId,
   ThreadId,
   ThreadLinkedPullRequest,
+  ThreadPullRequestLink,
   TurnId,
   ProviderInstanceId,
 } from "@t3tools/contracts";
@@ -63,6 +64,9 @@ const exists = (filePath: string) =>
 const BaseTestLayer = makeProjectionPipelinePrefixedTestLayer("t3-projection-pipeline-test-");
 const encodeThreadLinkedPullRequest = Schema.encodeSync(
   Schema.fromJsonString(ThreadLinkedPullRequest),
+);
+const encodeThreadPullRequestLinks = Schema.encodeSync(
+  Schema.fromJsonString(Schema.Array(ThreadPullRequestLink)),
 );
 
 it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-projection-cursor-batch-")))(
@@ -276,10 +280,12 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-branch-pr-proje
           const rows = yield* sql<{
             readonly linkedPullRequest: string | null;
             readonly branchPullRequest: string | null;
+            readonly pullRequestLinks: string;
           }>`
           SELECT
             linked_pull_request_json AS "linkedPullRequest",
-            branch_pull_request_json AS "branchPullRequest"
+            branch_pull_request_json AS "branchPullRequest",
+            pull_request_links_json AS "pullRequestLinks"
           FROM projection_threads
           WHERE thread_id = ${threadId}
         `;
@@ -288,9 +294,35 @@ it.layer(Layer.fresh(makeProjectionPipelinePrefixedTestLayer("t3-branch-pr-proje
               linkedPullRequest: encodeThreadLinkedPullRequest(linkedPullRequest),
               branchPullRequest:
                 update.expected === null ? null : encodeThreadLinkedPullRequest(update.expected),
+              pullRequestLinks: encodeThreadPullRequestLinks([
+                { ...linkedPullRequest, source: "linked" },
+                ...(update.expected === null
+                  ? []
+                  : [{ ...branchPullRequest, source: "branch" as const }]),
+              ]),
             },
           ]);
         }
+
+        const pullRequestLinks = [
+          { ...linkedPullRequest, source: "linked" as const },
+          { ...branchPullRequest, source: "linked" as const },
+        ];
+        const multiLinkEvent = yield* eventStore.append({
+          ...eventFields,
+          type: "thread.meta-updated",
+          eventId: EventId.make("evt-pull-request-multi-link"),
+          payload: { threadId, pullRequestLinks, updatedAt: now },
+        });
+        yield* projectionPipeline.projectEvent(multiLinkEvent);
+        const persisted = yield* sql<{ readonly pullRequestLinks: string }>`
+          SELECT pull_request_links_json AS "pullRequestLinks"
+          FROM projection_threads
+          WHERE thread_id = ${threadId}
+        `;
+        assert.deepEqual(persisted, [
+          { pullRequestLinks: encodeThreadPullRequestLinks(pullRequestLinks) },
+        ]);
       }),
     );
   },

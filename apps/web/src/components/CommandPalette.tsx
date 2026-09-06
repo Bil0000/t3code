@@ -63,6 +63,7 @@ import {
   type ReactNode,
 } from "react";
 import { useAtomValue } from "@effect/atom-react";
+import { getThreadPullRequest } from "@t3tools/contracts";
 
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
@@ -608,8 +609,7 @@ function OpenCommandPaletteDialog(props: {
       : resolveThreadReferenceCopyTarget({
           threadId: activeThread.id,
           openPanelPullRequestUrl,
-          linkedPullRequestUrl:
-            activeThread.linkedPullRequest?.url ?? activeThread.branchPullRequest?.url ?? null,
+          linkedPullRequestUrl: getThreadPullRequest(activeThread)?.url ?? null,
         });
   const copyActiveThreadReference = useCallback(async () => {
     const target = activeThreadReferenceCopyTarget;

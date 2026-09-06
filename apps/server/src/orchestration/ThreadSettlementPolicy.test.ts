@@ -41,13 +41,41 @@ const decide = (
 ) =>
   resolveAutoSettlementAt({
     thread,
-    pullRequest,
+    pullRequests: pullRequest === null ? [] : [pullRequest],
     now: NOW,
     autoSettleAfterDays: settings.days === undefined ? 3 : settings.days,
     autoSettleOnMerge: settings.merge ?? true,
   }) !== null;
 
 describe("resolveAutoSettlementAt", () => {
+  it("waits for every linked PR and honors merge settings", () => {
+    const input = {
+      thread: makeThread(),
+      now: NOW,
+      autoSettleAfterDays: null,
+      autoSettleOnMerge: true,
+    };
+    const closed = { state: "closed", closedAt: NOW } as const;
+    const merged = { state: "merged", mergedAt: NOW } as const;
+    expect(
+      resolveAutoSettlementAt({ ...input, pullRequests: [closed, { state: "open" }] }),
+    ).toBeNull();
+    expect(resolveAutoSettlementAt({ ...input, pullRequests: [closed, merged] })).not.toBeNull();
+    expect(
+      resolveAutoSettlementAt({
+        ...input,
+        autoSettleOnMerge: false,
+        pullRequests: [closed, merged],
+      }),
+    ).toBeNull();
+    expect(
+      resolveAutoSettlementAt({
+        ...input,
+        pullRequests: [closed, { state: "closed", closedAt: "2026-01-01T00:00:00.000Z" }],
+      }),
+    ).not.toBeNull();
+  });
+
   it("returns the last activity time for persisted settlement", () => {
     expect(
       resolveAutoSettlementAt({
@@ -61,7 +89,7 @@ describe("resolveAutoSettlementAt", () => {
             assistantMessageId: null,
           },
         }),
-        pullRequest: null,
+        pullRequests: [],
         now: NOW,
         autoSettleAfterDays: 3,
         autoSettleOnMerge: true,
@@ -77,7 +105,7 @@ describe("resolveAutoSettlementAt", () => {
           latestTurn: null,
           updatedAt: "2026-08-27T00:00:00.000Z",
         }),
-        pullRequest: { state: "closed", closedAt: NOW },
+        pullRequests: [{ state: "closed", closedAt: NOW }],
         now: NOW,
         autoSettleAfterDays: null,
         autoSettleOnMerge: true,

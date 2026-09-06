@@ -1,5 +1,10 @@
 import {
   EventId,
+  getThreadPullRequestLinks,
+  sameThreadPullRequest,
+  threadPullRequestFields,
+  applyThreadPullRequestUpdate,
+  ThreadPullRequestLink,
   MessageId,
   ThreadLinkedPullRequest,
   UserInputRequestedPayload,
@@ -794,6 +799,45 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         command,
         threadId: command.threadId,
       });
+      let pullRequestUpdate: Partial<ReturnType<typeof threadPullRequestFields>> = {};
+      if (command.pullRequestLink !== undefined) {
+        const { action, pullRequest } = command.pullRequestLink;
+        if (action === "link") {
+          const project = yield* requireProject({
+            readModel,
+            command,
+            projectId: pullRequest.projectId,
+          });
+          if (project.deletedAt !== null) {
+            return yield* new OrchestrationCommandInvariantError({
+              commandType: command.type,
+              detail: `project ${pullRequest.projectId} was deleted`,
+            });
+          }
+        }
+        const remaining = getThreadPullRequestLinks(thread).filter(
+          (link) => link.source !== "linked" || !sameThreadPullRequest(link, pullRequest),
+        );
+        pullRequestUpdate = threadPullRequestFields(
+          action === "link" ? [{ ...pullRequest, source: "linked" }, ...remaining] : remaining,
+        );
+      } else if (command.linkedPullRequest !== undefined) {
+        const linkedPullRequest = command.linkedPullRequest;
+        const links = getThreadPullRequestLinks(thread);
+        const primary = links.find((link) => link.source === "linked");
+        const remaining = links.filter(
+          (link) =>
+            link !== primary &&
+            (linkedPullRequest === null ||
+              link.source !== "linked" ||
+              !sameThreadPullRequest(link, linkedPullRequest)),
+        );
+        pullRequestUpdate = threadPullRequestFields(
+          command.linkedPullRequest === null
+            ? remaining
+            : [{ ...command.linkedPullRequest, source: "linked" }, ...remaining],
+        );
+      }
       const branch =
         command.branch !== undefined &&
         command.expectedBranch !== undefined &&
@@ -830,8 +874,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
             : {}),
           ...(branch !== undefined ? { branch } : {}),
           ...(command.worktreePath !== undefined ? { worktreePath: command.worktreePath } : {}),
-          ...(command.linkedPullRequest !== undefined
-            ? { linkedPullRequest: command.linkedPullRequest }
+          ...(pullRequestUpdate.pullRequestLinks !== undefined
+            ? {
+                pullRequestLinks: pullRequestUpdate.pullRequestLinks,
+                linkedPullRequest: pullRequestUpdate.linkedPullRequest,
+              }
             : {}),
           updatedAt: occurredAt,
         },
@@ -851,6 +898,11 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         });
       }
       if (
+        (command.expected.pullRequestLinks !== undefined &&
+          !Schema.toEquivalence(Schema.Array(ThreadPullRequestLink))(
+            getThreadPullRequestLinks(thread),
+            command.expected.pullRequestLinks,
+          )) ||
         thread.projectId !== command.projectId ||
         thread.branch !== command.expected.branch ||
         thread.worktreePath !== command.expected.worktreePath ||
@@ -886,10 +938,12 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
         type: "thread.meta-updated",
         payload: {
           threadId: command.threadId,
-          branchPullRequest: command.branchPullRequest,
-          ...(command.linkedPullRequest !== undefined
-            ? { linkedPullRequest: command.linkedPullRequest }
-            : {}),
+          ...applyThreadPullRequestUpdate(thread, {
+            branchPullRequest: command.branchPullRequest,
+            ...(command.linkedPullRequest !== undefined
+              ? { linkedPullRequest: command.linkedPullRequest }
+              : {}),
+          }),
           updatedAt: thread.updatedAt,
         },
       };

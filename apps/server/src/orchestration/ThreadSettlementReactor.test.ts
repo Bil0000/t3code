@@ -299,6 +299,48 @@ const startHarness = Effect.fn("startThreadSettlementHarness")(function* (
 });
 
 describe("ThreadSettlementReactor", () => {
+  it.effect("waits for every linked pull request before settling", () =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        yield* TestClock.setTime(Date.parse(NOW));
+        const link = (number: number) => ({
+          projectId: PROJECT_ID,
+          repository: "owner/repository",
+          number,
+          url: `https://example.test/owner/repository/pull/${number}`,
+          source: "linked" as const,
+        });
+        const fixture = yield* makeHarness({
+          snapshot: makeSnapshot([
+            makeThread("blocked", { pullRequestLinks: [link(1), link(2)] }),
+            makeThread("settled", { pullRequestLinks: [link(3), link(4)] }),
+          ]),
+          settings: {
+            ...DEFAULT_SERVER_SETTINGS,
+            sidebarAutoSettleAfterDays: null,
+            sidebarAutoSettleOnMerge: true,
+          },
+          pullRequestSummary: (input) =>
+            Effect.succeed(
+              makePullRequestSummary({
+                ...input,
+                state: input.number === 2 ? "open" : "merged",
+              }),
+            ),
+        });
+        yield* Effect.gen(function* () {
+          const reactor = yield* ThreadSettlementReactor.ThreadSettlementReactor;
+          yield* startHarness(reactor, fixture.activation, fixture.snapshotReads);
+          assert.deepStrictEqual(
+            (yield* Ref.get(fixture.commands)).map((command) => command.threadId),
+            [ThreadId.make("settled")],
+          );
+          assert.strictEqual((yield* Ref.get(fixture.summaryCalls)).length, 4);
+        }).pipe(Effect.provide(fixture.layer));
+      }),
+    ),
+  );
+
   it.effect("uses saved PRs without settling resumed threads or branches with newer PRs", () =>
     Effect.scoped(
       Effect.gen(function* () {
