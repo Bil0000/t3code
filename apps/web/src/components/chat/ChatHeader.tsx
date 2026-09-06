@@ -31,7 +31,6 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
-import { ThreadPullRequestMenu } from "./ThreadPullRequestMenu";
 import { useRemoteOpenState, type RemoteOpenMode } from "../../remoteOpen";
 import { usePrimaryEnvironmentId } from "../../state/environments";
 import { useT3ProjectFileScripts } from "~/hooks/useT3ProjectFileScripts";
@@ -440,7 +439,6 @@ export const ChatHeader = memo(function ChatHeader({
             openInCwd={openInCwd}
           />
         )}
-        {isServerThread && <ThreadPullRequestMenu threadRef={activeThreadRef} />}
         {activeProjectName && (
           <GitActionsControl
             gitCwd={gitCwd}

@@ -4,7 +4,7 @@ import {
   getGitActionDisabledReason,
   requiresDefaultBranchConfirmation,
 } from "@t3tools/client-runtime/state/vcs";
-import { EnvironmentId, getThreadPullRequestLinks, ThreadId } from "@t3tools/contracts";
+import { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import {
   CommonActions,
   StackActions,
@@ -24,13 +24,6 @@ import { AppText as Text } from "../../../components/AppText";
 import { nativeHeaderScrollEdgeEffects } from "../../../native/StackHeader";
 import { tryOpenExternalUrl } from "../../../lib/openExternalUrl";
 import { useEnvironmentQuery } from "../../../state/query";
-import { useEnvironmentServerConfig } from "../../../state/entities";
-import { threadEnvironment } from "../../../state/threads";
-import { useAtomCommand } from "../../../state/use-atom-command";
-import {
-  isAtomCommandInterrupted,
-  squashAtomCommandFailure,
-} from "@t3tools/client-runtime/state/runtime";
 import { useThreadSelection } from "../../../state/use-thread-selection";
 import { useSelectedThreadGitActions } from "../../../state/use-selected-thread-git-actions";
 import { useSelectedThreadGitState } from "../../../state/use-selected-thread-git-state";
@@ -57,12 +50,6 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
   const environmentId = EnvironmentId.make(props.route.params.environmentId);
   const threadId = ThreadId.make(props.route.params.threadId);
   const { selectedThread } = useThreadSelection();
-  const selectedEnvironmentServerConfig = useEnvironmentServerConfig(
-    selectedThread?.environmentId ?? null,
-  );
-  const updateThreadMetadata = useAtomCommand(threadEnvironment.updateMetadata, {
-    reportFailure: false,
-  });
   const { selectedThreadCwd, selectedThreadWorktreePath } = useSelectedThreadWorktree();
   const gitState = useSelectedThreadGitState();
   const gitActions = useSelectedThreadGitActions();
@@ -87,46 +74,6 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
   const isRepo = gitStatus.data?.isRepo ?? true;
   const hasPrimaryRemote = gitStatus.data?.hasPrimaryRemote ?? false;
   const isDefaultRef = gitStatus.data?.isDefaultRef ?? false;
-  const linkedPullRequests = useMemo(
-    () =>
-      selectedThread === null
-        ? []
-        : getThreadPullRequestLinks(selectedThread).filter((link) => link.source === "linked"),
-    [selectedThread],
-  );
-  const linkedPullRequestsAvailable =
-    selectedEnvironmentServerConfig?.environment.capabilities.threadPullRequestLinks === true &&
-    linkedPullRequests.length > 0;
-  const updateLinkedPullRequests = useCallback(
-    async (action: "link" | "unlink", pullRequest: (typeof linkedPullRequests)[number]) => {
-      if (!selectedThread || !linkedPullRequestsAvailable) return;
-      const reference = {
-        projectId: pullRequest.projectId,
-        repository: pullRequest.repository,
-        number: pullRequest.number,
-        url: pullRequest.url,
-      };
-      const result = await updateThreadMetadata({
-        environmentId: selectedThread.environmentId,
-        input: { threadId: selectedThread.id, pullRequestLink: { action, pullRequest: reference } },
-      });
-      if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
-        const error = squashAtomCommandFailure(result);
-        Alert.alert(
-          "Could not update linked pull requests",
-          error instanceof Error && error.message.trim().length > 0
-            ? error.message
-            : "The linked pull requests could not be updated.",
-        );
-      }
-    },
-    [linkedPullRequestsAvailable, selectedThread, updateThreadMetadata],
-  );
-  const openLinkedPullRequest = useCallback(async (url: string) => {
-    if (!(await tryOpenExternalUrl(url, "pull-request"))) {
-      Alert.alert("Unable to open PR", "The pull request could not be opened.");
-    }
-  }, []);
 
   const menuItems = useMemo(
     () => (isRepo ? buildMenuItems(gitStatus.data, busy, hasPrimaryRemote) : []),
@@ -337,59 +284,6 @@ export function GitOverviewSheet(props: GitOverviewSheetProps) {
           }
         />
       </View>
-
-      {linkedPullRequestsAvailable ? (
-        <View className="overflow-hidden rounded-[18px] border border-border bg-card px-4 py-2">
-          <Text className="text-foreground-muted py-2 text-2xs font-t3-bold tracking-[0.9px] uppercase">
-            Linked pull requests
-          </Text>
-          {linkedPullRequests.map((pullRequest, index) => {
-            const isPrimary = index === 0;
-            return (
-              <View
-                key={`${pullRequest.projectId}:${pullRequest.repository}#${pullRequest.number}`}
-              >
-                {index > 0 ? <View className="ml-12 h-px bg-border" /> : null}
-                <View className="flex-row items-center gap-3 py-2">
-                  <Pressable
-                    className="min-w-0 flex-1 flex-row items-center gap-3"
-                    accessibilityLabel={`Open ${pullRequest.repository} pull request ${pullRequest.number}`}
-                    onPress={() => void openLinkedPullRequest(pullRequest.url)}
-                  >
-                    <View className="bg-subtle h-9 w-9 items-center justify-center rounded-full">
-                      <SymbolView
-                        name="arrow.up.right.circle"
-                        size={16}
-                        tintColorClassName="accent-icon"
-                        type="monochrome"
-                      />
-                    </View>
-                    <Text className="text-foreground text-sm font-t3-bold" numberOfLines={1}>
-                      {pullRequest.repository} #{pullRequest.number}
-                    </Text>
-                  </Pressable>
-                  {!isPrimary ? (
-                    <Pressable
-                      accessibilityLabel={`Use pull request ${pullRequest.number} as primary`}
-                      className="px-1 py-2"
-                      onPress={() => void updateLinkedPullRequests("link", pullRequest)}
-                    >
-                      <Text className="text-accent text-xs font-t3-bold">Use</Text>
-                    </Pressable>
-                  ) : null}
-                  <Pressable
-                    accessibilityLabel={`Unlink pull request ${pullRequest.number}`}
-                    className="px-1 py-2"
-                    onPress={() => void updateLinkedPullRequests("unlink", pullRequest)}
-                  >
-                    <Text className="text-foreground-muted text-xs font-t3-bold">Remove</Text>
-                  </Pressable>
-                </View>
-              </View>
-            );
-          })}
-        </View>
-      ) : null}
 
       {currentWorktreePath ? <MetaCard label="Worktree" value={currentWorktreePath} /> : null}
     </ScrollView>

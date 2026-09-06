@@ -33,6 +33,8 @@ import {
 import {
   resolveEnvironmentMachineKind,
   getThreadPullRequest,
+  getThreadPullRequestLinks,
+  sameThreadPullRequest,
   type EnvironmentMachineKind,
   type ProjectIconOverride,
   type ScopedThreadRef,
@@ -861,6 +863,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     gitStatus.data,
   );
   const pr = linkedPullRequestStatus?.pr ?? null;
+  const attachedPullRequestCount = getThreadPullRequestLinks(thread).filter(
+    (link, index, links) =>
+      links.findIndex((candidate) => sameThreadPullRequest(candidate, link)) === index,
+  ).length;
 
   // Same semantics as the legacy sidebar (never-visited counts as read):
   // switching sidebars must not light up every historical thread as unread.
@@ -1219,9 +1225,18 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               : cn("text-secondary-label transition-colors", settledPrHoverClass)
             : prStatus.colorClass,
         )}
-        aria-label={prStatus.tooltip}
+        aria-label={
+          attachedPullRequestCount > 1
+            ? `${prStatus.tooltip}, ${attachedPullRequestCount} attached pull requests`
+            : prStatus.tooltip
+        }
       >
         #{pr.number}
+        {attachedPullRequestCount > 1 ? (
+          <span aria-hidden="true" className="ml-1 text-muted-foreground">
+            +{attachedPullRequestCount - 1}
+          </span>
+        ) : null}
       </a>
     ) : null;
   const terminalStatusIcon = terminalStatus ? (
