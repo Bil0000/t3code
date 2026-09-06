@@ -8,11 +8,11 @@ import * as NodeSqliteClient from "@t3tools/shared/nodeSqliteClient";
 
 const layer = it.layer(Layer.mergeAll(NodeSqliteClient.layerMemory()));
 
-layer("049_ProjectionThreadPullRequestLinks", (it) => {
+layer("050_ProjectionThreadPullRequestLinks", (it) => {
   it.effect("backfills linked and branch pull request entries", () =>
     Effect.gen(function* () {
       const sql = yield* SqlClient.SqlClient;
-      yield* runMigrations({ toMigrationInclusive: 48 });
+      yield* runMigrations({ toMigrationInclusive: 49 });
       yield* sql`
         INSERT INTO projection_threads (
           thread_id, project_id, title, model_selection_json, runtime_mode, interaction_mode,
@@ -52,7 +52,7 @@ layer("049_ProjectionThreadPullRequestLinks", (it) => {
           )
       `;
 
-      yield* runMigrations({ toMigrationInclusive: 49 });
+      yield* runMigrations({ toMigrationInclusive: 50 });
 
       const rows = yield* sql<{ readonly links: string }>`
         SELECT pull_request_links_json AS links
