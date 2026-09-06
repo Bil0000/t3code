@@ -19,6 +19,7 @@ import packageJson from "../../package.json" with { type: "json" };
 import * as ServerConfig from "../config.ts";
 import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as OrchestratorMcpService from "./OrchestratorMcpService.ts";
+import * as ThreadMetadataMcpService from "./ThreadMetadataMcpService.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 import * as PreviewAutomationBroker from "./PreviewAutomationBroker.ts";
 import { OrchestratorToolkitHandlersLive } from "./toolkits/orchestrator/handlers.ts";
@@ -492,6 +493,7 @@ export const PreviewToolkitRegistrationLive = Layer.mergeAll(
 export const OrchestratorToolkitRegistrationLive = McpServer.toolkit(OrchestratorToolkit).pipe(
   Layer.provide(OrchestratorToolkitHandlersLive),
   Layer.provide(OrchestratorMcpService.layer),
+  Layer.provide(ThreadMetadataMcpService.layer),
 );
 
 export const WorktreeToolkitRegistrationLive = McpServer.toolkit(WorktreeToolkit).pipe(
