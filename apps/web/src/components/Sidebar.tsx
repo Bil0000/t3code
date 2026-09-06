@@ -1275,19 +1275,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   useEffect(() => {
     if (!showSnoozeButton) setSnoozeMenuOpen(false);
   }, [showSnoozeButton]);
+  const [prListOpen, setPrListOpen] = useState(false);
   const handlePrClick = useCallback(
     (event: ReactMouseEvent<HTMLAnchorElement>) => {
-      if (!pr?.url) return;
       const openedInRightPanel = openPrLink(
         event,
-        pr.url,
+        event.currentTarget.href,
         openPullRequestsInRightPanel ? threadRef : undefined,
       );
       if (openedInRightPanel && openPullRequestsInRightPanel && !props.isActive) {
         onThreadActivate(threadRef);
       }
     },
-    [onThreadActivate, openPrLink, openPullRequestsInRightPanel, pr, props.isActive, threadRef],
+    [onThreadActivate, openPrLink, openPullRequestsInRightPanel, props.isActive, threadRef],
   );
 
   // All sidebar rows share one surface model. Live threads used to look
@@ -1395,8 +1395,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // browser. A plain click still opens T3's pull request view.
   const prBadge =
     prStatus && pr ? (
-      <Tooltip>
-        <TooltipTrigger
+      <Popover open={prListOpen} onOpenChange={setPrListOpen}>
+        <PopoverTrigger
+          openOnHover
+          nativeButton={false}
           render={
             <a
               href={pr.url}
@@ -1428,21 +1430,29 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               +{attachedPullRequestCount - 1}
             </span>
           ) : null}
-        </TooltipTrigger>
-        <TooltipPopup side="right" align="start">
+        </PopoverTrigger>
+        <PopoverPopup side="right" align="start" tooltipStyle aria-label="Attached pull requests">
           <div className="space-y-1 py-1">
             {attachedPullRequests.map((pullRequest) => (
-              <div
+              <a
+                href={pullRequest.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  handlePrClick(event);
+                  setPrListOpen(false);
+                }}
                 key={`${pullRequest.projectId}:${pullRequest.repository}:${pullRequest.number}`}
-                className="flex items-center gap-3"
+                className="flex items-center gap-3 rounded-sm px-1.5 py-1 hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
               >
                 <span className="text-muted-foreground">{pullRequest.repository}</span>
                 <span className="ml-auto tabular-nums">#{pullRequest.number}</span>
-              </div>
+              </a>
             ))}
           </div>
-        </TooltipPopup>
-      </Tooltip>
+        </PopoverPopup>
+      </Popover>
     ) : null;
   const terminalStatusIcon = terminalStatus ? (
     <span
@@ -1510,7 +1520,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
           sortable?.isDragging && "z-20 opacity-80",
         )}
       >
-        <Tooltip disabled={sortable?.isDragging}>
+        <Tooltip disabled={prListOpen || sortable?.isDragging}>
           <TooltipTrigger
             render={
               <div
@@ -1668,7 +1678,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         sortable?.isDragging && "z-20 opacity-80",
       )}
     >
-      <Tooltip disabled={snoozeMenuOpen || sortable?.isDragging}>
+      <Tooltip disabled={snoozeMenuOpen || prListOpen || sortable?.isDragging}>
         <TooltipTrigger
           render={
             <div
