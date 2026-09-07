@@ -18,7 +18,6 @@ type SnapShotMethods =
   | "getSnapShotState"
   | "checkSnapShotShortcut"
   | "setSnapShotShortcutSuppressed"
-  | "captureWindow"
   | "listPendingSnapShots"
   | "readSnapShot"
   | "acknowledgeSnapShot";
@@ -32,7 +31,6 @@ export function getDesktopSnapShotBridge(): DesktopSnapShotBridge | undefined {
     typeof bridge?.getSnapShotState !== "function" ||
     typeof bridge.checkSnapShotShortcut !== "function" ||
     typeof bridge.setSnapShotShortcutSuppressed !== "function" ||
-    typeof bridge.captureWindow !== "function" ||
     typeof bridge.listPendingSnapShots !== "function" ||
     typeof bridge.readSnapShot !== "function" ||
     typeof bridge.acknowledgeSnapShot !== "function"

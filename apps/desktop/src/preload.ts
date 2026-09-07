@@ -66,7 +66,6 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.invoke(IpcChannels.CHECK_SNAP_SHOT_SHORTCUT_CHANNEL, shortcut),
   setSnapShotShortcutSuppressed: (suppressed) =>
     ipcRenderer.invoke(IpcChannels.SET_SNAP_SHOT_SHORTCUT_SUPPRESSED_CHANNEL, suppressed),
-  captureWindow: () => ipcRenderer.invoke(IpcChannels.CAPTURE_WINDOW_CHANNEL),
   listPendingSnapShots: () => ipcRenderer.invoke(IpcChannels.LIST_PENDING_SNAP_SHOTS_CHANNEL),
   readSnapShot: (id) => ipcRenderer.invoke(IpcChannels.READ_SNAP_SHOT_CHANNEL, id),
   setSnapShotAnimationDestination: (destination) =>

@@ -75,7 +75,6 @@ describe("window capture failures", () => {
         getSnapShotState: vi.fn(),
         checkSnapShotShortcut: vi.fn(),
         setSnapShotShortcutSuppressed: vi.fn(),
-        captureWindow: vi.fn(),
         listPendingSnapShots: vi.fn(),
         readSnapShot: vi.fn(),
         acknowledgeSnapShot: vi.fn(),
@@ -157,7 +156,6 @@ describe("window capture delivery", () => {
         getSnapShotState: vi.fn(),
         checkSnapShotShortcut: vi.fn(),
         setSnapShotShortcutSuppressed: vi.fn(async () => undefined),
-        captureWindow: vi.fn(async () => undefined),
         listPendingSnapShots: vi.fn(async () => []),
         readSnapShot: vi.fn(async () => ({
           id: "12345678-1234-1234-1234-123456789abc",

@@ -24,7 +24,6 @@ import {
   squashAtomCommandFailure,
 } from "@t3tools/client-runtime/state/runtime";
 import {
-  type DesktopSnapShotState,
   type DesktopWslState,
   type EnvironmentId,
   type EnvironmentMachineKind,
@@ -40,7 +39,6 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import * as Option from "effect/Option";
 import {
   ArrowLeftIcon,
-  CameraIcon,
   CornerLeftUpIcon,
   FileSearchIcon,
   FolderIcon,
@@ -85,7 +83,6 @@ import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments"
 import { useProjects, useThreadShells } from "../state/entities";
 import { useThreadSearch } from "../state/queries";
 import { resolveThreadActionProjectRef, startNewThreadFromContext } from "../lib/chatThreadActions";
-import { getDesktopSnapShotBridge } from "../lib/desktopSnapShot";
 import {
   appendBrowsePathSegment,
   ensureBrowseDirectoryPath,
@@ -578,8 +575,6 @@ function OpenCommandPaletteDialog(props: {
   const pathname = useLocation({ select: (location) => location.pathname });
   const { clearOpenIntent, openIntent, openOverlayMode, setOpen } = props;
   const [query, setQuery] = useState("");
-  const snapShotBridge = getDesktopSnapShotBridge();
-  const [snapShotState, setSnapShotState] = useState<DesktopSnapShotState | null>(null);
   const deferredQuery = useDeferredValue(query);
   const isActionsOnly = deferredQuery.startsWith(">");
   const [highlightedItemValue, setHighlightedItemValue] = useState<string | null>(null);
@@ -696,19 +691,6 @@ function OpenCommandPaletteDialog(props: {
     () => selectProjectGroupingSettings(clientSettings),
     [clientSettings],
   );
-
-  useEffect(() => {
-    let active = true;
-    void snapShotBridge
-      ?.getSnapShotState()
-      .then((state) => {
-        if (active) setSnapShotState(state);
-      })
-      .catch(() => undefined);
-    return () => {
-      active = false;
-    };
-  }, [snapShotBridge]);
 
   const environmentLabelById = useMemo(
     () =>
@@ -1648,19 +1630,6 @@ function OpenCommandPaletteDialog(props: {
       openOverlayMode("content");
     },
   });
-
-  if (snapShotBridge && snapShotState && snapShotState.mode !== "unavailable") {
-    actionItems.push({
-      kind: "action",
-      value: "action:capture-window",
-      searchTerms: ["capture window", "screenshot", "attach", "snap"],
-      title: "Take snapshot",
-      icon: <CameraIcon className={ITEM_ICON_CLASS} />,
-      run: async () => {
-        await snapShotBridge.captureWindow().catch(() => undefined);
-      },
-    });
-  }
 
   actionItems.push({
     kind: "action",

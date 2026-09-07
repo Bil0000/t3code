@@ -161,16 +161,6 @@ export const setSnapShotShortcutSuppressed = DesktopIpc.makeIpcMethod({
   }),
 });
 
-export const captureWindow = DesktopIpc.makeIpcMethod({
-  channel: IpcChannels.CAPTURE_WINDOW_CHANNEL,
-  payload: Schema.Void,
-  result: Schema.Void,
-  handler: Effect.fn("desktop.ipc.snapShot.capture")(function* (_, event) {
-    yield* ensureTrustedSnapShotSender(event);
-    yield* (yield* DesktopSnapShot.DesktopSnapShot).captureNow;
-  }),
-});
-
 export const listPendingSnapShots = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.LIST_PENDING_SNAP_SHOTS_CHANNEL,
   payload: Schema.Void,

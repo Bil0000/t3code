@@ -35,7 +35,6 @@ export const GET_SNAP_SHOT_STATE_CHANNEL = "desktop:get-snap-shot-state";
 export const CHECK_SNAP_SHOT_SHORTCUT_CHANNEL = "desktop:check-snap-shot-shortcut";
 export const SET_SNAP_SHOT_SHORTCUT_SUPPRESSED_CHANNEL =
   "desktop:set-snap-shot-shortcut-suppressed";
-export const CAPTURE_WINDOW_CHANNEL = "desktop:capture-window";
 export const LIST_PENDING_SNAP_SHOTS_CHANNEL = "desktop:list-pending-snap-shots";
 export const READ_SNAP_SHOT_CHANNEL = "desktop:read-snap-shot";
 export const SET_SNAP_SHOT_ANIMATION_DESTINATION_CHANNEL =

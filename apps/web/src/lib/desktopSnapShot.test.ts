@@ -31,7 +31,6 @@ describe("getDesktopSnapShotBridge", () => {
       getSnapShotState: vi.fn(),
       checkSnapShotShortcut: vi.fn(),
       setSnapShotShortcutSuppressed: vi.fn(),
-      captureWindow: vi.fn(),
       listPendingSnapShots: vi.fn(),
       readSnapShot: vi.fn(),
       acknowledgeSnapShot: vi.fn(),

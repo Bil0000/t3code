@@ -1235,7 +1235,6 @@ export interface DesktopBridge {
     shortcut: SnapShotShortcut,
   ) => Promise<DesktopSnapShotShortcutAvailability>;
   setSnapShotShortcutSuppressed?: (suppressed: boolean) => Promise<void>;
-  captureWindow?: () => Promise<void>;
   listPendingSnapShots?: () => Promise<readonly DesktopPendingSnapShot[]>;
   readSnapShot?: (id: string) => Promise<DesktopSnapShot>;
   setSnapShotAnimationDestination?: (

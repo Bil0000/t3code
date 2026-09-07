@@ -9,7 +9,6 @@ import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as DesktopSnapShot from "../../snapShot/DesktopSnapShot.ts";
 import {
-  captureWindow,
   checkSnapShotShortcut,
   requestSnapShotPermissions,
   setupSnapShot,
@@ -214,36 +213,6 @@ describe("window capture IPC", () => {
     }).pipe(Effect.provide(layer));
   });
 
-  it.effect("uses the manual capture path for a trusted renderer", () => {
-    let globalCaptures = 0;
-    let manualCaptures = 0;
-    const layer = Layer.mergeAll(
-      Layer.succeed(
-        ElectronWindow.ElectronWindow,
-        ElectronWindow.ElectronWindow.of({
-          main: Effect.succeed(Option.some({ webContents: { id: 7 } })),
-        } as ElectronWindow.ElectronWindow["Service"]),
-      ),
-      Layer.succeed(
-        DesktopSnapShot.DesktopSnapShot,
-        DesktopSnapShot.DesktopSnapShot.of({
-          capture: Effect.sync(() => {
-            globalCaptures += 1;
-          }),
-          captureNow: Effect.sync(() => {
-            manualCaptures += 1;
-          }),
-        } as unknown as DesktopSnapShot.DesktopSnapShot["Service"]),
-      ),
-    );
-
-    return Effect.gen(function* () {
-      yield* captureWindow.handler(undefined, { sender: { id: 7 } });
-      assert.strictEqual(globalCaptures, 0);
-      assert.strictEqual(manualCaptures, 1);
-    }).pipe(Effect.provide(layer));
-  });
-
   it.effect("forwards the accessibility permission preference from a trusted renderer", () => {
     let includeAccessibility: boolean | undefined;
     const webContents = { id: 7 };
@@ -273,7 +242,9 @@ describe("window capture IPC", () => {
 
   it.effect("rejects an untrusted renderer at the IPC boundary", () =>
     Effect.gen(function* () {
-      const exit = yield* Effect.exit(captureWindow.handler(undefined, { sender: { id: 8 } }));
+      const exit = yield* Effect.exit(
+        requestSnapShotPermissions.handler(false, { sender: { id: 8 } }),
+      );
       assert(Exit.isFailure(exit));
       const failure = Cause.findErrorOption(exit.cause);
       assert(Option.isSome(failure));
