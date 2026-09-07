@@ -3,11 +3,29 @@ import type {
   DesktopPreviewPointerEvent,
   DesktopPreviewRecordingFrame,
   DesktopPreviewTabState,
+  DesktopSnapShotEvent,
 } from "@t3tools/contracts";
 import { exposeClerkBridge } from "@clerk/electron/preload";
 import { contextBridge, ipcRenderer } from "electron";
 
 import * as IpcChannels from "./ipc/channels.ts";
+
+const SNAP_SHOT_EVENT_TYPES = new Set([
+  "requested",
+  "started",
+  "ready",
+  "failed",
+  "shortcut-changed",
+]);
+function isSnapShotEvent(value: unknown): value is DesktopSnapShotEvent {
+  if (typeof value !== "object" || value === null) return false;
+  const { type, id } = value as { type?: unknown; id?: unknown };
+  return (
+    typeof type === "string" &&
+    SNAP_SHOT_EVENT_TYPES.has(type) &&
+    (id === undefined || typeof id === "string")
+  );
+}
 
 exposeClerkBridge({ passkeys: true });
 
@@ -148,15 +166,15 @@ contextBridge.exposeInMainWorld("desktopBridge", {
       ipcRenderer.removeListener(IpcChannels.MENU_ACTION_CHANNEL, wrappedListener);
     };
   },
-  onSnapShotReady: (listener) => {
-    const wrappedListener = (_event: Electron.IpcRendererEvent, id: unknown) => {
-      if (typeof id !== "string") return;
-      listener(id as Parameters<typeof listener>[0]);
+  onSnapShotEvent: (listener) => {
+    const wrappedListener = (_event: Electron.IpcRendererEvent, event: unknown) => {
+      if (!isSnapShotEvent(event)) return;
+      listener(event);
     };
 
-    ipcRenderer.on(IpcChannels.SNAP_SHOT_READY_CHANNEL, wrappedListener);
+    ipcRenderer.on(IpcChannels.SNAP_SHOT_EVENT_CHANNEL, wrappedListener);
     return () => {
-      ipcRenderer.removeListener(IpcChannels.SNAP_SHOT_READY_CHANNEL, wrappedListener);
+      ipcRenderer.removeListener(IpcChannels.SNAP_SHOT_EVENT_CHANNEL, wrappedListener);
     };
   },
   onQuitShortcut: (listener) => {

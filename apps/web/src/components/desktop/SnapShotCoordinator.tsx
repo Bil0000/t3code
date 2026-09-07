@@ -57,9 +57,6 @@ export function resolveExistingSnapShotTarget(
     : null;
 }
 
-const SNAP_SHOT_REQUESTED_ACTION_PREFIX = "snap-shot-requested:";
-const SNAP_SHOT_STARTED_ACTION_PREFIX = "snap-shot-started:";
-const SNAP_SHOT_FAILED_ACTION_PREFIX = "snap-shot-failed:";
 const NEXT_PAINT_FALLBACK_MS = 100;
 
 export async function beginSnapShotAnimationWhenReady(
@@ -336,65 +333,61 @@ export function SnapShotCoordinator() {
     const bridge = getDesktopSnapShotBridge();
     if (!bridge) return;
     void drain();
-    const unsubscribeCaptureReady = bridge.onSnapShotReady?.(() => void drain());
-    const unsubscribeMenuAction = bridge.onMenuAction((action) => {
-      if (action.startsWith(SNAP_SHOT_REQUESTED_ACTION_PREFIX)) {
-        const captureId = action.slice(SNAP_SHOT_REQUESTED_ACTION_PREFIX.length);
-        const current = lastTargetRef.current;
-        const target = current ? resolveExistingSnapShotTarget(current, routeThreadRef) : null;
-        // Creating a new draft would navigate the renderer before a self-capture finishes.
-        // Pin existing drafts now; create a destination after acquisition when none exists.
-        if (captureId && target) {
-          void resolveSnapShotDeliveryTarget(captureTargetsRef.current, captureId, () =>
-            Promise.resolve(target),
-          );
+    const unsubscribe = bridge.onSnapShotEvent((event) => {
+      switch (event.type) {
+        case "requested": {
+          const current = lastTargetRef.current;
+          const target = current ? resolveExistingSnapShotTarget(current, routeThreadRef) : null;
+          // Creating a new draft would navigate the renderer before a self-capture finishes.
+          // Pin existing drafts now; create a destination after acquisition when none exists.
+          if (target) {
+            void resolveSnapShotDeliveryTarget(captureTargetsRef.current, event.id, () =>
+              Promise.resolve(target),
+            );
+          }
+          return;
         }
-      }
-      if (action.startsWith(SNAP_SHOT_STARTED_ACTION_PREFIX)) {
-        const captureId = action.slice(SNAP_SHOT_STARTED_ACTION_PREFIX.length);
-        if (captureId) playCaptureSound(captureId);
-        if (
-          captureId &&
-          animateCaptures &&
-          !window.matchMedia("(prefers-reduced-motion: reduce)").matches
-        ) {
-          void beginSnapShotAnimationWhenReady(
-            captureId,
-            resolveSnapShotDeliveryTarget(
-              captureTargetsRef.current,
-              captureId,
-              resolveCaptureTarget,
-            ),
+        case "started": {
+          playCaptureSound(event.id);
+          if (animateCaptures && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+            void beginSnapShotAnimationWhenReady(
+              event.id,
+              resolveSnapShotDeliveryTarget(
+                captureTargetsRef.current,
+                event.id,
+                resolveCaptureTarget,
+              ),
+              pendingAnimationStartsRef.current,
+            );
+          }
+          return;
+        }
+        case "ready":
+          void drain();
+          return;
+        case "failed": {
+          if (event.id) captureTargetsRef.current.delete(event.id);
+          dismissFailedSnapShot(
+            event.id,
+            soundedCaptureIdsRef.current,
             pendingAnimationStartsRef.current,
           );
+          void bridge.getSnapShotState().then((state) => {
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Snapshot failed",
+                description: state.message ?? "Try the capture again.",
+              }),
+            );
+          });
+          return;
         }
-      }
-      if (!bridge.onSnapShotReady && action === "snap-shot-ready") void drain();
-      const failedCaptureId = action.startsWith(SNAP_SHOT_FAILED_ACTION_PREFIX)
-        ? action.slice(SNAP_SHOT_FAILED_ACTION_PREFIX.length)
-        : undefined;
-      if (action === "snap-shot-failed" || failedCaptureId) {
-        if (failedCaptureId) captureTargetsRef.current.delete(failedCaptureId);
-        dismissFailedSnapShot(
-          failedCaptureId,
-          soundedCaptureIdsRef.current,
-          pendingAnimationStartsRef.current,
-        );
-        void bridge.getSnapShotState().then((state) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Snapshot failed",
-              description: state.message ?? "Try the capture again.",
-            }),
-          );
-        });
+        case "shortcut-changed":
+          return;
       }
     });
-    return () => {
-      unsubscribeCaptureReady?.();
-      unsubscribeMenuAction();
-    };
+    return unsubscribe;
   }, [animateCaptures, drain, playCaptureSound, resolveCaptureTarget, routeThreadRef]);
 
   useEffect(() => {

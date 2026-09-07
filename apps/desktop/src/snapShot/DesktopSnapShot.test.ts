@@ -3,6 +3,7 @@ import {
   DEFAULT_CLIENT_SETTINGS,
   DesktopPendingSnapShot,
   type ClientSettings,
+  type DesktopSnapShotEvent,
 } from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Effect from "effect/Effect";
@@ -498,7 +499,7 @@ const testLayer = (
         activate: Effect.void,
         prepareCaptureReveal: Effect.sync(prepareCaptureRevealMock),
         dispatchMenuAction: () => Effect.void,
-        dispatchSnapShotReady: () => Effect.void,
+        dispatchSnapShotEvent: () => Effect.void,
       } as unknown as DesktopWindow.DesktopWindow["Service"]),
     ),
     FileSystem.layerNoop(fileSystemOverrides),
@@ -672,20 +673,23 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
           state.preparations++;
           state.preparedWithoutOverlay &&= flashWindows.every((window) => window.destroyed);
         }),
-        dispatchMenuAction: (action: string, options?: { readonly reveal?: boolean }) => {
-          if (action.startsWith("snap-shot-requested:")) {
-            return Effect.sync(() => {
-              assert.isFalse(options?.reveal);
-              requestedIds.push(action.slice("snap-shot-requested:".length));
-            });
+        dispatchMenuAction: () => Effect.void,
+        dispatchSnapShotEvent: (event: DesktopSnapShotEvent) => {
+          switch (event.type) {
+            case "requested":
+              return Effect.sync(() => {
+                requestedIds.push(event.id);
+              });
+            case "started":
+              return handoff;
+            case "ready":
+              return Effect.sync(() => {
+                readyIds.push(event.id);
+              });
+            default:
+              return Effect.void;
           }
-          if (!action.startsWith("snap-shot-started:")) return Effect.void;
-          return handoff;
         },
-        dispatchSnapShotReady: (id: string) =>
-          Effect.sync(() => {
-            readyIds.push(id);
-          }),
       } as unknown as DesktopWindow.DesktopWindow["Service"]),
     ),
   );

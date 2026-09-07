@@ -34,6 +34,7 @@ describe("getDesktopSnapShotBridge", () => {
       listPendingSnapShots: vi.fn(),
       readSnapShot: vi.fn(),
       acknowledgeSnapShot: vi.fn(),
+      onSnapShotEvent: vi.fn(),
     } as unknown as DesktopBridge;
     window.desktopBridge = bridge;
 

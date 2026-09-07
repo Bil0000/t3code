@@ -17,6 +17,8 @@ import {
   type SnapShotModifier,
   type SnapShotModifierPairShortcut,
   type SnapShotShortcut,
+  type DesktopSnapShotEvent,
+  type DesktopSnapShotId,
 } from "@t3tools/contracts";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
@@ -84,7 +86,6 @@ import {
 const MAX_CAPTURE_WIDTH = 2_560;
 const MAX_CAPTURE_HEIGHT = 1_600;
 const SHORTCUT_COOLDOWN_NS = 200_000_000n;
-const CAPTURE_FAILED_ACTION = "snap-shot-failed";
 const WAYLAND_MODIFIER_PAIR_UNAVAILABLE_MESSAGE =
   "Modifier-pair shortcuts aren't available in this Wayland session. Choose another shortcut or use Take snapshot from the command palette.";
 const FLASH_ANIMATION_DURATION_MS = 180;
@@ -815,17 +816,14 @@ export const make = Effect.gen(function* () {
     stopShiftShortcut = undefined;
   };
 
-  const notifyFailure = desktopWindow
-    .dispatchMenuAction(CAPTURE_FAILED_ACTION)
-    .pipe(Effect.catch(() => Effect.void));
+  const emit = (event: DesktopSnapShotEvent) =>
+    desktopWindow.dispatchSnapShotEvent(event).pipe(Effect.catchCause(() => Effect.void));
   const setFailure = (message: string, captureId?: string) =>
     Ref.update(stateRef, (state) => ({ ...state, message })).pipe(
       Effect.andThen(
-        captureId
-          ? desktopWindow
-              .dispatchMenuAction(`${CAPTURE_FAILED_ACTION}:${captureId}`)
-              .pipe(Effect.catch(() => Effect.void))
-          : notifyFailure,
+        emit(
+          captureId ? { type: "failed", id: captureId as DesktopSnapShotId } : { type: "failed" },
+        ),
       ),
     );
   const setShortcutFailure = (shortcutMessage: string) =>
@@ -839,7 +837,7 @@ export const make = Effect.gen(function* () {
           shortcutMessage,
         })),
       ),
-      Effect.andThen(notifyFailure),
+      Effect.andThen(emit({ type: "failed" })),
     );
 
   const discardCapture = Effect.fn("desktop.snapShot.discardCapture")(function* (id: string) {
@@ -870,9 +868,7 @@ export const make = Effect.gen(function* () {
       flash.dispose();
       transition.dispose();
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
-      yield* desktopWindow
-        .dispatchMenuAction(`snap-shot-requested:${id}`, { reveal: false })
-        .pipe(Effect.catch(() => Effect.void));
+      yield* emit({ type: "requested", id: id as DesktopSnapShotId });
       const snapshot = yield* Effect.tryPromise({
         try: () =>
           captureSource({
@@ -902,9 +898,7 @@ export const make = Effect.gen(function* () {
         );
       }
       if (snapshot.animationStarted) {
-        yield* desktopWindow
-          .dispatchMenuAction(`snap-shot-started:${id}`)
-          .pipe(Effect.catchCause(() => Effect.void));
+        yield* emit({ type: "started", id: id as DesktopSnapShotId });
       } else {
         yield* desktopWindow.activate.pipe(Effect.catchCause(() => Effect.void));
       }
@@ -987,19 +981,13 @@ export const make = Effect.gen(function* () {
     yield* persistCapture(capture).pipe(
       Effect.tap(() =>
         Ref.update(stateRef, (state) => ({ ...state, message: null })).pipe(
-          Effect.andThen(
-            desktopWindow.dispatchSnapShotReady(capture.id).pipe(Effect.catch(() => Effect.void)),
-          ),
+          Effect.andThen(emit({ type: "ready", id: capture.id as DesktopSnapShotId })),
         ),
       ),
       Effect.tapError((error) =>
         discardCapture(capture.id).pipe(
           Effect.andThen(Ref.update(stateRef, (state) => ({ ...state, message: error.message }))),
-          Effect.andThen(
-            desktopWindow
-              .dispatchMenuAction(`${CAPTURE_FAILED_ACTION}:${capture.id}`, { reveal: false })
-              .pipe(Effect.catch(() => Effect.void)),
-          ),
+          Effect.andThen(emit({ type: "failed", id: capture.id as DesktopSnapShotId })),
         ),
       ),
     );
@@ -1234,9 +1222,7 @@ export const make = Effect.gen(function* () {
           () => {
             if (generation !== shortcutGeneration) return;
             shortcutVerified = false;
-            void runPromise(desktopWindow.dispatchMenuAction("snap-shot-shortcut-changed")).catch(
-              () => undefined,
-            );
+            void runPromise(emit({ type: "shortcut-changed" })).catch(() => undefined);
           },
           undefined,
           hyprland,

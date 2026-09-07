@@ -8,7 +8,7 @@ import * as Ref from "effect/Ref";
 
 import * as Electron from "electron";
 
-import { DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
+import { type DesktopSnapShotEvent, DEFAULT_CLIENT_SETTINGS } from "@t3tools/contracts";
 
 import * as DesktopAssets from "../app/DesktopAssets.ts";
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
@@ -21,7 +21,7 @@ import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import {
   MENU_ACTION_CHANNEL,
   QUIT_SHORTCUT_CHANNEL,
-  SNAP_SHOT_READY_CHANNEL,
+  SNAP_SHOT_EVENT_CHANNEL,
   WINDOW_FULLSCREEN_STATE_CHANNEL,
 } from "../ipc/channels.ts";
 import * as PreviewManager from "../preview/Manager.ts";
@@ -105,8 +105,13 @@ export class DesktopWindow extends Context.Service<
       action: string,
       options?: { readonly reveal?: boolean },
     ) => Effect.Effect<void, DesktopWindowError>;
-    /** Deliver completed captures without interrupting the app the user has switched to. */
-    readonly dispatchSnapShotReady: (id: string) => Effect.Effect<void, DesktopWindowError>;
+    /**
+     * Push a capture lifecycle event to the renderer. Only `started` reveals the
+     * window; the rest must not interrupt the app the user has switched to.
+     */
+    readonly dispatchSnapShotEvent: (
+      event: DesktopSnapShotEvent,
+    ) => Effect.Effect<void, DesktopWindowError>;
     // Zooms the main window's own webContents. The Electron `zoomIn`/`zoomOut`
     // menu roles act on whichever webContents has keyboard focus, so with an
     // embedded preview WebContentsView (or DevTools) focused they zoom the
@@ -929,9 +934,14 @@ export const make = Effect.gen(function* () {
       yield* Effect.annotateCurrentSpan({ action });
       yield* dispatchRendererEvent(MENU_ACTION_CHANNEL, action, options);
     }),
-    dispatchSnapShotReady: Effect.fn("desktop.window.dispatchSnapShotReady")(function* (id) {
-      yield* Effect.annotateCurrentSpan({ captureId: id });
-      yield* dispatchRendererEvent(SNAP_SHOT_READY_CHANNEL, id, { reveal: false });
+    dispatchSnapShotEvent: Effect.fn("desktop.window.dispatchSnapShotEvent")(function* (event) {
+      yield* Effect.annotateCurrentSpan({
+        event: event.type,
+        captureId: "id" in event ? (event.id ?? null) : null,
+      });
+      yield* dispatchRendererEvent(SNAP_SHOT_EVENT_CHANNEL, event, {
+        reveal: event.type === "started",
+      });
     }),
     zoomMain: Effect.fn("desktop.window.zoomMain")(function* (direction) {
       yield* Effect.annotateCurrentSpan({ direction });

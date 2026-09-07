@@ -34,6 +34,7 @@ const bridge = vi.hoisted(() => ({
   applySnapShotConfig: vi.fn(),
   setupSnapShot: vi.fn(),
   onMenuAction: vi.fn(),
+  onSnapShotEvent: vi.fn(() => () => undefined),
 }));
 const toastManager = vi.hoisted(() => ({ add: vi.fn() }));
 vi.mock("../ui/toast", () => ({ toastManager }));

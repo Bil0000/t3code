@@ -78,6 +78,7 @@ describe("window capture failures", () => {
         listPendingSnapShots: vi.fn(),
         readSnapShot: vi.fn(),
         acknowledgeSnapShot: vi.fn(),
+        onSnapShotEvent: vi.fn(() => () => undefined),
         dismissSnapShotAnimation,
       },
     });
@@ -174,6 +175,7 @@ describe("window capture delivery", () => {
         acknowledgeSnapShot,
         setSnapShotAnimationDestination: vi.fn(() => never),
         onMenuAction: vi.fn(() => () => undefined),
+        onSnapShotEvent: vi.fn(() => () => undefined),
       } as unknown as DesktopSnapShotBridge;
       const item: DesktopPendingSnapShot = {
         id: "12345678-1234-1234-1234-123456789abc",

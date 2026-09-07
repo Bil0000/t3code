@@ -161,8 +161,8 @@ export function SnapShotSettings() {
 
   useEffect(
     () =>
-      bridge?.onMenuAction((action) => {
-        if (action === "snap-shot-shortcut-changed") void refreshState();
+      bridge?.onSnapShotEvent((event) => {
+        if (event.type === "shortcut-changed") void refreshState();
       }),
     [bridge, refreshState],
   );

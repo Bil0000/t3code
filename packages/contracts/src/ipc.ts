@@ -302,6 +302,16 @@ export const DesktopSnapShotId = TrimmedNonEmptyString.check(
 );
 export type DesktopSnapShotId = typeof DesktopSnapShotId.Type;
 
+/** Main-process capture lifecycle pushes. `id` is absent for failures before a capture exists. */
+export const DesktopSnapShotEvent = Schema.Union([
+  Schema.Struct({ type: Schema.Literal("requested"), id: DesktopSnapShotId }),
+  Schema.Struct({ type: Schema.Literal("started"), id: DesktopSnapShotId }),
+  Schema.Struct({ type: Schema.Literal("ready"), id: DesktopSnapShotId }),
+  Schema.Struct({ type: Schema.Literal("failed"), id: Schema.optional(DesktopSnapShotId) }),
+  Schema.Struct({ type: Schema.Literal("shortcut-changed") }),
+]);
+export type DesktopSnapShotEvent = typeof DesktopSnapShotEvent.Type;
+
 export const DesktopPendingSnapShot = Schema.Struct({
   id: DesktopSnapShotId,
   name: Schema.String,
@@ -1297,7 +1307,7 @@ export interface DesktopBridge {
    */
   probeRemoteEditors?: () => Promise<readonly EditorId[]>;
   onMenuAction: (listener: (action: string) => void) => () => void;
-  onSnapShotReady?: (listener: (id: DesktopSnapShotId) => void) => () => void;
+  onSnapShotEvent?: (listener: (event: DesktopSnapShotEvent) => void) => () => void;
   /**
    * Quit-confirmation hint pushes. Optional: older desktop builds never emit
    * them.
