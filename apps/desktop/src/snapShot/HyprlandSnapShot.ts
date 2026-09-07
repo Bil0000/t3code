@@ -18,7 +18,7 @@ export function hyprlandCaptureExecutable(paths: HyprlandCapturePaths) {
   return NodePath.join(paths.dataHome, "t3code", "hyprland-capture", HYPRLAND_CAPTURE_EXECUTABLE);
 }
 
-export function hyprlandCaptureBinding(appId: string, lua: boolean): string {
+function hyprlandCaptureBinding(appId: string, lua: boolean): string {
   if (!/^[A-Za-z0-9_.-]+$/.test(appId)) throw new Error("Invalid capture application ID.");
   const action = `${appId}:${HYPRLAND_CAPTURE_ACTION}`;
   return lua

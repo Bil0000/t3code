@@ -147,7 +147,7 @@ const developmentEnvironmentFilePath = NodePath.join(
   "dev-environment.sh",
 );
 
-export function writeDevelopmentEnvironmentScript() {
+function writeDevelopmentEnvironmentScript() {
   NodeFS.mkdirSync(NodePath.dirname(developmentEnvironmentFilePath), { recursive: true });
   NodeFS.writeFileSync(
     developmentEnvironmentFilePath,

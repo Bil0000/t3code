@@ -377,7 +377,7 @@ async function requestMacSnapShotPermissions(
   return screenMessage;
 }
 
-export function snapShotImageSize(png: Buffer, fallback: Electron.Rectangle): Electron.Size {
+function snapShotImageSize(png: Buffer, fallback: Electron.Rectangle): Electron.Size {
   try {
     const size = Electron.nativeImage.createFromBuffer(png).getSize();
     if (size.width > 0 && size.height > 0) return size;
