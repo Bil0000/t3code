@@ -1767,16 +1767,19 @@ export const preflightLinuxDesktopBuild = Effect.fn("preflightLinuxDesktopBuild"
   const reuseResourceMonitor = yield* Config.boolean("T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR").pipe(
     Config.withDefault(false),
   );
+  const reuseCaptureHelpers = yield* Config.boolean(
+    "T3CODE_DESKTOP_REUSE_LINUX_CAPTURE_HELPERS",
+  ).pipe(Config.withDefault(false));
+  // Rust is only optional when every Linux Rust artifact comes from a cache.
+  const needsRust = !reuseResourceMonitor || !reuseCaptureHelpers;
   const rustTarget = resolveResourceMonitorRustTargets("linux", arch)[0]!;
 
   const checks = yield* Effect.all(
     {
-      cargo: reuseResourceMonitor
-        ? Effect.succeed(true)
-        : desktopBuildProbeSucceeds(ChildProcess.make("cargo", ["--version"]), "cargo"),
-      "rust-target": reuseResourceMonitor
-        ? Effect.succeed(true)
-        : rustTargetIsInstalled(rustTarget),
+      cargo: needsRust
+        ? desktopBuildProbeSucceeds(ChildProcess.make("cargo", ["--version"]), "cargo")
+        : Effect.succeed(true),
+      "rust-target": needsRust ? rustTargetIsInstalled(rustTarget) : Effect.succeed(true),
       cc: desktopBuildProbeSucceeds(ChildProcess.make("cc", ["--version"]), "cc"),
       make: desktopBuildProbeSucceeds(ChildProcess.make("make", ["--version"]), "make"),
       libsecret: desktopBuildProbeSucceeds(
@@ -2176,37 +2179,49 @@ export const stageLinuxCaptureHelper = Effect.fn("stageLinuxCaptureHelper")(func
   const fs = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const [rustTarget] = resolveResourceMonitorRustTargets("linux", input.arch);
-  const spawnCommand = yield* resolveSpawnCommand("cargo", [
-    "build",
-    "--locked",
-    "--release",
-    "--manifest-path",
-    path.join(input.repoRoot, `native/${input.backend}-snap-shot/Cargo.toml`),
-    "--target",
-    rustTarget!,
-  ]);
-  yield* runCommand(
-    ChildProcess.make(spawnCommand.command, spawnCommand.args, {
-      cwd: input.repoRoot,
-      shell: spawnCommand.shell,
-    }),
-    {
-      label: `cargo build ${input.backend} capture helper (${rustTarget})`,
-      verbose: input.verbose,
-    },
+  // Release CI restores these binaries from a cache keyed on the crate sources and
+  // skips the Rust toolchain on a hit, so the build must be skippable too.
+  const reuseHelpers = yield* Config.boolean("T3CODE_DESKTOP_REUSE_LINUX_CAPTURE_HELPERS").pipe(
+    Config.withDefault(false),
   );
+  const binaryPath = path.join(
+    input.repoRoot,
+    `native/${input.backend}-snap-shot/target`,
+    rustTarget!,
+    `release/t3-${input.backend}-snap-shot`,
+  );
+  if (!reuseHelpers) {
+    const spawnCommand = yield* resolveSpawnCommand("cargo", [
+      "build",
+      "--locked",
+      "--release",
+      "--manifest-path",
+      path.join(input.repoRoot, `native/${input.backend}-snap-shot/Cargo.toml`),
+      "--target",
+      rustTarget!,
+    ]);
+    yield* runCommand(
+      ChildProcess.make(spawnCommand.command, spawnCommand.args, {
+        cwd: input.repoRoot,
+        shell: spawnCommand.shell,
+      }),
+      {
+        label: `cargo build ${input.backend} capture helper (${rustTarget})`,
+        verbose: input.verbose,
+      },
+    );
+  } else if (!(yield* fs.exists(binaryPath))) {
+    return yield* new ResourceMonitorBuildOutputMissingError({
+      binaryPath,
+      rustTarget: rustTarget!,
+      platform: "linux",
+      arch: input.arch,
+    });
+  }
   const destination = path.join(input.stageResourcesDir, `${input.backend}-capture`);
   yield* fs.makeDirectory(destination, { recursive: true });
   const executable = path.join(destination, `t3-${input.backend}-snap-shot`);
-  yield* fs.copyFile(
-    path.join(
-      input.repoRoot,
-      `native/${input.backend}-snap-shot/target`,
-      rustTarget!,
-      `release/t3-${input.backend}-snap-shot`,
-    ),
-    executable,
-  );
+  yield* fs.copyFile(binaryPath, executable);
   yield* fs.chmod(executable, 0o755);
   if (input.backend === "hyprland") {
     // The official protocol XML includes the BSD notices required with binary distribution.
