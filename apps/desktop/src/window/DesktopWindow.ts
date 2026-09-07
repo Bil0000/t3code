@@ -869,7 +869,11 @@ export const make = Effect.gen(function* () {
     const send = Effect.sync(() => {
       if (!targetWindow.isDestroyed()) targetWindow.webContents.send(channel, payload);
     });
-    const dispatch = reveal ? electronWindow.reveal(targetWindow).pipe(Effect.andThen(send)) : send;
+    // The renderer must learn about the event even when another process refuses to
+    // yield the foreground, so send first and treat the reveal as best effort.
+    const dispatch = reveal
+      ? send.pipe(Effect.andThen(electronWindow.reveal(targetWindow).pipe(Effect.ignoreCause)))
+      : send;
     if (targetWindow.webContents.isLoadingMainFrame()) {
       targetWindow.webContents.once("did-finish-load", () => void runPromise(dispatch));
       return;

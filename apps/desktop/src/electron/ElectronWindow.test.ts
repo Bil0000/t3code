@@ -17,6 +17,7 @@ const {
   nativeAppByPidMock,
   nativeAppListMock,
   shellHostedForegroundMock,
+  startWindowsForegroundFocusThreadMock,
   windowsForegroundFocusMock,
   windowsForegroundPrepareMock,
   windowsForegroundCloseMock,
@@ -30,6 +31,7 @@ const {
   nativeAppByPidMock: vi.fn(),
   nativeAppListMock: vi.fn(),
   shellHostedForegroundMock: vi.fn(),
+  startWindowsForegroundFocusThreadMock: vi.fn(),
   windowsForegroundFocusMock: vi.fn(),
   windowsForegroundPrepareMock: vi.fn(),
   windowsForegroundCloseMock: vi.fn(),
@@ -43,11 +45,7 @@ vi.mock("./WindowsForeground.ts", () => ({
 }));
 
 vi.mock("./WindowsForegroundFocusThread.ts", () => ({
-  startWindowsForegroundFocusThread: () => ({
-    prepare: windowsForegroundPrepareMock,
-    focus: windowsForegroundFocusMock,
-    close: windowsForegroundCloseMock,
-  }),
+  startWindowsForegroundFocusThread: startWindowsForegroundFocusThreadMock,
 }));
 
 vi.mock("@crowecawcaw/xa11y", () => ({
@@ -110,6 +108,11 @@ describe("ElectronWindow", () => {
     nativeAppByPidMock.mockReset();
     nativeAppListMock.mockReset().mockResolvedValue([]);
     shellHostedForegroundMock.mockReset().mockResolvedValue(false);
+    startWindowsForegroundFocusThreadMock.mockReset().mockReturnValue({
+      prepare: windowsForegroundPrepareMock,
+      focus: windowsForegroundFocusMock,
+      close: windowsForegroundCloseMock,
+    });
     windowsForegroundFocusMock.mockReset().mockResolvedValue(false);
     windowsForegroundPrepareMock.mockReset().mockResolvedValue(false);
     windowsForegroundCloseMock.mockReset();
@@ -261,6 +264,7 @@ describe("ElectronWindow", () => {
         focus: vi.fn(() => operations.push("focus")),
       } as unknown as Electron.BrowserWindow;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      yield* electronWindow.prepareReveal(window);
 
       yield* electronWindow.reveal(window);
 
@@ -337,6 +341,7 @@ describe("ElectronWindow", () => {
       } as unknown as Electron.BrowserWindow;
 
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      yield* electronWindow.prepareReveal(window);
       const revealFiber = yield* electronWindow.reveal(window).pipe(
         Effect.andThen(
           Effect.sync(() => {
@@ -391,6 +396,7 @@ describe("ElectronWindow", () => {
       } as unknown as Electron.BrowserWindow;
       appFocusMock.mockImplementation(() => operations.push("app-focus"));
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      yield* electronWindow.prepareReveal(window);
 
       yield* electronWindow.reveal(window);
 
@@ -459,6 +465,8 @@ describe("ElectronWindow", () => {
         window.getNativeWindowHandle.mockReturnValue(handle);
         activeWindowMock.mockResolvedValue({ id: hwnd, owner: { processId: process.pid } });
         const electronWindow = yield* ElectronWindow.ElectronWindow;
+        yield* electronWindow.prepareReveal(window as unknown as Electron.BrowserWindow);
+        window.getTitle.mockClear();
 
         yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
 
@@ -488,6 +496,7 @@ describe("ElectronWindow", () => {
         },
       ]);
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      yield* electronWindow.prepareReveal(window as unknown as Electron.BrowserWindow);
 
       yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
 
@@ -510,6 +519,7 @@ describe("ElectronWindow", () => {
         },
       ]);
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      yield* electronWindow.prepareReveal(window as unknown as Electron.BrowserWindow);
 
       yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
 
@@ -533,6 +543,7 @@ describe("ElectronWindow", () => {
         },
       ]);
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      yield* electronWindow.prepareReveal(window as unknown as Electron.BrowserWindow);
 
       yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
 
@@ -546,6 +557,7 @@ describe("ElectronWindow", () => {
       const window = makeWindowsRevealWindow();
       activateWindowsForegroundMock.mockRejectedValue(cause);
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      yield* electronWindow.prepareReveal(window as unknown as Electron.BrowserWindow);
 
       const exit = yield* Effect.exit(
         electronWindow.reveal(window as unknown as Electron.BrowserWindow),
@@ -578,6 +590,8 @@ describe("ElectronWindow", () => {
         return foreground.promise;
       });
       const electronWindow = yield* ElectronWindow.ElectronWindow;
+      yield* electronWindow.prepareReveal(window as unknown as Electron.BrowserWindow);
+      window.getTitle.mockClear();
 
       const revealFiber = yield* electronWindow
         .reveal(window as unknown as Electron.BrowserWindow)
@@ -610,6 +624,7 @@ describe("ElectronWindow", () => {
           new Error("Windows initially refused foreground activation"),
         );
         const electronWindow = yield* ElectronWindow.ElectronWindow;
+        yield* electronWindow.prepareReveal(window as unknown as Electron.BrowserWindow);
 
         const revealFiber = yield* electronWindow
           .reveal(window as unknown as Electron.BrowserWindow)
@@ -684,9 +699,49 @@ describe("ElectronWindow", () => {
       assert.equal(vi.mocked(laterWindow.destroy).mock.calls.length, 1);
     }).pipe(Effect.provide(TestLayer)),
   );
-  it.effect("closes the Windows focus worker when its layer is released", () =>
+  it.effect("an ordinary reveal on Windows does not touch the Win32 foreground helpers", () =>
+    Effect.gen(function* () {
+      const window = makeWindowsRevealWindow();
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
+
+      assert.lengthOf(activateWindowsForegroundMock.mock.calls, 0);
+      assert.lengthOf(windowsForegroundFocusMock.mock.calls, 0);
+      assert.lengthOf(shellHostedForegroundMock.mock.calls, 0);
+      assert.lengthOf(startWindowsForegroundFocusThreadMock.mock.calls, 0);
+      assert.lengthOf(window.focus.mock.calls, 1);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect("a capture reveal on Windows uses the Win32 path only once", () =>
+    Effect.gen(function* () {
+      const window = makeWindowsRevealWindow();
+      const electronWindow = yield* ElectronWindow.ElectronWindow;
+
+      yield* electronWindow.prepareReveal(window as unknown as Electron.BrowserWindow);
+      yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
+      yield* electronWindow.reveal(window as unknown as Electron.BrowserWindow);
+
+      assert.lengthOf(activateWindowsForegroundMock.mock.calls, 1);
+      assert.lengthOf(window.focus.mock.calls, 2);
+    }).pipe(Effect.provide(testLayer("win32"))),
+  );
+
+  it.effect("starts the Windows focus worker lazily and closes it with the layer", () =>
     Effect.gen(function* () {
       yield* ElectronWindow.ElectronWindow.pipe(Effect.provide(testLayer("win32")));
+      assert.lengthOf(startWindowsForegroundFocusThreadMock.mock.calls, 0);
+      assert.lengthOf(windowsForegroundCloseMock.mock.calls, 0);
+
+      yield* Effect.gen(function* () {
+        const electronWindow = yield* ElectronWindow.ElectronWindow;
+        const window = makeWindowsRevealWindow() as unknown as Electron.BrowserWindow;
+        yield* electronWindow.prepareReveal(window);
+        yield* electronWindow.prepareReveal(window);
+        assert.lengthOf(startWindowsForegroundFocusThreadMock.mock.calls, 1);
+        assert.lengthOf(windowsForegroundCloseMock.mock.calls, 0);
+      }).pipe(Effect.provide(testLayer("win32")));
       assert.lengthOf(windowsForegroundCloseMock.mock.calls, 1);
     }),
   );

@@ -13,7 +13,6 @@ import * as Ref from "effect/Ref";
 import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
-import { activeWindow } from "get-windows";
 
 import { activateWindowsForeground, isWindowsShellHostedForeground } from "./WindowsForeground.ts";
 import { startWindowsForegroundFocusThread } from "./WindowsForegroundFocusThread.ts";
@@ -29,6 +28,7 @@ function windowsForegroundFocusTarget(window: Electron.BrowserWindow) {
 }
 
 async function isWindowsBrowserWindowForeground(window: Electron.BrowserWindow): Promise<boolean> {
+  const { activeWindow } = await import("get-windows");
   const foreground = await activeWindow().catch(() => undefined);
   if (window.isDestroyed() || foreground?.owner.processId !== process.pid) return false;
   const handle = window.getNativeWindowHandle();
@@ -154,15 +154,18 @@ export class ElectronWindow extends Context.Service<
 
 export const make = Effect.gen(function* () {
   const platform = yield* HostProcessPlatform;
-  const windowsForegroundFocus =
-    platform === "win32"
-      ? startWindowsForegroundFocusThread(
-          NodePath.join(__dirname, "electron", "WindowsForegroundFocusWorker.cjs"),
-        )
-      : undefined;
-  if (windowsForegroundFocus) {
-    yield* Effect.addFinalizer(() => Effect.sync(() => windowsForegroundFocus.close()));
-  }
+  // The focus worker loads a native accessibility module. Start it on the first
+  // capture reveal so users who never capture pay nothing at launch.
+  let windowsForegroundFocus: ReturnType<typeof startWindowsForegroundFocusThread> | undefined;
+  const ensureWindowsForegroundFocus = () => {
+    windowsForegroundFocus ??= startWindowsForegroundFocusThread(
+      NodePath.join(__dirname, "electron", "WindowsForegroundFocusWorker.cjs"),
+    );
+    return windowsForegroundFocus;
+  };
+  // Tracks a capture reveal in flight. Ordinary reveals keep Electron's native path.
+  const captureRevealWindows = new Set<number>();
+  yield* Effect.addFinalizer(() => Effect.sync(() => windowsForegroundFocus?.close()));
   const mainWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
 
   const listWindows = Effect.try({
@@ -275,10 +278,11 @@ export const make = Effect.gen(function* () {
       }),
     prepareReveal: (window) =>
       Effect.promise(async () => {
-        if (platform !== "win32" || !windowsForegroundFocus || window.isDestroyed()) {
+        if (platform !== "win32" || window.isDestroyed()) {
           return false;
         }
-        return windowsForegroundFocus
+        captureRevealWindows.add(window.id);
+        return ensureWindowsForegroundFocus()
           .prepare(windowsForegroundFocusTarget(window))
           .catch(() => false);
       }),
@@ -289,22 +293,25 @@ export const make = Effect.gen(function* () {
             return;
           }
 
+          // Only a capture reveal fights another process for the foreground, which
+          // needs Win32 calls that load native modules. Everything else stays native.
+          const captureReveal = platform === "win32" && captureRevealWindows.delete(window.id);
           const shellHostedForeground =
-            platform === "win32" && (await isWindowsShellHostedForeground().catch(() => false));
+            captureReveal && (await isWindowsShellHostedForeground().catch(() => false));
 
           if (window.isMinimized()) {
             window.restore();
           }
 
-          if (platform === "win32") {
+          if (captureReveal) {
             Electron.app.focus();
           }
 
-          if (platform === "win32" || !window.isVisible()) {
+          if (captureReveal || !window.isVisible()) {
             window.show();
           }
 
-          if (platform === "win32") {
+          if (captureReveal) {
             window.moveTop();
           }
 
@@ -314,7 +321,7 @@ export const make = Effect.gen(function* () {
 
           window.focus();
 
-          if (platform === "win32") {
+          if (captureReveal) {
             if (shellHostedForeground) {
               await windowsForegroundFocus
                 ?.focus(windowsForegroundFocusTarget(window))

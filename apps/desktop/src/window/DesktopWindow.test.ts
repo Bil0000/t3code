@@ -1301,11 +1301,37 @@ describe("DesktopWindow", () => {
         });
 
         assert.equal(foreground, "Explorer");
-        assert.deepEqual(operations, ["reveal", "send", "send", "send"]);
+        assert.deepEqual(operations, ["send", "reveal", "send", "send"]);
         assert.deepEqual(fakeWindow.send.mock.calls, [
           [MENU_ACTION_CHANNEL, "snap-shot-started:capture-1"],
           [SNAP_SHOT_READY_CHANNEL, "capture-1"],
           [MENU_ACTION_CHANNEL, "snap-shot-failed:capture-2"],
+        ]);
+      }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("delivers the renderer event even when the reveal fails", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        onReveal: () => {
+          throw new Error("another process kept the foreground");
+        },
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
+        yield* Effect.exit(desktopWindow.dispatchMenuAction("snap-shot-started:capture-1"));
+
+        assert.deepEqual(fakeWindow.send.mock.calls, [
+          [MENU_ACTION_CHANNEL, "snap-shot-started:capture-1"],
         ]);
       }).pipe(Effect.provide(layer));
     }),
