@@ -15,18 +15,38 @@ import {
   dismissFailedSnapShot,
   resolveExistingSnapShotTarget,
   resolveSnapShotTargetOnce,
+  resolveSnapShotDeliveryTarget,
 } from "./SnapShotCoordinator";
 import {
   beginSnapShotAnimation,
   dismissAllSnapShotAnimations,
   getPendingSnapShotAnimations,
   setSnapShotAnimationDestination,
+  scheduleSnapShotAnimationDestination,
 } from "../../lib/snapShotAnimation";
+
+const storage = vi.hoisted(() => {
+  const values = new Map<string, string>();
+  const storage = {
+    getItem: (key: string) => values.get(key) ?? null,
+    setItem: vi.fn((key: string, value: string) => {
+      values.set(key, value);
+    }),
+    removeItem: (key: string) => {
+      values.delete(key);
+    },
+    clear: () => values.clear(),
+  };
+  vi.stubGlobal("localStorage", storage);
+  return storage;
+});
 
 const environmentId = EnvironmentId.make("snap-shot-environment");
 const projectRef = scopeProjectRef(environmentId, ProjectId.make("snap-shot-project"));
 
 beforeEach(() => {
+  storage.clear();
+  vi.stubGlobal("localStorage", storage);
   useComposerDraftStore.setState({
     draftsByThreadKey: {},
     draftThreadsByThreadKey: {},
@@ -49,6 +69,7 @@ describe("window capture failures", () => {
     const soundedIds = new Set(["older", "newer"]);
     const dismissSnapShotAnimation = vi.fn(async () => undefined);
     vi.stubGlobal("window", {
+      localStorage: storage,
       desktopBridge: {
         requestSnapShotPermissions: vi.fn(),
         getSnapShotState: vi.fn(),
@@ -170,6 +191,7 @@ describe("window capture delivery", () => {
         },
       };
       vi.stubGlobal("window", {
+        localStorage: storage,
         desktopBridge: bridge,
         setTimeout,
         clearTimeout,
@@ -267,4 +289,94 @@ describe("window capture target resolution", () => {
 
     expect(resolveExistingSnapShotTarget(routeThreadRef, routeThreadRef)).toEqual(routeThreadRef);
   });
+});
+
+describe("durable snapshot delivery", () => {
+  it.each([false, true])(
+    "retains a capture on quota failure and retries without duplicates (staged: %s)",
+    async (staged) => {
+      const target = scopeThreadRef(environmentId, ThreadId.make("quota-thread"));
+      const capture = {
+        id: "12345678-1234-1234-1234-123456789abc",
+        name: "window.png",
+        mimeType: "image/png" as const,
+        sizeBytes: 3,
+        dataUrl: "data:image/png;base64,AQID",
+        source: {
+          kind: "snap-shot" as const,
+          capturedAt: "2026-09-01T00:00:00.000Z",
+          appName: "Editor",
+          windowTitle: "main.ts",
+        },
+      };
+      const acknowledgeSnapShot = vi.fn(async () => undefined);
+      const bridge = {
+        readSnapShot: async () => capture,
+        acknowledgeSnapShot,
+      } as unknown as DesktopSnapShotBridge;
+      vi.stubGlobal("window", { localStorage: storage, dispatchEvent: vi.fn() });
+      const write = storage.setItem.getMockImplementation()!;
+      storage.setItem.mockImplementation(() => {
+        throw new Error("QuotaExceededError");
+      });
+      try {
+        if (staged) {
+          const store = useComposerDraftStore.getState();
+          store.addImage(target, {
+            type: "image",
+            ...capture,
+            previewUrl: capture.dataUrl,
+            file: new File([new Uint8Array([1, 2, 3])], capture.name, { type: capture.mimeType }),
+          });
+          void store.syncPersistedAttachments(target, [capture]);
+        }
+        await expect(deliverSnapShot(bridge, capture, target)).rejects.toThrow(
+          "could not be saved",
+        );
+        expect(acknowledgeSnapShot).not.toHaveBeenCalled();
+        expect(
+          useComposerDraftStore.getState().getComposerDraft(target)?.nonPersistedImageIds,
+        ).toContain(capture.id);
+        storage.setItem.mockImplementation(write);
+        await deliverSnapShot(bridge, capture, target);
+        expect(acknowledgeSnapShot).toHaveBeenCalledExactlyOnceWith(capture.id);
+        expect(useComposerDraftStore.getState().getComposerDraft(target)?.images).toHaveLength(1);
+        expect(
+          useComposerDraftStore.getState().getComposerDraft(target)?.persistedAttachments,
+        ).toHaveLength(1);
+      } finally {
+        storage.setItem.mockImplementation(write);
+      }
+    },
+  );
+});
+
+describe("snapshot destination ownership", () => {
+  it.each(["unmount", "blur", "disabled animations"])(
+    "keeps the original environment and thread after %s",
+    async (reason) => {
+      const original = scopeThreadRef(environmentId, ThreadId.make("original"));
+      const next = scopeThreadRef(EnvironmentId.make("another-environment"), ThreadId.make("next"));
+      const targets = new Map<string, Promise<typeof original | null>>();
+      let current = original;
+      const resolveTarget = async () => current;
+      const requested = resolveSnapShotDeliveryTarget(targets, "capture", resolveTarget);
+      if (reason !== "disabled animations") {
+        beginSnapShotAnimation("capture", original);
+        if (reason === "unmount") {
+          const unmount = scheduleSnapShotAnimationDestination("capture", () => undefined);
+          unmount();
+        } else dismissAllSnapShotAnimations();
+      }
+      current = next;
+      await requested;
+      expect(getPendingSnapShotAnimations()).toHaveLength(0);
+      expect(await resolveSnapShotDeliveryTarget(targets, "capture", resolveTarget)).toEqual(
+        original,
+      );
+      expect(await resolveSnapShotDeliveryTarget(targets, "later-capture", resolveTarget)).toEqual(
+        next,
+      );
+    },
+  );
 });

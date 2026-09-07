@@ -554,6 +554,7 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
   const images = new Map<string, Uint8Array>();
   const metadata = new Map<string, string>();
   const readyIds: string[] = [];
+  const requestedIds: string[] = [];
   const bounds = { x: 10, y: 20, width: 800, height: 600 };
   const takeSnapshot = async () => {
     const index = state.snapshots++;
@@ -665,6 +666,12 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
           state.preparedWithoutOverlay &&= flashWindows.every((window) => window.destroyed);
         }),
         dispatchMenuAction: (action: string, options?: { readonly reveal?: boolean }) => {
+          if (action.startsWith("snap-shot-requested:")) {
+            return Effect.sync(() => {
+              assert.isFalse(options?.reveal);
+              requestedIds.push(action.slice("snap-shot-requested:".length));
+            });
+          }
           if (!action.startsWith("snap-shot-started:")) return Effect.void;
           if (state.failNextReveal && options?.reveal !== false) {
             state.failNextReveal = false;
@@ -684,6 +691,7 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
     second: second!,
     state,
     readyIds,
+    requestedIds,
     layer,
     settings: {
       ...DEFAULT_CLIENT_SETTINGS,
@@ -1100,10 +1108,13 @@ it.effect.each([
       Effect.gen(function* () {
         const service = yield* DesktopSnapShot.make;
         yield* service.configure(fixture.settings);
-        fixture.first.pixels.resolve();
         const first = yield* Effect.promise(fixture.trigger).pipe(
           Effect.forkChild({ startImmediately: true }),
         );
+        yield* Effect.promise(() => fixture.first.started.promise);
+        assert.lengthOf(fixture.requestedIds, 1);
+        assert.lengthOf(fixture.readyIds, 0);
+        fixture.first.pixels.resolve();
         yield* Effect.promise(() => fixture.first.handoff.promise);
         assert.lengthOf(fixture.readyIds, 0);
 
@@ -1128,6 +1139,7 @@ it.effect.each([
         yield* Fiber.join(first);
         assert.lengthOf(fixture.readyIds, 2);
         assert.equal(new Set(fixture.readyIds).size, 2);
+        assert.deepEqual(fixture.readyIds, fixture.requestedIds.toReversed());
         const newer = yield* service.read(fixture.readyIds[0]!);
         const older = yield* service.read(fixture.readyIds[1]!);
         assert.equal(newer.source.windowTitle, fixture.second.title);

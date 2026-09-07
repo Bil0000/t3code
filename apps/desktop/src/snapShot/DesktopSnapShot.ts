@@ -831,8 +831,16 @@ export const make = Effect.gen(function* () {
   const notifyFailure = desktopWindow
     .dispatchMenuAction(CAPTURE_FAILED_ACTION)
     .pipe(Effect.catch(() => Effect.void));
-  const setFailure = (message: string) =>
-    Ref.update(stateRef, (state) => ({ ...state, message })).pipe(Effect.andThen(notifyFailure));
+  const setFailure = (message: string, captureId?: string) =>
+    Ref.update(stateRef, (state) => ({ ...state, message })).pipe(
+      Effect.andThen(
+        captureId
+          ? desktopWindow
+              .dispatchMenuAction(`${CAPTURE_FAILED_ACTION}:${captureId}`)
+              .pipe(Effect.catch(() => Effect.void))
+          : notifyFailure,
+      ),
+    );
   const setShortcutFailure = (shortcutMessage: string) =>
     Effect.sync(() => {
       shortcutVerified = false;
@@ -876,6 +884,9 @@ export const make = Effect.gen(function* () {
       flash.dispose();
       transition.dispose();
       yield* fileSystem.makeDirectory(captureDirectory, { recursive: true });
+      yield* desktopWindow
+        .dispatchMenuAction(`snap-shot-requested:${id}`, { reveal: false })
+        .pipe(Effect.catch(() => Effect.void));
       const snapshot = yield* Effect.tryPromise({
         try: () =>
           captureSource({
@@ -977,7 +988,7 @@ export const make = Effect.gen(function* () {
     const prepared = yield* prepareCapture(settings, target).pipe(
       Effect.tapError((error) =>
         (error.captureId ? discardCapture(error.captureId) : Effect.void).pipe(
-          Effect.andThen(setFailure(error.message)),
+          Effect.andThen(setFailure(error.message, error.captureId)),
         ),
       ),
       snapshotMutex.withPermitsIfAvailable(1),

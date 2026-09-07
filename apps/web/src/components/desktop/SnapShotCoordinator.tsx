@@ -24,6 +24,7 @@ import {
   updateSnapShotAnimationSource,
   waitForSnapShotAnimationDestination,
 } from "../../lib/snapShotAnimation";
+import { resizeSnapShotSource } from "../../lib/snapShotSource";
 import { playSnapShotSound } from "../../lib/snapShotSound";
 import {
   dispatchSnapShotComposerFocus,
@@ -56,6 +57,7 @@ export function resolveExistingSnapShotTarget(
     : null;
 }
 
+const SNAP_SHOT_REQUESTED_ACTION_PREFIX = "snap-shot-requested:";
 const SNAP_SHOT_STARTED_ACTION_PREFIX = "snap-shot-started:";
 const SNAP_SHOT_FAILED_ACTION_PREFIX = "snap-shot-failed:";
 const NEXT_PAINT_FALLBACK_MS = 100;
@@ -104,6 +106,22 @@ export function resolveSnapShotTargetOnce(
   return resolution;
 }
 
+// A capture keeps its destination even after its animation unmounts or the window blurs.
+export function resolveSnapShotDeliveryTarget(
+  targets: Map<string, Promise<CaptureTarget | null>>,
+  id: string,
+  resolveTarget: () => Promise<CaptureTarget | null>,
+): Promise<CaptureTarget | null> {
+  const existing = targets.get(id);
+  if (existing) return existing;
+  const target = resolveTarget().catch(() => null);
+  targets.set(id, target);
+  void target.then((resolved) => {
+    if (!resolved && targets.get(id) === target) targets.delete(id);
+  });
+  return target;
+}
+
 async function afterNextPaint(): Promise<void> {
   await new Promise<void>((resolve) => {
     const fallback = window.setTimeout(resolve, NEXT_PAINT_FALLBACK_MS);
@@ -122,13 +140,6 @@ export async function deliverSnapShot(
   target: CaptureTarget,
 ): Promise<void> {
   const store = useComposerDraftStore.getState();
-  const existing = store.getComposerDraft(target);
-  if (existing?.persistedAttachments.some((attachment) => attachment.id === item.id)) {
-    await bridge.acknowledgeSnapShot(item.id);
-    finishSnapShotAnimation(item.id);
-    return;
-  }
-
   updateSnapShotAnimationSource(item.id, item.source);
   const capture = await bridge.readSnapShot(item.id);
   const original = dataUrlToFile(capture.dataUrl, capture.name, capture.mimeType);
@@ -138,6 +149,7 @@ export async function deliverSnapShot(
     throw new Error("The captured window is too large to attach.");
   }
   const file = compressed.file;
+  const source = resizeSnapShotSource(capture.source, compressed.imageSize);
   const dataUrl = compressed.recompressed ? await readFileAsDataUrl(file) : capture.dataUrl;
   const alreadyAttached =
     store.getComposerDraft(target)?.images.some(({ id }) => id === capture.id) ?? false;
@@ -151,7 +163,7 @@ export async function deliverSnapShot(
       sizeBytes: file.size,
       previewUrl: dataUrl,
       file,
-      source: capture.source,
+      source,
     })
   ) {
     throw new Error("Remove an attachment, then try this capture again.");
@@ -162,13 +174,13 @@ export async function deliverSnapShot(
     mimeType: file.type,
     sizeBytes: file.size,
     dataUrl,
-    source: capture.source,
+    source,
   };
   const persistedAttachments =
     store
       .getComposerDraft(target)
       ?.persistedAttachments.filter((attachment) => attachment.id !== capture.id) ?? [];
-  store.syncPersistedAttachments(target, [...persistedAttachments, persisted]);
+  await store.syncPersistedAttachments(target, [...persistedAttachments, persisted]);
   if (!store.getComposerDraft(target)?.persistedAttachments.some(({ id }) => id === capture.id)) {
     throw new Error("The captured window could not be saved to the draft.");
   }
@@ -198,6 +210,7 @@ export function SnapShotCoordinator() {
     settings.snapShotPlaySound ? settings.snapShotSound : null,
   );
   const animateCaptures = useClientSettings((settings) => settings.snapShotAnimations);
+  const captureTargetsRef = useRef(new Map<string, Promise<CaptureTarget | null>>());
   const lastTargetRef = useRef<CaptureTarget | null>(null);
   const targetResolutionRef = useRef<Promise<CaptureTarget | null> | null>(null);
   const drainingRef = useRef<Promise<void> | null>(null);
@@ -261,12 +274,14 @@ export function SnapShotCoordinator() {
         const pending = await bridge.listPendingSnapShots();
         for (const item of pending) {
           playCaptureSound(item.id);
-          const animationTarget = getPendingSnapShotAnimations().find(
-            (animation) => animation.id === item.id,
-          )?.target;
-          const target = animationTarget
-            ? resolveExistingSnapShotTarget(animationTarget, routeThreadRef)
-            : await resolveCaptureTarget();
+          const capturedTarget = await resolveSnapShotDeliveryTarget(
+            captureTargetsRef.current,
+            item.id,
+            resolveCaptureTarget,
+          );
+          const target = capturedTarget
+            ? resolveExistingSnapShotTarget(capturedTarget, routeThreadRef)
+            : null;
           if (!target) {
             await dismissSnapShotAnimation(item.id);
             soundedCaptureIdsRef.current.delete(item.id);
@@ -282,6 +297,7 @@ export function SnapShotCoordinator() {
 
           try {
             await deliverSnapShot(bridge, item, target);
+            captureTargetsRef.current.delete(item.id);
             soundedCaptureIdsRef.current.delete(item.id);
           } catch (error) {
             await dismissSnapShotAnimation(item.id);
@@ -322,6 +338,18 @@ export function SnapShotCoordinator() {
     void drain();
     const unsubscribeCaptureReady = bridge.onSnapShotReady?.(() => void drain());
     const unsubscribeMenuAction = bridge.onMenuAction((action) => {
+      if (action.startsWith(SNAP_SHOT_REQUESTED_ACTION_PREFIX)) {
+        const captureId = action.slice(SNAP_SHOT_REQUESTED_ACTION_PREFIX.length);
+        const current = lastTargetRef.current;
+        const target = current ? resolveExistingSnapShotTarget(current, routeThreadRef) : null;
+        // Creating a new draft would navigate the renderer before a self-capture finishes.
+        // Pin existing drafts now; create a destination after acquisition when none exists.
+        if (captureId && target) {
+          void resolveSnapShotDeliveryTarget(captureTargetsRef.current, captureId, () =>
+            Promise.resolve(target),
+          );
+        }
+      }
       if (action.startsWith(SNAP_SHOT_STARTED_ACTION_PREFIX)) {
         const captureId = action.slice(SNAP_SHOT_STARTED_ACTION_PREFIX.length);
         if (captureId) playCaptureSound(captureId);
@@ -332,7 +360,11 @@ export function SnapShotCoordinator() {
         ) {
           void beginSnapShotAnimationWhenReady(
             captureId,
-            resolveCaptureTarget(),
+            resolveSnapShotDeliveryTarget(
+              captureTargetsRef.current,
+              captureId,
+              resolveCaptureTarget,
+            ),
             pendingAnimationStartsRef.current,
           );
         }
@@ -342,6 +374,7 @@ export function SnapShotCoordinator() {
         ? action.slice(SNAP_SHOT_FAILED_ACTION_PREFIX.length)
         : undefined;
       if (action === "snap-shot-failed" || failedCaptureId) {
+        if (failedCaptureId) captureTargetsRef.current.delete(failedCaptureId);
         dismissFailedSnapShot(
           failedCaptureId,
           soundedCaptureIdsRef.current,
@@ -362,7 +395,7 @@ export function SnapShotCoordinator() {
       unsubscribeCaptureReady?.();
       unsubscribeMenuAction();
     };
-  }, [animateCaptures, drain, playCaptureSound, resolveCaptureTarget]);
+  }, [animateCaptures, drain, playCaptureSound, resolveCaptureTarget, routeThreadRef]);
 
   useEffect(() => {
     const dismissOnBlur = () => {
