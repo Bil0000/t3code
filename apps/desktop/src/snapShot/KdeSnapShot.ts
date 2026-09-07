@@ -9,8 +9,10 @@ import * as Schema from "effect/Schema";
 import type { DesktopCaptureHelperState } from "@t3tools/contracts";
 
 import { escapeDesktopEntryExecArgument } from "../app/DesktopLinuxUrlHandler.ts";
-import { readPortalPng, type LinuxWindowSnapshot } from "./LinuxSnapShot.ts";
+import type { LinuxWindowSnapshot } from "./LinuxSnapShot.ts";
+import { readPortalPng } from "./linuxCaptureSession.ts";
 import { startNativeCaptureFeedback } from "./NativeCaptureFeedback.ts";
+export { isKdeCaptureSession } from "./linuxCaptureSession.ts";
 
 export const KDE_CAPTURE_EXECUTABLE = "t3-kde-snap-shot";
 const DESKTOP_FILE = "com.t3tools.T3Code.KdeCapture.desktop";
@@ -19,14 +21,6 @@ const decodeCapabilities = Schema.decodeUnknownSync(
   Schema.fromJsonString(Schema.Struct({ feedbackAvailable: Schema.optional(Schema.Boolean) })),
 );
 export type KdeCapturePaths = { readonly bundle: string; readonly dataHome: string };
-
-export function isKdeCaptureSession(env = process.env): boolean {
-  return (
-    !env.FLATPAK_ID &&
-    !env.SNAP &&
-    Boolean(env.XDG_CURRENT_DESKTOP?.split(":").some((name) => name.toLowerCase() === "kde"))
-  );
-}
 
 export function kdeCapturePaths(paths: KdeCapturePaths) {
   return {

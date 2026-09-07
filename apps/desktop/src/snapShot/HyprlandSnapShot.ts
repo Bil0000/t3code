@@ -6,19 +6,14 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as Schema from "effect/Schema";
 import type { DesktopCaptureHelperState } from "@t3tools/contracts";
-import { readPortalPng, type LinuxWindowSnapshot } from "./LinuxSnapShot.ts";
+import type { LinuxWindowSnapshot } from "./LinuxSnapShot.ts";
+import { readPortalPng } from "./linuxCaptureSession.ts";
 import { startNativeCaptureFeedback } from "./NativeCaptureFeedback.ts";
-import { HYPRLAND_CAPTURE_ACTION } from "./PortalCaptureShortcut.ts";
+import { HYPRLAND_CAPTURE_ACTION } from "./linuxCaptureSession.ts";
+export { isHyprlandCaptureSession } from "./linuxCaptureSession.ts";
 
 export const HYPRLAND_CAPTURE_EXECUTABLE = "t3-hyprland-snap-shot";
 export type HyprlandCapturePaths = { readonly bundle: string; readonly dataHome: string };
-export function isHyprlandCaptureSession(env = process.env): boolean {
-  return (
-    !env.FLATPAK_ID &&
-    !env.SNAP &&
-    Boolean(env.XDG_CURRENT_DESKTOP?.split(":").some((name) => name.toLowerCase() === "hyprland"))
-  );
-}
 export function hyprlandCaptureExecutable(paths: HyprlandCapturePaths) {
   return NodePath.join(paths.dataHome, "t3code", "hyprland-capture", HYPRLAND_CAPTURE_EXECUTABLE);
 }

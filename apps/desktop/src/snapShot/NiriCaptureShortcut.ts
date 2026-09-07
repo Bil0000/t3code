@@ -1,12 +1,10 @@
 // @effect-diagnostics globalTimers:off -- Bound session-bus registration at a native callback boundary.
 import { Message, MessageType, NameFlag, RequestNameReply, sessionBus } from "dbus-next";
 
-const PATH = "/com/t3tools/SnapShot";
-const INTERFACE = "com.t3tools.SnapShot";
-
-export function niriCaptureBinding(appId: string): string {
-  return `Ctrl+Shift+2 repeat=false { spawn "gdbus" "call" "--session" "--dest" "${appId}.SnapShot" "--object-path" "${PATH}" "--method" "${INTERFACE}.Capture"; }`;
-}
+import {
+  NIRI_CAPTURE_INTERFACE as INTERFACE,
+  NIRI_CAPTURE_PATH as PATH,
+} from "./linuxCaptureSession.ts";
 
 /** Niri owns the keybinding; this endpoint triggers capture without first focusing T3. */
 export async function startNiriCaptureShortcut(

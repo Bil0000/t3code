@@ -2,8 +2,6 @@
 // @effect-diagnostics nodeBuiltinImport:off -- Read the portal file through one bounded file descriptor at the native adapter boundary.
 
 import * as NodeCrypto from "node:crypto";
-import * as NodeFSP from "node:fs/promises";
-import * as NodeURL from "node:url";
 import {
   DBusError,
   Message,
@@ -17,9 +15,9 @@ import {
   type MessageLike,
 } from "dbus-next";
 import * as Schema from "effect/Schema";
-import { nativeImage } from "electron";
 import { isKdeCaptureSession, type KdeCapturePaths } from "./KdeSnapShot.ts";
-import { isGnomeCaptureSession } from "./GnomeCaptureSetup.ts";
+import { isGnomeCaptureSession, readPortalPng, resizeLinuxCapture } from "./linuxCaptureSession.ts";
+export { readPortalPng, resizeLinuxCapture } from "./linuxCaptureSession.ts";
 import { isHyprlandCaptureSession, type HyprlandCapturePaths } from "./HyprlandSnapShot.ts";
 
 const PORTAL = "org.freedesktop.portal.Desktop";
@@ -30,8 +28,6 @@ const EXTENSION = "org.gnome.Shell.Extensions.T3SnapShot";
 const EXTENSION_PATH = "/org/gnome/Shell/Extensions/T3SnapShot";
 const DBUS = "org.freedesktop.DBus";
 const DBUS_PATH = "/org/freedesktop/DBus";
-const MAX_PNG_BYTES = 32 * 1024 * 1024;
-const PNG_HEADER = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
 const UInt = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 0xffff_ffff }));
 const UIntVariant = Schema.Struct({ signature: Schema.Literal("u"), value: UInt });
 const StringVariant = Schema.Struct({ signature: Schema.Literal("s"), value: Schema.String });
@@ -365,44 +361,6 @@ export class LinuxCaptureConnection {
       signature,
       body,
     });
-  }
-}
-
-export function resizeLinuxCapture(png: Buffer): Buffer {
-  if (png.length > MAX_PNG_BYTES || !png.subarray(0, 8).equals(PNG_HEADER)) {
-    throw new Error("Invalid or oversized window screenshot.");
-  }
-  const image = nativeImage.createFromBuffer(png);
-  if (image.isEmpty()) throw new Error("The window screenshot is empty.");
-  const { width, height } = image.getSize();
-  const scale = Math.min(2_560 / width, 1_600 / height, 1);
-  return scale < 1
-    ? image
-        .resize({
-          width: Math.max(1, Math.round(width * scale)),
-          height: Math.max(1, Math.round(height * scale)),
-          quality: "best",
-        })
-        .toPNG()
-    : png;
-}
-
-export async function readPortalPng(uri: string): Promise<Buffer> {
-  // fileURLToPath rejects network schemes/hosts. Never delete a portal-owned file.
-  const file = await NodeFSP.open(NodeURL.fileURLToPath(uri), "r");
-  try {
-    const stat = await file.stat();
-    if (!stat.isFile() || stat.size > MAX_PNG_BYTES) throw new Error("Invalid screenshot file.");
-    const buffer = Buffer.alloc(stat.size);
-    let offset = 0;
-    while (offset < buffer.length) {
-      const { bytesRead } = await file.read(buffer, offset, buffer.length - offset, offset);
-      if (!bytesRead) throw new Error("Incomplete screenshot file.");
-      offset += bytesRead;
-    }
-    return resizeLinuxCapture(buffer);
-  } finally {
-    await file.close();
   }
 }
 

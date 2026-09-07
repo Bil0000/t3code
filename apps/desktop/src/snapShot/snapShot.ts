@@ -539,6 +539,18 @@ const ELECTRON_KEY_NAMES: Readonly<Record<string, string>> = {
   Escape: "Esc",
 };
 
+/** Two shortcuts are the same when they would register the same listener. */
+export function sameSnapShotShortcut(left: SnapShotShortcut, right: SnapShotShortcut): boolean {
+  if (isModifierPairShortcut(left) || isModifierPairShortcut(right)) {
+    return (
+      isModifierPairShortcut(left) &&
+      isModifierPairShortcut(right) &&
+      snapShotShortcutModifierPair(left) === snapShotShortcutModifierPair(right)
+    );
+  }
+  return toElectronAccelerator(left) === toElectronAccelerator(right);
+}
+
 export function toElectronAccelerator(shortcut: SnapShotKeyChord): string {
   const parts: string[] = [];
   if (shortcut.modKey) parts.push("CommandOrControl");

@@ -24,7 +24,6 @@ import * as Crypto from "effect/Crypto";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Encoding from "effect/Encoding";
-import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
@@ -34,7 +33,7 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import * as Electron from "electron";
-import { activeWindow, type Result as ActiveWindow } from "get-windows";
+import type { Result as ActiveWindow } from "get-windows";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
@@ -44,10 +43,13 @@ import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutPr
 import { captureMacWindowSnapshot, type MacSnapShotSource } from "./MacSnapShot.ts";
 import type { LinuxCaptureFeedback, LinuxWindowMetadata } from "./LinuxSnapShot.ts";
 import { niriSocketPath } from "./NiriSnapShot.ts";
-import { niriCaptureBinding, startNiriCaptureShortcut } from "./NiriCaptureShortcut.ts";
 import { CaptureShortcutConfig, niriCaptureConfigPath } from "./CaptureShortcutConfig.ts";
-import { GnomeCaptureSetup, isGnomeCaptureSession } from "./GnomeCaptureSetup.ts";
-import { PortalCaptureShortcut, portalShortcutTrigger } from "./PortalCaptureShortcut.ts";
+import type { PortalCaptureShortcut } from "./PortalCaptureShortcut.ts";
+import {
+  isGnomeCaptureSession,
+  niriCaptureBinding,
+  portalShortcutTrigger,
+} from "./linuxCaptureSession.ts";
 import {
   HyprlandCaptureSetup,
   HYPRLAND_CAPTURE_EXECUTABLE,
@@ -72,8 +74,8 @@ import { windowsAppIcon } from "./WindowsWindowIcon.ts";
 
 import {
   boundedSnapShotString,
-  hideAndWaitForBlur,
   isWaylandSession,
+  sameSnapShotShortcut,
   toElectronAccelerator,
   snapShotShortcutRegistrationFailureMessage,
   snapShotShortcutSystemConflict,
@@ -180,8 +182,6 @@ export class DesktopSnapShot extends Context.Service<
     readonly setShortcutSuppressed: (suppressed: boolean) => Effect.Effect<void>;
     /** Capture the foreground window in place, including T3 Code itself. */
     readonly capture: Effect.Effect<void, DesktopSnapShotError>;
-    /** Capture from the command palette, revealing the previous app first. */
-    readonly captureNow: Effect.Effect<void, DesktopSnapShotError>;
     readonly listPending: Effect.Effect<
       ReadonlyArray<DesktopPendingSnapShot>,
       DesktopSnapShotError
@@ -388,10 +388,7 @@ export function snapShotImageSize(png: Buffer, fallback: Electron.Rectangle): El
   };
 }
 
-type SnapShotTarget = "foreground" | "previous-app";
-
 async function captureSource({
-  target,
   mode,
   captureId,
   platform,
@@ -406,7 +403,6 @@ async function captureSource({
   prepareReveal,
   onLinuxFeedback,
 }: {
-  target: SnapShotTarget;
   mode: DesktopSnapShotState["mode"];
   captureId: string;
   platform: NodeJS.Platform;
@@ -425,17 +421,15 @@ async function captureSource({
   let linuxWindow: LinuxWindowMetadata | undefined;
   let linuxFeedback: LinuxCaptureFeedback | undefined;
   let linuxActivationFailure: { readonly cause: unknown } | undefined;
-  const focusedWindow = Electron.BrowserWindow.getFocusedWindow();
-  const hiddenWindow = target === "previous-app" ? focusedWindow : undefined;
   const destinationWindow =
-    focusedWindow ?? Electron.BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
+    Electron.BrowserWindow.getFocusedWindow() ??
+    Electron.BrowserWindow.getAllWindows().find((window) => !window.isDestroyed());
   const destinationWindowBounds = destinationWindow?.getBounds();
-  let hiddenWindowRestored = false;
-  try {
+  {
     const revealPreparation =
       platform === "win32" ? prepareReveal().catch(() => undefined) : Promise.resolve();
-    if (hiddenWindow) await hideAndWaitForBlur(hiddenWindow);
     if (mode === "direct") {
+      const { activeWindow } = await import("get-windows");
       active = await activeWindow({
         accessibilityPermission: false,
         screenRecordingPermission: platform === "darwin",
@@ -526,10 +520,6 @@ async function captureSource({
     }
     const contextPromise = accessibilityRead?.result ?? Promise.resolve(undefined);
     await revealPreparation;
-    if (platform !== "win32" && hiddenWindow && !hiddenWindow.isDestroyed()) {
-      hiddenWindow.show();
-      hiddenWindowRestored = true;
-    }
     if (linuxFeedback && destinationWindow && !destinationWindow.isDestroyed()) {
       if (destinationWindow.isMinimized()) destinationWindow.restore();
       if (!destinationWindow.isVisible()) destinationWindow.show();
@@ -549,10 +539,6 @@ async function captureSource({
         platform,
         destinationWindowBounds,
       ));
-    if (platform === "win32" && hiddenWindow && !hiddenWindow.isDestroyed()) {
-      hiddenWindow.show();
-      hiddenWindowRestored = true;
-    }
     return {
       source,
       active,
@@ -563,8 +549,6 @@ async function captureSource({
       png,
       imageTempReady,
     };
-  } finally {
-    if (!hiddenWindowRestored && hiddenWindow && !hiddenWindow.isDestroyed()) hiddenWindow.show();
   }
 }
 
@@ -780,6 +764,8 @@ export const make = Effect.gen(function* () {
   );
   const accessibilityProcessPool = makeSnapShotAccessibilityProcessPool(accessibilityWorkerPath);
   let registeredAccelerator: string | undefined;
+  // False until the first applySettings; the first pass must always register.
+  let initialized = false;
   let portalShortcut: PortalCaptureShortcut | undefined;
   let shortcutGeneration = 0;
   let shortcutSuppressed = false;
@@ -869,7 +855,6 @@ export const make = Effect.gen(function* () {
 
   const prepareCapture = Effect.fn("desktop.snapShot.prepareCapture")(function* (
     settings: ClientSettings,
-    target: SnapShotTarget,
   ) {
     const id = yield* crypto.randomUUIDv4.pipe(Effect.mapError((cause) => captureFailure(cause)));
     const mode = captureMode(environment.platform);
@@ -891,7 +876,6 @@ export const make = Effect.gen(function* () {
       const snapshot = yield* Effect.tryPromise({
         try: () =>
           captureSource({
-            target,
             mode,
             captureId: id,
             platform: environment.platform,
@@ -918,13 +902,9 @@ export const make = Effect.gen(function* () {
         );
       }
       if (snapshot.animationStarted) {
-        const action = `snap-shot-started:${id}`;
-        const revealExit = yield* Effect.exit(desktopWindow.dispatchMenuAction(action));
-        if (Exit.isFailure(revealExit)) {
-          yield* desktopWindow
-            .dispatchMenuAction(action, { reveal: false })
-            .pipe(Effect.catchCause(() => Effect.void));
-        }
+        yield* desktopWindow
+          .dispatchMenuAction(`snap-shot-started:${id}`)
+          .pipe(Effect.catchCause(() => Effect.void));
       } else {
         yield* desktopWindow.activate.pipe(Effect.catchCause(() => Effect.void));
       }
@@ -987,13 +967,14 @@ export const make = Effect.gen(function* () {
     }).pipe(Effect.mapError((cause) => captureFailure(cause, id)));
   });
 
-  const captureTarget = Effect.fn("desktop.snapShot.captureTarget")(function* (
-    target: SnapShotTarget,
-  ) {
+  const capture = Effect.gen(function* () {
     const settings = yield* Ref.get(settingsRef);
+    if (!settings.snapShotEnabled) {
+      return yield* new DesktopSnapShotError({ operation: "disabled" });
+    }
     // Only source acquisition and the initial handoff require exclusive access.
     // Each captured image can finish its own accessibility read and persistence.
-    const prepared = yield* prepareCapture(settings, target).pipe(
+    const prepared = yield* prepareCapture(settings).pipe(
       Effect.tapError((error) =>
         (error.captureId ? discardCapture(error.captureId) : Effect.void).pipe(
           Effect.andThen(setFailure(error.message, error.captureId)),
@@ -1022,17 +1003,7 @@ export const make = Effect.gen(function* () {
         ),
       ),
     );
-  });
-
-  const captureNow = captureTarget("previous-app");
-
-  const capture = Effect.gen(function* () {
-    const settings = yield* Ref.get(settingsRef);
-    if (!settings.snapShotEnabled) {
-      return yield* new DesktopSnapShotError({ operation: "disabled" });
-    }
-    yield* captureTarget("foreground");
-  });
+  }).pipe(Effect.withSpan("desktop.snapShot.capture"));
 
   const captureFromShortcut = Effect.gen(function* () {
     if (shortcutSuppressed) return;
@@ -1135,21 +1106,27 @@ export const make = Effect.gen(function* () {
       transition.dispose();
       closeLinuxFeedback();
     }
-    // Cosmetic capture preferences must not tear down an approved portal session.
-    if (
-      !forceShortcut &&
-      portalShortcut &&
+    // Every client-settings save lands here. Only the fields that decide which
+    // shortcut listener runs may tear it down; a font-size change must not
+    // uninstall a global keyboard hook or drop an approved portal session.
+    const shortcutInputsChanged =
+      settings.snapShotEnabled !== previousSettings.snapShotEnabled ||
+      settings.snapShotIncludeAccessibility !== previousSettings.snapShotIncludeAccessibility ||
+      !sameSnapShotShortcut(shortcut, previousSettings.snapShotShortcut);
+    const portalShortcutUnchanged =
+      portalShortcut !== undefined &&
       settings.snapShotEnabled &&
       previousSettings.snapShotEnabled &&
       (isHyprlandCaptureSession() ||
         (!isModifierPairShortcut(shortcut) &&
           !isModifierPairShortcut(previousSettings.snapShotShortcut) &&
           toElectronAccelerator(shortcut) ===
-            toElectronAccelerator(previousSettings.snapShotShortcut)))
-    ) {
+            toElectronAccelerator(previousSettings.snapShotShortcut)));
+    if (!forceShortcut && (portalShortcutUnchanged || (initialized && !shortcutInputsChanged))) {
       yield* Ref.update(stateRef, (state) => ({ ...state, shortcut }));
       return;
     }
+    initialized = true;
     releaseShortcut();
     shortcutVerified = false;
     const generation = shortcutGeneration;
@@ -1189,13 +1166,14 @@ export const make = Effect.gen(function* () {
       return;
     }
     if (mode === "portal" && niriSocketPath()) {
-      const registered = yield* Effect.tryPromise(() =>
-        startNiriCaptureShortcut(linuxAppId, onCurrentShortcut, () => {
+      const registered = yield* Effect.tryPromise(async () => {
+        const { startNiriCaptureShortcut } = await import("./NiriCaptureShortcut.ts");
+        return startNiriCaptureShortcut(linuxAppId, onCurrentShortcut, () => {
           void runPromise(
             setShortcutFailure("The Niri capture endpoint disconnected. Restart T3 Code."),
           ).catch(() => undefined);
-        }),
-      ).pipe(
+        });
+      }).pipe(
         Effect.tap((stop) =>
           Effect.sync(() => {
             stopShiftShortcut = stop;
@@ -1238,32 +1216,32 @@ export const make = Effect.gen(function* () {
         shortcutMessage: null,
         message: null,
       });
-      yield* Effect.try(
-        () =>
-          new PortalCaptureShortcut(
-            linuxAppId,
-            isModifierPairShortcut(shortcut)
-              ? {
-                  key: "2",
-                  ctrlKey: true,
-                  modKey: false,
-                  altKey: false,
-                  shiftKey: true,
-                  metaKey: false,
-                }
-              : shortcut,
-            onCurrentShortcut,
-            () => {
-              if (generation !== shortcutGeneration) return;
-              shortcutVerified = false;
-              void runPromise(desktopWindow.dispatchMenuAction("snap-shot-shortcut-changed")).catch(
-                () => undefined,
-              );
-            },
-            undefined,
-            hyprland,
-          ),
-      ).pipe(
+      yield* Effect.tryPromise(async () => {
+        const { PortalCaptureShortcut } = await import("./PortalCaptureShortcut.ts");
+        return new PortalCaptureShortcut(
+          linuxAppId,
+          isModifierPairShortcut(shortcut)
+            ? {
+                key: "2",
+                ctrlKey: true,
+                modKey: false,
+                altKey: false,
+                shiftKey: true,
+                metaKey: false,
+              }
+            : shortcut,
+          onCurrentShortcut,
+          () => {
+            if (generation !== shortcutGeneration) return;
+            shortcutVerified = false;
+            void runPromise(desktopWindow.dispatchMenuAction("snap-shot-shortcut-changed")).catch(
+              () => undefined,
+            );
+          },
+          undefined,
+          hyprland,
+        );
+      }).pipe(
         Effect.tap((registration) =>
           Effect.sync(() => {
             portalShortcut = registration;
@@ -1386,6 +1364,7 @@ export const make = Effect.gen(function* () {
         });
       yield* Effect.tryPromise({
         try: async () => {
+          const { GnomeCaptureSetup } = await import("./GnomeCaptureSetup.ts");
           const setup = new GnomeCaptureSetup(gnomeSetupPaths);
           try {
             await setup.perform(action);
@@ -1527,7 +1506,7 @@ export const make = Effect.gen(function* () {
                   state.message !== null &&
                   MAC_PERMISSION_MESSAGES.has(state.message)
                     ? yield* configurationMutex
-                        .withPermits(1)(applySettings(settings, null))
+                        .withPermits(1)(applySettings(settings, null, true))
                         .pipe(Effect.andThen(Ref.get(stateRef)))
                     : state;
                 return { ...recovered, macPermissions, ...(message ? { message } : {}) };
@@ -1550,6 +1529,7 @@ export const make = Effect.gen(function* () {
               : undefined;
           const gnomeExtension = hasGnomeSetup()
             ? yield* Effect.promise(async () => {
+                const { GnomeCaptureSetup } = await import("./GnomeCaptureSetup.ts");
                 const setup = new GnomeCaptureSetup(gnomeSetupPaths);
                 try {
                   return await setup.state();
@@ -1601,7 +1581,6 @@ export const make = Effect.gen(function* () {
     checkShortcut,
     setShortcutSuppressed,
     capture,
-    captureNow,
     listPending: fileSystem.readDirectory(captureDirectory).pipe(
       Effect.catchTags({
         PlatformError: (cause) =>

@@ -7,6 +7,7 @@ import * as Schema from "effect/Schema";
 import type { DesktopCaptureExtensionState } from "@t3tools/contracts";
 
 import { GNOME_CAPTURE_FILES, GNOME_CAPTURE_UUID } from "./gnomeCaptureBundle.ts";
+export { isGnomeCaptureSession } from "./linuxCaptureSession.ts";
 
 const SHELL = "org.gnome.Shell";
 const SHELL_PATH = "/org/gnome/Shell";
@@ -31,16 +32,6 @@ const Metadata = Schema.Struct({
   "shell-version": Schema.Array(Schema.String),
 });
 const decodeMetadata = Schema.decodeUnknownSync(Schema.fromJsonString(Metadata));
-
-export function isGnomeCaptureSession(env: NodeJS.ProcessEnv): boolean {
-  return (
-    !env.FLATPAK_ID &&
-    !env.SNAP &&
-    Boolean(
-      env.XDG_CURRENT_DESKTOP?.split(":").some((desktop) => desktop.toLowerCase() === "gnome"),
-    )
-  );
-}
 
 type SetupPaths = { readonly bundle: string; readonly dataHome: string };
 

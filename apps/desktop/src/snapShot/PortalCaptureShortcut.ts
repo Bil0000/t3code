@@ -13,6 +13,8 @@ import {
 } from "dbus-next";
 import * as Schema from "effect/Schema";
 import type { SnapShotKeyChord } from "@t3tools/contracts";
+import { HYPRLAND_CAPTURE_ACTION, portalShortcutTrigger } from "./linuxCaptureSession.ts";
+export { portalShortcutTrigger } from "./linuxCaptureSession.ts";
 
 const PORTAL = "org.freedesktop.portal.Desktop";
 const PATH = "/org/freedesktop/portal/desktop";
@@ -20,7 +22,6 @@ const SHORTCUTS = "org.freedesktop.portal.GlobalShortcuts";
 const REQUEST = "org.freedesktop.portal.Request";
 const SESSION = "org.freedesktop.portal.Session";
 const DBUS = "org.freedesktop.DBus";
-export const HYPRLAND_CAPTURE_ACTION = "capture-window";
 const string = Schema.decodeUnknownSync(Schema.String);
 const StringVariant = Schema.Struct({ signature: Schema.Literal("s"), value: Schema.String });
 const Shortcuts = Schema.Array(
@@ -48,79 +49,6 @@ const decodeVersion = Schema.decodeUnknownSync(
     value: Schema.Int,
   }),
 );
-
-const KEY_NAMES: Readonly<Record<string, string>> = {
-  " ": "space",
-  escape: "Escape",
-  esc: "Escape",
-  enter: "Return",
-  tab: "Tab",
-  backspace: "BackSpace",
-  delete: "Delete",
-  insert: "Insert",
-  home: "Home",
-  end: "End",
-  pageup: "Page_Up",
-  pagedown: "Page_Down",
-  arrowup: "Up",
-  arrowdown: "Down",
-  arrowleft: "Left",
-  arrowright: "Right",
-  up: "Up",
-  down: "Down",
-  left: "Left",
-  right: "Right",
-  "+": "plus",
-  "-": "minus",
-  "=": "equal",
-  ",": "comma",
-  ".": "period",
-  "/": "slash",
-  ";": "semicolon",
-  "'": "apostrophe",
-  "[": "bracketleft",
-  "]": "bracketright",
-  "\\": "backslash",
-  "`": "grave",
-  "!": "exclam",
-  "@": "at",
-  "#": "numbersign",
-  $: "dollar",
-  "%": "percent",
-  "^": "asciicircum",
-  "&": "ampersand",
-  "*": "asterisk",
-  "(": "parenleft",
-  ")": "parenright",
-  _: "underscore",
-  ":": "colon",
-  '"': "quotedbl",
-  "{": "braceleft",
-  "}": "braceright",
-  "|": "bar",
-  "<": "less",
-  ">": "greater",
-  "?": "question",
-  "~": "asciitilde",
-};
-
-export function portalShortcutTrigger(shortcut: SnapShotKeyChord): string {
-  const key = shortcut.key.toLowerCase();
-  const keysym =
-    KEY_NAMES[key] ??
-    (/^[a-z0-9]$/.test(key) || /^f([1-9]|1\d|2[0-4])$/.test(key) ? key.toUpperCase() : undefined);
-  if (!keysym)
-    throw new Error("This key isn't supported as a Wayland capture shortcut. Choose another key.");
-  return [
-    shortcut.ctrlKey || shortcut.modKey ? "CTRL" : null,
-    shortcut.altKey ? "ALT" : null,
-    shortcut.shiftKey ? "SHIFT" : null,
-    shortcut.metaKey ? "LOGO" : null,
-    keysym,
-  ]
-    .filter(Boolean)
-    .join("+");
-}
 
 export interface PortalShortcutState {
   readonly shortcutActionRegistered?: boolean;

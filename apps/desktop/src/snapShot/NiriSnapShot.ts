@@ -8,7 +8,8 @@ import * as NodePath from "node:path";
 import * as NodeURL from "node:url";
 import * as Schema from "effect/Schema";
 
-import { readPortalPng, type LinuxWindowSnapshot } from "./LinuxSnapShot.ts";
+import type { LinuxWindowSnapshot } from "./LinuxSnapShot.ts";
+import { readPortalPng } from "./linuxCaptureSession.ts";
 
 const MAX_MESSAGE_BYTES = 4 * 1024 * 1024;
 const TIMEOUT_MS = 5_000;
