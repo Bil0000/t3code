@@ -15,12 +15,10 @@ allowBuilds:
   electron: true
   electron-winstaller: false
   esbuild: true
-  get-windows: set this to true or false
   msgpackr-extract: true
   msw: false
   node-pty: true
   sharp: true
-  uiohook-napi: set this to true or false
   utf-8-validate: false
   workerd: false
 
@@ -96,7 +94,8 @@ minimumReleaseAgeExclude:
   - "@anthropic-ai/claude-agent-sdk@0.3.260"
 
 overrides:
-  # Window capture uses D-Bus messages/PNG bytes, not native Unix FD passing.
+  # The dbus-next patch drops usocket from the package, but pnpm resolves from the
+  # registry manifest, so the edge has to be cut here as well.
   "dbus-next>usocket": "-"
   # The SDK always receives the user's Claude executable, so its bundled binaries are unused.
   "@anthropic-ai/claude-agent-sdk>@anthropic-ai/claude-agent-sdk-darwin-arm64": "-"

@@ -12,10 +12,10 @@ GNOME extension must not select another desktop's backend; session detection com
 helpers (session detection, Niri binding text, portal key mapping, PNG reading) so the main process
 can answer "which desktop is this" without loading a D-Bus client on macOS or Windows.
 
-The pnpm override removes `usocket` from `dbus-next` because we never pass Unix descriptors.
-Upstream only falls back to `net` for `unix:path=` addresses, so `patches/dbus-next@0.10.2.patch`
-adds the same fallback for `unix:abstract=` (non-systemd `dbus-launch` sessions). Keep the patch
-when bumping `dbus-next`.
+`patches/dbus-next@0.10.2.patch` removes `usocket` (its optional native Unix-FD transport) and
+connects to both `unix:path=` and `unix:abstract=` buses through Node's `net`. We never pass Unix
+descriptors, and upstream had no `net` fallback for abstract sockets, which `dbus-launch` produces
+outside systemd. Keep the patch when bumping `dbus-next`.
 
 ## Accessibility identity
 
