@@ -25,43 +25,16 @@ interface AccessibilityTreeNode {
 const MAX_ACCESSIBILITY_TREE_NODES = 10_000;
 const WINDOW_BLUR_TIMEOUT_MS = 1_000;
 
-export const UIOHOOK_MODIFIER_KEYCODES: Record<SnapShotModifier, readonly [number, number]> = {
-  shift: [42, 54],
-  control: [29, 3_613],
-  alt: [56, 3_640],
-  meta: [3_675, 3_676],
+/** Win32 virtual-key codes for the left and right key of each modifier pair. */
+export const WINDOWS_MODIFIER_PAIR_VIRTUAL_KEYS: Record<
+  SnapShotModifier,
+  readonly [number, number]
+> = {
+  shift: [0xa0, 0xa1],
+  control: [0xa2, 0xa3],
+  alt: [0xa4, 0xa5],
+  meta: [0x5b, 0x5c],
 };
-
-export interface ModifierPairState {
-  readonly leftPressed: boolean;
-  readonly rightPressed: boolean;
-  readonly active: boolean;
-}
-
-export const MODIFIER_PAIR_IDLE: ModifierPairState = {
-  leftPressed: false,
-  rightPressed: false,
-  active: false,
-};
-
-export function updateModifierPair(
-  state: ModifierPairState,
-  pair: readonly [number, number],
-  keycode: number,
-  pressed: boolean,
-): { readonly state: ModifierPairState; readonly triggered: boolean } {
-  const [leftKeycode, rightKeycode] = pair;
-  if (keycode !== leftKeycode && keycode !== rightKeycode) {
-    return { state, triggered: false };
-  }
-  const leftPressed = keycode === leftKeycode ? pressed : state.leftPressed;
-  const rightPressed = keycode === rightKeycode ? pressed : state.rightPressed;
-  const active = leftPressed && rightPressed;
-  return {
-    state: { leftPressed, rightPressed, active },
-    triggered: active && !state.active,
-  };
-}
 
 export function snapShotShortcutRegistrationFailureMessage(
   shortcut: SnapShotShortcut,

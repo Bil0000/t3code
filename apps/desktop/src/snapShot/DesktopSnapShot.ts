@@ -35,13 +35,13 @@ import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 
 import * as Electron from "electron";
-import type { Result as ActiveWindow } from "get-windows";
 
 import * as DesktopEnvironment from "../app/DesktopEnvironment.ts";
 import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import { startGlobalShiftShortcutProcess } from "./GlobalShiftShortcutProcess.ts";
 import { startMacModifierPairShortcutProcess } from "./MacModifierPairShortcutProcess.ts";
+import { activeWindow, type ActiveWindow } from "./ActiveWindow.ts";
 import { captureMacWindowSnapshot, type MacSnapShotSource } from "./MacSnapShot.ts";
 import type { LinuxCaptureFeedback, LinuxWindowMetadata } from "./LinuxSnapShot.ts";
 import { niriSocketPath } from "./NiriSnapShot.ts";
@@ -65,14 +65,18 @@ import {
   isKdeCaptureSession,
   type KdeCapturePaths,
 } from "./KdeSnapShot.ts";
-import { captureRegionWindowSnapshot, type RegionSnapShotSource } from "./RegionSnapShot.ts";
+import {
+  captureRegionWindowSnapshot,
+  makeRegionSnapShotPool,
+  type RegionSnapShotPool,
+  type RegionSnapShotSource,
+} from "./RegionSnapShot.ts";
 import { type SnapShotAnimationDestination, SnapShotTransition } from "./SnapShotTransition.ts";
 import {
   type AccessibilityProcessPool,
   makeSnapShotAccessibilityProcessPool,
 } from "./SnapShotAccessibilityProcess.ts";
 import { showWindowsCaptureOverlay } from "./WindowsCaptureFeedback.ts";
-import { windowsAppIcon } from "./WindowsWindowIcon.ts";
 
 import {
   boundedSnapShotString,
@@ -286,11 +290,6 @@ export async function iconDataUrl(
   platform: NodeJS.Platform,
 ): Promise<string | undefined> {
   try {
-    const nativeIcon =
-      active?.platform === "windows"
-        ? await windowsAppIcon(active.owner.path, active.id).catch(() => undefined)
-        : undefined;
-    if (nativeIcon) return snapShotIconDataUrl(nativeIcon);
     const fileIcon = active?.owner.path
       ? await appFileIcon(active.owner.path, platform)
       : undefined;
@@ -401,6 +400,7 @@ async function captureSource({
   kdeCapturePaths,
   hyprlandCapturePaths,
   accessibilityProcessPool,
+  regionSnapShotPool,
   prepareReveal,
   onLinuxFeedback,
 }: {
@@ -415,6 +415,7 @@ async function captureSource({
   kdeCapturePaths: KdeCapturePaths;
   hyprlandCapturePaths: HyprlandCapturePaths;
   accessibilityProcessPool: AccessibilityProcessPool;
+  regionSnapShotPool: RegionSnapShotPool;
   prepareReveal: () => Promise<void>;
   onLinuxFeedback: (feedback: LinuxCaptureFeedback) => void;
 }) {
@@ -430,11 +431,7 @@ async function captureSource({
     const revealPreparation =
       platform === "win32" ? prepareReveal().catch(() => undefined) : Promise.resolve();
     if (mode === "direct") {
-      const { activeWindow } = await import("get-windows");
-      active = await activeWindow({
-        accessibilityPermission: false,
-        screenRecordingPermission: platform === "darwin",
-      });
+      active = await activeWindow(platform);
     }
 
     let source: MacSnapShotSource | RegionSnapShotSource | Electron.DesktopCapturerSource;
@@ -455,6 +452,7 @@ async function captureSource({
         throw new DesktopSnapShotError({ operation: "window-unavailable", captureId });
       }
       ({ source, png } = await captureRegionWindowSnapshot(
+        regionSnapShotPool,
         active,
         snapShotFlashBounds(active, platform),
         snapShotThumbnailSize(active),
@@ -764,6 +762,9 @@ export const make = Effect.gen(function* () {
     "SnapShotAccessibilityWorker.cjs",
   );
   const accessibilityProcessPool = makeSnapShotAccessibilityProcessPool(accessibilityWorkerPath);
+  const regionSnapShotPool = makeRegionSnapShotPool(
+    path.join(__dirname, "snapShot", "RegionSnapShotWorker.cjs"),
+  );
   let registeredAccelerator: string | undefined;
   // False until the first applySettings; the first pass must always register.
   let initialized = false;
@@ -883,6 +884,7 @@ export const make = Effect.gen(function* () {
             kdeCapturePaths,
             hyprlandCapturePaths,
             accessibilityProcessPool,
+            regionSnapShotPool,
             prepareReveal: () => runPromise(desktopWindow.prepareCaptureReveal),
             onLinuxFeedback: (feedback) => {
               linuxFeedback = { id, feedback };
@@ -1086,6 +1088,11 @@ export const make = Effect.gen(function* () {
       accessibilityProcessPool.warm();
     } else {
       accessibilityProcessPool.cool();
+    }
+    if (settings.snapShotEnabled && environment.platform === "win32") {
+      regionSnapShotPool.warm();
+    } else {
+      regionSnapShotPool.cool();
     }
     if (!settings.snapShotEnabled || !settings.snapShotFlash || mode === "unavailable") {
       flash.dispose();
@@ -1390,6 +1397,7 @@ export const make = Effect.gen(function* () {
       transition.dispose();
       closeLinuxFeedback();
       accessibilityProcessPool.close();
+      regionSnapShotPool.close();
     }),
   );
 

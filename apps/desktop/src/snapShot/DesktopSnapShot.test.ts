@@ -28,7 +28,6 @@ beforeEach(() => {
   transitionCapturePageMock.mockReset().mockResolvedValue(undefined);
   transitionSnapshotMock.mockReset().mockResolvedValue(undefined);
   prepareCaptureRevealMock.mockReset();
-  windowsAppIconMock.mockReset();
 });
 
 const {
@@ -58,8 +57,8 @@ const {
   portalShortcutInstances,
   prepareCaptureRevealMock,
   nextPortalState,
+  regionCaptureMock,
   screenToDipRectMock,
-  screenshotMock,
   shortcutForkArgs,
   shortcutForkOptions,
   shortcutProcesses,
@@ -69,16 +68,8 @@ const {
   transitionScriptState,
   transitionShowMock,
   transitionSnapshotMock,
-  uiohookMock,
-  windowsAppIconMock,
 } = vi.hoisted(() => ({
   activeWindowMock: vi.fn(),
-  windowsAppIconMock: vi.fn<
-    (
-      executablePath: string | undefined,
-      windowHandle: number,
-    ) => Promise<Electron.NativeImage | undefined>
-  >(async () => undefined),
   animationSettingsMock: vi.fn(() => ({
     prefersReducedMotion: true,
     shouldRenderRichAnimation: false,
@@ -143,8 +134,11 @@ const {
     hasSession: boolean;
   }>,
   prepareCaptureRevealMock: vi.fn(),
+  regionCaptureMock:
+    vi.fn<
+      (region: Electron.Rectangle) => Promise<{ width: number; height: number; png: Buffer }>
+    >(),
   screenToDipRectMock: vi.fn((_window: unknown, bounds: Electron.Rectangle) => bounds),
-  screenshotMock: vi.fn(),
   shortcutForkArgs: [] as Array<ReadonlyArray<string>>,
   shortcutForkOptions: [] as Array<{ env?: NodeJS.ProcessEnv }>,
   shortcutProcesses: [] as Array<{
@@ -167,22 +161,8 @@ const {
   },
   transitionShowMock: vi.fn(),
   transitionSnapshotMock: vi.fn<() => Promise<void>>(),
-  uiohookMock: {
-    off: vi.fn(),
-    on: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-  },
 }));
 
-vi.mock("@crowecawcaw/xa11y", () => {
-  const api = { screenshot: screenshotMock };
-  return {
-    ...api,
-    default: api,
-    App: { byPid: accessibilityByPidMock, foreground: accessibilityForegroundMock },
-  };
-});
 vi.mock("./SnapShotAccessibilityProcess.ts", () => ({
   makeSnapShotAccessibilityProcessPool: () => ({
     warm: accessibilityProcessWarmMock,
@@ -191,8 +171,16 @@ vi.mock("./SnapShotAccessibilityProcess.ts", () => ({
     close: accessibilityProcessCloseMock,
   }),
 }));
-vi.mock("get-windows", () => ({ activeWindow: activeWindowMock }));
-vi.mock("./WindowsWindowIcon.ts", () => ({ windowsAppIcon: windowsAppIconMock }));
+vi.mock("./ActiveWindow.ts", () => ({ activeWindow: activeWindowMock }));
+vi.mock("./RegionSnapShot.ts", async (original) => ({
+  ...(await original<typeof import("./RegionSnapShot.ts")>()),
+  makeRegionSnapShotPool: () => ({
+    warm: vi.fn(),
+    cool: vi.fn(),
+    close: vi.fn(),
+    capture: regionCaptureMock,
+  }),
+}));
 vi.mock("./WindowsCaptureFeedback.ts", () => ({
   showWindowsCaptureOverlay: (window: Electron.BaseWindow) => window.showInactive(),
 }));
@@ -234,8 +222,6 @@ vi.mock("./PortalCaptureShortcut.ts", async (original) => ({
     }
   },
 }));
-vi.mock("uiohook-napi", () => ({ uIOhook: uiohookMock }));
-
 vi.mock("node:child_process", () => ({
   spawn: (_command: string, args: ReadonlyArray<string>) => {
     const stderrListeners: Array<(chunk: Buffer) => void> = [];
@@ -438,9 +424,36 @@ import * as DesktopClientSettings from "../settings/DesktopClientSettings.ts";
 import * as DesktopWindow from "../window/DesktopWindow.ts";
 import * as DesktopSnapShot from "./DesktopSnapShot.ts";
 import * as SnapShotAccessibility from "./SnapShotAccessibility.ts";
+
+// The accessibility reader normally runs in a worker with the real xa11y `App`.
+// Tests hand it this stand-in so the mocks above drive window lookups.
+const accessibilityApp = {
+  byPid: accessibilityByPidMock,
+  foreground: accessibilityForegroundMock,
+} as unknown as Parameters<typeof SnapShotAccessibility.readAccessibleWindowContextWithApp>[0];
+const readAccessibleWindowContext = (
+  active: SnapShotAccessibility.AccessibleWindowIdentity,
+  platform: NodeJS.Platform,
+  sourceTitle: string,
+  imageSize: Electron.Size = {
+    width: Math.max(1, Math.round(active.bounds.width)),
+    height: Math.max(1, Math.round(active.bounds.height)),
+  },
+) =>
+  SnapShotAccessibility.readAccessibleWindowContextWithApp(accessibilityApp, {
+    active,
+    platform,
+    sourceTitle,
+    imageSize,
+  });
+const readAccessibleWindowText = async (
+  active: SnapShotAccessibility.AccessibleWindowIdentity,
+  platform: NodeJS.Platform,
+  sourceTitle: string,
+) => (await readAccessibleWindowContext(active, platform, sourceTitle))?.accessibleText;
 accessibilityProcessReadMock.mockImplementation((request) => ({
   started: Promise.resolve(),
-  result: SnapShotAccessibility.readAccessibleWindowContext(
+  result: readAccessibleWindowContext(
     request.active,
     request.platform,
     request.sourceTitle,
@@ -585,9 +598,9 @@ function concurrentCaptureFixture(platform: NodeJS.Platform, animations: boolean
       bounds,
     };
   });
-  screenshotMock.mockReset().mockImplementation(async () => {
+  regionCaptureMock.mockReset().mockImplementation(async () => {
     const capture = await takeSnapshot();
-    return { width: bounds.width, height: bounds.height, toPng: () => capture.png };
+    return { width: bounds.width, height: bounds.height, png: capture.png };
   });
   macCaptureMock.mockReset().mockImplementation(async (_active: unknown, imagePath: string) => {
     const capture = await takeSnapshot();
@@ -809,14 +822,14 @@ it.effect("captures the active Windows window without enumerating desktop source
     platform: "windows",
     id: 42,
     title: "Untitled - Paint",
-    owner: { name: "Paint.exe", processId: 123 },
+    owner: { name: "Paint.exe", processId: 123, path: "C:\\Windows\\System32\\mspaint.exe" },
     bounds: { x: 10, y: 20, width: 800, height: 600 },
   } as const;
   activeWindowMock.mockReset().mockResolvedValue(active);
   accessibilityByPidMock.mockReset().mockResolvedValue({ children: async () => [] });
-  screenshotMock.mockReset().mockResolvedValue({ width: 800, height: 600, toPng: () => png });
+  regionCaptureMock.mockReset().mockResolvedValue({ width: 800, height: 600, png });
   getSourcesMock.mockReset();
-  windowsAppIconMock.mockResolvedValue(fakeIcon("window"));
+  getFileIconMock.mockReset().mockResolvedValue(fakeIcon("file"));
   const writtenFiles: Array<[string, Uint8Array]> = [];
   let metadata = "";
   const layer = testLayer("win32", {
@@ -838,13 +851,13 @@ it.effect("captures the active Windows window without enumerating desktop source
       yield* service.configure(enabledSettings());
       yield* service.capture;
 
-      assert.deepEqual(screenshotMock.mock.calls, [[{ region: active.bounds }]]);
+      assert.deepEqual(regionCaptureMock.mock.calls, [[active.bounds]]);
       assert.lengthOf(getSourcesMock.mock.calls, 0);
-      assert.deepEqual(windowsAppIconMock.mock.calls, [[undefined, 42]]);
+      assert.deepEqual(getFileIconMock.mock.calls, [[active.owner.path, { size: "normal" }]]);
       assert.deepEqual(writtenFiles[0]?.[1], png);
       const saved = yield* decodePendingMetadata(metadata);
       assert.equal(saved.source.appName, "Paint");
-      assert.match(saved.source.appIconDataUrl ?? "", /base64,window:/);
+      assert.match(saved.source.appIconDataUrl ?? "", /base64,file:/);
     }),
   ).pipe(Effect.provide(layer));
 });
@@ -936,10 +949,10 @@ it.effect.each(["win32", "darwin", "linux"] as const)(
       ...t3,
       platform: platform === "darwin" ? "macos" : "windows",
     });
-    screenshotMock.mockReset().mockResolvedValue({
+    regionCaptureMock.mockReset().mockResolvedValue({
       width: bounds.width,
       height: bounds.height,
-      toPng: () => t3.png,
+      png: t3.png,
     });
     macCaptureMock.mockReset().mockImplementation(async () => {
       images.push(t3.png);
@@ -1231,7 +1244,7 @@ it.effect("matches Windows accessibility windows on a scaled display", () => {
   const dipBounds = { x: 5, y: 10, width: 400, height: 300 };
   activeWindowMock.mockReset().mockResolvedValue(active);
   screenToDipRectMock.mockImplementation(() => dipBounds);
-  screenshotMock.mockReset().mockResolvedValue({ width: 800, height: 600, toPng: () => png });
+  regionCaptureMock.mockReset().mockResolvedValue({ width: 800, height: 600, png });
   accessibilityForegroundMock.mockReset().mockResolvedValue({
     pid: 123,
     asElement: () => ({
@@ -1294,7 +1307,7 @@ it.effect("skips accessibility capture when the setting is disabled", () => {
     bounds: { x: 10, y: 20, width: 800, height: 600 },
   } as const;
   activeWindowMock.mockReset().mockResolvedValue(active);
-  screenshotMock.mockReset().mockResolvedValue({ width: 800, height: 600, toPng: () => png });
+  regionCaptureMock.mockReset().mockResolvedValue({ width: 800, height: 600, png });
   accessibilityProcessWarmMock.mockClear();
   accessibilityProcessReadMock.mockClear();
   accessibilityByPidMock.mockClear();
@@ -1744,7 +1757,7 @@ it.effect.each(["ready", "failed"] as const)(
       owner: { name: "Editor", processId: 123 },
       bounds: { x: 10, y: 20, width: 800, height: 600 },
     });
-    screenshotMock.mockReset().mockResolvedValue({ width: 800, height: 600, toPng: () => png });
+    regionCaptureMock.mockReset().mockResolvedValue({ width: 800, height: 600, png });
     animationSettingsMock.mockReturnValueOnce({
       prefersReducedMotion: false,
       shouldRenderRichAnimation: true,
@@ -2447,7 +2460,7 @@ it.each(["client", "frame"] as const)(
       ],
     });
     try {
-      const context = await SnapShotAccessibility.readAccessibleWindowContext(
+      const context = await readAccessibleWindowContext(
         { title: "Editor", bounds, clientBounds, owner: { processId: 123 } },
         "linux",
         "Editor",
@@ -2489,7 +2502,7 @@ it.each(["darwin", "win32"] as const)(
       .mockReset()
       .mockResolvedValue({ pid: 123, asElement: () => window });
 
-    const result = await SnapShotAccessibility.readAccessibleWindowContext(
+    const result = await readAccessibleWindowContext(
       { title: "Editor", bounds, owner: { processId: 123 } },
       platform,
       "Editor",
@@ -2524,7 +2537,7 @@ it.each(["darwin", "win32"] as const)(
       .mockResolvedValue({ pid: 123, asElement: () => window });
     try {
       assert.isUndefined(
-        await SnapShotAccessibility.readAccessibleWindowText(
+        await readAccessibleWindowText(
           {
             title: "Editor",
             bounds: { x: 479, y: 342, width: 700, height: 520 },
@@ -2557,7 +2570,7 @@ it.each([
   });
   try {
     assert.strictEqual(
-      await SnapShotAccessibility.readAccessibleWindowText(
+      await readAccessibleWindowText(
         {
           title: "⠋ t3code",
           bounds: { x: 479, y: 342, width: 700, height: 520 },
@@ -2596,7 +2609,7 @@ it.each([20, 1_350, 2_999])(
     });
 
     try {
-      const result = SnapShotAccessibility.readAccessibleWindowText(
+      const result = readAccessibleWindowText(
         {
           title: "Mozilla Firefox",
           owner: { processId: 42 },
@@ -2640,7 +2653,7 @@ it("falls back to completed flat text when rich traversal reaches the deadline",
   });
 
   try {
-    const result = SnapShotAccessibility.readAccessibleWindowContext(
+    const result = readAccessibleWindowContext(
       {
         title: "Editor",
         owner: { processId: 42 },
@@ -2681,10 +2694,10 @@ it("times out after three seconds without overlapping the outstanding accessibil
     title: "main.ts",
     owner: { processId: 42 },
     bounds: { x: 0, y: 0, width: 800, height: 600 },
-  } as Parameters<typeof SnapShotAccessibility.readAccessibleWindowText>[0];
+  } satisfies SnapShotAccessibility.AccessibleWindowIdentity;
 
   try {
-    const first = SnapShotAccessibility.readAccessibleWindowText(active, "darwin", "main.ts");
+    const first = readAccessibleWindowText(active, "darwin", "main.ts");
     let settled = false;
     void first.then(() => {
       settled = true;
@@ -2695,17 +2708,13 @@ it("times out after three seconds without overlapping the outstanding accessibil
     await vi.advanceTimersByTimeAsync(1);
     assert.isUndefined(await first);
     assert.strictEqual(vi.getTimerCount(), 0);
-    assert.isUndefined(
-      await SnapShotAccessibility.readAccessibleWindowText(active, "darwin", "main.ts"),
-    );
+    assert.isUndefined(await readAccessibleWindowText(active, "darwin", "main.ts"));
     assert.strictEqual(accessibilityByPidMock.mock.calls.length, 1);
 
     read.resolve({ children: async () => [] });
     await vi.advanceTimersByTimeAsync(0);
     accessibilityByPidMock.mockResolvedValueOnce({ children: async () => [] });
-    assert.isUndefined(
-      await SnapShotAccessibility.readAccessibleWindowText(active, "darwin", "main.ts"),
-    );
+    assert.isUndefined(await readAccessibleWindowText(active, "darwin", "main.ts"));
     assert.strictEqual(accessibilityByPidMock.mock.calls.length, 2);
   } finally {
     read.resolve({ children: async () => [] });
@@ -2935,7 +2944,6 @@ it.effect("starts the Shift listener outside the Electron main process", () => {
   shortcutForkArgs.length = 0;
   shortcutForkOptions.length = 0;
   shortcutProcesses.length = 0;
-  uiohookMock.start.mockClear();
   const settings = { ...DEFAULT_CLIENT_SETTINGS, snapShotEnabled: true };
 
   return Effect.scoped(
@@ -2948,7 +2956,6 @@ it.effect("starts the Shift listener outside the Electron main process", () => {
       assert.lengthOf(shortcutProcesses, 1);
       assert.deepEqual(shortcutForkArgs[0], ["shift"]);
       assert.strictEqual(shortcutForkOptions[0]?.env?.ELECTRON_RUN_AS_NODE, "1");
-      assert.strictEqual(uiohookMock.start.mock.calls.length, 0);
 
       shortcutProcesses[0]?.emit("exit", 1);
       yield* Effect.promise(() => new Promise<void>((resolve) => queueMicrotask(resolve)));
@@ -3050,7 +3057,7 @@ it.effect("an unrelated client-setting change keeps the registered shortcut", ()
 it.effect("capture fails closed while snapshots are disabled", () => {
   activeWindowMock.mockClear();
   getSourcesMock.mockClear();
-  screenshotMock.mockClear();
+  regionCaptureMock.mockClear();
 
   return Effect.scoped(
     Effect.gen(function* () {
@@ -3060,7 +3067,7 @@ it.effect("capture fails closed while snapshots are disabled", () => {
       assert.equal(failure.operation, "disabled");
       assert.lengthOf(activeWindowMock.mock.calls, 0);
       assert.lengthOf(getSourcesMock.mock.calls, 0);
-      assert.lengthOf(screenshotMock.mock.calls, 0);
+      assert.lengthOf(regionCaptureMock.mock.calls, 0);
     }),
   ).pipe(Effect.provide(testLayer("win32")));
 });

@@ -221,29 +221,3 @@ export function readAccessibleWindowContextWithApp(
     },
   );
 }
-
-export async function readAccessibleWindowContext(
-  active: AccessibleWindowIdentity,
-  platform: NodeJS.Platform,
-  sourceTitle: string,
-  imageSize: Electron.Size = {
-    width: Math.max(1, Math.round(active.bounds.width)),
-    height: Math.max(1, Math.round(active.bounds.height)),
-  },
-): Promise<CapturedWindowAccessibilityContext | undefined> {
-  const App = await import("@crowecawcaw/xa11y").then(
-    (module) => module.App,
-    () => undefined,
-  );
-  return App
-    ? readAccessibleWindowContextWithApp(App, { active, platform, sourceTitle, imageSize })
-    : undefined;
-}
-
-export async function readAccessibleWindowText(
-  active: AccessibleWindowIdentity,
-  platform: NodeJS.Platform,
-  sourceTitle: string,
-): Promise<string | undefined> {
-  return (await readAccessibleWindowContext(active, platform, sourceTitle))?.accessibleText;
-}

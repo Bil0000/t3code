@@ -76,7 +76,6 @@ import {
   WindowsPrimaryNativeProbeError,
   WindowsDesktopBuildPrerequisitesMissingError,
   WindowsPackagedPayloadValidationError,
-  WINDOWS_CAPTURE_FILE_EXCLUSIONS,
   WINDOWS_NATIVE_ASAR_UNPACK_GLOB,
   WINDOWS_PACKAGED_PAYLOAD_FILE_LIMIT,
   WINDOWS_SERVER_ASAR_IGNORE_GLOBS,
@@ -681,10 +680,7 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       ]);
       assert.deepStrictEqual(mac.files, [...DESKTOP_FILE_EXCLUSIONS, ...MAC_FILE_EXCLUSIONS]);
       assert.deepStrictEqual(linux.files, DESKTOP_FILE_EXCLUSIONS);
-      assert.deepStrictEqual(win.files, [
-        ...DESKTOP_FILE_EXCLUSIONS,
-        ...WINDOWS_CAPTURE_FILE_EXCLUSIONS,
-      ]);
+      assert.deepStrictEqual(win.files, DESKTOP_FILE_EXCLUSIONS);
       assert.deepStrictEqual(winWithoutWslPrebuild.files, win.files);
       assert.notProperty(mac.mac as Record<string, unknown>, "sign");
       for (const config of [linux, win]) {
@@ -703,9 +699,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
 
   it("unpacks native binaries while keeping their JavaScript and metadata archived", () => {
     for (const file of [
-      "node_modules/uiohook-napi/prebuilds/win32-x64/uiohook-napi.node",
-      "node_modules/uiohook-napi/prebuilds/win32-arm64/uiohook-napi.node",
-      "node_modules/get-windows/lib/binding/napi-9-win32-unknown-x64/node-get-windows.node",
       "node_modules/@napi-rs/keyring/keyring.win32-x64-msvc.node",
       "node_modules/@clerk/electron-passkeys/electron-passkeys.win32-x64-msvc.node",
       "node_modules/@ff-labs/fff-bin-win32-x64/fff_c.dll",
@@ -721,11 +714,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
     }
 
     for (const file of [
-      "node_modules/uiohook-napi/dist/index.js",
-      "node_modules/uiohook-napi/dist/index.js.map",
-      "node_modules/uiohook-napi/package.json",
-      "node_modules/uiohook-napi/LICENSE",
-      "node_modules/get-windows/lib/windows.js",
       "node_modules/@napi-rs/keyring/index.js",
       "node_modules/@napi-rs/keyring/keytar.js",
       "node_modules/@clerk/electron-passkeys/index.js",
@@ -734,45 +722,6 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         NodePath.matchesGlob(file, WINDOWS_NATIVE_ASAR_UNPACK_GLOB),
         `${file} should remain inside the archive`,
       );
-    }
-  });
-
-  it("omits capture build sources and non-Windows natives while keeping the Windows runtime", () => {
-    const excluded = (file: string) =>
-      WINDOWS_CAPTURE_FILE_EXCLUSIONS.some((pattern) =>
-        NodePath.matchesGlob(file, pattern.slice(1)),
-      );
-
-    for (const file of [
-      "node_modules/uiohook-napi/src/lib/addon.c",
-      "node_modules/uiohook-napi/libuiohook/include/uiohook.h",
-      "node_modules/uiohook-napi/libuiohook/src/windows/input_hook.c",
-      "node_modules/uiohook-napi/prebuilds/darwin-arm64/uiohook-napi.node",
-      "node_modules/uiohook-napi/prebuilds/darwin-x64/uiohook-napi.node",
-      "node_modules/uiohook-napi/prebuilds/linux-x64/uiohook-napi.node",
-      "node_modules/uiohook-napi/prebuilds/linux-loong64/uiohook-napi.node",
-      "node_modules/get-windows/main",
-      "node_modules/get-windows/lib/binding/napi-6-darwin-unknown-x64/node-active-win.node",
-      "node_modules/get-windows/lib/binding/napi-9-darwin-unknown-arm64/node-get-windows.node",
-    ]) {
-      assert.isTrue(excluded(file), `${file} should not ship in the Windows installer`);
-    }
-
-    for (const file of [
-      "node_modules/uiohook-napi/package.json",
-      "node_modules/uiohook-napi/LICENSE",
-      "node_modules/uiohook-napi/dist/index.js",
-      "node_modules/uiohook-napi/prebuilds/win32-x64/uiohook-napi.node",
-      "node_modules/uiohook-napi/prebuilds/win32-arm64/uiohook-napi.node",
-      "node_modules/get-windows/package.json",
-      "node_modules/get-windows/index.js",
-      "node_modules/get-windows/lib/macos.js",
-      "node_modules/get-windows/lib/linux.js",
-      "node_modules/get-windows/lib/windows.js",
-      "node_modules/get-windows/lib/binding/napi-9-win32-unknown-x64/node-get-windows.node",
-      "node_modules/get-windows/lib/binding/napi-9-win32-unknown-arm64/node-get-windows.node",
-    ]) {
-      assert.isFalse(excluded(file), `${file} is part of the Windows runtime`);
     }
   });
 

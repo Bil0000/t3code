@@ -14,7 +14,11 @@ import * as Schema from "effect/Schema";
 
 import * as Electron from "electron";
 
-import { activateWindowsForeground, isWindowsShellHostedForeground } from "./WindowsForeground.ts";
+import {
+  activateWindowsForeground,
+  isWindowsShellHostedForeground,
+  loadWindowsForegroundApi,
+} from "./WindowsForeground.ts";
 import { startWindowsForegroundFocusThread } from "./WindowsForegroundFocusThread.ts";
 
 function windowsForegroundFocusTarget(window: Electron.BrowserWindow) {
@@ -28,42 +32,13 @@ function windowsForegroundFocusTarget(window: Electron.BrowserWindow) {
 }
 
 async function isWindowsBrowserWindowForeground(window: Electron.BrowserWindow): Promise<boolean> {
-  const { activeWindow } = await import("get-windows");
-  const foreground = await activeWindow().catch(() => undefined);
-  if (window.isDestroyed() || foreground?.owner.processId !== process.pid) return false;
+  const foreground = await loadWindowsForegroundApi()
+    .then((api) => api.getForegroundWindow())
+    .catch(() => undefined);
+  if (window.isDestroyed() || foreground === undefined || foreground === 0n) return false;
   const handle = window.getNativeWindowHandle();
   const hwnd = handle.length === 8 ? handle.readBigUInt64LE() : BigInt(handle.readUInt32LE());
-  return Number.isSafeInteger(foreground.id) && BigInt(foreground.id) === hwnd;
-}
-
-async function focusWindowsBrowserWindow(window: Electron.BrowserWindow): Promise<void> {
-  if (window.isDestroyed()) return;
-  // Electron checks the calling thread's active window on Windows, which can remain
-  // active while another process owns the foreground. Query the actual foreground HWND.
-  if (await isWindowsBrowserWindowForeground(window)) return;
-  if (window.isDestroyed()) return;
-  const { App } = await import("@crowecawcaw/xa11y");
-  if (window.isDestroyed()) return;
-  const apps = await App.list().catch(() => []);
-  if (window.isDestroyed()) return;
-  if (await isWindowsBrowserWindowForeground(window)) return;
-  if (window.isDestroyed()) return;
-  const title = window.getTitle().trim();
-  const bounds = window.getBounds();
-  const exactWindow = apps
-    .filter((app) => app.pid === process.pid)
-    .map((app) => app.asElement())
-    .find((element) => {
-      if ((element.name ?? "").trim() !== title) return false;
-      const elementBounds = element.bounds;
-      return (
-        elementBounds !== null &&
-        (["x", "y", "width", "height"] as const).every(
-          (key) => Math.abs(elementBounds[key] - bounds[key]) <= 2,
-        )
-      );
-    });
-  await exactWindow?.focus();
+  return foreground === hwnd;
 }
 
 const ElectronWindowCreateOptions = Schema.Struct({
@@ -331,14 +306,10 @@ export const make = Effect.gen(function* () {
               await activateWindowsForeground(window.getNativeWindowHandle());
             } catch {
               const needsFocus = !(await isWindowsBrowserWindowForeground(window));
-              const focused =
-                needsFocus && !window.isDestroyed()
-                  ? await windowsForegroundFocus
-                      ?.focus(windowsForegroundFocusTarget(window))
-                      .catch(() => false)
-                  : false;
-              if (needsFocus && !focused && !shellHostedForeground) {
-                await focusWindowsBrowserWindow(window).catch(() => undefined);
+              if (needsFocus && !window.isDestroyed()) {
+                await windowsForegroundFocus
+                  ?.focus(windowsForegroundFocusTarget(window))
+                  .catch(() => false);
               }
               if (!window.isDestroyed()) {
                 await activateWindowsForeground(window.getNativeWindowHandle());

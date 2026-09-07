@@ -4,8 +4,6 @@ import * as Effect from "effect/Effect";
 import { describe, expect, it, vi } from "vite-plus/test";
 
 import {
-  MODIFIER_PAIR_IDLE,
-  UIOHOOK_MODIFIER_KEYCODES,
   accessibleWindowElementTree,
   accessibleWindowText,
   capturedImageBounds,
@@ -14,7 +12,6 @@ import {
   findCaptureSource,
   hideAndWaitForBlur,
   isWaylandSession,
-  updateModifierPair,
   snapShotShortcutRegistrationFailureMessage,
   snapShotShortcutSystemConflict,
   toElectronAccelerator,
@@ -689,37 +686,6 @@ describe("isWaylandSession", () => {
         });
       }),
   );
-});
-
-describe("modifier pairs", () => {
-  it("fires once when both physical Shift keys are held", () => {
-    const pair = UIOHOOK_MODIFIER_KEYCODES.shift;
-    const left = updateModifierPair(MODIFIER_PAIR_IDLE, pair, 42, true);
-    expect(left.triggered).toBe(false);
-
-    const both = updateModifierPair(left.state, pair, 54, true);
-    expect(both.triggered).toBe(true);
-    expect(updateModifierPair(both.state, pair, 54, true).triggered).toBe(false);
-
-    const released = updateModifierPair(both.state, pair, 42, false);
-    expect(updateModifierPair(released.state, pair, 42, true).triggered).toBe(true);
-  });
-
-  it("fires for both physical Command keys", () => {
-    const pair = UIOHOOK_MODIFIER_KEYCODES.meta;
-    const left = updateModifierPair(MODIFIER_PAIR_IDLE, pair, 3_675, true);
-    expect(left.triggered).toBe(false);
-    expect(updateModifierPair(left.state, pair, 3_676, true).triggered).toBe(true);
-  });
-
-  it("ignores other keys", () => {
-    expect(
-      updateModifierPair(MODIFIER_PAIR_IDLE, UIOHOOK_MODIFIER_KEYCODES.shift, 30, true),
-    ).toEqual({
-      state: MODIFIER_PAIR_IDLE,
-      triggered: false,
-    });
-  });
 });
 
 describe("snapShotShortcutRegistrationFailureMessage", () => {

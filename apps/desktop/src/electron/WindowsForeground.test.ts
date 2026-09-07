@@ -26,6 +26,14 @@ function makeApi(input: {
     getForegroundWindow: vi.fn(() => input.foregroundWindow ?? 99n),
     getWindowClassName: vi.fn(() => "Chrome_WidgetWin_1"),
     getWindowThreadId: vi.fn(() => input.foregroundThreadId ?? 20),
+    getWindowThreadAndProcessId: vi.fn(() => ({
+      threadId: input.foregroundThreadId ?? 20,
+      processId: 500,
+    })),
+    getWindowText: vi.fn(() => ""),
+    getWindowRect: vi.fn(() => undefined),
+    getProcessImagePath: vi.fn(() => ""),
+    isKeyDown: vi.fn(() => false),
     attachThreadInput: vi.fn((_source, _target, attach) =>
       attach ? (input.attached ?? true) : true,
     ),

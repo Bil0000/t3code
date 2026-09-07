@@ -978,16 +978,6 @@ export const MAC_FILE_EXCLUSIONS = [
   "!**/node_modules/node-pty/prebuilds/win32-*/**/*",
   "!**/node_modules/node-pty/third_party/conpty/**/*",
 ] as const;
-// Capture packages include build sources and other platforms' binaries that
-// are unused by the Windows runtime.
-export const WINDOWS_CAPTURE_FILE_EXCLUSIONS = [
-  "!**/node_modules/uiohook-napi/src/**/*",
-  "!**/node_modules/uiohook-napi/libuiohook/**/*",
-  "!**/node_modules/uiohook-napi/prebuilds/darwin-*/**/*",
-  "!**/node_modules/uiohook-napi/prebuilds/linux-*/**/*",
-  "!**/node_modules/get-windows/lib/binding/*-darwin-*/**/*",
-  "!**/node_modules/get-windows/main",
-] as const;
 
 // node-pty publishes both Darwin prebuilds in one package. Single-architecture
 // apps only need the native target; universal apps need both. An omitted arch
@@ -2683,7 +2673,6 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
     files: [
       ...DESKTOP_FILE_EXCLUSIONS,
       ...(platform === "mac" ? resolveMacFileExclusions(arch) : []),
-      ...(platform === "win" ? WINDOWS_CAPTURE_FILE_EXCLUSIONS : []),
     ],
     directories: {
       buildResources: "apps/desktop/resources",
