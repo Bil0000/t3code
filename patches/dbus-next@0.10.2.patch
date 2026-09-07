@@ -1,0 +1,21 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+deleted file mode 100644
+index a89691bec87b69ae600f4feb67b88b900ab799de..0000000000000000000000000000000000000000
+diff --git a/lib/connection.js b/lib/connection.js
+index 780dc041c58e83ebfcd84434e500ec471020813a..7f7f8b4c41e9c347c799e193c6878e3ecfabe982 100644
+--- a/lib/connection.js
++++ b/lib/connection.js
+@@ -45,10 +45,9 @@ function createStream (opts) {
+             return net.createConnection(params.socket);
+           }
+           if (params.abstract) {
+-            const usocket = require('usocket');
+-            const sock = new usocket.USocket({ path: '\u0000' + params.abstract });
+-            sock.supportsUnixFd = negotiateUnixFd;
+-            return sock;
++            // T3 Code never passes Unix descriptors, so usocket is removed from the
++            // install. Node connects to abstract sockets natively with a NUL prefix.
++            return net.createConnection('\u0000' + params.abstract);
+           }
+           if (params.path) {
+             try {

@@ -13,10 +13,9 @@ helpers (session detection, Niri binding text, portal key mapping, PNG reading) 
 can answer "which desktop is this" without loading a D-Bus client on macOS or Windows.
 
 The pnpm override removes `usocket` from `dbus-next` because we never pass Unix descriptors.
-`dbus-next` falls back to `net` for `unix:path=` addresses but has no fallback for
-`unix:abstract=`, so sessions whose bus uses an abstract socket (non-systemd `dbus-launch` setups)
-fail to connect. If that matters, patch `lib/connection.js` to use `net.createConnection` with a
-leading NUL byte rather than restoring `usocket`.
+Upstream only falls back to `net` for `unix:path=` addresses, so `patches/dbus-next@0.10.2.patch`
+adds the same fallback for `unix:abstract=` (non-systemd `dbus-launch` sessions). Keep the patch
+when bumping `dbus-next`.
 
 ## Accessibility identity
 
