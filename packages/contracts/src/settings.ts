@@ -170,7 +170,7 @@ export const SnapShotShortcut = Schema.Union([
 export type SnapShotShortcut = typeof SnapShotShortcut.Type;
 export const SnapShotSound = Schema.Literals(["soft-pop", "camera-shutter"]);
 export type SnapShotSound = typeof SnapShotSound.Type;
-export const DEFAULT_SNAP_SHOT_SOUND = "soft-pop";
+const DEFAULT_SNAP_SHOT_SOUND: SnapShotSound = "soft-pop";
 
 export type SnapShotModifierPairShortcut = Extract<SnapShotShortcut, { readonly kind: string }>;
 
@@ -203,7 +203,7 @@ export function snapShotModifierPairLabel(modifier: SnapShotModifier, apple: boo
   const label = (apple ? APPLE_MODIFIER_LABELS : OTHER_MODIFIER_LABELS)[modifier];
   return `${label} + ${label}`;
 }
-export const DEFAULT_SNAP_SHOT_SHORTCUT: SnapShotShortcut = {
+const DEFAULT_SNAP_SHOT_SHORTCUT: SnapShotShortcut = {
   kind: "both-shift-keys",
 };
 
