@@ -871,6 +871,59 @@ it.effect("captures the active Windows window without enumerating desktop source
   ).pipe(Effect.provide(layer));
 });
 
+it.effect.each([
+  { length: 1_000, suffix: "", expectedLength: 1_000 },
+  { length: 1_001, suffix: "", expectedLength: 1_000 },
+  { length: 999, suffix: "😀", expectedLength: 999 },
+])(
+  "preserves captures with native metadata of length $length and suffix $suffix",
+  ({ length, suffix, expectedLength }) => {
+    const png = Buffer.from([1, 2, 3]);
+    const title = "t".repeat(length) + suffix;
+    const appName = "a".repeat(254) + "😀";
+    const appIdentifier = "b".repeat(254) + "😀";
+    activeWindowMock.mockReset().mockResolvedValue({
+      platform: "macos",
+      id: 42,
+      title,
+      owner: { name: appName, bundleId: appIdentifier, processId: 123 },
+      bounds: { x: 10, y: 20, width: 800, height: 600 },
+    });
+    focusedWindowMock.mockReturnValue(undefined);
+    allWindowsMock.mockReturnValue([]);
+    macCaptureMock.mockReset().mockResolvedValue({ source: { name: title }, png });
+    accessibilityProcessReadMock.mockReturnValueOnce({
+      started: Promise.resolve(),
+      result: Promise.resolve(undefined),
+    });
+    let metadata = "";
+    const layer = testLayer("darwin", {
+      makeDirectory: () => Effect.void,
+      rename: () => Effect.void,
+      writeFileString: (_, text) =>
+        Effect.sync(() => {
+          metadata = text;
+        }),
+      readDirectory: () => Effect.succeed(["capture.json"]),
+      readFileString: () => Effect.succeed(metadata),
+      readFile: () => Effect.succeed(png),
+    });
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* DesktopSnapShot.make;
+        yield* service.captureNow;
+        const pending = yield* service.listPending;
+        assert.lengthOf(pending, 1);
+        const capture = yield* service.read(pending[0]!.id);
+        assert.equal(capture.dataUrl, "data:image/png;base64,AQID");
+        assert.equal(capture.source.windowTitle, "t".repeat(expectedLength));
+        assert.equal(capture.source.appName, "a".repeat(254));
+        assert.equal(capture.source.appIdentifier, "b".repeat(254));
+      }),
+    ).pipe(Effect.provide(layer));
+  },
+);
+
 it.effect.each(
   (["win32", "darwin", "linux"] as const).flatMap((platform) =>
     (["shortcut", "command palette"] as const).map((entryPoint) => ({ platform, entryPoint })),

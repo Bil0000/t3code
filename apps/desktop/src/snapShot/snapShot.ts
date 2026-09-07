@@ -182,13 +182,13 @@ function safeProperty<T>(read: () => T): T | undefined {
   }
 }
 
-function boundedAccessibilityString(value: unknown, maxChars: number): string | undefined {
+export function boundedSnapShotString(value: unknown, maxChars: number): string | undefined {
   if (typeof value !== "string") return undefined;
   const candidate = value.replaceAll("\0", "").trim();
   if (!candidate) return undefined;
   if (candidate.length <= maxChars) return candidate;
   const end = /[\uD800-\uDBFF]/.test(candidate[maxChars - 1] ?? "") ? maxChars - 1 : maxChars;
-  return candidate.slice(0, end);
+  return candidate.slice(0, end).trimEnd();
 }
 
 export function capturedImageBounds(
@@ -232,15 +232,15 @@ function accessibilityNode(
   isRoot: boolean,
   locationsReliable: boolean,
 ): MutableAccessibilityNode {
-  const name = boundedAccessibilityString(
+  const name = boundedSnapShotString(
     safeProperty(() => element.name),
     1_000,
   );
-  const value = boundedAccessibilityString(
+  const value = boundedSnapShotString(
     safeProperty(() => element.value),
     8_000,
   );
-  const description = boundedAccessibilityString(
+  const description = boundedSnapShotString(
     safeProperty(() => element.description),
     2_000,
   );
@@ -260,13 +260,13 @@ function accessibilityNode(
   const actions = Array.from(
     new Set(
       (safeProperty(() => element.actions) ?? [])
-        .map((action) => boundedAccessibilityString(action, 100))
+        .map((action) => boundedSnapShotString(action, 100))
         .filter((action): action is string => action !== undefined),
     ),
   ).slice(0, 32);
   return {
     role:
-      boundedAccessibilityString(
+      boundedSnapShotString(
         safeProperty(() => element.role),
         100,
       ) ?? "unknown",

@@ -71,6 +71,7 @@ import { showWindowsCaptureOverlay } from "./WindowsCaptureFeedback.ts";
 import { windowsAppIcon } from "./WindowsWindowIcon.ts";
 
 import {
+  boundedSnapShotString,
   hideAndWaitForBlur,
   isWaylandSession,
   toElectronAccelerator,
@@ -945,6 +946,11 @@ export const make = Effect.gen(function* () {
       const appIconDataUrl = yield* Effect.promise(() =>
         iconDataUrl(source, active, environment.platform),
       );
+      // Native labels are unbounded; keep a valid screenshot when its metadata is too long.
+      const appIdentifier = boundedSnapShotString(
+        active?.platform === "macos" ? active.owner.bundleId : linuxWindow?.appIdentifier,
+        255,
+      );
       const pending = yield* decodePendingCapture({
         id,
         name: `window-${capturedAt.replaceAll(":", "-")}.png`,
@@ -953,19 +959,21 @@ export const make = Effect.gen(function* () {
         source: {
           kind: "snap-shot",
           capturedAt,
-          appName: snapShotAppName(active, linuxWindow, source.name),
-          windowTitle: active?.title.trim() || linuxWindow?.title.trim() || source.name.trim(),
+          appName:
+            boundedSnapShotString(snapShotAppName(active, linuxWindow, source.name), 255) ??
+            "Window",
+          windowTitle:
+            boundedSnapShotString(
+              active?.title.trim() || linuxWindow?.title.trim() || source.name,
+              1_000,
+            ) ?? "",
           ...(accessibilityContext?.accessibleText
             ? { accessibleText: accessibilityContext.accessibleText }
             : {}),
           ...(accessibilityContext?.accessibility
             ? { accessibility: accessibilityContext.accessibility }
             : {}),
-          ...(active?.platform === "macos" && active.owner.bundleId
-            ? { appIdentifier: active.owner.bundleId }
-            : linuxWindow?.appIdentifier
-              ? { appIdentifier: linuxWindow.appIdentifier }
-              : {}),
+          ...(appIdentifier ? { appIdentifier } : {}),
           ...(appIconDataUrl ? { appIconDataUrl } : {}),
         },
       });
