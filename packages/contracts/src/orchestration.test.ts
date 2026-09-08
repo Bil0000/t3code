@@ -343,6 +343,36 @@ it.effect("tolerates attachment types from newer builds when decoding messages",
   }),
 );
 
+// A snap-shot source is provenance, not the image. A persisted event written
+// by a build with a different source shape must still decode, with the source
+// dropped, or the whole event store refuses to load on the next start.
+it.effect("drops an unreadable snap-shot source instead of failing the message", () =>
+  Effect.gen(function* () {
+    const message = yield* decodeOrchestrationMessage({
+      id: "message-1",
+      role: "user",
+      text: "look at this",
+      attachments: [
+        {
+          type: "image",
+          id: "thread-1-00000000-0000-4000-8000-000000000003-png",
+          name: "window.png",
+          mimeType: "image/png",
+          sizeBytes: 12,
+          source: { kind: "window-capture", capturedAt: "2026-01-01T00:00:00.000Z" },
+        },
+      ],
+      turnId: null,
+      streaming: false,
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    const attachment = message.attachments?.[0];
+    assert.strictEqual(attachment?.type, "image");
+    assert.strictEqual(attachment && "source" in attachment ? attachment.source : null, undefined);
+  }),
+);
+
 // The tolerant member must not catch malformed known attachments: a file over
 // the size cap or an image with a bad mime has to fail its own schema, not
 // slide through the open one with those constraints unchecked.

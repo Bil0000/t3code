@@ -1,4 +1,5 @@
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import * as SchemaIssue from "effect/SchemaIssue";
 import * as SchemaTransformation from "effect/SchemaTransformation";
@@ -292,13 +293,23 @@ export const SnapShotSource = Schema.Struct({
 });
 export type SnapShotSource = typeof SnapShotSource.Type;
 
+/**
+ * Persisted image attachments carry the source shape their build knew. A
+ * source this build cannot read (an older or newer field set, or a value that
+ * no longer passes today's bounds) must not fail the whole event: the image
+ * is still valid, only its provenance is lost. Uploads keep the strict schema.
+ */
+const PersistedSnapShotSource = Schema.optional(SnapShotSource).pipe(
+  Schema.catchDecoding(() => Effect.succeed(Option.some(undefined))),
+);
+
 export const ChatImageAttachment = Schema.Struct({
   type: Schema.Literal("image"),
   id: ChatAttachmentId,
   name: TrimmedNonEmptyString.check(Schema.isMaxLength(255)),
   mimeType: TrimmedNonEmptyString.check(Schema.isMaxLength(100), Schema.isPattern(/^image\//i)),
   sizeBytes: NonNegativeInt.check(Schema.isLessThanOrEqualTo(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES)),
-  source: Schema.optional(SnapShotSource),
+  source: PersistedSnapShotSource,
 });
 export type ChatImageAttachment = typeof ChatImageAttachment.Type;
 
