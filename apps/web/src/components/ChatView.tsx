@@ -7986,11 +7986,11 @@ export default function ChatView(props: ChatViewProps) {
         // A pane has no titlebar of its own, so its controls stay in flow.
         paneMode === null
           ? "fixed top-[var(--workspace-controls-top)] right-[var(--workspace-controls-right)] z-50 mr-px h-[var(--workspace-topbar-height)]"
-          : "ml-auto h-full shrink-0",
+          : "order-last ml-auto h-7 shrink-0",
       )}
       data-workspace-titlebar-controls
     >
-      {!shouldUseRightPanelSheet ? (
+      {!shouldUseRightPanelSheet && (paneMode === null || rightPanelOpen) ? (
         <span
           aria-hidden={!rightPanelOpen}
           className={cn(
@@ -8158,6 +8158,7 @@ export default function ChatView(props: ChatViewProps) {
       <div
         className={cn(
           "flex min-h-0 min-w-0 flex-col overflow-x-hidden",
+          paneMode !== null && "@container/pane-header",
           rightPanelMaximized ? "w-0 flex-none" : "flex-1",
         )}
         data-chat-column-maximized-away={rightPanelMaximized ? "true" : "false"}
@@ -8167,7 +8168,12 @@ export default function ChatView(props: ChatViewProps) {
           data-chat-header
           electron={isElectron}
           reserveNativeControls={reserveTitleBarControlInset && !inlineRightPanelOwnsTitleBar}
-          className="relative bg-background"
+          className={cn(
+            "relative bg-background",
+            // Match the action toolbar's gap so the panel controls read as
+            // one row with it instead of floating at the pane edge.
+            paneMode !== null && "gap-2 @3xl/pane-header:gap-3",
+          )}
         >
           {isElectron && rightPanelControlsAtRoot ? (
             <span
