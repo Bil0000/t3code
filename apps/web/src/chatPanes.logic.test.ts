@@ -7,6 +7,7 @@ import {
   collectLeaves,
   removePane,
   resolveDropZone,
+  selectChatPaneRoot,
   setPaneRatio,
   splitPane,
   type ChatPaneLeaf,
@@ -20,6 +21,15 @@ const leaf = (id: string): ChatPaneLeaf => ({
 });
 const allowAll = () => true;
 const rect = { left: 0, top: 0, width: 300, height: 100 };
+
+it("keeps a pane group intact while navigating outside it and back", () => {
+  const root = splitPane(leaf("a"), "a", "right", leaf("b"), "s1");
+  const other = splitPane(leaf("c"), "c", "right", leaf("d"), "s2");
+  expect(selectChatPaneRoot([root, other], leaf("a").threadRef)).toBe(root);
+  expect(selectChatPaneRoot([root, other], leaf("d").threadRef)).toBe(other);
+  expect(selectChatPaneRoot([root], leaf("outside").threadRef)).toBeNull();
+  expect(selectChatPaneRoot([root], null)).toBeNull();
+});
 
 describe("splitPane", () => {
   it("places the new leaf on the dropped side", () => {

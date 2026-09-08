@@ -55,17 +55,12 @@ export function ChatPanes({
 }) {
   const navigate = useNavigate();
   const focusPane = useChatPanesStore((state) => state.focusPane);
-  const showThread = useChatPanesStore((state) => state.showThread);
   const routeThreadKey = scopedThreadKey(routeThreadRef);
   const routeLeaf = useMemo(() => findLeaf(root, routeThreadKey), [root, routeThreadKey]);
 
-  // The route is the focused pane. A navigation to a thread outside the
-  // layout (sidebar, palette, shortcut) takes over the focused pane rather
-  // than tearing the layout down.
   useEffect(() => {
     if (routeLeaf) focusPane(routeLeaf.id);
-    else showThread(routeThreadRef);
-  }, [focusPane, routeLeaf, routeThreadRef, showThread]);
+  }, [focusPane, routeLeaf]);
 
   const follow = useCallback(
     (threadRef: ScopedThreadRef | null) => {

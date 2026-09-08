@@ -58,6 +58,15 @@ export function findLeafByThread(
   );
 }
 
+/** The group showing `threadRef`, or null when the thread renders on its own. */
+export function selectChatPaneRoot(
+  groups: ReadonlyArray<ChatPaneNode>,
+  threadRef: ScopedThreadRef | null,
+): ChatPaneNode | null {
+  if (!threadRef) return null;
+  return groups.find((group) => findLeafByThread(group, threadRef) !== null) ?? null;
+}
+
 function findPaneDepth(node: ChatPaneNode, paneId: ChatPaneId): number | null {
   if (node.id === paneId) return 0;
   if (node.kind === "leaf") return null;

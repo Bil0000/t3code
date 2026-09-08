@@ -11,6 +11,7 @@ import {
   useChatPanesStore,
 } from "../chatPanesStore";
 import { isChatPaneDragActive } from "../chatPaneDragStore";
+import { selectChatPaneRoot } from "../chatPanes.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
 import {
   buildThreadRouteParams,
@@ -58,7 +59,8 @@ function ChatThreadRouteView() {
     }
     return store.hasDraftThreadsInEnvironment(threadRef.environmentId);
   });
-  const paneRoot = useChatPanesStore((store) => store.root);
+  const paneGroups = useChatPanesStore((store) => store.groups);
+  const paneRoot = selectChatPaneRoot(paneGroups, threadRef);
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
     serverThreadShellExists: serverThreadShell !== null,
@@ -110,8 +112,8 @@ function ChatThreadRouteView() {
       {!ready ? null : paneRoot ? (
         <ChatPanes root={paneRoot} routeThreadRef={threadRef} />
       ) : (
-        // A drop on the plain view seeds the layout from this thread. The
-        // pane id is a placeholder the commit replaces with the real leaf.
+        // A drop on the plain view starts a new group from this thread. The
+        // pane id is a placeholder that matches no saved pane.
         <div
           className="flex min-h-0 min-w-0 flex-1"
           onPointerUpCapture={() => {
