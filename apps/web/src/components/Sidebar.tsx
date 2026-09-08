@@ -112,7 +112,9 @@ import {
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { chatPaneDragPointer, useChatPaneDragStore } from "../chatPaneDragStore";
-import { canOpenThreadInSplit, openThreadInSplit } from "../chatPanesStore";
+import { canOpenThreadInSplit, openThreadInSplit, useChatPanesStore } from "../chatPanesStore";
+import { collectLeaves } from "../chatPanes.logic";
+import { SidebarSplitViewHeader } from "./chat/SidebarSplitView";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
@@ -964,6 +966,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
   // the user visits the thread.
   wokeAt: string | null;
   isActive: boolean;
+  /** Split-view rows step in from the edge so the block reads as one group. */
+  inset?: boolean;
   openPullRequestsInRightPanel: boolean;
   jumpLabel: string | null;
   currentEnvironmentId: string | null;
@@ -1701,6 +1705,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       className={cn(
         // Matches the h-[4.875rem] content box; the py-0.5 padding is added on top.
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_78px]",
+        props.inset && "ps-2",
         sortable?.isDragging && "relative z-20",
       )}
     >
@@ -2461,7 +2466,12 @@ export default function Sidebar() {
         override holds until all of them appear in canonical state. */
     readonly assignedKeys: ReadonlyMap<string, string>;
   } | null>(null);
+  // Split threads leave their sections for one block per group below the
+  // active rows (desktop only: mobile has no panes). Reading the layout here
+  // keeps the rows real rows instead of a second copy.
+  const savedPaneGroups = useChatPanesStore((state) => state.groups);
   const {
+    splitGroups,
     pinnedThreads,
     draggableThreadKeys,
     activeReorderableThreadKeys,
@@ -2486,9 +2496,20 @@ export default function Sidebar() {
     const active: EnvironmentThreadShell[] = [];
     const snoozed: EnvironmentThreadShell[] = [];
     const settled: EnvironmentThreadShell[] = [];
+    const paneGroups = isMobile ? [] : savedPaneGroups;
+    const splitThreadByKey = new Map<string, EnvironmentThreadShell | null>(
+      paneGroups.flatMap((group) =>
+        collectLeaves(group).map((leaf) => [scopedThreadKey(leaf.threadRef), null]),
+      ),
+    );
     const draggable = new Set<string>();
     const activeReorderable = new Set<string>();
     for (const thread of visible) {
+      const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      if (splitThreadByKey.has(key)) {
+        splitThreadByKey.set(key, thread);
+        continue;
+      }
       const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
       // Threads on servers without the settlement capability (old server,
       // or descriptor not loaded yet) never classify as settled: the user
@@ -2539,6 +2560,14 @@ export default function Sidebar() {
     const sortedPinned = sortPinnedThreadsForSidebar(pinned);
     const sortedActive = sortThreadsForSidebar(active);
     return {
+      // Rows follow the pane order, so the block reads like the layout.
+      splitGroups: paneGroups.flatMap((root) => {
+        const threads = collectLeaves(root).flatMap((leaf) => {
+          const thread = splitThreadByKey.get(scopedThreadKey(leaf.threadRef));
+          return thread ? [thread] : [];
+        });
+        return threads.length === 0 ? [] : [{ root, threads }];
+      }),
       pinnedThreads:
         optimisticDrop?.section !== "pinned" || optimisticDrop.order === null
           ? sortedPinned
@@ -2566,15 +2595,35 @@ export default function Sidebar() {
       settledThreads: sortSettledThreadsForSidebar(settled),
       snoozeNow: preciseNow,
     };
-  }, [nowMinute, optimisticDrop, scopedProjectKeys, serverConfigs, snoozeWakeTick, threads]);
+  }, [
+    isMobile,
+    nowMinute,
+    optimisticDrop,
+    savedPaneGroups,
+    scopedProjectKeys,
+    serverConfigs,
+    snoozeWakeTick,
+    threads,
+  ]);
 
+  const splitThreads = useMemo(() => splitGroups.flatMap((group) => group.threads), [splitGroups]);
+  const splitRootById = useMemo(
+    () => new Map(splitGroups.map((group) => [group.root.id, group.root])),
+    [splitGroups],
+  );
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const searchableThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...snoozedThreads, ...settledThreads],
-    [activeThreads, pinnedThreads, settledThreads, snoozedThreads],
+    () => [
+      ...pinnedThreads,
+      ...activeThreads,
+      ...splitThreads,
+      ...snoozedThreads,
+      ...settledThreads,
+    ],
+    [activeThreads, pinnedThreads, settledThreads, snoozedThreads, splitThreads],
   );
   const threadSearchResults = useMemo(
     () => searchSidebarThreadsByTitle(searchableThreads, threadSearchQuery),
@@ -2692,8 +2741,14 @@ export default function Sidebar() {
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
   const orderedThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [pinnedThreads, activeThreads, visibleSnoozedThreads, renderedSettledThreads],
+    () => [
+      ...pinnedThreads,
+      ...activeThreads,
+      ...splitThreads,
+      ...visibleSnoozedThreads,
+      ...renderedSettledThreads,
+    ],
+    [pinnedThreads, activeThreads, splitThreads, visibleSnoozedThreads, renderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -3111,11 +3166,12 @@ export default function Sidebar() {
       }
     };
     add(pinnedThreads, "pinned");
+    add(splitThreads, "split");
     add(activeThreads, "active");
     add(snoozedThreads, "snoozed");
     add(settledThreads, "settled");
     return map;
-  }, [activeThreads, pinnedThreads, settledThreads, snoozedThreads]);
+  }, [activeThreads, pinnedThreads, settledThreads, snoozedThreads, splitThreads]);
   const pinnedKeys = useMemo(
     () =>
       pinnedThreads.map((thread) =>
@@ -3308,6 +3364,11 @@ export default function Sidebar() {
     const activeRows = rowsOf(activeThreads, "active");
     items.push({ kind: "marker", marker: "active-placeholder" });
     items.push(...activeRows);
+    for (const group of splitGroups) {
+      items.push({ kind: "marker", marker: `split-header-${group.root.id}` });
+      items.push(...rowsOf(group.threads, "split"));
+      items.push({ kind: "marker", marker: `split-divider-${group.root.id}` });
+    }
     if (snoozedThreads.length > 0) {
       items.push({ kind: "marker", marker: "snoozed-header" });
       items.push(...rowsOf(visibleSnoozedThreads, "snoozed"));
@@ -3323,6 +3384,7 @@ export default function Sidebar() {
     renderedSettledThreads,
     settledThreads.length,
     snoozedThreads.length,
+    splitGroups,
     visibleSnoozedThreads,
   ]);
   useEffect(() => {
@@ -4670,7 +4732,7 @@ export default function Sidebar() {
                         // row: every other thread is a full card. Density comes
                         // from users (or the auto rules) actually parking work,
                         // not from the sidebar second-guessing what still matters.
-                        const isCard = section === "active" || section === "pinned";
+                        const isCard = section !== "snoozed" && section !== "settled";
                         const rowVariant = isCard ? "card" : "slim";
                         return (
                           <SidebarThreadRow
@@ -4722,6 +4784,7 @@ export default function Sidebar() {
                             // rows resolve to null on their own.
                             wokeAt={threadWokeAt(thread, { now: snoozeNow })}
                             isActive={routeThreadKey === threadKey}
+                            inset={section === "split"}
                             openPullRequestsInRightPanel={routeThreadRef !== null}
                             jumpLabel={
                               showThreadJumpHints ? (jumpLabelByKey.get(threadKey) ?? null) : null
@@ -4799,6 +4862,32 @@ export default function Sidebar() {
                       for (const item of sidebarListItems) {
                         if (item.kind === "thread") {
                           items.push(renderThreadRow(threadByKey.get(item.key)!, item.section));
+                          continue;
+                        }
+                        if (item.marker.startsWith("split-header-")) {
+                          items.push(
+                            <SortableSidebarMarker
+                              key={item.marker}
+                              marker={item.marker}
+                              className="mx-0.5"
+                            >
+                              <SidebarSplitViewHeader
+                                root={splitRootById.get(item.marker.slice("split-header-".length))!}
+                                activeThreadKey={routeThreadKey}
+                                onOpenThread={navigateToThread}
+                              />
+                            </SortableSidebarMarker>,
+                          );
+                          continue;
+                        }
+                        if (item.marker.startsWith("split-divider-")) {
+                          items.push(
+                            <SortableSidebarMarker
+                              key={item.marker}
+                              marker={item.marker}
+                              className="mx-2.5 my-1.5 h-px bg-sidebar-border/60"
+                            />,
+                          );
                           continue;
                         }
                         switch (item.marker) {

@@ -92,7 +92,8 @@ export const animateSidebarLayoutChanges: AnimateLayoutChanges = (args) =>
 // order. Snoozed rows can leave the shelf, but dropping into it is not
 // supported because snoozing requires a wake time.
 
-export type SidebarSection = "pinned" | "active" | "snoozed" | "settled";
+/** Split threads sit between pinned and active. They are never a drop target. */
+export type SidebarSection = "pinned" | "split" | "active" | "snoozed" | "settled";
 
 /** Sortable ids: thread rows use their scoped key; structural items use a
     colon-free prefix: scoped thread keys always contain a colon. */
@@ -106,6 +107,9 @@ export type SidebarListMarker =
   | "settled-placeholder"
   /** The boundary between pinned and active rows. */
   | "pinned-divider"
+  /** One split group: its heading and the rule that closes the block. */
+  | `split-header-${string}`
+  | `split-divider-${string}`
   | "snoozed-header"
   | "settled-header";
 
@@ -131,6 +135,7 @@ function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number):
     const item = items[i]!;
     if (item.kind !== "marker") continue;
     if (item.marker === "pinned-divider") section = "active";
+    else if (item.marker.startsWith("split-header-")) section = "split";
     else if (item.marker === "snoozed-header") section = "snoozed";
     else if (item.marker === "settled-header") section = "settled";
   }
@@ -156,14 +161,20 @@ export function resolveSidebarDropTarget(
   const moved = items.filter((_, index) => index !== activeIndex);
   moved.splice(overIndex, 0, items[activeIndex]!);
   const section = sectionAtSidebarSlot(moved, overIndex);
-  if (section === "snoozed") return null;
+  if (section === "snoozed" || section === "split") return null;
   const pinnedOrder: string[] = [];
   const activeOrder: string[] = [];
   let currentSection: SidebarSection = "pinned";
   for (const item of moved) {
     if (item.kind === "marker") {
       if (item.marker === "pinned-divider") currentSection = "active";
-      else if (item.marker === "snoozed-header" || item.marker === "settled-header") break;
+      else if (
+        item.marker.startsWith("split-header-") ||
+        item.marker === "snoozed-header" ||
+        item.marker === "settled-header"
+      ) {
+        break;
+      }
     } else if (currentSection === "pinned") pinnedOrder.push(item.key);
     else activeOrder.push(item.key);
   }

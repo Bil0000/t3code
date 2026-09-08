@@ -120,6 +120,7 @@ export function createSidebarSortingStrategy(input: {
     if (!target) return [];
     const groups: Record<SidebarSection, ThreadItem[]> = {
       pinned: [],
+      split: [],
       active: [],
       snoozed: [],
       settled: [],
@@ -135,7 +136,7 @@ export function createSidebarSortingStrategy(input: {
         }
         continue;
       }
-      if (item.section === "pinned" || item.section === "active")
+      if (item.section !== "snoozed" && item.section !== "settled")
         cardHeight ??= rects[index]?.height;
       else slimHeight ??= rects[index]?.height;
       if (item.key !== active.key) groups[item.section].push(item);
@@ -180,6 +181,12 @@ export function createSidebarSortingStrategy(input: {
     projected.push(...groups.pinned);
     marker("pinned-divider");
     section("active");
+    // Split groups never take a drop, so their block passes through as is.
+    projected.push(
+      ...items.filter((item) =>
+        item.kind === "marker" ? item.marker.startsWith("split-") : item.section === "split",
+      ),
+    );
     if (
       groups.snoozed.length > 0 ||
       ((active.section !== "snoozed" || (input.snoozedThreadCount ?? 0) > 1) &&
@@ -197,7 +204,7 @@ export function createSidebarSortingStrategy(input: {
       const rect = index === undefined ? undefined : rects[index];
       if (index !== undefined && rect) result[index] = { ...stationary, y: top - rect.top };
       const fallback =
-        item.kind === "thread" && (item.section === "pinned" || item.section === "active")
+        item.kind === "thread" && item.section !== "snoozed" && item.section !== "settled"
           ? cardHeight
           : slimHeight;
       const moved = item.kind === "thread" && item.key === active.key;

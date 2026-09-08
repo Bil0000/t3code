@@ -81,6 +81,12 @@ a pane with the **×** in its header or with `pane.close`. Closing the last
 neighbor returns to the plain chat view. The layout is remembered per desktop
 window; in a browser it is shared by every tab on the same origin.
 
+Opening a thread outside the split shows it on its own and keeps the layout intact.
+Dropping a thread on a chat that is not part of a split starts another split, so
+several can exist at once. The sidebar lists each split's threads below the active
+ones under a **Split view** heading; select the heading or one of the threads to
+return to that layout.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list

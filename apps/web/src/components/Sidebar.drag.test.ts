@@ -37,10 +37,12 @@ function layout(
   const rects = items.map((item) => {
     const height =
       item.kind === "thread"
-        ? (item.section === "pinned" || item.section === "active" ? cardHeight : 36) * scale
+        ? (item.section === "snoozed" || item.section === "settled" ? 36 : cardHeight) * scale
         : item.marker === "pinned-header" || item.marker === "pinned-divider"
           ? 0
-          : (item.marker.endsWith("placeholder") ? 0 : 32) * scale;
+          : item.marker.startsWith("split-divider-")
+            ? 13 * scale
+            : (item.marker.endsWith("placeholder") ? 0 : 32) * scale;
     const rect = { top, height, bottom: top + height, left: 0, right: 260, width: 260 };
     top += height + 1;
     return rect;
@@ -278,6 +280,32 @@ describe("sidebar drag projection", () => {
       if (index === args.activeIndex) continue;
       expect(strategy({ ...args, index })).toEqual(verticalListSortingStrategy({ ...args, index }));
     }
+  });
+
+  it("keeps the split block in place and skips it as a target", () => {
+    const items = [
+      pinnedHeader,
+      thread("p", "pinned"),
+      divider,
+      thread("a1", "active"),
+      thread("a2", "active"),
+      marker("split-header-g"),
+      thread("x", "split"),
+      marker("split-divider-g"),
+      settledHeader,
+    ];
+    expect(resolveSidebarDropTarget(items, "a2", "x")).toBeNull();
+    expect(resolveSidebarDropTarget(items, "a2", "a1")).toEqual({
+      section: "active",
+      pinnedOrder: ["p"],
+      activeOrder: ["a2", "a1"],
+    });
+    const result = preview({ items, settledOrder: [], settledExpanded: true }, "a2", "a1");
+    expect(result.get("a1")?.y).toBe(83);
+    expect(result.get(sidebarMarkerId("split-header-g"))).toEqual(stationary);
+    expect(result.get("x")).toEqual(stationary);
+    expect(result.get(sidebarMarkerId("split-divider-g"))).toEqual(stationary);
+    expect(result.get(sidebarMarkerId("settled-header"))).toEqual(stationary);
   });
 
   it("keeps the pinned header above the gap when a lower pin moves to the top", () => {
