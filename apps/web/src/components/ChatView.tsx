@@ -6110,7 +6110,14 @@ export default function ChatView(props: ChatViewProps) {
         event.preventDefault();
         event.stopPropagation();
         if (event.repeat || !activeThreadRef) return;
-        useChatPanesStore.getState().closeThread(activeThreadRef);
+        const survivor = useChatPanesStore.getState().closeThread(activeThreadRef);
+        if (survivor) {
+          void navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(survivor),
+            replace: true,
+          });
+        }
         return;
       }
 
@@ -6302,6 +6309,7 @@ export default function ChatView(props: ChatViewProps) {
     keybindings,
     handleUnsettleActiveThread,
     isServerThread,
+    navigate,
     onInterrupt,
     onToggleDiff,
     pinThread,

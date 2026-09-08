@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from "react";
 
 import { type ChatPaneId, type DropZone } from "~/chatPanes.logic";
-import { useChatPaneDragStore } from "~/chatPaneDragStore";
+import { chatPaneDragPointer, useChatPaneDragStore } from "~/chatPaneDragStore";
 import { cn } from "~/lib/utils";
 
 const ZONE_CLASS: Record<DropZone, string> = {
@@ -41,14 +41,20 @@ export function ChatPaneDropOverlay({ paneId, resolveZone, children }: ChatPaneD
     let rect = wrapper.getBoundingClientRect();
     let measuredAt = performance.now();
     const setTarget = useChatPaneDragStore.getState().setTarget;
-    const onPointerMove = (event: PointerEvent) => {
+    const track = (x: number, y: number) => {
       const now = performance.now();
       if (now - measuredAt > 100) {
         rect = wrapper.getBoundingClientRect();
         measuredAt = now;
       }
-      setTarget(paneId, resolveZone(rect, event.clientX, event.clientY));
+      chatPaneDragPointer.current = { x, y };
+      setTarget(paneId, resolveZone(rect, x, y));
     };
+    const onPointerMove = (event: PointerEvent) => {
+      if (event.isPrimary) track(event.clientX, event.clientY);
+    };
+    const last = chatPaneDragPointer.current;
+    if (last) track(last.x, last.y);
     document.addEventListener("pointermove", onPointerMove, { capture: true });
     return () => {
       document.removeEventListener("pointermove", onPointerMove, { capture: true });

@@ -111,8 +111,8 @@ import {
 } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { useChatPaneDragStore } from "../chatPaneDragStore";
-import { isThreadOpenInPane, openThreadInSplit } from "../chatPanesStore";
+import { chatPaneDragPointer, useChatPaneDragStore } from "../chatPaneDragStore";
+import { canOpenThreadInSplit, openThreadInSplit } from "../chatPanesStore";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
@@ -3269,6 +3269,10 @@ export default function Sidebar() {
       // splits the view instead of reordering the list.
       const thread = threadByKeyRef.current.get(activeKey);
       if (thread && !isMobile) {
+        chatPaneDragPointer.current =
+          event.activatorEvent instanceof PointerEvent
+            ? { x: event.activatorEvent.clientX, y: event.activatorEvent.clientY }
+            : null;
         useChatPaneDragStore.getState().start({
           threadRef: scopeThreadRef(thread.environmentId, thread.id),
           title: thread.title,
@@ -3995,10 +3999,7 @@ export default function Sidebar() {
             buildThreadActionMenuItems({
               branch: thread.branch ?? null,
               canOpenInSplit:
-                !isMobile &&
-                routeThreadRefRef.current !== null &&
-                !isThreadOpenInPane(threadRef) &&
-                scopedThreadKey(routeThreadRefRef.current) !== threadKey,
+                !isMobile && canOpenThreadInSplit(routeThreadRefRef.current, threadRef),
               isPinned,
               isSettled,
               isSnoozed,

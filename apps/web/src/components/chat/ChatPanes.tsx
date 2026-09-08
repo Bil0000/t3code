@@ -18,7 +18,11 @@ import {
   type ChatPaneLeaf,
   type ChatPaneNode,
 } from "~/chatPanes.logic";
-import { isChatPaneDragActive, useChatPaneDragStore } from "~/chatPaneDragStore";
+import {
+  chatPaneDragPointer,
+  isChatPaneDragActive,
+  useChatPaneDragStore,
+} from "~/chatPaneDragStore";
 import {
   commitChatPaneDrop,
   selectPaneDropZoneResolver,
@@ -63,17 +67,17 @@ export function ChatPanes({
     else showThread(routeThreadRef);
   }, [focusPane, routeLeaf, routeThreadRef, showThread]);
 
-  // A closed focused pane hands the route to the next survivor.
-  const focusedPaneId = useChatPanesStore((state) => state.focusedPaneId);
-  useEffect(() => {
-    const focusedLeaf = findLeafById(root, focusedPaneId);
-    if (routeLeaf || !focusedLeaf) return;
-    void navigate({
-      to: "/$environmentId/$threadId",
-      params: buildThreadRouteParams(focusedLeaf.threadRef),
-      replace: true,
-    });
-  }, [focusedPaneId, navigate, root, routeLeaf]);
+  const follow = useCallback(
+    (threadRef: ScopedThreadRef | null) => {
+      if (!threadRef) return;
+      void navigate({
+        to: "/$environmentId/$threadId",
+        params: buildThreadRouteParams(threadRef),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
   const activate = useCallback(
     (threadRef: ScopedThreadRef) => {
@@ -100,7 +104,13 @@ export function ChatPanes({
         });
       }}
     >
-      <PaneNode node={root} root={root} routeThreadKey={routeThreadKey} onActivate={activate} />
+      <PaneNode
+        node={root}
+        root={root}
+        routeThreadKey={routeThreadKey}
+        onActivate={activate}
+        onClosed={follow}
+      />
     </div>
   );
 }
@@ -110,20 +120,16 @@ function findLeaf(node: ChatPaneNode, threadKey: string): ChatPaneLeaf | null {
   return findLeaf(node.first, threadKey) ?? findLeaf(node.second, threadKey);
 }
 
-function findLeafById(node: ChatPaneNode, paneId: ChatPaneId | null): ChatPaneLeaf | null {
-  if (paneId === null) return null;
-  if (node.kind === "leaf") return node.id === paneId ? node : null;
-  return findLeafById(node.first, paneId) ?? findLeafById(node.second, paneId);
-}
-
 interface PaneNodeProps {
   node: ChatPaneNode;
   root: ChatPaneNode;
   routeThreadKey: string;
   onActivate: (threadRef: ScopedThreadRef) => void;
+  /** Receives the survivor's thread when the focused pane closed. */
+  onClosed: (threadRef: ScopedThreadRef | null) => void;
 }
 
-function PaneNode({ node, root, routeThreadKey, onActivate }: PaneNodeProps) {
+function PaneNode({ node, root, routeThreadKey, onActivate, onClosed }: PaneNodeProps) {
   const setRatio = useChatPanesStore((state) => state.setRatio);
   const containerRef = useRef<HTMLDivElement | null>(null);
   // A moving pane leaves the tree before it lands, so its old slot must not
@@ -140,6 +146,7 @@ function PaneNode({ node, root, routeThreadKey, onActivate }: PaneNodeProps) {
         resolveZone={dropZoneResolver}
         focused={scopedThreadKey(node.threadRef) === routeThreadKey}
         onActivate={onActivate}
+        onClosed={onClosed}
       />
     );
   }
@@ -158,6 +165,7 @@ function PaneNode({ node, root, routeThreadKey, onActivate }: PaneNodeProps) {
           root={root}
           routeThreadKey={routeThreadKey}
           onActivate={onActivate}
+          onClosed={onClosed}
         />
       </div>
       <ChatPaneResizeHandle
@@ -177,6 +185,7 @@ function PaneNode({ node, root, routeThreadKey, onActivate }: PaneNodeProps) {
           root={root}
           routeThreadKey={routeThreadKey}
           onActivate={onActivate}
+          onClosed={onClosed}
         />
       </div>
     </div>
@@ -188,14 +197,19 @@ const PaneLeaf = memo(function PaneLeaf({
   resolveZone: resolveZoneFor,
   focused,
   onActivate,
+  onClosed,
 }: {
   leaf: ChatPaneLeaf;
   resolveZone: (paneId: ChatPaneId) => ReturnType<typeof selectPaneDropZoneResolver>;
   focused: boolean;
   onActivate: (threadRef: ScopedThreadRef) => void;
+  onClosed: (threadRef: ScopedThreadRef | null) => void;
 }) {
   const { threadRef } = leaf;
-  const closePane = useChatPanesStore((state) => state.closePane);
+  const close = useCallback(
+    () => onClosed(useChatPanesStore.getState().closePane(leaf.id)),
+    [leaf.id, onClosed],
+  );
   const shell = useThreadShell(threadRef);
   const detail = useThreadDetail(threadRef);
   const status = useThreadStatus(threadRef);
@@ -208,8 +222,8 @@ const PaneLeaf = memo(function PaneLeaf({
 
   // A thread deleted elsewhere takes its pane with it.
   useEffect(() => {
-    if (status === "deleted") closePane(leaf.id);
-  }, [closePane, leaf.id, status]);
+    if (status === "deleted") close();
+  }, [close, status]);
 
   const title = shell?.title ?? "Thread";
   const headerDrag = usePaneHeaderDrag(leaf, title);
@@ -254,7 +268,7 @@ const PaneLeaf = memo(function PaneLeaf({
                   size="icon-micro"
                   aria-label={`Close pane for ${title}`}
                   onPointerDown={(event) => event.stopPropagation()}
-                  onClick={() => closePane(leaf.id)}
+                  onClick={close}
                 />
               }
             >
@@ -314,6 +328,7 @@ function usePaneHeaderDrag(leaf: ChatPaneLeaf, title: string) {
           started = true;
           document.body.style.cursor = "grabbing";
           document.body.style.userSelect = "none";
+          chatPaneDragPointer.current = { x: move.clientX, y: move.clientY };
           useChatPaneDragStore.getState().start({
             threadRef: leaf.threadRef,
             title,

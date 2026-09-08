@@ -52,3 +52,10 @@ export const useChatPaneDragStore = create<ChatPaneDragState>((set, get) => ({
 export function isChatPaneDragActive(): boolean {
   return useChatPaneDragStore.getState().threadRef !== null;
 }
+
+/**
+ * Where the primary pointer last was during a drag. Overlays mount after
+ * the gesture starts, so they read this to resolve a zone before the next
+ * move; without it, a pickup that lands directly on a pane has no target.
+ */
+export const chatPaneDragPointer: { current: { x: number; y: number } | null } = { current: null };

@@ -61,8 +61,13 @@ interface ChatPanesState {
   movePane: (paneId: ChatPaneId, targetPaneId: ChatPaneId, zone: DropZone) => void;
   /** Shows `threadRef` in the focused pane, so a plain navigation keeps the layout. */
   showThread: (threadRef: ScopedThreadRef) => void;
-  closePane: (paneId: ChatPaneId) => void;
-  closeThread: (threadRef: ScopedThreadRef) => void;
+  /**
+   * Removes a leaf. Returns the thread the route should move to when the
+   * focused pane closed, so the caller can navigate before the layout
+   * collapses, or null when the route is unaffected.
+   */
+  closePane: (paneId: ChatPaneId) => ScopedThreadRef | null;
+  closeThread: (threadRef: ScopedThreadRef) => ScopedThreadRef | null;
   setRatio: (splitId: ChatPaneId, ratio: number) => void;
 }
 
@@ -70,22 +75,26 @@ function normalizeRoot(root: ChatPaneNode | null): ChatPaneNode | null {
   return root?.kind === "split" ? root : null;
 }
 
-/** Focus moves to the first surviving leaf so the route can follow it. */
 function closeLeaf(
+  set: (partial: Partial<ChatPanesState>) => void,
   state: Pick<ChatPanesState, "root" | "focusedPaneId">,
   paneId: ChatPaneId,
-): Partial<ChatPanesState> | typeof state {
-  if (!state.root) return state;
+): ScopedThreadRef | null {
+  if (!state.root) return null;
   const root = removePane(state.root, paneId);
-  if (root === state.root || root === null) return state;
-  const focusedPaneId =
-    state.focusedPaneId === paneId ? collectLeaves(root)[0]!.id : state.focusedPaneId;
-  return { root: normalizeRoot(root), focusedPaneId };
+  if (root === state.root || root === null) return null;
+  const survivor = collectLeaves(root)[0]!;
+  const focusedClosed = state.focusedPaneId === paneId;
+  set({
+    root: normalizeRoot(root),
+    focusedPaneId: focusedClosed ? survivor.id : state.focusedPaneId,
+  });
+  return focusedClosed ? survivor.threadRef : null;
 }
 
 export const useChatPanesStore = create<ChatPanesState>()(
   persist(
-    (set) => ({
+    (set, get) => ({
       root: null,
       focusedPaneId: null,
       focusPane: (paneId) =>
@@ -120,12 +129,12 @@ export const useChatPanesStore = create<ChatPanesState>()(
               : { ...node, first: swap(node.first), second: swap(node.second) };
           return { root: swap(state.root), focusedPaneId: target.id };
         }),
-      closePane: (paneId) => set((state) => closeLeaf(state, paneId)),
-      closeThread: (threadRef) =>
-        set((state) => {
-          const leaf = state.root ? findLeafByThread(state.root, threadRef) : null;
-          return leaf ? closeLeaf(state, leaf.id) : state;
-        }),
+      closePane: (paneId) => closeLeaf(set, get(), paneId),
+      closeThread: (threadRef) => {
+        const state = get();
+        const leaf = state.root ? findLeafByThread(state.root, threadRef) : null;
+        return leaf ? closeLeaf(set, state, leaf.id) : null;
+      },
       setRatio: (splitId, ratio) =>
         set((state) => {
           if (!state.root) return state;
@@ -207,23 +216,49 @@ function seedLayout(
   return true;
 }
 
+/** The zone a menu-driven split lands on: beside the focused pane, or below it once the row is full. */
+function splitZoneForFocusedPane(state: ChatPanesState): {
+  anchor: ChatPaneLeaf;
+  zone: DropZone;
+} | null {
+  if (!state.root) return null;
+  const leaves = collectLeaves(state.root);
+  const anchor = leaves.find((leaf) => leaf.id === state.focusedPaneId) ?? leaves[0];
+  if (!anchor) return null;
+  if (canSplitPane(state.root, anchor.id, "horizontal")) return { anchor, zone: "right" };
+  if (canSplitPane(state.root, anchor.id, "vertical")) return { anchor, zone: "bottom" };
+  return null;
+}
+
+/** Whether "Open in split view" can place `threadRef` beside the route thread right now. */
+export function canOpenThreadInSplit(
+  routeThreadRef: ScopedThreadRef | null,
+  threadRef: ScopedThreadRef,
+): boolean {
+  if (
+    !routeThreadRef ||
+    (routeThreadRef.environmentId === threadRef.environmentId &&
+      routeThreadRef.threadId === threadRef.threadId)
+  ) {
+    return false;
+  }
+  const state = useChatPanesStore.getState();
+  if (state.root === null) return true;
+  return (
+    findLeafByThread(state.root, threadRef) === null && splitZoneForFocusedPane(state) !== null
+  );
+}
+
 /** Opens `threadRef` beside the focused pane, seeding a layout from the route thread when needed. */
 export function openThreadInSplit(
   routeThreadRef: ScopedThreadRef | null,
   threadRef: ScopedThreadRef,
 ): boolean {
+  if (!canOpenThreadInSplit(routeThreadRef, threadRef)) return false;
   if (!seedLayout(routeThreadRef, threadRef, randomUUID())) return false;
   const current = useChatPanesStore.getState();
-  if (!current.root || findLeafByThread(current.root, threadRef)) return false;
-  const leaves = collectLeaves(current.root);
-  const anchor = leaves.find((leaf) => leaf.id === current.focusedPaneId) ?? leaves[0];
-  if (!anchor) return false;
-  const zone = canSplitPane(current.root, anchor.id, "horizontal") ? "right" : "bottom";
-  current.dropThread(anchor.id, zone, threadRef);
+  const placement = splitZoneForFocusedPane(current);
+  if (!placement) return false;
+  current.dropThread(placement.anchor.id, placement.zone, threadRef);
   return useChatPanesStore.getState().root !== current.root;
-}
-
-export function isThreadOpenInPane(threadRef: ScopedThreadRef): boolean {
-  const root = useChatPanesStore.getState().root;
-  return root !== null && findLeafByThread(root, threadRef) !== null;
 }

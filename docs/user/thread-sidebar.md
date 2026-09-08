@@ -78,8 +78,8 @@ Drag a pane's header to move it to another edge, and drag the divider between tw
 panes to resize them. Panes nest up to a two-by-two grid. Click into a pane to
 make it the active thread; shortcuts and typing go to the active pane only. Close
 a pane with the **×** in its header or with `pane.close`. Closing the last
-neighbor returns to the plain chat view. The layout is remembered per browser or
-desktop window.
+neighbor returns to the plain chat view. The layout is remembered per desktop
+window; in a browser it is shared by every tab on the same origin.
 
 ## Settle finished work
 
