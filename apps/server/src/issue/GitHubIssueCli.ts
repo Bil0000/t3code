@@ -587,7 +587,7 @@ function closeReasonArgs(reason: IssueCloseReason | undefined): ReadonlyArray<st
   return ["--reason", reason === "completed" ? "completed" : "not planned"];
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const github = yield* GitHubCli.GitHubCli;
   const graphQlBudget = yield* GitHubGraphQlBudget.GitHubGraphQlBudget;
 

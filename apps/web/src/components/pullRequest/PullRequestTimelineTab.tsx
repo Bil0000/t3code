@@ -39,7 +39,7 @@ import {
 } from "./pullRequestDetail.logic";
 import { canEditPullRequestComment } from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
-import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
+import { SourceControlMarkdownEditor as PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import {
   PullRequestDiffStat,

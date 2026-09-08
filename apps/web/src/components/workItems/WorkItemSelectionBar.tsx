@@ -99,7 +99,7 @@ export function WorkItemSelectButton() {
   );
 }
 
-export function WorkItemSelectionBar() {
+function WorkItemSelectionBar() {
   const items = useWorkItemSelection((state) => state.items);
   const mode = useWorkItemSelection((state) => state.mode);
   const setMode = useWorkItemSelection((state) => state.setMode);

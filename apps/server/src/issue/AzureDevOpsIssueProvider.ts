@@ -53,7 +53,7 @@ const CAPABILITIES: IssueCapabilities = {
  * moment they try — the safer half of an unknown, since hiding a control from somebody entitled
  * to it leaves them no way through and no reason given.
  */
-export const AZURE_DEVOPS_ISSUE_VIEWER_PERMISSIONS: IssueViewerPermissions = {
+const AZURE_DEVOPS_ISSUE_VIEWER_PERMISSIONS: IssueViewerPermissions = {
   actions: CAPABILITIES.actions,
   comment: CAPABILITIES.comment,
   edit: CAPABILITIES.edit,
@@ -158,14 +158,12 @@ export const make = Effect.gen(function* () {
     getIssue: (input) =>
       cli.getWorkItem({ cwd: input.cwd, number: input.number }).pipe(
         Effect.mapError(fail("getIssue")),
-        Effect.map(
-          (item): ProviderIssueDetail => ({
-            ...toIssue(item),
-            body: item.description,
-            linkedPullRequests: [],
-            viewerPermissions: AZURE_DEVOPS_ISSUE_VIEWER_PERMISSIONS,
-          }),
-        ),
+        Effect.map((item): ProviderIssueDetail => ({
+          ...toIssue(item),
+          body: item.description,
+          linkedPullRequests: [],
+          viewerPermissions: AZURE_DEVOPS_ISSUE_VIEWER_PERMISSIONS,
+        })),
       ),
 
     // Nothing in `az boards` reads a discussion back, so the conversation is empty rather than

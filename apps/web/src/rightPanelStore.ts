@@ -310,7 +310,7 @@ export function issueSurfaceId(target: {
   )}`;
 }
 
-export function issueSurface(target: {
+function issueSurface(target: {
   environmentId?: string;
   projectId: string;
   provider?: string;

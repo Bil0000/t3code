@@ -1,16 +1,11 @@
-import type { LocalApi, ScopedThreadRef } from "@t3tools/contracts";
+import type { LocalApi } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
-import { type MouseEvent, useCallback } from "react";
 
 import { sourceControlHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
 
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
 import { readLocalApi } from "../localApi";
-import { useRightPanelStore } from "../rightPanelStore";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
-
-import { useProjects, useServerConfigs } from "../state/entities";
-import { usePrimaryEnvironmentId } from "../state/environments";
 
 export class IssueLinkOpenError extends Schema.TaggedError<IssueLinkOpenError>()(
   "IssueLinkOpenError",
@@ -218,56 +213,4 @@ export function openLinkInBrowser(targetUrl: string): void {
       }),
     );
   });
-}
-
-/**
- * Returns a click handler that opens an issue link beside the thread it was read in, and says
- * whether it did. Anything else — another organisation's repository, a host nothing here is
- * checked out from, a link that merely looks like one — falls back to the system browser, exactly
- * as it would have without this handler.
- *
- * Resolving the project here rather than on the page is what makes recognising a URL safe: a
- * lookalike hostname matches no project and stays a link.
- *
- * Scoped to the thread's own environment, not every environment the workspace has: two
- * environments can hold the same repository, and matching against the wrong one's projects would
- * open a surface the thread's environment never loads.
- */
-export function useOpenIssueLink(threadRef?: ScopedThreadRef) {
-  const allProjects = useProjects();
-  const serverConfigs = useServerConfigs();
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
-  return useCallback(
-    (event: MouseEvent<HTMLElement>, issueUrl: string, targetThreadRef?: ScopedThreadRef) => {
-      event.preventDefault();
-      event.stopPropagation();
-
-      const resolvedThreadRef = targetThreadRef ?? threadRef;
-      const environmentId = resolvedThreadRef?.environmentId ?? primaryEnvironmentId;
-      const issuesSupported =
-        environmentId !== null &&
-        serverConfigs.get(environmentId)?.environment.capabilities.issues === true;
-      const parsed = parseIssueUrl(issueUrl);
-      const projects =
-        environmentId === null
-          ? []
-          : allProjects.filter((project) => project.environmentId === environmentId);
-      const project = parsed === null ? undefined : findProjectForIssue(projects, parsed);
-
-      if (issuesSupported && resolvedThreadRef && parsed !== null && project !== undefined) {
-        useRightPanelStore.getState().openIssue(resolvedThreadRef, {
-          projectId: project.id,
-          // The identity's own spelling, not the one read out of the URL: the panel asks the
-          // provider for this repository, while matching a link only ever compares lower case.
-          repository: repositoryForProjectLink(project, parsed.repository),
-          number: parsed.number,
-        });
-        return true;
-      }
-
-      openLinkInBrowser(issueUrl);
-      return false;
-    },
-    [allProjects, primaryEnvironmentId, serverConfigs, threadRef],
-  );
 }

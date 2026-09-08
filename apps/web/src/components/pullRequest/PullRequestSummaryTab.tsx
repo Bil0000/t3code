@@ -64,7 +64,7 @@ import {
 } from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
 import { ConversationGhost } from "../sourceControl/ListGhosts";
-import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
+import { SourceControlMarkdownEditor as PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import {
   useWorkItemMatches,

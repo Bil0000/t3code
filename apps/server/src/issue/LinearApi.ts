@@ -305,7 +305,7 @@ export class LinearApi extends Context.Service<
 const clean = (value: string | null | undefined) => value?.trim() || null;
 const isAuthError = (message: string) => /auth|api key|access token/i.test(message);
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const config = yield* ApiConfig;
   const http = yield* HttpClient.HttpClient;
   const secrets = yield* ServerSecretStore.ServerSecretStore;

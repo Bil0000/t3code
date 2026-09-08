@@ -118,6 +118,3 @@ export function SourceControlMarkdownEditor({
     </div>
   );
 }
-
-/** Existing name kept for pull-request callers while issues share the same editor. */
-export const PullRequestMarkdownEditor = SourceControlMarkdownEditor;

@@ -318,7 +318,7 @@ function assigneeIds(assignees: ReadonlyArray<string>): ReadonlyArray<number> {
   });
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const gitlab = yield* GitLabCli.GitLabCli;
 
   const api = (input: {

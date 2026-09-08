@@ -822,73 +822,73 @@ const IssueRpcError = Schema.Union([
   EnvironmentAuthorizationError,
 ]);
 
-export const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
+const WsIssuesListRpc = Rpc.make(WS_METHODS.issuesList, {
   payload: IssueListInput,
   success: IssueListResult,
   error: IssueRpcError,
 });
 
-export const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
+const WsIssuesDetailRpc = Rpc.make(WS_METHODS.issuesDetail, {
   payload: IssueRef,
   success: IssueDetail,
   error: IssueRpcError,
 });
 
-export const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
+const WsIssuesActivityRpc = Rpc.make(WS_METHODS.issuesActivity, {
   payload: IssueRef,
   success: IssueActivity,
   error: IssueRpcError,
 });
 
-export const WsIssuesCommentsPageRpc = Rpc.make(WS_METHODS.issuesCommentsPage, {
+const WsIssuesCommentsPageRpc = Rpc.make(WS_METHODS.issuesCommentsPage, {
   payload: IssueCommentsPageInput,
   success: IssueCommentsPageResult,
   error: IssueRpcError,
 });
 
-export const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
+const WsIssuesRunActionRpc = Rpc.make(WS_METHODS.issuesRunAction, {
   payload: IssueActionInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
 
-export const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
+const WsIssuesCommentRpc = Rpc.make(WS_METHODS.issuesComment, {
   payload: IssueCommentInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
 
-export const WsIssuesUpdateCommentRpc = Rpc.make(WS_METHODS.issuesUpdateComment, {
+const WsIssuesUpdateCommentRpc = Rpc.make(WS_METHODS.issuesUpdateComment, {
   payload: IssueCommentUpdateInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
 
-export const WsIssuesSetReactionRpc = Rpc.make(WS_METHODS.issuesSetReaction, {
+const WsIssuesSetReactionRpc = Rpc.make(WS_METHODS.issuesSetReaction, {
   payload: IssueReactionInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
 
-export const WsIssuesCreateRpc = Rpc.make(WS_METHODS.issuesCreate, {
+const WsIssuesCreateRpc = Rpc.make(WS_METHODS.issuesCreate, {
   payload: IssueCreateInput,
   success: IssueCreateResult,
   error: IssueRpcError,
 });
 
-export const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
+const WsIssuesUpdateRpc = Rpc.make(WS_METHODS.issuesUpdate, {
   payload: IssueUpdateInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
 
-export const WsIssuesSetLabelsRpc = Rpc.make(WS_METHODS.issuesSetLabels, {
+const WsIssuesSetLabelsRpc = Rpc.make(WS_METHODS.issuesSetLabels, {
   payload: IssueLabelsInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
 
-export const WsIssuesSetAssigneesRpc = Rpc.make(WS_METHODS.issuesSetAssignees, {
+const WsIssuesSetAssigneesRpc = Rpc.make(WS_METHODS.issuesSetAssignees, {
   payload: IssueAssigneesInput,
   success: Schema.Void,
   error: IssueRpcError,
@@ -899,13 +899,13 @@ export const WsIssuesSetAssigneesRpc = Rpc.make(WS_METHODS.issuesSetAssignees, {
  * may be assigned are only wanted once somebody opens the menu, and reading them with every issue
  * would spend a request per host on a list nobody looked at.
  */
-export const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandidates, {
+const WsIssuesLabelCandidatesRpc = Rpc.make(WS_METHODS.issuesLabelCandidates, {
   payload: IssueRef,
   success: IssueLabelCandidateList,
   error: IssueRpcError,
 });
 
-export const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
+const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeCandidates, {
   payload: IssueRef,
   success: IssueAssigneeCandidateList,
   error: IssueRpcError,
@@ -916,48 +916,48 @@ export const WsIssuesAssigneeCandidatesRpc = Rpc.make(WS_METHODS.issuesAssigneeC
  * composer rather than with the listing: it is about the repository and not about any issue in it,
  * which is why it takes a repository rather than a reference.
  */
-export const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
+const WsIssuesTemplatesRpc = Rpc.make(WS_METHODS.issuesTemplates, {
   payload: IssueRepositoryRef,
   success: IssueTemplateList,
   error: IssueRpcError,
 });
 
-export const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
+const WsIssuesInvalidateRpc = Rpc.make(WS_METHODS.issuesInvalidate, {
   payload: IssueInvalidateInput,
   success: Schema.Void,
   error: IssueRpcError,
 });
 
-export const WsLinearConnectionStatusRpc = Rpc.make(WS_METHODS.linearConnectionStatus, {
+const WsLinearConnectionStatusRpc = Rpc.make(WS_METHODS.linearConnectionStatus, {
   success: LinearConnection,
   error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
 
-export const WsLinearConnectRpc = Rpc.make(WS_METHODS.linearConnect, {
+const WsLinearConnectRpc = Rpc.make(WS_METHODS.linearConnect, {
   payload: LinearConnectInput,
   success: LinearConnection,
   error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
 
-export const WsLinearDisconnectRpc = Rpc.make(WS_METHODS.linearDisconnect, {
+const WsLinearDisconnectRpc = Rpc.make(WS_METHODS.linearDisconnect, {
   payload: LinearDisconnectInput,
   success: LinearConnection,
   error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
 
-export const WsLinearSetProjectBindingRpc = Rpc.make(WS_METHODS.linearSetProjectBinding, {
+const WsLinearSetProjectBindingRpc = Rpc.make(WS_METHODS.linearSetProjectBinding, {
   payload: LinearSetProjectBindingInput,
   success: Schema.Void,
   error: Schema.Union([IssueTrackingError, EnvironmentAuthorizationError]),
 });
 
-export const WsWorkItemsGenerateTaskRpc = Rpc.make(WS_METHODS.workItemsGenerateTask, {
+const WsWorkItemsGenerateTaskRpc = Rpc.make(WS_METHODS.workItemsGenerateTask, {
   payload: WorkItemTaskInput,
   success: WorkItemTaskResult,
   error: Schema.Union([WorkItemTaskError, EnvironmentAuthorizationError]),
 });
 
-export const WsWorkItemsFindMatchesRpc = Rpc.make(WS_METHODS.workItemsFindMatches, {
+const WsWorkItemsFindMatchesRpc = Rpc.make(WS_METHODS.workItemsFindMatches, {
   payload: WorkItemMatchInput,
   success: WorkItemMatchResult,
   error: Schema.Union([WorkItemMatchError, EnvironmentAuthorizationError]),

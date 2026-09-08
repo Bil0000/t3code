@@ -1,7 +1,7 @@
 import type { EnvironmentId, IssueProviderKind, ProjectId } from "@t3tools/contracts";
 import { create } from "zustand";
 
-export const MAX_SELECTED_WORK_ITEMS = 20;
+const MAX_SELECTED_WORK_ITEMS = 20;
 
 export interface SelectedWorkItem {
   readonly kind: "issue" | "pull-request";

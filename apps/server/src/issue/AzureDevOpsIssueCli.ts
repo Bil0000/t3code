@@ -193,7 +193,7 @@ function stateClause(state: IssueListState): string {
   }
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const azure = yield* AzureDevOpsCli.AzureDevOpsCli;
 
   // Every command resolves the organization and project from the checkout, which is what the

@@ -232,7 +232,7 @@ function searchFilter(query: string): string {
   return `(title ~ "${literal}" OR content.raw ~ "${literal}")`;
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const bitbucket = yield* BitbucketApi.BitbucketApi;
 
   const withRepository = <A>(
