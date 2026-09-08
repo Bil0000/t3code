@@ -1,5 +1,4 @@
 import * as NodeChildProcess from "node:child_process";
-import * as NodeFS from "node:fs";
 import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
@@ -9,6 +8,7 @@ import {
   resolveElectronLaunchCommand,
 } from "./electron-launcher.mjs";
 import { waitForResources } from "./wait-for-resources.mjs";
+import { watchBuildFiles } from "./watch-build-files.mjs";
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL?.trim();
 if (!devServerUrl) {
@@ -204,17 +204,7 @@ function scheduleRestart() {
 
 function startWatchers() {
   for (const { directory, files } of watchedDirectories) {
-    const watcher = NodeFS.watch(
-      NodePath.join(desktopDir, directory),
-      { persistent: true },
-      (_eventType, filename) => {
-        if (typeof filename !== "string" || !files.has(filename)) {
-          return;
-        }
-
-        scheduleRestart();
-      },
-    );
+    const watcher = watchBuildFiles(NodePath.join(desktopDir, directory), files, scheduleRestart);
 
     watchers.push(watcher);
   }
