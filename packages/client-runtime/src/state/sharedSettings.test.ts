@@ -122,6 +122,40 @@ describe("pickSharedServerSettings", () => {
 });
 
 describe("filterSharedServerPatch", () => {
+  it.each([true, false])(
+    "resets a disabled default provider only on the originating environment (%s)",
+    (targetIsSource) => {
+      const settings = {
+        ...DEFAULT_SERVER_SETTINGS,
+        providerInstances: {
+          codex: { driver: ProviderDriverKind.make("codex"), enabled: false, config: {} },
+          claudeAgent: {
+            driver: ProviderDriverKind.make("claudeAgent"),
+            enabled: true,
+            config: {},
+          },
+        },
+        textGenerationModelSelection: {
+          instanceId: ProviderInstanceId.make("claudeAgent"),
+          model: "claude-opus-4-6",
+        },
+      };
+      const patch = {
+        textGenerationModelSelection: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection,
+        continueThreadsAfterServerUpdate: true,
+        sidebarAutoSettleAfterDays: 7,
+      };
+      expect(filterSharedServerPatch(patch, undefined, settings, settings, targetIsSource)).toEqual(
+        {
+          ...(targetIsSource
+            ? { textGenerationModelSelection: DEFAULT_SERVER_SETTINGS.textGenerationModelSelection }
+            : {}),
+          sidebarAutoSettleAfterDays: 7,
+        },
+      );
+    },
+  );
+
   it.each(["missing", "disabled", "different-driver", "enabled"] as const)(
     "shares a custom model only when its target provider is enabled (%s)",
     (availability) => {

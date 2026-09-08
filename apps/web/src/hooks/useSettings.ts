@@ -467,6 +467,7 @@ function useUpdateSettingsTarget(environmentId: EnvironmentId | null) {
               target?.serverConfig?.environment.capabilities,
               target?.serverConfig?.settings,
               sourceSettings,
+              targetId === environmentId,
             );
             if (Object.keys(targetPatch).length === 0) continue;
             wroteToTarget = true;

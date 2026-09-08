@@ -54,17 +54,19 @@ export function splitSharedServerPatch(patch: ServerSettingsPatch): {
   };
 }
 
-/** Omit restart recovery on servers that cannot persist its preference. */
+/** Filter unsupported preferences; direct model writes retain the server's fallback behavior. */
 export function filterSharedServerPatch(
   patch: ServerSettingsPatch,
   capabilities: Pick<ExecutionEnvironmentCapabilities, "threadRestartContinuation"> | undefined,
   settings?: ServerSettings,
   sourceSettings = settings,
+  targetIsSource = false,
 ): ServerSettingsPatch {
   const instanceId =
     patch.textGenerationModelSelection?.instanceId ??
     sourceSettings?.textGenerationModelSelection.instanceId;
   if (
+    !targetIsSource &&
     patch.textGenerationModelSelection &&
     (!settings ||
       (instanceId !== undefined &&
