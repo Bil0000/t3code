@@ -1310,7 +1310,33 @@ export const make = Effect.gen(function* () {
     );
 
   const setup = Effect.fn("desktop.snapShot.setup")(function* (action: DesktopSnapShotSetupAction) {
-    if (action === "install-kde-helper" || action === "remove-kde-helper") {
+    if (action === "test-mac-capture") {
+      if (environment.platform !== "darwin")
+        return yield* new DesktopSnapShotSetupError({ action, reason: "unsupported-session" });
+      // Exercise the real capture path during setup without attaching a snapshot
+      // or running capture feedback. The temporary image is discarded on failure too.
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          const directory = yield* fileSystem.makeTempDirectoryScoped({
+            prefix: "t3-snapshot-test-",
+          });
+          yield* Effect.tryPromise(async () => {
+            const active = await activeWindow("darwin");
+            if (!active) throw new Error("No window is available to test capture.");
+            await captureMacWindowSnapshot(
+              active,
+              path.join(directory, "test.png"),
+              snapShotThumbnailSize(active),
+            );
+          });
+        }),
+      ).pipe(
+        Effect.mapError(
+          (cause) => new DesktopSnapShotSetupError({ action, reason: "setup-failed", cause }),
+        ),
+      );
+      return;
+    } else if (action === "install-kde-helper" || action === "remove-kde-helper") {
       if (captureMode(environment.platform) !== "portal" || !isKdeCaptureSession())
         return yield* new DesktopSnapShotSetupError({
           action,

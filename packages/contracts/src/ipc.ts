@@ -232,6 +232,7 @@ export const DesktopSnapShotSetupAction = Schema.Literals([
   "remove-kde-helper",
   "install-hyprland-helper",
   "remove-hyprland-helper",
+  "test-mac-capture",
   "allow-screen-recording",
   "allow-accessibility",
   "retry-shortcut",

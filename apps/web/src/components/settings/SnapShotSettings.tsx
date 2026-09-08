@@ -14,6 +14,11 @@ import { cn } from "~/lib/utils";
 
 import { useClientSettings, useUpdateClientSettings } from "../../hooks/useSettings";
 import { getDesktopSnapShotBridge } from "../../lib/desktopSnapShot";
+import {
+  readSnapShotSetupResume,
+  saveSnapShotSetupResume,
+  clearSnapShotSetupResume,
+} from "../../lib/snapShotSetupResume";
 import { sameSnapShotShortcut, snapShotKeybindingConflict } from "../../lib/snapShotShortcut";
 import { playSnapShotSound } from "../../lib/snapShotSound";
 import { primaryServerKeybindingsAtom } from "../../state/server";
@@ -125,6 +130,14 @@ export function SnapShotSettings() {
       setSetupBusy(true);
       setSetupError(null);
       try {
+        if (
+          state?.macPermissions &&
+          wizard &&
+          (action === "allow-screen-recording" || action === "allow-accessibility")
+        ) {
+          // macOS can quit the app from its permission prompt.
+          saveSnapShotSetupResume(wizard.wasEnabled);
+        }
         await bridge.setupSnapShot(action);
         await refreshState();
       } catch (error) {
@@ -140,7 +153,7 @@ export function SnapShotSettings() {
         setSetupBusy(false);
       }
     },
-    [bridge, refreshState, setupBusy],
+    [bridge, refreshState, setupBusy, state, wizard],
   );
 
   useEffect(() => {
@@ -154,9 +167,18 @@ export function SnapShotSettings() {
   }, [setupError, wizard]);
 
   useEffect(() => {
-    void refreshState();
+    let cancelled = false;
+    void refreshState().then((current) => {
+      const resume = readSnapShotSetupResume();
+      if (!cancelled && current?.macPermissions && resume) {
+        setWizard({ initialStep: "access", wasEnabled: resume.wasEnabled });
+      }
+    });
     window.addEventListener("focus", refreshState);
-    return () => window.removeEventListener("focus", refreshState);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", refreshState);
+    };
   }, [refreshState]);
 
   useEffect(
@@ -270,6 +292,7 @@ export function SnapShotSettings() {
     try {
       let current = await refreshState();
       if (!current) return;
+      if (current.macPermissions) requested = "access";
       if (!settings.snapShotEnabled && captureSetupInitialStep(current, requested) !== "access") {
         // Opening setup is the opt-in. Restore registration before resuming a
         // later step, just as Continue does on the access step.
@@ -295,6 +318,11 @@ export function SnapShotSettings() {
     setSetupBusy(true);
     setSetupError(null);
     try {
+      if (state?.macPermissions) {
+        saveSnapShotSetupResume(wizard?.wasEnabled ?? settings.snapShotEnabled);
+        if (!bridge?.setupSnapShot) throw new Error("Restart T3 Code to finish capture setup.");
+        await bridge.setupSnapShot("test-mac-capture");
+      }
       if (state?.mode === "direct")
         await bridge?.requestSnapShotPermissions(settings.snapShotIncludeAccessibility);
       const nextState =
@@ -303,7 +331,7 @@ export function SnapShotSettings() {
           : await save({ snapShotEnabled: true });
       return nextState !== undefined && captureSetupAccessReady(nextState);
     } catch (error) {
-      setSetupError(captureSettingsError("Couldn't request capture permissions", error));
+      setSetupError(captureSettingsError("Couldn't verify capture access", error));
       return false;
     } finally {
       setSetupBusy(false);
@@ -327,6 +355,7 @@ export function SnapShotSettings() {
       }
       stopRecording();
       setSetupError(null);
+      clearSnapShotSetupResume();
       setWizard(null);
     } catch (error) {
       setSetupError(captureSettingsError("Couldn't close capture setup", error));

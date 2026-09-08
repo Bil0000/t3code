@@ -33,6 +33,7 @@ const bridge = vi.hoisted(() => ({
   previewSnapShotConfig: vi.fn(),
   applySnapShotConfig: vi.fn(),
   setupSnapShot: vi.fn(),
+  requestSnapShotPermissions: vi.fn().mockResolvedValue(undefined),
   onMenuAction: vi.fn(),
   onSnapShotEvent: vi.fn(() => () => undefined),
 }));
@@ -336,4 +337,80 @@ it("keeps setup errors in the wizard and does not toast them after closing it", 
   await (dialog.props.onClose as (completed: boolean) => Promise<void>)(false);
   expect(wizard(renderWithEffects())).toBeNull();
   expect(toastManager.add).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "resumes macOS permission setup after restart and clears it on close, completed=%s",
+  async (completed) => {
+    const { readSnapShotSetupResume } = await import("../../lib/snapShotSetupResume");
+    const values = new Map<string, string>();
+    Object.assign(window, {
+      localStorage: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+        removeItem: (key: string) => values.delete(key),
+      },
+    });
+    settingsStore.current = { ...settingsStore.current, snapShotEnabled: false };
+    state = {
+      mode: "direct",
+      shortcut: DEFAULT_CLIENT_SETTINGS.snapShotShortcut,
+      shortcutRegistered: false,
+      shortcutMessage: null,
+      message: null,
+      macPermissions: { screenRecording: false, accessibility: false },
+    };
+    const tree = await mount();
+    const toggle = visitElements(
+      tree,
+      (element) => element.props["aria-label"] === "Enable snapshots",
+    );
+    (toggle!.props.onCheckedChange as (checked: boolean) => void)(true);
+    await finish(bridge.getSnapShotState.mock.results[1]!.value);
+    bridge.setupSnapShot.mockImplementationOnce(async () => {
+      expect(readSnapShotSetupResume()).toEqual({ wasEnabled: false });
+    });
+    await (wizard(render())!.props.onAction as (action: string) => Promise<void>)(
+      "allow-screen-recording",
+    );
+
+    hooks.reset();
+    effects.length = 0;
+    bridge.getSnapShotState.mockClear();
+    state = { ...state, macPermissions: { screenRecording: true, accessibility: true } };
+    const resumed = wizard(await mount());
+    expect(resumed).not.toBeNull();
+    expect(resumed!.props.initialStep).toBe("access");
+    expect(resumed!.props.wasEnabled).toBe(false);
+    await (resumed!.props.onClose as (completed: boolean) => Promise<void>)(completed);
+    expect(wizard(render())).toBeNull();
+    expect(readSnapShotSetupResume()).toBeNull();
+  },
+);
+
+it("requires a successful macOS test capture before enabling and allows retry", async () => {
+  settingsStore.current = { ...DEFAULT_CLIENT_SETTINGS, snapShotEnabled: false };
+  state = {
+    mode: "direct",
+    shortcut: DEFAULT_CLIENT_SETTINGS.snapShotShortcut,
+    shortcutRegistered: false,
+    shortcutMessage: null,
+    message: null,
+    macPermissions: { screenRecording: true, accessibility: true },
+  };
+  const tree = await mount();
+  const toggle = visitElements(
+    tree,
+    (element) => element.props["aria-label"] === "Enable snapshots",
+  );
+  (toggle!.props.onCheckedChange as (checked: boolean) => void)(true);
+  await finish(bridge.getSnapShotState.mock.results[1]!.value);
+  bridge.setupSnapShot.mockRejectedValueOnce(new Error("Capture was denied"));
+  const enable = () => (wizard(render())!.props.onEnable as () => Promise<boolean>)();
+  expect(await enable()).toBe(false);
+  expect(wizard(render())!.props.error).toBe("Capture was denied");
+  expect(settingsStore.current.snapShotEnabled).toBe(false);
+  expect(await enable()).toBe(true);
+  expect(bridge.setupSnapShot.mock.calls).toEqual([["test-mac-capture"], ["test-mac-capture"]]);
+  expect(settingsStore.current.snapShotEnabled).toBe(true);
 });

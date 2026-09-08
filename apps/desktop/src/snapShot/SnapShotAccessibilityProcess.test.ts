@@ -1,10 +1,15 @@
 import { assert, beforeEach, it } from "@effect/vitest";
 import * as NodeEvents from "node:events";
+import * as NodeProcess from "node:process";
 import { vi } from "vite-plus/test";
 
 const forkMock = vi.hoisted(() =>
   vi.fn<
-    (_path: string, _args: ReadonlyArray<string>, _options: { env?: NodeJS.ProcessEnv }) => unknown
+    (
+      _path: string,
+      _args: ReadonlyArray<string>,
+      _options: { env?: NodeJS.ProcessEnv; execPath?: string },
+    ) => unknown
   >(),
 );
 
@@ -68,6 +73,7 @@ it("returns accessibility extracted by the helper", async () => {
   await read.started;
   assert.deepEqual(await read.result, context);
   assert.strictEqual(forkMock.mock.calls[0]?.[2]?.env?.ELECTRON_RUN_AS_NODE, "1");
+  assert.strictEqual(forkMock.mock.calls[0]?.[2]?.execPath, NodeProcess.execPath);
 });
 
 it("hands a warm helper to the capture and prewarms its replacement", async () => {

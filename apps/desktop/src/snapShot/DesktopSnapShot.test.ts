@@ -3593,3 +3593,58 @@ it.effect("waits to apply settings while permissions are pending", () => {
     }),
   ).pipe(Effect.provide(layer));
 });
+
+for (const fails of [false, true]) {
+  it.effect(`tests macOS capture without publishing it and cleans up, failure=${fails}`, () => {
+    const active = {
+      platform: "macos",
+      id: 42,
+      title: "Setup",
+      owner: { name: "T3 Code", processId: 123, path: "/Applications/T3 Code.app" },
+      bounds: { x: 0, y: 0, width: 800, height: 600 },
+    };
+    activeWindowMock.mockReset().mockResolvedValue(active);
+    macCaptureMock.mockReset();
+    if (fails) macCaptureMock.mockRejectedValue(new Error("Capture denied"));
+    else macCaptureMock.mockResolvedValue({ source: { name: "Setup" }, png: Buffer.from("png") });
+    accessibilityProcessReadMock.mockClear();
+    const cleanup = vi.fn();
+    return Effect.scoped(
+      Effect.gen(function* () {
+        const service = yield* DesktopSnapShot.make;
+        if (fails) {
+          const error = yield* service.setup("test-mac-capture").pipe(Effect.flip);
+          assert.equal(error.reason, "setup-failed");
+        } else yield* service.setup("test-mac-capture");
+        assert.equal(macCaptureMock.mock.calls.length, 1);
+        assert.equal(macCaptureMock.mock.calls[0]?.[0], active);
+        assert.equal(macCaptureMock.mock.calls[0]?.[1], "/tmp/setup-test/test.png");
+        assert.equal(cleanup.mock.calls.length, 1);
+        assert.equal(accessibilityProcessReadMock.mock.calls.length, 0);
+        assert.deepEqual(yield* service.listPending, []);
+      }),
+    ).pipe(
+      Effect.provide(
+        testLayer("darwin", {
+          makeTempDirectoryScoped: () =>
+            Effect.acquireRelease(Effect.succeed("/tmp/setup-test"), () =>
+              Effect.sync(() => {
+                cleanup();
+              }),
+            ),
+          readDirectory: () => Effect.succeed([]),
+        }),
+      ),
+    );
+  });
+}
+
+it.effect("rejects macOS test capture on other platforms", () =>
+  Effect.scoped(
+    Effect.gen(function* () {
+      const service = yield* DesktopSnapShot.make;
+      const error = yield* service.setup("test-mac-capture").pipe(Effect.flip);
+      assert.equal(error.reason, "unsupported-session");
+    }),
+  ).pipe(Effect.provide(testLayer("win32"))),
+);

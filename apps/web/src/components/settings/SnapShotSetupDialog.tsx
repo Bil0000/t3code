@@ -296,7 +296,7 @@ export function SnapShotSetupDialog({
                       ? "Your desktop may ask for permission when you first capture."
                       : macPermissions
                         ? macPermissionsReady
-                          ? "Permissions are in place. Continue to choose your shortcut."
+                          ? "Test a snapshot of the current window. If macOS asks to bypass its window picker, choose Allow. The test image is discarded."
                           : "Allow each permission, then continue."
                         : "Allow access when prompted to start capturing windows.",
                 };
@@ -545,11 +545,13 @@ export function SnapShotSetupDialog({
               >
                 {busy
                   ? "Working…"
-                  : backend === "direct" && !macPermissions
-                    ? "Allow capture"
-                    : !accessReady && !macPermissions
-                      ? "Try again"
-                      : "Continue"}
+                  : macPermissions
+                    ? "Test capture and continue"
+                    : backend === "direct"
+                      ? "Allow capture"
+                      : !accessReady && !macPermissions
+                        ? "Try again"
+                        : "Continue"}
               </Button>
             )
           ) : !configShortcut ? (
