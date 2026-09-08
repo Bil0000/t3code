@@ -113,7 +113,7 @@ import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { chatPaneDragPointer, useChatPaneDragStore } from "../chatPaneDragStore";
 import { canOpenThreadInSplit, openThreadInSplit, useChatPanesStore } from "../chatPanesStore";
-import { collectLeaves } from "../chatPanes.logic";
+import { collectLeaves, filterPaneTree } from "../chatPanes.logic";
 import { SidebarSplitViewHeader } from "./chat/SidebarSplitView";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -2608,7 +2608,20 @@ export default function Sidebar() {
 
   const splitThreads = useMemo(() => splitGroups.flatMap((group) => group.threads), [splitGroups]);
   const splitRootById = useMemo(
-    () => new Map(splitGroups.map((group) => [group.root.id, group.root])),
+    () =>
+      new Map(
+        splitGroups.map((group) => {
+          const visible = new Set(
+            group.threads.map((thread) =>
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+            ),
+          );
+          return [
+            group.root.id,
+            filterPaneTree(group.root, (leaf) => visible.has(scopedThreadKey(leaf.threadRef)))!,
+          ];
+        }),
+      ),
     [splitGroups],
   );
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
@@ -4976,13 +4989,7 @@ export default function Sidebar() {
               </DndContext>
             </TooltipProvider>
           ) : null}
-          {!isSearchingThreads &&
-          visibleDraftSessionCount === 0 &&
-          pinnedThreads.length +
-            activeThreads.length +
-            snoozedThreads.length +
-            settledThreads.length ===
-            0 ? (
+          {!isSearchingThreads && !sidebarListHasRows ? (
             <div className="flex flex-col items-center gap-2 px-2 py-6 text-center text-xs text-muted-foreground/60">
               {projects.length === 0 ? (
                 <>

@@ -45,6 +45,16 @@ export function collectLeaves(node: ChatPaneNode): ChatPaneLeaf[] {
     : [...collectLeaves(node.first), ...collectLeaves(node.second)];
 }
 
+export function filterPaneTree(
+  root: ChatPaneNode,
+  include: (leaf: ChatPaneLeaf) => boolean,
+): ChatPaneNode | null {
+  return collectLeaves(root).reduce<ChatPaneNode | null>(
+    (tree, leaf) => (tree && !include(leaf) ? removePane(tree, leaf.id) : tree),
+    root,
+  );
+}
+
 export function findLeafByThread(
   node: ChatPaneNode,
   threadRef: ScopedThreadRef,

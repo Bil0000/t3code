@@ -5,6 +5,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   canSplitPane,
   collectLeaves,
+  filterPaneTree,
   removePane,
   resolveDropZone,
   selectChatPaneRoot,
@@ -95,4 +96,12 @@ describe("resolveDropZone", () => {
     expect(resolveDropZone(rect, 150, 50, () => false)).toBeNull();
     expect(resolveDropZone(rect, -1, 50, allowAll)).toBeNull();
   });
+});
+
+it("filters hidden leaves for sidebar headers without changing the saved group", () => {
+  const root = splitPane(leaf("a"), "a", "right", leaf("b"), "s1");
+  expect(filterPaneTree(root, () => true)).toBe(root);
+  expect(filterPaneTree(root, (pane) => pane.id === "b")).toEqual(leaf("b"));
+  expect(filterPaneTree(root, () => false)).toBeNull();
+  expect(collectLeaves(root)).toEqual([leaf("a"), leaf("b")]);
 });
