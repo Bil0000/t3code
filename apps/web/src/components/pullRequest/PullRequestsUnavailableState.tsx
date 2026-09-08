@@ -7,11 +7,13 @@ export function PullRequestsUnavailableState({
   title = "Could not load pull requests",
   error,
   onRetry,
+  refreshing = false,
   gitHubUrl,
 }: {
   title?: string;
   error: string;
   onRetry?: () => void;
+  refreshing?: boolean;
   gitHubUrl?: string;
 }) {
   return (
@@ -20,6 +22,7 @@ export function PullRequestsUnavailableState({
       title={title}
       error={error}
       onRetry={onRetry}
+      refreshing={refreshing}
       action={
         gitHubUrl ? (
           <Button

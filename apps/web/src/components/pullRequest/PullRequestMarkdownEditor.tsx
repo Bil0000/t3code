@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
 
 import { cn } from "~/lib/utils";
 
@@ -20,6 +20,7 @@ export function SourceControlMarkdownEditor({
   value,
   cwd,
   environmentId,
+  threadRef = null,
   placeholder,
   label,
   saving,
@@ -31,6 +32,8 @@ export function SourceControlMarkdownEditor({
   readonly value: string;
   readonly cwd: string;
   readonly environmentId: EnvironmentId;
+  /** Thread the editor sits beside, so links in its preview follow the link target setting. */
+  readonly threadRef?: ScopedThreadRef | null;
   readonly placeholder?: string | undefined;
   readonly label: string;
   readonly saving: boolean;
@@ -63,14 +66,13 @@ export function SourceControlMarkdownEditor({
       }}
     >
       <ToggleGroup
-        size="xs"
-        variant="outline"
-        aria-label="Markdown view"
-        disabled={saving}
+        aria-label="Markdown editor mode"
+        variant="segmented"
         value={[preview ? "preview" : "write"]}
+        disabled={saving}
         onValueChange={(next) => {
-          const value = next[0];
-          if (value) setPreview(value === "preview");
+          const mode = next[0];
+          if (mode === "write" || mode === "preview") setPreview(mode === "preview");
         }}
       >
         <Toggle value="write">Write</Toggle>
@@ -81,7 +83,12 @@ export function SourceControlMarkdownEditor({
           {empty ? (
             <p className="text-xs text-muted-foreground">Nothing to preview.</p>
           ) : (
-            <PullRequestMarkdown text={draft} cwd={cwd} environmentId={environmentId} />
+            <PullRequestMarkdown
+              text={draft}
+              cwd={cwd}
+              environmentId={environmentId}
+              threadRef={threadRef}
+            />
           )}
         </div>
       ) : (

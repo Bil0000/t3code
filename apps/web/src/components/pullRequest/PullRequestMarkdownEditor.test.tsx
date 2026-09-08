@@ -19,7 +19,7 @@ describe("SourceControlMarkdownEditor", () => {
     );
 
     expect(markup).toContain('data-slot="toggle-group"');
-    expect(markup).toContain('aria-label="Markdown view"');
+    expect(markup).toContain('aria-label="Markdown editor mode"');
     expect(markup).toContain(">Write<");
     expect(markup).toContain(">Preview<");
   });

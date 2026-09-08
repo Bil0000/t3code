@@ -179,7 +179,7 @@ const COMMENT_REACTIONS_QUERY = `query T3LinearCommentReactions($id: String!) {
   comment(id: $id) { reactions { ${REACTION_FIELDS} } }
 }`;
 
-export class LinearApiError extends Schema.TaggedErrorClass<LinearApiError>()("LinearApiError", {
+export class LinearApiError extends Schema.TaggedError<LinearApiError>()("LinearApiError", {
   operation: Schema.String,
   reason: Schema.Literals(["unauthenticated", "failed"]),
   status: Schema.optional(Schema.Int),
@@ -222,7 +222,7 @@ export class LinearApiError extends Schema.TaggedErrorClass<LinearApiError>()("L
 }
 export const isLinearApiError = Schema.is(LinearApiError);
 
-export class LinearAccountSelectionRequiredError extends Schema.TaggedErrorClass<LinearAccountSelectionRequiredError>()(
+export class LinearAccountSelectionRequiredError extends Schema.TaggedError<LinearAccountSelectionRequiredError>()(
   "LinearAccountSelectionRequiredError",
   {},
 ) {

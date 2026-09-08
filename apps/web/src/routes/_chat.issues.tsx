@@ -63,11 +63,7 @@ import {
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import { resolveProjectScope } from "../components/sourceControl/projectScope";
-import {
-  RightPanelTabs,
-  type IssueTabStatus,
-  type PullRequestTabStatus,
-} from "../components/RightPanelTabs";
+import { RightPanelTabs, type IssueTabStatus } from "../components/RightPanelTabs";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -83,7 +79,6 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import { usePrimarySettings } from "../hooks/useSettings";
 import {
-  pullRequestSurfaceId,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
@@ -414,18 +409,6 @@ function IssuesRouteView() {
     },
     [activeIssueSurfaceId],
   );
-  const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
-    Record<string, PullRequestTabStatus>
-  >({});
-  const handlePullRequestTabStatusChange = useCallback((status: PullRequestTabStatus) => {
-    const id = pullRequestSurfaceId(status);
-    setPullRequestTabStatuses((current) =>
-      current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
-        ? current
-        : { ...current, [id]: status },
-    );
-  }, []);
-
   const updateSearch = useCallback(
     (patch: {
       [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
@@ -1439,6 +1422,7 @@ function IssuesRouteView() {
             onCloseAllSurfaces={closeAllSurfaces}
             onCopyFilePath={() => undefined}
             onAddBrowser={() => undefined}
+            onAddBrowserInProfile={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
             onAddFiles={() => undefined}
@@ -1453,7 +1437,7 @@ function IssuesRouteView() {
             issueAvailable={false}
             agentsAvailable={false}
             liveAgentCount={0}
-            pullRequestStatuses={pullRequestTabStatuses}
+            environmentId={issueEnvironmentId}
             issueStatuses={issueTabStatuses}
           >
             {activeSurface.kind === "pull-request" ? (
@@ -1474,7 +1458,6 @@ function IssuesRouteView() {
                   authoredQuery.refresh();
                   assignedQuery.refresh();
                 }}
-                onStateChange={handlePullRequestTabStatusChange}
                 onOpenLinkedIssue={(link) => {
                   const project = findProjectForLink(projects, link);
                   if (rightPanelRef === null || project === undefined) {

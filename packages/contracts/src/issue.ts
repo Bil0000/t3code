@@ -853,7 +853,7 @@ export function issueProviderRequirement(
  * the provider rather than from whatever the CLI printed, so it stays a stable sentence the UI
  * can show as-is; the underlying failure travels in `cause`.
  */
-export class IssueUnavailableError extends Schema.TaggedErrorClass<IssueUnavailableError>()(
+export class IssueUnavailableError extends Schema.TaggedError<IssueUnavailableError>()(
   "IssueUnavailableError",
   {
     reason: IssueUnavailableReason,
@@ -884,7 +884,7 @@ export class IssueUnavailableError extends Schema.TaggedErrorClass<IssueUnavaila
   }
 }
 
-export class IssueOperationError extends Schema.TaggedErrorClass<IssueOperationError>()(
+export class IssueOperationError extends Schema.TaggedError<IssueOperationError>()(
   "IssueOperationError",
   {
     operation: Schema.String,

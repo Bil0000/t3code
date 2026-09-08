@@ -77,7 +77,7 @@ import type { ProviderListCursor } from "./IssueProvider.ts";
  * Names the read that produced unusable output, so a failure reports the call it came from
  * rather than borrowing another operation's message.
  */
-export class GitHubIssueReadError extends Schema.TaggedErrorClass<GitHubIssueReadError>()(
+export class GitHubIssueReadError extends Schema.TaggedError<GitHubIssueReadError>()(
   "GitHubIssueReadError",
   {
     command: Schema.Literal("gh"),
@@ -96,7 +96,7 @@ export class GitHubIssueReadError extends Schema.TaggedErrorClass<GitHubIssueRea
 }
 
 /** Not a decode failure: gh answered, the account it answered for just has no login. */
-export class GitHubIssueViewerLoginUnavailableError extends Schema.TaggedErrorClass<GitHubIssueViewerLoginUnavailableError>()(
+export class GitHubIssueViewerLoginUnavailableError extends Schema.TaggedError<GitHubIssueViewerLoginUnavailableError>()(
   "GitHubIssueViewerLoginUnavailableError",
   {
     command: Schema.Literal("gh"),
@@ -117,7 +117,7 @@ export class GitHubIssueViewerLoginUnavailableError extends Schema.TaggedErrorCl
  * setting that would let it is switched off. Told apart from an ordinary refusal so the page can
  * explain the setting rather than report a fault nobody can act on.
  */
-export class GitHubIssuesDisabledError extends Schema.TaggedErrorClass<GitHubIssuesDisabledError>()(
+export class GitHubIssuesDisabledError extends Schema.TaggedError<GitHubIssuesDisabledError>()(
   "GitHubIssuesDisabledError",
   {
     command: Schema.Literal("gh"),
@@ -140,7 +140,7 @@ export class GitHubIssuesDisabledError extends Schema.TaggedErrorClass<GitHubIss
  * one is refused here rather than escaped into something GitHub might read as a qualifier of its
  * own.
  */
-export class GitHubIssueRepositorySelectorError extends Schema.TaggedErrorClass<GitHubIssueRepositorySelectorError>()(
+export class GitHubIssueRepositorySelectorError extends Schema.TaggedError<GitHubIssueRepositorySelectorError>()(
   "GitHubIssueRepositorySelectorError",
   {
     command: Schema.Literal("gh"),
@@ -157,7 +157,7 @@ export class GitHubIssueRepositorySelectorError extends Schema.TaggedErrorClass<
   }
 }
 
-export class GitHubIssueCommentScopeError extends Schema.TaggedErrorClass<GitHubIssueCommentScopeError>()(
+export class GitHubIssueCommentScopeError extends Schema.TaggedError<GitHubIssueCommentScopeError>()(
   "GitHubIssueCommentScopeError",
   { command: Schema.Literal("gh"), cwd: Schema.String },
 ) {

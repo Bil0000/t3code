@@ -59,7 +59,7 @@ export const LinearSetProjectBindingInput = Schema.Struct({
 });
 export type LinearSetProjectBindingInput = typeof LinearSetProjectBindingInput.Type;
 
-export class IssueTrackingError extends Schema.TaggedErrorClass<IssueTrackingError>()(
+export class IssueTrackingError extends Schema.TaggedError<IssueTrackingError>()(
   "IssueTrackingError",
   {
     operation: Schema.Literals(["status", "connect", "disconnect", "bind"]),

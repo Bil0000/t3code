@@ -31,7 +31,7 @@ export const WorkItemTaskResult = Schema.Struct({
 });
 export type WorkItemTaskResult = typeof WorkItemTaskResult.Type;
 
-export class WorkItemTaskError extends Schema.TaggedErrorClass<WorkItemTaskError>()(
+export class WorkItemTaskError extends Schema.TaggedError<WorkItemTaskError>()(
   "WorkItemTaskError",
   {
     operation: Schema.Literals(["read-source", "generate"]),
@@ -72,7 +72,7 @@ export const WorkItemMatchResult = Schema.Struct({
 });
 export type WorkItemMatchResult = typeof WorkItemMatchResult.Type;
 
-export class WorkItemMatchError extends Schema.TaggedErrorClass<WorkItemMatchError>()(
+export class WorkItemMatchError extends Schema.TaggedError<WorkItemMatchError>()(
   "WorkItemMatchError",
   {
     operation: Schema.Literals(["read-source", "list-candidates", "read-candidate", "generate"]),

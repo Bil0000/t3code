@@ -17,7 +17,7 @@ import type { ProviderListCursor } from "./IssueProvider.ts";
  * Names the read that produced unusable output, so a failure reports the call it came from
  * rather than borrowing another operation's message.
  */
-export class AzureDevOpsIssueReadError extends Schema.TaggedErrorClass<AzureDevOpsIssueReadError>()(
+export class AzureDevOpsIssueReadError extends Schema.TaggedError<AzureDevOpsIssueReadError>()(
   "AzureDevOpsIssueReadError",
   {
     command: Schema.Literal("az"),
@@ -36,7 +36,7 @@ export class AzureDevOpsIssueReadError extends Schema.TaggedErrorClass<AzureDevO
 }
 
 /** Not a decode failure: az answered with a work item that carries no title, date or link. */
-export class AzureDevOpsWorkItemIncompleteError extends Schema.TaggedErrorClass<AzureDevOpsWorkItemIncompleteError>()(
+export class AzureDevOpsWorkItemIncompleteError extends Schema.TaggedError<AzureDevOpsWorkItemIncompleteError>()(
   "AzureDevOpsWorkItemIncompleteError",
   {
     command: Schema.Literal("az"),
@@ -54,7 +54,7 @@ export class AzureDevOpsWorkItemIncompleteError extends Schema.TaggedErrorClass<
 }
 
 /** Not a decode failure either: az answered, and named no project for the checkout it ran in. */
-export class AzureDevOpsProjectUnknownError extends Schema.TaggedErrorClass<AzureDevOpsProjectUnknownError>()(
+export class AzureDevOpsProjectUnknownError extends Schema.TaggedError<AzureDevOpsProjectUnknownError>()(
   "AzureDevOpsProjectUnknownError",
   {
     command: Schema.Literal("az"),
@@ -76,7 +76,7 @@ export class AzureDevOpsProjectUnknownError extends Schema.TaggedErrorClass<Azur
  * some other way is the one explanation a bare command failure cannot give, and the list says
  * exactly which name such a project would have to add.
  */
-export class AzureDevOpsWorkItemStateRefusedError extends Schema.TaggedErrorClass<AzureDevOpsWorkItemStateRefusedError>()(
+export class AzureDevOpsWorkItemStateRefusedError extends Schema.TaggedError<AzureDevOpsWorkItemStateRefusedError>()(
   "AzureDevOpsWorkItemStateRefusedError",
   {
     command: Schema.Literal("az"),

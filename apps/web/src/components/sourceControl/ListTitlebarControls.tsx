@@ -1,4 +1,4 @@
-import { ChevronDownIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { ChevronDownIcon, SearchIcon } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -10,6 +10,7 @@ import {
 
 import { cn } from "~/lib/utils";
 
+import { RefreshIcon } from "../ui/refresh-icon";
 import { Button } from "../ui/button";
 import { Menu, MenuPopup, MenuRadioGroup, MenuRadioItem, MenuTrigger } from "../ui/menu";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -34,22 +35,31 @@ export function ListRefreshControl({
       onClick={onRefresh}
       disabled={refreshing}
     >
-      <RefreshCwIcon className={cn("size-4", refreshing && "animate-spin")} />
+      <RefreshIcon className="size-4" refreshing={refreshing} />
     </Button>
   );
 }
 
+/** A compact stand-in for one pill group when the header is narrow. */
 export function CompactFilterMenu<Value extends string>({
   label,
+  triggerIcon,
+  triggerLabel,
+  outlined = false,
   value,
   options,
   onChange,
+  className,
   children,
 }: {
   label: string;
+  triggerIcon?: ReactNode;
+  triggerLabel?: string;
+  outlined?: boolean;
   value: Value;
   options: ReadonlyArray<ListFilterOption<Value>>;
   onChange: (value: Value) => void;
+  className?: string;
   children?: ReactNode;
 }) {
   const current = options.find((option) => option.value === value) ?? options[0];
@@ -57,11 +67,29 @@ export function CompactFilterMenu<Value extends string>({
   return (
     <Menu>
       <MenuTrigger
-        aria-label={label}
-        className="inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground"
+        aria-label={triggerLabel ? `${label}: ${current.label}` : label}
+        render={outlined ? <Button variant="outline" /> : undefined}
+        className={
+          outlined
+            ? className
+            : cn(
+                "inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
+                className,
+                children,
+              )
+        }
       >
-        {current.label}
-        <ChevronDownIcon aria-hidden className="size-3 text-muted-foreground/70" />
+        {triggerLabel ? (
+          <>
+            {triggerIcon}
+            <span>{triggerLabel}</span>
+          </>
+        ) : (
+          <>
+            <span className="truncate">{current.label}</span>
+            <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/70" />
+          </>
+        )}
       </MenuTrigger>
       <MenuPopup align="start" side="bottom" className="min-w-40">
         {children ?? (
@@ -131,7 +159,7 @@ export function ExpandableSearch({
     return (
       <div
         ref={containerRef}
-        className="w-56 shrink-0"
+        className="w-56 min-w-24 shrink"
         onFocus={() => onFocusWithin?.(true)}
         onBlur={() => {
           onFocusWithin?.(false);

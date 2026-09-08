@@ -12,7 +12,7 @@ import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 import { useProjects, useServerConfigs } from "../state/entities";
 import { usePrimaryEnvironmentId } from "../state/environments";
 
-export class IssueLinkOpenError extends Schema.TaggedErrorClass<IssueLinkOpenError>()(
+export class IssueLinkOpenError extends Schema.TaggedError<IssueLinkOpenError>()(
   "IssueLinkOpenError",
   {
     targetOrigin: Schema.NullOr(Schema.String),

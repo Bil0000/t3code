@@ -6,7 +6,7 @@
  * The state glyph and everything past the repository stay with the caller: open, closed, merged and
  * draft are not one vocabulary, and neither are the facts each surface thinks worth the meta line.
  */
-import type { ElementType, MouseEventHandler, ReactNode } from "react";
+import type { ElementType, MouseEventHandler, ReactNode, Ref } from "react";
 
 import { cn } from "~/lib/utils";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -15,6 +15,8 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { SourceControlMetaLine } from "./actorPresentation";
 
 export function ListRow({
+  ref,
+  "data-pull-request-stats-key": statsKey,
   glyph,
   title,
   providerName,
@@ -31,6 +33,8 @@ export function ListRow({
   onSelect,
 }: {
   /** The caller's own state drawing, which is the one thing the two surfaces do not share. */
+  ref?: Ref<HTMLButtonElement> | undefined;
+  "data-pull-request-stats-key"?: string | undefined;
   glyph: ReactNode;
   title: string;
   providerName: string;
@@ -60,6 +64,8 @@ export function ListRow({
 }) {
   return (
     <button
+      ref={ref}
+      data-pull-request-stats-key={statsKey}
       type="button"
       aria-current={selected ? "true" : undefined}
       onClick={onSelect}

@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, type RefCallback } from "react";
 
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
@@ -6,13 +6,57 @@ import { getSourceControlPresentationForKind } from "~/sourceControlPresentation
 import { ListRow } from "../sourceControl/ListRow";
 import { Checkbox } from "../ui/checkbox";
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
-import type { EnvironmentPullRequestEntry } from "./pullRequestList.logic";
+import { pullRequestLabelColor, type EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLinkContextMenu";
 import {
   PullRequestActorLabel,
   PullRequestDiffStat,
   PullRequestStateGlyph,
 } from "./pullRequestPresentation";
+
+/**
+ * Each slot past the first only appears once the meta line is wide enough to hold it, so a
+ * narrow row shows one label and a "+N" while a wide one spreads out up to three. The "+N"
+ * rides on whichever pill is the last visible one, and is hidden as soon as the next slot shows.
+ */
+const LABEL_SLOTS = [
+  { pill: "", overflow: "@xl/pr-row-meta:hidden" },
+  { pill: "hidden @xl/pr-row-meta:inline-flex", overflow: "@3xl/pr-row-meta:hidden" },
+  { pill: "hidden @3xl/pr-row-meta:inline-flex", overflow: "" },
+] as const;
+
+function PullRequestRowLabels({ labels }: { labels: EnvironmentPullRequestEntry["labels"] }) {
+  if (labels.length === 0) return null;
+  return (
+    <span className="flex min-w-0 items-center gap-1">
+      {LABEL_SLOTS.map((slot, index) => {
+        const label = labels[index];
+        if (!label) return null;
+        const dot = pullRequestLabelColor(label.color);
+        const remaining = labels.length - index - 1;
+        return (
+          <span
+            key={label.name}
+            className={cn(
+              "inline-flex max-w-40 min-w-0 items-center gap-1 rounded-full border border-border/70 bg-muted/40 py-0 pl-1 pr-1.5 text-[10px] leading-3.5 text-muted-foreground",
+              slot.pill,
+            )}
+          >
+            <span
+              aria-hidden
+              className="size-2 shrink-0 rounded-full bg-muted-foreground"
+              {...(dot ? { style: { backgroundColor: dot } } : {})}
+            />
+            <span className="truncate">{label.name}</span>
+            {remaining > 0 ? (
+              <span className={cn("shrink-0", slot.overflow)}>+{remaining}</span>
+            ) : null}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
 
 function PullRequestRowImpl({
   entry,
@@ -22,6 +66,8 @@ function PullRequestRowImpl({
   showProvider,
   environmentLabel,
   matchedElsewhere,
+  statsKey,
+  statsRef,
   onSelect,
   onToggleSelection,
 }: {
@@ -38,6 +84,9 @@ function PullRequestRowImpl({
    * commit message. Saying so is the difference between a result and an apparently random row.
    */
   matchedElsewhere?: boolean;
+  /** Used by the list's shared visibility observer to defer optional line-count reads. */
+  statsKey?: string;
+  statsRef?: RefCallback<HTMLButtonElement>;
   onSelect: (entry: EnvironmentPullRequestEntry) => void;
   onToggleSelection?: (entry: EnvironmentPullRequestEntry) => void;
 }) {
@@ -45,6 +94,8 @@ function PullRequestRowImpl({
   return (
     <div className={cn("group/row relative", onToggleSelection && "[&>button]:pl-10")}>
       <ListRow
+        ref={statsRef}
+        data-pull-request-stats-key={statsKey}
         glyph={
           <PullRequestStateGlyph
             state={entry.state}
@@ -69,6 +120,7 @@ function PullRequestRowImpl({
         }}
         repository={showProjectTitle ? entry.repository : null}
         meta={[
+          <PullRequestRowLabels key="labels" labels={entry.labels} />,
           environmentLabel ? (
             <span key="environment" className="max-w-32 shrink-0 truncate">
               {environmentLabel}
