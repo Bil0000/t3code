@@ -4822,7 +4822,13 @@ export default function Sidebar() {
                             key={threadKey}
                             id={threadKey}
                             disabled={
-                              !draggableThreadKeys.has(threadKey) || optimisticDrop !== null
+                              optimisticDrop !== null ||
+                              (!draggableThreadKeys.has(threadKey) &&
+                                (isMobile ||
+                                  !canOpenThreadInSplit(
+                                    routeThreadRef,
+                                    scopeThreadRef(thread.environmentId, thread.id),
+                                  )))
                             }
                           >
                             {(bag) => renderThreadRowInner(thread, section, bag)}

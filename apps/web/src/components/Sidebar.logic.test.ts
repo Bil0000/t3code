@@ -1221,6 +1221,20 @@ describe("planSidebarThreadDrop", () => {
       target: { activeOrder: [], ...overrides.target },
     });
 
+  it.each(["pinned", "active", "settled"] as const)(
+    "rejects a pane-only drag into %s",
+    (section) => {
+      expect(
+        plan({
+          activeKey: "a1",
+          activeSection: "active",
+          reorderableKeys: new Set(),
+          target: { section, pinnedOrder: ["a1", "p1"], activeOrder: ["a2", "a1"] },
+        }),
+      ).toEqual({ kind: "none" });
+    },
+  );
+
   it("allows old-server pinned reordering while rejecting settlement", () => {
     expect(
       plan({
