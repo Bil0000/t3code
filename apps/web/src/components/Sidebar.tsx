@@ -3325,10 +3325,7 @@ export default function Sidebar() {
       // splits the view instead of reordering the list.
       const thread = threadByKeyRef.current.get(activeKey);
       if (thread && !isMobile) {
-        chatPaneDragPointer.current =
-          event.activatorEvent instanceof PointerEvent
-            ? { x: event.activatorEvent.clientX, y: event.activatorEvent.clientY }
-            : null;
+        chatPaneDragPointer.current = dragSensorRef.current?.currentCoordinates ?? null;
         useChatPaneDragStore.getState().start({
           threadRef: scopeThreadRef(thread.environmentId, thread.id),
           title: thread.title,
