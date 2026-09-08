@@ -504,6 +504,7 @@ const make = Effect.gen(function* () {
 
   const materializeProviderEnvironmentSecrets = (
     settings: ServerSettings,
+    current?: ServerSettings,
   ): Effect.Effect<ServerSettings, ServerSettingsError> =>
     Effect.gen(function* () {
       const providerInstances: Record<string, ProviderInstanceConfig> = {
@@ -515,6 +516,13 @@ const make = Effect.gen(function* () {
         for (const variable of instance.environment) {
           if (!variable.sensitive || !variable.valueRedacted) {
             environment.push(variable);
+            continue;
+          }
+          const previous = current?.providerInstances[
+            ProviderInstanceId.make(instanceId)
+          ]?.environment?.findLast((entry) => entry.name === variable.name);
+          if (previous?.sensitive && !previous.valueRedacted && previous.value.length > 0) {
+            environment.push({ ...variable, value: previous.value });
             continue;
           }
           const secret = yield* secretStore
@@ -872,7 +880,7 @@ const make = Effect.gen(function* () {
         Effect.gen(function* () {
           const current = yield* getSettingsFromCache;
           const next = yield* normalizeServerSettings(applyServerSettingsPatch(current, patch));
-          const materialized = yield* materializeProviderEnvironmentSecrets(next);
+          const materialized = yield* materializeProviderEnvironmentSecrets(next, current);
           const persisted = yield* persistProviderEnvironmentSecrets(current, next);
           yield* writeSettingsAtomically(persisted);
           yield* Cache.set(settingsCache, cacheKey, persisted);
