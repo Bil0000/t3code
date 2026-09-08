@@ -4,7 +4,6 @@ import {
   DndContext,
   useSensor,
   useSensors,
-  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -184,6 +183,7 @@ import {
 import { resolveLocalCheckoutBranchMismatch } from "./BranchToolbar.logic";
 import {
   createSidebarCollisionDetection,
+  createSidebarPaneCollisionDetection,
   createSidebarSortingStrategy,
   restrictBelowSidebarLabel,
 } from "./Sidebar.drag";
@@ -3520,16 +3520,14 @@ export default function Sidebar() {
   ]);
   // Past the sidebar's right edge the row is headed for a chat pane, so the
   // list stops previewing a reorder that the release will not perform.
-  const dndCollisionDetection = useCallback<CollisionDetection>(
-    (args) => {
-      const list = threadListRef.current;
-      const pointerX = args.pointerCoordinates?.x;
-      if (list && pointerX !== undefined && pointerX > list.getBoundingClientRect().right) {
-        return [];
-      }
-      return sidebarCollisionDetection(args);
-    },
-    [sidebarCollisionDetection],
+  const dndCollisionDetection = useMemo(
+    () =>
+      createSidebarPaneCollisionDetection(
+        sidebarCollisionDetection,
+        !isMobile,
+        () => threadListRef.current?.getBoundingClientRect().right,
+      ),
+    [isMobile, sidebarCollisionDetection],
   );
   const handleThreadDragEnd = useCallback(
     (event: DragEndEvent) => {

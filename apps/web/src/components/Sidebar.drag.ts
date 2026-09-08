@@ -9,6 +9,19 @@ import {
   type SidebarSection,
 } from "./Sidebar.logic";
 
+export function createSidebarPaneCollisionDetection(
+  sidebarCollisionDetection: CollisionDetection,
+  paneDraggingEnabled: boolean,
+  sidebarRight: () => number | undefined,
+): CollisionDetection {
+  return (args) => {
+    const pointerX = args.pointerCoordinates?.x;
+    const right = paneDraggingEnabled ? sidebarRight() : undefined;
+    if (right !== undefined && pointerX !== undefined && pointerX > right) return [];
+    return sidebarCollisionDetection(args);
+  };
+}
+
 const stationary = { x: 0, y: 0, scaleX: 1, scaleY: 1 };
 const hidden = { ...stationary, scaleY: 0 };
 type ThreadItem = Extract<SidebarListItem, { kind: "thread" }>;

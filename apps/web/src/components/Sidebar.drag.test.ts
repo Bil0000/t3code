@@ -3,6 +3,7 @@ import { closestCenter, type CollisionDetection } from "@dnd-kit/core";
 import { verticalListSortingStrategy, type SortingStrategy } from "@dnd-kit/sortable";
 import {
   createSidebarCollisionDetection,
+  createSidebarPaneCollisionDetection,
   createSidebarSortingStrategy,
   restrictBelowSidebarLabel,
 } from "./Sidebar.drag";
@@ -118,6 +119,16 @@ describe("sidebar collision detection", () => {
       });
       expect(filtered[0]?.id).toBe(nearbyTarget);
       expect(detector(args).map((collision) => collision.id)).toEqual(["source"]);
+    },
+  );
+
+  it.each([false, true])(
+    "keeps sidebar targets beyond its edge unless pane dragging is enabled: %s",
+    (enabled) => {
+      const args = { ...collisionArgs(), pointerCoordinates: { x: 900, y: 50 } };
+      const sidebar = createSidebarCollisionDetection(() => true);
+      const detector = createSidebarPaneCollisionDetection(sidebar, enabled, () => 300);
+      expect(detector(args)).toEqual(enabled ? [] : sidebar(args));
     },
   );
 
