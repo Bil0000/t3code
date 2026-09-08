@@ -3,6 +3,7 @@ import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit
 import * as Cause from "effect/Cause";
 import { AsyncResult } from "effect/unstable/reactivity";
 import {
+  buildSidebarListItems,
   animateSidebarLayoutChanges,
   applySidebarThreadDrop,
   archiveSelectedThreadEntries,
@@ -2489,5 +2490,38 @@ describe("resolveSidebarDropVerb", () => {
     expect(resolveSidebarDropVerb("pinned", "pinned")).toBeNull();
     expect(resolveSidebarDropVerb("active", null)).toBeNull();
     expect(resolveSidebarDropVerb("active", "snoozed")).toBeNull();
+  });
+});
+
+describe("buildSidebarListItems", () => {
+  it("keeps split-only groups visible and leaves an empty sidebar empty", () => {
+    const empty = {
+      pinnedThreads: [],
+      activeThreads: [],
+      snoozedThreads: [],
+      settledThreads: [],
+      visibleSnoozedThreads: [],
+      renderedSettledThreads: [],
+      splitGroups: [],
+    };
+    expect(buildSidebarListItems(empty)).toEqual([]);
+    const rows = buildSidebarListItems({
+      ...empty,
+      splitGroups: [
+        {
+          root: { id: "group" },
+          threads: [
+            { environmentId: localEnvironmentId, id: ThreadId.make("first") },
+            { environmentId: localEnvironmentId, id: ThreadId.make("second") },
+          ],
+        },
+      ],
+    });
+    expect(rows.filter((row) => row.kind === "thread")).toEqual([
+      { kind: "thread", key: "environment-local:first", section: "split" },
+      { kind: "thread", key: "environment-local:second", section: "split" },
+    ]);
+    expect(rows).toContainEqual({ kind: "marker", marker: "split-header-group" });
+    expect(rows).toContainEqual({ kind: "marker", marker: "split-divider-group" });
   });
 });

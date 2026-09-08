@@ -1,3 +1,5 @@
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
+import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import * as React from "react";
 import { defaultAnimateLayoutChanges, type AnimateLayoutChanges } from "@dnd-kit/sortable";
 import {
@@ -120,6 +122,63 @@ export function sidebarMarkerId(marker: SidebarListMarker): string {
 export type SidebarListItem =
   | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
   | { readonly kind: "marker"; readonly marker: SidebarListMarker };
+
+type SidebarListThread = Pick<EnvironmentThreadShell, "environmentId" | "id">;
+
+export function buildSidebarListItems({
+  pinnedThreads,
+  activeThreads,
+  snoozedThreads,
+  settledThreads,
+  visibleSnoozedThreads,
+  renderedSettledThreads,
+  splitGroups,
+}: {
+  pinnedThreads: readonly SidebarListThread[];
+  activeThreads: readonly SidebarListThread[];
+  snoozedThreads: readonly SidebarListThread[];
+  settledThreads: readonly SidebarListThread[];
+  visibleSnoozedThreads: readonly SidebarListThread[];
+  renderedSettledThreads: readonly SidebarListThread[];
+  splitGroups: readonly { root: { id: string }; threads: readonly SidebarListThread[] }[];
+}): readonly SidebarListItem[] {
+  const rowsOf = (list: readonly SidebarListThread[], section: SidebarSection): SidebarListItem[] =>
+    list.map((thread) => {
+      const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
+      return { kind: "thread", key, section };
+    });
+  if (
+    splitGroups.length +
+      pinnedThreads.length +
+      activeThreads.length +
+      snoozedThreads.length +
+      settledThreads.length ===
+    0
+  ) {
+    return [];
+  }
+  const items: SidebarListItem[] = [{ kind: "marker", marker: "pinned-header" }];
+  const pinnedRows = rowsOf(pinnedThreads, "pinned");
+  items.push(...pinnedRows);
+  items.push({ kind: "marker", marker: "pinned-divider" });
+  const activeRows = rowsOf(activeThreads, "active");
+  items.push({ kind: "marker", marker: "active-placeholder" });
+  items.push(...activeRows);
+  for (const group of splitGroups) {
+    items.push({ kind: "marker", marker: `split-header-${group.root.id}` });
+    items.push(...rowsOf(group.threads, "split"));
+    items.push({ kind: "marker", marker: `split-divider-${group.root.id}` });
+  }
+  if (snoozedThreads.length > 0) {
+    items.push({ kind: "marker", marker: "snoozed-header" });
+    items.push(...rowsOf(visibleSnoozedThreads, "snoozed"));
+  }
+  items.push({ kind: "marker", marker: "settled-header" });
+  const settledRows = rowsOf(renderedSettledThreads, "settled");
+  items.push({ kind: "marker", marker: "settled-placeholder" });
+  items.push(...settledRows);
+  return items;
+}
 
 export function sidebarListItemId(item: SidebarListItem): string {
   return item.kind === "thread" ? item.key : sidebarMarkerId(item.marker);

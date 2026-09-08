@@ -177,7 +177,7 @@ import {
   useRetainedValue,
   useSidebarRowSubscriptionLease,
   useThreadJumpHintVisibility,
-  type SidebarListItem,
+  buildSidebarListItems,
   type SidebarListMarker,
   type SidebarSection,
 } from "./Sidebar.logic";
@@ -3339,54 +3339,27 @@ export default function Sidebar() {
   );
   // Include every visible row in the measured order. Older servers disable
   // pickup on their rows without changing where those rows render.
-  const sidebarListItems = useMemo((): readonly SidebarListItem[] => {
-    const rowsOf = (
-      list: readonly EnvironmentThreadShell[],
-      section: SidebarSection,
-    ): SidebarListItem[] =>
-      list.map((thread) => {
-        const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-        return { kind: "thread", key, section };
-      });
-    if (
-      pinnedThreads.length +
-        activeThreads.length +
-        snoozedThreads.length +
-        settledThreads.length ===
-      0
-    ) {
-      return [];
-    }
-    const items: SidebarListItem[] = [{ kind: "marker", marker: "pinned-header" }];
-    const pinnedRows = rowsOf(pinnedThreads, "pinned");
-    items.push(...pinnedRows);
-    items.push({ kind: "marker", marker: "pinned-divider" });
-    const activeRows = rowsOf(activeThreads, "active");
-    items.push({ kind: "marker", marker: "active-placeholder" });
-    items.push(...activeRows);
-    for (const group of splitGroups) {
-      items.push({ kind: "marker", marker: `split-header-${group.root.id}` });
-      items.push(...rowsOf(group.threads, "split"));
-      items.push({ kind: "marker", marker: `split-divider-${group.root.id}` });
-    }
-    if (snoozedThreads.length > 0) {
-      items.push({ kind: "marker", marker: "snoozed-header" });
-      items.push(...rowsOf(visibleSnoozedThreads, "snoozed"));
-    }
-    items.push({ kind: "marker", marker: "settled-header" });
-    const settledRows = rowsOf(renderedSettledThreads, "settled");
-    items.push({ kind: "marker", marker: "settled-placeholder" });
-    items.push(...settledRows);
-    return items;
-  }, [
-    activeThreads,
-    pinnedThreads,
-    renderedSettledThreads,
-    settledThreads.length,
-    snoozedThreads.length,
-    splitGroups,
-    visibleSnoozedThreads,
-  ]);
+  const sidebarListItems = useMemo(
+    () =>
+      buildSidebarListItems({
+        pinnedThreads,
+        activeThreads,
+        snoozedThreads,
+        settledThreads,
+        visibleSnoozedThreads,
+        renderedSettledThreads,
+        splitGroups,
+      }),
+    [
+      pinnedThreads,
+      activeThreads,
+      snoozedThreads,
+      settledThreads,
+      visibleSnoozedThreads,
+      renderedSettledThreads,
+      splitGroups,
+    ],
+  );
   useEffect(() => {
     if (
       dragState !== null &&
