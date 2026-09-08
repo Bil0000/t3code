@@ -66,6 +66,21 @@ If dragging is unavailable for one environment, update the T3 Code server runnin
 environment. Pinned and active reordering require server support. Threads from older servers keep
 their default order until the server is updated.
 
+## Work in split view
+
+On web and desktop, drag a thread from the sidebar onto the chat area to open it
+beside the thread you are reading. While you drag, the half of the pane that will
+hold the thread is highlighted; release on the left, right, top, or bottom edge
+to choose where it goes. **Open in split view** from a thread's menu does the same
+using the pane that last had focus.
+
+Drag a pane's header to move it to another edge, and drag the divider between two
+panes to resize them. Panes nest up to a two-by-two grid. Click into a pane to
+make it the active thread; shortcuts and typing go to the active pane only. Close
+a pane with the **×** in its header or with `pane.close`. Closing the last
+neighbor returns to the plain chat view. The layout is remembered per browser or
+desktop window.
+
 ## Settle finished work
 
 Choose **Settle thread** from its menu to move finished work out of the active list

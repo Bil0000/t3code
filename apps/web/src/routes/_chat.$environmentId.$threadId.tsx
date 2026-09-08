@@ -3,8 +3,20 @@ import { useEffect } from "react";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
+import { ChatPaneDragGhost, ChatPanes } from "../components/chat/ChatPanes";
+import { ChatPaneDropOverlay } from "../components/chat/ChatPaneDropOverlay";
+import {
+  commitChatPaneDrop,
+  selectPaneDropZoneResolver,
+  useChatPanesStore,
+} from "../chatPanesStore";
+import { isChatPaneDragActive } from "../chatPaneDragStore";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
-import { resolveThreadRouteRef, resolveThreadRouteRenderState } from "../threadRoutes";
+import {
+  buildThreadRouteParams,
+  resolveThreadRouteRef,
+  resolveThreadRouteRenderState,
+} from "../threadRoutes";
 import { resolveThreadSyncPhase } from "../threadSync";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { SidebarInset } from "~/components/ui/sidebar";
@@ -16,6 +28,9 @@ import {
 } from "../state/entities";
 import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
+
+const SINGLE_PANE_ID = "route";
+const singlePaneDropZone = selectPaneDropZoneResolver(null, SINGLE_PANE_ID);
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();
@@ -43,6 +58,7 @@ function ChatThreadRouteView() {
     }
     return store.hasDraftThreadsInEnvironment(threadRef.environmentId);
   });
+  const paneRoot = useChatPanesStore((store) => store.root);
   const renderState = resolveThreadRouteRenderState({
     bootstrapComplete,
     serverThreadShellExists: serverThreadShell !== null,
@@ -86,16 +102,42 @@ function ChatThreadRouteView() {
     return null;
   }
 
+  const ready =
+    renderState === "ready" || (renderState === "loading" && serverThreadShell !== null);
+
   return (
     <SidebarInset className="h-svh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground md:h-dvh">
-      {renderState === "ready" || (renderState === "loading" && serverThreadShell !== null) ? (
-        <ChatView
-          environmentId={threadRef.environmentId}
-          threadId={threadRef.threadId}
-          routeKind="server"
-          threadSyncPhase={threadSyncPhase}
-        />
-      ) : null}
+      {!ready ? null : paneRoot ? (
+        <ChatPanes root={paneRoot} routeThreadRef={threadRef} />
+      ) : (
+        // A drop on the plain view seeds the layout from this thread. The
+        // pane id is a placeholder the commit replaces with the real leaf.
+        <div
+          className="flex min-h-0 min-w-0 flex-1"
+          onPointerUpCapture={() => {
+            if (!isChatPaneDragActive()) return;
+            queueMicrotask(() => {
+              const opened = commitChatPaneDrop(threadRef);
+              if (opened) {
+                void navigate({
+                  to: "/$environmentId/$threadId",
+                  params: buildThreadRouteParams(opened),
+                });
+              }
+            });
+          }}
+        >
+          <ChatPaneDropOverlay paneId={SINGLE_PANE_ID} resolveZone={singlePaneDropZone}>
+            <ChatView
+              environmentId={threadRef.environmentId}
+              threadId={threadRef.threadId}
+              routeKind="server"
+              threadSyncPhase={threadSyncPhase}
+            />
+          </ChatPaneDropOverlay>
+        </div>
+      )}
+      <ChatPaneDragGhost />
     </SidebarInset>
   );
 }

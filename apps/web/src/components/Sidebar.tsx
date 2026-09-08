@@ -4,6 +4,7 @@ import {
   DndContext,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
   type DragOverEvent,
   type DragStartEvent,
@@ -110,6 +111,8 @@ import {
 } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { useChatPaneDragStore } from "../chatPaneDragStore";
+import { isThreadOpenInPane, openThreadInSplit } from "../chatPanesStore";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
 import { useClientSettings } from "../hooks/useSettings";
@@ -2202,6 +2205,8 @@ export default function Sidebar() {
   // the command was in flight, completing it must not yank them away.
   const routeThreadKeyRef = useRef(routeThreadKey);
   routeThreadKeyRef.current = routeThreadKey;
+  const routeThreadRefRef = useRef(routeThreadRef);
+  routeThreadRefRef.current = routeThreadRef;
 
   const environmentLabelById = useMemo(
     () =>
@@ -3074,11 +3079,15 @@ export default function Sidebar() {
   } | null>(null);
   const dragTargetSection = dragState?.targetSection ?? null;
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
-  const finishThreadDrag = useCallback((started: boolean) => {
+  const finishThreadDrag = useCallback((started: boolean, cancelled: boolean) => {
     dragSensorRef.current = null;
     if (started) {
       listMotionRef.current?.release();
       setDragState(null);
+      // A release over a pane leaves a target for the pane layout to apply
+      // (it ends the drag itself); a cancel or a release elsewhere ends it here.
+      const paneDrag = useChatPaneDragStore.getState();
+      if (cancelled || paneDrag.target === null) paneDrag.end();
     }
   }, []);
   const attachDragSensor = useCallback((sensor: SidebarPointerSensor) => {
@@ -3256,8 +3265,17 @@ export default function Sidebar() {
         activationY:
           event.activatorEvent instanceof PointerEvent ? event.activatorEvent.clientY : null,
       });
+      // The chat area listens for this row too: carrying it over a pane
+      // splits the view instead of reordering the list.
+      const thread = threadByKeyRef.current.get(activeKey);
+      if (thread && !isMobile) {
+        useChatPaneDragStore.getState().start({
+          threadRef: scopeThreadRef(thread.environmentId, thread.id),
+          title: thread.title,
+        });
+      }
     },
-    [sectionByThreadKey],
+    [isMobile, sectionByThreadKey],
   );
   // Include every visible row in the measured order. Older servers disable
   // pickup on their rows without changing where those rows render.
@@ -3404,7 +3422,7 @@ export default function Sidebar() {
   const draggedThreadKey = dragState?.activeKey;
   const draggedFromSection = dragState?.activeSection;
   const dragActivationY = dragState?.activationY;
-  const dndCollisionDetection = useMemo(() => {
+  const sidebarCollisionDetection = useMemo(() => {
     if (draggedThreadKey === undefined || draggedFromSection === undefined)
       return createSidebarCollisionDetection(() => true);
     const source = threadByKey.get(draggedThreadKey);
@@ -3451,8 +3469,22 @@ export default function Sidebar() {
     sidebarListItems,
     threadByKey,
   ]);
+  // Past the sidebar's right edge the row is headed for a chat pane, so the
+  // list stops previewing a reorder that the release will not perform.
+  const dndCollisionDetection = useCallback<CollisionDetection>(
+    (args) => {
+      const list = threadListRef.current;
+      const pointerX = args.pointerCoordinates?.x;
+      if (list && pointerX !== undefined && pointerX > list.getBoundingClientRect().right) {
+        return [];
+      }
+      return sidebarCollisionDetection(args);
+    },
+    [sidebarCollisionDetection],
+  );
   const handleThreadDragEnd = useCallback(
     (event: DragEndEvent) => {
+      if (useChatPaneDragStore.getState().target !== null) return;
       const activeKey = String(event.active.id);
       const activeSection = sectionByThreadKey.get(activeKey);
       const target =
@@ -3962,6 +3994,11 @@ export default function Sidebar() {
           api.contextMenu.show(
             buildThreadActionMenuItems({
               branch: thread.branch ?? null,
+              canOpenInSplit:
+                !isMobile &&
+                routeThreadRefRef.current !== null &&
+                !isThreadOpenInPane(threadRef) &&
+                scopedThreadKey(routeThreadRefRef.current) !== threadKey,
               isPinned,
               isSettled,
               isSnoozed,
@@ -4037,6 +4074,11 @@ export default function Sidebar() {
             return;
           case "unpin":
             attemptUnpin(threadRef);
+            return;
+          case "open-in-split":
+            if (openThreadInSplit(routeThreadRefRef.current, threadRef)) {
+              navigateToThread(threadRef);
+            }
             return;
           case "rename":
             startThreadRename(threadRef, thread.title);

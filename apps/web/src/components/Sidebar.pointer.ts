@@ -11,7 +11,7 @@ export function SidebarDragLifecycle({ onUnmount }: { onUnmount: () => void }) {
 type Options = {
   distance: number;
   onAttach: (sensor: SidebarPointerSensor) => void;
-  onFinish: (started: boolean) => void;
+  onFinish: (started: boolean, cancelled: boolean) => void;
 };
 
 /** A sidebar gesture ends on release, cancellation, or loss of its window.
@@ -131,7 +131,7 @@ export class SidebarPointerSensor {
     try {
       // Release the sidebar preview before dnd-kit clears its transforms.
       // Its public end/cancel event can be omitted before its first layout.
-      this.props.options.onFinish(!aborted);
+      this.props.options.onFinish(!aborted, cancelled);
     } finally {
       if (aborted) this.props.onAbort(this.props.active);
       if (cancelled) this.props.onCancel();
