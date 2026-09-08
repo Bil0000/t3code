@@ -45,3 +45,14 @@ it("returns the remaining thread when the focused member closes", () => {
   expect(useChatPanesStore.getState().closePane(focused.id)).toEqual(thread("a"));
   expect(useChatPanesStore.getState().groups).toEqual([]);
 });
+
+it.each([-1, 1.1, 0.5])("validates persisted pane ratio %s", async (ratio) => {
+  openThreadInSplit(thread("a"), thread("b"));
+  const root = useChatPanesStore.getState().groups[0]!;
+  const groups = [{ ...root, ratio }];
+  useChatPanesStore.setState({ groups: [], focusedPaneId: null });
+  const { storage, name } = useChatPanesStore.persist.getOptions();
+  await storage!.setItem(name!, { state: { groups, focusedPaneId: null } });
+  await useChatPanesStore.persist.rehydrate();
+  expect(useChatPanesStore.getState().groups).toEqual(ratio === 0.5 ? groups : []);
+});

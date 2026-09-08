@@ -6,6 +6,7 @@ import { createJSONStorage, persist } from "zustand/middleware";
 import { useChatPaneDragStore } from "./chatPaneDragStore";
 import {
   canSplitPane,
+  clampPaneRatio,
   collectLeaves,
   findLeafByThread,
   removePane,
@@ -41,7 +42,7 @@ const NodeSchema: Schema.Codec<ChatPaneNode> = Schema.Union([
     kind: Schema.Literal("split"),
     id: Schema.String,
     direction: Schema.Literals(["horizontal", "vertical"]),
-    ratio: Schema.Number,
+    ratio: Schema.Finite.check(Schema.makeFilter((ratio) => ratio === clampPaneRatio(ratio))),
     first: Schema.suspend(() => NodeSchema),
     second: Schema.suspend(() => NodeSchema),
   }),
