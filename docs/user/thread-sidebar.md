@@ -24,8 +24,10 @@ worktree**, each background submission creates its own worktree.
 
 Pin a thread from its menu to keep it above your active work.
 
-On web and desktop, pinning or unpinning a thread keeps the sidebar at your current
-scroll position instead of following the thread to its new place in the list.
+On web and desktop, you can also drag files from your computer onto any thread row:
+the thread opens and the files are attached in its composer, ready for
+your next message. The same per-message file limits apply as when attaching
+files directly; see [Attach files](./composer.md#attach-files).
 
 Pinning does not prevent automatic settlement. Settling a thread removes its pin.
 
