@@ -1671,6 +1671,7 @@ it.effect("sorts non-GitHub issues by comments in either direction", () =>
                 { ...issue(2, "2026-07-02T00:00:00Z"), commentCount: 8 },
               ],
               truncated: false,
+              continues: false,
             }),
         }),
       ],
