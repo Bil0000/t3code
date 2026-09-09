@@ -75,7 +75,6 @@ export function CompactFilterMenu<Value extends string>({
             : cn(
                 "inline-flex h-7 min-w-0 items-center gap-1 rounded-md px-1.5 text-sm font-medium text-muted-foreground hover:bg-accent hover:text-foreground",
                 className,
-                children,
               )
         }
       >
@@ -193,6 +192,13 @@ export function useListSearchShortcut({
       if (event.defaultPrevented) return;
       if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
       if (event.altKey || event.shiftKey) return;
+      if (
+        event.target instanceof HTMLElement &&
+        !inFlowSearchRef.current?.contains(event.target) &&
+        (event.target.isContentEditable || event.target.closest("input, textarea, select"))
+      ) {
+        return;
+      }
       event.preventDefault();
       if (condensed) {
         setSearchOpen(true);
