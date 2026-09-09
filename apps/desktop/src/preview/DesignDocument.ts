@@ -61,6 +61,28 @@ export function cancelDesignInteraction(
   else if (interaction) applyDesignElementState(interaction.element, interaction.before);
 }
 
+export function rgbToHex(value: string, fallback: string): string {
+  if (/^#[0-9a-f]{6}$/i.test(value)) return value;
+  const parts = value
+    .match(/[\d.]+/g)
+    ?.slice(0, 3)
+    .map((part) => Number(part) * (value.startsWith("color(srgb ") ? 255 : 1));
+  return parts?.length === 3
+    ? `#${parts
+        .map((part) =>
+          Math.max(0, Math.min(255, Math.round(part)))
+            .toString(16)
+            .padStart(2, "0"),
+        )
+        .join("")}`
+    : fallback;
+}
+
+export function designColorWithAlpha(color: string, original: string): string {
+  const channels = [1, 3, 5].map((start) => Number.parseInt(color.slice(start, start + 2), 16));
+  return `rgb(from ${original} ${channels.join(" ")} / alpha)`;
+}
+
 export interface DesignSelectionInput {
   id: string;
   pageUrl: string;

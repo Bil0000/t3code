@@ -6,6 +6,8 @@ import {
   createDesignSelectionAnnotation,
   designElementStatesMatch,
   designPathFromUrl,
+  designColorWithAlpha,
+  rgbToHex,
   cancelDesignInteraction,
   resolveDesignPosition,
   serializeDesignDocument,
@@ -97,6 +99,18 @@ describe("cancelDesignInteraction", () => {
     });
 
     expect(removed).toBe(true);
+  });
+});
+
+describe("design color edits", () => {
+  it("reopens a relative color in the RGB picker", () => {
+    expect(rgbToHex("color(srgb 0.0627451 0.12549 0.188235 / 0.3)", "#000000")).toBe("#102030");
+  });
+
+  it("uses the new RGB channels and retains the original alpha", () => {
+    expect(designColorWithAlpha("#102030", "rgba(1, 2, 3, 0.3)")).toBe(
+      "rgb(from rgba(1, 2, 3, 0.3) 16 32 48 / alpha)",
+    );
   });
 });
 

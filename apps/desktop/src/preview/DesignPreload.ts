@@ -11,6 +11,8 @@ import {
   DESIGN_UI_ATTRIBUTE,
   designElementStatesMatch as statesMatch,
   designPathFromUrl,
+  designColorWithAlpha,
+  rgbToHex,
   cancelDesignInteraction,
   resolveDesignPosition,
   serializeDesignDocument,
@@ -101,23 +103,6 @@ function positionOf(element: Element): Point {
     rect.width,
     rect.height,
   );
-}
-
-function rgbToHex(value: string, fallback: string): string {
-  if (/^#[0-9a-f]{6}$/i.test(value)) return value;
-  const parts = value
-    .match(/[\d.]+/g)
-    ?.slice(0, 3)
-    .map(Number);
-  return parts?.length === 3
-    ? `#${parts
-        .map((part) =>
-          Math.max(0, Math.min(255, Math.round(part)))
-            .toString(16)
-            .padStart(2, "0"),
-        )
-        .join("")}`
-    : fallback;
 }
 
 function startDesignEditor(): void {
@@ -309,9 +294,9 @@ function startDesignEditor(): void {
     const colorValue = rgbToHex(computed.color, "#111111");
     const borderColorValue = rgbToHex(computed.borderColor, "#000000");
     setFieldValue(fill, fillValue);
-    setFieldValue(fillText, fillValue);
+    setFieldValue(fillText, computed.backgroundColor);
     setFieldValue(color, colorValue);
-    setFieldValue(colorText, colorValue);
+    setFieldValue(colorText, computed.color);
     setFieldValue(fontSize, String(Math.round(Number.parseFloat(computed.fontSize) || 16)));
     setFieldValue(width, String(Math.round(rect.width)));
     setFieldValue(height, String(Math.round(rect.height)));
@@ -336,7 +321,7 @@ function startDesignEditor(): void {
     setFieldValue(borderWidth, String(Math.round(Number.parseFloat(computed.borderWidth) || 0)));
     setFieldValue(borderStyle, computed.borderStyle);
     setFieldValue(borderColor, borderColorValue);
-    setFieldValue(borderColorText, borderColorValue);
+    setFieldValue(borderColorText, computed.borderColor);
     setFieldValue(boxShadow, computed.boxShadow === "none" ? "" : computed.boxShadow);
     choose.textContent = findArtboard(selected)?.hasAttribute(SELECTED_ATTRIBUTE)
       ? "Chosen"
@@ -745,16 +730,18 @@ function startDesignEditor(): void {
     if (element.childElementCount === 0) element.textContent = value;
   });
   bindField(fill, (element, value) => {
-    fillText.value = value;
-    element.style.setProperty("background-color", value);
+    const next = designColorWithAlpha(value, getComputedStyle(element).backgroundColor);
+    fillText.value = next;
+    element.style.setProperty("background-color", next);
   });
   bindField(fillText, (element, value) => {
     if (/^#[0-9a-f]{6}$/i.test(value)) fill.value = value;
     element.style.setProperty("background-color", value);
   });
   bindField(color, (element, value) => {
-    colorText.value = value;
-    element.style.setProperty("color", value);
+    const next = designColorWithAlpha(value, getComputedStyle(element).color);
+    colorText.value = next;
+    element.style.setProperty("color", next);
   });
   bindField(colorText, (element, value) => {
     if (/^#[0-9a-f]{6}$/i.test(value)) color.value = value;
@@ -801,8 +788,9 @@ function startDesignEditor(): void {
   );
   bindField(borderStyle, (element, value) => element.style.setProperty("border-style", value));
   bindField(borderColor, (element, value) => {
-    borderColorText.value = value;
-    element.style.setProperty("border-color", value);
+    const next = designColorWithAlpha(value, getComputedStyle(element).borderColor);
+    borderColorText.value = next;
+    element.style.setProperty("border-color", next);
   });
   bindField(borderColorText, (element, value) => {
     if (/^#[0-9a-f]{6}$/i.test(value)) borderColor.value = value;
