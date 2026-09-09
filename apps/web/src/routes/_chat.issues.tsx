@@ -39,7 +39,6 @@ import {
 } from "../components/issue/issueList.logic";
 import { IssueCreateDialog } from "../components/issue/IssueCreateDialog";
 import { IssueDetailPanel } from "../components/issue/IssueDetailPanel";
-import { LinearConnectionDialog } from "../components/issue/LinearConnectionDialog";
 import { LinearIcon } from "../components/Icons";
 import { ListGhost } from "../components/sourceControl/ListGhosts";
 import {
@@ -346,12 +345,6 @@ function IssuesRouteView() {
     [allProjects, environmentId],
   );
   const currentProjectIds = projects.map((project) => project.id);
-  const linearProjectCount = currentProjectIds.filter(
-    (projectId) =>
-      linearSettings.projectBindings[projectId] != null ||
-      (linearSettings.projectBindings[projectId] === undefined &&
-        linearSettings.projectTeams[projectId] !== undefined),
-  ).length;
   const linearManaged = hasLinearManagementState(
     linearConnection.data,
     linearSettings,
@@ -1127,7 +1120,7 @@ function IssuesRouteView() {
   );
 
   const [creating, setCreating] = useState(false);
-  const [linearDialogOpen, setLinearDialogOpen] = useState(false);
+  const openLinearSettings = () => void navigate({ to: "/settings/integrations", hash: "linear" });
   const searchInput = (
     <ListSearchInput
       label="Search issues"
@@ -1314,7 +1307,7 @@ function IssuesRouteView() {
           host: search.host,
           hostOptions: hostMenuOptions,
           onHost: (host) => updateListScope({ host, sort: undefined, order: undefined }),
-          onManageLinear: () => setLinearDialogOpen(true),
+          onManageLinear: openLinearSettings,
           linearManaged,
         }}
         projectFilter={{
@@ -1341,7 +1334,7 @@ function IssuesRouteView() {
     hostMenuOptions,
     hostMenuAction: {
       connected: linearManaged,
-      onClick: () => setLinearDialogOpen(true),
+      onClick: openLinearSettings,
     },
     onInvolvement: (involvement: IssueInvolvement) => updateListScope({ involvement }),
     onState: (state: IssueListState) => updateListScope({ state }),
@@ -1541,28 +1534,6 @@ function IssuesRouteView() {
               baselineQuery.refresh();
               authoredQuery.refresh();
               assignedQuery.refresh();
-            }}
-          />
-          <LinearConnectionDialog
-            open={linearDialogOpen}
-            onOpenChange={setLinearDialogOpen}
-            onProviderChanged={(change) => {
-              if (change === "unavailable") {
-                setHosts((current) => current.filter((entry) => entry.kind !== "linear"));
-              }
-              const shouldSelectLinear = change === "available" && linearProjectCount === 0;
-              const shouldClearLinear = change === "unavailable" && search.host === "linear.app";
-              if (shouldSelectLinear || shouldClearLinear) {
-                void invalidateHost().then(() =>
-                  updateListScope({
-                    host: shouldSelectLinear ? "linear.app" : undefined,
-                    sort: undefined,
-                    order: undefined,
-                  }),
-                );
-                return;
-              }
-              void refreshFromHost();
             }}
           />
         </>

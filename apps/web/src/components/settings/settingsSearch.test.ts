@@ -258,9 +258,16 @@ describe("searchSettings", () => {
     });
   });
 
-  it("keeps issue tracking out of settings", () => {
+  it("routes Linear issue tracking to integrations", () => {
     expect(SETTINGS_SECTION_LABELS["/settings/source-control"]).toBe("Source Control");
     expect(Object.keys(SETTINGS_SECTION_LABELS)).not.toContain("/settings/issue-tracking");
-    expect(searchSettings("issue tracking")).toEqual([]);
+    expect(searchSettings("issue tracking")[0]).toMatchObject({
+      id: "linear",
+      to: "/settings/integrations",
+    });
+    expect(searchSettings("Linear")[0]).toMatchObject({
+      id: "linear",
+      to: "/settings/integrations",
+    });
   });
 });
