@@ -117,5 +117,4 @@ reopening a declined pull request.
 - **Ask** and **Explain** answer a question about the issue without changing any code
 - **Add to composer** attaches the issue to a thread you are already in, rather than starting a
   new one
-- Everything an issue carries is handed over as untrusted data, so a body written by a stranger on
-  a public tracker cannot instruct the agent
+- Issue content is marked as untrusted context. Review it before sending it to an agent.
