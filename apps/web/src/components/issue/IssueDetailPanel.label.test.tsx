@@ -1,10 +1,15 @@
 import type { EnvironmentId, IssueActivity, IssueDetail } from "@t3tools/contracts";
+import { Cause } from "effect";
+import { IssueSummaryTab } from "./IssueSummaryTab";
 import { Children, cloneElement, isValidElement, type ReactElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it, vi } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { reactHookHarness as hooks } from "../../test/reactHookHarness";
 import { visitElements } from "../../test/reactElementTree";
+
+const commands = vi.hoisted(() => ({ comment: vi.fn(), action: vi.fn(), refresh: vi.fn() }));
+afterEach(() => vi.clearAllMocks());
 
 vi.mock("react", async (importOriginal) => {
   const actual = await importOriginal<typeof import("react")>();
@@ -37,6 +42,7 @@ vi.mock("~/state/issues", () => ({
     commentsPage: "commentsPage",
     invalidate: "invalidate",
     runAction: "runAction",
+    comment: "comment",
   },
 }));
 vi.mock("~/state/query", () => ({
@@ -44,17 +50,23 @@ vi.mock("~/state/query", () => ({
     data: query === "detail" ? detail : activity,
     error: null,
     isPending: false,
-    refresh: vi.fn(),
+    refresh: commands.refresh,
   }),
 }));
 vi.mock("~/state/use-atom-command", () => ({
-  useAtomCommand: () => async () => ({ _tag: "Success", value: undefined }),
+  useAtomCommand: (command: string) =>
+    command === "comment"
+      ? commands.comment
+      : command === "runAction"
+        ? commands.action
+        : async () => ({ _tag: "Success", value: undefined }),
 }));
 vi.mock("../sourceControl/ActivityUnavailableState", () => ({
   ActivityUnavailableState: () => null,
 }));
 vi.mock("../sourceControl/actorPresentation", () => ({
   SourceControlActorLabel: () => null,
+  SourceControlActorAvatar: () => null,
   SourceControlMetaLine: ({ children }: { children: ReactNode }) => <div>{children}</div>,
 }));
 vi.mock("../sourceControl/DetailTabStrip", () => ({
@@ -236,3 +248,25 @@ describe("IssueDetailPanel provider labels", () => {
     expect(markup).toContain('aria-haspopup="menu"');
   });
 });
+
+it.each(["comment-failed", "action-failed", "success"])(
+  "handles comment and close without losing a posted comment: %s",
+  async (outcome) => {
+    hooks.reset();
+    const failure = { _tag: "Failure", cause: Cause.fail(new Error("Host refused")) };
+    commands.comment.mockResolvedValue(
+      outcome === "comment-failed" ? failure : { _tag: "Success" },
+    );
+    commands.action.mockResolvedValue(outcome === "action-failed" ? failure : { _tag: "Success" });
+    const summary = visitElements(renderPanel(), (element) => element.type === IssueSummaryTab);
+    const onCommentAction = summary!.props.onCommentAction as (
+      body: string,
+      action: "close",
+    ) => Promise<{ commentPosted: boolean }>;
+    expect(await onCommentAction("Done", "close")).toEqual({
+      commentPosted: outcome !== "comment-failed",
+    });
+    expect(commands.action).toHaveBeenCalledTimes(outcome === "comment-failed" ? 0 : 1);
+    expect(commands.refresh).toHaveBeenCalledTimes(outcome === "comment-failed" ? 0 : 2);
+  },
+);

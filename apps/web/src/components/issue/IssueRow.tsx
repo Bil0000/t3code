@@ -11,11 +11,7 @@ import {
 } from "../sourceControl/actorPresentation";
 import { ListRow } from "../sourceControl/ListRow";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import {
-  getIssueProviderPresentation,
-  IssueLabelChips,
-  IssueStateGlyph,
-} from "./issuePresentation";
+import { getIssueProviderPresentation, IssueRowLabels, IssueStateGlyph } from "./issuePresentation";
 import { Checkbox } from "../ui/checkbox";
 
 const REACTION_SORT: Partial<
@@ -74,9 +70,19 @@ function IssueRowImpl({
       : 0;
   const { Icon, providerName } = getIssueProviderPresentation(entry.provider);
   return (
-    <div className={cn("group/row relative", onToggleSelection && "[&>button]:pl-10")}>
+    <div className="group/row relative">
       <ListRow
-        glyph={<IssueStateGlyph state={entry.state} stateReason={entry.stateReason} />}
+        glyph={
+          <span
+            className={cn(
+              "flex items-center",
+              onToggleSelection && "group-hover/row:opacity-0 group-focus-within/row:opacity-0",
+              selectionChecked && "opacity-0",
+            )}
+          >
+            <IssueStateGlyph state={entry.state} stateReason={entry.stateReason} />
+          </span>
+        }
         title={entry.title}
         providerName={providerName}
         ProviderIcon={Icon}
@@ -110,9 +116,7 @@ function IssueRowImpl({
           ) : null,
           // Guarded here rather than left to the chips: a component that renders nothing is still a
           // child, and the meta line would draw a separator in front of it.
-          entry.labels.length > 0 ? (
-            <IssueLabelChips key="labels" labels={entry.labels} className="shrink-0" />
-          ) : null,
+          entry.labels.length > 0 ? <IssueRowLabels key="labels" labels={entry.labels} /> : null,
         ]}
         matchedElsewhere={matchedElsewhere === true}
         updatedAt={entry.updatedAt}

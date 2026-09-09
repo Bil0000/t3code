@@ -44,7 +44,7 @@ describe("IssueRow", () => {
     expect(markup).not.toContain(" title=");
   });
 
-  it("offers a checkbox without covering the status glyph", () => {
+  it("shares the status position with task selection", () => {
     const props = {
       entry,
       selected: false,
@@ -58,7 +58,7 @@ describe("IssueRow", () => {
 
     expect(markup).toContain('aria-label="Select pingdotgg/t3code issue #6368"');
     expect(markup).toContain("group-hover/row:opacity-100");
-    expect(markup).toContain("[&amp;&gt;button]:pl-10");
+    expect(markup).not.toContain("[&amp;&gt;button]:pl-10");
     expect(markup.indexOf('aria-label="Select pingdotgg/t3code issue #6368"')).toBeGreaterThan(
       markup.indexOf("</button>"),
     );

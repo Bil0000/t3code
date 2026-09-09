@@ -17,7 +17,9 @@ import {
   ArrowDownUpIcon,
   ArrowUpRightIcon,
   BookOpenIcon,
-  ChevronDownIcon,
+  CircleCheckIcon,
+  CircleDotIcon,
+  ExternalLinkIcon,
   HammerIcon,
   LinkIcon,
   MessageCircleQuestionIcon,
@@ -42,6 +44,7 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { PullRequestMarkdownContext } from "../pullRequest/PullRequestMarkdown";
 import { SourceControlActorLabel, SourceControlMetaLine } from "../sourceControl/actorPresentation";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { handoffPrompt, readableFailure } from "../sourceControl/handoff";
@@ -198,9 +201,7 @@ export function IssueDetailPanel({
 }) {
   const issueKey = `${reference.projectId}:${reference.repository}#${reference.number}`;
   const [tab, setTab] = useState<DetailTab>("summary");
-  // Oldest first, unlike a change request: an issue is an argument written from its opening
-  // towards whatever was settled, and reading it backwards is reading the conclusion first.
-  const [timelineOrder, setTimelineOrder] = useState<"oldest" | "newest">("oldest");
+  const [timelineOrder, setTimelineOrder] = useState<"oldest" | "newest">("newest");
   // Both live here rather than in the tab that shows them, because the menu that opens them is
   // in this header and the summary is a tab away when it is pressed.
   const [editing, setEditing] = useState(false);
@@ -370,10 +371,24 @@ export function IssueDetailPanel({
   }, [forcedRefreshToken, refreshFromHost]);
   const runAction = useAtomCommand(issueEnvironment.runAction, { reportFailure: false });
   const newThread = useNewThreadHandler();
+  const postComment = useAtomCommand(issueEnvironment.comment, { reportFailure: false });
 
-  const perform = async (action: IssueAction, target: IssueRef, reason?: IssueCloseReason) => {
-    if (actionPending) return;
+  const perform = async (
+    action: IssueAction,
+    target: IssueRef,
+    reason?: IssueCloseReason,
+    body?: string,
+  ) => {
+    if (actionPending) return { commentPosted: false };
     setActionPending(true);
+    if (body !== undefined) {
+      const commentResult = await postComment({ environmentId, input: { ...target, body } });
+      if (commentResult._tag === "Failure") {
+        setActionPending(false);
+        toastManager.add({ type: "error", title: "Could not post the comment" });
+        return { commentPosted: false };
+      }
+    }
     const result = await runAction({
       environmentId,
       input: { ...target, action, ...(reason ? { reason } : {}) },
@@ -391,11 +406,13 @@ export function IssueDetailPanel({
           ACTION_FAILURE_HINTS[action],
         ),
       });
-      return;
+      if (body !== undefined) refreshDetail();
+      return { commentPosted: body !== undefined };
     }
     toastManager.add({ type: "success", title: ACTION_SUCCESS_LABELS[action] });
     refreshDetail();
     onActed?.();
+    return { commentPosted: body !== undefined };
   };
 
   /**
@@ -524,6 +541,19 @@ export function IssueDetailPanel({
       ? "Opens a thread on this project holding the task"
       : "Puts the task in this thread's composer";
 
+  const markdownThreadRef =
+    handoffTarget.kind === "existing-thread" && typeof handoffTarget.draftId !== "string"
+      ? handoffTarget.draftId
+      : null;
+  const markdownRepositoryUrl =
+    detail?.provider === "github"
+      ? new URL(detail.repository, `${new URL(detail.url).origin}/`).toString()
+      : null;
+  const markdownContext = useMemo(
+    () => ({ repositoryUrl: markdownRepositoryUrl, threadRef: markdownThreadRef }),
+    [markdownRepositoryUrl, markdownThreadRef],
+  );
+
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
       {/* The top row's geometry never changes: both of its states occupy the same stacked
@@ -562,7 +592,7 @@ export function IssueDetailPanel({
                         type="button"
                         onClick={() => openLinkInBrowser(detail.url)}
                         className={cn(
-                          "shrink-0 font-medium underline-offset-2 hover:underline",
+                          "inline-flex shrink-0 items-center gap-0.5 font-medium underline-offset-2 hover:underline",
                           statePresentation.toneClassName,
                         )}
                         aria-label={openOnIssueLabel(detail.provider)}
@@ -570,6 +600,7 @@ export function IssueDetailPanel({
                     }
                   >
                     #{detail.number}
+                    <ExternalLinkIcon aria-hidden className="size-2.5" />
                   </TooltipTrigger>
                   <TooltipPopup side="top">{openOnIssueLabel(detail.provider)}</TooltipPopup>
                 </Tooltip>
@@ -596,7 +627,7 @@ export function IssueDetailPanel({
                         tabIndex={condensed ? 0 : -1}
                         onClick={() => openLinkInBrowser(detail.url)}
                         className={cn(
-                          "shrink-0 font-medium underline-offset-2 hover:underline",
+                          "inline-flex shrink-0 items-center gap-0.5 font-medium underline-offset-2 hover:underline",
                           statePresentation.toneClassName,
                         )}
                         aria-label={openOnIssueLabel(detail.provider)}
@@ -604,6 +635,7 @@ export function IssueDetailPanel({
                     }
                   >
                     #{detail.number}
+                    <ExternalLinkIcon aria-hidden className="size-2.5" />
                   </TooltipTrigger>
                   <TooltipPopup side="top">{openOnIssueLabel(detail.provider)}</TooltipPopup>
                 </Tooltip>
@@ -736,6 +768,44 @@ export function IssueDetailPanel({
                     <LinkIcon className="size-3.5" />
                     Copy link
                   </MenuItem>
+                  {detail.state === "open" && can("close") ? (
+                    <>
+                      <MenuSeparator />
+                      {closeReasons.length > 0 ? (
+                        closeReasons.map((reason) => (
+                          <MenuItem
+                            key={reason}
+                            variant="destructive"
+                            disabled={actionPending}
+                            onClick={() => setConfirmClose({ reference, reason })}
+                          >
+                            <CircleCheckIcon className="size-3.5" />
+                            {CLOSE_REASON_LABELS[reason]}
+                          </MenuItem>
+                        ))
+                      ) : (
+                        <MenuItem
+                          variant="destructive"
+                          disabled={actionPending}
+                          onClick={() => setConfirmClose({ reference, reason: null })}
+                        >
+                          <CircleCheckIcon className="size-3.5" />
+                          Close issue
+                        </MenuItem>
+                      )}
+                    </>
+                  ) : detail.state === "closed" && can("reopen") ? (
+                    <>
+                      <MenuSeparator />
+                      <MenuItem
+                        disabled={actionPending}
+                        onClick={() => void perform("reopen", reference)}
+                      >
+                        <CircleDotIcon className="size-3.5" />
+                        Reopen issue
+                      </MenuItem>
+                    </>
+                  ) : null}
                 </MenuPopup>
               </Menu>
               {/* Handing the issue to an agent is the reason to open one at all, so it is a
@@ -765,56 +835,6 @@ export function IssueDetailPanel({
                 </TooltipTrigger>
                 <TooltipPopup side="top">{solveDescription}</TooltipPopup>
               </Tooltip>
-              {detail.state === "open" && can("close") ? (
-                closeReasons.length > 0 ? (
-                  // A reason is not a second action but a part of this one, so it is chosen on the
-                  // way rather than offered as another button.
-                  <Menu>
-                    <MenuTrigger
-                      disabled={actionPending}
-                      render={
-                        <Button size="xs">
-                          {actionPending ? (
-                            "Closing..."
-                          ) : (
-                            <>
-                              Close
-                              <ChevronDownIcon className="size-3 opacity-80" />
-                            </>
-                          )}
-                        </Button>
-                      }
-                    />
-                    <MenuPopup align="end" side="bottom" className="min-w-56">
-                      {closeReasons.map((reason) => (
-                        <MenuItem
-                          key={reason}
-                          disabled={actionPending}
-                          onClick={() => setConfirmClose({ reference, reason })}
-                        >
-                          {CLOSE_REASON_LABELS[reason]}
-                        </MenuItem>
-                      ))}
-                    </MenuPopup>
-                  </Menu>
-                ) : (
-                  <Button
-                    size="xs"
-                    disabled={actionPending}
-                    onClick={() => setConfirmClose({ reference, reason: null })}
-                  >
-                    {actionPending ? "Closing..." : "Close"}
-                  </Button>
-                )
-              ) : detail.state === "closed" && can("reopen") ? (
-                <Button
-                  size="xs"
-                  disabled={actionPending}
-                  onClick={() => void perform("reopen", reference)}
-                >
-                  {actionPending ? "Reopening..." : "Reopen"}
-                </Button>
-              ) : null}
             </>
           ) : null}
         </div>
@@ -880,7 +900,25 @@ export function IssueDetailPanel({
           >
             {detail && statePresentation ? (
               <div className="col-span-2 mt-1 min-w-0 px-4 pb-4">
-                <h1 className="text-base font-semibold leading-snug">{detail.title}</h1>
+                <div className="group flex items-start gap-1">
+                  <h1 className="min-w-0 flex-1 text-base font-semibold leading-snug">
+                    {detail.title}
+                  </h1>
+                  {canEdit ? (
+                    <Button
+                      size="icon-xs"
+                      variant="ghost"
+                      aria-label="Edit issue title"
+                      className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                      onClick={() => {
+                        setTab("summary");
+                        setEditing(true);
+                      }}
+                    >
+                      <PencilLineIcon className="size-3" />
+                    </Button>
+                  ) : null}
+                </div>
                 <SourceControlMetaLine className="mt-2 text-xs text-muted-foreground">
                   <Badge
                     variant="outline"
@@ -993,7 +1031,7 @@ export function IssueDetailPanel({
         ) : detailQuery.error && !detail ? (
           <IssuesUnavailableState error={detailQuery.error} onRetry={refreshDetail} />
         ) : detail ? (
-          <>
+          <PullRequestMarkdownContext value={markdownContext}>
             {mountedTabs.has("summary") ? (
               <div
                 data-tab-scroller
@@ -1026,6 +1064,8 @@ export function IssueDetailPanel({
                   }
                   onOpenAiMatch={(match) => openLinkInBrowser(match.url)}
                   onRefresh={refreshDetail}
+                  actionPending={actionPending}
+                  onCommentAction={(body, action) => perform(action, reference, undefined, body)}
                 />
               </div>
             ) : null}
@@ -1055,7 +1095,7 @@ export function IssueDetailPanel({
                 )}
               </div>
             ) : null}
-          </>
+          </PullRequestMarkdownContext>
         ) : null}
       </div>
 

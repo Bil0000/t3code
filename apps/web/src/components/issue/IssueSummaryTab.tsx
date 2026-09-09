@@ -6,7 +6,15 @@ import type {
   IssueRef,
   WorkItemMatch,
 } from "@t3tools/contracts";
-import { MessageSquareIcon, MilestoneIcon, PencilIcon, TagIcon, UsersIcon } from "lucide-react";
+import {
+  ArrowDownUpIcon,
+  MessageSquareIcon,
+  MilestoneIcon,
+  PencilIcon,
+  TagIcon,
+  UsersIcon,
+} from "lucide-react";
+import { Tooltip, TooltipTrigger, TooltipPopup } from "../ui/tooltip";
 import { useState } from "react";
 
 import { cn } from "~/lib/utils";
@@ -15,7 +23,10 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { PullRequestMarkdownEditor as SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
-import { SourceControlActorLabel, SourceControlMetaLine } from "../sourceControl/actorPresentation";
+import {
+  SourceControlActorLabel,
+  SourceControlActorAvatar,
+} from "../sourceControl/actorPresentation";
 import { CommentComposer } from "../sourceControl/CommentComposer";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
 import { SummaryMetaRow, SummarySection } from "../sourceControl/SummaryMetaRow";
@@ -23,7 +34,7 @@ import { readableFailure } from "../sourceControl/handoff";
 import { resolvePullRequestState } from "../pullRequest/pullRequestPresentation";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
-import { Textarea } from "../ui/textarea";
+import { IssueLabelChips } from "./issuePresentation";
 import { toastManager } from "../ui/toast";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
 import { IssueAssigneePicker } from "./IssueAssigneePicker";
@@ -36,7 +47,6 @@ import {
 } from "./issueDetail.logic";
 import { ConversationGhost } from "../sourceControl/ListGhosts";
 import { IssueLabelPicker } from "./IssueLabelPicker";
-import { IssueLabelChips } from "./issuePresentation";
 import { IssueReactionBar } from "./IssueReactions";
 import {
   useWorkItemMatches,
@@ -61,16 +71,19 @@ function IssueEditor({
   onSaved: () => void;
 }) {
   const [title, setTitle] = useState(detail.title);
-  const [body, setBody] = useState(detail.body);
   const [saving, setSaving] = useState(false);
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
 
   const trimmedTitle = title.trim();
   const changedTitle = trimmedTitle !== detail.title;
-  const changedBody = body !== detail.body;
 
-  const save = async () => {
-    if (trimmedTitle.length === 0 || saving) return;
+  const save = async (body: string) => {
+    const changedBody = body !== detail.body;
+    if (saving) return;
+    if (trimmedTitle.length === 0) {
+      toastManager.add({ type: "error", title: "Enter an issue title" });
+      return;
+    }
     if (!changedTitle && !changedBody) {
       onDone();
       return;
@@ -111,27 +124,17 @@ function IssueEditor({
         aria-label="Issue title"
         onChange={(event) => setTitle(event.target.value)}
       />
-      <Textarea
-        disabled={saving}
-        value={body}
-        rows={12}
+      <SourceControlMarkdownEditor
+        allowEmpty
+        value={detail.body}
+        cwd={detail.workspaceRoot}
+        environmentId={environmentId}
+        label="Issue description"
         placeholder="Describe the issue"
-        aria-label="Issue description"
-        onChange={(event) => setBody(event.target.value)}
+        saving={saving}
+        onSave={(body) => void save(body)}
+        onCancel={onDone}
       />
-      <div className="flex justify-end gap-2">
-        <Button size="xs" variant="ghost" disabled={saving} onClick={onDone}>
-          Cancel
-        </Button>
-        <Button
-          size="xs"
-          variant="outline"
-          disabled={trimmedTitle.length === 0 || saving}
-          onClick={() => void save()}
-        >
-          {saving ? "Saving..." : "Save"}
-        </Button>
-      </div>
     </div>
   );
 }
@@ -159,6 +162,8 @@ export function IssueSummaryTab({
   onLoadMoreComments,
   loadingMoreComments,
   onRefresh,
+  actionPending,
+  onCommentAction,
 }: {
   environmentId: EnvironmentId;
   reference: IssueRef;
@@ -185,6 +190,11 @@ export function IssueSummaryTab({
   onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
   onOpenAiMatch: (match: WorkItemMatch) => void;
   onRefresh: () => void;
+  actionPending: boolean;
+  onCommentAction: (
+    body: string,
+    action: "close" | "reopen",
+  ) => Promise<{ readonly commentPosted: boolean }>;
   onLoadMoreComments: () => void;
   loadingMoreComments: boolean;
 }) {
@@ -206,6 +216,8 @@ export function IssueSummaryTab({
   // An issue reads in the order it was written, so the window reaches backwards from the end.
   const recentComments = detail.comments.slice(Math.max(0, detail.comments.length - shownComments));
   const hiddenCommentCount = detail.comments.length - recentComments.length;
+  const [commentOrder, setCommentOrder] = useState<"newest" | "oldest">("newest");
+  const visibleComments = commentOrder === "newest" ? recentComments.toReversed() : recentComments;
   const [commentScope, setCommentScope] = useState<IssueCommentEditScope | null>(null);
   const [commentSaving, setCommentSaving] = useState(false);
   const updateComment = useAtomCommand(issueEnvironment.updateComment, { reportFailure: false });
@@ -227,6 +239,42 @@ export function IssueSummaryTab({
     onRefresh();
   };
 
+  const olderComments = (
+    <>
+      {detail.nextCommentsCursor != null ? (
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-full"
+          disabled={loadingMoreComments}
+          onClick={() => {
+            setShown({
+              url: detail.url,
+              count: nextIssueCommentCount(shownComments, COMMENT_PAGE),
+            });
+            onLoadMoreComments();
+          }}
+        >
+          {loadingMoreComments ? "Loading..." : "Load older comments"}
+        </Button>
+      ) : null}
+      {hiddenCommentCount > 0 ? (
+        // Hundreds of comments are hundreds of markdown renders, and the ones worth
+        // opening an issue for are the recent ones. The rest are one press away and
+        // stay rendered once asked for.
+        <Button
+          size="sm"
+          variant="outline"
+          className="w-full"
+          onClick={() => setShown({ url: detail.url, count: shownComments + COMMENT_PAGE })}
+        >
+          Show {Math.min(hiddenCommentCount, COMMENT_PAGE)} earlier{" "}
+          {hiddenCommentCount === 1 ? "comment" : "comments"}
+        </Button>
+      ) : null}
+    </>
+  );
+
   return (
     <div className="h-full overflow-y-auto" data-summary-scroll>
       <section className="px-4 py-3">
@@ -237,7 +285,11 @@ export function IssueSummaryTab({
                 <span className="text-muted-foreground">Nobody</span>
               ) : (
                 detail.assignees.map((actor) => (
-                  <SourceControlActorLabel key={actor.login} actor={actor} className="shrink-0" />
+                  <SourceControlActorLabel
+                    key={actor.login}
+                    actor={actor}
+                    className="shrink-0 gap-0 [&>span:last-child]:sr-only"
+                  />
                 ))
               )}
               {/* Shown wherever the host can assign at all, and disabled with the reason where
@@ -260,7 +312,7 @@ export function IssueSummaryTab({
               {detail.labels.length === 0 ? (
                 <span className="text-muted-foreground">None</span>
               ) : (
-                <IssueLabelChips labels={detail.labels} max={detail.labels.length} />
+                <IssueLabelChips labels={detail.labels} />
               )}
               {detail.capabilities.labels && detail.capabilities.listLabelCandidates ? (
                 <IssueLabelPicker
@@ -301,11 +353,25 @@ export function IssueSummaryTab({
               onSaved={onRefresh}
             />
           ) : (
-            <HostMarkdown
-              text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
-              cwd={detail.workspaceRoot}
-              environmentId={environmentId}
-            />
+            <div className="flex items-start gap-1">
+              <HostMarkdown
+                className="min-w-0 flex-1"
+                text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
+                cwd={detail.workspaceRoot}
+                environmentId={environmentId}
+              />
+              {detail.capabilities.edit && detail.viewerPermissions.edit ? (
+                <Button
+                  size="icon-xs"
+                  variant="ghost"
+                  className="shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+                  aria-label="Edit description"
+                  onClick={() => onEditingChange(true)}
+                >
+                  <PencilIcon className="size-3" />
+                </Button>
+              ) : null}
+            </div>
           )}
           <IssueReactionBar
             className="mt-2"
@@ -419,6 +485,24 @@ export function IssueSummaryTab({
 
       <SummarySection
         title="Comments"
+        actions={
+          !activityPending && !activityError && detail.comments.length > 0 ? (
+            <Button
+              size="xs"
+              variant="ghost"
+              className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
+              aria-label={
+                commentOrder === "newest"
+                  ? "Show oldest comments first"
+                  : "Show newest comments first"
+              }
+              onClick={() => setCommentOrder(commentOrder === "newest" ? "oldest" : "newest")}
+            >
+              <ArrowDownUpIcon aria-hidden className="size-3" />
+              {commentOrder === "newest" ? "Newest first" : "Oldest first"}
+            </Button>
+          ) : null
+        }
         {...(activityPending || activityError ? {} : { count: detail.commentCount })}
       >
         {activityPending ? (
@@ -442,40 +526,8 @@ export function IssueSummaryTab({
               <p className="py-2 text-xs text-muted-foreground">No comments yet.</p>
             ) : (
               <div className="space-y-3">
-                {detail.nextCommentsCursor != null ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full"
-                    disabled={loadingMoreComments}
-                    onClick={() => {
-                      setShown({
-                        url: detail.url,
-                        count: nextIssueCommentCount(shownComments, COMMENT_PAGE),
-                      });
-                      onLoadMoreComments();
-                    }}
-                  >
-                    {loadingMoreComments ? "Loading..." : "Load older comments"}
-                  </Button>
-                ) : null}
-                {hiddenCommentCount > 0 ? (
-                  // Hundreds of comments are hundreds of markdown renders, and the ones worth
-                  // opening an issue for are the recent ones. The rest are one press away and
-                  // stay rendered once asked for.
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="w-full"
-                    onClick={() =>
-                      setShown({ url: detail.url, count: shownComments + COMMENT_PAGE })
-                    }
-                  >
-                    Show {Math.min(hiddenCommentCount, COMMENT_PAGE)} earlier{" "}
-                    {hiddenCommentCount === 1 ? "comment" : "comments"}
-                  </Button>
-                ) : null}
-                {recentComments.map((comment) => (
+                {commentOrder === "oldest" ? olderComments : null}
+                {visibleComments.map((comment) => (
                   <article
                     key={comment.id}
                     // Offscreen comments skip style, layout and paint. Bot comments carry pages
@@ -483,13 +535,24 @@ export function IssueSummaryTab({
                     // way.
                     className="group rounded-lg border border-border/60 p-3 [contain-intrinsic-block-size:120px] [content-visibility:auto]"
                   >
-                    <SourceControlMetaLine className="min-w-0 text-xs text-muted-foreground">
-                      <SourceControlActorLabel
-                        actor={comment.author}
-                        className="font-medium text-foreground"
-                      />
+                    <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+                      <Tooltip>
+                        <TooltipTrigger
+                          render={
+                            <span
+                              className="shrink-0 rounded-full"
+                              aria-label={comment.author?.login ?? "ghost"}
+                            />
+                          }
+                        >
+                          <SourceControlActorAvatar actor={comment.author} />
+                        </TooltipTrigger>
+                        <TooltipPopup>
+                          {comment.author?.name ?? comment.author?.login ?? "ghost"}
+                        </TooltipPopup>
+                      </Tooltip>
                       <span>{formatRelativeTimeLabel(comment.createdAt)}</span>
-                    </SourceControlMetaLine>
+                    </span>
                     {editingCommentId === comment.id ? (
                       <SourceControlMarkdownEditor
                         className="mt-2"
@@ -533,6 +596,7 @@ export function IssueSummaryTab({
                     />
                   </article>
                 ))}
+                {commentOrder === "newest" ? olderComments : null}
               </div>
             )}
           </>
@@ -545,6 +609,19 @@ export function IssueSummaryTab({
             detail={detail}
             label="Comment on this issue"
             command={issueEnvironment.comment}
+            actionPending={actionPending}
+            followUpAction={
+              detail.state === "open" &&
+              detail.capabilities.actions.includes("close") &&
+              detail.viewerPermissions.actions.includes("close")
+                ? "close"
+                : detail.state === "closed" &&
+                    detail.capabilities.actions.includes("reopen") &&
+                    detail.viewerPermissions.actions.includes("reopen")
+                  ? "reopen"
+                  : null
+            }
+            onCommentAction={onCommentAction}
             onCommented={onRefresh}
           />
         ) : null}

@@ -1,11 +1,6 @@
-import type {
-  IssueCloseReason,
-  IssueLabel,
-  IssueProviderKind,
-  IssueState,
-} from "@t3tools/contracts";
+import type { IssueCloseReason, IssueProviderKind, IssueState } from "@t3tools/contracts";
 import { CircleCheckIcon, CircleDotIcon, CircleSlashIcon, TicketIcon } from "lucide-react";
-import type { CSSProperties } from "react";
+import { pullRequestLabelColor } from "../pullRequest/pullRequestList.logic";
 
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { cn } from "~/lib/utils";
@@ -94,76 +89,72 @@ export function IssueStateGlyph({
   );
 }
 
-/**
- * Hosts write a label colour every one of these ways, and none of them with an alpha channel.
- * Checked rather than trusted: the value reaches a style attribute, and anything that is not a
- * colour would be one the browser silently keeps from whatever was set before.
- */
-const HEX_COLOR_PATTERN = /^#?(?:[\da-f]{3}|[\da-f]{6})$/iu;
+const LABEL_SLOTS = [
+  { pill: "", overflow: "@xl/pr-row-meta:hidden" },
+  { pill: "hidden @xl/pr-row-meta:inline-flex", overflow: "@3xl/pr-row-meta:hidden" },
+  { pill: "hidden @3xl/pr-row-meta:inline-flex", overflow: "" },
+] as const;
 
-/**
- * A label's own colour, worn the way the hosts wear it: a wash of the colour rather than the
- * colour itself, an edge a shade stronger, and the name in the colour pulled far enough towards
- * the page's own ink to stay legible — half the palettes on offer are pale enough that the raw
- * colour disappears against a light page and glares against a dark one.
- *
- * Mixed in CSS rather than computed here, so one set of numbers reads correctly in both themes.
- * Nothing at all where the host gave no usable colour, which leaves the neutral chip standing.
- */
-function labelStyle(color: string | null): CSSProperties | undefined {
-  if (color === null || !HEX_COLOR_PATTERN.test(color.trim())) return undefined;
-  const hex = `#${color.trim().replace(/^#/u, "")}`;
-  return {
-    backgroundColor: `color-mix(in oklab, ${hex} 18%, transparent)`,
-    borderColor: `color-mix(in oklab, ${hex} 35%, transparent)`,
-    color: `color-mix(in oklab, ${hex} 70%, var(--foreground))`,
-  };
-}
-
-/**
- * The labels a row wears, capped: an issue carrying nine of them would otherwise push everything
- * the row is about off its own line. What is left over is counted rather than dropped silently,
- * and named in the count's title so the reader can still find out what they were.
- */
-export function IssueLabelChips({
+export function IssueRowLabels({
   labels,
-  max = 3,
-  className,
 }: {
-  labels: ReadonlyArray<IssueLabel>;
-  max?: number;
-  className?: string;
+  labels: ReadonlyArray<{ name: string; color: string | null }>;
 }) {
   if (labels.length === 0) return null;
-  const shown = labels.slice(0, max);
-  const hidden = labels.slice(max);
   return (
-    <span className={cn("flex min-w-0 items-center gap-1", className)}>
-      {shown.map((label) => (
-        <Tooltip key={label.name}>
-          <TooltipTrigger
-            render={
-              <span
-                style={labelStyle(label.color)}
-                className="max-w-28 shrink-0 truncate rounded-full border border-border/60 px-1.5 text-[10px] leading-4 font-medium"
-              />
-            }
+    <span className="flex min-w-0 items-center gap-1">
+      {LABEL_SLOTS.map((slot, index) => {
+        const label = labels[index];
+        if (!label) return null;
+        const dot = pullRequestLabelColor(label.color);
+        const remaining = labels.length - index - 1;
+        return (
+          <span
+            key={label.name}
+            className={cn(
+              "inline-flex max-w-40 min-w-0 items-center gap-1 rounded-full border border-border/70 bg-muted/40 py-0 pl-1 pr-1.5 text-[10px] leading-3.5 text-muted-foreground",
+              slot.pill,
+            )}
           >
-            {label.name}
-          </TooltipTrigger>
-          <TooltipPopup side="top">{label.name}</TooltipPopup>
-        </Tooltip>
-      ))}
-      {hidden.length > 0 ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={<span className="shrink-0 text-[10px] text-muted-foreground/70" />}
-          >
-            +{hidden.length}
-          </TooltipTrigger>
-          <TooltipPopup side="top">{hidden.map((label) => label.name).join(", ")}</TooltipPopup>
-        </Tooltip>
-      ) : null}
+            <span
+              aria-hidden
+              className="size-2 shrink-0 rounded-full bg-muted-foreground"
+              {...(dot ? { style: { backgroundColor: dot } } : {})}
+            />
+            <span className="truncate">{label.name}</span>
+            {remaining > 0 ? (
+              <span className={cn("shrink-0", slot.overflow)}>+{remaining}</span>
+            ) : null}
+          </span>
+        );
+      })}
     </span>
+  );
+}
+
+export function IssueLabelChips({
+  labels,
+}: {
+  labels: ReadonlyArray<{ name: string; color: string | null }>;
+}) {
+  return (
+    <>
+      {labels.map((label) => {
+        const dot = pullRequestLabelColor(label.color);
+        return (
+          <span
+            key={label.name}
+            className="inline-flex max-w-48 items-center gap-1.5 rounded-full border border-border/70 bg-muted/40 py-0.5 pl-1.5 pr-2 text-xs"
+          >
+            <span
+              aria-hidden
+              className="size-2 shrink-0 rounded-full bg-muted-foreground"
+              {...(dot ? { style: { backgroundColor: dot } } : {})}
+            />
+            <span className="truncate">{label.name}</span>
+          </span>
+        );
+      })}
+    </>
   );
 }
