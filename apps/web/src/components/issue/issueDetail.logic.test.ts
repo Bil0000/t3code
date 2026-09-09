@@ -213,7 +213,7 @@ describe("issue timeline", () => {
           comment({ id: "late-2", createdAt: "2026-07-04T00:00:00Z" }),
         ],
         events: [
-          event({ id: "closed", kind: "closed", detail: null, createdAt: "2026-07-05T00:00:00Z" }),
+          event({ id: "closed", kind: "closed", detail: null, createdAt: "2026-07-02T00:00:00Z" }),
         ],
       }),
     );
@@ -226,8 +226,9 @@ describe("issue timeline", () => {
       ),
     ).toEqual([
       ["event", "created"],
-      ["comments", "early-1", "early-2", "late-1", "late-2"],
+      ["comments", "early-1", "early-2"],
       ["event", "closed"],
+      ["comments", "late-1", "late-2"],
     ]);
   });
 
