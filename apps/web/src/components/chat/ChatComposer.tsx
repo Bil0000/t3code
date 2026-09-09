@@ -2173,6 +2173,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     compactSlashCommandAvailable,
     composerTrigger,
     composerIssues.data?.entries,
+    debouncedIssueQuery,
+    pathTriggerQuery,
     planModeUiEnabled,
     selectedProvider,
     selectedProviderSkills,
