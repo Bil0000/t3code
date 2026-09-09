@@ -8,12 +8,11 @@
  * of. Two controls wide is the whole design, and the trigger's dot is what says the list is
  * narrowed.
  */
-import type { EnvironmentId, ProjectId, SourceControlProviderKind } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { FolderGit2Icon, LayersIcon, ListFilterIcon, LoaderIcon, SearchIcon } from "lucide-react";
 import type { ElementType, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
-import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 
 import { ProjectFavicon } from "../ProjectFavicon";
 import { Button } from "../ui/button";
@@ -41,30 +40,9 @@ export interface ListFilterOption<Value extends string> {
   readonly unavailable?: string | undefined;
 }
 
-export interface ListFilterHost<Kind extends string = SourceControlProviderKind> {
-  readonly host: string;
-  readonly kind: Kind;
-}
-
 /** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
 export const ALL_HOSTS_VALUE = "";
 const ALL_PROJECTS_VALUE = "all";
-
-/**
- * What to call a host in the row. The provider's own name reads best — "GitHub" over
- * "github.com" — but it stops naming anything once a workspace has two hosts of one kind, so
- * those wear the host itself instead. Only the ambiguous ones: a lone GitLab beside two GitHub
- * installs is still "GitLab".
- */
-export function listFilterHostLabel(
-  entries: ReadonlyArray<ListFilterHost>,
-  entry: ListFilterHost,
-): string {
-  const sharing = entries.filter((candidate) => candidate.kind === entry.kind);
-  return sharing.length > 1
-    ? entry.host
-    : getSourceControlPresentationForKind(entry.kind).providerName;
-}
 
 export function ListSearchInput({
   label,
