@@ -1,3 +1,9 @@
+import {
+  CompactFilterMenu,
+  ExpandableSearch,
+  ListRefreshControl,
+  useListSearchShortcut,
+} from "../components/sourceControl/ListTitlebarControls";
 import { Spinner } from "~/components/ui/spinner";
 import { pullRequestHostOf, resolveEnvironmentMachineKind } from "@t3tools/contracts";
 import type {
@@ -88,28 +94,15 @@ import { environmentMachineIcon } from "../components/EnvironmentMachineIcon";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import {
   PullRequestFiltersMenu,
+  PullRequestSearchInput,
+  pullRequestHostLabel,
   pullRequestProjectKey,
+  type PullRequestExpectedHost,
   type PullRequestFilterOption,
 } from "../components/pullRequest/PullRequestListFilters";
-import {
-  ListSearchInput,
-  listFilterHostLabel,
-  type ListFilterHost,
-  type ListFilterOption,
-} from "../components/sourceControl/ListFilterMenu";
 import { PullRequestListEmptyState } from "../components/pullRequest/PullRequestListEmptyState";
-import { ListGhost } from "../components/sourceControl/ListGhosts";
-import {
-  CompactFilterMenu,
-  ExpandableSearch,
-  ListRefreshControl,
-  useListSearchShortcut,
-} from "../components/sourceControl/ListTitlebarControls";
+import { PullRequestListGhost } from "../components/pullRequest/PullRequestGhosts";
 import { PullRequestRow } from "../components/pullRequest/PullRequestRow";
-import {
-  WorkItemSelectButton,
-  WorkItemSelectionBarHost,
-} from "../components/workItems/WorkItemSelectionBar";
 import { PullRequestsUnavailableState } from "../components/pullRequest/PullRequestsUnavailableState";
 import {
   RightPanelTabs,
@@ -160,7 +153,6 @@ import { useAtomCommand } from "../state/use-atom-command";
 import { cn } from "~/lib/utils";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
-import { isWorkItemSelected, useWorkItemSelection } from "../workItemSelection";
 
 export interface PullRequestsSearch extends PullRequestListPreferences {
   /**
@@ -191,14 +183,14 @@ const INVOLVEMENT_TABS = [
   { value: "all", label: "All", Icon: LayersIcon },
   { value: "reviewing", label: "Reviewing", Icon: EyeIcon },
   { value: "authored", label: "Authored", Icon: PenLineIcon },
-] as const satisfies ReadonlyArray<ListFilterOption<PullRequestInvolvement>>;
+] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestInvolvement>>;
 
 const STATE_TABS = [
   { value: "all", label: "All", Icon: LayersIcon },
   { value: "open", label: "Open", Icon: GitPullRequestIcon },
   { value: "closed", label: "Closed", Icon: GitPullRequestClosedIcon },
   { value: "merged", label: "Merged", Icon: GitMergeIcon },
-] as const satisfies ReadonlyArray<ListFilterOption<PullRequestListState>>;
+] as const satisfies ReadonlyArray<PullRequestFilterOption<PullRequestListState>>;
 
 const SORT_OPTIONS = [
   { value: "ready", label: "Merge readiness", Icon: ListChecksIcon },
@@ -299,8 +291,6 @@ export const Route = createFileRoute("/_chat/pull-requests")({
 });
 
 function PullRequestsRouteView() {
-  const selectedWorkItems = useWorkItemSelection((state) => state.items);
-  const toggleWorkItem = useWorkItemSelection((state) => state.toggle);
   const search = Route.useSearch();
   const sort = search.sort ?? "ready";
   const statsPolicy: PullRequestStatsPolicy =
@@ -1000,9 +990,10 @@ function PullRequestsRouteView() {
   // A grown page is read by the list and nothing else: the baseline always asks for one page, so
   // a host with no cursor to continue from — where "more" means asking for a longer page — would
   // have its extra rows thrown away for the ninety-nine the baseline keeps answering with.
-  const baselineVisible = sentQuery.length === 0 && sentCursors === null && pageSize === PAGE_SIZE;
   const answered =
-    (baselineVisible ? baselineQuery.data : listQuery.data) ??
+    (sentQuery.length === 0 && sentCursors === null && pageSize === PAGE_SIZE
+      ? baselineQuery.data
+      : listQuery.data) ??
     (loaded?.scope === scopeKey && loaded.query === sentQuery ? loaded.data : null);
   // Clearing a search returns to a list that has already been read, so it comes back at once
   // rather than after another round trip: the search was the temporary state, not the list.
@@ -1512,7 +1503,7 @@ function PullRequestsRouteView() {
   // The workspace's own projects already name their hosts, so the row's shape is known before
   // the list is. Only its shape: which hosts can actually be read still comes from the server.
   const expectedHosts = useMemo(() => {
-    const byHost = new Map<string, ListFilterHost>();
+    const byHost = new Map<string, PullRequestExpectedHost>();
     for (const project of projects) {
       const kind = project.repositoryIdentity?.provider as SourceControlProviderKind | undefined;
       if (kind === undefined) continue;
@@ -1553,30 +1544,8 @@ function PullRequestsRouteView() {
     [rightPanelRef, updateSearch],
   );
 
-  const togglePullRequestSelection = useCallback(
-    (entry: EnvironmentPullRequestEntry) => {
-      const error = toggleWorkItem({
-        kind: "pull-request",
-        provider: entry.provider,
-        environmentId: entry.environmentId,
-        projectId: entry.projectId,
-        repository: entry.repository,
-        number: entry.number,
-        title: entry.title,
-        url: entry.url,
-      });
-      if (error === "project")
-        toastManager.add({ type: "warning", title: "Select items from one project" });
-      if (error === "limit")
-        toastManager.add({ type: "warning", title: "You can select up to 20 items" });
-    },
-    [toggleWorkItem],
-  );
-
   const searchInput = (
-    <ListSearchInput
-      label="Search pull requests"
-      placeholder="Search pull requests, or label:bug"
+    <PullRequestSearchInput
       value={search.q ?? ""}
       busy={typedQuery.length > 0 && (!querySettled || showingCarried)}
       onChange={(query) => updateListScope({ q: query || undefined })}
@@ -1619,14 +1588,14 @@ function PullRequestsRouteView() {
   const listBody = (
     <>
       {!capabilityKnown ? (
-        <ListGhost rows={7} label="Loading pull requests" />
+        <PullRequestListGhost rows={7} />
       ) : !pullRequestsSupported ? (
         <PullRequestsUnavailableState
           title="Pull requests unavailable"
           error="Update your T3 Code servers to browse pull requests."
         />
       ) : firstLoad ? (
-        <ListGhost rows={7} label="Loading pull requests" />
+        <PullRequestListGhost rows={7} />
       ) : listQuery.error && entries.length === 0 ? (
         <PullRequestsUnavailableState
           error={listQuery.error}
@@ -1634,7 +1603,7 @@ function PullRequestsRouteView() {
           onRetry={() => listQuery.refresh()}
         />
       ) : carriedToNothing ? (
-        <ListGhost rows={7} label="Loading pull requests" />
+        <PullRequestListGhost rows={7} />
       ) : entries.length === 0 ? (
         <PullRequestListEmptyState
           hasProjects={!projectsKnown || projects.length > 0}
@@ -1683,17 +1652,6 @@ function PullRequestsRouteView() {
                       typedParsed.text.length > 0 &&
                       scorePullRequestMatch(entry, typedParsed.text) <= MATCHED_ELSEWHERE_SCORE
                     }
-                    selectionChecked={isWorkItemSelected(selectedWorkItems, {
-                      kind: "pull-request",
-                      provider: entry.provider,
-                      environmentId: entry.environmentId,
-                      projectId: entry.projectId,
-                      repository: entry.repository,
-                      number: entry.number,
-                      title: entry.title,
-                      url: entry.url,
-                    })}
-                    onToggleSelection={togglePullRequestSelection}
                     selected={
                       selected?.environmentId === entry.environmentId &&
                       selected.repository === entry.repository &&
@@ -1743,7 +1701,7 @@ function PullRequestsRouteView() {
   // one control: "GitHub" with its mark, never the bare hostname — unless two installs of one
   // kind force the hostname to tell them apart.
   const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
-  const hostMenuOptions: ReadonlyArray<ListFilterOption<string>> = [
+  const hostMenuOptions: ReadonlyArray<PullRequestFilterOption<string>> = [
     { value: "", label: "All hosts", Icon: LayersIcon },
     ...hostEntries.map((entry) => {
       // `expectedHosts` stands in before the server has answered, and nothing is known to be
@@ -1751,7 +1709,7 @@ function PullRequestsRouteView() {
       const summary = hosts.find((host) => host.host === entry.host);
       return {
         value: entry.host,
-        label: listFilterHostLabel(hostEntries, entry),
+        label: pullRequestHostLabel(hostEntries, entry),
         Icon: getSourceControlPresentationForKind(entry.kind).Icon,
         ...(summary === undefined || summary.configured
           ? {}
@@ -1781,50 +1739,45 @@ function PullRequestsRouteView() {
     />
   );
   const filtersMenu = (
-    <div className="flex shrink-0 items-center gap-1">
-      <PullRequestFiltersMenu
-        onOpenChange={setFiltersOpen}
-        state={search.state}
-        stateOptions={STATE_TABS}
-        onState={(state) => updateListScope({ state })}
-        involvement={search.involvement}
-        involvementOptions={INVOLVEMENT_TABS}
-        onInvolvement={(involvement) => updateListScope({ involvement })}
-        filters={menuFilters}
-        onFilters={(next) =>
-          updateListScope({
-            draft: next.draft,
-            review: next.review,
-            checks: next.checks,
-            author: next.author,
-            labels: next.labels?.flatMap((group) => group),
-          })
-        }
-        authorOptions={facets.authors}
-        labelOptions={facets.labels}
-        host={search.host}
-        hostOptions={hostMenuOptions}
-        onHost={(host) => updateListScope({ host })}
-        server={scopedEnvironmentId ?? undefined}
-        serverOptions={serverMenuOptions}
-        // Narrowing to one server drops a project scope belonging to another, which would
-        // otherwise narrow the list to nothing with no visible filter to explain it.
-        onServer={(server) => updateListScope({ environmentId: server, projectId: undefined })}
-        projects={scopedProjects}
-        projectId={scopedProjectId}
-        projectEnvironmentId={scopedProject?.environmentId}
-        unavailable={unavailableProjects}
-        // The environment comes along with the project it belongs to, so a duplicate id on
-        // another server never gets narrowed to by mistake; picking "All projects" leaves the
-        // server scope as it was rather than clearing it.
-        onProject={(projectId, environmentId) =>
-          updateListScope(
-            environmentId === undefined ? { projectId } : { projectId, environmentId },
-          )
-        }
-      />
-      <WorkItemSelectButton />
-    </div>
+    <PullRequestFiltersMenu
+      onOpenChange={setFiltersOpen}
+      state={search.state}
+      stateOptions={STATE_TABS}
+      onState={(state) => updateListScope({ state })}
+      involvement={search.involvement}
+      involvementOptions={INVOLVEMENT_TABS}
+      onInvolvement={(involvement) => updateListScope({ involvement })}
+      filters={menuFilters}
+      onFilters={(next) =>
+        updateListScope({
+          draft: next.draft,
+          review: next.review,
+          checks: next.checks,
+          author: next.author,
+          labels: next.labels?.flatMap((group) => group),
+        })
+      }
+      authorOptions={facets.authors}
+      labelOptions={facets.labels}
+      host={search.host}
+      hostOptions={hostMenuOptions}
+      onHost={(host) => updateListScope({ host })}
+      server={scopedEnvironmentId ?? undefined}
+      serverOptions={serverMenuOptions}
+      // Narrowing to one server drops a project scope belonging to another, which would
+      // otherwise narrow the list to nothing with no visible filter to explain it.
+      onServer={(server) => updateListScope({ environmentId: server, projectId: undefined })}
+      projects={scopedProjects}
+      projectId={scopedProjectId}
+      projectEnvironmentId={scopedProject?.environmentId}
+      unavailable={unavailableProjects}
+      // The environment comes along with the project it belongs to, so a duplicate id on
+      // another server never gets narrowed to by mistake; picking "All projects" leaves the
+      // server scope as it was rather than clearing it.
+      onProject={(projectId, environmentId) =>
+        updateListScope(environmentId === undefined ? { projectId } : { projectId, environmentId })
+      }
+    />
   );
   const columnProps = {
     refreshing,
@@ -1959,9 +1912,7 @@ function PullRequestsRouteView() {
     <SidebarInset className="h-dvh min-h-0 overflow-hidden overscroll-y-none bg-background text-foreground">
       <div className="relative flex min-h-0 flex-1">
         {pullRequestsSupported && rightPanelPresent ? openPanelControls : null}
-        <WorkItemSelectionBarHost>
-          <PullRequestsColumn {...columnProps} />
-        </WorkItemSelectionBarHost>
+        <PullRequestsColumn {...columnProps} />
 
         {rightPanelPresent && renderedPullRequestSurface && panelEnvironmentId !== null ? (
           <RightPanelTabs
@@ -2100,6 +2051,14 @@ function PullRequestsRouteView() {
   );
 }
 
+/**
+ * The pull request list column. The full controls live at the top of the scroll flow; once
+ * they scroll away, the title transforms into the scope itself — "Pull Requests / Open ▾
+ * Authored ▾" — where each segment is the menu for that filter, and a folded search sits on
+ * the right. Scrolled back up, the topbar returns to the plain title. The topbar is the
+ * window drag region throughout; its interactive children opt out through the `.drag-region`
+ * descendant rules.
+ */
 function PullRequestsColumn({
   refreshing,
   onRefresh,
@@ -2126,7 +2085,7 @@ function PullRequestsColumn({
   involvement: PullRequestInvolvement;
   state: PullRequestListState;
   host: string | undefined;
-  hostMenuOptions: ReadonlyArray<ListFilterOption<string>>;
+  hostMenuOptions: ReadonlyArray<PullRequestFilterOption<string>>;
   onInvolvement: (involvement: PullRequestInvolvement) => void;
   onState: (state: PullRequestListState) => void;
   onHost: (host: string | undefined) => void;

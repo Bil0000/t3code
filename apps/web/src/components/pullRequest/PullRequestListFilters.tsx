@@ -1,3 +1,4 @@
+import { Spinner } from "~/components/ui/spinner";
 import type {
   EnvironmentId,
   ProjectId,
@@ -23,6 +24,7 @@ import {
 } from "lucide-react";
 import { type ElementType, useState } from "react";
 
+import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
 import { ProjectFavicon, type ProjectFaviconProject } from "../ProjectFavicon";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
 import { Button } from "../ui/button";
@@ -60,7 +62,7 @@ export interface PullRequestFilterOption<Value extends string> {
   readonly unavailable?: string | undefined;
 }
 
-function PullRequestFilterOptionIcon<Value extends string>({
+export function PullRequestFilterOptionIcon<Value extends string>({
   option,
 }: {
   option: PullRequestFilterOption<Value>;
@@ -75,6 +77,48 @@ function PullRequestFilterOptionIcon<Value extends string>({
 export interface PullRequestExpectedHost {
   readonly host: string;
   readonly kind: SourceControlProviderKind;
+}
+
+/**
+ * What to call a host in the row. The provider's own name reads best — "GitHub" over
+ * "github.com" — but it stops naming anything once a workspace has two hosts of one kind, so
+ * those wear the host itself instead. Only the ambiguous ones: a lone GitLab beside two GitHub
+ * installs is still "GitLab".
+ */
+export function pullRequestHostLabel(
+  entries: ReadonlyArray<{ readonly host: string; readonly kind: SourceControlProviderKind }>,
+  entry: { readonly host: string; readonly kind: SourceControlProviderKind },
+): string {
+  const sharing = entries.filter((candidate) => candidate.kind === entry.kind);
+  return sharing.length > 1
+    ? entry.host
+    : getSourceControlPresentationForKind(entry.kind).providerName;
+}
+
+export function PullRequestSearchInput({
+  value,
+  busy,
+  onChange,
+}: {
+  value: string;
+  /** A search is on its way to the hosts, said where the typing is rather than over the list. */
+  busy?: boolean;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <InputGroup className="min-w-0 flex-1 **:[input]:h-9 sm:**:[input]:h-8">
+      <InputGroupAddon>
+        {busy ? <Spinner aria-hidden /> : <SearchIcon aria-hidden />}
+      </InputGroupAddon>
+      <InputGroupInput
+        type="search"
+        value={value}
+        onChange={(event) => onChange(event.currentTarget.value)}
+        placeholder="Search pull requests, or label:bug"
+        aria-label="Search pull requests"
+      />
+    </InputGroup>
+  );
 }
 
 /**

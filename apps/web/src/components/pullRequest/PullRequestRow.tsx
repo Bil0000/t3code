@@ -1,16 +1,18 @@
+import { SearchIcon } from "lucide-react";
 import { memo, type RefCallback } from "react";
 
 import { cn } from "~/lib/utils";
 import { getSourceControlPresentationForKind } from "~/sourceControlPresentation";
+import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import { ListRow } from "../sourceControl/ListRow";
-import { Checkbox } from "../ui/checkbox";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestChecksPopover } from "./PullRequestChecksPopover";
 import { pullRequestLabelColor, type EnvironmentPullRequestEntry } from "./pullRequestList.logic";
 import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLinkContextMenu";
 import {
   PullRequestActorLabel,
   PullRequestDiffStat,
+  PullRequestMetaLine,
   PullRequestStateGlyph,
 } from "./pullRequestPresentation";
 
@@ -61,7 +63,6 @@ function PullRequestRowLabels({ labels }: { labels: EnvironmentPullRequestEntry[
 function PullRequestRowImpl({
   entry,
   selected,
-  selectionChecked,
   showProjectTitle,
   showProvider,
   environmentLabel,
@@ -69,11 +70,9 @@ function PullRequestRowImpl({
   statsKey,
   statsRef,
   onSelect,
-  onToggleSelection,
 }: {
   entry: EnvironmentPullRequestEntry;
   selected: boolean;
-  selectionChecked?: boolean;
   showProjectTitle: boolean;
   /** Only when the list spans more than one host, where the repository alone is ambiguous. */
   showProvider: boolean;
@@ -88,50 +87,41 @@ function PullRequestRowImpl({
   statsKey?: string;
   statsRef?: RefCallback<HTMLButtonElement>;
   onSelect: (entry: EnvironmentPullRequestEntry) => void;
-  onToggleSelection?: (entry: EnvironmentPullRequestEntry) => void;
 }) {
   const { Icon, providerName } = getSourceControlPresentationForKind(entry.provider);
   return (
-    <div className={cn("group/row relative", onToggleSelection && "[&>button]:pl-10")}>
-      <ListRow
-        ref={statsRef}
-        data-pull-request-stats-key={statsKey}
-        glyph={
-          <PullRequestStateGlyph
-            state={entry.state}
-            isDraft={entry.isDraft}
-            mergeability={entry.mergeability}
-            baseBranch={entry.baseBranch}
-          />
-        }
-        title={entry.title}
-        providerName={providerName}
-        ProviderIcon={Icon}
-        showProvider={showProvider}
-        number={entry.number}
-        onNumberContextMenu={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          void showPullRequestLinkContextMenu({
-            url: entry.url,
-            openLabel: openOnHostLabel(entry.provider),
-            position: { x: event.clientX, y: event.clientY },
-          });
-        }}
-        repository={showProjectTitle ? entry.repository : null}
-        meta={[
-          <PullRequestRowLabels key="labels" labels={entry.labels} />,
-          environmentLabel ? (
-            <span key="environment" className="max-w-32 shrink-0 truncate">
-              {environmentLabel}
-            </span>
-          ) : null,
-          <PullRequestActorLabel key="author" actor={entry.author} className="max-w-40 shrink-0" />,
-          entry.reviewDecision === "approved" || entry.reviewDecision === "changes-requested" ? (
+    <button
+      ref={statsRef}
+      data-pull-request-stats-key={statsKey}
+      type="button"
+      aria-current={selected ? "true" : undefined}
+      onClick={() => onSelect(entry)}
+      className={cn(
+        "@container/pr-row grid w-full grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-lg px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+        // Offscreen rows are skipped for style, layout and paint: a long list costs what the
+        // viewport shows, not what the pages have loaded. The intrinsic size keeps the
+        // scrollbar honest while a row is skipped.
+        "[contain-intrinsic-block-size:66px] [content-visibility:auto]",
+        selected ? "bg-accent" : "hover:bg-accent/60",
+      )}
+    >
+      <PullRequestStateGlyph
+        state={entry.state}
+        isDraft={entry.isDraft}
+        mergeability={entry.mergeability}
+        baseBranch={entry.baseBranch}
+      />
+      <span className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1.5">
+        <span className="col-start-1 row-start-1 block truncate text-sm font-medium text-foreground">
+          {entry.title}
+        </span>
+        <span className="col-start-2 row-start-1 flex max-w-36 items-center justify-self-end gap-2 text-xs">
+          {/* Only a verdict somebody has actually given: "review required" is the absence of
+              one, and saying so on every unreviewed row would say nothing. */}
+          {entry.reviewDecision === "approved" || entry.reviewDecision === "changes-requested" ? (
             <span
-              key="review"
               className={cn(
-                "shrink-0",
+                "sr-only @md/pr-row:not-sr-only @md/pr-row:min-w-0 @md/pr-row:truncate",
                 entry.reviewDecision === "approved"
                   ? "text-emerald-600/90 dark:text-emerald-400/80"
                   : "text-amber-600/90 dark:text-amber-400/80",
@@ -139,10 +129,9 @@ function PullRequestRowImpl({
             >
               {entry.reviewDecision === "approved" ? "Approved" : "Changes requested"}
             </span>
-          ) : null,
-          entry.checksState === undefined ? null : (
+          ) : null}
+          {entry.checksState === undefined ? null : (
             <PullRequestChecksPopover
-              key="checks"
               checksState={entry.checksState}
               environmentId={entry.environmentId}
               reference={{
@@ -151,33 +140,69 @@ function PullRequestRowImpl({
                 number: entry.number,
               }}
             />
-          ),
-        ]}
-        matchedElsewhere={matchedElsewhere === true}
-        updatedAt={entry.updatedAt}
-        trailing={<PullRequestDiffStat additions={entry.additions} deletions={entry.deletions} />}
-        selected={selected}
-        onSelect={() => onSelect(entry)}
-      />
-      {onToggleSelection ? (
-        <Checkbox
-          checked={selectionChecked}
-          aria-label={
-            (selectionChecked ? "Deselect " : "Select ") +
-            entry.repository +
-            " pull request #" +
-            entry.number
-          }
-          className={cn(
-            "absolute top-1/2 left-3 z-10 -translate-y-1/2 transition-opacity",
-            selectionChecked
-              ? "opacity-100"
-              : "opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100",
           )}
-          onCheckedChange={() => onToggleSelection(entry)}
-        />
-      ) : null}
-    </div>
+        </span>
+        <PullRequestMetaLine className="@container/pr-row-meta col-start-1 row-start-2 overflow-hidden text-xs text-muted-foreground/70">
+          {matchedElsewhere ? (
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <span className="flex min-w-6 items-center gap-1 overflow-hidden rounded-full border border-border/60 px-1 text-[10px]" />
+                }
+              >
+                <span className="sr-only">matched in the description</span>
+                <SearchIcon aria-hidden className="size-3 shrink-0" />
+                <span aria-hidden className="hidden truncate @xs/pr-row-meta:block">
+                  matched in the description
+                </span>
+              </TooltipTrigger>
+              <TooltipPopup side="top">Matched in the description</TooltipPopup>
+            </Tooltip>
+          ) : null}
+          <span className="flex shrink-0 items-center gap-1">
+            {showProvider ? (
+              <Tooltip>
+                <TooltipTrigger render={<span className="inline-flex shrink-0" />}>
+                  <Icon aria-label={providerName} className="size-3" />
+                </TooltipTrigger>
+                <TooltipPopup>{providerName}</TooltipPopup>
+              </Tooltip>
+            ) : null}
+            {/* The number carries the link, here as much as on the detail: a right-click on it
+                copies the pull request's own address rather than opening the editing menu. */}
+            <span
+              onContextMenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void showPullRequestLinkContextMenu({
+                  url: entry.url,
+                  openLabel: openOnHostLabel(entry.provider),
+                  position: { x: event.clientX, y: event.clientY },
+                });
+              }}
+            >
+              #{entry.number}
+            </span>
+          </span>
+          {showProjectTitle ? <span className="truncate">{entry.repository}</span> : null}
+          {environmentLabel ? (
+            <span className="min-w-0 max-w-32 truncate">{environmentLabel}</span>
+          ) : null}
+          <PullRequestActorLabel
+            actor={entry.author}
+            className="min-w-4 max-w-40"
+            labelClassName="sr-only @xs/pr-row-meta:not-sr-only @xs/pr-row-meta:truncate"
+          />
+          {entry.labels.length > 0 ? <PullRequestRowLabels labels={entry.labels} /> : null}
+        </PullRequestMetaLine>
+        <span className="col-start-2 row-start-2 flex items-center justify-self-end gap-3 whitespace-nowrap text-[11px] text-muted-foreground/70 tabular-nums">
+          <PullRequestDiffStat additions={entry.additions} deletions={entry.deletions} />
+          <span className="hidden @sm/pr-row:inline">
+            {formatRelativeTimeLabel(entry.updatedAt)}
+          </span>
+        </span>
+      </span>
+    </button>
   );
 }
 
