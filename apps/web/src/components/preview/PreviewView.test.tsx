@@ -8,10 +8,14 @@ import {
   ThreadId,
 } from "@t3tools/contracts";
 import { act, Profiler } from "react";
+import * as Cause from "effect/Cause";
+import { AsyncResult } from "effect/unstable/reactivity";
+import { FileSaveCoordinator } from "~/components/files/fileSaveCoordinator";
 import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 const mocks = vi.hoisted(() => ({
+  writeDesign: vi.fn(),
   navigate: vi.fn(async (_tabId: string, _url: string): Promise<void> => undefined),
   rememberPreviewUrl: vi.fn(),
   readPreparedConnection: vi.fn(() => ({ httpBaseUrl: "http://172.25.85.75:3773" })),
@@ -59,13 +63,19 @@ vi.mock("~/browserHistoryStore", () => ({
   useThreadRecentHistory: () => EMPTY_HISTORY,
 }));
 
+vi.mock("~/components/files/fileSaveCoordinator", () => ({
+  FileSaveCoordinator: vi.fn(function () {
+    return { dispose: vi.fn() };
+  }),
+}));
+
 vi.mock("~/state/entities", () => ({
   useThread: () => ({ projectId: "project-1", worktreePath: "/workspace" }),
   useProject: () => ({ workspaceRoot: "/workspace" }),
 }));
 
 vi.mock("~/state/projects", () => ({
-  projectEnvironment: { writeFile: {} },
+  projectEnvironment: { writeFile: mocks.writeDesign },
 }));
 
 vi.mock("~/state/session", async (importOriginal) => ({
@@ -167,7 +177,8 @@ vi.mock("~/state/preview", () => ({
 }));
 
 vi.mock("~/state/use-atom-command", () => ({
-  useAtomCommand: () => vi.fn(),
+  useAtomCommand: (command: unknown) =>
+    command === mocks.writeDesign ? mocks.writeDesign : vi.fn(),
 }));
 
 vi.mock("~/browser/browserRecording", () => ({
@@ -660,6 +671,21 @@ describe("PreviewView navigation", () => {
     await vi.waitFor(() => expect(onSendAnnotation).toHaveBeenCalledWith(sent, null));
     expect(mocks.addPreviewAnnotation).toHaveBeenCalledWith(TEST_THREAD_REF, sent);
     expect(mocks.addImage).not.toHaveBeenCalled();
+  });
+
+  it("reports failed design writes to the user", async () => {
+    mocks.previewUrl =
+      "http://172.25.85.75:3773/api/assets/design?t3-design=1&t3-design-path=.t3%2Fdesigns%2Fthread-1.html";
+    const failure = AsyncResult.failure(Cause.fail(new Error("Disk full")));
+    mocks.writeDesign.mockResolvedValueOnce(failure);
+    renderToStaticMarkup(<PreviewView threadRef={TEST_THREAD_REF} tabId="tab-1" visible />);
+    const options = vi.mocked(FileSaveCoordinator).mock.calls.at(-1)![0];
+    await expect(options.persist("<p>Edited</p>")).resolves.toBe(failure);
+    expect(toastManager.add).toHaveBeenCalledWith({
+      type: "error",
+      title: "Unable to save design",
+      description: "Disk full",
+    });
   });
 
   it("saves and attaches a design selection only for the active tab", () => {

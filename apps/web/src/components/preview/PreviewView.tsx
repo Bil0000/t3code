@@ -178,11 +178,21 @@ export function PreviewView({
       designPath && designCwd
         ? new FileSaveCoordinator({
             debounceMs: 0,
-            persist: (contents) =>
-              writeDesign({
+            persist: async (contents) => {
+              const result = await writeDesign({
                 environmentId: threadRef.environmentId,
                 input: { cwd: designCwd, relativePath: designPath, contents },
-              }),
+              });
+              if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+                const error = squashAtomCommandFailure(result);
+                toastManager.add({
+                  type: "error",
+                  title: "Unable to save design",
+                  description: error instanceof Error ? error.message : "An error occurred.",
+                });
+              }
+              return result;
+            },
             onPendingChange: () => {},
             onConfirmed: () => {},
           })
