@@ -963,6 +963,8 @@ layer("GitHubIssueCli.layer", (it) => {
       assert.strictEqual(error._tag, "SourceControlRateLimitPausedError");
       assert.strictEqual(mockedExecute.mock.calls.length, 1);
       yield* TestClock.setTime(Date.parse("2100-01-01T00:00:00Z"));
+      mockedExecute.mockReturnValueOnce(Effect.succeed(page));
+      yield* cli.getIssueActivity(target);
     }),
   );
   it.effect("reads the conversation and the history in one request", () =>
