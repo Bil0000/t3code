@@ -2160,6 +2160,7 @@ function PullRequestsColumn({
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFocusToken, setSearchFocusToken] = useState(0);
   useListSearchShortcut({
+    active: !rightPanelOpen,
     condensed,
     inFlowSearchRef,
     setSearchOpen,

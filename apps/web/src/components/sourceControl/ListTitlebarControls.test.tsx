@@ -18,8 +18,9 @@ it("leaves find in an editor alone but focuses the list from elsewhere", async (
   vi.stubGlobal("window", events);
   vi.stubGlobal("HTMLElement", Editable);
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  function Probe() {
+  function Probe({ active = true }: { active?: boolean }) {
     useListSearchShortcut({
+      active,
       condensed: false,
       inFlowSearchRef: { current: container },
       setSearchOpen: vi.fn(),
@@ -48,6 +49,13 @@ it("leaves find in an editor alone but focuses the list from elsewhere", async (
     expect(listFind.defaultPrevented).toBe(true);
     expect(focus).toHaveBeenCalledOnce();
     expect(select).toHaveBeenCalledOnce();
+
+    await act(() => renderer.update(<Probe active={false} />));
+    const detailFind = new Event("keydown", { cancelable: true });
+    Object.defineProperties(detailFind, { key: { value: "f" }, ctrlKey: { value: true } });
+    events.dispatchEvent(detailFind);
+    expect(detailFind.defaultPrevented).toBe(false);
+    expect(focus).toHaveBeenCalledOnce();
   } finally {
     await act(() => renderer?.unmount());
     vi.unstubAllGlobals();

@@ -177,11 +177,13 @@ export function ExpandableSearch({
 }
 
 export function useListSearchShortcut({
+  active,
   condensed,
   inFlowSearchRef,
   setSearchOpen,
   setSearchFocusToken,
 }: {
+  active: boolean;
   condensed: boolean;
   inFlowSearchRef: RefObject<HTMLDivElement | null>;
   setSearchOpen: Dispatch<SetStateAction<boolean>>;
@@ -189,7 +191,7 @@ export function useListSearchShortcut({
 }) {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return;
+      if (!active || event.defaultPrevented) return;
       if (event.key.toLowerCase() !== "f" || !(event.metaKey || event.ctrlKey)) return;
       if (event.altKey || event.shiftKey) return;
       if (
@@ -211,5 +213,5 @@ export function useListSearchShortcut({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [condensed, inFlowSearchRef, setSearchFocusToken, setSearchOpen]);
+  }, [active, condensed, inFlowSearchRef, setSearchFocusToken, setSearchOpen]);
 }
