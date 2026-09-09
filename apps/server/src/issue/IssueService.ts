@@ -1483,7 +1483,10 @@ export const make = Effect.gen(function* () {
     const scope = refScope(ref);
     if (!refEpochs.has(scope) && refEpochs.size >= REF_EPOCH_CAPACITY) {
       const oldest = refEpochs.keys().next().value;
-      if (oldest !== undefined) refEpochs.delete(oldest);
+      if (oldest !== undefined) {
+        refEpochs.delete(oldest);
+        allRefsEpoch = ++epochCounter;
+      }
     }
     refEpochs.set(scope, ++epochCounter);
   };

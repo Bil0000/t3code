@@ -1557,6 +1557,26 @@ it.effect("an explicit invalidation refreshes issue detail and activity", () =>
   }),
 );
 
+it.effect("does not revive old detail after its invalidation epoch is evicted", () =>
+  Effect.gen(function* () {
+    let reads = 0;
+    const service = yield* makeService({
+      projects: ONE_PROJECT,
+      providers: [
+        fakeProvider("github", {
+          getIssue: () => Effect.succeed(issueDetail(7, { body: `detail ${++reads}` })),
+        }),
+      ],
+    });
+    assert.strictEqual((yield* service.detail(REFERENCE)).body, "detail 1");
+    yield* service.invalidate({ reference: REFERENCE });
+    for (let number = 100; number < 2148; number++) {
+      yield* service.invalidate({ reference: { ...REFERENCE, number } });
+    }
+    assert.strictEqual((yield* service.detail(REFERENCE)).body, "detail 2");
+  }),
+);
+
 it.effect("a write forgets the listings and the issue it touched, with no client asking", () =>
   Effect.gen(function* () {
     let listCalls = 0;
