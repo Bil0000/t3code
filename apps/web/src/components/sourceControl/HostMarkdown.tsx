@@ -57,7 +57,7 @@ export function HostMarkdown({
           >
             <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="min-w-0 flex-1 truncate">
-              {isVideo ? "Play video on GitHub" : "Open attachment on GitHub"}
+              {`${isVideo ? "Play video" : "Open attachment"} on ${new URL(segment.url).hostname}`}
             </span>
             <ExternalLinkIcon aria-hidden className="size-3 shrink-0 text-muted-foreground" />
           </a>
