@@ -749,6 +749,7 @@ const make = Effect.gen(function* () {
     {
       readonly reactions: ReadonlyArray<IssueReaction>;
       readonly reactionsByNoteId: ReadonlyMap<string, ReadonlyArray<IssueReaction>>;
+      readonly truncated: boolean;
     },
     GitLabIssueCliError
   > =>
@@ -775,6 +776,7 @@ const make = Effect.gen(function* () {
           ? Effect.succeed({
               reactions: decoded.success.reactions,
               reactionsByNoteId: input.collected,
+              truncated: decoded.success.nextCursor !== null,
             })
           : awardsPage({
               ...input,
@@ -841,7 +843,7 @@ const make = Effect.gen(function* () {
           ),
           // Either walk hitting its bound leaves the timeline short, and a history missing its
           // labellings is no more complete than one missing its remarks.
-          truncated: notes.truncated || labelEvents.truncated,
+          truncated: notes.truncated || labelEvents.truncated || awards.truncated,
           reactions: awards.reactions,
         })),
       ),

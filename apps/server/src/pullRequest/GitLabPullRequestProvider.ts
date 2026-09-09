@@ -186,20 +186,24 @@ export const make = Effect.gen(function* () {
           cli.getProjectMergeCapabilities({ cwd: input.cwd, repository: input.repository }),
           // A section of links is worth less than the merge request it hangs off, so a project
           // whose issues this account cannot read leaves it empty rather than failing the detail.
-          cli
-            .listLinkedIssues(input)
-            .pipe(Effect.orElseSucceed((): ReadonlyArray<IssueLink> => [])),
+          cli.listLinkedIssues(input).pipe(
+            Effect.orElseSucceed(() => ({
+              links: [] as ReadonlyArray<IssueLink>,
+              truncated: true,
+            })),
+          ),
         ],
         { concurrency: 3 },
       ).pipe(
         Effect.mapError(fail("getChangeRequest")),
         Effect.flatMap(([mergeRequest, mergeCapabilities, linkedIssues]) =>
-          citedIssues(input, mergeRequest, linkedIssues).pipe(
+          citedIssues(input, mergeRequest, linkedIssues.links).pipe(
             Effect.map((cited): ProviderChangeRequestDetail => ({
               ...mergeRequest,
               mergeCapabilities,
               viewerPermissions: gitLabViewerPermissions(mergeRequest),
-              linkedIssues: mergeIssueLinks(linkedIssues, cited),
+              linkedIssues: mergeIssueLinks(linkedIssues.links, cited),
+              linkedIssuesTruncated: linkedIssues.truncated,
               // A GitLab too old to count the divergence says nothing here rather than "up to
               // date": the banner is worth missing, and a wrong all-clear is not worth showing.
               baseComparison:

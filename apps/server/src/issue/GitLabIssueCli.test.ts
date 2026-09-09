@@ -640,6 +640,33 @@ layer("GitLabIssueCli.layer", (it) => {
     }),
   );
 
+  it.effect("reports truncation when only award pages reach the bound", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockImplementation((input) =>
+        Effect.succeed(
+          output(
+            input.args[1] === "graphql"
+              ? JSON.stringify({
+                  data: {
+                    project: {
+                      issue: {
+                        awardEmoji: { nodes: [] },
+                        notes: { pageInfo: { hasNextPage: true, endCursor: "next" }, nodes: [] },
+                      },
+                    },
+                  },
+                })
+              : "[]",
+          ),
+        ),
+      );
+      const cli = yield* GitLabIssueCli.GitLabIssueCli;
+      const activity = yield* cli.listActivity({ cwd: "/w", repository: "acme/web", number: 7 });
+      assert.isTrue(activity.truncated);
+      assert.strictEqual(mockedExecute.mock.calls.length, 12);
+    }),
+  );
+
   it.effect("files a new issue with its body over stdin, never in argv", () =>
     Effect.gen(function* () {
       mockedExecute.mockReturnValueOnce(Effect.succeed(output(issueJson({ iid: 9 }))));

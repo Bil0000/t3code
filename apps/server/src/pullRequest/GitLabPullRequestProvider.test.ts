@@ -104,7 +104,7 @@ describe("getChangeRequest base freshness", () => {
           getMergeRequestDetail: () => Effect.succeed({ ...detail, ...divergence }),
           getProjectMergeCapabilities: () =>
             Effect.succeed({ merge: true, squash: true, rebase: true }),
-          listLinkedIssues: () => Effect.succeed([]),
+          listLinkedIssues: () => Effect.succeed({ links: [], truncated: false }),
         }),
       ),
     );
@@ -243,7 +243,7 @@ describe("getChangeRequest linked issues", () => {
       getMergeRequestDetail: () => Effect.succeed(detailWith(input.body)),
       getProjectMergeCapabilities: () =>
         Effect.succeed({ merge: true, squash: true, rebase: false }),
-      listLinkedIssues: () => Effect.succeed(input.linked),
+      listLinkedIssues: () => Effect.succeed({ links: input.linked, truncated: false }),
       listCitedIssues: input.listCitedIssues,
     });
 

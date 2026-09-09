@@ -257,7 +257,10 @@ export class GitLabPullRequestCli extends Context.Service<
       readonly cwd: string;
       readonly repository: string;
       readonly number: number;
-    }) => Effect.Effect<ReadonlyArray<IssueLink>, GitLabPullRequestCliError>;
+    }) => Effect.Effect<
+      { readonly links: ReadonlyArray<IssueLink>; readonly truncated: boolean },
+      GitLabPullRequestCliError
+    >;
 
     /**
      * The issues a merge request's own words name, looked up so that only ones which exist reach
@@ -1080,7 +1083,10 @@ export const make = Effect.gen(function* () {
     readonly number: number;
     readonly page: number;
     readonly collected: ReadonlyArray<IssueLink>;
-  }): Effect.Effect<ReadonlyArray<IssueLink>, GitLabPullRequestCliError> =>
+  }): Effect.Effect<
+    { readonly links: ReadonlyArray<IssueLink>; readonly truncated: boolean },
+    GitLabPullRequestCliError
+  > =>
     api({
       cwd: input.cwd,
       path: `projects/${projectPath(input.repository)}/merge_requests/${input.number}/closes_issues?${query(
@@ -1103,8 +1109,11 @@ export const make = Effect.gen(function* () {
           );
         }
         const collected = [...input.collected, ...decoded.success.links];
-        return decoded.success.rawCount < MAX_PAGE_SIZE
-          ? Effect.succeed(collected)
+        return decoded.success.rawCount < MAX_PAGE_SIZE || input.page >= CONVERSATION_PAGES
+          ? Effect.succeed({
+              links: collected,
+              truncated: decoded.success.rawCount >= MAX_PAGE_SIZE,
+            })
           : linkedIssuesPage({ ...input, page: input.page + 1, collected });
       }),
     );

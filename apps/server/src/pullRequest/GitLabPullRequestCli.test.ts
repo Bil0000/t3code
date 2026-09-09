@@ -940,11 +940,22 @@ layer("GitLabPullRequestCli.layer", (it) => {
         number: 7,
       });
 
-      assert.strictEqual(issues.length, 102);
-      assert.strictEqual(issues[0]?.number, 1);
-      assert.strictEqual(issues[101]?.number, 102);
+      assert.strictEqual(issues.links.length, 102);
+      assert.strictEqual(issues.links[0]?.number, 1);
+      assert.strictEqual(issues.links[101]?.number, 102);
+      assert.isFalse(issues.truncated);
       expect(argsOfCall(0).join(" ")).toContain("page=1");
       expect(argsOfCall(1).join(" ")).toContain("page=2");
+    }),
+  );
+
+  it.effect("bounds closing issue pages and reports the incomplete list", () =>
+    Effect.gen(function* () {
+      mockedExecute.mockReturnValue(Effect.succeed(output(closingIssues(100, 1))));
+      const cli = yield* GitLabPullRequestCli.GitLabPullRequestCli;
+      const result = yield* cli.listLinkedIssues({ cwd: "/w", repository: "acme/web", number: 7 });
+      assert.isTrue(result.truncated);
+      assert.strictEqual(mockedExecute.mock.calls.length, 10);
     }),
   );
 
