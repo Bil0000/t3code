@@ -1871,7 +1871,7 @@ const makeNativeOperations = Effect.fn("PreviewManager.makeOperations")(function
         Effect.gen(function* () {
           const current = (yield* SynchronizedRef.get(tabsRef)).get(tabId);
           if (current?.webContentsId !== wc.id || webContents.fromId(wc.id) !== wc) return;
-          const event: DesktopPreviewDesignChange = { tabId, ...payload };
+          const event: DesktopPreviewDesignChange = { ...payload, tabId };
           const listeners = yield* Ref.get(designChangeListenersRef);
           yield* Effect.forEach(
             listeners,

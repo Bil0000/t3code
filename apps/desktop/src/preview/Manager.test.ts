@@ -744,7 +744,7 @@ describe("PreviewManager", () => {
         };
         ipcListeners.get("preview:design-changed")?.(
           {},
-          { html: "<!doctype html><p>Saved</p>", annotation },
+          { html: "<!doctype html><p>Saved</p>", annotation, tabId: "other-tab" },
         );
         ipcListeners.get("preview:design-changed")?.({}, { html: 42 });
         yield* settle(() => changes.length === 1);
