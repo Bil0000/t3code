@@ -1937,10 +1937,10 @@ function PullRequestsRouteView() {
     );
   });
   const closeActiveSurfaceFromShortcut = useEffectEvent((event: KeyboardEvent) => {
-    if (activePullRequestSurface === null) return;
+    if (!rightPanelState.isOpen || selectedPullRequestSurface === null) return;
     event.preventDefault();
     event.stopPropagation();
-    if (!event.repeat) closeSurface(activePullRequestSurface);
+    if (!event.repeat) closeSurface(selectedPullRequestSurface);
   });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
