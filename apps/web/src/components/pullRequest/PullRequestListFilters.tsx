@@ -2,7 +2,6 @@ import type {
   EnvironmentId,
   ProjectId,
   PullRequestInvolvement,
-  ProjectIconOverride,
   PullRequestListFilters,
   PullRequestListState,
   SourceControlProviderKind,
@@ -368,6 +367,7 @@ export function PullRequestFiltersMenu({
   projectEnvironmentId,
   unavailable,
   onProject,
+  showProjectScope = true,
 }: {
   onOpenChange?: (open: boolean) => void;
   state: PullRequestListState;
@@ -411,6 +411,8 @@ export function PullRequestFiltersMenu({
   unavailable: ReadonlyMap<string, string>;
   /** The environment comes with the project id, since picking a row picks a specific server's copy of it. */
   onProject: (projectId: ProjectId | undefined, environmentId: EnvironmentId | undefined) => void;
+  /** A repository-scoped panel already knows its project and does not repeat that choice. */
+  showProjectScope?: boolean;
 }) {
   const selectedLabels = (filters.labels ?? []).flatMap((group) => group);
   const filterCount = [
@@ -545,17 +547,23 @@ export function PullRequestFiltersMenu({
             />
           </>
         ) : null}
-        <MenuSeparator />
-        <PullRequestFilterRadioSubmenu
-          label="Project"
-          value={projectValue}
-          options={projectOptions}
-          onChange={(next) => {
-            const project = projects.find((candidate) => pullRequestProjectKey(candidate) === next);
-            if (project) onProject(project.id, project.environmentId);
-            else if (projectId !== undefined) onProject(undefined, undefined);
-          }}
-        />
+        {showProjectScope ? (
+          <>
+            <MenuSeparator />
+            <PullRequestFilterRadioSubmenu
+              label="Project"
+              value={projectValue}
+              options={projectOptions}
+              onChange={(next) => {
+                const project = projects.find(
+                  (candidate) => pullRequestProjectKey(candidate) === next,
+                );
+                if (project) onProject(project.id, project.environmentId);
+                else if (projectId !== undefined) onProject(undefined, undefined);
+              }}
+            />
+          </>
+        ) : null}
       </MenuPopup>
     </Menu>
   );

@@ -25,21 +25,33 @@ const stateByEnvironment = Atom.family((environmentId: EnvironmentId) =>
     persistedCacheReadable: true,
   }).pipe(Atom.keepAlive, Atom.withLabel(`environment-data:vcs:list-refs-state:${environmentId}`)),
 );
+const historyRevisionByRepository = Atom.family((key: string) =>
+  Atom.make(0).pipe(Atom.withLabel(`environment-data:vcs:history-revision:${key}`)),
+);
 const persistenceLock = PartitionedSemaphore.makeUnsafe<EnvironmentId>({ permits: 1 });
 
 export function vcsRefsCacheStateAtom(target: VcsRefsInvalidationTarget) {
   return stateByEnvironment(target.environmentId);
 }
 
+export function vcsHistoryRevisionAtom(
+  target: CachedVcsRefsInvalidationTarget,
+): Atom.Writable<number, number> {
+  return historyRevisionByRepository(JSON.stringify([target.environmentId, target.cwd]));
+}
+
 export function invalidateVcsRefs(
   registry: AtomRegistry.AtomRegistry,
-  target: VcsRefsInvalidationTarget,
+  target: CachedVcsRefsInvalidationTarget,
   persistedCacheReadable?: boolean,
+  invalidateHistory = true,
 ): void {
   registry.update(vcsRefsCacheStateAtom(target), (state) => ({
     revision: state.revision + 1,
     persistedCacheReadable: persistedCacheReadable ?? state.persistedCacheReadable,
   }));
+  if (invalidateHistory)
+    registry.update(vcsHistoryRevisionAtom(target), (revision) => revision + 1);
 }
 
 export function withVcsRefsPersistenceLock<A, E, R>(
@@ -59,6 +71,7 @@ export function withVcsRefsPersistenceLock<A, E, R>(
 export const invalidateCachedVcsRefs = Effect.fn("VcsRefsState.invalidateCached")(function* (
   registry: AtomRegistry.AtomRegistry,
   target: CachedVcsRefsInvalidationTarget,
+  invalidateHistory = true,
 ) {
   const cache = yield* EnvironmentCacheStore;
   yield* withVcsRefsPersistenceLock(
@@ -77,7 +90,7 @@ export const invalidateCachedVcsRefs = Effect.fn("VcsRefsState.invalidateCached"
           ),
         ),
       );
-      invalidateVcsRefs(registry, target, persistedCacheReadable);
+      invalidateVcsRefs(registry, target, persistedCacheReadable, invalidateHistory);
     }),
   );
 });

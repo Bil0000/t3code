@@ -15,6 +15,7 @@ import type {
   PullRequestLabel,
   PullRequestListCursors,
   PullRequestListFilters,
+  PullRequestListStatsInput,
   PullRequestListState,
 } from "@t3tools/contracts";
 
@@ -669,6 +670,50 @@ export const pullRequestDiffStatKey = (row: {
   readonly projectId: string;
   readonly number: number;
 }) => `${row.environmentId} ${row.projectId} ${row.number}`;
+const MAX_STATS_REFS_PER_BATCH = 500;
+
+/** Keeps the stats cache bounded to rows that remain visible after a filter or page change. */
+export function prunePullRequestDiffStats(
+  previous: PullRequestDiffStats,
+  entries: ReadonlyArray<EnvironmentPullRequestEntry>,
+): PullRequestDiffStats {
+  const visible = new Set(entries.map(pullRequestDiffStatKey));
+  if ([...previous.keys()].every((key) => visible.has(key))) return previous;
+  return new Map([...previous].filter(([key]) => visible.has(key)));
+}
+
+/** The bounded line-count batches for the rows currently visible in the list. */
+export function pullRequestStatsTargets(
+  entries: ReadonlyArray<EnvironmentPullRequestEntry>,
+): ReadonlyArray<{
+  readonly environmentId: EnvironmentId;
+  readonly input: PullRequestListStatsInput;
+}> {
+  const refsByEnvironment = new Map<
+    EnvironmentId,
+    Array<PullRequestListStatsInput["refs"][number]>
+  >();
+  const seen = new Set<string>();
+  for (const entry of entries) {
+    const key = pullRequestDiffStatKey(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const refs = refsByEnvironment.get(entry.environmentId) ?? [];
+    refs.push({ projectId: entry.projectId, repository: entry.repository, number: entry.number });
+    refsByEnvironment.set(entry.environmentId, refs);
+  }
+  return [...refsByEnvironment].flatMap(([environmentId, refs]) =>
+    Array.from({ length: Math.ceil(refs.length / MAX_STATS_REFS_PER_BATCH) }, (_, batchIndex) => ({
+      environmentId,
+      input: {
+        refs: refs.slice(
+          batchIndex * MAX_STATS_REFS_PER_BATCH,
+          (batchIndex + 1) * MAX_STATS_REFS_PER_BATCH,
+        ),
+      },
+    })),
+  );
+}
 
 /**
  * Every connected environment's listing, read as one list.
@@ -1063,4 +1108,26 @@ export function withDiffStat<
   if (entry.additions !== 0 || entry.deletions !== 0) return entry;
   const stat = statsByRow.get(pullRequestDiffStatKey(entry));
   return stat === undefined ? entry : { ...entry, ...stat };
+}
+
+/** Reuses a row's decoration when the same source row keeps the same line counts. */
+export function decoratePullRequestEntries<
+  Entry extends PullRequestListEntry & { readonly environmentId: string },
+>(
+  entries: ReadonlyArray<Entry>,
+  statsByRow: ReadonlyMap<string, { readonly additions: number; readonly deletions: number }>,
+  previous: ReadonlyMap<Entry, Entry>,
+): { readonly entries: ReadonlyArray<Entry>; readonly bySource: ReadonlyMap<Entry, Entry> } {
+  const bySource = new Map<Entry, Entry>();
+  const decorated = entries.map((entry) => {
+    const next = withDiffStat(entry, statsByRow);
+    const held = previous.get(entry);
+    const value =
+      held !== undefined && held.additions === next.additions && held.deletions === next.deletions
+        ? held
+        : next;
+    bySource.set(entry, value);
+    return value;
+  });
+  return { entries: decorated, bySource };
 }

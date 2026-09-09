@@ -18,6 +18,7 @@ import { AsyncResult, Atom } from "effect/unstable/reactivity";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { appAtomRegistry } from "./atom-registry";
+import { environmentCatalog } from "../connection/catalog";
 import { orchestrationEnvironment } from "./orchestration";
 import { projectEnvironment } from "./projects";
 import { useEnvironmentQuery } from "./query";
@@ -138,9 +139,13 @@ export function useBranches(input: {
 
 export function usePaginatedBranches(target: VcsRefTarget) {
   const query = target.query?.trim() ?? "";
+  const connection = useEnvironmentQuery(
+    target.environmentId === null ? null : environmentCatalog.stateAtom(target.environmentId),
+  ).data;
+  const connectionGeneration = connection?.phase === "connected" ? connection.generation : null;
   const targetKey =
     target.environmentId !== null && target.cwd !== null
-      ? JSON.stringify([target.environmentId, target.cwd, query])
+      ? JSON.stringify([target.environmentId, target.cwd, query, connectionGeneration])
       : null;
   const [pagination, setPagination] = useState<{
     readonly targetKey: string | null;

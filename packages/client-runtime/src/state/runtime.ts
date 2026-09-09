@@ -51,6 +51,7 @@ interface EnvironmentQueryAtomOptions<Input, A, E, R> extends EnvironmentAtomOpt
   readonly staleTimeMs?: number;
   readonly idleTtlMs?: number;
   readonly refreshIntervalMs?: number;
+  readonly revalidateOnReconnect?: (input: Input) => boolean;
   readonly refreshTrigger?: (target: {
     readonly environmentId: EnvironmentIdType;
     readonly input: Input;
@@ -428,8 +429,9 @@ export async function settlePromise<A>(
 export function environmentRpcKey<Input>(target: {
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
+  readonly cacheKey?: string | number;
 }): string {
-  return JSON.stringify([target.environmentId, target.input]);
+  return JSON.stringify([target.environmentId, target.input, target.cacheKey]);
 }
 
 function parseEnvironmentRpcKey<Input>(key: string): {
@@ -491,6 +493,7 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
 ): (target: {
   readonly environmentId: EnvironmentIdType;
   readonly input: Input;
+  readonly cacheKey?: string | number;
 }) => Atom.Atom<AsyncResult.AsyncResult<A, E | ER | Error>> {
   const connectionAtom = Atom.family((environmentId: EnvironmentIdType) =>
     runtime.atom(
@@ -517,6 +520,29 @@ export function createEnvironmentQueryAtomFamily<R, ER, Input, A, E>(
         A,
         E | ConnectionAttemptError | EnvironmentNotRegisteredError | EnvironmentRpcUnavailableError
       >((get) => {
+        if (!(options.revalidateOnReconnect?.(target.input) ?? true)) {
+          return runInEnvironment(
+            target.environmentId,
+            EnvironmentSupervisor.pipe(
+              Effect.flatMap((supervisor) =>
+                Stream.concat(
+                  Stream.fromEffect(SubscriptionRef.get(supervisor.state)),
+                  SubscriptionRef.changes(supervisor.state),
+                ).pipe(
+                  Stream.filter((state) => state.phase === "connected"),
+                  Stream.take(1),
+                  Stream.runHead,
+                  Effect.flatMap(
+                    Option.match({
+                      onNone: () => Effect.never,
+                      onSome: () => options.execute(target.input),
+                    }),
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
         const connection = Option.getOrNull(
           AsyncResult.value(get(connectionAtom(target.environmentId))),
         );
@@ -610,6 +636,7 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     readonly staleTimeMs?: number;
     readonly idleTtlMs?: number;
     readonly refreshIntervalMs?: number;
+    readonly revalidateOnReconnect?: (input: EnvironmentRpcInput<TTag>) => boolean;
     readonly refreshTrigger?: (target: {
       readonly environmentId: EnvironmentIdType;
       readonly input: EnvironmentRpcInput<TTag>;
@@ -623,6 +650,9 @@ export function createEnvironmentRpcQueryAtomFamily<R, ER, TTag extends Environm
     ...(options.refreshIntervalMs === undefined
       ? {}
       : { refreshIntervalMs: options.refreshIntervalMs }),
+    ...(options.revalidateOnReconnect === undefined
+      ? {}
+      : { revalidateOnReconnect: options.revalidateOnReconnect }),
     ...(options.refreshTrigger === undefined ? {} : { refreshTrigger: options.refreshTrigger }),
     execute: (input: EnvironmentRpcInput<TTag>) => request(options.tag, input),
   });

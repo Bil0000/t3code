@@ -2,6 +2,8 @@ import type { DesktopPreviewFavicon, PreviewSessionSnapshot } from "@t3tools/con
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
+import { issueSurfaceId } from "~/rightPanelStore";
+
 import {
   RightPanelTabs,
   shouldOpenDefaultBrowserProfileFromMenuClick,
@@ -42,6 +44,16 @@ const secondSurface = {
   id: "browser:tab-2" as const,
   kind: "preview" as const,
   resourceId: "tab-2",
+};
+const issuesSurface = {
+  id: "issues" as const,
+  kind: "issues" as const,
+  selected: {
+    projectId: "project-1",
+    provider: "linear",
+    repository: "acme/project",
+    number: 42,
+  },
 };
 const sessions: Readonly<Record<string, PreviewSessionSnapshot>> = {
   "tab-1": {
@@ -92,13 +104,20 @@ function renderTabs(
   second?: DesktopPreviewFavicon,
   audio?: { audible?: boolean; audioMuted?: boolean },
   previewRuntimeTabId: ((tabId: string) => string) | null = (tabId) => `runtime:${tabId}`,
+  issueStatus?: { state: "open" | "closed"; stateReason: null },
 ) {
+  const surfaces = issueStatus
+    ? [issuesSurface]
+    : second
+      ? [previewSurface, secondSurface]
+      : [previewSurface];
+
   return renderToStaticMarkup(
     <RightPanelTabs
       mode="inline"
-      surfaces={second ? [previewSurface, secondSurface] : [previewSurface]}
+      surfaces={surfaces}
       environmentId={null}
-      activeSurfaceId={previewSurface.id}
+      activeSurfaceId={issueStatus ? issuesSurface.id : previewSurface.id}
       pendingSurfaceIds={new Set()}
       previewSessions={sessions}
       desktopByTabId={{
@@ -107,6 +126,18 @@ function renderTabs(
       }}
       {...(previewRuntimeTabId ? { previewRuntimeTabId } : {})}
       terminalLabelsById={new Map()}
+      {...(issueStatus
+        ? {
+            issueStatuses: {
+              [issueSurfaceId(issuesSurface.selected)]: {
+                projectId: issuesSurface.selected.projectId,
+                repository: issuesSurface.selected.repository,
+                number: issuesSurface.selected.number,
+                ...issueStatus,
+              },
+            },
+          }
+        : {})}
       onActivate={() => undefined}
       onCloseSurface={() => undefined}
       onCloseOtherSurfaces={() => undefined}
@@ -155,6 +186,99 @@ describe("RightPanelTabs preview favicon", () => {
   it("hides a capture while the server session still describes another origin", () => {
     const html = renderTabs(favicon("data:image/png;base64,AAAA", "https://example.com/"));
     expect(html).not.toContain("data:image/png;base64,AAAA");
+  });
+
+  it("shows the selected issue's state on the shared Issues browser tab", () => {
+    const html = renderTabs(null, undefined, undefined, undefined, {
+      state: "closed",
+      stateReason: null,
+    });
+
+    expect(html).toContain("lucide-circle-check");
+    expect(html).toContain("text-violet-600");
+  });
+
+  it("offers the combined Repository surface only when its capability is enabled", () => {
+    const html = renderToStaticMarkup(
+      <RightPanelTabs
+        mode="inline"
+        surfaces={[]}
+        environmentId={null}
+        activeSurfaceId={null}
+        pendingSurfaceIds={new Set()}
+        previewSessions={{}}
+        desktopByTabId={{}}
+        terminalLabelsById={new Map()}
+        onActivate={() => undefined}
+        onCloseSurface={() => undefined}
+        onCloseOtherSurfaces={() => undefined}
+        onCloseSurfacesToRight={() => undefined}
+        onCloseAllSurfaces={() => undefined}
+        onCopyFilePath={() => undefined}
+        onAddBrowser={() => undefined}
+        onAddBrowserInProfile={() => undefined}
+        onAddTerminal={() => undefined}
+        onAddPullRequest={() => undefined}
+        onAddIssue={() => undefined}
+        onAddDiff={() => undefined}
+        onAddFiles={() => undefined}
+        onAddAgents={() => undefined}
+        liveAgentCount={0}
+        browserAvailable={false}
+        terminalAvailable={false}
+        diffAvailable={false}
+        filesAvailable={false}
+        pullRequestAvailable={false}
+        issueAvailable={false}
+        agentsAvailable={false}
+      >
+        <div />
+      </RightPanelTabs>,
+    );
+
+    expect(html).not.toContain(">Repository</span>");
+
+    const enabledHtml = renderToStaticMarkup(
+      <RightPanelTabs
+        mode="inline"
+        surfaces={[]}
+        environmentId={null}
+        activeSurfaceId={null}
+        pendingSurfaceIds={new Set()}
+        previewSessions={{}}
+        desktopByTabId={{}}
+        terminalLabelsById={new Map()}
+        onActivate={() => undefined}
+        onCloseSurface={() => undefined}
+        onCloseOtherSurfaces={() => undefined}
+        onCloseSurfacesToRight={() => undefined}
+        onCloseAllSurfaces={() => undefined}
+        onCopyFilePath={() => undefined}
+        onAddBrowser={() => undefined}
+        onAddBrowserInProfile={() => undefined}
+        onAddTerminal={() => undefined}
+        onAddPullRequest={() => undefined}
+        onAddRepository={() => undefined}
+        onAddIssue={() => undefined}
+        onAddDiff={() => undefined}
+        onAddFiles={() => undefined}
+        onAddAgents={() => undefined}
+        liveAgentCount={0}
+        browserAvailable={false}
+        terminalAvailable={false}
+        diffAvailable={false}
+        filesAvailable={false}
+        pullRequestAvailable={false}
+        repositoryAvailable
+        issueAvailable={false}
+        agentsAvailable={false}
+      >
+        <div />
+      </RightPanelTabs>,
+    );
+
+    expect(enabledHtml).toContain(">Repository</span>");
+    expect(enabledHtml).toContain("Browse history, issues, and pull requests.");
   });
 });
 

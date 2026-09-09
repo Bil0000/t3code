@@ -5,5 +5,6 @@ import {
 
 import { connectionAtomRuntime } from "../connection/runtime";
 
-export const vcsEnvironment = createVcsEnvironmentAtoms(connectionAtomRuntime);
+export const vcsEnvironment: ReturnType<typeof createVcsEnvironmentAtoms> =
+  createVcsEnvironmentAtoms(connectionAtomRuntime);
 export const vcsActionManager = createVcsActionManager(connectionAtomRuntime);
