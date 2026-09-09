@@ -56,10 +56,7 @@ import {
 } from "../components/issue/IssueListFilters";
 import { ListSearchInput, type ListFilterOption } from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
-import {
-  WorkItemSelectButton,
-  WorkItemSelectionBarHost,
-} from "../components/workItems/WorkItemSelectionBar";
+import { WorkItemSelectionBarHost } from "../components/workItems/WorkItemSelectionBar";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import { resolveProjectScope } from "../components/sourceControl/projectScope";
@@ -1293,6 +1290,19 @@ function IssuesRouteView() {
     sortingHosts.length > 0 && sortingHosts.every((entry) => entry.kind === "github");
   const filtersMenu = (
     <div className="flex shrink-0 items-center gap-1">
+      <IssueSortMenu
+        reactionsAvailable={githubSortingAvailable}
+        sort={sort}
+        order={order}
+        onSort={(nextSort) =>
+          updateListScope({
+            sort: nextSort === "updated" && sentQuery.length === 0 ? undefined : nextSort,
+          })
+        }
+        onOrder={(nextOrder) =>
+          updateListScope({ order: nextOrder === "desc" ? undefined : nextOrder })
+        }
+      />
       <IssueFiltersMenu
         state={search.state}
         stateOptions={STATE_TABS}
@@ -1319,21 +1329,6 @@ function IssuesRouteView() {
         labels={labelOptions}
         onLabel={(label) => updateListScope({ label })}
       />
-      {githubSortingAvailable ? (
-        <IssueSortMenu
-          sort={sort}
-          order={order}
-          onSort={(nextSort) =>
-            updateListScope({
-              sort: nextSort === "updated" && sentQuery.length === 0 ? undefined : nextSort,
-            })
-          }
-          onOrder={(nextOrder) =>
-            updateListScope({ order: nextOrder === "desc" ? undefined : nextOrder })
-          }
-        />
-      ) : null}
-      <WorkItemSelectButton />
     </div>
   );
   const columnProps = {
@@ -1702,7 +1697,7 @@ export function IssuesColumn({
   return (
     // Painted flat like the chat column: the inset underneath carries the chrome grain, and a
     // content surface that lets it show reads as a different background than every thread.
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
+    <div className="@container/issue-list flex min-h-0 min-w-0 flex-1 flex-col bg-background">
       <WorkspacePageHeader electron={isElectron} reserveNativeControls={!rightPanelOpen}>
         {condensed ? (
           <WorkspaceBreadcrumb ariaLabel="Issue scope">
@@ -1776,10 +1771,12 @@ export function IssuesColumn({
         {/* The top padding is the fade band's own height (1.5rem here), the same pairing the
             settings page makes: at rest the controls sit fully below the mask, and only
             content actually passing under the chrome fades. */}
-        <WorkspacePageContainer className="gap-4">
+        <WorkspacePageContainer width="expanded" className="gap-4">
           <div className="flex flex-col gap-3">
-            <div ref={inFlowSearchRef} className="flex items-center gap-2">
-              {searchInput}
+            <div ref={inFlowSearchRef} className="flex flex-wrap items-center gap-2">
+              <div className="min-w-0 basis-full @lg/issue-list:basis-0 @lg/issue-list:flex-1">
+                {searchInput}
+              </div>
               {filtersMenu}
               {!condensed ? (
                 <ListRefreshControl

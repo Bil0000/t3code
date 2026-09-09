@@ -415,6 +415,13 @@ function IssueBrowserList({
           onChange={onQuery}
         />
         <div className="flex shrink-0 items-center gap-1">
+          <IssueSortMenu
+            reactionsAvailable={githubSortingAvailable}
+            sort={filters.sort}
+            order={filters.order}
+            onSort={(sort) => onFilters({ ...filters, sort })}
+            onOrder={(order) => onFilters({ ...filters, order })}
+          />
           <IssueFiltersMenu
             state={filters.state}
             stateOptions={STATE_OPTIONS}
@@ -426,14 +433,6 @@ function IssueBrowserList({
             labels={labelOptions}
             onLabel={(label) => onFilters({ ...filters, label })}
           />
-          {githubSortingAvailable ? (
-            <IssueSortMenu
-              sort={filters.sort}
-              order={filters.order}
-              onSort={(sort) => onFilters({ ...filters, sort })}
-              onOrder={(order) => onFilters({ ...filters, order })}
-            />
-          ) : null}
         </div>
       </div>
       <ScrollArea className="min-h-0 flex-1">

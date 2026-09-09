@@ -6,7 +6,23 @@ import type {
   IssueListState,
   ProjectId,
 } from "@t3tools/contracts";
-import { ArrowDownUpIcon, SettingsIcon, TagIcon, TagsIcon } from "lucide-react";
+import {
+  ArrowDownUpIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
+  CalendarArrowUpIcon,
+  ClockIcon,
+  FolderGit2Icon,
+  LayersIcon,
+  MessageSquareIcon,
+  SearchIcon,
+  SettingsIcon,
+  TagIcon,
+  TagsIcon,
+  ThumbsUpIcon,
+} from "lucide-react";
+
+import type { ElementType, ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 
@@ -26,6 +42,7 @@ import {
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
+  MenuRadioItemIndicator,
   MenuSeparator,
   MenuSub,
   MenuSubPopup,
@@ -68,6 +85,7 @@ export function renderIssueProviderMenuRadioGroup({
             <span className="flex min-w-0 items-center gap-2">
               <option.Icon aria-hidden className="size-3.5" />
               <span className="min-w-0 flex-1 truncate">{option.label}</span>
+              <MenuRadioItemIndicator />
             </span>
           </MenuRadioItem>
         );
@@ -106,6 +124,13 @@ export function renderIssueProviderMenuRadioGroup({
   );
 }
 
+const SORT_OPTIONS = [
+  { value: "created", label: "Created on", Icon: CalendarArrowUpIcon },
+  { value: "updated", label: "Last updated", Icon: ClockIcon },
+  { value: "comments", label: "Total comments", Icon: MessageSquareIcon },
+  { value: "best-match", label: "Best match", Icon: SearchIcon },
+] as const;
+
 const REACTION_SORTS = [
   ["reactions", "Total reactions", ""],
   ["reactions-thumbs-up", "Thumbs up", "👍"],
@@ -123,7 +148,9 @@ export function IssueSortMenu({
   order,
   onSort,
   onOrder,
+  reactionsAvailable = true,
 }: {
+  readonly reactionsAvailable?: boolean;
   readonly sort: IssueListSort;
   readonly order: IssueListOrder;
   readonly onSort: (sort: IssueListSort) => void;
@@ -135,54 +162,44 @@ export function IssueSortMenu({
   const [ascendingLabel, descendingLabel] = issueListOrderLabels(sort);
   return (
     <Menu>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <MenuTrigger
-              render={
-                <Button
-                  className="relative"
-                  size="icon"
-                  variant="outline"
-                  aria-label="Sort issues"
-                />
-              }
-            />
-          }
-        >
-          <ArrowDownUpIcon className="size-4" />
-          {sort !== "updated" || order !== "desc" ? (
-            <span
-              aria-hidden
-              className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"
-            />
-          ) : null}
-        </TooltipTrigger>
-        <TooltipPopup side="top">Sort issues</TooltipPopup>
-      </Tooltip>
+      <MenuTrigger aria-label="Sort issues" render={<Button variant="outline" />}>
+        <ArrowDownUpIcon className="size-4" />
+        <span>Sort</span>
+      </MenuTrigger>
       <MenuPopup align="end" side="bottom" className="min-w-48">
         <MenuRadioGroup value={sort} onValueChange={chooseSort}>
           <MenuGroupLabel>Sort by</MenuGroupLabel>
-          <MenuRadioItem value="created">Created on</MenuRadioItem>
-          <MenuRadioItem value="updated">Last updated</MenuRadioItem>
-          <MenuRadioItem value="comments">Total comments</MenuRadioItem>
-          <MenuRadioItem value="best-match">Best match</MenuRadioItem>
+          {SORT_OPTIONS.map(({ value, label, Icon }) => (
+            <MenuRadioItem key={value} value={value}>
+              <span className="flex min-w-0 items-center gap-2">
+                <Icon aria-hidden className="size-3.5" />
+                <span className="flex-1">{label}</span>
+                <MenuRadioItemIndicator />
+              </span>
+            </MenuRadioItem>
+          ))}
         </MenuRadioGroup>
-        <MenuSub>
-          <MenuSubTrigger>Reactions</MenuSubTrigger>
-          <MenuSubPopup className="min-w-48">
-            <MenuRadioGroup value={sort} onValueChange={chooseSort}>
-              {REACTION_SORTS.map(([value, label, emoji]) => (
-                <MenuRadioItem key={value} value={value}>
-                  <span className="flex items-center gap-2">
-                    {emoji ? <span aria-hidden>{emoji}</span> : null}
-                    {label}
-                  </span>
-                </MenuRadioItem>
-              ))}
-            </MenuRadioGroup>
-          </MenuSubPopup>
-        </MenuSub>
+        {reactionsAvailable ? (
+          <MenuSub>
+            <MenuSubTrigger>
+              <ThumbsUpIcon aria-hidden className="size-3.5" />
+              Reactions
+            </MenuSubTrigger>
+            <MenuSubPopup className="min-w-48">
+              <MenuRadioGroup value={sort} onValueChange={chooseSort}>
+                {REACTION_SORTS.map(([value, label, emoji]) => (
+                  <MenuRadioItem key={value} value={value}>
+                    <span className="flex items-center gap-2">
+                      {emoji ? <span aria-hidden>{emoji}</span> : null}
+                      <span className="flex-1">{label}</span>
+                      <MenuRadioItemIndicator />
+                    </span>
+                  </MenuRadioItem>
+                ))}
+              </MenuRadioGroup>
+            </MenuSubPopup>
+          </MenuSub>
+        ) : null}
         {sort !== "best-match" ? (
           <>
             <MenuSeparator />
@@ -193,13 +210,48 @@ export function IssueSortMenu({
               }}
             >
               <MenuGroupLabel>Order</MenuGroupLabel>
-              <MenuRadioItem value="asc">{ascendingLabel}</MenuRadioItem>
-              <MenuRadioItem value="desc">{descendingLabel}</MenuRadioItem>
+              <MenuRadioItem value="asc">
+                <span className="flex items-center gap-2">
+                  <ArrowUpIcon aria-hidden className="size-3.5" />
+                  <span className="flex-1">{ascendingLabel}</span>
+                  <MenuRadioItemIndicator />
+                </span>
+              </MenuRadioItem>
+              <MenuRadioItem value="desc">
+                <span className="flex items-center gap-2">
+                  <ArrowDownIcon aria-hidden className="size-3.5" />
+                  <span className="flex-1">{descendingLabel}</span>
+                  <MenuRadioItemIndicator />
+                </span>
+              </MenuRadioItem>
             </MenuRadioGroup>
           </>
         ) : null}
       </MenuPopup>
     </Menu>
+  );
+}
+
+function IssueFilterSubmenu({
+  Icon,
+  label,
+  current,
+  children,
+}: {
+  label: string;
+  current: string;
+  Icon: ElementType<{ className?: string }>;
+  children: ReactNode;
+}) {
+  return (
+    <MenuSub>
+      <MenuSubTrigger>
+        <Icon aria-hidden className="size-3.5" />
+        <span className="flex-1">{label}</span>
+        <span className="min-w-0 max-w-32 truncate text-xs text-muted-foreground">{current}</span>
+      </MenuSubTrigger>
+      <MenuSubPopup className="min-w-56">{children}</MenuSubPopup>
+    </MenuSub>
   );
 }
 
@@ -261,64 +313,109 @@ export function IssueFiltersMenu({
   const providerOptions = hostFilter?.hostOptions.filter((option) => !option.unavailable) ?? [];
   const linearOption = providerOptions.find((option) => option.value === "linear.app");
   const linearManaged = hostFilter?.linearManaged ?? linearOption !== undefined;
-  const filtered =
-    state !== "open" ||
-    involvement !== "all" ||
-    hostFilter?.host !== undefined ||
-    projectFilter?.projectId !== undefined ||
-    label !== undefined;
+  const filterCount = [
+    state !== "open",
+    involvement !== "all",
+    hostFilter?.host !== undefined,
+    projectFilter?.projectId !== undefined,
+    label !== undefined,
+  ].filter(Boolean).length;
   return (
-    <ListFilterMenu label="Filter issues" filtered={filtered}>
-      <ListFilterRadioGroup label="State" value={state} options={stateOptions} onChange={onState} />
-      <MenuSeparator />
-      <ListFilterRadioGroup
+    <ListFilterMenu label="Filter issues" filterCount={filterCount}>
+      <IssueFilterSubmenu
+        label="State"
+        Icon={stateOptions.find((option) => option.value === state)?.Icon ?? LayersIcon}
+        current={stateOptions.find((option) => option.value === state)?.label ?? state}
+      >
+        <ListFilterRadioGroup
+          label="State"
+          value={state}
+          options={stateOptions}
+          onChange={onState}
+        />
+      </IssueFilterSubmenu>
+      <IssueFilterSubmenu
         label="Involvement"
-        value={involvement}
-        options={involvementOptions}
-        onChange={onInvolvement}
-      />
+        Icon={involvementOptions.find((option) => option.value === involvement)?.Icon ?? LayersIcon}
+        current={
+          involvementOptions.find((option) => option.value === involvement)?.label ?? involvement
+        }
+      >
+        <ListFilterRadioGroup
+          label="Involvement"
+          value={involvement}
+          options={involvementOptions}
+          onChange={onInvolvement}
+        />
+      </IssueFilterSubmenu>
       {hostFilter !== undefined &&
       (providerOptions.length > 2 || hostFilter.onManageLinear !== undefined) ? (
         <>
           <MenuSeparator />
-          {linearOption && hostFilter.onManageLinear ? (
-            renderIssueProviderMenuRadioGroup({
-              label: "Provider",
-              value: hostFilter.host ?? ALL_HOSTS_VALUE,
-              options: providerOptions,
-              onChange: (next) => {
-                if (next !== (hostFilter.host ?? ALL_HOSTS_VALUE)) {
-                  hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next);
-                }
-              },
-              onManageLinear: hostFilter.onManageLinear,
-            })
-          ) : (
-            <ListFilterRadioGroup
-              label="Provider"
-              value={hostFilter.host ?? ALL_HOSTS_VALUE}
-              options={providerOptions}
-              onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
-            />
-          )}
-          {hostFilter.onManageLinear !== undefined && linearOption === undefined ? (
-            <MenuItem onClick={hostFilter.onManageLinear}>
-              <LinearIcon aria-hidden className="size-3.5" />
-              {linearManaged ? "Linear settings…" : "Connect Linear…"}
-            </MenuItem>
-          ) : null}
+          <IssueFilterSubmenu
+            label="Provider"
+            Icon={
+              providerOptions.find(
+                (option) => option.value === (hostFilter.host ?? ALL_HOSTS_VALUE),
+              )?.Icon ?? LayersIcon
+            }
+            current={
+              providerOptions.find(
+                (option) => option.value === (hostFilter.host ?? ALL_HOSTS_VALUE),
+              )?.label ?? "All providers"
+            }
+          >
+            {linearOption && hostFilter.onManageLinear ? (
+              renderIssueProviderMenuRadioGroup({
+                label: "Provider",
+                value: hostFilter.host ?? ALL_HOSTS_VALUE,
+                options: providerOptions,
+                onChange: (next) => {
+                  if (next !== (hostFilter.host ?? ALL_HOSTS_VALUE)) {
+                    hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next);
+                  }
+                },
+                onManageLinear: hostFilter.onManageLinear,
+              })
+            ) : (
+              <ListFilterRadioGroup
+                label="Provider"
+                value={hostFilter.host ?? ALL_HOSTS_VALUE}
+                options={providerOptions}
+                onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
+              />
+            )}
+            {hostFilter.onManageLinear !== undefined && linearOption === undefined ? (
+              <>
+                <MenuSeparator />
+                <MenuItem onClick={hostFilter.onManageLinear}>
+                  <LinearIcon aria-hidden className="size-3.5" />
+                  {linearManaged ? "Linear settings…" : "Connect Linear…"}
+                </MenuItem>
+              </>
+            ) : null}
+          </IssueFilterSubmenu>
         </>
       ) : null}
       {projectFilter === undefined ? null : (
         <>
           <MenuSeparator />
-          <ListProjectFilterGroup
-            environmentId={projectFilter.environmentId}
-            projects={projectFilter.projects}
-            projectId={projectFilter.projectId}
-            unavailable={projectFilter.unavailable}
-            onProject={projectFilter.onProject}
-          />
+          <IssueFilterSubmenu
+            label="Project"
+            Icon={FolderGit2Icon}
+            current={
+              projectFilter.projects.find((project) => project.id === projectFilter.projectId)
+                ?.title ?? "All projects"
+            }
+          >
+            <ListProjectFilterGroup
+              environmentId={projectFilter.environmentId}
+              projects={projectFilter.projects}
+              projectId={projectFilter.projectId}
+              unavailable={projectFilter.unavailable}
+              onProject={projectFilter.onProject}
+            />
+          </IssueFilterSubmenu>
         </>
       )}
       {/* Nothing loaded wears a label: there is no choice to offer, and a lone "All labels"
@@ -326,15 +423,17 @@ export function IssueFiltersMenu({
       {labels.length > 0 ? (
         <>
           <MenuSeparator />
-          <ListFilterRadioGroup
-            label="Label"
-            value={label ?? ALL_LABELS_VALUE}
-            options={[
-              { value: ALL_LABELS_VALUE, label: "All labels", Icon: TagsIcon },
-              ...labels.map((name) => ({ value: name, label: name, Icon: TagIcon })),
-            ]}
-            onChange={(next) => onLabel(next === ALL_LABELS_VALUE ? undefined : next)}
-          />
+          <IssueFilterSubmenu Icon={TagIcon} label="Label" current={label ?? "All labels"}>
+            <ListFilterRadioGroup
+              label="Label"
+              value={label ?? ALL_LABELS_VALUE}
+              options={[
+                { value: ALL_LABELS_VALUE, label: "All labels", Icon: TagsIcon },
+                ...labels.map((name) => ({ value: name, label: name, Icon: TagIcon })),
+              ]}
+              onChange={(next) => onLabel(next === ALL_LABELS_VALUE ? undefined : next)}
+            />
+          </IssueFilterSubmenu>
         </>
       ) : null}
     </ListFilterMenu>

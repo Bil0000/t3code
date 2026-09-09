@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vite-plus/test";
 
 import { ListFilterRadioGroup } from "../sourceControl/ListFilterMenu";
 import { LinearIcon } from "../Icons";
-import { Button } from "../ui/button";
 import { MenuItem, MenuRadioItem, MenuSeparator } from "../ui/menu";
 import { TooltipPopup } from "../ui/tooltip";
 import {
@@ -28,33 +27,22 @@ function collect(
 }
 
 describe("issue filters", () => {
-  it("uses the shared outline button for sorting", () => {
+  it("keeps basic sorting available without GitHub reactions", () => {
     const menu = IssueSortMenu({
       sort: "updated",
       order: "desc",
+      reactionsAvailable: false,
       onSort: vi.fn(),
       onOrder: vi.fn(),
     });
-    const tooltip = Children.toArray(menu.props.children)[0] as ReactElement<{
-      readonly children: ReactNode;
-    }>;
-    const trigger = Children.toArray(tooltip.props.children)[0] as ReactElement<{
-      readonly render?: ReactElement<{
-        readonly render?: ReactElement<{
-          readonly size: string;
-          readonly variant: string;
-          readonly title?: string;
-        }>;
-      }>;
-    }>;
-    const button = trigger.props.render?.props.render;
-
-    expect(button?.type).toBe(Button);
-    expect(button?.props).toMatchObject({ size: "icon", variant: "outline" });
-    expect(button?.props.title).toBeUndefined();
-    expect(collect(menu, TooltipPopup).map((popup) => popup.props.children)).toContain(
-      "Sort issues",
-    );
+    expect(collect(menu, MenuRadioItem).map((item) => item.props.value)).toEqual([
+      "created",
+      "updated",
+      "comments",
+      "best-match",
+      "asc",
+      "desc",
+    ]);
   });
 
   it("hides ineffective order choices for best-match sorting", () => {

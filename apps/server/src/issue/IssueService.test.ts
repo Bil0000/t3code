@@ -1650,6 +1650,41 @@ const TWO_PROJECTS = [
   project({ id: "p2", title: "api", workspaceRoot: "/b", repository: "acme/api" }),
 ];
 
+it.effect("sorts non-GitHub issues by comments in either direction", () =>
+  Effect.gen(function* () {
+    const service = yield* makeService({
+      projects: [
+        project({
+          id: "p1",
+          title: "web",
+          workspaceRoot: "/a",
+          repository: "acme/web",
+          provider: "gitlab",
+        }),
+      ],
+      providers: [
+        fakeProvider("gitlab", {
+          listIssues: () =>
+            Effect.succeed({
+              items: [
+                { ...issue(1, "2026-07-05T00:00:00Z"), commentCount: 2 },
+                { ...issue(2, "2026-07-02T00:00:00Z"), commentCount: 8 },
+              ],
+              truncated: false,
+            }),
+        }),
+      ],
+    });
+    for (const order of ["asc", "desc"] as const) {
+      const result = yield* service.list({ state: "open", sort: "comments", order });
+      assert.deepStrictEqual(
+        result.entries.map((entry) => entry.number),
+        order === "asc" ? [1, 2] : [2, 1],
+      );
+    }
+  }),
+);
+
 it.effect("orders rows by the selected reaction kind across repositories", () =>
   Effect.gen(function* () {
     const service = yield* makeService({

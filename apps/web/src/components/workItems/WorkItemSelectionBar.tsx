@@ -1,5 +1,5 @@
 import { scopeProjectRef } from "@t3tools/client-runtime/environment";
-import { ListChecksIcon, LoaderIcon, SparklesIcon, XIcon } from "lucide-react";
+import { InfoIcon, LoaderIcon, SparklesIcon, XIcon } from "lucide-react";
 import { type PropsWithChildren, useState } from "react";
 
 import { useComposerDraftStore } from "~/composerDraftStore";
@@ -14,8 +14,8 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export const WORK_ITEM_MODE_HELP = {
-  compound: "One task that merges overlap and orders dependencies.",
-  subtasks: "One parent task split into ordered child steps.",
+  compound: "Combines the selected items into one task.",
+  subtasks: "Splits the selected items into steps under one parent task.",
 } as const;
 
 export const WORK_ITEM_SELECTION_BAR_CLASS_NAME =
@@ -82,23 +82,6 @@ export async function createGeneratedWorkItemDraft<TDraftId>(input: {
   return { status: "success", generated: generation.value.generated };
 }
 
-export function WorkItemSelectButton() {
-  const selecting = useWorkItemSelection((state) => state.selecting);
-  const count = useWorkItemSelection((state) => state.items.length);
-  const start = useWorkItemSelection((state) => state.start);
-  const clear = useWorkItemSelection((state) => state.clear);
-  return (
-    <Button size="xs" variant="outline" onClick={selecting ? clear : start}>
-      {selecting ? (
-        <XIcon aria-hidden className="size-3.5" />
-      ) : (
-        <ListChecksIcon aria-hidden className="size-3.5" />
-      )}
-      {selecting ? `Cancel${count > 0 ? ` (${count})` : ""}` : "Select"}
-    </Button>
-  );
-}
-
 function WorkItemSelectionBar() {
   const items = useWorkItemSelection((state) => state.items);
   const mode = useWorkItemSelection((state) => state.mode);
@@ -162,26 +145,26 @@ function WorkItemSelectionBar() {
       <span className="mr-auto whitespace-nowrap px-1 text-xs text-muted-foreground">
         {items.length} selected
       </span>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <ToggleGroup
-              size="segmented"
-              variant="segmented"
-              aria-label="Task shape"
-              value={[mode]}
-              onValueChange={(next) => {
-                const value = next[0];
-                if (value === "compound" || value === "subtasks") setMode(value);
-              }}
-            />
-          }
-        >
-          <Toggle value="compound">Compound</Toggle>
-          <Toggle value="subtasks">Subtasks</Toggle>
-        </TooltipTrigger>
-        <TooltipPopup side="top">{WORK_ITEM_MODE_HELP[mode]}</TooltipPopup>
-      </Tooltip>
+      <ToggleGroup
+        size="segmented"
+        variant="segmented"
+        aria-label="Task shape"
+        value={[mode]}
+        onValueChange={(next) => {
+          const value = next[0];
+          if (value === "compound" || value === "subtasks") setMode(value);
+        }}
+      >
+        {(["compound", "subtasks"] as const).map((value) => (
+          <Tooltip key={value}>
+            <TooltipTrigger render={<Toggle value={value} />}>
+              {value === "compound" ? "Compound" : "Subtasks"}
+              <InfoIcon aria-hidden className="ml-1 size-3 text-muted-foreground" />
+            </TooltipTrigger>
+            <TooltipPopup side="top">{WORK_ITEM_MODE_HELP[value]}</TooltipPopup>
+          </Tooltip>
+        ))}
+      </ToggleGroup>
       <Button size="xs" disabled={busy} onClick={() => void createTask()}>
         {busy ? (
           <LoaderIcon aria-hidden className="size-3.5 animate-spin" />

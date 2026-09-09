@@ -23,6 +23,7 @@ import {
   MenuPopup,
   MenuRadioGroup,
   MenuRadioItem,
+  MenuRadioItemIndicator,
   MenuTrigger,
 } from "../ui/menu";
 import { InputGroup, InputGroupAddon, InputGroupInput } from "../ui/input-group";
@@ -97,20 +98,13 @@ export function ListSearchInput({
   );
 }
 
-/**
- * Every list filter lives behind the one filter icon so the control row stays two controls
- * wide: the search and this. The trigger carries a dot whenever any filter is off its
- * default, so a narrowed list is never a mystery. Same menu chrome as the detail panel's
- * actions, which also owns its own spacing.
- */
 export function ListFilterMenu({
   label,
-  filtered,
+  filterCount,
   children,
 }: {
   label: string;
-  /** Whether anything is off its default — which only the surface's own filters can say. */
-  filtered: boolean;
+  filterCount: number;
   children: ReactNode;
 }) {
   return (
@@ -118,19 +112,19 @@ export function ListFilterMenu({
       <MenuTrigger
         render={
           <Button
-            className={cn("relative", filtered && "[--control-icon-color:currentColor]")}
-            size="icon"
+            className={cn(filterCount > 0 && "[--control-icon-color:currentColor]")}
+            size="default"
             variant="outline"
             aria-label={label}
           />
         }
       >
         <ListFilterIcon className="size-4" />
-        {filtered ? (
-          <span
-            aria-hidden
-            className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"
-          />
+        <span>Filters</span>
+        {filterCount > 0 ? (
+          <span className="rounded-full bg-muted px-1.5 text-xs text-muted-foreground tabular-nums">
+            {filterCount}
+          </span>
         ) : null}
       </MenuTrigger>
       <MenuPopup align="end" side="bottom" className="min-w-56">
@@ -172,6 +166,7 @@ export function ListFilterRadioGroup<Value extends string>({
             <span className="flex min-w-0 items-center gap-2">
               <option.Icon aria-hidden className="size-3.5" />
               <span className="min-w-0 flex-1 truncate">{option.label}</span>
+              <MenuRadioItemIndicator />
             </span>
           </MenuRadioItem>
         );
@@ -225,7 +220,8 @@ export function ListProjectFilterGroup({
       <MenuRadioItem value={ALL_PROJECTS_VALUE}>
         <span className="flex min-w-0 items-center gap-2">
           <LayersIcon aria-hidden className="size-3.5" />
-          All projects
+          <span className="flex-1">All projects</span>
+          <MenuRadioItemIndicator />
         </span>
       </MenuRadioItem>
       {/* The ones that can be chosen first: a list that opens with three disabled rows reads
@@ -254,6 +250,7 @@ export function ListProjectFilterGroup({
                   />
                 )}
                 <span className="min-w-0 flex-1 truncate">{project.title}</span>
+                <MenuRadioItemIndicator />
                 {reason === undefined ? null : (
                   <span className="shrink-0 rounded-full border border-amber-500/40 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-600 dark:text-amber-400/90">
                     Unavailable

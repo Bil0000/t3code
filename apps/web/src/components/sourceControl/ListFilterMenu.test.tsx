@@ -42,7 +42,7 @@ function findValueChange(
 
 describe("list filter menu", () => {
   it("uses the shared outline button for list filters", () => {
-    const menu = ListFilterMenu({ label: "Filter issues", filtered: true, children: null });
+    const menu = ListFilterMenu({ label: "Filter issues", filterCount: 1, children: null });
     const trigger = Children.toArray(menu.props.children)[0] as ReactElement<{
       readonly render: ReactElement<{ readonly className?: string; size: string; variant: string }>;
     }>;
@@ -51,7 +51,7 @@ describe("list filter menu", () => {
     const button = trigger.props.render;
     if (!button) return;
     expect(button.type).toBe(Button);
-    expect(button.props).toMatchObject({ size: "icon", variant: "outline" });
+    expect(button.props).toMatchObject({ size: "default", variant: "outline" });
     expect(button.props.className).toContain("--control-icon-color");
   });
 

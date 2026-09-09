@@ -45,8 +45,8 @@ describe("work item task draft", () => {
 
   it("shows the exact help for each task shape", () => {
     expect(WORK_ITEM_MODE_HELP).toEqual({
-      compound: "One task that merges overlap and orders dependencies.",
-      subtasks: "One parent task split into ordered child steps.",
+      compound: "Combines the selected items into one task.",
+      subtasks: "Splits the selected items into steps under one parent task.",
     });
   });
 
