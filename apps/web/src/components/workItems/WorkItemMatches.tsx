@@ -6,7 +6,7 @@ import type {
   WorkItemMatchRelationship,
 } from "@t3tools/contracts";
 import { ArrowUpRightIcon, LinkIcon, LoaderIcon, SparklesIcon } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
 
 import { findWorkItemMatches } from "~/state/workItems";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -127,6 +127,10 @@ export function workItemMatchCacheKey(input: WorkItemMatchCacheInput): string {
 export function useWorkItemMatches(input: WorkItemMatchCacheInput) {
   const run = useAtomCommand(findWorkItemMatches, { reportFailure: false });
   const key = workItemMatchCacheKey(input);
+  const currentKey = useRef(key);
+  useLayoutEffect(() => {
+    currentKey.current = key;
+  }, [key]);
   const [cache, setCache] = useState<MatchCache>({ key });
   const [pending, setPending] = useState<WorkItemMatchRelationship | null>(null);
   const find = useCallback(
@@ -140,6 +144,13 @@ export function useWorkItemMatches(input: WorkItemMatchCacheInput) {
       setPending(null);
       if (response._tag === "Failure") {
         toastManager.add({ type: "error", title: "Could not find matches" });
+        return;
+      }
+      if (currentKey.current !== key) {
+        toastManager.add({
+          type: "error",
+          title: "This item changed. Find matches again.",
+        });
         return;
       }
       setCache((current) => ({
