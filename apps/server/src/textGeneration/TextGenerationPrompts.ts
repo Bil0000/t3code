@@ -34,6 +34,12 @@ export interface WorkItemTaskPromptInput {
   readonly items: ReadonlyArray<WorkItemPromptSource>;
 }
 
+function workItemReference(item: WorkItemPromptSource): string {
+  return item.provider === "linear"
+    ? `${item.repository}-${item.number}`
+    : `${item.repository}#${item.number}`;
+}
+
 /** One explicit model call over only the work the user selected. */
 export function buildWorkItemTaskPrompt(input: WorkItemTaskPromptInput) {
   const taskShape =
@@ -42,10 +48,7 @@ export function buildWorkItemTaskPrompt(input: WorkItemTaskPromptInput) {
       : "Write one parent task with clear, ordered subtasks. Merge duplicate work and name dependencies.";
   const sources = input.items
     .map((item) => {
-      const reference =
-        item.provider === "linear"
-          ? `${item.repository}-${item.number}`
-          : `${item.repository}#${item.number}`;
+      const reference = workItemReference(item);
       return [
         `### ${item.kind === "issue" ? "Issue" : "Pull request"}: ${reference}`,
         `Provider: ${item.provider}`,
@@ -78,7 +81,7 @@ export function buildWorkItemTaskPrompt(input: WorkItemTaskPromptInput) {
 export function fallbackWorkItemTaskPrompt(input: WorkItemTaskPromptInput): string {
   const sources = input.items.map(
     (item, index) =>
-      `${input.mode === "subtasks" ? `${index + 1}.` : "-"} [${item.title}](${item.url}) (${item.repository}#${item.number})`,
+      `${input.mode === "subtasks" ? `${index + 1}.` : "-"} [${item.title}](${item.url}) (${workItemReference(item)})`,
   );
   return [
     input.mode === "compound"
@@ -114,7 +117,7 @@ export function buildWorkItemMatchPrompt(input: {
       index === undefined ? "Source" : `Candidate ${index}`,
       `Type: ${source.kind}`,
       `Provider: ${source.provider}`,
-      `Reference: ${source.repository}#${source.number}`,
+      `Reference: ${workItemReference(source)}`,
       `Title: ${source.title}`,
       `URL: ${source.url}`,
       "Body:",

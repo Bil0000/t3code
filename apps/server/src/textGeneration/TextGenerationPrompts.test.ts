@@ -48,6 +48,8 @@ describe("buildWorkItemTaskPrompt", () => {
   it("keeps a deterministic draft when AI is unavailable", () => {
     const draft = fallbackWorkItemTaskPrompt({ mode: "subtasks", items });
     expect(draft).toContain("Fix login");
+    expect(draft).toContain("(ENG-12)");
+    expect(draft).not.toContain("ENG#12");
     expect(draft).toContain("https://linear.app/acme/issue/ENG-12");
   });
 
@@ -91,6 +93,8 @@ describe("buildWorkItemMatchPrompt", () => {
     const related = buildWorkItemMatchPrompt({ relationship: "related", source, candidates });
     const duplicate = buildWorkItemMatchPrompt({ relationship: "duplicate", source, candidates });
 
+    expect(related.prompt).toContain("Reference: ENG-12");
+    expect(related.prompt).toContain("Reference: acme/app#34");
     expect(related.prompt).toContain("Sessions expire too early");
     expect(related.prompt).toContain("Refreshes the session before expiry.");
     expect(duplicate.prompt).toContain("Refreshes the session before expiry.");
