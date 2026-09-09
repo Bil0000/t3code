@@ -3,7 +3,12 @@ import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Result from "effect/Result";
 import * as Schema from "effect/Schema";
-import { IssueAction, type IssueInvolvement, type IssueListState } from "@t3tools/contracts";
+import {
+  VcsProcessExitError,
+  IssueAction,
+  type IssueInvolvement,
+  type IssueListState,
+} from "@t3tools/contracts";
 
 import * as AzureDevOpsCli from "../sourceControl/AzureDevOpsCli.ts";
 import {
@@ -365,6 +370,12 @@ const make = Effect.gen(function* () {
           // tags: they keep their own explanation, and no other state is written after them.
           Effect.catchTags({
             AzureDevOpsCommandFailedError: (error) => {
+              if (
+                !Schema.is(VcsProcessExitError)(error.cause) ||
+                error.cause.failureKind !== "state-rule"
+              ) {
+                return Effect.fail(error);
+              }
               const [next, ...following] = remaining;
               return next === undefined
                 ? Effect.fail(

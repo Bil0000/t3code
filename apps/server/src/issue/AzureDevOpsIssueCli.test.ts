@@ -1,3 +1,4 @@
+import { VcsProcessExitError } from "@t3tools/contracts";
 import { afterEach, assert, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
@@ -91,7 +92,14 @@ const ruleError = (argumentCount: number) =>
     command: "az",
     cwd: "/w",
     argumentCount,
-    cause: new Error("TF401320: Rule Error for field State."),
+    cause: new VcsProcessExitError({
+      operation: "execute",
+      command: "az",
+      cwd: "/w",
+      exitCode: 1,
+      detail: "Process exited with a non-zero status.",
+      failureKind: "state-rule",
+    }),
   });
 
 /** A project whose workflow has only the states named: every other write is refused. */
@@ -491,6 +499,25 @@ layer((it) => {
         "New",
         "Proposed",
       ]);
+    }),
+  );
+
+  it.effect("does not retry unrelated command failures as state changes", () =>
+    Effect.gen(function* () {
+      const failure = new AzureDevOpsCli.AzureDevOpsCommandFailedError({
+        operation: "execute",
+        command: "az",
+        cwd: "/w",
+        argumentCount: 9,
+        cause: new Error("connection lost"),
+      });
+      mockedExecute.mockReturnValue(Effect.fail(failure));
+      const cli = yield* AzureDevOpsIssueCli.AzureDevOpsIssueCli;
+      const error = yield* Effect.flip(
+        cli.runWorkItemAction({ cwd: "/w", number: 7, action: "close" }),
+      );
+      assert.strictEqual(error, failure);
+      assert.deepStrictEqual(statesWritten(), ["Closed"]);
     }),
   );
 
