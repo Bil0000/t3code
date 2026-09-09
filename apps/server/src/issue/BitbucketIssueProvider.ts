@@ -142,7 +142,12 @@ export const make = Effect.gen(function* () {
     getIssue: (input) => {
       const target = { repository: input.repository, number: input.number };
       return Effect.all(
-        [api.getIssue(target), api.getRepositoryPermission({ repository: input.repository })],
+        [
+          api.getIssue(target),
+          api
+            .getRepositoryPermission({ repository: input.repository })
+            .pipe(Effect.orElseSucceed(() => false)),
+        ],
         { concurrency: 2 },
       ).pipe(
         Effect.mapError(fail("getIssue")),
