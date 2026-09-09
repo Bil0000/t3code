@@ -47,10 +47,18 @@ export function designElementStatesMatch(
   );
 }
 
-export function discardPendingDesignObject(
-  interaction: { readonly kind: string; readonly element: Pick<Element, "remove"> } | null,
+export function cancelDesignInteraction(
+  interaction:
+    | { readonly kind: "create"; readonly element: Pick<Element, "remove"> }
+    | {
+        readonly kind: "move" | "resize";
+        readonly element: HTMLElement | SVGElement;
+        readonly before: DesignElementState;
+      }
+    | null,
 ): void {
   if (interaction?.kind === "create") interaction.element.remove();
+  else if (interaction) applyDesignElementState(interaction.element, interaction.before);
 }
 
 export interface DesignSelectionInput {
@@ -152,8 +160,4 @@ export function serializeDesignDocument(document: Document): string {
     element.removeAttribute("contenteditable");
   });
   return `<!doctype html>\n${root.outerHTML}`;
-}
-
-export function isDesignDocument(document: Document): boolean {
-  return designPathFromUrl(document.location.href) !== null;
 }

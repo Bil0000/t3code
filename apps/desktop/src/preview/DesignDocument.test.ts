@@ -6,7 +6,7 @@ import {
   createDesignSelectionAnnotation,
   designElementStatesMatch,
   designPathFromUrl,
-  discardPendingDesignObject,
+  cancelDesignInteraction,
   resolveDesignPosition,
   serializeDesignDocument,
 } from "./DesignDocument.ts";
@@ -87,11 +87,11 @@ describe("serializeDesignDocument", () => {
   });
 });
 
-describe("discardPendingDesignObject", () => {
+describe("cancelDesignInteraction", () => {
   it("removes an unfinished object", () => {
     let removed = false;
 
-    discardPendingDesignObject({
+    cancelDesignInteraction({
       kind: "create",
       element: { remove: () => (removed = true) },
     });
@@ -101,6 +101,17 @@ describe("discardPendingDesignObject", () => {
 });
 
 describe("design element state", () => {
+  it.each(["move", "resize"] as const)("restores a canceled %s", (kind) => {
+    const element = textElement("Before");
+    const target = element as unknown as HTMLElement;
+    const before = captureDesignElementState(target);
+    element.style.cssText = "width: 200px; translate: 10px 20px";
+    element.setAttribute("data-t3-design-x", "10");
+    element.setAttribute("data-t3-design-y", "20");
+    cancelDesignInteraction({ kind, element: target, before });
+    expect(captureDesignElementState(target)).toEqual(before);
+  });
+
   it("captures and restores leaf text for undo", () => {
     const element = textElement("Before");
     const before = captureDesignElementState(element as unknown as HTMLElement);

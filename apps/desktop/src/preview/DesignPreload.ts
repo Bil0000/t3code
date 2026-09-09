@@ -11,7 +11,7 @@ import {
   DESIGN_UI_ATTRIBUTE,
   designElementStatesMatch as statesMatch,
   designPathFromUrl,
-  discardPendingDesignObject,
+  cancelDesignInteraction,
   resolveDesignPosition,
   serializeDesignDocument,
   type DesignElementState as ElementState,
@@ -1042,6 +1042,12 @@ function startDesignEditor(): void {
     event.stopPropagation();
   };
 
+  const cancelDrag = (): void => {
+    cancelDesignInteraction(drag);
+    drag = null;
+    refreshSelection();
+  };
+
   const onPointerUp = (event: PointerEvent): void => {
     if (!editorOpen || annotationActive() || !drag) return;
     const completed = drag;
@@ -1151,8 +1157,7 @@ function startDesignEditor(): void {
     editorOpen = active;
     toolbar.hidden = !active;
     document.documentElement.toggleAttribute(DESIGN_OPEN_ATTRIBUTE, active && !annotationActive());
-    if (!active) discardPendingDesignObject(drag);
-    drag = null;
+    cancelDrag();
     finishEditingText?.();
     hideHover();
     setTool("select");
@@ -1172,7 +1177,7 @@ function startDesignEditor(): void {
   window.addEventListener("pointerdown", onPointerDown, true);
   window.addEventListener("pointermove", onPointerMove, true);
   window.addEventListener("pointerup", onPointerUp, true);
-  window.addEventListener("pointercancel", onPointerUp, true);
+  window.addEventListener("pointercancel", cancelDrag, true);
   window.addEventListener("click", preventNavigation, true);
   window.addEventListener("dblclick", editText, true);
   window.addEventListener("keydown", onKeyDown, true);
@@ -1193,8 +1198,7 @@ function startDesignEditor(): void {
     host.style.display = active ? "none" : "";
     document.documentElement.toggleAttribute(DESIGN_OPEN_ATTRIBUTE, editorOpen && !active);
     if (active) {
-      discardPendingDesignObject(drag);
-      drag = null;
+      cancelDrag();
       finishEditingText?.();
       hideHover();
     }
