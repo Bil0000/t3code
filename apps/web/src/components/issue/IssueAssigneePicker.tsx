@@ -137,7 +137,7 @@ export function IssueAssigneePicker({
           key={candidate.id}
           checked={candidate.isAssigned}
           checkedLabel="Already assigned"
-          disabled={pending !== null || truncated}
+          disabled={pending !== null}
           onSelect={() => void toggle(candidate)}
         >
           <SourceControlActorLabel actor={candidate} className="min-w-0 flex-1 truncate" />
