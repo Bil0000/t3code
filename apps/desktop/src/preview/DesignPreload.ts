@@ -780,9 +780,10 @@ function startDesignEditor(): void {
   bindField(margin, (element, value) => element.style.setProperty("margin", value));
   bindField(radius, (element, value) => element.style.setProperty("border-radius", `${value}px`));
   bindField(overflow, (element, value) => element.style.setProperty("overflow", value));
-  bindField(opacity, (element, value) =>
-    element.style.setProperty("opacity", String(Number(value) / 100)),
-  );
+  bindField(opacity, (element, value) => {
+    if (value.trim() === "") return;
+    element.style.setProperty("opacity", String(Number(value) / 100));
+  });
   bindField(borderWidth, (element, value) =>
     element.style.setProperty("border-width", `${value}px`),
   );
@@ -1061,7 +1062,8 @@ function startDesignEditor(): void {
   const editText = (event: MouseEvent): void => {
     if (!editorOpen || annotationActive() || tool !== "select" || isUiElement(event.target)) return;
     const target = event.target;
-    if (!(target instanceof HTMLElement) || target.childElementCount > 0) return;
+    if (!(target instanceof HTMLElement) || target.childElementCount > 0 || editingText === target)
+      return;
     selectElement(target);
     const before = target.innerHTML;
     editingText = target;
@@ -1110,10 +1112,12 @@ function startDesignEditor(): void {
 
   const onKeyDown = (event: KeyboardEvent): void => {
     if (!editorOpen || annotationActive()) return;
+    const target = root.activeElement ?? event.target;
     const typing =
-      event.target instanceof HTMLInputElement ||
-      event.target instanceof HTMLTextAreaElement ||
-      (event.target instanceof HTMLElement && event.target.isContentEditable);
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      (target instanceof HTMLElement && target.isContentEditable);
     if (typing) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "z") {
       runHistory(event.shiftKey ? 1 : -1);
