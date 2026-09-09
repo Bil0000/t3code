@@ -16,10 +16,7 @@ it.effect("does not fail after the target file is committed", () =>
       const target = path.join(root, "settings.json");
       const cleanupFailureFileSystem = {
         ...fileSystem,
-        makeTempDirectoryScoped: (options) =>
-          Effect.acquireRelease(fileSystem.makeTempDirectory(options), () =>
-            Effect.die(new Error("temporary directory cleanup failed")),
-          ),
+        remove: () => Effect.die(new Error("temporary directory cleanup failed")),
       } satisfies FileSystem.FileSystem;
 
       const exit = yield* writeFileStringAtomically({

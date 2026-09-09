@@ -23,7 +23,7 @@ export const writeFileStringAtomically = (input: {
       yield* fs.rename(tempPath, input.filePath);
     }).pipe(
       Effect.ensuring(
-        fs.remove(tempDirectory, { recursive: true, force: true }).pipe(Effect.ignore),
+        fs.remove(tempDirectory, { recursive: true, force: true }).pipe(Effect.ignoreCause),
       ),
     );
   });
