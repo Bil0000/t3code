@@ -50,6 +50,8 @@ export type PendingUserInput = ThreadPendingUserInput;
 export interface PendingUserInputDraftAnswer {
   readonly selectedOptionValues?: ReadonlyArray<string>;
   readonly customAnswer?: string;
+  readonly attachmentCount?: number;
+  readonly attachmentsBlocked?: boolean;
 }
 
 export interface ThreadFeedActivity {
@@ -287,6 +289,7 @@ function resolvePendingUserInputAnswer(
   question: ThreadUserInputQuestion,
   draft: PendingUserInputDraftAnswer | undefined,
 ): string | ReadonlyArray<string> | null {
+  if (draft?.attachmentsBlocked) return null;
   const customAnswer =
     question.allowCustomAnswer === false ? null : normalizeDraftAnswer(draft?.customAnswer);
   if (customAnswer) {
@@ -295,9 +298,16 @@ function resolvePendingUserInputAnswer(
 
   const selectedOptionValues = normalizeSelectedOptionValues(question, draft?.selectedOptionValues);
   if (question.multiSelect) {
-    return selectedOptionValues.length > 0 ? selectedOptionValues : null;
+    return selectedOptionValues.length > 0
+      ? selectedOptionValues
+      : question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0
+        ? ""
+        : null;
   }
-  return selectedOptionValues[0] ?? null;
+  return (
+    selectedOptionValues[0] ??
+    (question.allowCustomAnswer !== false && (draft?.attachmentCount ?? 0) > 0 ? "" : null)
+  );
 }
 
 function capitalizePhrase(value: string): string {
@@ -544,6 +554,9 @@ function toWorkLogEntry(
     itemType: item.type,
     toolLifecycleStatus: itemLifecycleStatus(item),
     structuredPayload: item,
+    ...(item.type === "user_input_request" && item.questionAnswer
+      ? { questionAnswer: item.questionAnswer }
+      : {}),
   } as const;
 
   switch (item.type) {
