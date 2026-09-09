@@ -10,7 +10,7 @@ import type {
   PullRequestRef,
   PullRequestReviewerCandidate,
 } from "@t3tools/contracts";
-import { UserPlusIcon } from "lucide-react";
+import { CheckIcon, UserPlusIcon } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { pullRequestEnvironment } from "~/state/pullRequests";
@@ -18,9 +18,8 @@ import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
 
-import { EntityPicker, EntityPickerOption } from "../sourceControl/EntityPicker";
 import { toastManager } from "../ui/toast";
-import { PeopleGhost } from "../sourceControl/ListGhosts";
+import { PullRequestCandidatePicker } from "./PullRequestCandidatePicker";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { readableFailure } from "./pullRequestDetail.logic";
 
@@ -102,48 +101,39 @@ export function PullRequestReviewerPicker({
   };
 
   return (
-    <EntityPicker
+    <PullRequestCandidatePicker
       icon={<UserPlusIcon className="size-3.5" />}
       label="Request a review"
       allowed={allowed}
-      disallowedReason="Asking someone to review needs write access on this repository"
+      disabledReason="Asking someone to review needs write access on this repository"
       open={open}
       onOpenChange={setOpen}
-      searchLabel="Search people with access"
       query={query}
       onQueryChange={setQuery}
-      loading={candidatesQuery.isPending ? <PeopleGhost rows={4} /> : null}
-      message={
-        candidatesQuery.error !== null
-          ? `The people with access could not be read. ${candidatesQuery.error}`
-          : candidates.length === 0
-            ? query.length > 0
-              ? "Nobody with access matches that."
-              : "Nobody else has access to this repository."
-            : null
-      }
-      note={
-        // Typing filters what arrived; it does not ask the host again, so this says what the list
-        // is rather than offering a search that would find nothing further.
-        candidatesQuery.data?.truncated === true
-          ? "This repository has more people with access than are listed here. Ask for the rest on the host."
-          : null
-      }
+      searchLabel="Search people with access"
+      isPending={candidatesQuery.isPending}
+      error={candidatesQuery.error}
+      candidates={candidates}
+      emptyLabel="Nobody else has access to this repository."
+      noMatchLabel="Nobody with access matches that."
+      errorLabel="The people with access could not be read."
+      truncated={candidatesQuery.data?.truncated === true}
+      truncatedLabel="This repository has more people with access than are listed here. Ask for the rest on the host."
+      candidateKey={(candidate) => `${candidate.kind}:${candidate.id}`}
+      disabled={pending !== null}
+      onSelect={(candidate) => void toggle(candidate)}
     >
-      {candidates.map((candidate) => (
-        <EntityPickerOption
-          key={`${candidate.kind}:${candidate.id}`}
-          checked={candidate.isRequested}
-          checkedLabel="Already asked"
-          disabled={pending !== null}
-          onSelect={() => void toggle(candidate)}
-        >
+      {(candidate) => (
+        <>
           <PullRequestActorLabel actor={candidate} className="min-w-0 flex-1 truncate" />
           {candidate.kind === "team" ? (
             <span className="shrink-0 text-muted-foreground">team</span>
           ) : null}
-        </EntityPickerOption>
-      ))}
-    </EntityPicker>
+          {candidate.isRequested ? (
+            <CheckIcon aria-label="Already asked" className="size-3.5 shrink-0" />
+          ) : null}
+        </>
+      )}
+    </PullRequestCandidatePicker>
   );
 }

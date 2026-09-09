@@ -22,10 +22,9 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
+import { Button } from "../ui/button";
 import { ActorName, ActorTimelineMarker, IconMarker } from "../sourceControl/TimelineRail";
 import { ConversationGroup } from "../sourceControl/ConversationGroup";
-import { TimelineComment } from "../sourceControl/TimelineComment";
-import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -39,7 +38,7 @@ import {
 } from "./pullRequestDetail.logic";
 import { canEditPullRequestComment } from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
-import { SourceControlMarkdownEditor as PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
+import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import {
   PullRequestDiffStat,
@@ -73,15 +72,19 @@ function TimelineBody({
   environmentId: EnvironmentId;
   threadRef: ScopedThreadRef | null;
 }) {
-  return markdown ? (
-    <PullRequestMarkdown
-      text={body}
-      cwd={cwd}
-      environmentId={environmentId}
-      threadRef={threadRef}
-    />
-  ) : (
-    <p className="whitespace-pre-wrap text-xs text-muted-foreground">{body}</p>
+  return (
+    <div className="mt-3">
+      {markdown ? (
+        <PullRequestMarkdown
+          text={body}
+          cwd={cwd}
+          environmentId={environmentId}
+          threadRef={threadRef}
+        />
+      ) : (
+        <p className="whitespace-pre-wrap text-xs text-muted-foreground">{body}</p>
+      )}
+    </div>
   );
 }
 
@@ -151,36 +154,41 @@ function ConversationCard({
   };
 
   return (
-    <TimelineComment
-      actor={event.actor}
-      title={event.title}
-      at={event.at}
-      url={event.url}
-      onOpen={onOpen}
-      badge={event.reviewState ? <ReviewStateBadge state={event.reviewState} /> : null}
-      meta={
-        event.path ? (
-          <span className="inline-flex min-w-0 items-center gap-1">
-            <FileCode2Icon aria-hidden className="size-3 shrink-0" />
-            <span className="truncate">{event.path}</span>
-          </span>
-        ) : null
-      }
-      actions={
-        editable !== null && !editing ? (
-          <Button
-            size="icon-xs"
-            variant="ghost"
-            className="-mt-1 shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
-            aria-label="Edit comment"
-            onClick={() => setEditing(true)}
-          >
-            <PencilIcon className="size-3" />
-          </Button>
-        ) : null
-      }
-      body={
-        editing && editable !== null ? (
+    <article className="group py-2">
+      <div className="px-2">
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
+              <ActorName actor={event.actor} />
+              <span className="text-muted-foreground">{event.title}</span>
+              {event.reviewState ? <ReviewStateBadge state={event.reviewState} /> : null}
+            </div>
+            <PullRequestMetaLine className="mt-1 flex-wrap text-[11px] text-muted-foreground">
+              <span>{formatRelativeTimeLabel(event.at)}</span>
+              {event.path ? (
+                <span className="inline-flex min-w-0 items-center gap-1">
+                  <FileCode2Icon aria-hidden className="size-3 shrink-0" />
+                  <span className="truncate">{event.path}</span>
+                </span>
+              ) : null}
+            </PullRequestMetaLine>
+          </div>
+          {editable !== null && !editing ? (
+            <Button
+              size="icon-xs"
+              variant="ghost"
+              className="-mt-1 shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+              aria-label="Edit comment"
+              onClick={() => setEditing(true)}
+            >
+              <PencilIcon className="size-3" />
+            </Button>
+          ) : null}
+          <OpenOnHostButton url={event.url} onOpen={onOpen} />
+        </div>
+      </div>
+      {editing && editable !== null ? (
+        <div className="px-2 pb-2 pt-3">
           <PullRequestMarkdownEditor
             value={editable.body}
             cwd={cwd}
@@ -191,33 +199,31 @@ function ConversationCard({
             onSave={(body) => void save(body)}
             onCancel={() => setEditing(false)}
           />
-        ) : event.body || reactions.canReact || event.reactions.length > 0 ? (
-          <>
-            {event.body ? (
-              <TimelineBody
-                body={event.body}
-                markdown={event.markdown}
-                cwd={cwd}
-                environmentId={reactions.environmentId}
-                threadRef={reactions.threadRef}
-              />
-            ) : null}
-            {reactions.canReact || event.reactions.length > 0 ? (
-              <div className={event.body ? "mt-2" : undefined}>
-                <PullRequestReactionBar
-                  reactions={event.reactions}
-                  canReact={reactions.canReact}
-                  subjectId={event.id}
-                  environmentId={reactions.environmentId}
-                  reference={reactions.reference}
-                  onRefresh={reactions.onRefresh}
-                />
-              </div>
-            ) : null}
-          </>
-        ) : null
-      }
-    />
+        </div>
+      ) : event.body ? (
+        <div className="px-2 pb-2">
+          <TimelineBody
+            body={event.body}
+            markdown={event.markdown}
+            cwd={cwd}
+            environmentId={reactions.environmentId}
+            threadRef={reactions.threadRef}
+          />
+        </div>
+      ) : null}
+      {reactions.canReact || event.reactions.length > 0 ? (
+        <div className="px-2 pb-2">
+          <PullRequestReactionBar
+            reactions={event.reactions}
+            canReact={reactions.canReact}
+            subjectId={event.id}
+            environmentId={reactions.environmentId}
+            reference={reactions.reference}
+            onRefresh={reactions.onRefresh}
+          />
+        </div>
+      ) : null}
+    </article>
   );
 }
 
@@ -379,15 +385,13 @@ function ReviewVerdictEvent({
           {/* An approval usually carries no words. When it does they are the review, so they stay
               visible rather than being folded away with the ordinary conversation. */}
           {event.body ? (
-            <div className="mt-3">
-              <TimelineBody
-                body={event.body}
-                markdown={event.markdown}
-                cwd={cwd}
-                environmentId={reactions.environmentId}
-                threadRef={reactions.threadRef}
-              />
-            </div>
+            <TimelineBody
+              body={event.body}
+              markdown={event.markdown}
+              cwd={cwd}
+              environmentId={reactions.environmentId}
+              threadRef={reactions.threadRef}
+            />
           ) : null}
         </div>
         <OpenOnHostButton url={event.url} onOpen={onOpen} />

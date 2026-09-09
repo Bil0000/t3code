@@ -95,6 +95,7 @@ import { EnvironmentMachineIcon } from "../EnvironmentMachineIcon";
 import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import {
   Menu,
   MenuItem,
@@ -107,9 +108,8 @@ import {
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { PullRequestDetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
-import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
-import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
+import { PullRequestDetailGhost, PullRequestTimelineGhost } from "./PullRequestGhosts";
+import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
@@ -229,10 +229,10 @@ const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
 const UPDATE_BRANCH_REBASE_FAILURE_HINT =
   "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.";
 
-const TABS: ReadonlyArray<{ value: DetailTab; label: string; onPrefetch?: () => void }> = [
+const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
   { value: "summary", label: "Summary" },
   { value: "timeline", label: "Timeline" },
-  { value: "code", label: "Code", onPrefetch: () => void loadCodeTab() },
+  { value: "code", label: "Code" },
 ];
 
 // The diff viewer pulls in its worker pool, so load it only when the reader approaches Code.
@@ -1902,26 +1902,7 @@ export function PullRequestDetailPanel({
                     <ArrowUpRightIcon className="size-3.5" />
                     {openOnHostLabel(detail.provider)}
                   </MenuItem>
-                  {/* A clipboard that is switched off or refuses says nothing on its own, and a
-                      reader who has been handed nothing goes and pastes whatever was there
-                      before. The refusal is the host's own sentence, because it is the only
-                      thing that says which of the two happened. */}
-                  <MenuItem
-                    onClick={() =>
-                      void writeTextToClipboard(detail.url, "pull request link").catch(
-                        (error: unknown) => {
-                          toastManager.add({
-                            type: "error",
-                            title: "Could not copy the link",
-                            description:
-                              error instanceof Error
-                                ? error.message
-                                : "The clipboard refused it. Open the pull request on the host instead.",
-                          });
-                        },
-                      )
-                    }
-                  >
+                  <MenuItem onClick={() => void writeTextToClipboard(detail.url)}>
                     <LinkIcon className="size-3.5" />
                     Copy link
                   </MenuItem>
@@ -2248,12 +2229,30 @@ export function PullRequestDetailPanel({
         </div>
 
         {detail ? (
-          <DetailTabStrip
-            label="Pull request tabs"
-            tabs={visibleTabs}
-            active={tab}
-            onSelect={setTab}
+          <nav
+            className="col-span-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-border/60 px-4 py-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+            aria-label="Pull request tabs"
           >
+            <ToggleGroup
+              size="segmented"
+              variant="segmented"
+              value={[tab]}
+              onValueChange={(next) => {
+                const nextTab = visibleTabs.find((item) => item.value === next[0])?.value;
+                if (nextTab) setTab(nextTab);
+              }}
+            >
+              {visibleTabs.map((item) => (
+                <Toggle
+                  key={item.value}
+                  value={item.value}
+                  onPointerEnter={item.value === "code" ? () => void loadCodeTab() : undefined}
+                  onFocus={item.value === "code" ? () => void loadCodeTab() : undefined}
+                >
+                  {item.label}
+                </Toggle>
+              ))}
+            </ToggleGroup>
             {tab === "summary" ? (
               <span className="ml-auto inline-flex shrink-0 items-center">
                 {workflowApprovalsRequired > 0 && can("approve-workflows") ? (
@@ -2383,7 +2382,7 @@ export function PullRequestDetailPanel({
                 </Button>
               </div>
             ) : null}
-          </DetailTabStrip>
+          </nav>
         ) : null}
       </div>
 
@@ -2391,12 +2390,6 @@ export function PullRequestDetailPanel({
         className="relative min-h-0 flex-1 overflow-hidden"
         onScrollCapture={(event) => {
           const scroller = event.target as HTMLElement;
-          // Only the tab's own scrollport folds the chrome. A scrollable inside it — a code
-          // block running wide, the capped list of stranded conversations — is the reader
-          // moving something on the page rather than the page, and its `scrollTop` is not the
-          // one the compensation belongs to. Summary and timeline render their scroller as the
-          // marked wrapper's only child, so that is what the mark asks about.
-          if (scroller.parentElement?.hasAttribute("data-tab-scroller") !== true) return;
           scrollerRef.current = scroller;
           const top = scroller.scrollTop;
           setChromeCondensed((previous) => {
@@ -2430,10 +2423,7 @@ export function PullRequestDetailPanel({
         ) : detail ? (
           <PullRequestMarkdownContext value={markdownContext}>
             {mountedTabs.has("summary") ? (
-              <div
-                data-tab-scroller
-                className={cn("absolute inset-0", tab !== "summary" && "invisible")}
-              >
+              <div className={cn("absolute inset-0", tab !== "summary" && "invisible")}>
                 <PullRequestSummaryTab
                   environmentId={environmentId}
                   threadRef={threadRef}
@@ -2454,15 +2444,11 @@ export function PullRequestDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("timeline") ? (
-              <div
-                data-tab-scroller
-                className={cn("absolute inset-0", tab !== "timeline" && "invisible")}
-              >
+              <div className={cn("absolute inset-0", tab !== "timeline" && "invisible")}>
                 {activityPending ? (
-                  <TimelineGhost />
+                  <PullRequestTimelineGhost />
                 ) : activityError ? (
-                  <ActivityUnavailableState
-                    title="Could not load pull request activity"
+                  <PullRequestActivityUnavailableState
                     error={activityError}
                     onRetry={activityQuery.refresh}
                   />
@@ -2480,8 +2466,6 @@ export function PullRequestDetailPanel({
               </div>
             ) : null}
             {mountedTabs.has("code") ? (
-              // No mark: the viewer keeps its scrollport inside itself, under its own toolbar,
-              // so no child of this wrapper is the tab's own scrollport to fold against.
               <div className={cn("absolute inset-0", tab !== "code" && "invisible")}>
                 <Suspense fallback={<DiffPanelLoadingState label="Loading pull request diff..." />}>
                   <PullRequestCodeTab

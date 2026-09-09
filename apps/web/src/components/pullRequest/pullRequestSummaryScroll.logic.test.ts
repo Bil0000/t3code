@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vite-plus/test";
 
-import { sectionCollapseAnchorScrollTop } from "../sourceControl/summarySectionScroll.logic";
+import { sectionCollapseAnchorScrollTop } from "./pullRequestSummaryScroll.logic";
 
 describe("section collapse scroll anchoring", () => {
   it("returns the section's natural offset when its heading is pinned", () => {

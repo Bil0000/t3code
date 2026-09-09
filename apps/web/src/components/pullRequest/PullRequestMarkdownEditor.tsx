@@ -16,7 +16,7 @@ import { PullRequestMarkdown } from "./PullRequestMarkdown";
  * Preview renders through the same component the saved body will be read through, which is the
  * only way to see what a host's markdown will actually become before it is sent.
  */
-export function SourceControlMarkdownEditor({
+export function PullRequestMarkdownEditor({
   value,
   cwd,
   environmentId,

@@ -19,7 +19,7 @@ import {
   ComboboxTrigger,
 } from "../ui/combobox";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
-import { PeopleGhost as PullRequestPeopleGhost } from "../sourceControl/ListGhosts";
+import { PullRequestPeopleGhost } from "./PullRequestGhosts";
 
 export function PullRequestCandidatePicker<T>({
   icon,

@@ -10,7 +10,7 @@ import { formatRelativeTimeLabel } from "~/timestampFormat";
 import { ConversationGroup } from "../sourceControl/ConversationGroup";
 import { HostMarkdown } from "../sourceControl/HostMarkdown";
 import { ActorName, IconMarker } from "../sourceControl/TimelineRail";
-import { SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
+import { PullRequestMarkdownEditor as SourceControlMarkdownEditor } from "../pullRequest/PullRequestMarkdownEditor";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { IssueReactionBar } from "./IssueReactions";

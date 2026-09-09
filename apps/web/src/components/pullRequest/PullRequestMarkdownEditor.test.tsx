@@ -2,12 +2,12 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vite-plus/test";
 
-import { SourceControlMarkdownEditor } from "./PullRequestMarkdownEditor";
+import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 
-describe("SourceControlMarkdownEditor", () => {
+describe("PullRequestMarkdownEditor", () => {
   it("uses the shared named toggle group for markdown views", () => {
     const markup = renderToStaticMarkup(
-      <SourceControlMarkdownEditor
+      <PullRequestMarkdownEditor
         value="Body"
         cwd="/tmp/project"
         environmentId={"environment-1" as EnvironmentId}

@@ -1,11 +1,11 @@
 import type {
   EnvironmentId,
   IssueLink,
+  WorkItemMatch,
   PullRequestActor,
   PullRequestComment,
   PullRequestDetailView,
   PullRequestRef,
-  WorkItemMatch,
   ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
@@ -22,16 +22,22 @@ import {
 } from "lucide-react";
 import { useState, type ReactNode } from "react";
 
-import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { pullRequestEnvironment } from "~/state/pullRequests";
 import { cn } from "~/lib/utils";
 import { useOpenLink } from "~/browser/useOpenLink";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import { Textarea } from "../ui/textarea";
 import { openLinkInBrowser } from "~/lib/openIssueLink";
+import { IssueStateGlyph } from "../issue/issuePresentation";
+import {
+  useWorkItemMatches,
+  WorkItemMatchButton,
+  WorkItemMatchRows,
+} from "../workItems/WorkItemMatches";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
+import { Textarea } from "../ui/textarea";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -44,11 +50,9 @@ import {
   pullRequestReviewOutcomeRingClassName,
   pullRequestReviewOutcomeStaleLabel,
 } from "./pullRequestPresentation";
-import { IssueStateGlyph } from "../issue/issuePresentation";
 import { PullRequestLabelPicker } from "./PullRequestLabelPicker";
 import { PullRequestReviewerPicker } from "./PullRequestReviewerPicker";
-import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
-import { SummaryMetaRow, SummarySection } from "../sourceControl/SummaryMetaRow";
+import { PullRequestActivityUnavailableState } from "./PullRequestActivityUnavailableState";
 import {
   LINK_ISSUES_HANDOFF_KIND,
   latestPullRequestReviewOutcomes,
@@ -63,15 +67,14 @@ import {
   canEditPullRequestComment,
 } from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
-import { ConversationGhost } from "../sourceControl/ListGhosts";
-import { SourceControlMarkdownEditor as PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
+import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
-import {
-  useWorkItemMatches,
-  WorkItemMatchButton,
-  WorkItemMatchRows,
-} from "../workItems/WorkItemMatches";
+import { PullRequestConversationGhost } from "./PullRequestGhosts";
 import { pullRequestLabelColor } from "./pullRequestList.logic";
+import {
+  SummaryMetaRow as MetaRow,
+  SummarySection as Section,
+} from "../sourceControl/SummaryMetaRow";
 
 /** One reviewer, however a host happens to have cased their login this time. */
 function reviewerKey(login: string): string {
@@ -228,7 +231,7 @@ function CollapsedComment({
   );
 }
 
-function PullRequestCommentComposer({
+function CommentComposer({
   environmentId,
   detail,
   actionPending,
@@ -539,10 +542,10 @@ export function PullRequestSummaryTab({
   };
 
   return (
-    <div className="h-full overflow-y-auto" data-summary-scroll>
+    <div className="h-full overflow-y-auto" data-pull-request-summary-scroll>
       <section className="px-4 py-3">
         <div>
-          <SummaryMetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
+          <MetaRow icon={<UsersIcon className="size-3.5" />} label="Reviewers">
             <span className="flex min-w-0 flex-wrap items-center gap-1.5">
               {reviewerEntries.length === 0 ? (
                 <span className="text-muted-foreground">None</span>
@@ -631,11 +634,11 @@ export function PullRequestSummaryTab({
                 />
               ) : null}
             </span>
-          </SummaryMetaRow>
+          </MetaRow>
           {/* The row is shown empty only where a label could be put on it from here; on a host
               with none to offer, an empty row is a row about nothing. */}
           {detail.labels.length > 0 || detail.capabilities.labels === true ? (
-            <SummaryMetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
+            <MetaRow icon={<TagIcon className="size-3.5" />} label="Labels">
               <span className="flex min-w-0 flex-wrap items-center gap-1">
                 {detail.labels.length === 0 ? (
                   <span className="text-muted-foreground">None</span>
@@ -666,9 +669,9 @@ export function PullRequestSummaryTab({
                   />
                 ) : null}
               </span>
-            </SummaryMetaRow>
+            </MetaRow>
           ) : null}
-          <SummaryMetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
+          <MetaRow icon={<MessageSquareIcon className="size-3.5" />} label="Comments">
             {activityPending
               ? "Loading conversation…"
               : activityError
@@ -676,11 +679,11 @@ export function PullRequestSummaryTab({
                 : detail.commentCount === 1
                   ? "1 comment"
                   : `${detail.commentCount} comments`}
-          </SummaryMetaRow>
+          </MetaRow>
         </div>
       </section>
 
-      <SummarySection title="Description">
+      <Section title="Description">
         <div className="group">
           {bodyScope === detail.url ? (
             <PullRequestMarkdownEditor
@@ -727,9 +730,9 @@ export function PullRequestSummaryTab({
             onRefresh={onRefresh}
           />
         </div>
-      </SummarySection>
+      </Section>
 
-      <SummarySection
+      <Section
         title="Related issues"
         {...(detail.linkedIssues === undefined ? {} : { count: detail.linkedIssues.length })}
         actions={
@@ -792,34 +795,9 @@ export function PullRequestSummaryTab({
             />
           </div>
         )}
-      </SummarySection>
+      </Section>
 
-      <SummarySection
-        title="Possible duplicate pull requests"
-        {...(aiMatches.duplicate === undefined ? {} : { count: aiMatches.duplicate.length })}
-        actions={
-          <WorkItemMatchButton
-            busy={aiMatches.pending === "duplicate"}
-            disabled={aiMatches.pending !== null}
-            loaded={aiMatches.duplicate !== undefined}
-            onClick={() => void aiMatches.find("duplicate")}
-          />
-        }
-      >
-        {aiMatches.duplicate === undefined ? (
-          <p className="text-xs text-muted-foreground">
-            Find pull requests that make the same change.
-          </p>
-        ) : (
-          <WorkItemMatchRows
-            matches={aiMatches.duplicate}
-            emptyText="No likely duplicate pull requests found."
-            onOpen={openAiMatch}
-          />
-        )}
-      </SummarySection>
-
-      <SummarySection title="Checks" count={detail.checks.length}>
+      <Section title="Checks" count={detail.checks.length}>
         {detail.checks.length === 0 ? (
           <p className="text-xs text-muted-foreground">No checks reported.</p>
         ) : (
@@ -870,9 +848,9 @@ export function PullRequestSummaryTab({
             })}
           </div>
         )}
-      </SummarySection>
+      </Section>
 
-      <SummarySection
+      <Section
         title="Comments"
         {...(activityPending || activityError ? {} : { count: detail.commentCount })}
         actions={
@@ -895,14 +873,9 @@ export function PullRequestSummaryTab({
         }
       >
         {activityPending ? (
-          <ConversationGhost label="Loading pull request conversation" />
+          <PullRequestConversationGhost />
         ) : activityError ? (
-          <ActivityUnavailableState
-            compact
-            title="Could not load pull request activity"
-            error={activityError}
-            onRetry={onRefresh}
-          />
+          <PullRequestActivityUnavailableState compact error={activityError} onRetry={onRefresh} />
         ) : (
           <>
             {detail.commentsTruncated ? (
@@ -1034,7 +1007,7 @@ export function PullRequestSummaryTab({
         )}
         {/* Posting is a core capability and remains usable even if the activity read failed. */}
         {detail.capabilities.comment && detail.viewerPermissions.comment ? (
-          <PullRequestCommentComposer
+          <CommentComposer
             key={`${environmentId}:${detail.projectId}/${detail.repository}#${detail.number}`}
             environmentId={environmentId}
             detail={detail}
@@ -1043,7 +1016,7 @@ export function PullRequestSummaryTab({
             onCommented={onRefresh}
           />
         ) : null}
-      </SummarySection>
+      </Section>
     </div>
   );
 }

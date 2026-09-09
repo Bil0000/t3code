@@ -52,7 +52,9 @@ export function SummarySection({
     if (!nextOpen) {
       const heading = headingRef.current;
       const section = heading?.closest<HTMLElement>("[data-summary-section]");
-      const scroller = heading?.closest<HTMLElement>("[data-summary-scroll]");
+      const scroller = heading?.closest<HTMLElement>(
+        "[data-summary-scroll], [data-pull-request-summary-scroll]",
+      );
       if (heading && section && scroller) {
         const target = sectionCollapseAnchorScrollTop({
           scrollTop: scroller.scrollTop,
