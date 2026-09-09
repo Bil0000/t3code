@@ -237,11 +237,14 @@ const make = Effect.gen(function* () {
 
   const withRepository = <A>(
     repository: string,
-    use: (path: string) => Effect.Effect<A, BitbucketIssueApiError>,
+    use: (
+      path: string,
+      segments: { workspace: string; slug: string },
+    ) => Effect.Effect<A, BitbucketIssueApiError>,
   ): Effect.Effect<A, BitbucketIssueApiError> => {
     const segments = repositorySegments(repository);
     return Result.isSuccess(segments)
-      ? use(repositoryPathOf(segments.success))
+      ? use(repositoryPathOf(segments.success), segments.success)
       : Effect.fail(segments.failure);
   };
 
@@ -369,11 +372,11 @@ const make = Effect.gen(function* () {
     // Nothing on the repository or the issue states what the credentials may do, so this is the
     // one request Bitbucket makes unavoidable — the same read the pull request provider makes.
     getRepositoryPermission: (input) =>
-      withRepository(input.repository, () =>
+      withRepository(input.repository, (_path, segments) =>
         readPage({
           operation: "getRepositoryPermission",
           url: `/user/permissions/repositories?q=${encodeURIComponent(
-            `repository.full_name="${filterLiteral(input.repository.trim())}"`,
+            `repository.full_name="${filterLiteral(`${segments.workspace}/${segments.slug}`)}"`,
           )}`,
           decode: decodeRepositoryPermissionJson,
         }),

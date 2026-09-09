@@ -434,7 +434,7 @@ layer("BitbucketIssueApi.layer", (it) => {
       );
       const api = yield* BitbucketIssueApi.BitbucketIssueApi;
 
-      assert.isFalse(yield* api.getRepositoryPermission({ repository: "acme/web" }));
+      assert.isFalse(yield* api.getRepositoryPermission({ repository: " acme / web " }));
 
       expect(callAt(0).url).toContain("/user/permissions/repositories");
       assert.strictEqual(filterOfCall(0), 'repository.full_name="acme/web"');
