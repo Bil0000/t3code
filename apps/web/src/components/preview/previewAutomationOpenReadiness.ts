@@ -30,6 +30,20 @@ export function shouldOpenPreviewMiniPlayer(
   return input.open ?? input.show ?? autoShowFloatingPreview;
 }
 
+export function shouldAutoShowPreviewForAutomationUse(input: {
+  readonly operation: PreviewAutomationOperation;
+  readonly autoShowFloatingPreview: boolean;
+  readonly presentationSuppressed: boolean;
+}): boolean {
+  return (
+    input.operation !== "open" && input.autoShowFloatingPreview && !input.presentationSuppressed
+  );
+}
+
+export function explicitlySuppressesPreviewMiniPlayer(input: PreviewAutomationOpenInput): boolean {
+  return (input.open ?? input.show) === false;
+}
+
 export function previewAutomationOpenNeedsOverlay(
   input: PreviewAutomationOpenInput,
   snapshot: PreviewSessionSnapshot,

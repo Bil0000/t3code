@@ -5,6 +5,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 import { resetPreviewStateForTests } from "~/previewStateStore";
 import { useRightPanelStore } from "~/rightPanelStore";
 
+vi.mock("~/hooks/useSettings", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/hooks/useSettings")>()),
+  ensureClientSettingsHydrated: vi.fn(async () => undefined),
+}));
+
 import { openFileInPreview } from "./openFileInPreview";
 
 const threadRef = {
@@ -46,6 +51,7 @@ describe("openFileInPreview", () => {
     await openFileInPreview({
       threadRef,
       filePath: `/workspace/${sourcePath}`,
+      workspaceRoot: "/workspace",
       httpBaseUrl: "http://127.0.0.1:3773",
       createAssetUrl: async () =>
         AsyncResult.success({

@@ -13,6 +13,7 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private latestContents = "";
   private latestRevision = 0;
+  private confirmedRevision = 0;
   private lastChangeAt = 0;
   private saving = false;
   private disposed = false;
@@ -21,6 +22,7 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
   constructor(private readonly options: FileSaveCoordinatorOptions<A, E>) {}
 
   change(contents: string): void {
+    if (this.disposed) return;
     this.latestContents = contents;
     this.latestRevision += 1;
     this.lastChangeAt = Date.now();
@@ -50,7 +52,7 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
   }
 
   private async persistLatest(): Promise<void> {
-    if (this.saving || this.latestRevision === 0) return;
+    if (this.saving || this.latestRevision === this.confirmedRevision) return;
 
     this.saving = true;
     const contents = this.latestContents;
@@ -58,13 +60,13 @@ export class FileSaveCoordinator<A = unknown, E = unknown> {
     const result = await this.options.persist(contents);
     const succeeded = result._tag === "Success";
     if (succeeded) {
+      this.confirmedRevision = revision;
       this.options.onConfirmed(contents);
     }
 
     this.saving = false;
     if (revision === this.latestRevision) {
       if (succeeded) {
-        this.latestRevision = 0;
         this.options.onPendingChange(false);
       } else if (this.canRetry) {
         this.canRetry = false;

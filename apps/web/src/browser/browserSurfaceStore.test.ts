@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   acquireBrowserSurface,
+  acquireBrowserSurfaceActivity,
   resolveBrowserSurfacePanelRect,
   useBrowserSurfaceStore,
   waitForBrowserSurfaceReady,
@@ -9,7 +10,18 @@ import {
 
 describe("browserSurfaceStore", () => {
   beforeEach(() => {
-    useBrowserSurfaceStore.setState({ byTabId: {} });
+    useBrowserSurfaceStore.setState({ activityByTabId: {}, byTabId: {} });
+  });
+
+  it("keeps concurrent background work active until every lease is released", () => {
+    const first = acquireBrowserSurfaceActivity("background-browser");
+    const second = acquireBrowserSurfaceActivity("background-browser");
+
+    first();
+    expect(useBrowserSurfaceStore.getState().activityByTabId["background-browser"]).toBe(1);
+
+    second();
+    expect(useBrowserSurfaceStore.getState().activityByTabId["background-browser"]).toBeUndefined();
   });
 
   afterEach(() => {
@@ -138,6 +150,7 @@ describe("browserSurfaceStore", () => {
           hidden: {
             rect: staleRect,
             visible: false,
+            zIndex: 30,
             content: null,
             fittedSourceContent: null,
             fitSourceContent: false,
@@ -149,6 +162,7 @@ describe("browserSurfaceStore", () => {
           active: {
             rect: liveRect,
             visible: true,
+            zIndex: 30,
             content: null,
             fittedSourceContent: null,
             fitSourceContent: false,
@@ -192,6 +206,17 @@ describe("browserSurfaceStore", () => {
     expect(useBrowserSurfaceStore.getState().byTabId[tabId]).toMatchObject({
       visible: false,
       owner: null,
+    });
+  });
+
+  it("keeps the requested layer with the active surface lease", () => {
+    const tabId = "layered-browser-surface";
+    const lease = acquireBrowserSurface(tabId);
+    lease.present({ x: 10, y: 20, width: 320, height: 200 }, true, 12, 48);
+
+    expect(useBrowserSurfaceStore.getState().byTabId[tabId]).toMatchObject({
+      visible: true,
+      zIndex: 48,
     });
   });
 

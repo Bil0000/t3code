@@ -12,6 +12,7 @@ export type BrowserSurfacePlacement = "right-panel" | "mini-player";
 export interface BrowserSurfacePresentation {
   readonly rect: BrowserSurfaceRect | null;
   readonly visible: boolean;
+  readonly zIndex: number;
   readonly content: BrowserSurfaceContentPresentation | null;
   readonly fittedSourceContent: BrowserSurfaceContentPresentation | null;
   readonly fitSourceContent: boolean;
@@ -32,7 +33,9 @@ export interface BrowserSurfaceContentPresentation {
 }
 
 interface BrowserSurfaceStoreState {
+  readonly activityByTabId: Record<string, number>;
   readonly byTabId: Record<string, BrowserSurfacePresentation>;
+  readonly acquireActivity: (tabId: string) => () => void;
   readonly claim: (
     tabId: string,
     owner: symbol,
@@ -45,13 +48,19 @@ interface BrowserSurfaceStoreState {
     rect: BrowserSurfaceRect,
     visible: boolean,
     cornerRadius: number,
+    zIndex: number,
   ) => void;
   readonly presentContent: (tabId: string, content: BrowserSurfaceContentPresentation) => void;
   readonly release: (tabId: string, owner: symbol) => void;
 }
 
 export interface BrowserSurfaceLease {
-  readonly present: (rect: BrowserSurfaceRect, visible: boolean, cornerRadius?: number) => boolean;
+  readonly present: (
+    rect: BrowserSurfaceRect,
+    visible: boolean,
+    cornerRadius?: number,
+    zIndex?: number,
+  ) => boolean;
   readonly release: () => void;
 }
 
@@ -77,7 +86,28 @@ const rectEquals = (left: BrowserSurfaceRect | null, right: BrowserSurfaceRect):
   left.height === right.height;
 
 export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) => ({
+  activityByTabId: {},
   byTabId: {},
+  acquireActivity: (tabId) => {
+    let released = false;
+    set((state) => ({
+      activityByTabId: {
+        ...state.activityByTabId,
+        [tabId]: (state.activityByTabId[tabId] ?? 0) + 1,
+      },
+    }));
+    return () => {
+      if (released) return;
+      released = true;
+      set((state) => {
+        const count = state.activityByTabId[tabId] ?? 0;
+        const activityByTabId = { ...state.activityByTabId };
+        if (count <= 1) delete activityByTabId[tabId];
+        else activityByTabId[tabId] = count - 1;
+        return { activityByTabId };
+      });
+    };
+  },
   claim: (tabId, owner, fitSourceContent, surface) =>
     set((state) => {
       const current = state.byTabId[tabId];
@@ -88,6 +118,7 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
           [tabId]: {
             rect: current?.rect ?? null,
             visible: false,
+            zIndex: current?.zIndex ?? 30,
             content: current?.content ?? null,
             fittedSourceContent: fitSourceContent ? (current?.content ?? null) : null,
             fitSourceContent,
@@ -99,7 +130,7 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
         },
       };
     }),
-  present: (tabId, owner, rect, visible, cornerRadius) =>
+  present: (tabId, owner, rect, visible, cornerRadius, zIndex) =>
     set((state) => {
       const current = state.byTabId[tabId];
       if (current?.owner !== owner) return state;
@@ -107,6 +138,7 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
         current &&
         current.visible === visible &&
         current.cornerRadius === cornerRadius &&
+        current.zIndex === zIndex &&
         rectEquals(current.rect, rect)
       ) {
         return state;
@@ -114,7 +146,7 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
       return {
         byTabId: {
           ...state.byTabId,
-          [tabId]: { ...current, rect, visible, cornerRadius, updatedAt: Date.now() },
+          [tabId]: { ...current, rect, visible, cornerRadius, zIndex, updatedAt: Date.now() },
         },
       };
     }),
@@ -128,6 +160,7 @@ export const useBrowserSurfaceStore = create<BrowserSurfaceStoreState>()((set) =
             [tabId]: {
               rect: null,
               visible: false,
+              zIndex: 30,
               content,
               fittedSourceContent: null,
               fitSourceContent: false,
@@ -222,6 +255,8 @@ export function waitForBrowserSurfaceReady(
     if (receipt) finish(receipt);
   });
 }
+export const acquireBrowserSurfaceActivity = (tabId: string): (() => void) =>
+  useBrowserSurfaceStore.getState().acquireActivity(tabId);
 
 export function acquireBrowserSurface(
   tabId: string,
@@ -233,10 +268,10 @@ export function acquireBrowserSurface(
   useBrowserSurfaceStore.getState().claim(tabId, owner, fitSourceContent, surface);
 
   return {
-    present: (rect, visible, cornerRadius = 0) => {
+    present: (rect, visible, cornerRadius = 0, zIndex = 30) => {
       if (released) return false;
       if (useBrowserSurfaceStore.getState().byTabId[tabId]?.owner !== owner) return false;
-      useBrowserSurfaceStore.getState().present(tabId, owner, rect, visible, cornerRadius);
+      useBrowserSurfaceStore.getState().present(tabId, owner, rect, visible, cornerRadius, zIndex);
       return true;
     },
     release: () => {
