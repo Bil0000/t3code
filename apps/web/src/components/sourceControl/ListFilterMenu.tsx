@@ -248,8 +248,7 @@ export function ListProjectFilterGroup({
                   <FolderGit2Icon aria-hidden className="size-3.5 shrink-0" />
                 ) : (
                   <ProjectFavicon
-                    environmentId={environmentId}
-                    cwd={project.workspaceRoot}
+                    project={{ ...project, environmentId }}
                     fallbackIcon={FolderGit2Icon}
                     className="size-3.5 shrink-0"
                   />

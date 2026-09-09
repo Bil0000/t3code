@@ -41,9 +41,7 @@ const CAPABILITIES: IssueCapabilities = {
  * Commenting and filing are not gated at all: being able to see a repository whose tracker is on
  * is being able to say something in it, and that is what an issue tracker is for.
  */
-export function gitHubIssueViewerPermissions(
-  access: GitHubIssueViewerAccess,
-): IssueViewerPermissions {
+function gitHubIssueViewerPermissions(access: GitHubIssueViewerAccess): IssueViewerPermissions {
   return {
     actions: access.canUpdate ? (["close", "reopen"] as const) : [],
     comment: true,
@@ -136,18 +134,16 @@ export const make = Effect.gen(function* () {
         concurrency: 2,
       }).pipe(
         Effect.mapError(fail("getIssue")),
-        Effect.map(
-          ([issue, supplement]): ProviderIssueDetail => ({
-            ...issue,
-            author: withAvatar(issue.author, supplement.avatarsByLogin),
-            assignees: issue.assignees.map(
-              (assignee) => withAvatar(assignee, supplement.avatarsByLogin) ?? assignee,
-            ),
-            commentCount: supplement.commentCount,
-            linkedPullRequests: supplement.linkedPullRequests,
-            viewerPermissions: gitHubIssueViewerPermissions(supplement.viewer),
-          }),
-        ),
+        Effect.map(([issue, supplement]): ProviderIssueDetail => ({
+          ...issue,
+          author: withAvatar(issue.author, supplement.avatarsByLogin),
+          assignees: issue.assignees.map(
+            (assignee) => withAvatar(assignee, supplement.avatarsByLogin) ?? assignee,
+          ),
+          commentCount: supplement.commentCount,
+          linkedPullRequests: supplement.linkedPullRequests,
+          viewerPermissions: gitHubIssueViewerPermissions(supplement.viewer),
+        })),
       ),
 
     getIssueActivity: (input) =>

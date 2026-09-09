@@ -193,6 +193,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   );
   const historyRefs = useGitHistoryRefs(props.environmentId, props.cwd, vcsHistoryRevision);
   const { selectedRevision } = historyRefs;
+  const refSelectionError = historyRefs.initialLocalRefError;
   const targetKey = `${baseTargetKey}:${selectedRevision?.revision ?? "all"}:${vcsHistoryRevision}:${connectionGeneration}`;
   const [pagination, setPagination] = useState<{
     targetKey: string;
@@ -201,7 +202,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
   const cursors = pagination.targetKey === targetKey ? pagination.cursors : INITIAL_CURSORS;
   const pageAtoms = useMemo(
     () =>
-      selectedRevision === undefined
+      selectedRevision === undefined || refSelectionError !== null
         ? []
         : cursors.map((cursor) =>
             vcsEnvironment.getHistory({
@@ -221,6 +222,7 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       historyQueryGeneration,
       props.cwd,
       props.environmentId,
+      refSelectionError,
       selectedRevision,
       vcsHistoryRevision,
     ],
@@ -267,8 +269,9 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
       setHistoryQueryGeneration((generation) => generation + 1);
     }
   }, [failed, historyQueryGeneration, targetKey, values.length]);
-  const isPending = selectedRevision === undefined || results.some((result) => result.waiting);
-  const refSelectionError = selectedRevision === undefined ? historyRefs.refPaginationError : null;
+  const isPending =
+    refSelectionError === null &&
+    (selectedRevision === undefined || results.some((result) => result.waiting));
   const isInitialLoad =
     refSelectionError === null &&
     (selectedRevision === undefined || (values.length === 0 && isPending));
@@ -617,16 +620,35 @@ export default function GitHistoryPanel(props: GitHistoryPanelProps) {
           onLoadMoreFiles={loadMoreCommitFiles}
           onRetryFiles={() => void commitFilesQuery.refresh()}
         />
-      ) : refSelectionError ? (
-        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
-          <p className="text-xs text-destructive">{refSelectionError}</p>
-          <Button size="sm" variant="outline" onClick={onRetryRefs}>
-            Retry refs
-          </Button>
-        </div>
-      ) : isInitialLoad ? (
-        <div className="flex min-h-0 flex-1 items-center justify-center text-xs text-muted-foreground">
-          <RefreshCwIcon className="mr-2 size-3.5 animate-spin" /> Loading history…
+      ) : refSelectionError || isInitialLoad ? (
+        <div className="relative flex min-h-0 flex-1">
+          {isWideLayout ? (
+            <GitRefsPane
+              className="!border-r-0"
+              style={{
+                width: refsPaneWidth,
+                minWidth: refsPaneWidth,
+                maxWidth: refsPaneWidth,
+                flexBasis: refsPaneWidth,
+              }}
+              {...refPaneProps}
+            />
+          ) : null}
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+            {refSelectionError ? (
+              <>
+                <p className="text-xs text-destructive">{refSelectionError}</p>
+                <Button size="sm" variant="outline" onClick={onRetryRefs}>
+                  Retry refs
+                </Button>
+              </>
+            ) : (
+              <div className="flex items-center text-xs text-muted-foreground">
+                <RefreshCwIcon className="mr-2 size-3.5 animate-spin" />
+                <span>Loading history…</span>
+              </div>
+            )}
+          </div>
         </div>
       ) : error && history.length === 0 ? (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">

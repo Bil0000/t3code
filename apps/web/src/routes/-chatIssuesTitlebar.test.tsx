@@ -135,7 +135,7 @@ describe("IssuesColumn", () => {
     );
 
     expect(gear).not.toBeNull();
-    expect(visitElements(gear, (element) => element.type === SettingsIcon)).not.toBeNull();
+    expect(visitElements(menu, (element) => element.type === SettingsIcon)).not.toBeNull();
     expect(visitElements(linearRadio, (element) => element.type === MenuItem)).toBeNull();
     (gear?.props.onClick as (() => void) | undefined)?.();
     expect(onClick).toHaveBeenCalledOnce();

@@ -304,6 +304,7 @@ export function IssueSummaryTab({
             <HostMarkdown
               text={detail.body.trim().length > 0 ? detail.body : "_No description provided._"}
               cwd={detail.workspaceRoot}
+              environmentId={environmentId}
             />
           )}
           <IssueReactionBar
@@ -494,6 +495,7 @@ export function IssueSummaryTab({
                         className="mt-2"
                         value={comment.body}
                         cwd={detail.workspaceRoot}
+                        environmentId={environmentId}
                         label="Edit comment"
                         saving={commentSaving}
                         onSave={(body) => void saveComment(comment.id, body)}
@@ -505,6 +507,7 @@ export function IssueSummaryTab({
                           className="min-w-0 flex-1"
                           text={comment.body}
                           cwd={detail.workspaceRoot}
+                          environmentId={environmentId}
                         />
                         {canEditIssueComment(detail, comment) ? (
                           <Button

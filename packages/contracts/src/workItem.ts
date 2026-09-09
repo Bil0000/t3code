@@ -20,21 +20,28 @@ export const WorkItemTaskInput = Schema.Struct({
 });
 export type WorkItemTaskInput = typeof WorkItemTaskInput.Type;
 
+export const WORK_ITEM_TASK_PROMPT_MAX_LENGTH = 65_536;
+
 export const WorkItemTaskResult = Schema.Struct({
-  prompt: Schema.String.check(Schema.isNonEmpty(), Schema.isMaxLength(65_536)),
+  prompt: Schema.String.check(
+    Schema.isNonEmpty(),
+    Schema.isMaxLength(WORK_ITEM_TASK_PROMPT_MAX_LENGTH),
+  ),
   generated: Schema.Boolean,
 });
 export type WorkItemTaskResult = typeof WorkItemTaskResult.Type;
 
-export class WorkItemTaskError extends Schema.TaggedErrorClass<WorkItemTaskError>()(
+export class WorkItemTaskError extends Schema.TaggedError<WorkItemTaskError>()(
   "WorkItemTaskError",
   {
+    operation: Schema.Literals(["read-source", "generate"]),
+    source: WorkItemTaskSourceRef,
     detail: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Work item task generation failed: ${this.detail}`;
+    return `Work item task generation failed during ${this.operation}: ${this.detail}`;
   }
 }
 
@@ -65,14 +72,16 @@ export const WorkItemMatchResult = Schema.Struct({
 });
 export type WorkItemMatchResult = typeof WorkItemMatchResult.Type;
 
-export class WorkItemMatchError extends Schema.TaggedErrorClass<WorkItemMatchError>()(
+export class WorkItemMatchError extends Schema.TaggedError<WorkItemMatchError>()(
   "WorkItemMatchError",
   {
+    operation: Schema.Literals(["read-source", "list-candidates", "read-candidate", "generate"]),
+    source: WorkItemTaskSourceRef,
     detail: TrimmedNonEmptyString,
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    return `Work item matching failed: ${this.detail}`;
+    return `Work item matching failed during ${this.operation}: ${this.detail}`;
   }
 }

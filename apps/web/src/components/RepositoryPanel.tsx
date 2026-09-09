@@ -11,7 +11,7 @@ import type { DraftId } from "~/composerDraftStore";
 import type { RepositoryItemSelection, RepositoryView } from "~/rightPanelStore";
 
 import type { IssueHandoffTarget } from "./issue/IssueDetailPanel";
-import type { IssueTabStatus, PullRequestTabStatus } from "./RightPanelTabs";
+import type { IssueTabStatus } from "./RightPanelTabs";
 import { Button } from "./ui/button";
 
 const GitHistoryPanel = lazy(() => import("./GitHistoryPanel"));
@@ -41,7 +41,6 @@ interface RepositoryPanelProps {
   readonly selectedPullRequest: RepositoryItemSelection | null;
   readonly onSelectPullRequest: (target: RepositoryItemSelection | null) => void;
   readonly onIssueStateChange: (status: IssueTabStatus) => void;
-  readonly onPullRequestStateChange: (status: PullRequestTabStatus) => void;
   readonly onOpenLinkedIssue: (link: IssueLink) => void;
   readonly onOpenLinkedPullRequest: (link: IssueLinkedPullRequest) => void;
 }
@@ -269,7 +268,6 @@ export default function RepositoryPanel(props: RepositoryPanelProps) {
                 }
                 onSelect={props.onSelectPullRequest}
                 composerDraftTarget={props.composerDraftTarget}
-                onStateChange={props.onPullRequestStateChange}
                 onOpenLinkedIssue={props.onOpenLinkedIssue}
               />
             </Suspense>

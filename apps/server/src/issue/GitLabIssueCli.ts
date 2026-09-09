@@ -48,7 +48,7 @@ import type { ProviderListCursor } from "./IssueProvider.ts";
  * Names the read that produced unusable output, so a failure reports the call it came from
  * rather than borrowing another operation's message.
  */
-export class GitLabIssueReadError extends Schema.TaggedErrorClass<GitLabIssueReadError>()(
+export class GitLabIssueReadError extends Schema.TaggedError<GitLabIssueReadError>()(
   "GitLabIssueReadError",
   {
     command: Schema.Literal("glab"),
@@ -67,7 +67,7 @@ export class GitLabIssueReadError extends Schema.TaggedErrorClass<GitLabIssueRea
 }
 
 /** Not a decode failure: glab answered, the account it answered for just has no username. */
-export class GitLabIssueViewerUnavailableError extends Schema.TaggedErrorClass<GitLabIssueViewerUnavailableError>()(
+export class GitLabIssueViewerUnavailableError extends Schema.TaggedError<GitLabIssueViewerUnavailableError>()(
   "GitLabIssueViewerUnavailableError",
   {
     command: Schema.Literal("glab"),
@@ -318,7 +318,7 @@ function assigneeIds(assignees: ReadonlyArray<string>): ReadonlyArray<number> {
   });
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const gitlab = yield* GitLabCli.GitLabCli;
 
   const api = (input: {

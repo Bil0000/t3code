@@ -83,7 +83,6 @@ describe("RepositoryPanel", () => {
         onSelectPullRequest={() => undefined}
         handoffTarget={{ kind: "new-thread" }}
         onIssueStateChange={() => undefined}
-        onPullRequestStateChange={() => undefined}
         onOpenLinkedIssue={() => undefined}
         onOpenLinkedPullRequest={() => undefined}
       />,
@@ -111,7 +110,6 @@ describe("RepositoryPanel", () => {
         onSelectPullRequest={() => undefined}
         handoffTarget={{ kind: "new-thread" }}
         onIssueStateChange={() => undefined}
-        onPullRequestStateChange={() => undefined}
         onOpenLinkedIssue={() => undefined}
         onOpenLinkedPullRequest={() => undefined}
       />,
@@ -140,7 +138,6 @@ describe("RepositoryPanel", () => {
         onSelectPullRequest={() => undefined}
         handoffTarget={{ kind: "new-thread" }}
         onIssueStateChange={() => undefined}
-        onPullRequestStateChange={() => undefined}
         onOpenLinkedIssue={() => undefined}
         onOpenLinkedPullRequest={() => undefined}
       />,
@@ -168,7 +165,6 @@ describe("RepositoryPanel", () => {
         onSelectPullRequest={() => undefined}
         handoffTarget={{ kind: "new-thread" }}
         onIssueStateChange={() => undefined}
-        onPullRequestStateChange={() => undefined}
         onOpenLinkedIssue={() => undefined}
         onOpenLinkedPullRequest={() => undefined}
       />,
@@ -202,7 +198,6 @@ describe("RepositoryPanel", () => {
         onSelectPullRequest={() => undefined}
         handoffTarget={{ kind: "new-thread" }}
         onIssueStateChange={() => undefined}
-        onPullRequestStateChange={() => undefined}
         onOpenLinkedIssue={() => undefined}
         onOpenLinkedPullRequest={() => undefined}
       />,
@@ -252,7 +247,6 @@ describe("RepositoryPanel", () => {
         onSelectPullRequest={() => undefined}
         handoffTarget={{ kind: "new-thread" }}
         onIssueStateChange={() => undefined}
-        onPullRequestStateChange={() => undefined}
         onOpenLinkedIssue={() => undefined}
         onOpenLinkedPullRequest={() => undefined}
       />,

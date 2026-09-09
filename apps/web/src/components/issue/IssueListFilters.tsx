@@ -8,6 +8,8 @@ import type {
 } from "@t3tools/contracts";
 import { ArrowDownUpIcon, SettingsIcon, TagIcon, TagsIcon } from "lucide-react";
 
+import { cn } from "~/lib/utils";
+
 import {
   ALL_HOSTS_VALUE,
   ListFilterMenu,
@@ -30,6 +32,7 @@ import {
   MenuSubTrigger,
   MenuTrigger,
 } from "../ui/menu";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { issueListOrderLabels } from "./issueList.logic";
 
 /** A label name is never empty, so the same trick the hosts use names "every label". */
@@ -52,40 +55,51 @@ export function renderIssueProviderMenuRadioGroup({
     <MenuRadioGroup value={value} onValueChange={onChange}>
       {label ? <MenuGroupLabel>{label}</MenuGroupLabel> : null}
       {options.map((option) => {
-        const content = (
-          <span className="flex min-w-0 items-center gap-2">
-            <option.Icon aria-hidden className="size-3.5" />
-            <span className="min-w-0 flex-1 truncate">{option.label}</span>
-          </span>
-        );
-        return option.value === "linear.app" && onManageLinear ? (
-          <div key={option.value} className="flex items-center gap-1">
-            <MenuRadioItem
-              value={option.value}
-              className="min-w-0 flex-1"
-              disabled={option.unavailable !== undefined}
-              title={option.unavailable}
-            >
-              {content}
-            </MenuRadioItem>
-            <MenuItem
-              aria-label="Linear settings"
-              title="Linear settings"
-              className="size-7 shrink-0 justify-center p-0"
-              onClick={onManageLinear}
-            >
-              <SettingsIcon aria-hidden />
-            </MenuItem>
-          </div>
-        ) : (
+        const item = (
           <MenuRadioItem
             key={option.value}
             value={option.value}
+            className={cn(
+              option.value === "linear.app" && onManageLinear && "min-w-0 flex-1",
+              option.unavailable && "data-disabled:pointer-events-auto",
+            )}
             disabled={option.unavailable !== undefined}
-            title={option.unavailable}
           >
-            {content}
+            <span className="flex min-w-0 items-center gap-2">
+              <option.Icon aria-hidden className="size-3.5" />
+              <span className="min-w-0 flex-1 truncate">{option.label}</span>
+            </span>
           </MenuRadioItem>
+        );
+        const radioItem = option.unavailable ? (
+          <Tooltip key={option.value}>
+            <TooltipTrigger render={item} />
+            <TooltipPopup side="top" className="max-w-80">
+              {option.unavailable}
+            </TooltipPopup>
+          </Tooltip>
+        ) : (
+          item
+        );
+        if (option.value !== "linear.app" || !onManageLinear) return radioItem;
+        return (
+          <div key={option.value} className="flex items-center gap-1">
+            {radioItem}
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <MenuItem
+                    aria-label="Linear settings"
+                    className="size-7 shrink-0 justify-center p-0"
+                    onClick={onManageLinear}
+                  />
+                }
+              >
+                <SettingsIcon aria-hidden />
+              </TooltipTrigger>
+              <TooltipPopup side="top">Linear settings</TooltipPopup>
+            </Tooltip>
+          </div>
         );
       })}
     </MenuRadioGroup>
@@ -121,25 +135,31 @@ export function IssueSortMenu({
   const [ascendingLabel, descendingLabel] = issueListOrderLabels(sort);
   return (
     <Menu>
-      <MenuTrigger
-        render={
-          <Button
-            className="relative"
-            size="icon"
-            variant="outline"
-            aria-label="Sort issues"
-            title="Sort issues"
-          />
-        }
-      >
-        <ArrowDownUpIcon className="size-4" />
-        {sort !== "updated" || order !== "desc" ? (
-          <span
-            aria-hidden
-            className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"
-          />
-        ) : null}
-      </MenuTrigger>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <MenuTrigger
+              render={
+                <Button
+                  className="relative"
+                  size="icon"
+                  variant="outline"
+                  aria-label="Sort issues"
+                />
+              }
+            />
+          }
+        >
+          <ArrowDownUpIcon className="size-4" />
+          {sort !== "updated" || order !== "desc" ? (
+            <span
+              aria-hidden
+              className="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-primary"
+            />
+          ) : null}
+        </TooltipTrigger>
+        <TooltipPopup side="top">Sort issues</TooltipPopup>
+      </Tooltip>
       <MenuPopup align="end" side="bottom" className="min-w-48">
         <MenuRadioGroup value={sort} onValueChange={chooseSort}>
           <MenuGroupLabel>Sort by</MenuGroupLabel>

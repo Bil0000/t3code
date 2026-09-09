@@ -39,4 +39,29 @@ describe("ExecutionEnvironmentDescriptor", () => {
       }).capabilities.gitHistory,
     ).toBe(true);
   });
+
+  it("treats a missing attachment upload capability as unsupported", () => {
+    expect(decodeDescriptor(descriptor).capabilities.attachmentUploads).toBeUndefined();
+  });
+
+  it("preserves an advertised attachment upload capability", () => {
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: { ...descriptor.capabilities, attachmentUploads: true },
+      }).capabilities.attachmentUploads,
+    ).toBe(true);
+  });
+
+  it("preserves the server's generic attachment upload limit", () => {
+    expect(
+      decodeDescriptor({
+        ...descriptor,
+        capabilities: {
+          ...descriptor.capabilities,
+          fileAttachments: { maxUploadBytes: 50 * 1024 * 1024 },
+        },
+      }).capabilities.fileAttachments,
+    ).toEqual({ maxUploadBytes: 50 * 1024 * 1024 });
+  });
 });

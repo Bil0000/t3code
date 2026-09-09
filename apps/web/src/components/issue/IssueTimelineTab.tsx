@@ -137,6 +137,7 @@ export function IssueTimelineTab({
                     <SourceControlMarkdownEditor
                       value={comment.body}
                       cwd={detail.workspaceRoot}
+                      environmentId={environmentId}
                       label="Edit comment"
                       saving={saving}
                       onSave={(body) => void saveComment(comment, body)}
@@ -144,7 +145,11 @@ export function IssueTimelineTab({
                     />
                   ) : entry.body === null ? null : (
                     <div className="group">
-                      <HostMarkdown text={entry.body} cwd={detail.workspaceRoot} />
+                      <HostMarkdown
+                        text={entry.body}
+                        cwd={detail.workspaceRoot}
+                        environmentId={environmentId}
+                      />
                       <IssueReactionBar
                         className="mt-2"
                         reactions={comments.get(entry.id)?.reactions ?? []}

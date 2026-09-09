@@ -8,7 +8,7 @@
  */
 import type { SourceControlActor } from "@t3tools/contracts";
 import { ChevronDownIcon, MessageSquareIcon } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { Fragment, useState, type ReactNode } from "react";
 
 import { cn } from "~/lib/utils";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -28,20 +28,24 @@ type ConversationEntry = {
 
 export function ConversationGroup<Entry extends ConversationEntry>({
   entries,
+  keyPrefix = "",
   onOpen,
   renderBadge,
   renderMeta,
   renderActions,
   renderBody,
+  renderComment,
 }: {
   entries: ReadonlyArray<Entry>;
+  keyPrefix?: string;
   onOpen: (url: string) => void;
   /** Said beside a comment's title, for what the surface adds to it — a review's own state. */
   renderBadge?: (entry: Entry) => ReactNode;
   /** Further segments for a comment's meta line — the file a review comment hangs on. */
   renderMeta?: (entry: Entry) => ReactNode;
   renderActions?: (entry: Entry) => ReactNode;
-  renderBody: (entry: Entry) => ReactNode;
+  renderBody?: (entry: Entry) => ReactNode;
+  renderComment?: (entry: Entry) => ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const actors = uniqueConversationActors(entries);
@@ -85,18 +89,23 @@ export function ConversationGroup<Entry extends ConversationEntry>({
             {open ? (
               <div className="mt-1 space-y-1">
                 {entries.map((entry) => (
-                  <TimelineComment
-                    key={entry.id}
-                    actor={entry.actor}
-                    title={entry.title}
-                    at={entry.at}
-                    url={entry.url}
-                    onOpen={onOpen}
-                    badge={renderBadge?.(entry)}
-                    meta={renderMeta?.(entry)}
-                    actions={renderActions?.(entry)}
-                    body={renderBody(entry)}
-                  />
+                  <Fragment key={`${keyPrefix}${entry.id}`}>
+                    {renderComment === undefined ? (
+                      <TimelineComment
+                        actor={entry.actor}
+                        title={entry.title}
+                        at={entry.at}
+                        url={entry.url}
+                        onOpen={onOpen}
+                        badge={renderBadge?.(entry)}
+                        meta={renderMeta?.(entry)}
+                        actions={renderActions?.(entry)}
+                        body={renderBody?.(entry) ?? null}
+                      />
+                    ) : (
+                      renderComment(entry)
+                    )}
+                  </Fragment>
                 ))}
               </div>
             ) : null}

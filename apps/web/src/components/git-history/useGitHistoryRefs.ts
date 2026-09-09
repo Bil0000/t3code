@@ -120,15 +120,11 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
   if (currentRefResult !== undefined) lastResolvedCurrentRef.current.currentRef = currentRefResult;
   const currentRef =
     currentRefResult === undefined ? lastResolvedCurrentRef.current.currentRef : currentRefResult;
-  const defaultSelectedRevision = useMemo(
-    () =>
-      currentRef === undefined
-        ? undefined
-        : currentRef === null
-          ? null
-          : { label: currentRef.name, revision: `refs/heads/${currentRef.name}` },
-    [currentRef],
-  );
+  const defaultSelectedRevision = useMemo(() => {
+    if (currentRef === undefined) return refs.error === null ? undefined : null;
+    if (currentRef === null) return null;
+    return { label: currentRef.name, revision: `refs/heads/${currentRef.name}` };
+  }, [currentRef, refs.error]);
   const selectedRefWasRemoved = useMemo(() => {
     if (scopedSelectedRevision === undefined || scopedSelectedRevision === null) return false;
     if (deferredRefFilter.length > 0) return false;
@@ -172,6 +168,8 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
     scopedSelectedRevision === undefined || selectedRefWasRemoved
       ? defaultSelectedRevision
       : scopedSelectedRevision;
+  const initialLocalRefError =
+    currentRef === undefined && scopedSelectedRevision === undefined ? refs.error : null;
   const toggleRefKey = useCallback((key: string) => {
     setExpandedRefKeys((current) => {
       const next = new Set(current);
@@ -225,6 +223,7 @@ export function useGitHistoryRefs(environmentId: EnvironmentId, cwd: string, rev
       refs.data?.isComplete !== false &&
       (!shouldLoadRemote || remote.data?.isComplete !== false) &&
       (!shouldLoadTags || tags.data?.isComplete !== false),
+    initialLocalRefError,
     localRefTree,
     localRefs,
     normalizedRefFilter,

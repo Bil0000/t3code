@@ -58,8 +58,10 @@ const historyState = vi.hoisted(() => ({
   refs: [] as ReadonlyArray<VcsHistoryRef>,
   refsResolved: true,
   refsError: null as string | null,
+  remoteRefsError: null as string | null,
   retryRefs: vi.fn(),
   tags: [] as ReadonlyArray<VcsHistoryRef>,
+  tagsError: null as string | null,
   status: { aheadCount: 0, behindCount: 0 },
 }));
 
@@ -185,7 +187,12 @@ vi.mock("../state/queries", () => ({
           }
         : null,
       refs,
-      error: options?.namespace === "local" ? historyState.refsError : null,
+      error:
+        options?.namespace === "local"
+          ? historyState.refsError
+          : options?.namespace === "remote"
+            ? historyState.remoteRefsError
+            : historyState.tagsError,
       isPending: false,
       isFetchingNextPage: false,
       loadNext: vi.fn(),
@@ -484,8 +491,10 @@ describe("GitHistoryPanel", () => {
     historyState.refs = [];
     historyState.refsResolved = true;
     historyState.refsError = null;
+    historyState.remoteRefsError = null;
     historyState.retryRefs.mockReset();
     historyState.tags = [];
+    historyState.tagsError = null;
     historyState.status = { aheadCount: 0, behindCount: 0 };
   });
 
@@ -516,6 +525,52 @@ describe("GitHistoryPanel", () => {
     expect(retry).not.toBeNull();
     (retry?.props.onClick as () => void)();
     expect(historyState.retryRefs).toHaveBeenCalledOnce();
+  });
+
+  it("starts current branch history after an initial ref failure recovers", () => {
+    historyState.refsResolved = false;
+    historyState.refsError = "Could not load refs.";
+
+    renderPanel();
+    expect(historyState.getHistory).not.toHaveBeenCalled();
+
+    historyState.refsError = null;
+    historyState.refsResolved = true;
+    historyState.refs = [gitRef("main", { current: true })];
+
+    renderPanel();
+
+    expect(historyState.getHistory).toHaveBeenCalledWith({
+      cacheKey: 0,
+      environmentId,
+      input: { cwd: workspacePath, limit: historyPageSize, revision: "refs/heads/main" },
+    });
+  });
+
+  it("keeps the current branch history visible when a remote refs request fails", () => {
+    historyState.refs = [gitRef("main", { current: true })];
+    historyState.remoteRefsError = "Could not load remote refs.";
+
+    renderPanel();
+
+    expect(historyState.getHistory).toHaveBeenCalledWith({
+      cacheKey: 0,
+      environmentId,
+      input: { cwd: workspacePath, limit: historyPageSize, revision: "refs/heads/main" },
+    });
+  });
+
+  it("keeps the current branch history visible when a tag refs request fails", () => {
+    historyState.refs = [gitRef("main", { current: true })];
+    historyState.tagsError = "Could not load tags.";
+
+    renderPanel();
+
+    expect(historyState.getHistory).toHaveBeenCalledWith({
+      cacheKey: 0,
+      environmentId,
+      input: { cwd: workspacePath, limit: historyPageSize, revision: "refs/heads/main" },
+    });
   });
 
   it("notices a server-capped history result before the client page limit", () => {

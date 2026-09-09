@@ -22,7 +22,7 @@ import type { ProviderListCursor } from "./IssueProvider.ts";
  * Names the read that produced unusable output, so a failure reports the call it came from
  * rather than borrowing another operation's message.
  */
-export class BitbucketIssueReadError extends Schema.TaggedErrorClass<BitbucketIssueReadError>()(
+export class BitbucketIssueReadError extends Schema.TaggedError<BitbucketIssueReadError>()(
   "BitbucketIssueReadError",
   {
     operation: Schema.String,
@@ -39,7 +39,7 @@ export class BitbucketIssueReadError extends Schema.TaggedErrorClass<BitbucketIs
 }
 
 /** Not a decode failure: Bitbucket answered, the account it answered for just has no handle. */
-export class BitbucketIssueViewerUnavailableError extends Schema.TaggedErrorClass<BitbucketIssueViewerUnavailableError>()(
+export class BitbucketIssueViewerUnavailableError extends Schema.TaggedError<BitbucketIssueViewerUnavailableError>()(
   "BitbucketIssueViewerUnavailableError",
   {},
 ) {
@@ -53,7 +53,7 @@ export class BitbucketIssueViewerUnavailableError extends Schema.TaggedErrorClas
 }
 
 /** A repository that is not `workspace/slug`, which is the only form Bitbucket addresses. */
-export class BitbucketIssueRepositoryUnsupportedError extends Schema.TaggedErrorClass<BitbucketIssueRepositoryUnsupportedError>()(
+export class BitbucketIssueRepositoryUnsupportedError extends Schema.TaggedError<BitbucketIssueRepositoryUnsupportedError>()(
   "BitbucketIssueRepositoryUnsupportedError",
   {
     repository: Schema.String,
@@ -232,7 +232,7 @@ function searchFilter(query: string): string {
   return `(title ~ "${literal}" OR content.raw ~ "${literal}")`;
 }
 
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const bitbucket = yield* BitbucketApi.BitbucketApi;
 
   const withRepository = <A>(

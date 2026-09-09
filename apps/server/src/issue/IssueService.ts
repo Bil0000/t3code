@@ -937,33 +937,31 @@ export const make = Effect.gen(function* () {
           { concurrency: 2 },
         ).pipe(
           Effect.mapError(toIssueError("detail")),
-          Effect.map(
-            ([issue, viewer]): IssueDetail => ({
-              provider: project.adapter.kind,
-              capabilities: project.adapter.capabilities,
-              viewerPermissions: issue.viewerPermissions,
-              projectId: project.project.id,
-              projectTitle: project.project.title,
-              workspaceRoot: project.project.workspaceRoot,
-              repository: project.repository,
-              number: issue.number,
-              title: issue.title,
-              body: issue.body,
-              url: issue.url,
-              author: issue.author,
-              state: issue.state,
-              stateReason: issue.stateReason,
-              createdAt: issue.createdAt,
-              updatedAt: issue.updatedAt,
-              closedAt: issue.closedAt,
-              assignees: issue.assignees,
-              labels: issue.labels,
-              milestone: issue.milestone,
-              ...(viewer === undefined ? {} : { viewer }),
-              commentCount: issue.commentCount,
-              linkedPullRequests: issue.linkedPullRequests,
-            }),
-          ),
+          Effect.map(([issue, viewer]): IssueDetail => ({
+            provider: project.adapter.kind,
+            capabilities: project.adapter.capabilities,
+            viewerPermissions: issue.viewerPermissions,
+            projectId: project.project.id,
+            projectTitle: project.project.title,
+            workspaceRoot: project.project.workspaceRoot,
+            repository: project.repository,
+            number: issue.number,
+            title: issue.title,
+            body: issue.body,
+            url: issue.url,
+            author: issue.author,
+            state: issue.state,
+            stateReason: issue.stateReason,
+            createdAt: issue.createdAt,
+            updatedAt: issue.updatedAt,
+            closedAt: issue.closedAt,
+            assignees: issue.assignees,
+            labels: issue.labels,
+            milestone: issue.milestone,
+            ...(viewer === undefined ? {} : { viewer }),
+            commentCount: issue.commentCount,
+            linkedPullRequests: issue.linkedPullRequests,
+          })),
         ),
       ),
     );
@@ -981,19 +979,17 @@ export const make = Effect.gen(function* () {
           })
           .pipe(
             Effect.mapError(toIssueError("activity")),
-            Effect.map(
-              (activity): IssueActivity => ({
-                ...(activity.author === undefined ? {} : { author: activity.author }),
-                comments: activity.comments,
-                commentCount: activity.commentCount,
-                commentsTruncated: activity.commentsTruncated,
-                ...(activity.nextCommentsCursor === undefined
-                  ? {}
-                  : { nextCommentsCursor: activity.nextCommentsCursor }),
-                events: activity.events,
-                ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
-              }),
-            ),
+            Effect.map((activity): IssueActivity => ({
+              ...(activity.author === undefined ? {} : { author: activity.author }),
+              comments: activity.comments,
+              commentCount: activity.commentCount,
+              commentsTruncated: activity.commentsTruncated,
+              ...(activity.nextCommentsCursor === undefined
+                ? {}
+                : { nextCommentsCursor: activity.nextCommentsCursor }),
+              events: activity.events,
+              ...(activity.reactions === undefined ? {} : { reactions: activity.reactions }),
+            })),
           ),
       ),
     );
@@ -1338,24 +1334,23 @@ export const make = Effect.gen(function* () {
           );
         }
         return viewerPermissionsOf(project, input, "labelCandidates").pipe(
-          Effect.flatMap(
-            (viewer): Effect.Effect<IssueLabelCandidateList, IssueError> =>
-              viewer.labels
-                ? project.adapter
-                    .listLabelCandidates({
-                      ...providerContextOf(project),
-                      cwd: project.project.workspaceRoot,
-                      repository: project.repository,
-                      host: project.host,
-                      number: input.number,
-                    })
-                    .pipe(Effect.mapError(toIssueError("labelCandidates")))
-                : Effect.fail(
-                    new IssueOperationError({
-                      operation: "labelCandidates",
-                      detail: LABEL_ACCESS_REFUSAL,
-                    }),
-                  ),
+          Effect.flatMap((viewer): Effect.Effect<IssueLabelCandidateList, IssueError> =>
+            viewer.labels
+              ? project.adapter
+                  .listLabelCandidates({
+                    ...providerContextOf(project),
+                    cwd: project.project.workspaceRoot,
+                    repository: project.repository,
+                    host: project.host,
+                    number: input.number,
+                  })
+                  .pipe(Effect.mapError(toIssueError("labelCandidates")))
+              : Effect.fail(
+                  new IssueOperationError({
+                    operation: "labelCandidates",
+                    detail: LABEL_ACCESS_REFUSAL,
+                  }),
+                ),
           ),
         );
       }),
@@ -1373,24 +1368,23 @@ export const make = Effect.gen(function* () {
           );
         }
         return viewerPermissionsOf(project, input, "assigneeCandidates").pipe(
-          Effect.flatMap(
-            (viewer): Effect.Effect<IssueAssigneeCandidateList, IssueError> =>
-              viewer.assignees
-                ? project.adapter
-                    .listAssigneeCandidates({
-                      ...providerContextOf(project),
-                      cwd: project.project.workspaceRoot,
-                      repository: project.repository,
-                      host: project.host,
-                      number: input.number,
-                    })
-                    .pipe(Effect.mapError(toIssueError("assigneeCandidates")))
-                : Effect.fail(
-                    new IssueOperationError({
-                      operation: "assigneeCandidates",
-                      detail: ASSIGNEE_ACCESS_REFUSAL,
-                    }),
-                  ),
+          Effect.flatMap((viewer): Effect.Effect<IssueAssigneeCandidateList, IssueError> =>
+            viewer.assignees
+              ? project.adapter
+                  .listAssigneeCandidates({
+                    ...providerContextOf(project),
+                    cwd: project.project.workspaceRoot,
+                    repository: project.repository,
+                    host: project.host,
+                    number: input.number,
+                  })
+                  .pipe(Effect.mapError(toIssueError("assigneeCandidates")))
+              : Effect.fail(
+                  new IssueOperationError({
+                    operation: "assigneeCandidates",
+                    detail: ASSIGNEE_ACCESS_REFUSAL,
+                  }),
+                ),
           ),
         );
       }),

@@ -2,6 +2,7 @@ import { issueProjectSourceKey, issueSourceKey, type IssueListEntry } from "@t3t
 import { describe, expect, it } from "vite-plus/test";
 
 import {
+  filterIssueQueryResults,
   filterIssuesByInvolvement,
   groupIssuesByInvolvement,
   issueEntryKey,
@@ -221,6 +222,25 @@ describe("issue search", () => {
   it("ignores surrounding whitespace and rejects non-matches", () => {
     expect(matchesIssueQuery(target, "   ")).toBe(true);
     expect(matchesIssueQuery(target, "kanban")).toBe(false);
+  });
+
+  it("filters hosts that cannot search while keeping host search results", () => {
+    const localMiss = entry({
+      number: 2,
+      host: "dev.azure.com",
+      provider: "azure-devops",
+      title: "Another issue",
+    });
+    const hiddenHostMatch = entry({ number: 3, title: "Matched in a comment" });
+
+    expect(
+      filterIssueQueryResults(
+        [target, localMiss, hiddenHostMatch],
+        "sidebar",
+        true,
+        new Set(["github.com"]),
+      ).map((item) => item.number),
+    ).toEqual([4711, 3]);
   });
 });
 

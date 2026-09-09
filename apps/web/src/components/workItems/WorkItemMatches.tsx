@@ -62,7 +62,7 @@ export function WorkItemMatchRows({
       {matches.map((match) => (
         <div
           key={`${match.provider}:${match.repository}#${match.number}`}
-          className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-muted/60"
+          className="flex w-full items-start gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60"
         >
           <button
             type="button"

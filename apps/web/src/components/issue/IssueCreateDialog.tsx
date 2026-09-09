@@ -111,12 +111,14 @@ function AnswerTextarea({
   field,
   value,
   cwd,
+  environmentId,
   disabled,
   onChange,
 }: {
   field: Extract<IssueTemplateQuestion, { readonly kind: "textarea" }>;
   value: string;
   cwd: string;
+  environmentId: EnvironmentId;
   disabled: boolean;
   onChange: (value: string) => void;
 }) {
@@ -126,8 +128,12 @@ function AnswerTextarea({
       <ToggleGroup
         size="xs"
         variant="outline"
+        aria-label="Markdown view"
         value={[previewing ? "preview" : "write"]}
-        onValueChange={(next) => setPreviewing(next[0] === "preview")}
+        onValueChange={(next) => {
+          const value = next[0];
+          if (value) setPreviewing(value === "preview");
+        }}
       >
         <Toggle value="write">Write</Toggle>
         <Toggle value="preview">Preview</Toggle>
@@ -135,7 +141,7 @@ function AnswerTextarea({
       {previewing ? (
         <div className="min-h-24 rounded-lg border border-border/60 px-3 py-2 text-sm">
           {value.trim().length > 0 ? (
-            <HostMarkdown text={value} cwd={cwd} />
+            <HostMarkdown text={value} cwd={cwd} environmentId={environmentId} />
           ) : (
             <span className="text-muted-foreground">Nothing to preview yet.</span>
           )}
@@ -159,18 +165,27 @@ function TemplateField({
   field,
   answer,
   cwd,
+  environmentId,
   disabled,
   onChange,
 }: {
   field: IssueTemplateField;
   answer: IssueTemplateFieldAnswer | undefined;
   cwd: string;
+  environmentId: EnvironmentId;
   disabled: boolean;
   onChange: (answer: IssueTemplateFieldAnswer) => void;
 }) {
   if (field.kind === "markdown") {
     // Prose the form shows and never files, rendered as the markdown it is.
-    return <HostMarkdown className="text-sm" text={field.value} cwd={cwd} />;
+    return (
+      <HostMarkdown
+        className="text-sm"
+        text={field.value}
+        cwd={cwd}
+        environmentId={environmentId}
+      />
+    );
   }
 
   const taken = issueTemplateAnswerOptions(answer);
@@ -199,6 +214,7 @@ function TemplateField({
             field={field}
             value={issueTemplateAnswerText(answer)}
             cwd={cwd}
+            environmentId={environmentId}
             disabled={disabled}
             onChange={onChange}
           />
@@ -676,6 +692,7 @@ export function IssueCreateDialog({
                         field={field}
                         answer={field.kind === "markdown" ? undefined : answers[field.id]}
                         cwd={selected.workspaceRoot}
+                        environmentId={environmentId}
                         disabled={filing}
                         onChange={(answer) =>
                           field.kind === "markdown"

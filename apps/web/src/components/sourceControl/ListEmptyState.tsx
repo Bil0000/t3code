@@ -8,7 +8,8 @@
  * with no project to read from — leave the button out, since pressing it could only repeat what
  * is already happening or ask nobody.
  */
-import { PlusIcon, RefreshCwIcon, SearchIcon } from "lucide-react";
+import { PlusIcon, SearchIcon } from "lucide-react";
+import { RefreshIcon } from "../ui/refresh-icon";
 import type { ReactNode } from "react";
 
 import { openCommandPalette } from "../../commandPaletteBus";
@@ -115,7 +116,7 @@ export function ListEmptyState({
           {/* The hosts answered this query once; anything filed since then would answer
               differently, and nothing on screen says which of the two the reader is looking at. */}
           <Button size="sm" variant="outline" disabled={refreshing} onClick={onRefresh}>
-            <RefreshCwIcon className="size-3.5" />
+            <RefreshIcon className="size-3.5" refreshing={refreshing} />
             {refreshing ? "Checking..." : "Check again"}
           </Button>
         </EmptyContent>
@@ -141,7 +142,7 @@ export function ListEmptyState({
           </Button>
         ) : null}
         <Button size="sm" variant="outline" disabled={refreshing} onClick={onRefresh}>
-          <RefreshCwIcon className="size-3.5" />
+          <RefreshIcon className="size-3.5" refreshing={refreshing} />
           {refreshing ? "Checking..." : "Check again"}
         </Button>
       </EmptyContent>

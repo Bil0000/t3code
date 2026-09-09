@@ -31,7 +31,7 @@ import {
 } from "./pullRequestDetail.logic";
 import { PullRequestActorLabel } from "./pullRequestPresentation";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
-import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
+import { SourceControlMarkdownEditor as PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import type { PendingReviewComment } from "./pullRequestReviewStore";
 
@@ -273,6 +273,7 @@ export function ReviewThreadCard({
                     className="mt-1"
                     value={comment.body}
                     cwd={workspaceRoot}
+                    environmentId={environmentId}
                     label="Edit comment"
                     saving={savingEdit}
                     onSave={(body) => void saveEdit(comment.id, body)}
@@ -284,6 +285,7 @@ export function ReviewThreadCard({
                       className="min-w-0 flex-1 text-sm"
                       text={comment.body}
                       cwd={workspaceRoot}
+                      environmentId={environmentId}
                     />
                     {canEditComment(comment) ? (
                       <Button

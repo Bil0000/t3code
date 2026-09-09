@@ -279,6 +279,16 @@ describe("useGitHistoryRefs", () => {
     });
   });
 
+  it("keeps the resolved current branch selected when a local ref refresh fails", () => {
+    refState.currentRef = ref("main");
+    refState.localError = "Could not refresh refs.";
+
+    expect(renderRefs().historyRefs.selectedRevision).toEqual({
+      label: "main",
+      revision: "refs/heads/main",
+    });
+  });
+
   it("falls back to all history when the initial local ref request fails", () => {
     refState.currentRefResolved = false;
     refState.localError = "Could not load refs.";

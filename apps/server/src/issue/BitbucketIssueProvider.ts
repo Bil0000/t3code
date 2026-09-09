@@ -39,7 +39,7 @@ const CAPABILITIES: IssueCapabilities = {
  * repository permission. Filing, editing, assigning and closing all need `write` or `admin`.
  * Commenting stays open at `read`, which is what posting to the tracker itself needs.
  */
-export function bitbucketIssueViewerPermissions(input: {
+function bitbucketIssueViewerPermissions(input: {
   readonly canWrite: boolean;
 }): IssueViewerPermissions {
   return {
@@ -58,7 +58,7 @@ export function bitbucketIssueViewerPermissions(input: {
  * environment, so there is no tool to be missing: an unusable account always means the
  * credentials are absent or refused.
  */
-export function bitbucketIssueErrorReason(
+function bitbucketIssueErrorReason(
   error: BitbucketIssueApi.BitbucketIssueApiError,
   operation: string,
 ): IssueProviderError["reason"] {

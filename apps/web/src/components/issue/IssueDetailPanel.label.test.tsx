@@ -125,7 +125,9 @@ const activity: IssueActivity = {
 
 import { IssueDetailPanel } from "./IssueDetailPanel";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
+import { Button } from "../ui/button";
 import { Menu, MenuItem } from "../ui/menu";
+import { TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 function textContent(node: unknown): string {
   if (typeof node === "string") return node;
@@ -209,11 +211,26 @@ describe("IssueDetailPanel provider labels", () => {
       (element) =>
         element.type === MenuItem && textContent(element.props.children).includes("Open on Linear"),
     );
+    const solveTrigger = visitElements(
+      panel,
+      (element) =>
+        element.type === TooltipTrigger && textContent(element.props.children).includes("Solve"),
+    );
+    const solveButton = visitElements(solveTrigger, (element) => element.type === Button);
+    const solveTooltip = visitElements(
+      panel,
+      (element) =>
+        element.type === TooltipPopup &&
+        textContent(element.props.children) === "Opens a thread on this project holding the task",
+    );
     const markup = renderToStaticMarkup(cloneElement(menu!, { open: true }));
 
     expect(panelMarkup).toContain('aria-label="Open on Linear"');
     expect(menuItem).not.toBeNull();
     expect(textContent(menuItem?.props.children)).toContain("Open on Linear");
+    expect(solveButton).not.toBeNull();
+    expect(solveButton?.props.title).toBeUndefined();
+    expect(solveTooltip).not.toBeNull();
     // Base UI portals do not emit popup contents during SSR; the real open root still renders
     // here, while the MenuItem assertion above checks the child mounted in that root.
     expect(markup).toContain('aria-haspopup="menu"');

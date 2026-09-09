@@ -26,10 +26,10 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import {
+  filterIssueQueryResults,
   filterIssuesByInvolvement,
   groupIssuesByInvolvement,
   issueEntryKey,
-  matchesIssueQuery,
   narrowIssuesToFilters,
   partitionIssuesWithPriority,
   rankIssueMatches,
@@ -56,15 +56,14 @@ import {
 } from "../components/issue/IssueListFilters";
 import { ListSearchInput, type ListFilterOption } from "../components/sourceControl/ListFilterMenu";
 import { IssueRow } from "../components/issue/IssueRow";
-import { WorkItemSelectionBarHost } from "../components/workItems/WorkItemSelectionBar";
+import {
+  WorkItemSelectButton,
+  WorkItemSelectionBarHost,
+} from "../components/workItems/WorkItemSelectionBar";
 import { IssuesUnavailableState } from "../components/issue/IssuesUnavailableState";
 import { PullRequestDetailPanel } from "../components/pullRequest/PullRequestDetailPanel";
 import { resolveProjectScope } from "../components/sourceControl/projectScope";
-import {
-  RightPanelTabs,
-  type IssueTabStatus,
-  type PullRequestTabStatus,
-} from "../components/RightPanelTabs";
+import { RightPanelTabs, type IssueTabStatus } from "../components/RightPanelTabs";
 import {
   WorkspaceBreadcrumb,
   WorkspaceBreadcrumbItem,
@@ -80,7 +79,6 @@ import { SidebarInset } from "../components/ui/sidebar";
 import { useLiveRefresh } from "../hooks/useLiveRefresh";
 import { usePrimarySettings } from "../hooks/useSettings";
 import {
-  pullRequestSurfaceId,
   selectActiveRightPanelSurface,
   selectSelectedRightPanelSurface,
   selectThreadRightPanelState,
@@ -411,18 +409,6 @@ function IssuesRouteView() {
     },
     [activeIssueSurfaceId],
   );
-  const [pullRequestTabStatuses, setPullRequestTabStatuses] = useState<
-    Record<string, PullRequestTabStatus>
-  >({});
-  const handlePullRequestTabStatusChange = useCallback((status: PullRequestTabStatus) => {
-    const id = pullRequestSurfaceId(status);
-    setPullRequestTabStatuses((current) =>
-      current[id]?.state === status.state && current[id]?.isDraft === status.isDraft
-        ? current
-        : { ...current, [id]: status },
-    );
-  }, []);
-
   const updateSearch = useCallback(
     (patch: {
       [Key in keyof IssuesSearch]?: IssuesSearch[Key] | undefined;
@@ -869,10 +855,7 @@ function IssuesRouteView() {
           );
     if (typedQuery.length === 0) return labelled;
     const answeredLocally = querySettled && !showingCarried;
-    return labelled.filter(
-      (entry) =>
-        (answeredLocally && searchingHosts.has(entry.host)) || matchesIssueQuery(entry, typedQuery),
-    );
+    return filterIssueQueryResults(labelled, typedQuery, answeredLocally, searchingHosts);
   }, [
     filterKey,
     listData,
@@ -1350,6 +1333,7 @@ function IssuesRouteView() {
           }
         />
       ) : null}
+      <WorkItemSelectButton />
     </div>
   );
   const columnProps = {
@@ -1438,6 +1422,7 @@ function IssuesRouteView() {
             onCloseAllSurfaces={closeAllSurfaces}
             onCopyFilePath={() => undefined}
             onAddBrowser={() => undefined}
+            onAddBrowserInProfile={() => undefined}
             onAddTerminal={() => undefined}
             onAddDiff={() => undefined}
             onAddFiles={() => undefined}
@@ -1452,7 +1437,7 @@ function IssuesRouteView() {
             issueAvailable={false}
             agentsAvailable={false}
             liveAgentCount={0}
-            pullRequestStatuses={pullRequestTabStatuses}
+            environmentId={issueEnvironmentId}
             issueStatuses={issueTabStatuses}
           >
             {activeSurface.kind === "pull-request" ? (
@@ -1473,7 +1458,6 @@ function IssuesRouteView() {
                   authoredQuery.refresh();
                   assignedQuery.refresh();
                 }}
-                onStateChange={handlePullRequestTabStatusChange}
                 onOpenLinkedIssue={(link) => {
                   const project = findProjectForLink(projects, link);
                   if (rightPanelRef === null || project === undefined) {

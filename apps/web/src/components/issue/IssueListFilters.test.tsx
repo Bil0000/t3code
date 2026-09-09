@@ -6,17 +6,23 @@ import { ListFilterRadioGroup } from "../sourceControl/ListFilterMenu";
 import { LinearIcon } from "../Icons";
 import { Button } from "../ui/button";
 import { MenuItem, MenuRadioItem, MenuSeparator } from "../ui/menu";
-import { IssueFiltersMenu, IssueSortMenu } from "./IssueListFilters";
+import { TooltipPopup } from "../ui/tooltip";
+import {
+  IssueFiltersMenu,
+  IssueSortMenu,
+  renderIssueProviderMenuRadioGroup,
+} from "./IssueListFilters";
 
 function collect(
-  node: ReactNode,
+  node: unknown,
   type: ReactElement["type"],
 ): Array<ReactElement<Record<string, unknown>>> {
-  const found: Array<ReactElement<Record<string, unknown>>> = [];
-  for (const child of Children.toArray(node)) {
-    if (!isValidElement(child)) continue;
-    if (child.type === type) found.push(child as ReactElement<Record<string, unknown>>);
-    found.push(...collect((child.props as { children?: ReactNode }).children, type));
+  if (Array.isArray(node)) return node.flatMap((child) => collect(child, type));
+  if (!isValidElement<Record<string, unknown>>(node)) return [];
+
+  const found = node.type === type ? [node] : [];
+  for (const value of Object.values(node.props)) {
+    found.push(...collect(value, type));
   }
   return found;
 }
@@ -29,14 +35,26 @@ describe("issue filters", () => {
       onSort: vi.fn(),
       onOrder: vi.fn(),
     });
-    const trigger = Children.toArray(menu.props.children)[0] as ReactElement<{
-      readonly render?: ReactElement<{ readonly size: string; readonly variant: string }>;
+    const tooltip = Children.toArray(menu.props.children)[0] as ReactElement<{
+      readonly children: ReactNode;
     }>;
+    const trigger = Children.toArray(tooltip.props.children)[0] as ReactElement<{
+      readonly render?: ReactElement<{
+        readonly render?: ReactElement<{
+          readonly size: string;
+          readonly variant: string;
+          readonly title?: string;
+        }>;
+      }>;
+    }>;
+    const button = trigger.props.render?.props.render;
 
-    expect(trigger.props.render).toBeDefined();
-    if (!trigger.props.render) return;
-    expect(trigger.props.render.type).toBe(Button);
-    expect(trigger.props.render.props).toMatchObject({ size: "icon", variant: "outline" });
+    expect(button?.type).toBe(Button);
+    expect(button?.props).toMatchObject({ size: "icon", variant: "outline" });
+    expect(button?.props.title).toBeUndefined();
+    expect(collect(menu, TooltipPopup).map((popup) => popup.props.children)).toContain(
+      "Sort issues",
+    );
   });
 
   it("hides ineffective order choices for best-match sorting", () => {
@@ -156,9 +174,37 @@ describe("issue filters", () => {
       (candidate) => candidate.props.value === "linear.app",
     );
     expect(gear).toBeDefined();
-    expect(collect(gear, SettingsIcon)).toHaveLength(1);
+    expect(collect(menu, SettingsIcon)).toHaveLength(1);
     expect(collect(linearRadio, MenuItem)).toHaveLength(0);
     (gear?.props.onClick as (() => void) | undefined)?.();
     expect(onManageLinear).toHaveBeenCalledOnce();
+  });
+
+  it("uses styled help for unavailable providers and Linear settings", () => {
+    const group = renderIssueProviderMenuRadioGroup({
+      value: "",
+      options: [
+        {
+          value: "gitlab.com",
+          label: "GitLab",
+          Icon: LayersIcon,
+          unavailable: "Not authenticated",
+        },
+        { value: "linear.app", label: "Linear", Icon: LayersIcon },
+      ],
+      onChange: vi.fn(),
+      onManageLinear: vi.fn(),
+    });
+    const popups = collect(group, TooltipPopup).map((popup) => popup.props.children);
+    const items = collect(group, MenuRadioItem);
+    const settings = collect(group, MenuItem).find(
+      (item) => item.props["aria-label"] === "Linear settings",
+    );
+
+    expect(popups).toEqual(expect.arrayContaining(["Not authenticated", "Linear settings"]));
+    expect(items).toHaveLength(2);
+    expect(items.every((item) => item.props.title === undefined)).toBe(true);
+    expect(settings).toBeDefined();
+    expect(settings?.props.title).toBeUndefined();
   });
 });

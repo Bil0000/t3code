@@ -1,4 +1,5 @@
 import { ExternalLinkIcon, PaperclipIcon, PlayIcon } from "lucide-react";
+import type { EnvironmentId } from "@t3tools/contracts";
 
 import { cn } from "~/lib/utils";
 
@@ -19,10 +20,12 @@ import { splitHostBody } from "./hostMarkdown.logic";
 export function HostMarkdown({
   text,
   cwd,
+  environmentId,
   className,
 }: {
   text: string;
   cwd: string;
+  environmentId?: EnvironmentId;
   className?: string;
 }) {
   const segments = splitHostBody(text);
@@ -30,7 +33,14 @@ export function HostMarkdown({
     <div className={cn("space-y-3", className)}>
       {segments.map((segment) => {
         if (segment.kind === "markdown") {
-          return <ChatMarkdown key={segment.id} text={segment.text} cwd={cwd} />;
+          return (
+            <ChatMarkdown
+              key={segment.id}
+              text={segment.text}
+              cwd={cwd}
+              environmentId={environmentId}
+            />
+          );
         }
         const isVideo = segment.media === "video";
         const Icon = isVideo ? PlayIcon : PaperclipIcon;

@@ -3,16 +3,15 @@ import type {
   PullRequestComment,
   PullRequestDetailView,
   PullRequestRef,
+  ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
-  ChevronDownIcon,
   ExternalLinkIcon,
   FileCode2Icon,
   GitCommitHorizontalIcon,
   GitMergeIcon,
   GitPullRequestClosedIcon,
   GitPullRequestIcon,
-  MessageSquareIcon,
   PencilIcon,
 } from "lucide-react";
 import { useState } from "react";
@@ -23,14 +22,10 @@ import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
-import {
-  ActorName,
-  ActorTimelineMarker,
-  IconMarker,
-  uniqueConversationActors,
-} from "../sourceControl/TimelineRail";
+import { ActorName, ActorTimelineMarker, IconMarker } from "../sourceControl/TimelineRail";
+import { ConversationGroup } from "../sourceControl/ConversationGroup";
+import { TimelineComment } from "../sourceControl/TimelineComment";
 import { Button } from "../ui/button";
-import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
@@ -44,10 +39,9 @@ import {
 } from "./pullRequestDetail.logic";
 import { canEditPullRequestComment } from "./pullRequestEditing.logic";
 import { PullRequestMarkdown } from "./PullRequestMarkdown";
-import { PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
+import { SourceControlMarkdownEditor as PullRequestMarkdownEditor } from "./PullRequestMarkdownEditor";
 import { PullRequestReactionBar } from "./PullRequestReactions";
 import {
-  PullRequestActorAvatar,
   PullRequestDiffStat,
   PullRequestMetaLine,
   PullRequestReviewOutcomeIcon,
@@ -60,19 +54,34 @@ import {
 interface ReactionSurface {
   readonly canReact: boolean;
   readonly environmentId: EnvironmentId;
+  /** Thread the timeline is shown beside, so body links can open in its in-app browser. */
+  readonly threadRef: ScopedThreadRef | null;
   readonly reference: PullRequestRef;
   readonly onRefresh: () => void;
 }
 
-function TimelineBody({ body, markdown, cwd }: { body: string; markdown: boolean; cwd: string }) {
-  return (
-    <div className="mt-3">
-      {markdown ? (
-        <PullRequestMarkdown text={body} cwd={cwd} />
-      ) : (
-        <p className="whitespace-pre-wrap text-xs text-muted-foreground">{body}</p>
-      )}
-    </div>
+function TimelineBody({
+  body,
+  markdown,
+  cwd,
+  environmentId,
+  threadRef,
+}: {
+  body: string;
+  markdown: boolean;
+  cwd: string;
+  environmentId: EnvironmentId;
+  threadRef: ScopedThreadRef | null;
+}) {
+  return markdown ? (
+    <PullRequestMarkdown
+      text={body}
+      cwd={cwd}
+      environmentId={environmentId}
+      threadRef={threadRef}
+    />
+  ) : (
+    <p className="whitespace-pre-wrap text-xs text-muted-foreground">{body}</p>
   );
 }
 
@@ -142,144 +151,73 @@ function ConversationCard({
   };
 
   return (
-    <article className="group py-2">
-      <div className="px-2">
-        <div className="flex min-w-0 items-start gap-2">
-          <div className="min-w-0 flex-1">
-            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
-              <ActorName actor={event.actor} />
-              <span className="text-muted-foreground">{event.title}</span>
-              {event.reviewState ? <ReviewStateBadge state={event.reviewState} /> : null}
-            </div>
-            <PullRequestMetaLine className="mt-1 flex-wrap text-[11px] text-muted-foreground">
-              <span>{formatRelativeTimeLabel(event.at)}</span>
-              {event.path ? (
-                <span className="inline-flex min-w-0 items-center gap-1">
-                  <FileCode2Icon aria-hidden className="size-3 shrink-0" />
-                  <span className="truncate">{event.path}</span>
-                </span>
-              ) : null}
-            </PullRequestMetaLine>
-          </div>
-          {editable !== null && !editing ? (
-            <Button
-              size="icon-xs"
-              variant="ghost"
-              className="-mt-1 shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
-              aria-label="Edit comment"
-              onClick={() => setEditing(true)}
-            >
-              <PencilIcon className="size-3" />
-            </Button>
-          ) : null}
-          <OpenOnHostButton url={event.url} onOpen={onOpen} />
-        </div>
-      </div>
-      {editing && editable !== null ? (
-        <div className="px-2 pb-2 pt-3">
+    <TimelineComment
+      actor={event.actor}
+      title={event.title}
+      at={event.at}
+      url={event.url}
+      onOpen={onOpen}
+      badge={event.reviewState ? <ReviewStateBadge state={event.reviewState} /> : null}
+      meta={
+        event.path ? (
+          <span className="inline-flex min-w-0 items-center gap-1">
+            <FileCode2Icon aria-hidden className="size-3 shrink-0" />
+            <span className="truncate">{event.path}</span>
+          </span>
+        ) : null
+      }
+      actions={
+        editable !== null && !editing ? (
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            className="-mt-1 shrink-0 text-muted-foreground opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 focus-visible:opacity-100"
+            aria-label="Edit comment"
+            onClick={() => setEditing(true)}
+          >
+            <PencilIcon className="size-3" />
+          </Button>
+        ) : null
+      }
+      body={
+        editing && editable !== null ? (
           <PullRequestMarkdownEditor
             value={editable.body}
             cwd={cwd}
+            environmentId={reactions.environmentId}
+            threadRef={reactions.threadRef}
             label="Edit comment"
             saving={saving}
             onSave={(body) => void save(body)}
             onCancel={() => setEditing(false)}
           />
-        </div>
-      ) : event.body ? (
-        <div className="px-2 pb-2">
-          <TimelineBody body={event.body} markdown={event.markdown} cwd={cwd} />
-        </div>
-      ) : null}
-      {reactions.canReact || event.reactions.length > 0 ? (
-        <div className="px-2 pb-2">
-          <PullRequestReactionBar
-            reactions={event.reactions}
-            canReact={reactions.canReact}
-            subjectId={event.id}
-            environmentId={reactions.environmentId}
-            reference={reactions.reference}
-            onRefresh={reactions.onRefresh}
-          />
-        </div>
-      ) : null}
-    </article>
-  );
-}
-
-function ConversationGroup({
-  events,
-  editable,
-  cwd,
-  onOpen,
-  reactions,
-}: {
-  events: ReadonlyArray<PullRequestTimelineEvent>;
-  editable: ReadonlyMap<string, PullRequestComment>;
-  cwd: string;
-  onOpen: (url: string) => void;
-  reactions: ReactionSurface;
-}) {
-  const [open, setOpen] = useState(false);
-  const actors = uniqueConversationActors(events);
-  const first = events[0];
-  if (first === undefined) return null;
-
-  return (
-    <div className="relative mb-5 pl-12 [contain-intrinsic-block-size:48px] [content-visibility:auto]">
-      <ActorTimelineMarker
-        actors={actors}
-        className="top-6"
-        fallback={<MessageSquareIcon className="size-3.5" />}
-        muted={!open}
-      />
-      <Collapsible open={open} onOpenChange={setOpen}>
-        <div>
-          <CollapsibleTrigger
-            className={cn(
-              "flex w-full min-w-0 items-center gap-3 py-2 text-left transition-opacity hover:opacity-100",
-              open ? "text-foreground opacity-100" : "text-muted-foreground opacity-55",
-            )}
-          >
-            <span className="min-w-0 flex-1">
-              <span className="block text-xs font-semibold">
-                {events.length.toLocaleString()} {events.length === 1 ? "comment" : "comments"}
-              </span>
-              <span className="block truncate text-[10px] text-muted-foreground">
-                {actors.length.toLocaleString()} {actors.length === 1 ? "author" : "authors"} ·{" "}
-                {formatRelativeTimeLabel(first.at)}
-              </span>
-            </span>
-            <ChevronDownIcon
-              aria-hidden
-              className={cn(
-                "size-3.5 shrink-0 text-muted-foreground transition-transform",
-                open && "rotate-180",
-              )}
-            />
-          </CollapsibleTrigger>
-          <CollapsiblePanel>
-            {open ? (
-              <div className="mt-1 space-y-1">
-                {events.map((event) => (
-                  <ConversationCard
-                    // Named with the pull request too: a remark's id is the host's own, and two
-                    // pull requests can hand out the same one — which would leave one card's open
-                    // editor standing over the other's remark.
-                    key={`${reactions.reference.projectId}#${reactions.reference.number}:${event.id}`}
-                    event={event}
-                    editable={editable.get(event.id) ?? null}
-                    cwd={cwd}
-                    onOpen={onOpen}
-                    reactions={reactions}
-                  />
-                ))}
+        ) : event.body || reactions.canReact || event.reactions.length > 0 ? (
+          <>
+            {event.body ? (
+              <TimelineBody
+                body={event.body}
+                markdown={event.markdown}
+                cwd={cwd}
+                environmentId={reactions.environmentId}
+                threadRef={reactions.threadRef}
+              />
+            ) : null}
+            {reactions.canReact || event.reactions.length > 0 ? (
+              <div className={event.body ? "mt-2" : undefined}>
+                <PullRequestReactionBar
+                  reactions={event.reactions}
+                  canReact={reactions.canReact}
+                  subjectId={event.id}
+                  environmentId={reactions.environmentId}
+                  reference={reactions.reference}
+                  onRefresh={reactions.onRefresh}
+                />
               </div>
             ) : null}
-          </CollapsiblePanel>
-        </div>
-      </Collapsible>
-    </div>
+          </>
+        ) : null
+      }
+    />
   );
 }
 
@@ -441,7 +379,15 @@ function ReviewVerdictEvent({
           {/* An approval usually carries no words. When it does they are the review, so they stay
               visible rather than being folded away with the ordinary conversation. */}
           {event.body ? (
-            <TimelineBody body={event.body} markdown={event.markdown} cwd={cwd} />
+            <div className="mt-3">
+              <TimelineBody
+                body={event.body}
+                markdown={event.markdown}
+                cwd={cwd}
+                environmentId={reactions.environmentId}
+                threadRef={reactions.threadRef}
+              />
+            </div>
           ) : null}
         </div>
         <OpenOnHostButton url={event.url} onOpen={onOpen} />
@@ -453,6 +399,7 @@ function ReviewVerdictEvent({
 export function PullRequestTimelineTab({
   detail,
   environmentId,
+  threadRef = null,
   reference,
   order,
   onOpenCommit,
@@ -460,6 +407,7 @@ export function PullRequestTimelineTab({
 }: {
   detail: PullRequestDetailView;
   environmentId: EnvironmentId;
+  threadRef?: ScopedThreadRef | null;
   reference: PullRequestRef;
   order: "newest" | "oldest";
   onOpenCommit: (oid: string) => void;
@@ -470,6 +418,7 @@ export function PullRequestTimelineTab({
   const reactions: ReactionSurface = {
     canReact: detail.capabilities.reactions === true,
     environmentId,
+    threadRef,
     reference,
     onRefresh,
   };
@@ -496,11 +445,18 @@ export function PullRequestTimelineTab({
               return (
                 <ConversationGroup
                   key={`comments:${row.events[0]?.id ?? "empty"}`}
-                  events={row.events}
-                  editable={editable}
-                  cwd={detail.workspaceRoot}
+                  entries={row.events}
+                  keyPrefix={`${reference.projectId}#${reference.number}:`}
                   onOpen={openOnHost}
-                  reactions={reactions}
+                  renderComment={(event) => (
+                    <ConversationCard
+                      event={event}
+                      editable={editable.get(event.id) ?? null}
+                      cwd={detail.workspaceRoot}
+                      onOpen={openOnHost}
+                      reactions={reactions}
+                    />
+                  )}
                 />
               );
             }

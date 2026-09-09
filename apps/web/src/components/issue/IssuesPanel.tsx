@@ -27,19 +27,20 @@ import { useEnvironmentQuery } from "~/state/query";
 
 import type { IssueTabStatus } from "../RightPanelTabs";
 import { Button } from "../ui/button";
-import { Input } from "../ui/input";
 import { ScrollArea } from "../ui/scroll-area";
 import { IssueDetailPanel, type IssueHandoffTarget } from "./IssueDetailPanel";
 import { ListGhost } from "../sourceControl/ListGhosts";
 import {
+  filterIssueQueryResults,
   filterIssuesByInvolvement,
   issueEntryKey,
   rankIssueMatches,
   type IssueViewers,
 } from "./issueList.logic";
 import { IssueFiltersMenu, IssueSortMenu } from "./IssueListFilters";
-import { type ListFilterOption } from "../sourceControl/ListFilterMenu";
+import { ListSearchInput, type ListFilterOption } from "../sourceControl/ListFilterMenu";
 import { IssueRow } from "./IssueRow";
+import { IssuesUnavailableState } from "./IssuesUnavailableState";
 
 // The same vocabulary the issues page filters by, minus the two questions a panel already knows
 // the answer to: it lists one project, on one host.
@@ -241,6 +242,15 @@ function IssueBrowserList({
   const answered = listQuery.data;
   const githubSortingAvailable =
     answered?.providers.some((provider) => provider.kind === "github") ?? false;
+  const searchingHosts = useMemo(
+    () =>
+      new Set(
+        (answered?.providers ?? []).flatMap((provider) =>
+          provider.searchesOnHost ? [provider.host] : [],
+        ),
+      ),
+    [answered?.providers],
+  );
 
   /**
    * What the list holds, across the slices it has asked for. A continuation carries only the rows
@@ -296,10 +306,26 @@ function IssueBrowserList({
       shown?.viewers ?? answered?.viewers ?? {},
       filters.involvement,
     );
+    const queried = filterIssueQueryResults(
+      byInvolvement,
+      typed,
+      typed === sent && !listQuery.isPending,
+      searchingHosts,
+    );
     return filters.label === undefined
-      ? byInvolvement
-      : byInvolvement.filter((entry) => entry.labels.some((label) => label.name === filters.label));
-  }, [answered, filterKey, filters.involvement, filters.label, ordered]);
+      ? queried
+      : queried.filter((entry) => entry.labels.some((label) => label.name === filters.label));
+  }, [
+    answered,
+    filterKey,
+    filters.involvement,
+    filters.label,
+    listQuery.isPending,
+    ordered,
+    searchingHosts,
+    sent,
+    typed,
+  ]);
 
   /** From what is held rather than from the read in flight, which has not answered yet. */
   const truncated = ordered?.key === filterKey ? ordered.truncated : (answered?.truncated ?? false);
@@ -386,11 +412,11 @@ function IssueBrowserList({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex items-center gap-2 px-2 py-2">
-        <Input
+        <ListSearchInput
+          label="Search issues"
           value={query}
-          aria-label="Search issues"
-          placeholder="Search issues"
-          onChange={(event) => onQuery(event.target.value)}
+          busy={typed.length > 0 && (typed !== sent || listQuery.isPending)}
+          onChange={onQuery}
         />
         <div className="flex shrink-0 items-center gap-1">
           <IssueFiltersMenu
@@ -419,7 +445,7 @@ function IssueBrowserList({
           {entries.length === 0 && listQuery.isPending ? (
             <ListGhost rows={7} label="Loading issues" />
           ) : listQuery.error !== null && listQuery.data === null ? (
-            <p className="px-2 text-sm text-muted-foreground">{listQuery.error}</p>
+            <IssuesUnavailableState error={listQuery.error} onRetry={() => listQuery.refresh()} />
           ) : entries.length === 0 ? (
             <div className="space-y-2 px-2">
               <p className="text-sm text-muted-foreground">

@@ -106,7 +106,10 @@ vi.mock("react", async (importOriginal) => ({
   useState: hooks.useState,
 }));
 
-vi.mock("effect/Option", () => ({ getOrNull: <T,>(value: T) => value }));
+vi.mock("effect/Option", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("effect/Option")>()),
+  getOrNull: <T,>(value: T) => value,
+}));
 vi.mock("effect/unstable/reactivity", () => ({
   AsyncResult: { value: (result: { readonly value: unknown }) => result.value },
 }));

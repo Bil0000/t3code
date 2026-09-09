@@ -102,30 +102,26 @@ export const make = Effect.gen(function* () {
         concurrency: 2,
       }).pipe(
         Effect.mapError(fail("getIssue")),
-        Effect.map(
-          ([issue, linkedPullRequests]): ProviderIssueDetail => ({
-            ...issue,
-            linkedPullRequests,
-            viewerPermissions: VIEWER_PERMISSIONS,
-          }),
-        ),
+        Effect.map(([issue, linkedPullRequests]): ProviderIssueDetail => ({
+          ...issue,
+          linkedPullRequests,
+          viewerPermissions: VIEWER_PERMISSIONS,
+        })),
       ),
 
     getIssueActivity: (input) =>
       cli.listActivity(input).pipe(
         Effect.mapError(fail("getIssueActivity")),
-        Effect.map(
-          (activity): ProviderIssueActivity => ({
-            comments: activity.comments,
-            // The issue's own `user_notes_count` is on a read this one does not make, and reading
-            // the issue again to learn a number the walk already has is a request for nothing:
-            // the notes endpoint carries every remark, and it is read until GitLab runs out.
-            commentCount: activity.comments.length,
-            commentsTruncated: activity.truncated,
-            events: activity.events,
-            reactions: activity.reactions,
-          }),
-        ),
+        Effect.map((activity): ProviderIssueActivity => ({
+          comments: activity.comments,
+          // The issue's own `user_notes_count` is on a read this one does not make, and reading
+          // the issue again to learn a number the walk already has is a request for nothing:
+          // the notes endpoint carries every remark, and it is read until GitLab runs out.
+          commentCount: activity.comments.length,
+          commentsTruncated: activity.truncated,
+          events: activity.events,
+          reactions: activity.reactions,
+        })),
       ),
 
     // No request at all: nothing GitLab reports about an issue narrows what this viewer may ask

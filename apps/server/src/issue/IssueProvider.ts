@@ -33,7 +33,7 @@ import { IssueProviderKind as IssueProviderKindSchema, issueSourceKey } from "@t
  * provider for the whole workspace, a switched-off tracker disables one repository, and anything
  * else is specific to the request.
  */
-export class IssueProviderError extends Schema.TaggedErrorClass<IssueProviderError>()(
+export class IssueProviderError extends Schema.TaggedError<IssueProviderError>()(
   "IssueProviderError",
   {
     provider: IssueProviderKindSchema,

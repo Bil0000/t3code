@@ -3,7 +3,22 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vite-plus/test";
 
 import { issueSurfaceId } from "~/rightPanelStore";
-import { RightPanelTabs, surfaceShortcutActionForKey, tabMuteMenuItem } from "./RightPanelTabs";
+
+import {
+  RightPanelTabs,
+  shouldOpenDefaultBrowserProfileFromMenuClick,
+  surfaceShortcutActionForKey,
+  surfaceShortcutTargetsTypingContext,
+  tabMuteMenuItem,
+} from "./RightPanelTabs";
+
+describe("browser profile submenu", () => {
+  it("reserves touch clicks for opening the choices while mouse clicks use the default", () => {
+    expect(shouldOpenDefaultBrowserProfileFromMenuClick("touch")).toBe(false);
+    expect(shouldOpenDefaultBrowserProfileFromMenuClick("mouse")).toBe(true);
+    expect(shouldOpenDefaultBrowserProfileFromMenuClick(undefined)).toBe(true);
+  });
+});
 
 function shortcutEvent(
   key: string,
@@ -101,6 +116,7 @@ function renderTabs(
     <RightPanelTabs
       mode="inline"
       surfaces={surfaces}
+      environmentId={null}
       activeSurfaceId={issueStatus ? issuesSurface.id : previewSurface.id}
       pendingSurfaceIds={new Set()}
       previewSessions={sessions}
@@ -129,6 +145,7 @@ function renderTabs(
       onCloseAllSurfaces={() => undefined}
       onCopyFilePath={() => undefined}
       onAddBrowser={() => undefined}
+      onAddBrowserInProfile={() => undefined}
       onAddTerminal={() => undefined}
       onAddPullRequest={() => undefined}
       onAddIssue={() => undefined}
@@ -186,6 +203,7 @@ describe("RightPanelTabs preview favicon", () => {
       <RightPanelTabs
         mode="inline"
         surfaces={[]}
+        environmentId={null}
         activeSurfaceId={null}
         pendingSurfaceIds={new Set()}
         previewSessions={{}}
@@ -198,6 +216,7 @@ describe("RightPanelTabs preview favicon", () => {
         onCloseAllSurfaces={() => undefined}
         onCopyFilePath={() => undefined}
         onAddBrowser={() => undefined}
+        onAddBrowserInProfile={() => undefined}
         onAddTerminal={() => undefined}
         onAddPullRequest={() => undefined}
         onAddIssue={() => undefined}
@@ -223,6 +242,7 @@ describe("RightPanelTabs preview favicon", () => {
       <RightPanelTabs
         mode="inline"
         surfaces={[]}
+        environmentId={null}
         activeSurfaceId={null}
         pendingSurfaceIds={new Set()}
         previewSessions={{}}
@@ -235,6 +255,7 @@ describe("RightPanelTabs preview favicon", () => {
         onCloseAllSurfaces={() => undefined}
         onCopyFilePath={() => undefined}
         onAddBrowser={() => undefined}
+        onAddBrowserInProfile={() => undefined}
         onAddTerminal={() => undefined}
         onAddPullRequest={() => undefined}
         onAddRepository={() => undefined}
@@ -284,6 +305,33 @@ describe("surface shortcuts", () => {
     expect(
       surfaceShortcutActionForKey(actions, shortcutEvent("b", { defaultPrevented: true })),
     ).toBeNull();
+  });
+});
+
+describe("surface shortcut typing contexts", () => {
+  // Selector-aware stub: closest() answers only tokens the combined selector
+  // would actually match, mirroring how the browser resolves it.
+  const makeTarget = (matches: string | null) => ({
+    closest(selectors: string) {
+      if (matches === null || !selectors.includes(matches)) return null;
+      return {};
+    },
+  });
+
+  it("treats form fields and every editable region as typing contexts", () => {
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("input"))).toBe(true);
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("textarea"))).toBe(true);
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("select"))).toBe(true);
+    // The chat composer is a contenteditable that sits empty until a draft
+    // exists; launcher letters claimed from it redirected prompts into shells.
+    // The :not clause sees past contenteditable="false" islands to an editable
+    // host around them, so nested editors stay protected too.
+    expect(surfaceShortcutTargetsTypingContext(makeTarget("[contenteditable]"))).toBe(true);
+  });
+
+  it("claims letters when focus sits outside any editable region", () => {
+    expect(surfaceShortcutTargetsTypingContext(null)).toBe(false);
+    expect(surfaceShortcutTargetsTypingContext(makeTarget(null))).toBe(false);
   });
 });
 

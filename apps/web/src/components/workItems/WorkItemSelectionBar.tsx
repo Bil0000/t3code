@@ -10,6 +10,8 @@ import { type SelectedWorkItem, useWorkItemSelection } from "~/workItemSelection
 
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
+import { Toggle, ToggleGroup } from "../ui/toggle-group";
+import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
 export const WORK_ITEM_MODE_HELP = {
   compound: "One task that merges overlap and orders dependencies.",
@@ -97,7 +99,7 @@ export function WorkItemSelectButton() {
   );
 }
 
-export function WorkItemSelectionBar() {
+function WorkItemSelectionBar() {
   const items = useWorkItemSelection((state) => state.items);
   const mode = useWorkItemSelection((state) => state.mode);
   const setMode = useWorkItemSelection((state) => state.setMode);
@@ -160,28 +162,26 @@ export function WorkItemSelectionBar() {
       <span className="mr-auto whitespace-nowrap px-1 text-xs text-muted-foreground">
         {items.length} selected
       </span>
-      <div
-        role="group"
-        aria-label={WORK_ITEM_MODE_HELP[mode]}
-        className="flex rounded-md bg-muted p-0.5"
-      >
-        <Button
-          size="xs"
-          variant={mode === "compound" ? "secondary" : "ghost"}
-          aria-pressed={mode === "compound"}
-          onClick={() => setMode("compound")}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <ToggleGroup
+              size="segmented"
+              variant="segmented"
+              aria-label="Task shape"
+              value={[mode]}
+              onValueChange={(next) => {
+                const value = next[0];
+                if (value === "compound" || value === "subtasks") setMode(value);
+              }}
+            />
+          }
         >
-          Compound
-        </Button>
-        <Button
-          size="xs"
-          variant={mode === "subtasks" ? "secondary" : "ghost"}
-          aria-pressed={mode === "subtasks"}
-          onClick={() => setMode("subtasks")}
-        >
-          Subtasks
-        </Button>
-      </div>
+          <Toggle value="compound">Compound</Toggle>
+          <Toggle value="subtasks">Subtasks</Toggle>
+        </TooltipTrigger>
+        <TooltipPopup side="top">{WORK_ITEM_MODE_HELP[mode]}</TooltipPopup>
+      </Tooltip>
       <Button size="xs" disabled={busy} onClick={() => void createTask()}>
         {busy ? (
           <LoaderIcon aria-hidden className="size-3.5 animate-spin" />

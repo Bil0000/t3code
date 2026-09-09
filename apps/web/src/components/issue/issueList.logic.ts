@@ -71,6 +71,19 @@ export function matchesIssueQuery(entry: IssueListEntry, query: string): boolean
     .includes(normalizedQuery);
 }
 
+export function filterIssueQueryResults(
+  entries: ReadonlyArray<IssueListEntry>,
+  query: string,
+  hostAnswerReady: boolean,
+  searchingHosts: ReadonlySet<string>,
+): ReadonlyArray<IssueListEntry> {
+  if (query.trim().length === 0) return entries;
+  return entries.filter(
+    (entry) =>
+      (hostAnswerReady && searchingHosts.has(entry.host)) || matchesIssueQuery(entry, query),
+  );
+}
+
 /**
  * The server returns the involvement superset for a state, so switching between the Assigned and
  * Authored tabs never waits on the network.

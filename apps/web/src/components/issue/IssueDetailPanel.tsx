@@ -522,6 +522,11 @@ export function IssueDetailPanel({
   const handoffDisabled = handoff !== null || activityPending;
   const handoffLabel = (kind: string, label: string) =>
     handoff === kind ? "Opening..." : activityPending ? `${label} (loading comments)` : label;
+  const solveDescription = activityPending
+    ? "Waiting for the issue's comments, which go with the task"
+    : inPlaceDraft === null
+      ? "Opens a thread on this project holding the task"
+      : "Puts the task in this thread's composer";
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col bg-background">
@@ -740,30 +745,30 @@ export function IssueDetailPanel({
               {/* Handing the issue to an agent is the reason to open one at all, so it is a
                   button of its own wherever the panel is — beside a thread as much as on the
                   page. The label goes once the chrome condenses; the button itself does not. */}
-              <Button
-                size="xs"
-                variant="outline"
-                disabled={handoffDisabled}
-                title={
-                  activityPending
-                    ? "Waiting for the issue's comments, which go with the task"
-                    : inPlaceDraft === null
-                      ? "Opens a thread on this project holding the task"
-                      : "Puts the task in this thread's composer"
-                }
-                onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
-              >
-                {handoff === "solve" ? (
-                  "Opening..."
-                ) : activityPending ? (
-                  "Loading..."
-                ) : (
-                  <>
-                    <HammerIcon className="size-3" />
-                    <span className={cn(condensed && "sr-only")}>Solve</span>
-                  </>
-                )}
-              </Button>
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      disabled={handoffDisabled}
+                      onClick={() => void startHandoff("solve", buildSolveIssueHandoff)}
+                    />
+                  }
+                >
+                  {handoff === "solve" ? (
+                    "Opening..."
+                  ) : activityPending ? (
+                    "Loading..."
+                  ) : (
+                    <>
+                      <HammerIcon className="size-3" />
+                      <span className={cn(condensed && "sr-only")}>Solve</span>
+                    </>
+                  )}
+                </TooltipTrigger>
+                <TooltipPopup side="top">{solveDescription}</TooltipPopup>
+              </Tooltip>
               {detail.state === "open" && can("close") ? (
                 closeReasons.length > 0 ? (
                   // A reason is not a second action but a part of this one, so it is chosen on the

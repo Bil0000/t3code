@@ -283,7 +283,7 @@ export function fromProviders(
  * The hosts this build can read issues from. A host with no entry here still shows up in the
  * provider list as unimplemented, so its projects are explained rather than missing.
  */
-export const make = Effect.gen(function* () {
+const make = Effect.gen(function* () {
   const providers = yield* Effect.all([
     GitHubIssueProvider.make,
     GitLabIssueProvider.make,
