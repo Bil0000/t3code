@@ -5,6 +5,7 @@ import { Toggle, ToggleGroup } from "../ui/toggle-group";
 interface DetailTab<Value extends string> {
   readonly value: Value;
   readonly label: string;
+  readonly onPrefetch?: () => void;
 }
 
 export function DetailTabStrip<Value extends string>({
@@ -37,7 +38,12 @@ export function DetailTabStrip<Value extends string>({
         }}
       >
         {tabs.map((item) => (
-          <Toggle key={item.value} value={item.value}>
+          <Toggle
+            key={item.value}
+            value={item.value}
+            onPointerEnter={item.onPrefetch}
+            onFocus={item.onPrefetch}
+          >
             {item.label}
           </Toggle>
         ))}

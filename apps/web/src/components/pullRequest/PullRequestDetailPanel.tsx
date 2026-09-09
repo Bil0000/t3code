@@ -110,7 +110,6 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import { PullRequestDetailGhost, TimelineGhost } from "../sourceControl/ListGhosts";
 import { DetailTabStrip } from "../sourceControl/DetailTabStrip";
 import { ActivityUnavailableState } from "../sourceControl/ActivityUnavailableState";
-import { Toggle, ToggleGroup } from "../ui/toggle-group";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { PullRequestsUnavailableState } from "./PullRequestsUnavailableState";
 import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
@@ -230,10 +229,10 @@ const ACTION_FAILURE_HINTS: Record<PullRequestAction, string> = {
 const UPDATE_BRANCH_REBASE_FAILURE_HINT =
   "The host refused it. A rebase stops at the first commit that does not apply cleanly; updating with a merge commit may still work.";
 
-const TABS: ReadonlyArray<{ value: DetailTab; label: string }> = [
+const TABS: ReadonlyArray<{ value: DetailTab; label: string; onPrefetch?: () => void }> = [
   { value: "summary", label: "Summary" },
   { value: "timeline", label: "Timeline" },
-  { value: "code", label: "Code" },
+  { value: "code", label: "Code", onPrefetch: () => void loadCodeTab() },
 ];
 
 // The diff viewer pulls in its worker pool, so load it only when the reader approaches Code.
@@ -2255,26 +2254,6 @@ export function PullRequestDetailPanel({
             active={tab}
             onSelect={setTab}
           >
-            <ToggleGroup
-              size="segmented"
-              variant="segmented"
-              value={[tab]}
-              onValueChange={(next) => {
-                const nextTab = visibleTabs.find((item) => item.value === next[0])?.value;
-                if (nextTab) setTab(nextTab);
-              }}
-            >
-              {visibleTabs.map((item) => (
-                <Toggle
-                  key={item.value}
-                  value={item.value}
-                  onPointerEnter={item.value === "code" ? () => void loadCodeTab() : undefined}
-                  onFocus={item.value === "code" ? () => void loadCodeTab() : undefined}
-                >
-                  {item.label}
-                </Toggle>
-              ))}
-            </ToggleGroup>
             {tab === "summary" ? (
               <span className="ml-auto inline-flex shrink-0 items-center">
                 {workflowApprovalsRequired > 0 && can("approve-workflows") ? (
