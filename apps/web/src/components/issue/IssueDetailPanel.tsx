@@ -36,7 +36,7 @@ import { writeTextToClipboard } from "~/hooks/useCopyToClipboard";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useLiveRefresh } from "~/hooks/useLiveRefresh";
 import { cn } from "~/lib/utils";
-import { readLocalApi } from "~/localApi";
+import { openLinkInBrowser } from "~/lib/openIssueLink";
 import { issueEnvironment } from "~/state/issues";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
@@ -483,10 +483,6 @@ export function IssueDetailPanel({
     toastManager.add({ type: "success", title: "Opened in a thread", description });
   };
 
-  const openOnHost = (url: string) => {
-    void readLocalApi()?.shell.openExternal(url);
-  };
-
   // Two questions, both of which have to say yes: whether this host can do it at all, and
   // whether this account may. A reader with read access on someone else's project sees the issue
   // and none of the buttons that would only ever be refused.
@@ -564,7 +560,7 @@ export function IssueDetailPanel({
                     render={
                       <button
                         type="button"
-                        onClick={() => openOnHost(detail.url)}
+                        onClick={() => openLinkInBrowser(detail.url)}
                         className={cn(
                           "shrink-0 font-medium underline-offset-2 hover:underline",
                           statePresentation.toneClassName,
@@ -598,7 +594,7 @@ export function IssueDetailPanel({
                       <button
                         type="button"
                         tabIndex={condensed ? 0 : -1}
-                        onClick={() => openOnHost(detail.url)}
+                        onClick={() => openLinkInBrowser(detail.url)}
                         className={cn(
                           "shrink-0 font-medium underline-offset-2 hover:underline",
                           statePresentation.toneClassName,
@@ -713,7 +709,7 @@ export function IssueDetailPanel({
                     </>
                   ) : null}
                   <MenuSeparator />
-                  <MenuItem onClick={() => openOnHost(detail.url)}>
+                  <MenuItem onClick={() => openLinkInBrowser(detail.url)}>
                     <ArrowUpRightIcon className="size-3.5" />
                     {openOnIssueLabel(detail.provider)}
                   </MenuItem>
@@ -1025,10 +1021,10 @@ export function IssueDetailPanel({
                   }
                   onOpenLinkedPullRequest={(link) =>
                     onOpenLinkedPullRequest === undefined
-                      ? openOnHost(link.url)
+                      ? openLinkInBrowser(link.url)
                       : onOpenLinkedPullRequest(link)
                   }
-                  onOpenAiMatch={(match) => openOnHost(match.url)}
+                  onOpenAiMatch={(match) => openLinkInBrowser(match.url)}
                   onRefresh={refreshDetail}
                 />
               </div>

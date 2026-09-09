@@ -9,6 +9,18 @@ import {
 } from "./openIssueLink";
 
 describe("openIssueLink", () => {
+  it.each(["javascript:alert(1)", "data:text/html,unsafe", "file:///etc/passwd", "not a URL"])(
+    "rejects unsafe issue links before opening them: %s",
+    async (targetUrl) => {
+      const openExternal = vi.fn();
+
+      await expect(openIssueLink({ openExternal }, targetUrl)).rejects.toBeInstanceOf(
+        IssueLinkOpenError,
+      );
+      expect(openExternal).not.toHaveBeenCalled();
+    },
+  );
+
   it("opens the requested issue URL", async () => {
     const openExternal = vi.fn(async () => undefined);
     const targetUrl = "https://github.com/pingdotgg/t3code/issues/123";

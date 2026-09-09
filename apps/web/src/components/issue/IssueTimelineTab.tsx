@@ -2,7 +2,7 @@ import type { EnvironmentId, IssueComment, IssueDetailView, IssueRef } from "@t3
 import { CircleDotIcon, PencilIcon } from "lucide-react";
 import { useState } from "react";
 
-import { readLocalApi } from "~/localApi";
+import { openLinkInBrowser } from "~/lib/openIssueLink";
 import { issueEnvironment } from "~/state/issues";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
@@ -66,9 +66,7 @@ export function IssueTimelineTab({
 }) {
   const entries = buildIssueTimeline(detail);
   const rows = groupIssueTimelineConversations(order === "oldest" ? entries : entries.toReversed());
-  const openOnHost = (url: string) => {
-    void readLocalApi()?.shell.openExternal(url);
-  };
+
   const comments = new Map(detail.comments.map((comment) => [comment.id, comment]));
   const [editingScope, setEditingScope] = useState<IssueCommentEditScope | null>(null);
   const editingId = issueCommentEditId(editingScope, detail.url);
@@ -116,7 +114,7 @@ export function IssueTimelineTab({
               <ConversationGroup
                 key={`comments:${row.key}`}
                 entries={row.entries}
-                onOpen={openOnHost}
+                onOpen={openLinkInBrowser}
                 renderActions={(entry) => {
                   const comment = editableComment(entry);
                   return comment === null || editingId === entry.id ? null : (

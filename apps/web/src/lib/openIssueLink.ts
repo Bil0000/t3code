@@ -36,6 +36,10 @@ export async function openIssueLink(
   targetUrl: string,
 ): Promise<void> {
   try {
+    const url = new URL(targetUrl);
+    if (url.protocol !== "https:" && url.protocol !== "http:") {
+      throw new Error("Issue links must use HTTP or HTTPS.");
+    }
     await shell.openExternal(targetUrl);
   } catch (cause) {
     throw IssueLinkOpenError.fromCause(targetUrl, cause);

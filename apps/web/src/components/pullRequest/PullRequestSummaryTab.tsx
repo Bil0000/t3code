@@ -29,7 +29,7 @@ import { useOpenLink } from "~/browser/useOpenLink";
 import { formatRelativeTimeLabel } from "~/timestampFormat";
 
 import { Textarea } from "../ui/textarea";
-import { readLocalApi } from "~/localApi";
+import { openLinkInBrowser } from "~/lib/openIssueLink";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import { toastManager } from "../ui/toast";
@@ -403,7 +403,7 @@ export function PullRequestSummaryTab({
     version: detail.updatedAt,
   });
   const openAiMatch = (match: { readonly url: string }) => {
-    void readLocalApi()?.shell.openExternal(match.url);
+    openLinkInBrowser(match.url);
   };
   const shownComments = shown.url === detail.url ? shown.count : COMMENT_PAGE;
   // Windowed by recency regardless of display order: expanding always reaches further back in
@@ -755,7 +755,7 @@ export function PullRequestSummaryTab({
                 // reading the two together.
                 onClick={() =>
                   onOpenLinkedIssue === undefined
-                    ? void readLocalApi()?.shell.openExternal(link.url)
+                    ? openAiMatch(link)
                     : onOpenLinkedIssue({ ...link, provider: detail.provider })
                 }
                 className="flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs hover:bg-accent/60"
