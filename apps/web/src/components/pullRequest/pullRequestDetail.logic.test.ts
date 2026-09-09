@@ -1129,6 +1129,16 @@ describe("linking a change to the issues it is about", () => {
     expect(prompt).not.toMatch(/\bAPI\b/u);
   });
 
+  it.each([
+    { ...relatedIssue, provider: "bitbucket" },
+    { ...relatedIssue, kind: "pull-request" as const },
+  ])("uses a plain URL for $provider $kind matches", (match) => {
+    const prompt = buildLinkIssuesHandoff(base, match).prompt;
+    expect(prompt).toContain(match.url);
+    expect(prompt).not.toContain("Closes #");
+    expect(prompt).toContain("Do not claim that this closes");
+  });
+
   it("frames the change as untrusted data, in a chip named after it", () => {
     const [chip] = buildLinkIssuesHandoff(base, relatedIssue).reviewComments;
     expect(chip?.id).toBe("pull-request-context:42");
