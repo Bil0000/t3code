@@ -155,6 +155,7 @@ const draftKey = (target: ScopedThreadRef | DraftId): string =>
 
 export function IssueDetailPanel({
   environmentId,
+  panelRef = null,
   reference,
   handoffTarget,
   refreshToken: forcedRefreshToken = 0,
@@ -164,6 +165,7 @@ export function IssueDetailPanel({
   chromeVariant = "full",
 }: {
   environmentId: EnvironmentId;
+  panelRef?: ScopedThreadRef | null;
   reference: IssueRef;
   /** Where "Solve", "Ask" and the rest put what they write. */
   handoffTarget: IssueHandoffTarget;
@@ -550,8 +552,8 @@ export function IssueDetailPanel({
       ? new URL(detail.repository, `${new URL(detail.url).origin}/`).toString()
       : null;
   const markdownContext = useMemo(
-    () => ({ repositoryUrl: markdownRepositoryUrl, threadRef: markdownThreadRef }),
-    [markdownRepositoryUrl, markdownThreadRef],
+    () => ({ repositoryUrl: markdownRepositoryUrl, threadRef: markdownThreadRef, panelRef }),
+    [markdownRepositoryUrl, markdownThreadRef, panelRef],
   );
 
   return (

@@ -1432,6 +1432,7 @@ function IssuesRouteView() {
               <PullRequestDetailPanel
                 key={activeSurface.id}
                 environmentId={issueEnvironmentId}
+                panelRef={rightPanelRef}
                 reference={{
                   projectId: activeSurface.projectId as ProjectId,
                   repository: activeSurface.repository,
@@ -1471,6 +1472,7 @@ function IssuesRouteView() {
               <IssueDetailPanel
                 key={activeSurface.id}
                 environmentId={issueEnvironmentId}
+                panelRef={rightPanelRef}
                 reference={{
                   projectId: activeSurface.projectId as ProjectId,
                   ...(activeSurface.provider === undefined

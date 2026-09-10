@@ -457,6 +457,7 @@ function PullRequestBaseFreshnessWarning({
 
 export function PullRequestDetailPanel({
   environmentId,
+  panelRef = null,
   threadRef = null,
   reference: requestedReference,
   listEntry = null,
@@ -470,6 +471,7 @@ export function PullRequestDetailPanel({
   onSelectPullRequest,
 }: {
   environmentId: EnvironmentId;
+  panelRef?: ScopedThreadRef | null;
   onSelectPullRequest?: ((reference: PullRequestRef) => void) | undefined;
   /**
    * The thread this panel sits beside, if any. Links that are not the pull
@@ -709,8 +711,12 @@ export function PullRequestDetailPanel({
   }, [detail?.autoMergeMethod, pullRequestKey]);
   const repositoryUrl = detail === null ? null : changeRequestRepositoryUrl(detail.url);
   const markdownContext = useMemo(
-    () => ({ repositoryUrl: detail?.provider === "github" ? repositoryUrl : null, threadRef }),
-    [detail?.provider, repositoryUrl, threadRef],
+    () => ({
+      repositoryUrl: detail?.provider === "github" ? repositoryUrl : null,
+      threadRef,
+      panelRef,
+    }),
+    [detail?.provider, repositoryUrl, threadRef, panelRef],
   );
   const authorProfileUrl =
     detail?.provider === "github" &&

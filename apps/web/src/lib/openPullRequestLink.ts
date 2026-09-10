@@ -1,4 +1,5 @@
 import type { EnvironmentId, ScopedThreadRef } from "@t3tools/contracts";
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import * as Schema from "effect/Schema";
 import { PullRequestListSort } from "../components/pullRequest/pullRequestListPreferences";
 import { useNavigate } from "@tanstack/react-router";
@@ -13,7 +14,7 @@ import {
 
 import { useOpenLink } from "../browser/useOpenLink";
 import { stackedThreadToast, toastManager } from "../components/ui/toast";
-import { useRightPanelStore } from "../rightPanelStore";
+import { PULL_REQUESTS_PANEL_REF, useRightPanelStore } from "../rightPanelStore";
 import type { EnvironmentProject } from "@t3tools/client-runtime/state/shell";
 
 import { useProjects, useServerConfigs } from "../state/entities";
@@ -198,7 +199,10 @@ export function useOpenChangeRequestLink(
           url: targetUrl,
           number: parsed.number,
         });
-        if (!resolvedThreadRef) {
+        if (
+          !resolvedThreadRef &&
+          scopedThreadKey(resolvedPanelRef) === scopedThreadKey(PULL_REQUESTS_PANEL_REF)
+        ) {
           void navigate({
             to: "/pull-requests",
             search: (previous) => {
