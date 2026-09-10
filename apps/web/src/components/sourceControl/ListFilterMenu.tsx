@@ -40,8 +40,6 @@ export interface ListFilterOption<Value extends string> {
   readonly unavailable?: string | undefined;
 }
 
-/** MenuRadioGroup wants a string, so "every host" wears the one value no host can be. */
-export const ALL_HOSTS_VALUE = "";
 const ALL_PROJECTS_VALUE = "all";
 
 export function ListSearchInput({

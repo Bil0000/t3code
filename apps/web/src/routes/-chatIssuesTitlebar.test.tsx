@@ -93,21 +93,21 @@ describe("IssuesColumn", () => {
     expect(markup).toContain("gap-4");
   });
 
-  it("keeps provider management in the compact menu", () => {
+  it.each([false, true])("keeps provider management available when connected=%s", (connected) => {
     const onClick = vi.fn();
     const menu = CompactFilterMenu({
       label: "Filter by provider",
       value: "",
       options: [{ value: "", label: "All providers", Icon: SettingsIcon }],
       onChange: vi.fn(),
-      action: { connected: false, onClick },
+      action: { connected, onClick },
     });
     const action = visitElements(
       menu,
       (element) => element.type === MenuItem && element.props.children !== undefined,
     );
 
-    expect(action?.props.children).toContain("Connect Linear…");
+    expect(action?.props.children).toContain(connected ? "Linear settings…" : "Connect Linear…");
     expect(visitElements(action, (element) => element.type === LinearIcon)).not.toBeNull();
     (action?.props.onClick as (() => void) | undefined)?.();
     expect(onClick).toHaveBeenCalledOnce();

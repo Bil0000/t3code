@@ -21,6 +21,7 @@ import {
   LayersIcon,
   LoaderIcon,
   PenLineIcon,
+  Plug2Icon,
   UserCheckIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -1262,7 +1263,7 @@ function IssuesRouteView() {
     (entry, index) => activeHosts.findIndex((other) => other.host === entry.host) === index,
   );
   const hostMenuOptions: ReadonlyArray<ListFilterOption<string>> = [
-    { value: "", label: "All providers", Icon: LayersIcon },
+    { value: "", label: "All", Icon: Plug2Icon },
     ...hostMenuEntries.map((entry) => {
       const presentation = getIssueProviderPresentation(entry.kind);
       const sharesKind = activeHosts.some((host) => host !== entry && host.kind === entry.kind);
@@ -1305,13 +1306,6 @@ function IssuesRouteView() {
         involvement={search.involvement}
         involvementOptions={INVOLVEMENT_TABS}
         onInvolvement={(involvement) => updateListScope({ involvement })}
-        hostFilter={{
-          host: search.host,
-          hostOptions: hostMenuOptions,
-          onHost: (host) => updateListScope({ host, sort: undefined, order: undefined }),
-          onManageLinear: openLinearSettings,
-          linearManaged,
-        }}
         projectFilter={{
           environmentId,
           projects: scopedProjects,
@@ -1554,17 +1548,26 @@ export function CompactFilterMenu<Value extends string>({
   options,
   onChange,
   action,
+  outlined = false,
 }: {
   label: string;
   value: Value;
   options: ReadonlyArray<ListFilterOption<Value>>;
   onChange: (value: Value) => void;
   action?: CompactFilterAction | undefined;
+  outlined?: boolean;
 }) {
   const inlineLinearSettings =
     action?.connected === true && options.some((option) => option.value === "linear.app");
   return (
-    <SharedCompactFilterMenu label={label} value={value} options={options} onChange={onChange}>
+    <SharedCompactFilterMenu
+      label={label}
+      value={value}
+      options={options}
+      onChange={onChange}
+      outlined={outlined}
+      className={outlined ? "min-w-0 max-w-44 flex-1 @lg/issue-list:flex-none" : ""}
+    >
       {renderIssueProviderMenuRadioGroup({
         value,
         options,
@@ -1694,7 +1697,7 @@ export function IssuesColumn({
                 options={INVOLVEMENT_TABS}
                 onChange={onInvolvement}
               />
-              {hostMenuOptions.length > 2 || hostMenuAction !== undefined ? (
+              {hostMenuOptions.length > 2 ? (
                 <CompactFilterMenu
                   label="Filter by provider"
                   value={host ?? ""}
@@ -1751,6 +1754,16 @@ export function IssuesColumn({
                 {searchInput}
               </div>
               {filtersMenu}
+              {hostMenuOptions.length > 2 ? (
+                <CompactFilterMenu
+                  label="Filter by provider"
+                  outlined
+                  value={host ?? ""}
+                  options={hostMenuOptions}
+                  onChange={(next) => onHost(next === "" ? undefined : next)}
+                  action={hostMenuAction}
+                />
+              ) : null}
               {!condensed ? (
                 <ListRefreshControl
                   label="Refresh issues"

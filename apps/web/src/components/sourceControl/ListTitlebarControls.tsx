@@ -85,6 +85,7 @@ export function CompactFilterMenu<Value extends string>({
           </>
         ) : (
           <>
+            {outlined ? <current.Icon aria-hidden className="size-4 shrink-0" /> : null}
             <span className="truncate">{current.label}</span>
             <ChevronDownIcon aria-hidden className="size-3 shrink-0 text-muted-foreground/70" />
           </>
@@ -92,7 +93,12 @@ export function CompactFilterMenu<Value extends string>({
       </MenuTrigger>
       <MenuPopup align="start" side="bottom" className="min-w-40">
         {children ?? (
-          <MenuRadioGroup value={value} onValueChange={(next) => onChange(next as Value)}>
+          <MenuRadioGroup
+            value={value}
+            onValueChange={(next) => {
+              if (next !== value) onChange(next as Value);
+            }}
+          >
             {options.map((option) => {
               const item = (
                 <MenuRadioItem

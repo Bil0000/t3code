@@ -1,8 +1,28 @@
 import { act } from "react";
+import { LayersIcon } from "lucide-react";
 import { create } from "react-test-renderer";
 import { expect, it, vi } from "vite-plus/test";
 
-import { useListSearchShortcut } from "./ListTitlebarControls";
+import { visitElements } from "../../test/reactElementTree";
+import { MenuRadioGroup } from "../ui/menu";
+import { CompactFilterMenu, useListSearchShortcut } from "./ListTitlebarControls";
+
+it("does not reset the list scope when the current provider is selected again", () => {
+  const onChange = vi.fn();
+  const menu = CompactFilterMenu({
+    label: "Filter by provider",
+    value: "github.com",
+    options: [{ value: "github.com", label: "GitHub", Icon: LayersIcon }],
+    onChange,
+  });
+  const group = visitElements(menu, (element) => element.type === MenuRadioGroup);
+  const select = group?.props.onValueChange as (value: string) => void;
+
+  select("github.com");
+  expect(onChange).not.toHaveBeenCalled();
+  select("");
+  expect(onChange).toHaveBeenCalledExactlyOnceWith("");
+});
 
 it("leaves find in an editor alone but focuses the list from elsewhere", async () => {
   const events = new EventTarget();

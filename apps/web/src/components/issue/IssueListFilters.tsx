@@ -27,13 +27,11 @@ import type { ElementType, ReactNode } from "react";
 import { cn } from "~/lib/utils";
 
 import {
-  ALL_HOSTS_VALUE,
   ListFilterMenu,
   ListFilterRadioGroup,
   ListProjectFilterGroup,
   type ListFilterOption,
 } from "../sourceControl/ListFilterMenu";
-import { LinearIcon } from "../Icons";
 import { Button } from "../ui/button";
 import {
   Menu,
@@ -69,7 +67,12 @@ export function renderIssueProviderMenuRadioGroup({
   onManageLinear?: () => void;
 }) {
   return (
-    <MenuRadioGroup value={value} onValueChange={onChange}>
+    <MenuRadioGroup
+      value={value}
+      onValueChange={(next) => {
+        if (next !== value) onChange(next);
+      }}
+    >
       {label ? <MenuGroupLabel>{label}</MenuGroupLabel> : null}
       {options.map((option) => {
         const item = (
@@ -262,7 +265,6 @@ export function IssueFiltersMenu({
   involvement,
   involvementOptions,
   onInvolvement,
-  hostFilter,
   projectFilter,
   label,
   labels,
@@ -274,22 +276,6 @@ export function IssueFiltersMenu({
   involvement: IssueInvolvement;
   involvementOptions: ReadonlyArray<ListFilterOption<IssueInvolvement>>;
   onInvolvement: (involvement: IssueInvolvement) => void;
-  /**
-   * Absent where the caller already knows the host, which is a surface listing one repository:
-   * a group offering the only host there is says nothing.
-   */
-  hostFilter?: {
-    readonly host: string | undefined;
-    /**
-     * Includes the "all hosts" entry, whose value is the empty string. With fewer than two real
-     * hosts there is nothing to switch between, so the whole group stays out of the menu.
-     */
-    readonly hostOptions: ReadonlyArray<ListFilterOption<string>>;
-    readonly onHost: (host: string | undefined) => void;
-    readonly onManageLinear?: () => void;
-    readonly linearManaged?: boolean;
-  };
-  /** Absent for the same reason `hostFilter` is: one project is not a choice. */
   projectFilter?: {
     readonly environmentId: EnvironmentId | null;
     readonly projects: ReadonlyArray<{
@@ -310,13 +296,9 @@ export function IssueFiltersMenu({
   labels: ReadonlyArray<string>;
   onLabel: (label: string | undefined) => void;
 }) {
-  const providerOptions = hostFilter?.hostOptions.filter((option) => !option.unavailable) ?? [];
-  const linearOption = providerOptions.find((option) => option.value === "linear.app");
-  const linearManaged = hostFilter?.linearManaged ?? linearOption !== undefined;
   const filterCount = [
     state !== "open",
     involvement !== "all",
-    hostFilter?.host !== undefined,
     projectFilter?.projectId !== undefined,
     label !== undefined,
   ].filter(Boolean).length;
@@ -348,55 +330,6 @@ export function IssueFiltersMenu({
           onChange={onInvolvement}
         />
       </IssueFilterSubmenu>
-      {hostFilter !== undefined &&
-      (providerOptions.length > 2 || hostFilter.onManageLinear !== undefined) ? (
-        <>
-          <MenuSeparator />
-          <IssueFilterSubmenu
-            label="Provider"
-            Icon={
-              providerOptions.find(
-                (option) => option.value === (hostFilter.host ?? ALL_HOSTS_VALUE),
-              )?.Icon ?? LayersIcon
-            }
-            current={
-              providerOptions.find(
-                (option) => option.value === (hostFilter.host ?? ALL_HOSTS_VALUE),
-              )?.label ?? "All providers"
-            }
-          >
-            {linearOption && hostFilter.onManageLinear ? (
-              renderIssueProviderMenuRadioGroup({
-                label: "Provider",
-                value: hostFilter.host ?? ALL_HOSTS_VALUE,
-                options: providerOptions,
-                onChange: (next) => {
-                  if (next !== (hostFilter.host ?? ALL_HOSTS_VALUE)) {
-                    hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next);
-                  }
-                },
-                onManageLinear: hostFilter.onManageLinear,
-              })
-            ) : (
-              <ListFilterRadioGroup
-                label="Provider"
-                value={hostFilter.host ?? ALL_HOSTS_VALUE}
-                options={providerOptions}
-                onChange={(next) => hostFilter.onHost(next === ALL_HOSTS_VALUE ? undefined : next)}
-              />
-            )}
-            {hostFilter.onManageLinear !== undefined && linearOption === undefined ? (
-              <>
-                <MenuSeparator />
-                <MenuItem onClick={hostFilter.onManageLinear}>
-                  <LinearIcon aria-hidden className="size-3.5" />
-                  {linearManaged ? "Linear settings…" : "Connect Linear…"}
-                </MenuItem>
-              </>
-            ) : null}
-          </IssueFilterSubmenu>
-        </>
-      ) : null}
       {projectFilter === undefined ? null : (
         <>
           <MenuSeparator />

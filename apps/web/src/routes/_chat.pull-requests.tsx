@@ -31,6 +31,7 @@ import {
   LayersIcon,
   ListChecksIcon,
   PenLineIcon,
+  Plug2Icon,
   Maximize2Icon,
   Minimize2Icon,
 } from "lucide-react";
@@ -1702,7 +1703,7 @@ function PullRequestsRouteView() {
   // kind force the hostname to tell them apart.
   const hostEntries = hosts.length > 0 ? hosts : expectedHosts;
   const hostMenuOptions: ReadonlyArray<PullRequestFilterOption<string>> = [
-    { value: "", label: "All hosts", Icon: LayersIcon },
+    { value: "", label: "All", Icon: Plug2Icon },
     ...hostEntries.map((entry) => {
       // `expectedHosts` stands in before the server has answered, and nothing is known to be
       // unreadable yet; once the summaries arrive they carry whether each one could be read.
@@ -1759,9 +1760,6 @@ function PullRequestsRouteView() {
       }
       authorOptions={facets.authors}
       labelOptions={facets.labels}
-      host={search.host}
-      hostOptions={hostMenuOptions}
-      onHost={(host) => updateListScope({ host })}
       server={scopedEnvironmentId ?? undefined}
       serverOptions={serverMenuOptions}
       // Narrowing to one server drops a project scope belonging to another, which would
@@ -2180,7 +2178,7 @@ function PullRequestsColumn({
               />
               {hostMenuOptions.length > 2 ? (
                 <CompactFilterMenu
-                  label="Filter by host"
+                  label="Filter by provider"
                   value={host ?? ""}
                   options={hostMenuOptions}
                   onChange={(next) => onHost(next === "" ? undefined : next)}
@@ -2235,6 +2233,16 @@ function PullRequestsColumn({
               </div>
               {sortMenu}
               {filtersMenu}
+              {hostMenuOptions.length > 2 ? (
+                <CompactFilterMenu
+                  label="Filter by provider"
+                  outlined
+                  className="min-w-0 max-w-44 flex-1 @lg/pr-list:flex-none"
+                  value={host ?? ""}
+                  options={hostMenuOptions}
+                  onChange={(next) => onHost(next === "" ? undefined : next)}
+                />
+              ) : null}
               {!condensed ? (
                 <ListRefreshControl
                   label="Refresh pull requests"
