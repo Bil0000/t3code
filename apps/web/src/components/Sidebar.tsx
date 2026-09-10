@@ -3150,11 +3150,14 @@ export default function Sidebar() {
   const finishThreadDrag = useCallback((started: boolean, cancelled: boolean) => {
     dragSensorRef.current = null;
     if (started) {
-      listMotionRef.current?.release();
-      setDragState(null);
       // A release over a pane leaves a target for the pane layout to apply
       // (it ends the drag itself); a cancel or a release elsewhere ends it here.
+      // Rows glide back into place only for a sidebar drop: a pane drop is
+      // about to rebuild the split block, and gliding into that is noise.
       const paneDrag = useChatPaneDragStore.getState();
+      if (paneDrag.target === null) listMotionRef.current?.release();
+      else listMotionRef.current?.suspend();
+      setDragState(null);
       if (cancelled || paneDrag.target === null) paneDrag.end();
     }
   }, []);
@@ -3391,18 +3394,32 @@ export default function Sidebar() {
     [sidebarListItems],
   );
   const sidebarListHasRows = sidebarListItems.length + visibleDraftSessionCount > 0;
+  // A split opening or closing moves whole cards between sections. Sliding
+  // and fading every displaced row reads as the sidebar rearranging itself,
+  // so that update jumps; only reorders within a section animate.
+  const splitMembershipKey = useMemo(
+    () =>
+      sidebarListItems
+        .flatMap((item) => (item.kind === "thread" && item.section === "split" ? [item.key] : []))
+        .join("\0"),
+    [sidebarListItems],
+  );
+  const previousSplitMembershipKeyRef = useRef(splitMembershipKey);
   useLayoutEffect(() => {
     // Drag release clears the baseline, so its commit cannot replay the
     // sortable preview; rows glide from their released positions instead.
     // Later thread actions can animate while writes settle.
     // Draft navigation can reveal a frozen row without changing the draft count.
     void sidebarListOrderKey;
-    listMotionRef.current?.update(!listMotionPaused && sidebarListHasRows);
+    const splitChanged = previousSplitMembershipKeyRef.current !== splitMembershipKey;
+    previousSplitMembershipKeyRef.current = splitMembershipKey;
+    listMotionRef.current?.update(!listMotionPaused && sidebarListHasRows && !splitChanged);
   }, [
     listMotionPaused,
     routeDraftIdForRows,
     sidebarListHasRows,
     sidebarListOrderKey,
+    splitMembershipKey,
     visibleDraftSessionCount,
   ]);
   const handleThreadDragOver = useCallback(
