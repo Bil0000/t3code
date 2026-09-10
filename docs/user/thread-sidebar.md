@@ -97,7 +97,9 @@ The server finds the PR for each unsettled thread's saved branch, even when your
 apps are closed. Settled threads keep their saved links. Update the server if
 automatic branch links do not appear.
 
-On web and desktop, choose **Link another PR** beside a linked PR to add more
+On web and desktop, use the link button beside a PR to choose several PRs at once.
+It suggests your recent open PRs in the project, puts branch matches first, and
+marks saved links. You can also paste a PR URL. **Link another PR** adds more
 without replacing existing links. Select the additional PR count to open all
 linked reviews. **Unlink from thread** removes only that review; the branch PR
 appears again when no links remain, if one exists. See

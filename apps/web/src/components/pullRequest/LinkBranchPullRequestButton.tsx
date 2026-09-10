@@ -19,7 +19,11 @@ export function LinkBranchPullRequestButton({
   const linking = usePullRequestLinking(threadRef.environmentId);
   const [pending, setPending] = useState(false);
   if (linked ? linking.mode !== "multiple" : !linking.canLink(url)) return null;
-  const label = linked ? "Link another PR" : "Link this PR";
+  const label = linked
+    ? "Link another PR"
+    : linking.mode === "multiple"
+      ? "Link PRs"
+      : "Link this PR";
   return (
     <Tooltip>
       <TooltipTrigger
@@ -33,8 +37,8 @@ export function LinkBranchPullRequestButton({
             onClick={async (event) => {
               event.preventDefault();
               event.stopPropagation();
-              if (linked) {
-                openLinkPullRequestDialog(threadRef);
+              if (linking.mode === "multiple") {
+                openLinkPullRequestDialog(threadRef, url);
                 return;
               }
               setPending(true);
@@ -55,7 +59,11 @@ export function LinkBranchPullRequestButton({
           </Button>
         }
       />
-      <TooltipPopup>{linked ? label : "Link this PR to keep it with this thread"}</TooltipPopup>
+      <TooltipPopup>
+        {linking.mode === "multiple"
+          ? "Choose PRs to keep with this thread"
+          : "Link this PR to keep it with this thread"}
+      </TooltipPopup>
     </Tooltip>
   );
 }
