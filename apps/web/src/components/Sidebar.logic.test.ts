@@ -2494,6 +2494,8 @@ describe("resolveSidebarDropVerb", () => {
     expect(resolveSidebarDropVerb("pinned", "active")).toBe("unpin");
     expect(resolveSidebarDropVerb("settled", "active")).toBe("unsettle");
     expect(resolveSidebarDropVerb("snoozed", "active")).toBe("wake");
+    expect(resolveSidebarDropVerb("split", "active")).toBe("unsplit");
+    expect(resolveSidebarDropVerb("split", "pinned")).toBe("pin");
     expect(resolveSidebarDropVerb("active", "settled")).toBe("settle");
     expect(resolveSidebarDropVerb("pinned", "settled")).toBe("settle");
     expect(resolveSidebarDropVerb("snoozed", "settled")).toBe("settle");

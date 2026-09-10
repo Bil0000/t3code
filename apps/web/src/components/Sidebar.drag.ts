@@ -194,10 +194,13 @@ export function createSidebarSortingStrategy(input: {
     projected.push(...groups.pinned);
     marker("pinned-divider");
     section("active");
-    // Split groups never take a drop, so their block passes through as is.
+    // Split groups never take a drop, so their block passes through as is,
+    // minus a lifted split row on its way out.
     projected.push(
       ...items.filter((item) =>
-        item.kind === "marker" ? item.marker.startsWith("split-") : item.section === "split",
+        item.kind === "marker"
+          ? item.marker.startsWith("split-")
+          : item.section === "split" && item.key !== active.key,
       ),
     );
     if (

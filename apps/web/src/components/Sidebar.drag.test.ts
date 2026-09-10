@@ -319,6 +319,31 @@ describe("sidebar drag projection", () => {
     expect(result.get(sidebarMarkerId("settled-header"))).toEqual(stationary);
   });
 
+  it("previews a split row leaving its block for the Active slot under it", () => {
+    const items = [
+      pinnedHeader,
+      divider,
+      thread("a1", "active"),
+      marker("split-header-g"),
+      thread("x", "split"),
+      thread("y", "split"),
+      marker("split-divider-g"),
+      settledHeader,
+    ];
+    expect(resolveSidebarDropTarget(items, "x", "a1")).toEqual({
+      section: "active",
+      pinnedOrder: [],
+      activeOrder: ["x", "a1"],
+    });
+    const result = preview({ items, settledOrder: [], settledExpanded: true }, "x", "a1");
+    // The lifted row moves above a1; its old slot in the block closes up.
+    expect(result.get("x")).toEqual(stationary);
+    expect(result.get("a1")?.y).toBe(83);
+    expect(result.get(sidebarMarkerId("split-header-g"))?.y).toBe(83);
+    expect(result.get("y")?.y).toBe(0);
+    expect(result.get(sidebarMarkerId("split-divider-g"))?.y).toBe(0);
+  });
+
   it("keeps the pinned header above the gap when a lower pin moves to the top", () => {
     const result = preview(
       { items: pinned, settledOrder: [], settledExpanded: true },

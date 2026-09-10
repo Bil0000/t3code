@@ -904,6 +904,12 @@ const SidebarDraftBlock = memo(function SidebarDraftBlock(props: {
 // the same icons as the row actions and context menu so the drop reads as the
 // action it performs.
 const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
+  unsplit: (
+    <>
+      <XIcon aria-hidden className="size-3" />
+      Leave split
+    </>
+  ),
   pin: (
     <>
       <PinIcon aria-hidden className="size-3" />
@@ -2505,12 +2511,18 @@ export default function Sidebar() {
     const draggable = new Set<string>();
     const activeReorderable = new Set<string>();
     for (const thread of visible) {
+      const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
       const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
       if (splitThreadByKey.has(key)) {
         splitThreadByKey.set(key, thread);
+        // A split row drags out of its pane into Pinned or Active, so it
+        // needs the same reorder capabilities as the rows already there.
+        if (capabilities?.threadActiveReorder === true) activeReorderable.add(key);
+        if (capabilities?.threadPinning === true && capabilities.threadPinReorder === true) {
+          draggable.add(key);
+        }
         continue;
       }
-      const capabilities = serverConfigs.get(thread.environmentId)?.environment.capabilities;
       // Threads on servers without the settlement capability (old server,
       // or descriptor not loaded yet) never classify as settled: the user
       // could neither un-settle nor pin them, so auto-settling them would
@@ -3500,7 +3512,7 @@ export default function Sidebar() {
         return (
           planSidebarThreadDrop({
             activeKey: draggedThreadKey,
-            activeSection: draggedFromSection,
+            activeSection: draggedFromSection === "split" ? "active" : draggedFromSection,
             activePinned: source.pinnedAt != null,
             activeSettled: source.settledOverride === "settled",
             supportsSettlement:
@@ -3558,9 +3570,21 @@ export default function Sidebar() {
       const activeThread = threadByKey.get(activeKey);
       if (activeSection === undefined || target === null || activeThread === undefined) return;
       const threadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+      // A split row leaves its pane and then places like an Active row.
+      const dropFrom = activeSection === "split" ? "active" : activeSection;
+      if (activeSection === "split") {
+        // Dropping a split row anywhere in the list takes it out of its
+        // pane; the route follows the pane that stays when it was focused.
+        const survivor = useChatPanesStore.getState().closeThread(threadRef);
+        if (survivor) void navigateToThread(survivor);
+        if (target.section === "settled") {
+          attemptSettle(threadRef);
+          return;
+        }
+      }
       const plan = planSidebarThreadDrop({
         activeKey,
-        activeSection,
+        activeSection: dropFrom,
         activePinned: activeThread.pinnedAt != null,
         activeSettled: activeThread.settledOverride === "settled",
         supportsSettlement:
@@ -3587,7 +3611,7 @@ export default function Sidebar() {
             : [];
       const drop = {
         key: activeKey,
-        sourceSection: activeSection,
+        sourceSection: dropFrom,
         section: target.section,
         occurredAt: new Date().toISOString(),
         clearsSnooze:
@@ -3683,7 +3707,9 @@ export default function Sidebar() {
       serverConfigs,
       activeKeys,
       activeReorderableThreadKeys,
+      attemptSettle,
       draggableThreadKeys,
+      navigateToThread,
       pinThread,
       pinnedKeys,
       planForwardNavigation,
