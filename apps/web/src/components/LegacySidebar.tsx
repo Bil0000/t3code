@@ -1,3 +1,4 @@
+import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { LinkBranchPullRequestButton } from "./pullRequest/LinkBranchPullRequestButton";
 import { useRightPanelStore } from "../rightPanelStore";
@@ -88,6 +89,7 @@ import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { makeWorkspaceFileDropHandlers } from "./chat/workspaceFileDrop";
 import {
   readThreadShell,
+  useServerConfigs,
   useProjects,
   useThreadShells,
   useThreadShellsForProjectRefs,
@@ -741,7 +743,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             }}
             onOpenPullRequest={handlePrClick}
           />
-          {prUrl ? (
+          {supportsMultiplePullRequests || prUrl ? (
             <LinkBranchPullRequestButton
               threadRef={threadRef}
               url={prUrl}
@@ -2218,6 +2220,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
     updateSettings,
   ]);
 
+  const serverConfigs = useServerConfigs();
   const handleThreadContextMenu = useCallback(
     async (threadRef: ScopedThreadRef, position: { x: number; y: number }) => {
       const api = readLocalApi();
@@ -2236,6 +2239,10 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             ? [{ id: "new-thread-on-branch", label: `New thread on ${thread.branch}` }]
             : []),
           { id: "rename", label: "Rename thread" },
+          ...(serverConfigs.get(thread.environmentId)?.environment.capabilities
+            .threadPullRequests === true
+            ? [{ id: "link-pr", label: "Link PR", icon: "link" }]
+            : []),
           { id: "mark-unread", label: "Mark unread" },
           { id: "copy-path", label: "Copy Path" },
           { id: "copy-thread-id", label: "Copy Thread ID" },
@@ -2275,6 +2282,11 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
             }),
           );
         }
+        return;
+      }
+
+      if (clicked === "link-pr") {
+        openLinkPullRequestDialog(threadRef);
         return;
       }
 
@@ -2344,6 +2356,7 @@ const SidebarProjectItem = memo(function SidebarProjectItem(props: SidebarProjec
       router,
       setOpenMobile,
       startThreadRename,
+      serverConfigs,
     ],
   );
 

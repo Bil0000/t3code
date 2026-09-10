@@ -7,17 +7,11 @@ import {
 } from "@t3tools/contracts";
 import { useAtomValue } from "@effect/atom-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  threadPullRequestKeyOf,
-  visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
 
 import { parseChangeRequestUrl } from "~/lib/openPullRequestLink";
 import { parsePullRequestReference } from "~/pullRequestReference";
 import { useProjects, useThreadShell } from "~/state/entities";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
-import { pullRequestEnvironment } from "~/state/pullRequests";
-import { useEnvironmentQuery } from "~/state/query";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { Atom } from "effect/unstable/reactivity";
 import { Button } from "../ui/button";
@@ -31,18 +25,14 @@ import {
   DialogTitle,
 } from "../ui/dialog";
 import { Input } from "../ui/input";
-import { Checkbox } from "../ui/checkbox";
 
-const linkPullRequestDialogThreadAtom = Atom.make<{
-  threadRef: ScopedThreadRef;
-  initialUrl: string | null;
-} | null>(null).pipe(Atom.keepAlive, Atom.withLabel("pull-requests:link-dialog-thread"));
+const linkPullRequestDialogThreadAtom = Atom.make<ScopedThreadRef | null>(null).pipe(
+  Atom.keepAlive,
+  Atom.withLabel("pull-requests:link-dialog-thread"),
+);
 
-export function openLinkPullRequestDialog(
-  threadRef: ScopedThreadRef,
-  initialUrl: string | null = null,
-): void {
-  appAtomRegistry.set(linkPullRequestDialogThreadAtom, { threadRef, initialUrl });
+export function openLinkPullRequestDialog(threadRef: ScopedThreadRef): void {
+  appAtomRegistry.set(linkPullRequestDialogThreadAtom, threadRef);
 }
 
 interface LinkPullRequestDialogProps {
@@ -50,13 +40,11 @@ interface LinkPullRequestDialogProps {
   threadRef: ScopedThreadRef;
   /** The thread's own project: bare numbers resolve against its repository. */
   projectId: string | null;
-  initialUrl: string | null;
   onOpenChange: (open: boolean) => void;
 }
 
 export function LinkPullRequestDialogHost() {
-  const target = useAtomValue(linkPullRequestDialogThreadAtom);
-  const threadRef = target?.threadRef ?? null;
+  const threadRef = useAtomValue(linkPullRequestDialogThreadAtom);
   const thread = useThreadShell(threadRef);
   const linking = usePullRequestLinking(threadRef?.environmentId);
   if (threadRef === null || linking.mode === "unsupported") return null;
@@ -66,7 +54,6 @@ export function LinkPullRequestDialogHost() {
       open
       threadRef={threadRef}
       projectId={thread?.projectId ?? null}
-      initialUrl={target?.initialUrl ?? null}
       onOpenChange={(open) => {
         if (!open) appAtomRegistry.set(linkPullRequestDialogThreadAtom, null);
       }}
@@ -128,7 +115,6 @@ function LinkPullRequestDialog({
   open,
   threadRef,
   projectId,
-  initialUrl,
   onOpenChange,
 }: LinkPullRequestDialogProps) {
   const inputRef = useRef<HTMLInputElement>(null);
@@ -136,7 +122,6 @@ function LinkPullRequestDialog({
   const [dirty, setDirty] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const projects = useProjects();
-  const thread = useThreadShell(threadRef);
   const environmentProjects = useMemo(
     () => projects.filter((project) => project.environmentId === threadRef.environmentId),
     [projects, threadRef.environmentId],
@@ -152,7 +137,6 @@ function LinkPullRequestDialog({
     const kind = identity.provider as SourceControlProviderKind;
     const host = pullRequestHostOf(identity, kind);
     return {
-      id: project.id,
       host,
       repository,
       webUrl: (number: number) => changeRequestWebUrl(kind, host, repository, number),
@@ -160,47 +144,6 @@ function LinkPullRequestDialog({
   }, [environmentProjects, projectId]);
   const linking = usePullRequestLinking(threadRef.environmentId);
   const [pending, setPending] = useState(false);
-  const [selected, setSelected] = useState<string[]>([]);
-  const suggestionsQuery = useEnvironmentQuery(
-    open && linking.mode === "multiple" && ownProject !== null
-      ? pullRequestEnvironment.list({
-          environmentId: threadRef.environmentId,
-          input: { projectId: ownProject.id, state: "open", involvement: "authored", limit: 20 },
-        })
-      : null,
-  );
-  const suggestions = useMemo(() => {
-    const candidates = new Map<
-      string,
-      { url: string; number: number; title: string; headBranch: string | null }
-    >();
-    for (const link of visibleThreadPullRequests(thread?.pullRequests ?? [])) {
-      candidates.set(threadPullRequestKeyOf(link), {
-        ...link,
-        title: link.snapshot?.title ?? link.repository,
-        headBranch: link.snapshot?.headBranch ?? null,
-      });
-    }
-    for (const url of [thread?.branchPullRequest?.url, initialUrl]) {
-      const parsed = url ? parseChangeRequestUrl(url) : null;
-      if (parsed === null || !url || candidates.has(threadPullRequestKeyOf(parsed))) continue;
-      candidates.set(threadPullRequestKeyOf(parsed), {
-        ...parsed,
-        url,
-        title: parsed.repository,
-        headBranch: null,
-      });
-    }
-    for (const entry of suggestionsQuery.data?.entries ?? []) {
-      candidates.set(threadPullRequestKeyOf(entry), entry);
-    }
-    const matchesBranch = (entry: { url: string; headBranch: string | null }) =>
-      entry.url === thread?.branchPullRequest?.url ||
-      (thread?.branch != null && entry.headBranch === thread.branch);
-    return [...candidates.values()]
-      .filter((entry) => linking.canLink(entry.url))
-      .toSorted((a, b) => Number(matchesBranch(b)) - Number(matchesBranch(a)));
-  }, [initialUrl, linking, suggestionsQuery.data, thread]);
 
   useEffect(() => {
     if (!open) return;
@@ -220,19 +163,12 @@ function LinkPullRequestDialog({
 
   const submit = useCallback(async () => {
     if (pending) return;
-    let urls = selected.filter((url) => !linking.isLinked(thread, url));
-    if (selected.length === 0) {
-      setDirty(true);
-      if (resolved === null || "error" in resolved) return;
-      urls = [resolved.link.url];
-    }
+    setDirty(true);
+    if (resolved === null || "error" in resolved) return;
     setSubmitError(null);
     setPending(true);
     try {
-      for (const url of urls) {
-        await linking.changeLink(threadRef, url, true);
-        setSelected((current) => current.filter((selectedUrl) => selectedUrl !== url));
-      }
+      await linking.changeLink(threadRef, resolved.link.url, true);
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "Could not link the pull request.");
       return;
@@ -240,7 +176,7 @@ function LinkPullRequestDialog({
       setPending(false);
     }
     onOpenChange(false);
-  }, [linking, onOpenChange, pending, resolved, selected, thread, threadRef]);
+  }, [linking, onOpenChange, pending, resolved, threadRef]);
 
   const validation = !dirty
     ? null
@@ -258,69 +194,16 @@ function LinkPullRequestDialog({
         <DialogHeader>
           <DialogTitle>Link pull request</DialogTitle>
           <DialogDescription>
-            {linking.mode === "multiple"
-              ? "Choose PRs to keep with this thread, or paste a pull request URL."
-              : "Attach a pull request to this thread. A full URL can point at any repository on a host this environment has a project for."}
+            Enter a PR number from this project, or paste a pull request URL.
           </DialogDescription>
         </DialogHeader>
         <DialogPanel className="space-y-3">
-          {linking.mode === "multiple" ? (
-            <div className="space-y-2">
-              <p className="text-xs text-muted-foreground">Your recent PRs in this project</p>
-              <div className="max-h-64 space-y-1 overflow-y-auto">
-                {suggestions.map((suggestion) => {
-                  const linked = linking.isLinked(thread, suggestion.url);
-                  return (
-                    <label
-                      key={suggestion.url}
-                      className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50"
-                    >
-                      <Checkbox
-                        aria-label={`Link #${suggestion.number} ${suggestion.title}`}
-                        checked={linked || selected.includes(suggestion.url)}
-                        disabled={linked || pending}
-                        onCheckedChange={(checked) => {
-                          setReference("");
-                          setDirty(false);
-                          setSubmitError(null);
-                          setSelected((current) =>
-                            checked
-                              ? [...current, suggestion.url]
-                              : current.filter((url) => url !== suggestion.url),
-                          );
-                        }}
-                      />
-                      <span className="min-w-0 flex-1 truncate text-sm">
-                        #{suggestion.number} {suggestion.title}
-                      </span>
-                      {linked ? (
-                        <span className="text-xs text-muted-foreground">Linked</span>
-                      ) : null}
-                    </label>
-                  );
-                })}
-              </div>
-              {suggestionsQuery.isPending ? (
-                <p className="text-xs text-muted-foreground">Loading PR suggestions...</p>
-              ) : null}
-              {suggestionsQuery.error !== null || suggestionsQuery.data?.errors.length ? (
-                <p className="text-xs text-muted-foreground">
-                  Could not load PR suggestions. You can still paste a URL below.
-                </p>
-              ) : suggestions.length === 0 && !suggestionsQuery.isPending ? (
-                <p className="text-xs text-muted-foreground">
-                  No recent open PRs found. Paste a URL below.
-                </p>
-              ) : null}
-            </div>
-          ) : null}
           <Input
             ref={inputRef}
             placeholder="Pull request URL or #42"
             value={reference}
             disabled={pending}
             onChange={(event) => {
-              setSelected([]);
               setDirty(true);
               setReference(event.target.value);
             }}
@@ -353,15 +236,9 @@ function LinkPullRequestDialog({
             type="button"
             size="sm"
             onClick={() => void submit()}
-            disabled={
-              pending || (selected.length === 0 && (resolved === null || "error" in resolved))
-            }
+            disabled={pending || resolved === null || "error" in resolved}
           >
-            {pending
-              ? "Linking..."
-              : selected.length > 0
-                ? `Link ${selected.length} PR${selected.length === 1 ? "" : "s"}`
-                : "Link"}
+            {pending ? "Linking..." : "Link"}
           </Button>
         </DialogFooter>
       </DialogPopup>

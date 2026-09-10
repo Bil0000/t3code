@@ -1,3 +1,4 @@
+import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { LinkBranchPullRequestButton } from "./pullRequest/LinkBranchPullRequestButton";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
@@ -1504,15 +1505,16 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
       />
     ) : null;
   const prUrl = pr?.url ?? currentLinkedPr?.url;
-  const prLinkButton = prUrl ? (
-    <LinkBranchPullRequestButton
-      threadRef={threadRef}
-      url={prUrl}
-      linked={
-        supportsMultiplePullRequests ? currentLinkedPr !== null : thread.linkedPullRequest != null
-      }
-    />
-  ) : null;
+  const prLinkButton =
+    supportsMultiplePullRequests || prUrl ? (
+      <LinkBranchPullRequestButton
+        threadRef={threadRef}
+        url={prUrl}
+        linked={
+          supportsMultiplePullRequests ? currentLinkedPr !== null : thread.linkedPullRequest != null
+        }
+      />
+    ) : null;
   const terminalStatusIcon = terminalStatus ? (
     <span
       role="img"
@@ -4010,6 +4012,9 @@ export default function Sidebar() {
                 snooze: supportsSnooze,
                 pinning: supportsPinning,
                 titleRegeneration: supportsTitleRegeneration,
+                pullRequestLinking:
+                  serverConfigs.get(thread.environmentId)?.environment.capabilities
+                    .threadPullRequests === true,
               },
               snoozePresets,
             }),
@@ -4073,6 +4078,9 @@ export default function Sidebar() {
             return;
           case "unpin":
             attemptUnpin(threadRef);
+            return;
+          case "link-pr":
+            openLinkPullRequestDialog(threadRef);
             return;
           case "rename":
             startThreadRename(threadRef, thread.title);

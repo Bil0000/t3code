@@ -1,20 +1,13 @@
-import {
-  EnvironmentId,
-  ProjectId,
-  ThreadId,
-  type PullRequestListEntry,
-  type ThreadPullRequestLink,
-} from "@t3tools/contracts";
+import { EnvironmentId, ProjectId, ThreadId, type ThreadPullRequestLink } from "@t3tools/contracts";
 import { act, type PropsWithChildren, type ReactElement } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   multiple: true,
+  cursor: null as string | null,
   dispatch: vi.fn(),
-  entries: [] as PullRequestListEntry[],
   links: [] as ThreadPullRequestLink[],
-  queryError: null as string | null,
 }));
 const threadRef = {
   environmentId: EnvironmentId.make("remote"),
@@ -33,10 +26,15 @@ const project = {
   },
 };
 const projects = [project];
-
+const url = (number: number) => "https://github.com/acme/web/pull/" + number;
 vi.mock("~/state/entities", () => ({
   useProjects: () => projects,
-  useThreadShell: () => ({ projectId: project.id, branch: "feature", pullRequests: state.links }),
+  useProject: () => project,
+  useThreadShell: () => ({
+    projectId: project.id,
+    branchPullRequest: { url: url(1) },
+    pullRequests: state.links,
+  }),
   useServerConfigs: () =>
     new Map([
       [
@@ -49,31 +47,24 @@ vi.mock("~/state/entities", () => ({
       ],
     ]),
 }));
-vi.mock("~/state/use-atom-command", () => ({
-  useAtomCommand: (command: unknown) => (input: unknown) => state.dispatch(command, input),
-}));
-vi.mock("~/state/pullRequests", () => ({
-  pullRequestEnvironment: { list: vi.fn((input: unknown) => input) },
-}));
-vi.mock("~/state/query", () => ({
-  useEnvironmentQuery: () => ({
-    data: { entries: state.entries, errors: [] },
-    error: state.queryError,
-    isPending: false,
+vi.mock("~/state/threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("~/state/threads")>()),
+  useEnvironmentThread: (environmentId: unknown) => ({
+    status: "live",
+    data: environmentId
+      ? { _tag: "Some", value: { messages: [{ text: url(2) + " " + url(3) }] } }
+      : { _tag: "None" },
+    page: state.cursor
+      ? { _tag: "Some", value: { beforeCursor: state.cursor, hasMore: true, loadingOlder: false } }
+      : { _tag: "None" },
   }),
 }));
-vi.mock("../ui/checkbox", () => ({
-  Checkbox: ({
-    onCheckedChange,
-    ...props
-  }: {
-    checked: boolean;
-    disabled: boolean;
-    "aria-label": string;
-    onCheckedChange: (checked: boolean) => void;
-  }) => (
-    <input type="checkbox" {...props} onChange={(event) => onCheckedChange(event.target.checked)} />
-  ),
+vi.mock("@t3tools/client-runtime/state/threads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@t3tools/client-runtime/state/threads")>()),
+  requestOlderThreadTurns: vi.fn(),
+}));
+vi.mock("~/state/use-atom-command", () => ({
+  useAtomCommand: (command: unknown) => (input: unknown) => state.dispatch(command, input),
 }));
 vi.mock("../ui/dialog", () => {
   const content = ({ children }: PropsWithChildren) => children;
@@ -87,97 +78,79 @@ vi.mock("../ui/dialog", () => {
     DialogTitle: content,
   };
 });
+vi.mock("../ui/menu", () => {
+  const content = ({ children }: PropsWithChildren) => children;
+  return {
+    Menu: ({
+      children,
+      onOpenChange,
+    }: PropsWithChildren<{ onOpenChange: (open: boolean) => void }>) => (
+      <div>
+        <button aria-label="Link PRs" onClick={() => onOpenChange(true)} />
+        {children}
+      </div>
+    ),
+    MenuTrigger: () => null,
+    MenuPopup: content,
+    MenuGroup: content,
+    MenuGroupLabel: content,
+    MenuSeparator: () => null,
+    MenuItem: "button",
+  };
+});
 vi.mock("../ui/tooltip", () => ({
   Tooltip: ({ children }: PropsWithChildren) => children,
   TooltipTrigger: ({ render }: { render: ReactElement }) => render,
   TooltipPopup: () => null,
 }));
+vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
 
 import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
+import { requestOlderThreadTurns } from "@t3tools/client-runtime/state/threads";
 import { threadEnvironment } from "~/state/threads";
-import { pullRequestEnvironment } from "~/state/pullRequests";
+import { toastManager } from "../ui/toast";
 import { LinkBranchPullRequestButton } from "./LinkBranchPullRequestButton";
-import { LinkPullRequestDialogHost } from "./LinkPullRequestDialog";
+import { LinkPullRequestDialogHost, openLinkPullRequestDialog } from "./LinkPullRequestDialog";
 
 let renderer: ReactTestRenderer;
-
-function entry(number: number, headBranch = "feature"): PullRequestListEntry {
-  return {
-    provider: "github",
-    host: "github.com",
-    projectId: project.id,
-    projectTitle: "Web",
-    repository: "acme/web",
-    number,
-    title: `PR ${number}`,
-    url: `https://github.com/acme/web/pull/${number}`,
-    author: null,
-    headBranch,
-    baseBranch: "main",
-    state: "open",
-    isDraft: false,
-    mergeability: "unknown",
-    additions: 0,
-    deletions: 0,
-    createdAt: "2026-09-10T12:00:00Z",
-    updatedAt: "2026-09-10T12:00:00Z",
-    viewerReviewRequested: false,
-    labels: [],
-  };
+function view() {
+  return (
+    <AppAtomRegistryProvider>
+      <LinkBranchPullRequestButton threadRef={threadRef} url={url(1)} linked={false} />
+      <LinkPullRequestDialogHost />
+    </AppAtomRegistryProvider>
+  );
 }
-
-async function openPicker(linked = true) {
+async function render() {
   await act(async () => {
-    renderer = create(
-      <AppAtomRegistryProvider>
-        <LinkBranchPullRequestButton threadRef={threadRef} url={entry(1).url} linked={linked} />
-        <LinkPullRequestDialogHost />
-      </AppAtomRegistryProvider>,
-    );
-  });
-  expect(pullRequestEnvironment.list).not.toHaveBeenCalled();
-  await act(async () => {
-    await renderer.root
-      .findByType("button")
-      .props.onClick({ preventDefault() {}, stopPropagation() {} });
+    renderer = create(view());
   });
 }
-
-async function select(...numbers: number[]) {
-  for (const number of numbers) {
-    await act(async () => {
-      renderer.root
-        .findAllByType("input")
-        .find((input) => input.props["aria-label"]?.startsWith(`Link #${number} `))!
-        .props.onChange({ target: { checked: true } });
-    });
-  }
-}
-
-async function submitSelection() {
+async function click(label: string) {
   await act(async () => {
     await renderer.root
       .findAllByType("button")
-      .find(
-        (button) =>
-          typeof button.props.children === "string" &&
-          /^Link \d+ PRs?$/.test(button.props.children),
-      )!
-      .props.onClick();
+      .find((button) => button.props["aria-label"] === label || button.props.children === label)!
+      .props.onClick({ preventDefault() {}, stopPropagation() {} });
+  });
+  await act(async () => {
+    renderer.update(view());
   });
 }
-
 beforeEach(() => {
   state.multiple = true;
-  state.entries = [];
   state.links = [];
-  state.queryError = null;
-  vi.mocked(pullRequestEnvironment.list).mockClear();
-  state.dispatch.mockReset().mockResolvedValue({ _tag: "Success" });
+  state.cursor = null;
+  vi.mocked(requestOlderThreadTurns).mockClear();
+  state.dispatch.mockReset().mockImplementation(async (command, { input }) => {
+    if (command === threadEnvironment.linkPullRequest)
+      state.links.push({ ...input, linkedAt: "2026-09-10T12:00:00Z", snapshot: null, stack: null });
+    return { _tag: "Success" };
+  });
+  vi.mocked(toastManager.add).mockClear();
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   vi.stubGlobal("window", { requestAnimationFrame: () => 0, cancelAnimationFrame: () => {} });
 });
-
 afterEach(async () => {
   await act(async () => {
     renderer?.root
@@ -189,133 +162,103 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("adds a second PR through the dialog without replacing the existing link", async () => {
-  state.queryError = "Offline";
-  await openPicker();
+it("offers all thread PRs and links each separately while keeping the menu available", async () => {
+  await render();
+  await click("Link PRs");
   expect(state.dispatch).not.toHaveBeenCalled();
-  await act(async () => {
-    renderer.root.findByProps({ placeholder: "Pull request URL or #42" }).props.onChange({
-      target: { value: "https://github.com/acme/api/pull/2" },
-      currentTarget: { value: "https://github.com/acme/api/pull/2" },
-    });
-  });
-  await act(async () => {
+  expect(
     renderer.root
       .findAllByType("button")
-      .find((button) => button.props.children === "Link")!
-      .props.onClick();
-  });
-  expect(state.dispatch).toHaveBeenCalledExactlyOnceWith(threadEnvironment.linkPullRequest, {
+      .filter((button) => (button.props["aria-label"] ?? "").startsWith("Link PR #")),
+  ).toHaveLength(3);
+  await click("Link PR #2");
+  expect(state.dispatch.mock.calls.map(([, { input }]) => input.number)).toEqual([2]);
+  expect(
+    renderer.root
+      .findAllByType("button")
+      .find((button) => button.props["aria-label"] === "PR #2 linked")?.props.disabled,
+  ).toBe(true);
+  await click("Link PR #3");
+  expect(state.links.map((link) => link.number)).toEqual([2, 3]);
+  expect(
+    state.dispatch.mock.calls.every(([command]) => command === threadEnvironment.linkPullRequest),
+  ).toBe(true);
+});
+
+it("keeps a failed PR available for retry without adding other PRs", async () => {
+  state.dispatch.mockRejectedValueOnce(new Error("Connection lost"));
+  await render();
+  await click("Link PRs");
+  await click("Link PR #2");
+  expect(toastManager.add).toHaveBeenCalledWith(
+    expect.objectContaining({ description: "Connection lost" }),
+  );
+  expect(state.links).toHaveLength(0);
+  await click("Link PR #2");
+  expect(state.links.map((link) => link.number)).toEqual([2]);
+});
+
+it("adds a PR by project number without replacing an existing link", async () => {
+  await render();
+  await click("Link PRs");
+  await click("Link PR #1");
+  await act(async () => openLinkPullRequestDialog(threadRef));
+  await act(async () =>
+    renderer.root
+      .findByProps({ placeholder: "Pull request URL or #42" })
+      .props.onChange({ target: { value: "#4" } }),
+  );
+  await click("Link");
+  expect(state.links.map((link) => link.number)).toEqual([1, 4]);
+  expect(state.dispatch).toHaveBeenLastCalledWith(threadEnvironment.linkPullRequest, {
     environmentId: threadRef.environmentId,
     input: {
       threadId: threadRef.threadId,
       host: "github.com",
-      repository: "acme/api",
-      number: 2,
-      url: "https://github.com/acme/api/pull/2",
+      repository: "acme/web",
+      number: 4,
+      url: url(4),
       source: "manual",
     },
   });
   expect(renderer.root.findAllByType("input")).toHaveLength(0);
 });
 
-it("offers several PRs before the first link and links the selected PRs together", async () => {
-  state.entries = [entry(3, "other"), entry(2), entry(1)];
-  await openPicker(false);
-  expect(pullRequestEnvironment.list).toHaveBeenCalledWith({
-    environmentId: threadRef.environmentId,
-    input: { projectId: project.id, state: "open", involvement: "authored", limit: 20 },
-  });
-  expect(
-    renderer.root
-      .findAllByType("input")
-      .filter((input) => input.props.type === "checkbox")
-      .map((input) => input.props["aria-label"]),
-  ).toEqual(["Link #1 PR 1", "Link #2 PR 2", "Link #3 PR 3"]);
-  await select(1, 2, 3);
-  await submitSelection();
-  expect(
-    state.dispatch.mock.calls.map(([command, input]) => [command, input.input.number]),
-  ).toEqual([
-    [threadEnvironment.linkPullRequest, 1],
-    [threadEnvironment.linkPullRequest, 2],
-    [threadEnvironment.linkPullRequest, 3],
-  ]);
-  expect(renderer.root.findAllByType("input")).toHaveLength(0);
-});
-
-it("marks an existing link and adds two more without replacing it", async () => {
-  state.entries = [entry(1), entry(2), entry(3)];
-  state.links = [
-    {
-      ...entry(1),
-      source: "manual",
-      linkedAt: "2026-09-10T12:00:00Z",
-      snapshot: null,
-      stack: null,
-    },
-  ];
-  await openPicker();
-  const linked = renderer.root
-    .findAllByType("input")
-    .find((input) => input.props["aria-label"] === "Link #1 PR 1")!;
-  expect(linked.props.checked).toBe(true);
-  expect(linked.props.disabled).toBe(true);
-  await select(2, 3);
-  await submitSelection();
-  expect(
-    state.dispatch.mock.calls.map(([command, input]) => [command, input.input.number]),
-  ).toEqual([
-    [threadEnvironment.linkPullRequest, 2],
-    [threadEnvironment.linkPullRequest, 3],
-  ]);
-});
-
-it("keeps successful links and retries only the remaining selection after a failure", async () => {
-  state.entries = [entry(1), entry(2), entry(3)];
-  state.dispatch
-    .mockResolvedValueOnce({ _tag: "Success" })
-    .mockRejectedValueOnce(new Error("Connection lost"));
-  await openPicker(false);
-  await select(1, 2, 3);
-  await submitSelection();
-  expect(renderer.root.findAllByType("p").some((p) => p.props.children === "Connection lost")).toBe(
-    true,
-  );
-  await submitSelection();
-  expect(state.dispatch.mock.calls.map(([, input]) => input.input.number)).toEqual([1, 2, 2, 3]);
-  expect(renderer.root.findAllByType("input")).toHaveLength(0);
-});
-
-it("keeps direct linking for an older single-link server", async () => {
+it("keeps direct linking and hides extra links on older servers", async () => {
   state.multiple = false;
-  await openPicker(false);
-  expect(pullRequestEnvironment.list).not.toHaveBeenCalled();
+  await render();
+  await click("Link this PR");
   expect(state.dispatch).toHaveBeenCalledExactlyOnceWith(threadEnvironment.updateMetadata, {
     environmentId: threadRef.environmentId,
     input: {
       threadId: threadRef.threadId,
-      linkedPullRequest: {
-        projectId: project.id,
-        repository: "acme/web",
-        number: 1,
-        url: entry(1).url,
-      },
+      linkedPullRequest: { projectId: project.id, repository: "acme/web", number: 1, url: url(1) },
     },
   });
+  await act(async () =>
+    renderer.update(<LinkBranchPullRequestButton threadRef={threadRef} url={url(1)} linked />),
+  );
+  expect(renderer.toJSON()).toBeNull();
 });
 
-it("does not offer another link on a server that only supports one", async () => {
-  state.multiple = false;
+it("looks through older pages only while open and does not loop on a failed page", async () => {
+  state.cursor = "older-page";
+  await render();
+  expect(requestOlderThreadTurns).not.toHaveBeenCalled();
+  await click("Link PRs");
+  expect(requestOlderThreadTurns).toHaveBeenCalledTimes(1);
   await act(async () => {
-    renderer = create(
-      <LinkBranchPullRequestButton
-        threadRef={threadRef}
-        url="https://github.com/acme/web/pull/1"
-        linked
-      />,
-    );
+    renderer.update(view());
   });
-  expect(renderer.toJSON()).toBeNull();
-  expect(state.dispatch).not.toHaveBeenCalled();
+  expect(requestOlderThreadTurns).toHaveBeenCalledTimes(1);
+  state.cursor = "oldest-page";
+  await act(async () => {
+    renderer.update(view());
+  });
+  expect(requestOlderThreadTurns).toHaveBeenCalledTimes(2);
+  state.cursor = null;
+  await act(async () => {
+    renderer.update(view());
+  });
+  expect(requestOlderThreadTurns).toHaveBeenCalledTimes(2);
 });
