@@ -3,7 +3,7 @@ import * as Option from "effect/Option";
 import { useEnvironmentThread } from "~/state/threads";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { CheckIcon, GitPullRequestIcon, Link2, PlusIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import { useProject, useThreadShell } from "~/state/entities";
 import {
@@ -81,10 +81,6 @@ function ThreadPullRequestLinkMenu({ threadRef }: { threadRef: ScopedThreadRef }
   const detail = Option.getOrNull(history.data);
   const page = Option.getOrNull(history.page);
   const cursor = page?.hasMore ? page.beforeCursor : null;
-  useEffect(() => {
-    if (open && history.status === "live" && cursor !== null)
-      requestOlderThreadTurns(threadRef.environmentId, threadRef.threadId);
-  }, [cursor, history.status, open, threadRef.environmentId, threadRef.threadId]);
   const project = useProject(
     thread ? { environmentId: threadRef.environmentId, projectId: thread.projectId } : null,
   );

@@ -99,7 +99,8 @@ automatic branch links do not appear.
 
 On web and desktop, the link button beside a PR lists the branch PR and PR URLs
 mentioned in this thread for the same project. Select a PR to link it. Each click
-adds only that PR, and the menu stays available after linking.
+adds only that PR, and the menu stays available after linking. Use **Look for
+older PRs** to check earlier messages.
 
 Right-click the thread and choose **Link PR** to add a PR by number or URL.
 Existing links stay in place. Select the additional PR count to open all linked

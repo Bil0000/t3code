@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 const state = vi.hoisted(() => ({
   multiple: true,
   cursor: null as string | null,
+  olderText: "",
   dispatch: vi.fn(),
   links: [] as ThreadPullRequestLink[],
 }));
@@ -52,7 +53,10 @@ vi.mock("~/state/threads", async (importOriginal) => ({
   useEnvironmentThread: (environmentId: unknown) => ({
     status: "live",
     data: environmentId
-      ? { _tag: "Some", value: { messages: [{ text: url(2) + " " + url(3) }] } }
+      ? {
+          _tag: "Some",
+          value: { messages: [{ text: url(2) + " " + url(3) + " " + state.olderText }] },
+        }
       : { _tag: "None" },
     page: state.cursor
       ? { _tag: "Some", value: { beforeCursor: state.cursor, hasMore: true, loadingOlder: false } }
@@ -141,6 +145,7 @@ beforeEach(() => {
   state.multiple = true;
   state.links = [];
   state.cursor = null;
+  state.olderText = "";
   vi.mocked(requestOlderThreadTurns).mockClear();
   state.dispatch.mockReset().mockImplementation(async (command, { input }) => {
     if (command === threadEnvironment.linkPullRequest)
@@ -241,24 +246,25 @@ it("keeps direct linking and hides extra links on older servers", async () => {
   expect(renderer.toJSON()).toBeNull();
 });
 
-it("looks through older pages only while open and does not loop on a failed page", async () => {
+it("loads older PR suggestions only when requested", async () => {
   state.cursor = "older-page";
   await render();
-  expect(requestOlderThreadTurns).not.toHaveBeenCalled();
   await click("Link PRs");
-  expect(requestOlderThreadTurns).toHaveBeenCalledTimes(1);
-  await act(async () => {
-    renderer.update(view());
-  });
-  expect(requestOlderThreadTurns).toHaveBeenCalledTimes(1);
+  expect(requestOlderThreadTurns).not.toHaveBeenCalled();
+  await click("Look for older PRs");
+  expect(requestOlderThreadTurns).toHaveBeenCalledExactlyOnceWith(
+    threadRef.environmentId,
+    threadRef.threadId,
+  );
   state.cursor = "oldest-page";
+  state.olderText = url(4);
   await act(async () => {
     renderer.update(view());
   });
-  expect(requestOlderThreadTurns).toHaveBeenCalledTimes(2);
-  state.cursor = null;
-  await act(async () => {
-    renderer.update(view());
-  });
-  expect(requestOlderThreadTurns).toHaveBeenCalledTimes(2);
+  expect(
+    renderer.root
+      .findAllByType("button")
+      .some((button) => button.props["aria-label"] === "Link PR #4"),
+  ).toBe(true);
+  expect(requestOlderThreadTurns).toHaveBeenCalledTimes(1);
 });
