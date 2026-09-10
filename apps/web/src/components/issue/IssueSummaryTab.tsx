@@ -70,15 +70,17 @@ function IssueEditor({
   onDone: () => void;
   onSaved: () => void;
 }) {
-  const [title, setTitle] = useState(detail.title);
+  const [initialTitle] = useState(detail.title);
+  const [initialBody] = useState(detail.body);
+  const [title, setTitle] = useState(initialTitle);
   const [saving, setSaving] = useState(false);
   const update = useAtomCommand(issueEnvironment.update, { reportFailure: false });
 
   const trimmedTitle = title.trim();
-  const changedTitle = trimmedTitle !== detail.title;
+  const changedTitle = trimmedTitle !== initialTitle;
 
   const save = async (body: string) => {
-    const changedBody = body !== detail.body;
+    const changedBody = body !== initialBody;
     if (saving) return;
     if (trimmedTitle.length === 0) {
       toastManager.add({ type: "error", title: "Enter an issue title" });
@@ -126,7 +128,7 @@ function IssueEditor({
       />
       <SourceControlMarkdownEditor
         allowEmpty
-        value={detail.body}
+        value={initialBody}
         cwd={detail.workspaceRoot}
         environmentId={environmentId}
         label="Issue description"
@@ -491,11 +493,6 @@ export function IssueSummaryTab({
               size="xs"
               variant="ghost"
               className="h-7 shrink-0 px-2 text-[10px] text-muted-foreground"
-              aria-label={
-                commentOrder === "newest"
-                  ? "Show oldest comments first"
-                  : "Show newest comments first"
-              }
               onClick={() => setCommentOrder(commentOrder === "newest" ? "oldest" : "newest")}
             >
               <ArrowDownUpIcon aria-hidden className="size-3" />
