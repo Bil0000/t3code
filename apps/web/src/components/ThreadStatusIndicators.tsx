@@ -154,15 +154,13 @@ export function ThreadPullRequestBadgeControl({
   onOpenPullRequest: (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
   const isStack = badge?.kind === "stack";
-  const others = badge?.kind === "pull-request" ? badge.others : 0;
+  const linkedCount = badge?.kind === "pull-request" && badge.others > 0 ? badge.others + 1 : null;
   if (!isStack && (number === undefined || url === undefined)) return null;
   const label = isStack
     ? `Stack of ${badge.layers} pull requests, ${badge.state}`
-    : `${status?.tooltip ?? `PR #${number}, status pending`}${
-        badge?.kind === "pull-request" && badge.others > 0
-          ? `, and ${badge.others} more linked`
-          : ""
-      }`;
+    : linkedCount !== null
+      ? `Show all ${linkedCount} linked pull requests`
+      : (status?.tooltip ?? `PR #${number}, status pending`);
   const className = cn(
     variant === "ghost"
       ? buttonVariants({ variant: "ghost", size: "xs" })
@@ -170,69 +168,50 @@ export function ThreadPullRequestBadgeControl({
     "text-xs tabular-nums",
     variant === "ghost" &&
       "font-normal text-xs! active:scale-100 [--control-icon-color:currentColor]",
-    isStack ? PR_STATE_COLOR_CLASS[badge.state] : (status?.colorClass ?? "text-muted-foreground"),
+    linkedCount !== null
+      ? "text-secondary-label"
+      : isStack
+        ? PR_STATE_COLOR_CLASS[badge.state]
+        : (status?.colorClass ?? "text-muted-foreground"),
   );
   const content = (
     <>
       <ThreadPullRequestBadgeIcon icon={badge?.kind ?? "pull-request"} />
-      {isStack ? badge.layers : number}
+      {isStack ? badge.layers : linkedCount !== null ? `+${linkedCount}` : number}
     </>
   );
   return (
-    <span className="inline-flex shrink-0 items-center gap-0.5">
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            isStack ? (
-              <InlineButton
-                className={className}
-                aria-label={label}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onOpenPullRequests();
-                }}
-              />
-            ) : (
-              <a
-                href={url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className={className}
-                aria-label={label}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={onOpenPullRequest}
-              />
-            )
-          }
-        >
-          {content}
-        </TooltipTrigger>
-        <TooltipPopup side="top">{label}</TooltipPopup>
-      </Tooltip>
-      {others > 0 ? (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <InlineButton
-                className={cn(className, "opacity-70")}
-                aria-label={`Show all ${others + 1} linked pull requests`}
-                onPointerDown={(event) => event.stopPropagation()}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onOpenPullRequests();
-                }}
-              />
-            }
-          >
-            +{others}
-          </TooltipTrigger>
-          <TooltipPopup side="top">Show all {others + 1} linked pull requests</TooltipPopup>
-        </Tooltip>
-      ) : null}
-    </span>
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          isStack || linkedCount !== null ? (
+            <InlineButton
+              className={className}
+              aria-label={label}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onOpenPullRequests();
+              }}
+            />
+          ) : (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={className}
+              aria-label={label}
+              onPointerDown={(event) => event.stopPropagation()}
+              onClick={onOpenPullRequest}
+            />
+          )
+        }
+      >
+        {content}
+      </TooltipTrigger>
+      <TooltipPopup side="top">{label}</TooltipPopup>
+    </Tooltip>
   );
 }
 
