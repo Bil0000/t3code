@@ -759,7 +759,7 @@ export function BranchToolbarBranchSelector({
           number={prNumber}
           url={prUrl}
           status={displayedPrStatus}
-          onOpenStack={() => useRightPanelStore.getState().open(threadRef, "pull-requests")}
+          onOpenPullRequests={() => useRightPanelStore.getState().open(threadRef, "pull-requests")}
           onOpenPullRequest={(event) => {
             if (prUrl) openPrLink(event, prUrl);
           }}

@@ -2,21 +2,24 @@ import type { ScopedThreadRef } from "@t3tools/contracts";
 import { Link2 } from "lucide-react";
 import { useState } from "react";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
+import { openLinkPullRequestDialog } from "./LinkPullRequestDialog";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
-/** Adopts a branch discovery as a durable link, even after the thread changes branches. */
 export function LinkBranchPullRequestButton({
   threadRef,
   url,
+  linked,
 }: {
   threadRef: ScopedThreadRef;
   url: string;
+  linked: boolean;
 }) {
   const linking = usePullRequestLinking(threadRef.environmentId);
   const [pending, setPending] = useState(false);
-  if (!linking.canLink(url)) return null;
+  if (linked ? linking.mode !== "multiple" : !linking.canLink(url)) return null;
+  const label = linked ? "Link another PR" : "Link this PR";
   return (
     <Tooltip>
       <TooltipTrigger
@@ -24,12 +27,16 @@ export function LinkBranchPullRequestButton({
           <Button
             size="icon-tiny"
             variant="ghost-muted"
-            aria-label="Link this PR"
+            aria-label={label}
             disabled={pending}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={async (event) => {
               event.preventDefault();
               event.stopPropagation();
+              if (linked) {
+                openLinkPullRequestDialog(threadRef);
+                return;
+              }
               setPending(true);
               try {
                 await linking.changeLink(threadRef, url, true);
@@ -48,7 +55,7 @@ export function LinkBranchPullRequestButton({
           </Button>
         }
       />
-      <TooltipPopup>Link this PR to keep it with this thread</TooltipPopup>
+      <TooltipPopup>{linked ? label : "Link this PR to keep it with this thread"}</TooltipPopup>
     </Tooltip>
   );
 }

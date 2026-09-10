@@ -1,9 +1,6 @@
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
 import { LinkBranchPullRequestButton } from "./pullRequest/LinkBranchPullRequestButton";
-import {
-  resolveThreadCurrentPullRequestLink,
-  visibleThreadPullRequests,
-} from "@t3tools/shared/threadPullRequests";
+import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
 import {
@@ -1502,10 +1499,20 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
         number={pr?.number ?? currentLinkedPr?.number}
         url={pr?.url ?? currentLinkedPr?.url}
         status={prStatus}
-        onOpenStack={handlePrStackClick}
+        onOpenPullRequests={handlePrStackClick}
         onOpenPullRequest={handlePrClick}
       />
     ) : null;
+  const prUrl = pr?.url ?? currentLinkedPr?.url;
+  const prLinkButton = prUrl ? (
+    <LinkBranchPullRequestButton
+      threadRef={threadRef}
+      url={prUrl}
+      linked={
+        supportsMultiplePullRequests ? currentLinkedPr !== null : thread.linkedPullRequest != null
+      }
+    />
+  ) : null;
   const terminalStatusIcon = terminalStatus ? (
     <span
       role="img"
@@ -1616,13 +1623,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
             {prBadge}
-            {prBadge &&
-            pr &&
-            (supportsMultiplePullRequests
-              ? visibleThreadPullRequests(thread.pullRequests).length === 0
-              : thread.linkedPullRequest == null) ? (
-              <LinkBranchPullRequestButton threadRef={threadRef} url={pr.url} />
-            ) : null}
+            {prLinkButton}
             {sortable?.isDragging ? (
               dragDestination
             ) : (
@@ -1923,13 +1924,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               )}
               {terminalStatusIcon}
               {prBadge}
-              {prBadge &&
-              pr &&
-              (supportsMultiplePullRequests
-                ? visibleThreadPullRequests(thread.pullRequests).length === 0
-                : thread.linkedPullRequest == null) ? (
-                <LinkBranchPullRequestButton threadRef={threadRef} url={pr.url} />
-              ) : null}
+              {prLinkButton}
               {diff ? (
                 <span className="shrink-0 font-mono">
                   <span className="text-diff-addition-foreground">+{diff.insertions}</span>{" "}

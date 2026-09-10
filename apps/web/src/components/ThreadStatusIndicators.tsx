@@ -142,7 +142,7 @@ export function ThreadPullRequestBadgeControl({
   number,
   url,
   status,
-  onOpenStack,
+  onOpenPullRequests,
   onOpenPullRequest,
 }: {
   variant: "underline" | "ghost";
@@ -150,10 +150,11 @@ export function ThreadPullRequestBadgeControl({
   number?: number | undefined;
   url?: string | undefined;
   status: PrStatusIndicator | null;
-  onOpenStack: () => void;
+  onOpenPullRequests: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
   const isStack = badge?.kind === "stack";
+  const others = badge?.kind === "pull-request" ? badge.others : 0;
   if (!isStack && (number === undefined || url === undefined)) return null;
   const label = isStack
     ? `Stack of ${badge.layers} pull requests, ${badge.state}`
@@ -175,43 +176,63 @@ export function ThreadPullRequestBadgeControl({
     <>
       <ThreadPullRequestBadgeIcon icon={badge?.kind ?? "pull-request"} />
       {isStack ? badge.layers : number}
-      {badge?.kind === "pull-request" && badge.others > 0 ? (
-        <span className="opacity-70">+{badge.others}</span>
-      ) : null}
     </>
   );
   return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          isStack ? (
-            <InlineButton
-              className={className}
-              aria-label={label}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onOpenStack();
-              }}
-            />
-          ) : (
-            <a
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={className}
-              aria-label={label}
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={onOpenPullRequest}
-            />
-          )
-        }
-      >
-        {content}
-      </TooltipTrigger>
-      <TooltipPopup side="top">{label}</TooltipPopup>
-    </Tooltip>
+    <span className="inline-flex shrink-0 items-center gap-0.5">
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            isStack ? (
+              <InlineButton
+                className={className}
+                aria-label={label}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpenPullRequests();
+                }}
+              />
+            ) : (
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={className}
+                aria-label={label}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={onOpenPullRequest}
+              />
+            )
+          }
+        >
+          {content}
+        </TooltipTrigger>
+        <TooltipPopup side="top">{label}</TooltipPopup>
+      </Tooltip>
+      {others > 0 ? (
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <InlineButton
+                className={cn(className, "opacity-70")}
+                aria-label={`Show all ${others + 1} linked pull requests`}
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onOpenPullRequests();
+                }}
+              />
+            }
+          >
+            +{others}
+          </TooltipTrigger>
+          <TooltipPopup side="top">Show all {others + 1} linked pull requests</TooltipPopup>
+        </Tooltip>
+      ) : null}
+    </span>
   );
 }
 

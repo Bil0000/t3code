@@ -1,9 +1,9 @@
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
-import { GitPullRequestIcon } from "lucide-react";
 import { LinkBranchPullRequestButton } from "./pullRequest/LinkBranchPullRequestButton";
+import { useRightPanelStore } from "../rightPanelStore";
 import {
   resolveThreadCurrentPullRequestLink,
-  visibleThreadPullRequests,
+  resolveThreadPullRequestBadge,
 } from "@t3tools/shared/threadPullRequests";
 import { Spinner } from "~/components/ui/spinner";
 import {
@@ -18,9 +18,8 @@ import {
   TriangleAlertIcon,
 } from "lucide-react";
 import {
-  ChangeRequestStatusIcon,
+  ThreadPullRequestBadgeControl,
   prStatusIndicator,
-  PrStatusTooltipContent,
   terminalStatusFromRunningIds,
   ThreadStatusLabel,
   ThreadWorktreeIndicator,
@@ -483,6 +482,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     ? resolveThreadCurrentPullRequestLink(thread.pullRequests)
     : null;
   const prStatus = prStatusIndicator(pr, linkedPullRequestStatus?.sourceControlProvider);
+  const prUrl = pr?.url ?? currentLinkedPr?.url;
   const terminalStatus = terminalStatusFromRunningIds(runningTerminalIds);
   const isConfirmingArchive = confirmingArchiveThreadKey === threadKey && !isThreadRunning;
   const threadMetaClassName = isConfirmingArchive
@@ -725,50 +725,32 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         onContextMenu={handleRowContextMenu}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-          {prStatus && pr && (
-            <Tooltip>
-              <TooltipTrigger
-                render={
-                  <a
-                    href={prStatus.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    aria-label={prStatus.tooltip}
-                    className={`inline-flex items-center justify-center ${prStatus.colorClass} cursor-pointer rounded-sm outline-hidden focus-visible:ring-1 focus-visible:ring-ring`}
-                    onPointerDown={(event) => event.stopPropagation()}
-                    onClick={handlePrClick}
-                  >
-                    <ChangeRequestStatusIcon
-                      state={pr.state}
-                      isDraft={pr.isDraft}
-                      className="size-3"
-                    />
-                  </a>
-                }
-              />
-              <TooltipPopup side="top">
-                <PrStatusTooltipContent status={prStatus} />
-              </TooltipPopup>
-            </Tooltip>
-          )}
-          {!pr && currentLinkedPr ? (
-            <a
-              href={currentLinkedPr.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              onPointerDown={(event) => event.stopPropagation()}
-              onClick={handlePrClick}
-              className="text-muted-foreground"
-              aria-label={`PR #${currentLinkedPr.number}, status pending`}
-            >
-              <GitPullRequestIcon className="size-3" />
-            </a>
-          ) : null}
-          {pr &&
-          (supportsMultiplePullRequests
-            ? visibleThreadPullRequests(thread.pullRequests).length === 0
-            : thread.linkedPullRequest == null) ? (
-            <LinkBranchPullRequestButton threadRef={threadRef} url={pr.url} />
+          <ThreadPullRequestBadgeControl
+            variant="underline"
+            badge={
+              supportsMultiplePullRequests
+                ? resolveThreadPullRequestBadge(thread.pullRequests)
+                : null
+            }
+            number={pr?.number ?? currentLinkedPr?.number}
+            url={prUrl}
+            status={prStatus}
+            onOpenPullRequests={() => {
+              useRightPanelStore.getState().open(threadRef, "pull-requests");
+              if (!isActive) navigateToThread(threadRef);
+            }}
+            onOpenPullRequest={handlePrClick}
+          />
+          {prUrl ? (
+            <LinkBranchPullRequestButton
+              threadRef={threadRef}
+              url={prUrl}
+              linked={
+                supportsMultiplePullRequests
+                  ? currentLinkedPr !== null
+                  : thread.linkedPullRequest != null
+              }
+            />
           ) : null}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
           {renamingThreadKey === threadKey ? (
