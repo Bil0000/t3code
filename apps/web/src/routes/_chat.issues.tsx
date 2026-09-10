@@ -159,9 +159,11 @@ export function mergeIssueProviderSummaries(
   next: IssueListResult["providers"],
   filteredHost: string | undefined,
 ): IssueListResult["providers"] {
-  return filteredHost === undefined
-    ? next
-    : [...previous.filter((provider) => provider.host !== filteredHost), ...next];
+  if (filteredHost === undefined) return next;
+  const merged = new Map(previous.map((provider) => [provider.host, provider]));
+  if (!next.some((provider) => provider.host === filteredHost)) merged.delete(filteredHost);
+  for (const provider of next) merged.set(provider.host, provider);
+  return [...merged.values()];
 }
 
 export function stabilizeLinearProviderSummary(

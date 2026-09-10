@@ -164,6 +164,19 @@ describe("IssuesColumn", () => {
       github,
       linear,
     ]);
+    const updatedGithub = { ...github, projectCount: 2 };
+    const afterGithub = mergeIssueProviderSummaries(
+      [github, linear],
+      [updatedGithub],
+      "github.com",
+    );
+    expect(afterGithub).toEqual([updatedGithub, linear]);
+    expect(mergeIssueProviderSummaries(afterGithub, [linear], "linear.app")).toEqual([
+      updatedGithub,
+      linear,
+    ]);
+    expect(mergeIssueProviderSummaries([github, linear], [], "github.com")).toEqual([linear]);
+    expect(mergeIssueProviderSummaries([github], [linear], "linear.app")).toEqual([github, linear]);
     expect(mergeIssueProviderSummaries([github], [linear], undefined)).toEqual([linear]);
   });
 
