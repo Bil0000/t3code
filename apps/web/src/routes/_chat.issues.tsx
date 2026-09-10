@@ -1412,14 +1412,18 @@ function IssuesRouteView() {
             onAddFiles={() => undefined}
             onAddPullRequest={() => undefined}
             onAddIssue={() => undefined}
+            onAddPullRequests={() => undefined}
             onAddAgents={() => undefined}
+            onAddDevice={() => undefined}
             browserAvailable={false}
             terminalAvailable={false}
             diffAvailable={false}
             filesAvailable={false}
             pullRequestAvailable={false}
             issueAvailable={false}
+            pullRequestsAvailable={false}
             agentsAvailable={false}
+            deviceAvailable={false}
             liveAgentCount={0}
             environmentId={issueEnvironmentId}
             issueStatuses={issueTabStatuses}

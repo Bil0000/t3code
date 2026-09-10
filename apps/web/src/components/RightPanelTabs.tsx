@@ -1,3 +1,10 @@
+import { pullRequestHostOf, type SourceControlProviderKind } from "@t3tools/contracts";
+import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/shell";
+import { useProjects, useServerConfigs, useThreadShells } from "~/state/entities";
+import {
+  threadPullRequestKeysEqual,
+  visibleThreadPullRequests,
+} from "@t3tools/shared/threadPullRequests";
 import type {
   ContextMenuItem,
   EnvironmentId,
@@ -11,12 +18,14 @@ import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import {
   Bot,
   CircleDot,
+  Smartphone,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
   FileDiff,
   Files,
   GitPullRequest,
+  GitPullRequestArrow,
   Globe2,
   Plus,
   TerminalSquare,
@@ -40,6 +49,7 @@ import { issueSurfaceId, type RightPanelSurface } from "~/rightPanelStore";
 import { cn } from "~/lib/utils";
 import { readLocalApi } from "~/localApi";
 import { Button } from "~/components/ui/button";
+import { AndroidIcon, AppleIcon } from "~/components/Icons";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { Kbd } from "~/components/ui/kbd";
 import {
@@ -92,6 +102,7 @@ interface RightPanelTabsProps {
   previewRuntimeTabId?: ((tabId: string) => string) | undefined;
   terminalLabelsById: ReadonlyMap<string, string>;
   onActivate: (surface: RightPanelSurface) => void;
+  onRenameDevice?: (surfaceId: string, title: string) => void;
   onCloseSurface: (surface: RightPanelSurface) => void;
   onCloseOtherSurfaces: (surface: RightPanelSurface) => void;
   onCloseSurfacesToRight: (surface: RightPanelSurface) => void;
@@ -108,6 +119,7 @@ interface RightPanelTabsProps {
   onAddDiff: () => void;
   onAddFiles: () => void;
   onAddPullRequest: () => void;
+  onAddPullRequests: () => void;
   onAddAgents: () => void;
   /**
    * Picking an issue needs a project to pick from, which only a thread has: the list pages reuse
@@ -115,12 +127,15 @@ interface RightPanelTabsProps {
    */
   onAddIssue: () => void;
   issueAvailable: boolean;
+  onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
+  pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
+  deviceAvailable: boolean;
   pullRequestStatusSeeds?: Readonly<Record<string, PullRequestTabStatusSeed>>;
   issueStatuses?: Readonly<Record<string, IssueTabStatus>>;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
@@ -159,7 +174,9 @@ const SURFACE_DISABLED_REASONS = {
   diff: "Diff is only available for server threads in Git repositories.",
   pullRequest: "This thread's branch has no pull request yet.",
   issue: "Issues are only available from a project checked out from a host.",
+  pullRequests: "Linked pull requests are only available for server threads.",
   agents: "Agents are only available from a thread.",
+  device: "Devices are only available from a thread.",
 } as const;
 
 /** Overlays that must win over the launcher's letter shortcuts. */
@@ -182,10 +199,13 @@ const SURFACE_UNAVAILABLE_HINTS = {
   diff: "Available for Git repositories.",
   pullRequest: "No pull request on this branch yet.",
   issue: "Available for projects with a host.",
+  pullRequests: "Available for server threads.",
   agents: "Available from a thread.",
+  device: "Available from a thread.",
 } as const;
 
 type TabContextMenuAction =
+  | "rename"
   | "copy-path"
   | "toggle-mute"
   | "close"
@@ -320,14 +340,18 @@ function RightPanelEmptyState(props: {
   onAddFiles: () => void;
   onAddPullRequest: () => void;
   onAddIssue: () => void;
+  onAddPullRequests: () => void;
   onAddAgents: () => void;
+  onAddDevice: () => void;
   browserAvailable: boolean;
   terminalAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   issueAvailable: boolean;
+  pullRequestsAvailable: boolean;
   agentsAvailable: boolean;
+  deviceAvailable: boolean;
   liveAgentCount: number;
 }) {
   // -1 means no highlight: it only appears on hover or arrow use.
@@ -395,6 +419,16 @@ function RightPanelEmptyState(props: {
       badgeCount: 0,
     },
     {
+      label: "Linked pull requests",
+      description: "Every pull request this thread has linked, stacks included.",
+      icon: GitPullRequestArrow,
+      shortcut: "L",
+      available: props.pullRequestsAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.pullRequests,
+      onClick: props.onAddPullRequests,
+      badgeCount: 0,
+    },
+    {
       label: "Agents",
       description: "Follow subagents and workflows.",
       icon: Bot,
@@ -403,6 +437,16 @@ function RightPanelEmptyState(props: {
       disabledReason: SURFACE_UNAVAILABLE_HINTS.agents,
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
+    },
+    {
+      label: "Device",
+      description: "Watch an iOS Simulator or Android Emulator.",
+      icon: Smartphone,
+      shortcut: "M",
+      available: props.deviceAvailable,
+      disabledReason: SURFACE_UNAVAILABLE_HINTS.device,
+      onClick: props.onAddDevice,
+      badgeCount: 0,
     },
   ] as const;
 
@@ -639,8 +683,12 @@ function surfaceTitle(
     // The strip says what the tab is showing, which for the browser is either of two things.
     case "issues":
       return surface.selected ? `#${surface.selected.number}` : "Issues";
+    case "pull-requests":
+      return "Pull requests";
     case "agents":
       return "Agents";
+    case "device":
+      return surface.title ?? surface.target?.name ?? "Device";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -742,9 +790,48 @@ function SurfaceIcon({
         />
       );
     }
+    case "pull-requests":
+      return <GitPullRequestArrow className="size-3 shrink-0" />;
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "device":
+      return surface.target?.platform === "ios" ? (
+        <AppleIcon className="size-3 shrink-0" />
+      ) : surface.target?.platform === "android" ? (
+        <AndroidIcon className="size-3 shrink-0" />
+      ) : (
+        <Smartphone className="size-3 shrink-0" />
+      );
   }
+}
+
+export function resolvePullRequestTabLink(
+  threads: readonly Pick<EnvironmentThreadShell, "environmentId" | "pullRequests">[],
+  environmentId: EnvironmentId | null,
+  host: string | null,
+  reference: { repository: string; number: number },
+) {
+  if (environmentId === null || host === null) return undefined;
+  let newest: EnvironmentThreadShell["pullRequests"][number] | undefined;
+  for (const thread of threads) {
+    if (thread.environmentId !== environmentId) continue;
+    for (const link of visibleThreadPullRequests(thread.pullRequests)) {
+      if (
+        !threadPullRequestKeysEqual(link, {
+          host,
+          repository: reference.repository,
+          number: reference.number,
+        })
+      )
+        continue;
+      if (
+        newest === undefined ||
+        (link.snapshot?.syncedAt ?? "") > (newest.snapshot?.syncedAt ?? "")
+      )
+        newest = link;
+    }
+  }
+  return newest;
 }
 
 function PullRequestSurfaceIcon({
@@ -758,13 +845,36 @@ function PullRequestSurfaceIcon({
 }) {
   const resolvedEnvironmentId =
     (surface.environmentId as EnvironmentId | undefined) ?? environmentId;
-  const detail = useEnvironmentQuery(
+  const projects = useProjects();
+  const threads = useThreadShells();
+  const project = projects.find(
+    (entry) => entry.environmentId === resolvedEnvironmentId && entry.id === surface.projectId,
+  );
+  const identity = project?.repositoryIdentity;
+  const host =
+    surface.host ??
+    (identity?.provider
+      ? pullRequestHostOf(identity, identity.provider as SourceControlProviderKind)
+      : null);
+  const configs = useServerConfigs();
+  const capabilities =
     resolvedEnvironmentId === null
+      ? undefined
+      : configs.get(resolvedEnvironmentId)?.environment.capabilities;
+  const linkedSnapshot =
+    capabilities?.threadPullRequests === true
+      ? (resolvePullRequestTabLink(threads, resolvedEnvironmentId, host, surface)?.snapshot ?? null)
+      : null;
+  const detail = useEnvironmentQuery(
+    resolvedEnvironmentId === null || capabilities?.pullRequests !== true || linkedSnapshot !== null
       ? null
       : pullRequestEnvironment.detail({
           environmentId: resolvedEnvironmentId,
           input: {
             projectId: surface.projectId as ProjectId,
+            ...(capabilities?.threadPullRequests === true && surface.host !== undefined
+              ? { host: surface.host }
+              : {}),
             repository: surface.repository,
             number: surface.number,
           },
@@ -773,11 +883,15 @@ function PullRequestSurfaceIcon({
   // Only state and draft reach the tab. A list seed cannot know mergeability, so feeding the
   // full detail would flip an open tab to the conflict glyph the moment its read lands.
   const status =
-    detail === null ? (seed ?? null) : { state: detail.state, isDraft: detail.isDraft };
+    linkedSnapshot !== null
+      ? linkedSnapshot
+      : detail === null
+        ? (seed ?? null)
+        : { state: detail.state, isDraft: detail.isDraft };
   if (status === null) {
     return <GitPullRequest className="size-3 shrink-0 text-muted-foreground" />;
   }
-  const presentation = resolvePullRequestState(status);
+  const presentation = resolvePullRequestState({ state: status.state, isDraft: status.isDraft });
   return <presentation.Icon className={cn("size-3 shrink-0", presentation.toneClassName)} />;
 }
 
@@ -786,6 +900,7 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
   const browserProfiles = useBrowserDefaults().profiles;
   const { resolvedTheme } = useTheme();
   const tabListRef = useRef<HTMLDivElement>(null);
+  const [renamingDevice, setRenamingDevice] = useState<string | null>(null);
   const [addSurfaceMenuOpen, setAddSurfaceMenuOpen] = useState(false);
   const [tabScrollState, setTabScrollState] = useState({
     hasOverflow: false,
@@ -874,12 +989,28 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       onClick: props.onAddIssue,
     },
     {
+      label: "Linked pull requests",
+      icon: GitPullRequestArrow,
+      shortcut: "L",
+      available: props.pullRequestsAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.pullRequests,
+      onClick: props.onAddPullRequests,
+    },
+    {
       label: "Agents",
       icon: Bot,
       shortcut: "A",
       available: props.agentsAvailable,
       disabledReason: SURFACE_DISABLED_REASONS.agents,
       onClick: props.onAddAgents,
+    },
+    {
+      label: "Device",
+      icon: Smartphone,
+      shortcut: "M",
+      available: props.deviceAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.device,
+      onClick: props.onAddDevice,
     },
   ] as const;
 
@@ -904,6 +1035,8 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
       if (surfaceIndex < 0) return;
 
       const items: ContextMenuItem<TabContextMenuAction>[] = [];
+      if (surface.kind === "device" && props.onRenameDevice)
+        items.push({ id: "rename", label: "Rename" });
       if (surface.kind === "file" && surface.attachment === undefined) {
         items.push({ id: "copy-path", label: "Copy path" });
       }
@@ -947,6 +1080,9 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
 
       const action = await api.contextMenu.show(items, { x: event.clientX, y: event.clientY });
       switch (action) {
+        case "rename":
+          setRenamingDevice(surface.id);
+          break;
         case "copy-path":
           if (surface.kind === "file" && surface.attachment === undefined) {
             props.onCopyFilePath(surface.relativePath);
@@ -1152,20 +1288,48 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                       <TooltipPopup>{audio === "muted" ? "Unmute tab" : "Mute tab"}</TooltipPopup>
                     </Tooltip>
                   )}
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <button
-                          type="button"
-                          className="cursor-pointer flex min-w-0 items-center"
-                          onClick={() => props.onActivate(surface)}
-                        >
-                          <span className="truncate">{title}</span>
-                        </button>
-                      }
+                  {renamingDevice === surface.id ? (
+                    <input
+                      aria-label="Device tab name"
+                      className="w-24 min-w-0 rounded-sm bg-background px-1 outline-none ring-1 ring-ring"
+                      defaultValue={title}
+                      ref={(element) => {
+                        element?.focus();
+                        element?.select();
+                      }}
+                      onBlur={(event) => {
+                        props.onRenameDevice?.(surface.id, event.currentTarget.value);
+                        setRenamingDevice(null);
+                      }}
+                      onKeyDown={(event) => {
+                        event.stopPropagation();
+                        if (event.key === "Enter") event.currentTarget.blur();
+                        if (event.key === "Escape") {
+                          event.currentTarget.value = title;
+                          event.currentTarget.blur();
+                        }
+                      }}
                     />
-                    <TooltipPopup>{tooltip}</TooltipPopup>
-                  </Tooltip>
+                  ) : (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <button
+                            type="button"
+                            onDoubleClick={() => {
+                              if (surface.kind === "device" && props.onRenameDevice)
+                                setRenamingDevice(surface.id);
+                            }}
+                            className="cursor-pointer flex min-w-0 items-center"
+                            onClick={() => props.onActivate(surface)}
+                          >
+                            <span className="truncate">{title}</span>
+                          </button>
+                        }
+                      />
+                      <TooltipPopup>{tooltip}</TooltipPopup>
+                    </Tooltip>
+                  )}
                 </div>
               );
             })}
@@ -1322,14 +1486,18 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddFiles={props.onAddFiles}
             onAddPullRequest={props.onAddPullRequest}
             onAddIssue={props.onAddIssue}
+            onAddPullRequests={props.onAddPullRequests}
             onAddAgents={props.onAddAgents}
+            onAddDevice={props.onAddDevice}
             browserAvailable={props.browserAvailable}
             terminalAvailable={props.terminalAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
             pullRequestAvailable={props.pullRequestAvailable}
             issueAvailable={props.issueAvailable}
+            pullRequestsAvailable={props.pullRequestsAvailable}
             agentsAvailable={props.agentsAvailable}
+            deviceAvailable={props.deviceAvailable}
             liveAgentCount={props.liveAgentCount}
           />
         ) : (
