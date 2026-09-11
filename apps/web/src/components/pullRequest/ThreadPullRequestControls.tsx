@@ -73,7 +73,7 @@ function ThreadPullRequestLinkMenu({
         {...badgeProps}
         badge={
           unlinkedCount > 0 && suggestions.length > 1
-            ? { kind: "pull-request", others: suggestions.length - 1 }
+            ? { kind: "pull-request", others: suggestions.length - 1, state: "open" }
             : badgeProps.badge
         }
         unlinkedCount={unlinkedCount}

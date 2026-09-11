@@ -202,7 +202,7 @@ it("offers all thread PRs and links each separately while keeping the menu avail
   expect(state.links.map((link) => link.number)).toEqual([2, 3]);
   await click("Show all 3 pull requests, 1 not linked");
   await click("Link PR #1");
-  await click("Show all 3 linked pull requests");
+  await click("Show all 3 linked pull requests; overall open");
   expect(state.openLinked).toHaveBeenCalledTimes(1);
   expect(
     state.dispatch.mock.calls.every(([command]) => command === threadEnvironment.linkPullRequest),
