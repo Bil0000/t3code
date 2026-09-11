@@ -1,15 +1,17 @@
 import type { GitStatusEntry } from "@pierre/trees";
 import { FileTree, useFileTree, useFileTreeSelector } from "@pierre/trees/react";
 import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
+import { useResizableWidth } from "~/hooks/useResizableWidth";
 import { cn } from "~/lib/utils";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 
 import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "../files/fileTreeExpansion";
 import { Button } from "../ui/button";
+import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   buildDiffFileTreeUpdates,
@@ -35,6 +37,7 @@ interface DiffFileTreeProps {
   /** Rendered under the tree, for a host that still has files to fetch. */
   readonly footer?: ReactNode;
   readonly className?: string;
+  readonly defaultWidth?: number;
 }
 
 /**
@@ -50,8 +53,27 @@ export function DiffFileTree({
   headerAccessory,
   footer,
   className,
+  defaultWidth = 256,
 }: DiffFileTreeProps) {
   const { resolvedTheme } = useTheme();
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [maxWidth, setMaxWidth] = useState(640);
+  useLayoutEffect(() => {
+    const parent = containerRef.current?.parentElement;
+    if (!parent) return;
+    const resize = () => setMaxWidth(Math.max(160, Math.min(640, parent.clientWidth * 0.6)));
+    resize();
+    const observer = new ResizeObserver(resize);
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, []);
+  const { width, handlers } = useResizableWidth({
+    storageKey: "t3code.diffFileTreeWidth",
+    defaultWidth,
+    minWidth: 160,
+    maxWidth,
+    edge: "left",
+  });
   const paths = useMemo(() => entries.map((entry) => entry.path), [entries]);
   const directoryPaths = useMemo(() => collectDirectoryPaths(paths), [paths]);
   const gitStatus = useMemo<ReadonlyArray<GitStatusEntry>>(
@@ -83,7 +105,17 @@ export function DiffFileTree({
     },
     paths: [],
     search: false,
-    unsafeCSS: PIERRE_TREE_UNSAFE_CSS,
+    unsafeCSS: `${PIERRE_TREE_UNSAFE_CSS}
+      [data-file-tree-virtualized-list='true'],
+      [data-file-tree-virtualized-sticky='true'] {
+        width: max-content;
+        min-width: 100%;
+      }
+      [data-item-section='content'] {
+        flex-shrink: 0;
+        max-width: none;
+      }
+    `,
   });
   const allDirectoriesExpanded = useFileTreeSelector(model, (currentModel) =>
     areAllDirectoriesExpanded(currentModel, directoryPaths),
@@ -137,7 +169,15 @@ export function DiffFileTree({
   }, [model, paths, revealRequestId, selectedPath]);
 
   return (
-    <div className={cn("flex min-h-0 flex-1 flex-col bg-background", className)}>
+    <div
+      ref={containerRef}
+      className={cn(
+        "relative flex min-h-0 min-w-40 max-w-[60%] shrink-0 flex-col border-l border-border/60 bg-background",
+        className,
+      )}
+      style={{ width }}
+    >
+      <RightPanelResizeHandle handlers={handlers} />
       <div
         className="flex h-10 min-h-10 shrink-0 items-center gap-1 border-b border-border/60 bg-background px-2 text-xs text-muted-foreground in-data-[preview-panel-mode=inline]:mb-3 in-data-[preview-panel-mode=inline]:h-7 in-data-[preview-panel-mode=inline]:min-h-7 in-data-[preview-panel-mode=inline]:border-b-transparent"
         data-surface-subheader

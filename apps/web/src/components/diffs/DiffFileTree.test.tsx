@@ -102,6 +102,7 @@ describe("diff tree file activation", () => {
     vi.useFakeTimers();
     vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
     vi.stubGlobal("HTMLElement", TreeRow);
+    vi.stubGlobal("window", new EventTarget());
   });
 
   afterEach(async () => {
