@@ -29,11 +29,11 @@ function makeLayer(input: {
 }
 
 describe("GitWorkflowService", () => {
-  it.effect("keeps a checkout behind a write in the same worktree", () =>
+  it.effect.each(["checkout", "pull"])("keeps a %s behind a write in the same worktree", (action) =>
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
-      const checkoutResolved = yield* Deferred.make<void>();
+      const commandResolved = yield* Deferred.make<void>();
       const events: string[] = [];
       const observedAt = yield* DateTime.now;
       const driver = yield* VcsDriver.VcsDriver.pipe(
@@ -56,7 +56,7 @@ describe("GitWorkflowService", () => {
             Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
               resolve: ({ cwd }) =>
                 Effect.gen(function* () {
-                  if (cwd === "/repo/nested") yield* Deferred.succeed(checkoutResolved, undefined);
+                  if (cwd === "/repo/nested") yield* Deferred.succeed(commandResolved, undefined);
                   return {
                     kind: "git" as const,
                     driver,
@@ -79,6 +79,11 @@ describe("GitWorkflowService", () => {
                   events.push("checkout");
                   return { refName };
                 }),
+              pullCurrentBranch: () =>
+                Effect.sync(() => {
+                  events.push("pull");
+                  return { status: "pulled" as const, refName: "main", upstreamRef: "origin/main" };
+                }),
             }),
             Layer.mock(GitManager.GitManager)({}),
           ),
@@ -96,10 +101,12 @@ describe("GitWorkflowService", () => {
         )
         .pipe(Effect.forkScoped);
       yield* Deferred.await(entered);
-      const checkout = yield* workflow
-        .switchRef({ cwd: "/repo/nested", refName: "other" })
-        .pipe(Effect.forkScoped);
-      yield* Deferred.await(checkoutResolved);
+      const command = yield* (
+        action === "checkout"
+          ? workflow.switchRef({ cwd: "/repo/nested", refName: "other" })
+          : workflow.pullCurrentBranch("/repo/nested")
+      ).pipe(Effect.forkScoped);
+      yield* Deferred.await(commandResolved);
       yield* workflow.withWorktreeLock(
         "/other",
         Effect.sync(() => events.push("other worktree")),
@@ -107,8 +114,8 @@ describe("GitWorkflowService", () => {
       assert.deepStrictEqual(events, ["validate", "other worktree"]);
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(write);
-      yield* Fiber.join(checkout);
-      assert.deepStrictEqual(events, ["validate", "other worktree", "write", "checkout"]);
+      yield* Fiber.join(command);
+      assert.deepStrictEqual(events, ["validate", "other worktree", "write", action]);
     }).pipe(Effect.scoped),
   );
 
