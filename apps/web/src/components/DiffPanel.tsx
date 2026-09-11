@@ -1,6 +1,6 @@
 import { RefreshIcon } from "~/components/ui/refresh-icon";
 import { useAtomValue } from "@effect/atom-react";
-import type { FileDiffContentsLoader } from "@pierre/diffs";
+import type { FileDiffContentsLoader, FileDiffMetadata } from "@pierre/diffs";
 import { useParams } from "@tanstack/react-router";
 import {
   isAtomCommandInterrupted,
@@ -27,7 +27,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useCodeViewFileReveal } from "./diffs/useCodeViewFileReveal";
 import { useOpenInPreferredEditor } from "../editorPreferences";
 import { type DraftId } from "../composerDraftStore";
-import { openDiffFilePrimaryAction } from "../diffFileActions";
+import { openDiffFilePrimaryAction, resolveDiffPathForWorkspace } from "../diffFileActions";
 import { useCheckpointDiff } from "~/lib/checkpointDiffState";
 import { cn } from "~/lib/utils";
 import { selectThreadDiffPanelSelection, useDiffPanelStore } from "../diffPanelStore";
@@ -55,6 +55,7 @@ import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./Dif
 import { DiffStatLabel } from "./chat/DiffStatLabel";
 import { AnnotatableCodeView, type AnnotatableCodeViewHandle } from "./diffs/AnnotatableCodeView";
 import { DiffFileTree } from "./diffs/DiffFileTree";
+import { DiffFileEditButton } from "./diffs/DiffFileEditButton";
 import { diffFileTreeEntries } from "./diffs/diffFileTree.logic";
 import { Button } from "./ui/button";
 import { ToggleGroup, Toggle } from "./ui/toggle-group";
@@ -500,6 +501,44 @@ export default function DiffPanel({
     },
     [activeCwd, activeRepositoryRoot, openInPreferredEditor, routeThreadRef],
   );
+  const editEnvironmentId = activeThread?.environmentId;
+  const renderHeaderFilenameSuffix = useCallback(
+    (fileDiff: FileDiffMetadata) => {
+      const filePath = resolveFileDiffPath(fileDiff);
+      const relativePath = resolveDiffPathForWorkspace({
+        filePath,
+        workspaceRoot: activeCwd,
+        repositoryRoot: activeRepositoryRoot,
+      });
+      return (
+        <>
+          <DiffFilePathCopyButton filePath={filePath} />
+          {fileDiff.type !== "deleted" &&
+          !shouldRetryBranchDiffAtEnvironmentCwd &&
+          editEnvironmentId &&
+          activeCwd &&
+          relativePath ? (
+            <DiffFileEditButton
+              key={`${editEnvironmentId}:${activeCwd}:${relativePath}`}
+              environmentId={editEnvironmentId}
+              cwd={activeCwd}
+              filePath={relativePath}
+              {...(canRefreshGitDiff ? { onSaved: refreshBranchDiffPreview } : {})}
+            />
+          ) : null}
+        </>
+      );
+    },
+    [
+      activeCwd,
+      activeRepositoryRoot,
+      editEnvironmentId,
+      canRefreshGitDiff,
+      refreshBranchDiffPreview,
+      shouldRetryBranchDiffAtEnvironmentCwd,
+    ],
+  );
+
   const toggleDiffFileCollapsed = useCallback(
     (fileKey: string) => {
       setCollapsedDiffFiles((current) => {
@@ -975,9 +1014,7 @@ export default function DiffPanel({
                     sectionId={reviewSectionId}
                     sectionTitle={reviewSectionTitle}
                     composerDraftTarget={composerDraftTarget}
-                    renderHeaderFilenameSuffix={(fileDiff) => (
-                      <DiffFilePathCopyButton filePath={resolveFileDiffPath(fileDiff)} />
-                    )}
+                    renderHeaderFilenameSuffix={renderHeaderFilenameSuffix}
                     renderHeaderPrefix={(fileDiff, fileKey, collapsed) => {
                       const filePath = resolveFileDiffPath(fileDiff);
                       return (

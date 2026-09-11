@@ -2601,6 +2601,7 @@ export function PullRequestDetailPanel({
                   <PullRequestCodeTab
                     {...(attachTarget ? { onAddToAgentSelection: addSelectionToAgent } : {})}
                     environmentId={environmentId}
+                    threadRef={threadRef}
                     reference={reference}
                     detail={detail}
                     selectedCommitOid={selectedCodeCommitOid}

@@ -597,7 +597,7 @@ interface EditableFileSurfaceProps {
   environmentId: EnvironmentId;
   cwd: string;
   relativePath: string;
-  composerDraftTarget: ScopedThreadRef | DraftId;
+  composerDraftTarget: ScopedThreadRef | DraftId | null;
   contents: string;
   resolvedTheme: "light" | "dark";
   revealRequestId: number;
@@ -611,7 +611,7 @@ interface FileSelectionOverride {
   range: SelectedLineRange | null;
 }
 
-function EditableFileSurface({
+export function EditableFileSurface({
   environmentId,
   cwd,
   relativePath,
@@ -658,7 +658,7 @@ function EditableFileSurface({
             setLineAnnotations(remapped);
             for (const annotation of remapped) {
               for (const entry of annotation.metadata.entries) {
-                if (entry.kind !== "comment") continue;
+                if (entry.kind !== "comment" || composerDraftTarget === null) continue;
                 addReviewComment(
                   composerDraftTarget,
                   buildFileReviewComment({
@@ -688,7 +688,7 @@ function EditableFileSurface({
   const removeAnnotationEntry = useCallback(
     (entryId: string) => {
       setSelectedRange(null);
-      removeReviewComment(composerDraftTarget, entryId);
+      if (composerDraftTarget !== null) removeReviewComment(composerDraftTarget, entryId);
       setLineAnnotations((current) => {
         return current.flatMap((annotation) => {
           const entries = annotation.metadata.entries.filter((entry) => entry.id !== entryId);
@@ -705,7 +705,7 @@ function EditableFileSurface({
       const entry = lineAnnotations
         .flatMap((annotation) => annotation.metadata.entries)
         .find((candidate) => candidate.id === entryId);
-      if (entry) {
+      if (entry && composerDraftTarget !== null) {
         addReviewComment(
           composerDraftTarget,
           buildFileReviewComment({
@@ -848,8 +848,8 @@ function EditableFileSurface({
             }}
             options={{
               disableFileHeader: true,
-              enableGutterUtility: !hasOpenCommentForm,
-              enableLineSelection: !hasOpenCommentForm,
+              enableGutterUtility: composerDraftTarget !== null && !hasOpenCommentForm,
+              enableLineSelection: composerDraftTarget !== null && !hasOpenCommentForm,
               onGutterUtilityClick: setSelectedRange,
               onLineSelectionChange: setSelectedRange,
               onLineSelectionEnd: handleLineSelectionEnd,

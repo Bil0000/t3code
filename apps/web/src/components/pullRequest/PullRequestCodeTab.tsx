@@ -9,6 +9,7 @@ import type {
   PullRequestReviewPosition,
   PullRequestReviewThread,
   PullRequestThreadCommentsResult,
+  ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
@@ -31,6 +32,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
+import { useProject, useThreadShell } from "~/state/entities";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
 import { canEditPullRequestComment } from "./pullRequestEditing.logic";
@@ -60,6 +62,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { DiffFileTree } from "../diffs/DiffFileTree";
+import { DiffFileEditButton } from "../diffs/DiffFileEditButton";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
@@ -191,6 +194,7 @@ function PullRequestCodeTab({
   environmentId,
   reference,
   detail,
+  threadRef = null,
   selectedCommitOid,
   onSelectedCommitChange,
   pendingFinding,
@@ -203,6 +207,7 @@ function PullRequestCodeTab({
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   detail: PullRequestDetailView;
+  threadRef?: ScopedThreadRef | null;
   /** Commit whose diff is open. Null keeps the whole pull-request diff selected. */
   selectedCommitOid: string | null;
   onSelectedCommitChange: (oid: string | null) => void;
@@ -218,6 +223,14 @@ function PullRequestCodeTab({
 }) {
   const { resolvedTheme } = useTheme();
   const settings = useClientSettings();
+  const thread = useThreadShell(threadRef);
+  const project = useProject({ environmentId, projectId: reference.projectId });
+  const editCwd =
+    (thread?.environmentId === environmentId && thread.projectId === reference.projectId
+      ? thread.worktreePath
+      : null) ??
+    project?.repositoryIdentity?.rootPath ??
+    detail.workspaceRoot;
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
   // A change of any size can carry hundreds of commits, and a menu that long is a scroll rather
   // than a choice. The rest arrive ten at a time, on request.
@@ -738,6 +751,20 @@ function PullRequestCodeTab({
       );
     },
     [toggleFile],
+  );
+
+  const renderHeaderFilenameSuffix = useCallback(
+    (item: CodeViewItem<ReviewAnnotationGroup>) =>
+      item.type === "diff" && item.fileDiff.type !== "deleted" ? (
+        <DiffFileEditButton
+          key={`${environmentId}:${editCwd}:${detail.url}:${resolveFileDiffPath(item.fileDiff)}`}
+          environmentId={environmentId}
+          cwd={editCwd}
+          filePath={resolveFileDiffPath(item.fileDiff)}
+          pullRequestUrl={detail.url}
+        />
+      ) : null,
+    [detail.url, editCwd, environmentId],
   );
 
   const renderHeaderMetadata = useCallback(
@@ -1397,6 +1424,7 @@ function PullRequestCodeTab({
             // is running out of diff.
             renderCodeViewFooter={renderCodeViewFooter}
             renderHeaderPrefix={renderHeaderPrefix}
+            renderHeaderFilenameSuffix={renderHeaderFilenameSuffix}
             renderHeaderMetadata={renderHeaderMetadata}
             renderAnnotation={renderAnnotation}
             unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
