@@ -1,4 +1,6 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import { ProjectWriteFileError, type EnvironmentId } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
+import * as Schema from "effect/Schema";
 import { createRef, useEffect, useMemo } from "react";
 
 import { projectEnvironment } from "~/state/projects";
@@ -13,6 +15,7 @@ import {
 } from "./projectFilesQueryState";
 
 const FILE_SAVE_DEBOUNCE_MS = 500;
+const isProjectWriteFileError = Schema.is(ProjectWriteFileError);
 
 interface FileSaveOptions {
   environmentId: EnvironmentId;
@@ -50,8 +53,10 @@ export function useFileSaveCoordinator({
                 ...(expectedBranch !== undefined ? { expectedBranch } : {}),
               },
             });
+            const error = result._tag === "Failure" ? Cause.squash(result.cause) : null;
             if (
-              result._tag === "Failure" &&
+              isProjectWriteFileError(error) &&
+              error.failure === "checkout_changed" &&
               expectedBranch !== undefined &&
               getOptimisticProjectFileQueryData(environmentId, cwd, relativePath)?.contents ===
                 nextContents

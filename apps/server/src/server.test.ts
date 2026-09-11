@@ -7109,8 +7109,10 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
                 contents: "pending edit",
               }).pipe(Effect.result);
               assert.equal(result._tag, "Failure");
-              if (result._tag === "Failure")
+              if (result._tag === "Failure") {
                 assert.include(result.failure.message, "checkout changed");
+                assert.propertyVal(result.failure, "failure", "checkout_changed");
+              }
               assert.equal(yield* fs.readFileString(path.join(cwd, "file.ts")), "saved");
             }
           }),

@@ -2404,7 +2404,7 @@ const makeWsRpcLayer = (
                     cwd: input.cwd,
                     relativePath: input.relativePath,
                     message: "The checkout changed. Reopen the file before saving.",
-                    failure: "operation_failed",
+                    failure: "checkout_changed",
                   });
                 }
               }
