@@ -50,10 +50,10 @@ export const resolveDeviceHubAccess = Effect.fn("clientRuntime.state.resolveDevi
       prepared: input.prepared,
       signer,
       remoteAuthorization,
+      group: "auth",
       method: "POST",
       url: (httpBaseUrl) => environmentEndpointUrl(httpBaseUrl, "/api/auth/websocket-ticket"),
       timeoutMs: TICKET_TIMEOUT_MS,
-      group: "auth",
       request: ({ client, headers }) => client.webSocketTicket({ headers }),
     });
     return {
