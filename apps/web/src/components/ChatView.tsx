@@ -1965,14 +1965,17 @@ export default function ChatView(props: ChatViewProps) {
   const activePreviewMiniPlayer = usePreviewMiniPlayerStore((state) =>
     selectThreadPreviewMiniPlayer(state.byThreadKey, activeThreadRef),
   );
+  // A pane's surface has left the docked store, and the server has not listed
+  // a terminal it just created, so it has to be counted here too or the next
+  // allocation hands back an id the pane already shows.
   const panelTerminalIds = useMemo(
     () =>
       new Set(
-        rightPanelState.surfaces.flatMap((surface) =>
+        [...rightPanelState.surfaces, ...(paneSurface ? [paneSurface] : [])].flatMap((surface) =>
           surface.kind === "terminal" ? surface.terminalIds : [],
         ),
       ),
-    [rightPanelState.surfaces],
+    [paneSurface, rightPanelState.surfaces],
   );
   const allocatableActiveTerminalIds = useMemo(
     () => [...new Set([...activeKnownTerminalIds, ...panelTerminalIds])],
@@ -6531,6 +6534,7 @@ export default function ChatView(props: ChatViewProps) {
     terminalUiState.terminalOpen,
     terminalUiState.activeTerminalId,
     activeThreadId,
+    closeOwnPane,
     closeRightPanelSurface,
     inputOwner,
     paneMode,
