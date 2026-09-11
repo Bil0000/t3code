@@ -131,6 +131,7 @@ function renderTabs(
       filesAvailable={false}
       pullRequestAvailable={false}
       pullRequestsAvailable={false}
+      agentsAvailable={false}
       deviceAvailable={false}
     >
       <div>content</div>

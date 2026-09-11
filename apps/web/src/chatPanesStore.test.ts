@@ -5,6 +5,7 @@ import { beforeEach, expect, it } from "vite-plus/test";
 import { useChatPaneDragStore } from "./chatPaneDragStore";
 import { collectLeaves } from "./chatPanes.logic";
 import { commitChatPaneDrop, openInSplit, useChatPanesStore } from "./chatPanesStore";
+import type { RightPanelSurface } from "./rightPanelStore";
 
 const thread = (id: string) => scopeThreadRef(EnvironmentId.make("env"), ThreadId.make(id));
 const threadIds = (index: number) =>
@@ -62,6 +63,32 @@ it("opens a panel pane beside the thread and closes it by surface", () => {
   expect(openInSplit(thread("a"), { threadRef: thread("a"), surface: diff })).toBe(false);
   expect(threadIds(0)).toEqual(["a", "a"]);
   useChatPanesStore.getState().closeSurface(thread("a"), "diff");
+  expect(useChatPanesStore.getState().groups).toEqual([]);
+});
+
+it("rewrites a panel pane's surface and follows the survivor when it closes", () => {
+  const terminal: RightPanelSurface = {
+    id: "terminal:t1",
+    kind: "terminal",
+    resourceId: "t1",
+    terminalIds: ["t1"],
+    activeTerminalId: "t1",
+  };
+  openInSplit(thread("a"), { threadRef: thread("a"), surface: terminal });
+  const store = useChatPanesStore.getState();
+  store.updateSurface(thread("a"), terminal.id, (surface) =>
+    surface.kind === "terminal" ? { ...surface, terminalIds: ["t1", "t2"] } : surface,
+  );
+  const leaf = collectLeaves(useChatPanesStore.getState().groups[0]!)[1]!;
+  expect(leaf.surface?.kind === "terminal" && leaf.surface.terminalIds).toEqual(["t1", "t2"]);
+  expect(store.closeSurface(thread("a"), terminal.id)).toEqual(thread("a"));
+  expect(useChatPanesStore.getState().groups).toEqual([]);
+});
+
+it("drops a group left with only panel panes", () => {
+  const diff = { id: "diff", kind: "diff" } as const;
+  openInSplit(thread("a"), { threadRef: thread("a"), surface: diff });
+  useChatPanesStore.getState().closeThread(thread("a"));
   expect(useChatPanesStore.getState().groups).toEqual([]);
 });
 

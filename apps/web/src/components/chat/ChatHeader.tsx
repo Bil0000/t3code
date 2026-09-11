@@ -409,8 +409,8 @@ export const ChatHeader = memo(function ChatHeader({
           "[[data-panel-animations=true]_&]:motion-safe:transition-[padding-right] [[data-panel-animations=true]_&]:motion-safe:[transition-duration:var(--panel-animation-duration)] [[data-panel-animations=true]_&]:motion-safe:ease-out",
         )}
       >
-        {/* A narrow pane keeps only the source-control actions; scripts and
-            the editor picker stay reachable from the command palette. */}
+        {/* A narrow pane keeps only the source-control actions. Both stay
+            mounted, so their shortcuts still fire; widen the pane to click. */}
         <span className="contents @max-[30rem]/pane-header:hidden">
           {activeProjectScripts && (
             <ProjectScriptsControl

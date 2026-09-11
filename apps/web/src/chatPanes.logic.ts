@@ -144,6 +144,20 @@ export function removePane(root: ChatPaneNode, paneId: ChatPaneId): ChatPaneNode
   return first === root.first && second === root.second ? root : { ...root, first, second };
 }
 
+/** Replaces the surface `paneId` shows, leaving a pane without one alone. */
+export function setPaneSurface(
+  root: ChatPaneNode,
+  paneId: ChatPaneId,
+  surface: RightPanelSurface,
+): ChatPaneNode {
+  if (root.kind === "leaf") {
+    return root.id === paneId && root.surface ? { ...root, surface } : root;
+  }
+  const first = setPaneSurface(root.first, paneId, surface);
+  const second = setPaneSurface(root.second, paneId, surface);
+  return first === root.first && second === root.second ? root : { ...root, first, second };
+}
+
 export function setPaneRatio(root: ChatPaneNode, splitId: ChatPaneId, ratio: number): ChatPaneNode {
   if (root.kind === "leaf") return root;
   if (root.id === splitId) return { ...root, ratio: clampPaneRatio(ratio) };

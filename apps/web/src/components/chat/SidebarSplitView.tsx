@@ -33,7 +33,7 @@ export function SidebarSplitViewHeader({
       <button
         type="button"
         onClick={() => onOpenThread(focused.threadRef)}
-        aria-label={`Open split view with ${threadCount} threads`}
+        aria-label={`Open split view with ${threadCount} thread${threadCount === 1 ? "" : "s"}`}
         className={cn(
           "flex h-8 w-full cursor-pointer items-center gap-2 px-2 text-left text-xs font-medium transition-colors hover:text-sidebar-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           active ? "text-primary" : "text-sidebar-muted-foreground/60",

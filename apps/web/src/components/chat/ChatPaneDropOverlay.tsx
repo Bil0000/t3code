@@ -15,10 +15,7 @@ interface ChatPaneDropOverlayProps {
   paneId: ChatPaneId;
   /** Which edge the pointer would split, or null when this target does not apply. */
   resolveZone: (rect: DOMRect, clientX: number, clientY: number) => DropZone | null;
-  /**
-   * Set on the layout's own overlay: when it resolves a zone it wins over
-   * any pane under the pointer, and a null does not clear a pane's target.
-   */
+  /** Set on the layout's own overlay: when it resolves a zone it wins over any pane under the pointer. */
   priority?: boolean;
   children: ReactNode;
 }
@@ -27,7 +24,7 @@ interface ChatPaneDropOverlayProps {
  * Wraps one pane and paints the half it would give to the carried content.
  * Pointer moves are read at the document so the gesture works no matter
  * which sensor owns it, and the resolved zone is published to the drag store
- * for the owner to apply on release. Nothing here is hit-testable, so a
+ * for the drag layer to apply on release. Nothing here is hit-testable, so a
  * resting pane never intercepts clicks or wheel events.
  */
 export function ChatPaneDropOverlay({
@@ -58,9 +55,7 @@ export function ChatPaneDropOverlay({
         measuredAt = now;
       }
       chatPaneDragPointer.current = { x, y };
-      const resolved = resolveZone(rect, x, y);
-      if (priority && resolved === null) return;
-      setTarget(paneId, resolved, priority);
+      setTarget(paneId, resolveZone(rect, x, y), priority);
     };
     const onPointerMove = (event: PointerEvent) => {
       if (event.isPrimary) track(event.clientX, event.clientY);

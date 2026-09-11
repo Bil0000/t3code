@@ -13,6 +13,7 @@ import {
   removePane,
   selectChatPaneRoot,
   setPaneRatio,
+  setPaneSurface,
   splitPane,
   type ChatPaneId,
   type ChatPaneLeaf,
@@ -82,8 +83,18 @@ interface ChatPanesState {
    */
   closePane: (paneId: ChatPaneId) => ScopedThreadRef | null;
   closeThread: (threadRef: ScopedThreadRef) => ScopedThreadRef | null;
-  /** Closes the pane showing `surfaceId` for `threadRef`, if any. */
-  closeSurface: (threadRef: ScopedThreadRef, surfaceId: string) => void;
+  /** Closes the pane showing `surfaceId` for `threadRef`, if any; the survivor when it had focus. */
+  closeSurface: (threadRef: ScopedThreadRef, surfaceId: string) => ScopedThreadRef | null;
+  /**
+   * Rewrites the panel state a pane owns. A surface shown as a pane is gone
+   * from the right panel store, so its own store is the only thing that can
+   * record what happens inside it, such as splitting a terminal group.
+   */
+  updateSurface: (
+    threadRef: ScopedThreadRef,
+    surfaceId: string,
+    update: (surface: RightPanelSurface) => RightPanelSurface,
+  ) => void;
   setRatio: (splitId: ChatPaneId, ratio: number) => void;
 }
 
@@ -105,11 +116,14 @@ function newLeaf(content: ChatPaneContent): ChatPaneLeaf {
 }
 
 /** Swaps one group for its replacement and drops every group down to one
-    pane: `to` after a close, and the source movePane already shrank. */
+    pane: `to` after a close, and the source movePane already shrank. A group
+    of surfaces alone goes too: no route reaches it, so it would just linger. */
 function replaceGroup(groups: ReadonlyArray<ChatPaneNode>, from: ChatPaneNode, to: ChatPaneNode) {
   return groups
     .map((group) => (group === from ? to : group))
-    .filter((group) => group.kind === "split");
+    .filter(
+      (group) => group.kind === "split" && collectLeaves(group).some((leaf) => !leaf.surface),
+    );
 }
 
 function closeLeaf(
@@ -185,8 +199,16 @@ export const useChatPanesStore = create<ChatPanesState>()(
       closeSurface: (threadRef, surfaceId) => {
         const state = get();
         const leaf = findContent(state.groups, threadRef, surfaceId);
-        if (leaf) closeLeaf(set, state, leaf.id);
+        return leaf ? closeLeaf(set, state, leaf.id) : null;
       },
+      updateSurface: (threadRef, surfaceId, update) =>
+        set((state) => {
+          const leaf = findContent(state.groups, threadRef, surfaceId);
+          if (!leaf?.surface) return state;
+          const surface = update(leaf.surface);
+          if (surface === leaf.surface) return state;
+          return { groups: state.groups.map((group) => setPaneSurface(group, leaf.id, surface)) };
+        }),
       setRatio: (splitId, ratio) =>
         set((state) => {
           const groups = state.groups.map((group) => setPaneRatio(group, splitId, ratio));
@@ -271,13 +293,20 @@ function placeCreatedSurface(
   create();
   const now = added();
   if (now) return place({ threadRef, surface: now });
-  const stop = useRightPanelStore.subscribe(() => {
+  const unsubscribe = useRightPanelStore.subscribe(() => {
     const surface = added();
     if (!surface) return;
     stop();
-    clearTimeout(timeout);
     place({ threadRef, surface });
   });
+  // The next press means the action opened a dialog the user dealt with, so
+  // whatever surface they add afterwards is their own, not this one's result.
+  const stop = () => {
+    unsubscribe();
+    clearTimeout(timeout);
+    document.removeEventListener("pointerdown", stop, true);
+  };
+  document.addEventListener("pointerdown", stop, true);
   const timeout = setTimeout(stop, 15_000);
 }
 

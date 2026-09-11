@@ -174,6 +174,8 @@ import {
   selectActiveRightPanel,
   selectActiveRightPanelSurface,
   selectThreadRightPanelState,
+  withTerminalSplit,
+  withoutTerminal,
   type RightPanelSurface,
   useRightPanelStore,
 } from "../rightPanelStore";
@@ -702,11 +704,8 @@ type ChatViewProps =
        * renders that surface alone, full-bleed.
        */
       paneSurface?: RightPanelSurface;
-      /**
-       * Receives the add-surface callbacks so the pane header's "+" menu can
-       * offer the same surfaces as the right panel, opened as panes.
-       */
-      onAddSurfaceProps?: (props: AddSurfaceProps) => void;
+      /** Receives what the pane header needs from the view inside it. */
+      onPaneHeaderProps?: (props: ChatPaneHeaderProps) => void;
     }
   | {
       environmentId: EnvironmentId;
@@ -719,8 +718,15 @@ type ChatViewProps =
       draftId: DraftId;
       paneMode?: never;
       paneSurface?: never;
-      onAddSurfaceProps?: never;
+      onPaneHeaderProps?: never;
     };
+
+export interface ChatPaneHeaderProps {
+  /** The right panel's add actions, which the header's "+" opens as panes. */
+  addSurface: AddSurfaceProps;
+  /** Closes the pane; a surface pane also ends its tab's sessions, asking first when needed. */
+  close: () => void;
+}
 
 interface TerminalLaunchContext {
   threadId: ThreadId;
@@ -1437,7 +1443,7 @@ export default function ChatView(props: ChatViewProps) {
   const draftId = routeKind === "draft" ? props.draftId : null;
   const paneMode = routeKind === "server" ? (props.paneMode ?? null) : null;
   const paneSurface = routeKind === "server" ? (props.paneSurface ?? null) : null;
-  const onAddSurfaceProps = routeKind === "server" ? props.onAddSurfaceProps : undefined;
+  const onPaneHeaderProps = routeKind === "server" ? props.onPaneHeaderProps : undefined;
   const inputOwner = paneMode !== "background";
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
@@ -1547,6 +1553,19 @@ export default function ChatView(props: ChatViewProps) {
   );
   const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
+  /** After a pane closes, the route follows the pane that stays. */
+  const followPane = useCallback(
+    (survivor: ScopedThreadRef | null) => {
+      if (survivor) {
+        void navigate({
+          to: "/$environmentId/$threadId",
+          params: buildThreadRouteParams(survivor),
+          replace: true,
+        });
+      }
+    },
+    [navigate],
+  );
   const citationLocation = useLocation({
     select: (location) => ({
       href: location.href,
@@ -4502,9 +4521,19 @@ export default function ChatView(props: ChatViewProps) {
       }
       const terminalId = nextTerminalId(allocatableActiveTerminalIds);
       const cwd = gitCwd ?? activeProject.workspaceRoot;
-      useRightPanelStore
-        .getState()
-        .splitTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId, direction);
+      if (paneSurface) {
+        useChatPanesStore
+          .getState()
+          .updateSurface(activeThreadRef, paneSurface.id, (surface) =>
+            surface.kind === "terminal"
+              ? withTerminalSplit(surface, terminalId, direction)
+              : surface,
+          );
+      } else {
+        useRightPanelStore
+          .getState()
+          .splitTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId, direction);
+      }
       setTerminalFocusRequestId((value) => value + 1);
       void openTerminal({
         environmentId: activeThreadRef.environmentId,
@@ -4529,6 +4558,7 @@ export default function ChatView(props: ChatViewProps) {
       allocatableActiveTerminalIds,
       gitCwd,
       openTerminal,
+      paneSurface,
     ],
   );
   const splitPanelTerminalVertical = useCallback(() => {
@@ -4537,12 +4567,22 @@ export default function ChatView(props: ChatViewProps) {
   const activatePanelTerminal = useCallback(
     (terminalId: string) => {
       if (!activeThreadRef || activeRightPanelSurface?.kind !== "terminal") return;
-      useRightPanelStore
-        .getState()
-        .activateTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId);
+      if (paneSurface) {
+        useChatPanesStore
+          .getState()
+          .updateSurface(activeThreadRef, paneSurface.id, (surface) =>
+            surface.kind === "terminal" && surface.terminalIds.includes(terminalId)
+              ? { ...surface, activeTerminalId: terminalId }
+              : surface,
+          );
+      } else {
+        useRightPanelStore
+          .getState()
+          .activateTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId);
+      }
       setTerminalFocusRequestId((value) => value + 1);
     },
-    [activeRightPanelSurface, activeThreadRef],
+    [activeRightPanelSurface, activeThreadRef, paneSurface],
   );
   const closePanelTerminal = useCallback(
     (terminalId: string) => {
@@ -4552,12 +4592,26 @@ export default function ChatView(props: ChatViewProps) {
         input: { threadId: activeThreadRef.threadId, terminalId, deleteHistory: true },
       });
       storeCloseTerminal(activeThreadRef, terminalId);
-      useRightPanelStore
-        .getState()
-        .closeTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId);
+      if (paneSurface?.kind === "terminal") {
+        const next = withoutTerminal(paneSurface, terminalId);
+        const panes = useChatPanesStore.getState();
+        if (next) panes.updateSurface(activeThreadRef, paneSurface.id, () => next);
+        else followPane(panes.closeSurface(activeThreadRef, paneSurface.id));
+      } else {
+        useRightPanelStore
+          .getState()
+          .closeTerminal(activeThreadRef, activeRightPanelSurface.id, terminalId);
+      }
       setTerminalFocusRequestId((value) => value + 1);
     },
-    [activeRightPanelSurface, activeThreadRef, closeTerminalMutation, storeCloseTerminal],
+    [
+      activeRightPanelSurface,
+      activeThreadRef,
+      closeTerminalMutation,
+      followPane,
+      paneSurface,
+      storeCloseTerminal,
+    ],
   );
   const requestCloseTerminal = useCallback(
     (terminalId: string) => {
@@ -4593,14 +4647,6 @@ export default function ChatView(props: ChatViewProps) {
     },
     [activeThreadRef, diffOpen, onDiffPanelOpen],
   );
-  const toggleRightPanel = useCallback(() => {
-    if (!activeThreadRef) return;
-    if (rightPanelOpen) {
-      closePreviewPanel();
-      return;
-    }
-    useRightPanelStore.getState().toggleVisibility(activeThreadRef);
-  }, [activeThreadRef, closePreviewPanel, rightPanelOpen]);
   const toggleRightPanelMaximized = useCallback(() => {
     if (!canMaximizeRightPanel) return;
     setMaximizedRightPanelThreadKey((threadKey) =>
@@ -4676,11 +4722,11 @@ export default function ChatView(props: ChatViewProps) {
       const store = useRightPanelStore.getState();
       for (const surface of surfaces) {
         store.closeSurface(activeThreadRef, surface.id);
-        useChatPanesStore.getState().closeSurface(activeThreadRef, surface.id);
+        followPane(useChatPanesStore.getState().closeSurface(activeThreadRef, surface.id));
       }
       syncActivePreviewSurface();
     },
-    [activeThreadRef, cleanupRightPanelSurfaces, syncActivePreviewSurface],
+    [activeThreadRef, cleanupRightPanelSurfaces, followPane, syncActivePreviewSurface],
   );
   const closeRightPanelSurface = useCallback(
     (surface: RightPanelSurface) => {
@@ -4713,6 +4759,26 @@ export default function ChatView(props: ChatViewProps) {
       finishRightPanelSurfaceClose,
     ],
   );
+  /** Closes the pane this view renders in: its surface's tab, or the thread's chat pane. */
+  const closeOwnPane = useCallback(() => {
+    if (!activeThreadRef) return;
+    if (paneSurface) closeRightPanelSurface(paneSurface);
+    else followPane(useChatPanesStore.getState().closeThread(activeThreadRef));
+  }, [activeThreadRef, closeRightPanelSurface, followPane, paneSurface]);
+  const toggleRightPanel = useCallback(() => {
+    if (!activeThreadRef) return;
+    // A surface pane is this view's panel, so the toggle closes the pane
+    // rather than the docked panel the thread may still have elsewhere.
+    if (paneSurface !== null) {
+      closeOwnPane();
+      return;
+    }
+    if (rightPanelOpen) {
+      closePreviewPanel();
+      return;
+    }
+    useRightPanelStore.getState().toggleVisibility(activeThreadRef);
+  }, [activeThreadRef, closeOwnPane, closePreviewPanel, paneSurface, rightPanelOpen]);
   const closeOtherRightPanelSurfaces = useCallback(
     (surface: RightPanelSurface) => {
       if (!activeThreadRef) return;
@@ -6286,14 +6352,7 @@ export default function ChatView(props: ChatViewProps) {
         event.preventDefault();
         event.stopPropagation();
         if (event.repeat || !activeThreadRef) return;
-        const survivor = useChatPanesStore.getState().closeThread(activeThreadRef);
-        if (survivor) {
-          void navigate({
-            to: "/$environmentId/$threadId",
-            params: buildThreadRouteParams(survivor),
-            replace: true,
-          });
-        }
+        closeOwnPane();
         return;
       }
 
@@ -8203,6 +8262,49 @@ export default function ChatView(props: ChatViewProps) {
     pendingSidebarFileDrops,
   ]);
 
+  const addSurfaceProps = useMemo<AddSurfaceProps>(
+    () => ({
+      // Not passed bare: a DOM click handler would hand it a MouseEvent as the profile id.
+      onAddBrowser: () => createBrowserSurface(),
+      onAddBrowserInProfile: createBrowserSurface,
+      onAddTerminal: addTerminalSurface,
+      onAddDiff: addDiffSurface,
+      onAddFiles: addFilesSurface,
+      onAddPullRequest: addPullRequestSurface,
+      onAddPullRequests: addPullRequestsSurface,
+      onAddAgents: addAgentsSurface,
+      onAddDevice: addDeviceSurface,
+      browserAvailable: isPreviewSupportedInRuntime(),
+      terminalAvailable: activeProject !== null,
+      diffAvailable: isServerThread && isGitRepo,
+      filesAvailable: activeProject !== null,
+      pullRequestAvailable: pullRequestSurfaceAvailable,
+      pullRequestsAvailable: isServerThread && supportsThreadPullRequests,
+      agentsAvailable: true,
+      deviceAvailable: activeThreadRef !== null,
+    }),
+    [
+      createBrowserSurface,
+      addTerminalSurface,
+      addDiffSurface,
+      addFilesSurface,
+      addPullRequestSurface,
+      addPullRequestsSurface,
+      addAgentsSurface,
+      addDeviceSurface,
+      activeProject,
+      isServerThread,
+      isGitRepo,
+      pullRequestSurfaceAvailable,
+      supportsThreadPullRequests,
+      activeThreadRef,
+    ],
+  );
+  useEffect(
+    () => onPaneHeaderProps?.({ addSurface: addSurfaceProps, close: closeOwnPane }),
+    [onPaneHeaderProps, addSurfaceProps, closeOwnPane],
+  );
+
   // Empty state: no active thread
   if (!activeThread) {
     return <NoActiveThreadState />;
@@ -8419,46 +8521,6 @@ export default function ChatView(props: ChatViewProps) {
     setDragActive: setIsWorkspaceFileDragActive,
     addFiles: (files) => composerRef.current?.addDroppedFiles(files),
   });
-
-  const addSurfaceProps = useMemo<AddSurfaceProps>(
-    () => ({
-      // Not passed bare: a DOM click handler would hand it a MouseEvent as the profile id.
-      onAddBrowser: () => createBrowserSurface(),
-      onAddBrowserInProfile: createBrowserSurface,
-      onAddTerminal: addTerminalSurface,
-      onAddDiff: addDiffSurface,
-      onAddFiles: addFilesSurface,
-      onAddPullRequest: addPullRequestSurface,
-      onAddPullRequests: addPullRequestsSurface,
-      onAddAgents: addAgentsSurface,
-      onAddDevice: addDeviceSurface,
-      browserAvailable: isPreviewSupportedInRuntime(),
-      terminalAvailable: activeProject !== null,
-      diffAvailable: isServerThread && isGitRepo,
-      filesAvailable: activeProject !== null,
-      pullRequestAvailable: pullRequestSurfaceAvailable,
-      pullRequestsAvailable: isServerThread && supportsThreadPullRequests,
-      deviceAvailable: activeThreadRef !== null,
-    }),
-    [
-      createBrowserSurface,
-      addTerminalSurface,
-      addDiffSurface,
-      addFilesSurface,
-      addPullRequestSurface,
-      addPullRequestsSurface,
-      addAgentsSurface,
-      addDeviceSurface,
-      activeProject,
-      isServerThread,
-      isGitRepo,
-      pullRequestSurfaceAvailable,
-      supportsThreadPullRequests,
-      activeThreadRef,
-    ],
-  );
-  // The pane header drives its own "+" menu from a copy of these props.
-  useEffect(() => onAddSurfaceProps?.(addSurfaceProps), [onAddSurfaceProps, addSurfaceProps]);
 
   if (paneSurface) {
     return (

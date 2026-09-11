@@ -14,6 +14,7 @@ import {
 } from "react";
 
 import {
+  collectLeaves,
   findLeaf,
   resolveDropZone,
   resolveEdgeDropZone,
@@ -22,8 +23,8 @@ import {
 } from "~/chatPanes.logic";
 import { isChatPaneDragActive, startChatPaneDrag, useChatPaneDragStore } from "~/chatPaneDragStore";
 import { commitChatPaneDrop, openCreatedSurfaceInSplit, useChatPanesStore } from "~/chatPanesStore";
-import ChatView from "~/components/ChatView";
-import { AddSurfaceMenu, surfaceTitle, type AddSurfaceProps } from "~/components/RightPanelTabs";
+import ChatView, { type ChatPaneHeaderProps } from "~/components/ChatView";
+import { AddSurfaceMenu, surfaceTitle } from "~/components/RightPanelTabs";
 import { Button } from "~/components/ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
@@ -53,8 +54,14 @@ export function ChatPanes({
   const routeLeaf = useMemo(() => findLeaf(root, routeThreadRef), [root, routeThreadRef]);
 
   useEffect(() => {
-    if (routeLeaf) focusPane(routeLeaf.id);
-  }, [focusPane, routeLeaf]);
+    if (!routeLeaf) return;
+    // A surface pane the route thread just opened keeps focus; pointing back
+    // at its chat leaf would dim the pane the split was made for.
+    const focusedId = useChatPanesStore.getState().focusedPaneId;
+    const focused = collectLeaves(root).find((leaf) => leaf.id === focusedId);
+    if (focused && scopedThreadKey(focused.threadRef) === routeThreadKey) return;
+    focusPane(routeLeaf.id);
+  }, [focusPane, root, routeLeaf, routeThreadKey]);
 
   const follow = useCallback(
     (threadRef: ScopedThreadRef | null) => {
@@ -178,9 +185,10 @@ const PaneLeaf = memo(function PaneLeaf({
       sourcePaneId: leaf.id,
     });
   };
-  // The view inside publishes the same add-surface actions the right panel
-  // uses; the header's "+" opens each one as a pane beside this one.
-  const [addSurfaceProps, setAddSurfaceProps] = useState<AddSurfaceProps | null>(null);
+  // The view inside publishes its add-surface actions, which the header's
+  // "+" opens as panes beside this one, and the close that also ends a
+  // surface pane's sessions. Until it mounts, the close is the bare pane.
+  const [header, setHeader] = useState<ChatPaneHeaderProps | null>(null);
   const [addMenuOpen, setAddMenuOpen] = useState(false);
 
   return (
@@ -218,9 +226,9 @@ const PaneLeaf = memo(function PaneLeaf({
               <span className="min-w-0 truncate text-muted-foreground/70">{origin}</span>
             ) : null}
           </span>
-          {addSurfaceProps ? (
+          {header ? (
             <AddSurfaceMenu
-              {...addSurfaceProps}
+              {...header.addSurface}
               // Land beside this pane, whichever pane had focus before the menu opened.
               onAdd={(create) => {
                 useChatPanesStore.getState().focusPane(leaf.id);
@@ -247,7 +255,7 @@ const PaneLeaf = memo(function PaneLeaf({
                   size="icon-micro"
                   aria-label={`Close pane for ${title}`}
                   onPointerDown={(event) => event.stopPropagation()}
-                  onClick={close}
+                  onClick={header?.close ?? close}
                 />
               }
             >
@@ -264,7 +272,7 @@ const PaneLeaf = memo(function PaneLeaf({
             threadSyncPhase={threadSyncPhase}
             paneMode={focused ? "focused" : "background"}
             {...(leaf.surface ? { paneSurface: leaf.surface } : {})}
-            onAddSurfaceProps={setAddSurfaceProps}
+            onPaneHeaderProps={setHeader}
             reserveTitleBarControlInset={false}
           />
         ) : null}

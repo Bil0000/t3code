@@ -139,6 +139,7 @@ const SURFACE_DISABLED_REASONS = {
   pullRequest: "This thread's branch has no pull request yet.",
   pullRequests: "Linked pull requests are only available for server threads.",
   device: "Devices are only available from a thread.",
+  agents: "Agents are only available from a thread.",
 } as const;
 
 /** Overlays that must win over the launcher's letter shortcuts. */
@@ -322,7 +323,8 @@ function surfaceActions(props: AddSurfaceProps, liveAgentCount = 0): SurfaceActi
       label: "Agents",
       icon: Bot,
       shortcut: "A",
-      available: true,
+      available: props.agentsAvailable,
+      disabledReason: SURFACE_DISABLED_REASONS.agents,
       onClick: props.onAddAgents,
       badgeCount: liveAgentCount,
     },
@@ -373,6 +375,7 @@ export interface AddSurfaceProps {
   filesAvailable: boolean;
   pullRequestAvailable: boolean;
   pullRequestsAvailable: boolean;
+  agentsAvailable: boolean;
   deviceAvailable: boolean;
 }
 
@@ -1174,13 +1177,15 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                   key={surface.id}
                   data-active-tab={active}
                   onMouseDown={handleTabMouseDown}
-                  onPointerDown={(event) =>
-                    props.threadRef &&
+                  onPointerDown={(event) => {
+                    // The rename field is a child of this tab: dragging to
+                    // select text there must not arm a pane drag.
+                    if (!props.threadRef || renamingDevice === surface.id) return;
                     startChatPaneDrag(event, {
                       content: { threadRef: props.threadRef, surface },
                       title,
-                    })
-                  }
+                    });
+                  }}
                   onAuxClick={(event) => handleTabAuxClick(event, surface)}
                   onContextMenu={(event) => void handleTabContextMenu(event, surface)}
                   className={cn(
