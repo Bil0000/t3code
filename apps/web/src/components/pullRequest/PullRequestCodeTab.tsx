@@ -35,7 +35,7 @@ import { useTheme } from "~/hooks/useTheme";
 import { useProject, useThreadShell } from "~/state/entities";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
-import { canEditPullRequestComment } from "./pullRequestEditing.logic";
+import { canEditPullRequestComment, resolvePullRequestEditCwd } from "./pullRequestEditing.logic";
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
@@ -224,13 +224,12 @@ function PullRequestCodeTab({
   const { resolvedTheme } = useTheme();
   const settings = useClientSettings();
   const thread = useThreadShell(threadRef);
-  const project = useProject({ environmentId, projectId: reference.projectId });
-  const editCwd =
-    (thread?.environmentId === environmentId && thread.projectId === reference.projectId
-      ? thread.worktreePath
-      : null) ??
-    project?.repositoryIdentity?.rootPath ??
-    detail.workspaceRoot;
+  const project = useProject({ environmentId, projectId: detail.projectId });
+  const editCwd = resolvePullRequestEditCwd(
+    { environmentId, projectId: detail.projectId },
+    project?.repositoryIdentity?.rootPath,
+    thread,
+  );
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
   // A change of any size can carry hundreds of commits, and a menu that long is a scroll rather
   // than a choice. The rest arrive ten at a time, on request.
@@ -755,7 +754,7 @@ function PullRequestCodeTab({
 
   const renderHeaderFilenameSuffix = useCallback(
     (item: CodeViewItem<ReviewAnnotationGroup>) =>
-      item.type === "diff" && item.fileDiff.type !== "deleted" ? (
+      item.type === "diff" && item.fileDiff.type !== "deleted" && editCwd ? (
         <DiffFileEditButton
           key={`${environmentId}:${editCwd}:${detail.url}:${resolveFileDiffPath(item.fileDiff)}`}
           environmentId={environmentId}
