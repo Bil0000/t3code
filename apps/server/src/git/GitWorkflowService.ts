@@ -1,6 +1,7 @@
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Semaphore from "effect/Semaphore";
 
 import {
   GitManagerError,
@@ -35,6 +36,10 @@ import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 export class GitWorkflowService extends Context.Service<
   GitWorkflowService,
   {
+    readonly withWorktreeLock: <A, E, R>(
+      cwd: string,
+      effect: Effect.Effect<A, E, R>,
+    ) => Effect.Effect<A, E | GitCommandError, R>;
     readonly status: (
       input: VcsStatusInput,
     ) => Effect.Effect<VcsStatusResult, GitManagerServiceError>;
@@ -147,6 +152,29 @@ export const make = Effect.gen(function* () {
   const registry = yield* VcsDriverRegistry.VcsDriverRegistry;
   const git = yield* GitVcsDriver.GitVcsDriver;
   const gitManager = yield* GitManager.GitManager;
+  const worktreeLocks = new Map<string, Semaphore.Semaphore>();
+  const withWorktreeLock: GitWorkflowService["Service"]["withWorktreeLock"] = (cwd, effect) =>
+    Effect.gen(function* () {
+      const handle = yield* registry.resolve({ cwd }).pipe(
+        Effect.mapError(
+          (cause) =>
+            new GitCommandError({
+              operation: "GitWorkflowService.withWorktreeLock",
+              command: "vcs-route",
+              cwd,
+              detail: "Failed to resolve the worktree before changing its files.",
+              cause,
+            }),
+        ),
+      );
+      const key = handle.repository.rootPath;
+      let lock = worktreeLocks.get(key);
+      if (!lock) {
+        lock = Semaphore.makeUnsafe(1);
+        worktreeLocks.set(key, lock);
+      }
+      return yield* lock.withPermits(1)(effect);
+    });
 
   const ensureGit = Effect.fn("GitWorkflowService.ensureGit")(function* (
     operation: string,
@@ -263,6 +291,7 @@ export const make = Effect.gen(function* () {
       ensureGit(operation, input.cwd).pipe(Effect.andThen(run(input)));
 
   return GitWorkflowService.of({
+    withWorktreeLock,
     status: (input) =>
       detectGitRepositoryForStatus("GitWorkflowService.status", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>
@@ -293,15 +322,20 @@ export const make = Effect.gen(function* () {
     runStackedAction: (input, options) =>
       ensureGit("GitWorkflowService.runStackedAction", input.cwd).pipe(
         Effect.andThen(gitManager.runStackedAction(input, options)),
+        (effect) => (input.featureBranch ? withWorktreeLock(input.cwd, effect) : effect),
       ),
     resolvePullRequest: routeGitManager(
       "GitWorkflowService.resolvePullRequest",
       gitManager.resolvePullRequest,
     ),
-    preparePullRequestThread: routeGitManager(
-      "GitWorkflowService.preparePullRequestThread",
-      gitManager.preparePullRequestThread,
-    ),
+    preparePullRequestThread: (input) =>
+      withWorktreeLock(
+        input.cwd,
+        routeGitManager(
+          "GitWorkflowService.preparePullRequestThread",
+          gitManager.preparePullRequestThread,
+        )(input),
+      ),
     listRefs: (input) =>
       detectGitRepositoryForCommand("GitWorkflowService.listRefs", input.cwd).pipe(
         Effect.flatMap((isGitRepository) =>
@@ -339,14 +373,17 @@ export const make = Effect.gen(function* () {
     createRef: (input) =>
       ensureGitCommand("GitWorkflowService.createRef", input.cwd).pipe(
         Effect.andThen(git.createRef(input)),
+        (effect) => (input.switchRef ? withWorktreeLock(input.cwd, effect) : effect),
       ),
     switchRef: (input) =>
       ensureGitCommand("GitWorkflowService.switchRef", input.cwd).pipe(
         Effect.andThen(Effect.scoped(git.switchRef(input))),
+        (effect) => withWorktreeLock(input.cwd, effect),
       ),
     renameBranch: (input) =>
       ensureGit("GitWorkflowService.renameBranch", input.cwd).pipe(
         Effect.andThen(git.renameBranch(input)),
+        (effect) => withWorktreeLock(input.cwd, effect),
       ),
   });
 });

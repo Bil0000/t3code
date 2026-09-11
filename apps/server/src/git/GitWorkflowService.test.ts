@@ -1,5 +1,9 @@
 import { assert, describe, expect, it, vi } from "@effect/vitest";
 import * as Effect from "effect/Effect";
+import * as Deferred from "effect/Deferred";
+import * as Fiber from "effect/Fiber";
+import * as DateTime from "effect/DateTime";
+import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
 
 import { VcsRepositoryDetectionError } from "@t3tools/contracts";
@@ -8,6 +12,7 @@ import * as GitManager from "./GitManager.ts";
 import * as GitWorkflowService from "./GitWorkflowService.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
+import * as VcsDriver from "../vcs/VcsDriver.ts";
 
 function makeLayer(input: {
   readonly detect: VcsDriverRegistry.VcsDriverRegistry["Service"]["detect"];
@@ -24,6 +29,89 @@ function makeLayer(input: {
 }
 
 describe("GitWorkflowService", () => {
+  it.effect("keeps a checkout behind a write in the same worktree", () =>
+    Effect.gen(function* () {
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const checkoutResolved = yield* Deferred.make<void>();
+      const events: string[] = [];
+      const observedAt = yield* DateTime.now;
+      const driver = yield* VcsDriver.VcsDriver.pipe(
+        Effect.provide(
+          Layer.mock(VcsDriver.VcsDriver)({
+            capabilities: {
+              kind: "git",
+              supportsWorktrees: true,
+              supportsBookmarks: false,
+              supportsAtomicSnapshot: false,
+              supportsPushDefaultRemote: true,
+              ignoreClassifier: "native",
+            },
+          }),
+        ),
+      );
+      const workflow = yield* GitWorkflowService.make.pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
+              resolve: ({ cwd }) =>
+                Effect.gen(function* () {
+                  if (cwd === "/repo/nested") yield* Deferred.succeed(checkoutResolved, undefined);
+                  return {
+                    kind: "git" as const,
+                    driver,
+                    repository: {
+                      kind: "git" as const,
+                      rootPath: cwd === "/other" ? "/other" : "/repo",
+                      metadataPath: null,
+                      freshness: {
+                        source: "live-local" as const,
+                        observedAt,
+                        expiresAt: Option.none(),
+                      },
+                    },
+                  };
+                }),
+            }),
+            Layer.mock(GitVcsDriver.GitVcsDriver)({
+              switchRef: ({ refName }) =>
+                Effect.sync(() => {
+                  events.push("checkout");
+                  return { refName };
+                }),
+            }),
+            Layer.mock(GitManager.GitManager)({}),
+          ),
+        ),
+      );
+      const write = yield* workflow
+        .withWorktreeLock(
+          "/repo",
+          Effect.gen(function* () {
+            events.push("validate");
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+            events.push("write");
+          }),
+        )
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(entered);
+      const checkout = yield* workflow
+        .switchRef({ cwd: "/repo/nested", refName: "other" })
+        .pipe(Effect.forkScoped);
+      yield* Deferred.await(checkoutResolved);
+      yield* workflow.withWorktreeLock(
+        "/other",
+        Effect.sync(() => events.push("other worktree")),
+      );
+      assert.deepStrictEqual(events, ["validate", "other worktree"]);
+      yield* Deferred.succeed(release, undefined);
+      yield* Fiber.join(write);
+      yield* Fiber.join(checkout);
+      assert.deepStrictEqual(events, ["validate", "other worktree", "write", "checkout"]);
+    }).pipe(Effect.scoped),
+  );
+
   it.effect("returns an empty local status when no VCS repository is detected", () =>
     Effect.gen(function* () {
       const workflow = yield* GitWorkflowService.GitWorkflowService;

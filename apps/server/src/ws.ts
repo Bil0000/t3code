@@ -2419,7 +2419,23 @@ const makeWsRpcLayer = (
                     }),
                 ),
               );
-            }),
+            }).pipe((effect) =>
+              input.expectedBranch === undefined
+                ? effect
+                : gitWorkflow.withWorktreeLock(input.cwd, effect).pipe(
+                    Effect.mapError((cause) =>
+                      cause._tag === "ProjectWriteFileError"
+                        ? cause
+                        : new ProjectWriteFileError({
+                            cwd: input.cwd,
+                            relativePath: input.relativePath,
+                            failure: "operation_failed",
+                            message: "Could not verify the working copy before saving.",
+                            cause,
+                          }),
+                    ),
+                  ),
+            ),
             { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.shellOpenInEditor]: (input) =>
