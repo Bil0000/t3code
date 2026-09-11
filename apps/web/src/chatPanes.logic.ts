@@ -1,10 +1,13 @@
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
+
+import type { RightPanelSurface } from "./rightPanelStore";
 
 /**
  * Pure helpers for the chat pane layout: a binary tree of splits whose leaves
- * each show one server thread. The tree stays shallow on purpose (a leaf can
- * split at most twice, and only across its parent's axis) so the result is
- * never deeper than a 2x2 grid. Anything beyond that stops being readable.
+ * each show one server thread, or one of that thread's right-panel surfaces.
+ * The tree has no depth cap: panes share the screen by ratio while they fit,
+ * and the layout scrolls sideways once their minimum widths no longer do.
  */
 
 export type ChatPaneId = string;
@@ -15,6 +18,8 @@ export interface ChatPaneLeaf {
   readonly kind: "leaf";
   readonly id: ChatPaneId;
   readonly threadRef: ScopedThreadRef;
+  /** Present when the pane shows one of the thread's panels instead of the chat. */
+  readonly surface?: RightPanelSurface;
 }
 
 export interface ChatPaneSplit {
@@ -29,7 +34,6 @@ export interface ChatPaneSplit {
 
 export type ChatPaneNode = ChatPaneLeaf | ChatPaneSplit;
 
-const MAX_PANE_DEPTH = 2;
 const MIN_PANE_RATIO = 0.2;
 const MAX_PANE_RATIO = 0.8;
 const EDGE_REGION_FRACTION = 1 / 3;
@@ -45,6 +49,13 @@ export function collectLeaves(node: ChatPaneNode): ChatPaneLeaf[] {
     : [...collectLeaves(node.first), ...collectLeaves(node.second)];
 }
 
+/** Any node, leaf or split, by id. The root's id names the whole layout. */
+export function findNode(node: ChatPaneNode, id: ChatPaneId): ChatPaneNode | null {
+  if (node.id === id) return node;
+  if (node.kind === "leaf") return null;
+  return findNode(node.first, id) ?? findNode(node.second, id);
+}
+
 export function filterPaneTree(
   root: ChatPaneNode,
   include: (leaf: ChatPaneLeaf) => boolean,
@@ -55,15 +66,16 @@ export function filterPaneTree(
   );
 }
 
-export function findLeafByThread(
+/** The pane showing `threadRef`'s chat, or its surface `surfaceId` when given. */
+export function findLeaf(
   node: ChatPaneNode,
   threadRef: ScopedThreadRef,
+  surfaceId?: string,
 ): ChatPaneLeaf | null {
+  const threadKey = scopedThreadKey(threadRef);
   return (
     collectLeaves(node).find(
-      (leaf) =>
-        leaf.threadRef.environmentId === threadRef.environmentId &&
-        leaf.threadRef.threadId === threadRef.threadId,
+      (leaf) => leaf.surface?.id === surfaceId && scopedThreadKey(leaf.threadRef) === threadKey,
     ) ?? null
   );
 }
@@ -74,37 +86,10 @@ export function selectChatPaneRoot(
   threadRef: ScopedThreadRef | null,
 ): ChatPaneNode | null {
   if (!threadRef) return null;
-  return groups.find((group) => findLeafByThread(group, threadRef) !== null) ?? null;
+  return groups.find((group) => findLeaf(group, threadRef) !== null) ?? null;
 }
 
-function findPaneDepth(node: ChatPaneNode, paneId: ChatPaneId): number | null {
-  if (node.id === paneId) return 0;
-  if (node.kind === "leaf") return null;
-  const first = findPaneDepth(node.first, paneId);
-  if (first !== null) return first + 1;
-  const second = findPaneDepth(node.second, paneId);
-  return second === null ? null : second + 1;
-}
-
-function findParent(node: ChatPaneNode, paneId: ChatPaneId): ChatPaneSplit | null {
-  if (node.kind === "leaf") return null;
-  if (node.first.id === paneId || node.second.id === paneId) return node;
-  return findParent(node.first, paneId) ?? findParent(node.second, paneId);
-}
-
-/** A leaf can split while it is above the depth cap and never along the same axis as its parent. */
-export function canSplitPane(
-  root: ChatPaneNode,
-  paneId: ChatPaneId,
-  direction: SplitDirection,
-): boolean {
-  const depth = findPaneDepth(root, paneId);
-  if (depth === null || depth >= MAX_PANE_DEPTH) return false;
-  const parent = findParent(root, paneId);
-  return parent === null || parent.direction !== direction;
-}
-
-export function zoneToSplit(zone: DropZone): {
+function zoneToSplit(zone: DropZone): {
   direction: SplitDirection;
   side: "first" | "second";
 } {
@@ -120,17 +105,17 @@ export function zoneToSplit(zone: DropZone): {
   }
 }
 
+/** Wraps the node `targetId` (a pane, or the root for the whole layout) in a split with `newLeaf`. */
 export function splitPane(
   root: ChatPaneNode,
-  paneId: ChatPaneId,
+  targetId: ChatPaneId,
   zone: DropZone,
   newLeaf: ChatPaneLeaf,
   splitId: ChatPaneId,
 ): ChatPaneNode {
   const { direction, side } = zoneToSplit(zone);
-  if (!canSplitPane(root, paneId, direction)) return root;
   const replace = (node: ChatPaneNode): ChatPaneNode => {
-    if (node.id === paneId) {
+    if (node.id === targetId) {
       return {
         kind: "split",
         id: splitId,
@@ -168,31 +153,46 @@ export function setPaneRatio(root: ChatPaneNode, splitId: ChatPaneId, ratio: num
 }
 
 /**
- * Which edge the pointer is closest to, VS Code style: the outer third of the
- * long axis wins outright, the middle falls back to the short axis. Zones the
- * tree cannot honor are skipped so the preview never promises a split that
- * the drop would refuse.
+ * Which edge of a pane the pointer is closest to, VS Code style: the outer
+ * third of the long axis wins outright, the middle falls back to the short axis.
  */
 export function resolveDropZone(
   rect: { left: number; top: number; width: number; height: number },
   clientX: number,
   clientY: number,
-  isZoneAllowed: (zone: DropZone) => boolean,
 ): DropZone | null {
   if (rect.width <= 0 || rect.height <= 0) return null;
   const relX = (clientX - rect.left) / rect.width;
   const relY = (clientY - rect.top) / rect.height;
   if (relX < 0 || relX > 1 || relY < 0 || relY > 1) return null;
-  const horizontal = relX < 0.5 ? (["left", "right"] as const) : (["right", "left"] as const);
-  const vertical = relY < 0.5 ? (["top", "bottom"] as const) : (["bottom", "top"] as const);
-  const pick = (candidates: readonly DropZone[]) => candidates.find(isZoneAllowed) ?? null;
+  const horizontal: DropZone = relX < 0.5 ? "left" : "right";
+  const vertical: DropZone = relY < 0.5 ? "top" : "bottom";
   const wide = rect.width >= rect.height;
-  const [longAxis, longRel, shortAxis] = wide
-    ? [horizontal, relX, vertical]
-    : [vertical, relY, horizontal];
+  const longRel = wide ? relX : relY;
   if (longRel < EDGE_REGION_FRACTION || longRel > 1 - EDGE_REGION_FRACTION) {
-    const edge = pick([longAxis[0]]);
-    if (edge) return edge;
+    return wide ? horizontal : vertical;
   }
-  return pick(shortAxis) ?? pick(longAxis);
+  return wide ? vertical : horizontal;
+}
+
+/** Pointer distance from the layout's outer edge that targets the whole layout. */
+const EDGE_DROP_BAND_PX = 28;
+
+/**
+ * Which outer edge of the whole layout the pointer sits on, so a drop there
+ * spans the full width or height instead of splitting one pane.
+ */
+export function resolveEdgeDropZone(
+  rect: { left: number; top: number; width: number; height: number },
+  clientX: number,
+  clientY: number,
+): DropZone | null {
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  if (x < 0 || x > rect.width || y < 0 || y > rect.height) return null;
+  if (y < EDGE_DROP_BAND_PX) return "top";
+  if (rect.height - y < EDGE_DROP_BAND_PX) return "bottom";
+  if (x < EDGE_DROP_BAND_PX) return "left";
+  if (rect.width - x < EDGE_DROP_BAND_PX) return "right";
+  return null;
 }

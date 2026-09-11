@@ -202,7 +202,7 @@ import { isThreadOwnPullRequest } from "./pullRequest/pullRequestDetail.logic";
 import { PullRequestDetailPanel } from "./pullRequest/PullRequestDetailPanel";
 import { PullRequestDetailGhost } from "./pullRequest/PullRequestGhosts";
 import { PullRequestsUnavailableState } from "./pullRequest/PullRequestsUnavailableState";
-import { RightPanelTabs } from "./RightPanelTabs";
+import { RightPanelTabs, type AddSurfaceProps } from "./RightPanelTabs";
 import { AgentsPanel } from "./AgentsPanel";
 import { LinkPullRequestDialogHost } from "./pullRequest/LinkPullRequestDialog";
 import { ThreadPullRequestsPanel } from "./pullRequest/ThreadPullRequestsPanel";
@@ -696,6 +696,17 @@ type ChatViewProps =
        * background pane still renders and streams but never steals input.
        */
       paneMode?: "focused" | "background";
+      /**
+       * Set when the pane shows one of the thread's panels instead of its
+       * chat. The view keeps the thread's panel state and callbacks and
+       * renders that surface alone, full-bleed.
+       */
+      paneSurface?: RightPanelSurface;
+      /**
+       * Receives the add-surface callbacks so the pane header's "+" menu can
+       * offer the same surfaces as the right panel, opened as panes.
+       */
+      onAddSurfaceProps?: (props: AddSurfaceProps) => void;
     }
   | {
       environmentId: EnvironmentId;
@@ -707,6 +718,8 @@ type ChatViewProps =
       routeKind: "draft";
       draftId: DraftId;
       paneMode?: never;
+      paneSurface?: never;
+      onAddSurfaceProps?: never;
     };
 
 interface TerminalLaunchContext {
@@ -1423,6 +1436,8 @@ export default function ChatView(props: ChatViewProps) {
   } = props;
   const draftId = routeKind === "draft" ? props.draftId : null;
   const paneMode = routeKind === "server" ? (props.paneMode ?? null) : null;
+  const paneSurface = routeKind === "server" ? (props.paneSurface ?? null) : null;
+  const onAddSurfaceProps = routeKind === "server" ? props.onAddSurfaceProps : undefined;
   const inputOwner = paneMode !== "background";
   const threadSyncPhase = routeKind === "server" ? (props.threadSyncPhase ?? null) : null;
   const threadDetailLoading = threadSyncPhase === "loading";
@@ -1913,9 +1928,12 @@ export default function ChatView(props: ChatViewProps) {
   const rightPanelState = useRightPanelStore((state) =>
     selectThreadRightPanelState(state.byThreadKey, activeThreadRef),
   );
-  const activeRightPanelSurface = useRightPanelStore((state) =>
+  const dockedRightPanelSurface = useRightPanelStore((state) =>
     selectActiveRightPanelSurface(state.byThreadKey, activeThreadRef),
   );
+  // A surface pane renders its own surface: the docked panel's selection is
+  // another tab entirely and must not steer the terminal callbacks here.
+  const activeRightPanelSurface = paneSurface ?? dockedRightPanelSurface;
   const activePreviewState = useThreadPreviewState(activeThreadRef);
   const activePreviewServerEpoch = activePreviewState.serverEpoch;
   const resolvePreviewRuntimeTabId = useMemo(
@@ -1942,7 +1960,7 @@ export default function ChatView(props: ChatViewProps) {
     [activeKnownTerminalIds, panelTerminalIds],
   );
   const previewPanelOpen = activeRightPanelKind === "preview" && isPreviewSupportedInRuntime();
-  const rightPanelOpen = rightPanelState.isOpen;
+  const rightPanelOpen = paneSurface !== null || rightPanelState.isOpen;
   const { active: panelAnimationsActive, durationMs: panelAnimationDurationMs } =
     usePanelAnimationSettings();
   const activeTerminalDrawerPresence = usePanelPresence(
@@ -1960,7 +1978,7 @@ export default function ChatView(props: ChatViewProps) {
     [activeRightPanelSurface, rightPanelState.surfaces],
   );
   const rightPanelPresence = usePanelPresence(
-    rightPanelOpen && activeThreadRef !== null,
+    rightPanelOpen && activeThreadRef !== null && paneSurface === null,
     rightPanelPresenceValue,
     panelAnimationsActive,
     activeThreadKey,
@@ -4658,6 +4676,7 @@ export default function ChatView(props: ChatViewProps) {
       const store = useRightPanelStore.getState();
       for (const surface of surfaces) {
         store.closeSurface(activeThreadRef, surface.id);
+        useChatPanesStore.getState().closeSurface(activeThreadRef, surface.id);
       }
       syncActivePreviewSurface();
     },
@@ -8239,13 +8258,16 @@ export default function ChatView(props: ChatViewProps) {
       <div className="pointer-events-auto flex h-full items-center">{panelToggleControls}</div>
     </div>
   );
+  // A surface pane renders its own surface; the docked panel renders whatever
+  // the presence hook says is showing.
+  const renderedSurface = paneSurface ?? renderedRightPanelSurface;
   const rightPanelContent = activeThreadRef ? (
-    renderedRightPanelSurface?.kind === "preview" ? (
+    renderedSurface?.kind === "preview" ? (
       <Suspense fallback={null}>
         <PreviewPanel
           mode="embedded"
           threadRef={activeThreadRef}
-          tabId={renderedRightPanelSurface.resourceId}
+          tabId={renderedSurface.resourceId}
           configuredUrls={configuredPreviewUrls}
           visible={rightPanelOpen}
           onSendAnnotation={(annotation, image) => {
@@ -8253,11 +8275,11 @@ export default function ChatView(props: ChatViewProps) {
           }}
         />
       </Suspense>
-    ) : renderedRightPanelSurface?.kind === "terminal" ? (
+    ) : renderedSurface?.kind === "terminal" ? (
       <PersistentThreadTerminalPanel
         visible={rightPanelOpen}
         threadRef={activeThreadRef}
-        surface={renderedRightPanelSurface}
+        surface={renderedSurface}
         launchContext={activeTerminalLaunchContext ?? null}
         focusRequestId={terminalFocusRequestId}
         keybindings={keybindings}
@@ -8272,7 +8294,7 @@ export default function ChatView(props: ChatViewProps) {
         newShortcutLabel={newTerminalShortcutLabel ?? undefined}
         closeShortcutLabel={closeTerminalShortcutLabel ?? undefined}
       />
-    ) : renderedRightPanelSurface?.kind === "diff" ? (
+    ) : renderedSurface?.kind === "diff" ? (
       <Suspense fallback={null}>
         <DiffPanel
           key={`${activeThreadKey}:${diffPanelGitStatusResolutionKey}`}
@@ -8282,21 +8304,21 @@ export default function ChatView(props: ChatViewProps) {
           workspaceMutationId={workspaceMutationId}
         />
       </Suspense>
-    ) : renderedRightPanelSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
+    ) : renderedSurface?.kind === "pull-request" && !pullRequestsCapabilityKnown ? (
       <PullRequestDetailGhost />
-    ) : renderedRightPanelSurface?.kind === "pull-request" && !supportsPullRequests ? (
+    ) : renderedSurface?.kind === "pull-request" && !supportsPullRequests ? (
       <PullRequestsUnavailableState
         title="Pull requests unavailable"
         error="Update this environment's T3 Code server to browse pull requests."
       />
-    ) : renderedRightPanelSurface?.kind === "pull-request" ? (
+    ) : renderedSurface?.kind === "pull-request" ? (
       // No onClose: the surface tab's own X owns closing here, and a second X in the header
       // would be the same action twice. The thread context also drops the checkout button, so it
       // is only right for the thread's own pull request, whose branch is already under the
       // reader's feet. A link the agent wrote can open any other one here, and that one has to be
       // checkable out like it is anywhere else.
       <PullRequestDetailPanel
-        key={`${renderedRightPanelSurface.host ?? ""}:${renderedRightPanelSurface.repository}#${renderedRightPanelSurface.number}`}
+        key={`${renderedSurface.host ?? ""}:${renderedSurface.repository}#${renderedSurface.number}`}
         environmentId={activeThread.environmentId}
         onSelectPullRequest={(reference) => {
           if (activeThreadRef)
@@ -8309,10 +8331,10 @@ export default function ChatView(props: ChatViewProps) {
         }}
         threadRef={activeThreadRef}
         reference={{
-          projectId: renderedRightPanelSurface.projectId as ProjectId,
-          ...(renderedRightPanelSurface.host ? { host: renderedRightPanelSurface.host } : {}),
-          repository: renderedRightPanelSurface.repository,
-          number: renderedRightPanelSurface.number,
+          projectId: renderedSurface.projectId as ProjectId,
+          ...(renderedSurface.host ? { host: renderedSurface.host } : {}),
+          repository: renderedSurface.repository,
+          number: renderedSurface.number,
         }}
         context={
           isThreadOwnPullRequest(
@@ -8322,9 +8344,9 @@ export default function ChatView(props: ChatViewProps) {
               number: linkedThreadPullRequest?.number ?? null,
             },
             {
-              projectId: renderedRightPanelSurface.projectId,
-              repository: renderedRightPanelSurface.repository,
-              number: renderedRightPanelSurface.number,
+              projectId: renderedSurface.projectId,
+              repository: renderedSurface.repository,
+              number: renderedSurface.number,
             },
           )
             ? "thread"
@@ -8337,37 +8359,36 @@ export default function ChatView(props: ChatViewProps) {
             : undefined
         }
       />
-    ) : renderedRightPanelSurface?.kind === "pull-requests" && activeThreadRef ? (
+    ) : renderedSurface?.kind === "pull-requests" && activeThreadRef ? (
       <ThreadPullRequestsPanel threadRef={activeThreadRef} />
-    ) : renderedRightPanelSurface?.kind === "agents" ? (
+    ) : renderedSurface?.kind === "agents" ? (
       <AgentsPanel
         model={agentPanelModel}
         environmentId={activeThreadRef?.environmentId ?? null}
         threadId={activeThreadRef?.threadId ?? null}
       />
-    ) : renderedRightPanelSurface?.kind === "device" ? (
+    ) : renderedSurface?.kind === "device" ? (
       <Suspense fallback={null}>
         <DevicePanel
           mode="embedded"
           threadRef={activeThreadRef}
-          key={renderedRightPanelSurface.id}
-          surface={renderedRightPanelSurface}
+          key={renderedSurface.id}
+          surface={renderedSurface}
           visible={rightPanelOpen}
           onDismissSetup={() => {
-            closeRightPanelSurface(renderedRightPanelSurface);
+            closeRightPanelSurface(renderedSurface);
             useRightPanelStore.getState().show(activeThreadRef);
           }}
         />
       </Suspense>
-    ) : (renderedRightPanelSurface?.kind === "files" ||
-        renderedRightPanelSurface?.kind === "file") &&
+    ) : (renderedSurface?.kind === "files" || renderedSurface?.kind === "file") &&
       ((activeProject && activeWorkspaceRoot) ||
-        (renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment)) ? (
+        (renderedSurface.kind === "file" && renderedSurface.attachment)) ? (
       <Suspense fallback={null}>
         <FilePreviewPanel
           key={`${activeThread.environmentId}:${
-            renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment
-              ? `attachment:${renderedRightPanelSurface.attachment.id}`
+            renderedSurface.kind === "file" && renderedSurface.attachment
+              ? `attachment:${renderedSurface.attachment.id}`
               : activeWorkspaceRoot
           }`}
           environmentId={activeThread.environmentId}
@@ -8377,29 +8398,16 @@ export default function ChatView(props: ChatViewProps) {
           composerDraftTarget={composerDraftTarget}
           keybindings={keybindings}
           availableEditors={availableEditors}
-          relativePath={
-            renderedRightPanelSurface.kind === "file"
-              ? renderedRightPanelSurface.relativePath
-              : null
-          }
-          {...(renderedRightPanelSurface.kind === "file" && renderedRightPanelSurface.attachment
-            ? { attachment: renderedRightPanelSurface.attachment }
+          relativePath={renderedSurface.kind === "file" ? renderedSurface.relativePath : null}
+          {...(renderedSurface.kind === "file" && renderedSurface.attachment
+            ? { attachment: renderedSurface.attachment }
             : {})}
-          revealLine={
-            renderedRightPanelSurface.kind === "file"
-              ? (renderedRightPanelSurface.revealLine ?? null)
-              : null
-          }
-          revealRequestId={
-            renderedRightPanelSurface.kind === "file"
-              ? renderedRightPanelSurface.revealRequestId
-              : 0
-          }
+          revealLine={renderedSurface.kind === "file" ? (renderedSurface.revealLine ?? null) : null}
+          revealRequestId={renderedSurface.kind === "file" ? renderedSurface.revealRequestId : 0}
           onOpenFile={openFileSurface}
           onPendingChange={handleFilePendingChange}
           selectedFilePending={
-            renderedRightPanelSurface.kind === "file" &&
-            pendingFileSurfaceIds.has(renderedRightPanelSurface.id)
+            renderedSurface.kind === "file" && pendingFileSurfaceIds.has(renderedSurface.id)
           }
           workspaceMutationId={workspaceMutationId}
         />
@@ -8411,6 +8419,54 @@ export default function ChatView(props: ChatViewProps) {
     setDragActive: setIsWorkspaceFileDragActive,
     addFiles: (files) => composerRef.current?.addDroppedFiles(files),
   });
+
+  const addSurfaceProps = useMemo<AddSurfaceProps>(
+    () => ({
+      // Not passed bare: a DOM click handler would hand it a MouseEvent as the profile id.
+      onAddBrowser: () => createBrowserSurface(),
+      onAddBrowserInProfile: createBrowserSurface,
+      onAddTerminal: addTerminalSurface,
+      onAddDiff: addDiffSurface,
+      onAddFiles: addFilesSurface,
+      onAddPullRequest: addPullRequestSurface,
+      onAddPullRequests: addPullRequestsSurface,
+      onAddAgents: addAgentsSurface,
+      onAddDevice: addDeviceSurface,
+      browserAvailable: isPreviewSupportedInRuntime(),
+      terminalAvailable: activeProject !== null,
+      diffAvailable: isServerThread && isGitRepo,
+      filesAvailable: activeProject !== null,
+      pullRequestAvailable: pullRequestSurfaceAvailable,
+      pullRequestsAvailable: isServerThread && supportsThreadPullRequests,
+      deviceAvailable: activeThreadRef !== null,
+    }),
+    [
+      createBrowserSurface,
+      addTerminalSurface,
+      addDiffSurface,
+      addFilesSurface,
+      addPullRequestSurface,
+      addPullRequestsSurface,
+      addAgentsSurface,
+      addDeviceSurface,
+      activeProject,
+      isServerThread,
+      isGitRepo,
+      pullRequestSurfaceAvailable,
+      supportsThreadPullRequests,
+      activeThreadRef,
+    ],
+  );
+  // The pane header drives its own "+" menu from a copy of these props.
+  useEffect(() => onAddSurfaceProps?.(addSurfaceProps), [onAddSurfaceProps, addSurfaceProps]);
+
+  if (paneSurface) {
+    return (
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background">
+        {rightPanelContent}
+      </div>
+    );
+  }
 
   return (
     <div className="relative flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background">
@@ -8945,6 +9001,7 @@ export default function ChatView(props: ChatViewProps) {
           open={rightPanelOpen}
           maximized={rightPanelMaximized}
           surfaces={renderedRightPanelSurfaces}
+          threadRef={activeThreadRef}
           environmentId={activeThreadRef.environmentId}
           activeSurfaceId={renderedRightPanelSurface?.id ?? null}
           pendingSurfaceIds={pendingFileSurfaceIds}
@@ -8962,23 +9019,7 @@ export default function ChatView(props: ChatViewProps) {
           onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
           onCloseAllSurfaces={closeAllRightPanelSurfaces}
           onCopyFilePath={copyRightPanelFilePath}
-          onAddBrowser={() => createBrowserSurface()}
-          onAddBrowserInProfile={createBrowserSurface}
-          onAddTerminal={addTerminalSurface}
-          onAddDiff={addDiffSurface}
-          onAddFiles={addFilesSurface}
-          onAddPullRequest={addPullRequestSurface}
-          onAddPullRequests={addPullRequestsSurface}
-          onAddAgents={addAgentsSurface}
-          onAddDevice={addDeviceSurface}
-          browserAvailable={isPreviewSupportedInRuntime()}
-          terminalAvailable={activeProject !== null}
-          diffAvailable={isServerThread && isGitRepo}
-          filesAvailable={activeProject !== null}
-          pullRequestAvailable={pullRequestSurfaceAvailable}
-          pullRequestsAvailable={isServerThread && supportsThreadPullRequests}
-          agentsAvailable
-          deviceAvailable={activeThreadRef !== null}
+          {...addSurfaceProps}
           liveAgentCount={agentPanelModel.liveCount}
         >
           {rightPanelContent}
@@ -9020,23 +9061,7 @@ export default function ChatView(props: ChatViewProps) {
             onCloseSurfacesToRight={closeRightPanelSurfacesToRight}
             onCloseAllSurfaces={closeAllRightPanelSurfaces}
             onCopyFilePath={copyRightPanelFilePath}
-            onAddBrowser={() => createBrowserSurface()}
-            onAddBrowserInProfile={createBrowserSurface}
-            onAddTerminal={addTerminalSurface}
-            onAddDiff={addDiffSurface}
-            onAddFiles={addFilesSurface}
-            onAddPullRequest={addPullRequestSurface}
-            onAddPullRequests={addPullRequestsSurface}
-            onAddAgents={addAgentsSurface}
-            onAddDevice={addDeviceSurface}
-            browserAvailable={isPreviewSupportedInRuntime()}
-            terminalAvailable={activeProject !== null}
-            diffAvailable={isServerThread && isGitRepo}
-            filesAvailable={activeProject !== null}
-            pullRequestAvailable={pullRequestSurfaceAvailable}
-            pullRequestsAvailable={isServerThread && supportsThreadPullRequests}
-            agentsAvailable
-            deviceAvailable={activeThreadRef !== null}
+            {...addSurfaceProps}
             liveAgentCount={agentPanelModel.liveCount}
           >
             {rightPanelContent}

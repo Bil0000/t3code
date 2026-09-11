@@ -5,13 +5,9 @@ import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
 import { ChatPaneDragGhost, ChatPanes } from "../components/chat/ChatPanes";
 import { ChatPaneDropOverlay } from "../components/chat/ChatPaneDropOverlay";
-import {
-  commitChatPaneDrop,
-  selectPaneDropZoneResolver,
-  useChatPanesStore,
-} from "../chatPanesStore";
+import { commitChatPaneDrop, useChatPanesStore } from "../chatPanesStore";
 import { isChatPaneDragActive } from "../chatPaneDragStore";
-import { selectChatPaneRoot } from "../chatPanes.logic";
+import { resolveDropZone, selectChatPaneRoot } from "../chatPanes.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
 import {
   buildThreadRouteParams,
@@ -31,7 +27,6 @@ import { useEnvironmentQuery } from "../state/query";
 import { environmentShell } from "../state/shell";
 
 const SINGLE_PANE_ID = "route";
-const singlePaneDropZone = selectPaneDropZoneResolver(null, SINGLE_PANE_ID);
 
 function ChatThreadRouteView() {
   const navigate = useNavigate();
@@ -124,12 +119,13 @@ function ChatThreadRouteView() {
                 void navigate({
                   to: "/$environmentId/$threadId",
                   params: buildThreadRouteParams(opened),
+                  replace: true,
                 });
               }
             });
           }}
         >
-          <ChatPaneDropOverlay paneId={SINGLE_PANE_ID} resolveZone={singlePaneDropZone}>
+          <ChatPaneDropOverlay paneId={SINGLE_PANE_ID} resolveZone={resolveDropZone}>
             <ChatView
               environmentId={threadRef.environmentId}
               threadId={threadRef.threadId}

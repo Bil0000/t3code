@@ -114,7 +114,7 @@ import {
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { chatPaneDragPointer, useChatPaneDragStore } from "../chatPaneDragStore";
-import { canOpenThreadInSplit, openThreadInSplit, useChatPanesStore } from "../chatPanesStore";
+import { canOpenInSplit, openInSplit, useChatPanesStore } from "../chatPanesStore";
 import { collectLeaves, filterPaneTree } from "../chatPanes.logic";
 import { SidebarSplitViewHeader } from "./chat/SidebarSplitView";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
@@ -2598,8 +2598,11 @@ export default function Sidebar() {
     return {
       // Rows follow the pane order, so the block reads like the layout.
       splitGroups: paneGroups.flatMap((root) => {
+        // Panel panes sit beside their thread's chat pane; the row is the thread.
         const threads = collectLeaves(root).flatMap((leaf) => {
-          const thread = splitThreadByKey.get(scopedThreadKey(leaf.threadRef));
+          const thread = leaf.surface
+            ? null
+            : splitThreadByKey.get(scopedThreadKey(leaf.threadRef));
           return thread ? [thread] : [];
         });
         return threads.length === 0 ? [] : [{ root, threads }];
@@ -3379,7 +3382,7 @@ export default function Sidebar() {
       if (thread && !isMobile) {
         chatPaneDragPointer.current = dragSensorRef.current?.currentCoordinates ?? null;
         useChatPaneDragStore.getState().start({
-          threadRef: scopeThreadRef(thread.environmentId, thread.id),
+          content: { threadRef: scopeThreadRef(thread.environmentId, thread.id) },
           title: thread.title,
         });
       }
@@ -4108,8 +4111,7 @@ export default function Sidebar() {
           api.contextMenu.show(
             buildThreadActionMenuItems({
               branch: thread.branch ?? null,
-              canOpenInSplit:
-                !isMobile && canOpenThreadInSplit(routeThreadRefRef.current, threadRef),
+              canOpenInSplit: !isMobile && canOpenInSplit(routeThreadRefRef.current, { threadRef }),
               isPinned,
               isSettled,
               isSnoozed,
@@ -4187,7 +4189,7 @@ export default function Sidebar() {
             attemptUnpin(threadRef);
             return;
           case "open-in-split":
-            if (openThreadInSplit(routeThreadRefRef.current, threadRef)) {
+            if (openInSplit(routeThreadRefRef.current, { threadRef })) {
               navigateToThread(threadRef);
             }
             return;
@@ -4892,10 +4894,9 @@ export default function Sidebar() {
                               optimisticDrop !== null ||
                               (!draggableThreadKeys.has(threadKey) &&
                                 (isMobile ||
-                                  !canOpenThreadInSplit(
-                                    routeThreadRef,
-                                    scopeThreadRef(thread.environmentId, thread.id),
-                                  )))
+                                  !canOpenInSplit(routeThreadRef, {
+                                    threadRef: scopeThreadRef(thread.environmentId, thread.id),
+                                  })))
                             }
                           >
                             {(bag) => renderThreadRowInner(thread, section, bag)}

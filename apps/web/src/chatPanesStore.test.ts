@@ -4,7 +4,7 @@ import { beforeEach, expect, it } from "vite-plus/test";
 
 import { useChatPaneDragStore } from "./chatPaneDragStore";
 import { collectLeaves } from "./chatPanes.logic";
-import { commitChatPaneDrop, openThreadInSplit, useChatPanesStore } from "./chatPanesStore";
+import { commitChatPaneDrop, openInSplit, useChatPanesStore } from "./chatPanesStore";
 
 const thread = (id: string) => scopeThreadRef(EnvironmentId.make("env"), ThreadId.make(id));
 const threadIds = (index: number) =>
@@ -16,9 +16,9 @@ beforeEach(() => {
 });
 
 it("starts a second group when a thread is dropped on a thread outside the first", () => {
-  openThreadInSplit(thread("a"), thread("b"));
+  openInSplit(thread("a"), { threadRef: thread("b") });
   const first = useChatPanesStore.getState().groups[0]!;
-  useChatPaneDragStore.getState().start({ threadRef: thread("d"), title: "D" });
+  useChatPaneDragStore.getState().start({ content: { threadRef: thread("d") }, title: "D" });
   useChatPaneDragStore.setState({ target: { paneId: "route", zone: "right" } });
   expect(commitChatPaneDrop(thread("c"))).toEqual(thread("d"));
   expect(useChatPanesStore.getState().groups[0]).toBe(first);
@@ -26,8 +26,8 @@ it("starts a second group when a thread is dropped on a thread outside the first
 });
 
 it("moves a pane into another group and drops the group it emptied", () => {
-  openThreadInSplit(thread("a"), thread("b"));
-  openThreadInSplit(thread("c"), thread("d"));
+  openInSplit(thread("a"), { threadRef: thread("b") });
+  openInSplit(thread("c"), { threadRef: thread("d") });
   const [first, second] = useChatPanesStore.getState().groups;
   const b = collectLeaves(first!)[1]!;
   const d = collectLeaves(second!)[1]!;
@@ -37,7 +37,7 @@ it("moves a pane into another group and drops the group it emptied", () => {
 });
 
 it("returns the remaining thread when the focused member closes", () => {
-  openThreadInSplit(thread("a"), thread("b"));
+  openInSplit(thread("a"), { threadRef: thread("b") });
   const root = useChatPanesStore.getState().groups[0]!;
   const focused = collectLeaves(root).find(
     (leaf) => leaf.id === useChatPanesStore.getState().focusedPaneId,
@@ -46,8 +46,27 @@ it("returns the remaining thread when the focused member closes", () => {
   expect(useChatPanesStore.getState().groups).toEqual([]);
 });
 
+it("drops a pane on the layout edge to span the whole group", () => {
+  openInSplit(thread("a"), { threadRef: thread("b") });
+  const root = useChatPanesStore.getState().groups[0]!;
+  useChatPanesStore.getState().dropContent(root.id, "bottom", { threadRef: thread("c") });
+  const next = useChatPanesStore.getState().groups[0]!;
+  expect(next.kind === "split" && next.direction).toBe("vertical");
+  expect(next.kind === "split" && next.first).toBe(root);
+  expect(threadIds(0)).toEqual(["a", "b", "c"]);
+});
+
+it("opens a panel pane beside the thread and closes it by surface", () => {
+  const diff = { id: "diff", kind: "diff" } as const;
+  expect(openInSplit(thread("a"), { threadRef: thread("a"), surface: diff })).toBe(true);
+  expect(openInSplit(thread("a"), { threadRef: thread("a"), surface: diff })).toBe(false);
+  expect(threadIds(0)).toEqual(["a", "a"]);
+  useChatPanesStore.getState().closeSurface(thread("a"), "diff");
+  expect(useChatPanesStore.getState().groups).toEqual([]);
+});
+
 it.each([-1, 1.1, 0.5])("validates persisted pane ratio %s", async (ratio) => {
-  openThreadInSplit(thread("a"), thread("b"));
+  openInSplit(thread("a"), { threadRef: thread("b") });
   const root = useChatPanesStore.getState().groups[0]!;
   const groups = [{ ...root, ratio }];
   useChatPanesStore.setState({ groups: [], focusedPaneId: null });

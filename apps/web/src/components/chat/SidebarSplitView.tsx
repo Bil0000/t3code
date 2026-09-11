@@ -21,6 +21,7 @@ export function SidebarSplitViewHeader({
   const leaves = useMemo(() => collectLeaves(root), [root]);
   const focusedPaneId = useChatPanesStore((state) => state.focusedPaneId);
   const focused = leaves.find((leaf) => leaf.id === focusedPaneId) ?? leaves[0]!;
+  const threadCount = leaves.filter((leaf) => !leaf.surface).length;
   const active =
     activeThreadKey !== null &&
     leaves.some((leaf) => scopedThreadKey(leaf.threadRef) === activeThreadKey);
@@ -32,7 +33,7 @@ export function SidebarSplitViewHeader({
       <button
         type="button"
         onClick={() => onOpenThread(focused.threadRef)}
-        aria-label={`Open split view with ${leaves.length} threads`}
+        aria-label={`Open split view with ${threadCount} threads`}
         className={cn(
           "flex h-8 w-full cursor-pointer items-center gap-2 px-2 text-left text-xs font-medium transition-colors hover:text-sidebar-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
           active ? "text-primary" : "text-sidebar-muted-foreground/60",

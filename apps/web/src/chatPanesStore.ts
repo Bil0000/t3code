@@ -1,3 +1,4 @@
+import { scopedThreadKey } from "@t3tools/client-runtime/environment";
 import { EnvironmentId, ThreadId, type ScopedThreadRef } from "@t3tools/contracts";
 import * as Schema from "effect/Schema";
 import { create } from "zustand";
@@ -5,16 +6,14 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import { useChatPaneDragStore } from "./chatPaneDragStore";
 import {
-  canSplitPane,
   clampPaneRatio,
   collectLeaves,
-  findLeafByThread,
+  findLeaf,
+  findNode,
   removePane,
-  resolveDropZone,
   selectChatPaneRoot,
   setPaneRatio,
   splitPane,
-  zoneToSplit,
   type ChatPaneId,
   type ChatPaneLeaf,
   type ChatPaneNode,
@@ -22,6 +21,11 @@ import {
 } from "./chatPanes.logic";
 import { randomUUID } from "./lib/utils";
 import { resolveStorage } from "./lib/storage";
+import {
+  selectThreadRightPanelState,
+  useRightPanelStore,
+  type RightPanelSurface,
+} from "./rightPanelStore";
 
 /**
  * The split layouts of one browser window. Each group is a tree of splits; a
@@ -31,10 +35,12 @@ import { resolveStorage } from "./lib/storage";
  * is the plain chat view, so it is dropped as soon as that happens.
  */
 
+// A pane whose persisted surface no longer matches renders nothing; close still works.
 const LeafSchema = Schema.Struct({
   kind: Schema.Literal("leaf"),
   id: Schema.String,
   threadRef: Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId }),
+  surface: Schema.optionalKey(Schema.Unknown),
 });
 const NodeSchema: Schema.Codec<ChatPaneNode> = Schema.Union([
   LeafSchema,
@@ -53,16 +59,22 @@ const PersistedSchema = Schema.Struct({
 });
 const decodePersisted = Schema.decodeUnknownSync(PersistedSchema);
 
+/** What a new pane shows: a thread's chat, or one of that thread's panels. */
+export interface ChatPaneContent {
+  readonly threadRef: ScopedThreadRef;
+  readonly surface?: RightPanelSurface;
+}
+
 interface ChatPanesState {
   groups: ReadonlyArray<ChatPaneNode>;
   focusedPaneId: ChatPaneId | null;
   focusPane: (paneId: ChatPaneId) => void;
-  /** Splits `paneId` and shows `threadRef` on the dropped side. */
-  dropThread: (paneId: ChatPaneId, zone: DropZone, threadRef: ScopedThreadRef) => void;
+  /** Splits the pane `targetId`, or the whole layout when it names a root, showing `content` on the dropped side. */
+  dropContent: (targetId: ChatPaneId, zone: DropZone, content: ChatPaneContent) => void;
   /** Starts a new group from a thread shown on its own. */
-  splitFromThread: (anchorRef: ScopedThreadRef, zone: DropZone, threadRef: ScopedThreadRef) => void;
-  /** Moves an open pane's thread next to another pane, in any group. */
-  movePane: (paneId: ChatPaneId, targetPaneId: ChatPaneId, zone: DropZone) => void;
+  splitFromThread: (anchorRef: ScopedThreadRef, zone: DropZone, content: ChatPaneContent) => void;
+  /** Moves an open pane next to another pane or layout edge, in any group. */
+  movePane: (paneId: ChatPaneId, targetId: ChatPaneId, zone: DropZone) => void;
   /**
    * Removes a leaf. Returns the thread the route should move to when the
    * focused pane closed, so the caller can navigate before the layout
@@ -70,19 +82,26 @@ interface ChatPanesState {
    */
   closePane: (paneId: ChatPaneId) => ScopedThreadRef | null;
   closeThread: (threadRef: ScopedThreadRef) => ScopedThreadRef | null;
+  /** Closes the pane showing `surfaceId` for `threadRef`, if any. */
+  closeSurface: (threadRef: ScopedThreadRef, surfaceId: string) => void;
   setRatio: (splitId: ChatPaneId, ratio: number) => void;
 }
 
-function sameThread(left: ScopedThreadRef, right: ScopedThreadRef): boolean {
-  return left.environmentId === right.environmentId && left.threadId === right.threadId;
+function findGroup(groups: ReadonlyArray<ChatPaneNode>, nodeId: ChatPaneId) {
+  return groups.find((group) => findNode(group, nodeId) !== null) ?? null;
 }
 
-function findPane(groups: ReadonlyArray<ChatPaneNode>, paneId: ChatPaneId) {
-  for (const group of groups) {
-    const leaf = collectLeaves(group).find((item) => item.id === paneId);
-    if (leaf) return { group, leaf };
-  }
-  return null;
+/** The pane already showing `threadRef`'s chat, or its surface `surfaceId`, in any group. */
+function findContent(
+  groups: ReadonlyArray<ChatPaneNode>,
+  threadRef: ScopedThreadRef,
+  surfaceId?: string,
+) {
+  return groups.map((group) => findLeaf(group, threadRef, surfaceId)).find(Boolean) ?? null;
+}
+
+function newLeaf(content: ChatPaneContent): ChatPaneLeaf {
+  return { kind: "leaf", id: randomUUID(), ...content };
 }
 
 /** Swaps one group for its replacement and drops every group down to one
@@ -98,7 +117,7 @@ function closeLeaf(
   state: Pick<ChatPanesState, "groups" | "focusedPaneId">,
   paneId: ChatPaneId,
 ): ScopedThreadRef | null {
-  const group = findPane(state.groups, paneId)?.group;
+  const group = findGroup(state.groups, paneId);
   const root = group ? removePane(group, paneId) : null;
   if (!group || !root) return null;
   const survivor = collectLeaves(root)[0]!;
@@ -117,49 +136,56 @@ export const useChatPanesStore = create<ChatPanesState>()(
       focusedPaneId: null,
       focusPane: (paneId) =>
         set((state) => (state.focusedPaneId === paneId ? state : { focusedPaneId: paneId })),
-      dropThread: (paneId, zone, threadRef) =>
+      dropContent: (targetId, zone, content) =>
         set((state) => {
-          const group = findPane(state.groups, paneId)?.group;
-          if (!group || selectChatPaneRoot(state.groups, threadRef)) return state;
-          const leaf: ChatPaneLeaf = { kind: "leaf", id: randomUUID(), threadRef };
-          const root = splitPane(group, paneId, zone, leaf, randomUUID());
-          if (root === group) return state;
+          const group = findGroup(state.groups, targetId);
+          if (!group || findContent(state.groups, content.threadRef, content.surface?.id))
+            return state;
+          const leaf = newLeaf(content);
+          const root = splitPane(group, targetId, zone, leaf, randomUUID());
           return { groups: replaceGroup(state.groups, group, root), focusedPaneId: leaf.id };
         }),
-      splitFromThread: (anchorRef, zone, threadRef) =>
+      splitFromThread: (anchorRef, zone, content) =>
         set((state) => {
           if (
-            sameThread(anchorRef, threadRef) ||
+            (!content.surface &&
+              scopedThreadKey(anchorRef) === scopedThreadKey(content.threadRef)) ||
             selectChatPaneRoot(state.groups, anchorRef) ||
-            selectChatPaneRoot(state.groups, threadRef)
+            findContent(state.groups, content.threadRef, content.surface?.id)
           ) {
             return state;
           }
-          const anchor: ChatPaneLeaf = { kind: "leaf", id: randomUUID(), threadRef: anchorRef };
-          const leaf: ChatPaneLeaf = { kind: "leaf", id: randomUUID(), threadRef };
+          const anchor = newLeaf({ threadRef: anchorRef });
+          const leaf = newLeaf(content);
           const root = splitPane(anchor, anchor.id, zone, leaf, randomUUID());
           return { groups: [...state.groups, root], focusedPaneId: leaf.id };
         }),
-      movePane: (paneId, targetPaneId, zone) =>
+      movePane: (paneId, targetId, zone) =>
         set((state) => {
-          if (paneId === targetPaneId) return state;
-          const found = findPane(state.groups, paneId);
-          if (!found) return state;
-          const { group: source, leaf } = found;
+          if (paneId === targetId) return state;
+          const source = findGroup(state.groups, paneId);
+          const leaf = source && findNode(source, paneId);
+          if (!source || leaf?.kind !== "leaf") return state;
           const without = removePane(source, paneId)!;
           const groups = state.groups.map((group) => (group === source ? without : group));
-          const target = findPane(groups, targetPaneId)?.group;
+          // Pulling the pane out can collapse its own root; a drop on that
+          // root's edge then means the survivor.
+          const resolvedTargetId = targetId === source.id ? without.id : targetId;
+          const target = findGroup(groups, resolvedTargetId);
           if (!target) return state;
-          const root = splitPane(target, targetPaneId, zone, leaf, randomUUID());
-          if (root === target) return state;
+          const root = splitPane(target, resolvedTargetId, zone, leaf, randomUUID());
           return { groups: replaceGroup(groups, target, root), focusedPaneId: leaf.id };
         }),
       closePane: (paneId) => closeLeaf(set, get(), paneId),
       closeThread: (threadRef) => {
         const state = get();
-        const group = selectChatPaneRoot(state.groups, threadRef);
-        const leaf = group ? findLeafByThread(group, threadRef) : null;
+        const leaf = findContent(state.groups, threadRef);
         return leaf ? closeLeaf(set, state, leaf.id) : null;
+      },
+      closeSurface: (threadRef, surfaceId) => {
+        const state = get();
+        const leaf = findContent(state.groups, threadRef, surfaceId);
+        if (leaf) closeLeaf(set, state, leaf.id);
       },
       setRatio: (splitId, ratio) =>
         set((state) => {
@@ -189,20 +215,6 @@ export const useChatPanesStore = create<ChatPanesState>()(
   ),
 );
 
-export function selectPaneDropZoneResolver(root: ChatPaneNode | null, paneId: ChatPaneId) {
-  return (
-    rect: { left: number; top: number; width: number; height: number },
-    clientX: number,
-    clientY: number,
-  ): DropZone | null =>
-    resolveDropZone(
-      rect,
-      clientX,
-      clientY,
-      (zone) => root === null || canSplitPane(root, paneId, zoneToSplit(zone).direction),
-    );
-}
-
 /**
  * Applies the drop the drag store is pointing at. A drop on the plain chat
  * view starts a new group from the route thread. Returns the thread that
@@ -210,61 +222,96 @@ export function selectPaneDropZoneResolver(root: ChatPaneNode | null, paneId: Ch
  */
 export function commitChatPaneDrop(routeThreadRef: ScopedThreadRef): ScopedThreadRef | null {
   const drag = useChatPaneDragStore.getState();
-  const { threadRef, target, sourcePaneId } = drag;
+  const { content, target, sourcePaneId, create } = drag;
   drag.end();
-  if (!threadRef || !target) return null;
-  const store = useChatPanesStore.getState();
-  const before = store.groups;
-  if (sourcePaneId !== null) {
-    store.movePane(sourcePaneId, target.paneId, target.zone);
-  } else {
-    // No pane matched the target: the drop landed on a thread shown alone.
-    store.dropThread(target.paneId, target.zone, threadRef);
-    if (useChatPanesStore.getState().groups === before) {
-      store.splitFromThread(routeThreadRef, target.zone, threadRef);
+  if (!content || !target) return null;
+  const place = (placed: ChatPaneContent) => {
+    const store = useChatPanesStore.getState();
+    const before = store.groups;
+    if (sourcePaneId !== null) {
+      store.movePane(sourcePaneId, target.paneId, target.zone);
+    } else {
+      // No pane matched the target: the drop landed on a thread shown alone.
+      store.dropContent(target.paneId, target.zone, placed);
+      if (useChatPanesStore.getState().groups === before) {
+        store.splitFromThread(routeThreadRef, target.zone, placed);
+      }
     }
+    if (useChatPanesStore.getState().groups !== before && placed.surface && sourcePaneId === null) {
+      detachSurfaceFromPanel(placed);
+    }
+  };
+  // A launcher card creates its tab first; the pane opens once it exists.
+  if (create) placeCreatedSurface(content.threadRef, create, place);
+  else place(content);
+  return create ? null : content.threadRef;
+}
+
+/** A panel surface now lives in a pane: its tab leaves the docked panel, which hides. */
+function detachSurfaceFromPanel(content: ChatPaneContent) {
+  if (!content.surface) return;
+  useRightPanelStore.getState().closeSurface(content.threadRef, content.surface.id);
+  useRightPanelStore.getState().close(content.threadRef);
+}
+
+/**
+ * Runs a right-panel add action and hands the tab it adds to `place`: at once
+ * for singleton surfaces, or once an async open (browser session) lands.
+ * Nothing happens when the action adds no tab, as when it opens a setup dialog.
+ */
+function placeCreatedSurface(
+  threadRef: ScopedThreadRef,
+  create: () => void,
+  place: (content: ChatPaneContent) => void,
+) {
+  const surfaces = () =>
+    selectThreadRightPanelState(useRightPanelStore.getState().byThreadKey, threadRef).surfaces;
+  const seen = new Set(surfaces().map((surface) => surface.id));
+  const added = () => surfaces().find((surface) => !seen.has(surface.id)) ?? null;
+  create();
+  const now = added();
+  if (now) return place({ threadRef, surface: now });
+  const stop = useRightPanelStore.subscribe(() => {
+    const surface = added();
+    if (!surface) return;
+    stop();
+    clearTimeout(timeout);
+    place({ threadRef, surface });
+  });
+  const timeout = setTimeout(stop, 15_000);
+}
+
+/** Pane header "+": runs `create` and opens the tab it adds as a pane beside the thread. */
+export function openCreatedSurfaceInSplit(threadRef: ScopedThreadRef, create: () => void) {
+  placeCreatedSurface(threadRef, create, (content) => {
+    openInSplit(threadRef, content);
+    detachSurfaceFromPanel(content);
+  });
+}
+
+/** Whether "Open in split view" can place `content` beside the route thread right now. */
+export function canOpenInSplit(
+  routeThreadRef: ScopedThreadRef | null,
+  content: ChatPaneContent,
+): boolean {
+  if (!routeThreadRef) return false;
+  if (!content.surface && scopedThreadKey(routeThreadRef) === scopedThreadKey(content.threadRef)) {
+    return false;
   }
-  return useChatPanesStore.getState().groups === before ? null : threadRef;
+  return !findContent(useChatPanesStore.getState().groups, content.threadRef, content.surface?.id);
 }
 
-/** The zone a menu-driven split lands on: beside the focused pane, or below it once the row is full. */
-function splitZoneForFocusedPane(
-  group: ChatPaneNode,
-  focusedPaneId: ChatPaneId | null,
-): { anchor: ChatPaneLeaf; zone: DropZone } | null {
-  const leaves = collectLeaves(group);
-  const anchor = leaves.find((leaf) => leaf.id === focusedPaneId) ?? leaves[0]!;
-  if (canSplitPane(group, anchor.id, "horizontal")) return { anchor, zone: "right" };
-  if (canSplitPane(group, anchor.id, "vertical")) return { anchor, zone: "bottom" };
-  return null;
-}
-
-/** Whether "Open in split view" can place `threadRef` beside the route thread right now. */
-export function canOpenThreadInSplit(
-  routeThreadRef: ScopedThreadRef | null,
-  threadRef: ScopedThreadRef,
-): boolean {
-  if (!routeThreadRef || sameThread(routeThreadRef, threadRef)) return false;
-  const state = useChatPanesStore.getState();
-  if (selectChatPaneRoot(state.groups, threadRef)) return false;
-  const group = selectChatPaneRoot(state.groups, routeThreadRef);
-  return group === null || splitZoneForFocusedPane(group, state.focusedPaneId) !== null;
-}
-
-/** Opens `threadRef` beside the focused pane, starting a new group from the route thread when needed. */
-export function openThreadInSplit(
-  routeThreadRef: ScopedThreadRef | null,
-  threadRef: ScopedThreadRef,
-): boolean {
-  if (!canOpenThreadInSplit(routeThreadRef, threadRef)) return false;
+/** Opens `content` to the right of the focused pane, starting a new group from the route thread when needed. */
+export function openInSplit(routeThreadRef: ScopedThreadRef | null, content: ChatPaneContent) {
+  if (!canOpenInSplit(routeThreadRef, content)) return false;
   const state = useChatPanesStore.getState();
   const group = selectChatPaneRoot(state.groups, routeThreadRef);
   if (group) {
-    const placement = splitZoneForFocusedPane(group, state.focusedPaneId);
-    if (!placement) return false;
-    state.dropThread(placement.anchor.id, placement.zone, threadRef);
+    const leaves = collectLeaves(group);
+    const anchor = leaves.find((leaf) => leaf.id === state.focusedPaneId) ?? leaves[0]!;
+    state.dropContent(anchor.id, "right", content);
   } else {
-    state.splitFromThread(routeThreadRef!, "right", threadRef);
+    state.splitFromThread(routeThreadRef!, "right", content);
   }
   return useChatPanesStore.getState().groups !== state.groups;
 }

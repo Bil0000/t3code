@@ -8,27 +8,22 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 
 import {
-  removePane,
-  type ChatPaneId,
+  findLeaf,
+  resolveDropZone,
+  resolveEdgeDropZone,
   type ChatPaneLeaf,
   type ChatPaneNode,
 } from "~/chatPanes.logic";
-import {
-  chatPaneDragPointer,
-  isChatPaneDragActive,
-  useChatPaneDragStore,
-} from "~/chatPaneDragStore";
-import {
-  commitChatPaneDrop,
-  selectPaneDropZoneResolver,
-  useChatPanesStore,
-} from "~/chatPanesStore";
+import { isChatPaneDragActive, startChatPaneDrag, useChatPaneDragStore } from "~/chatPaneDragStore";
+import { commitChatPaneDrop, openCreatedSurfaceInSplit, useChatPanesStore } from "~/chatPanesStore";
 import ChatView from "~/components/ChatView";
+import { AddSurfaceMenu, surfaceTitle, type AddSurfaceProps } from "~/components/RightPanelTabs";
 import { Button } from "~/components/ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
@@ -37,8 +32,6 @@ import { buildThreadRouteParams } from "~/threadRoutes";
 import { resolveThreadSyncPhase } from "~/threadSync";
 import { ChatPaneDropOverlay } from "./ChatPaneDropOverlay";
 import { ChatPaneResizeHandle } from "./ChatPaneResizeHandle";
-
-const DRAG_DISTANCE = 6;
 
 /**
  * Renders the split layout. Every leaf mounts its own ChatView; the route
@@ -56,7 +49,7 @@ export function ChatPanes({
   const navigate = useNavigate();
   const focusPane = useChatPanesStore((state) => state.focusPane);
   const routeThreadKey = scopedThreadKey(routeThreadRef);
-  const routeLeaf = useMemo(() => findLeaf(root, routeThreadKey), [root, routeThreadKey]);
+  const routeLeaf = useMemo(() => findLeaf(root, routeThreadRef), [root, routeThreadRef]);
 
   useEffect(() => {
     if (routeLeaf) focusPane(routeLeaf.id);
@@ -75,19 +68,20 @@ export function ChatPanes({
   );
 
   const activate = useCallback(
-    (threadRef: ScopedThreadRef) => {
-      if (scopedThreadKey(threadRef) === routeThreadKey) return;
+    (leaf: ChatPaneLeaf) => {
+      focusPane(leaf.id);
+      if (scopedThreadKey(leaf.threadRef) === routeThreadKey) return;
       void navigate({
         to: "/$environmentId/$threadId",
-        params: buildThreadRouteParams(threadRef),
+        params: buildThreadRouteParams(leaf.threadRef),
       });
     },
-    [navigate, routeThreadKey],
+    [focusPane, navigate, routeThreadKey],
   );
 
   return (
     <div
-      className="flex min-h-0 min-w-0 flex-1 bg-background"
+      className="flex min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-hidden overscroll-x-contain bg-background"
       data-chat-panes
       onPointerUpCapture={() => {
         if (!isChatPaneDragActive()) return;
@@ -95,73 +89,41 @@ export function ChatPanes({
         // layout change so React finishes this event untouched.
         queueMicrotask(() => {
           const opened = commitChatPaneDrop(routeThreadRef);
-          if (opened) activate(opened);
+          if (opened) follow(opened);
         });
       }}
     >
-      <PaneNode
-        node={root}
-        root={root}
-        routeThreadKey={routeThreadKey}
-        onActivate={activate}
-        onClosed={follow}
-      />
+      <ChatPaneDropOverlay paneId={root.id} resolveZone={resolveEdgeDropZone} priority>
+        <PaneNode node={root} onActivate={activate} onClosed={follow} />
+      </ChatPaneDropOverlay>
     </div>
   );
 }
 
-function findLeaf(node: ChatPaneNode, threadKey: string): ChatPaneLeaf | null {
-  if (node.kind === "leaf") return scopedThreadKey(node.threadRef) === threadKey ? node : null;
-  return findLeaf(node.first, threadKey) ?? findLeaf(node.second, threadKey);
-}
-
 interface PaneNodeProps {
   node: ChatPaneNode;
-  root: ChatPaneNode;
-  routeThreadKey: string;
-  onActivate: (threadRef: ScopedThreadRef) => void;
+  onActivate: (leaf: ChatPaneLeaf) => void;
   /** Receives the survivor's thread when the focused pane closed. */
   onClosed: (threadRef: ScopedThreadRef | null) => void;
 }
 
-function PaneNode({ node, root, routeThreadKey, onActivate, onClosed }: PaneNodeProps) {
+function PaneNode({ node, onActivate, onClosed }: PaneNodeProps) {
   const setRatio = useChatPanesStore((state) => state.setRatio);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  // A moving pane leaves the tree before it lands, so its old slot must not
-  // count against the depth cap of the pane it is dropped on.
-  const sourcePaneId = useChatPaneDragStore((state) => state.sourcePaneId);
-  const dropZoneResolver = useMemo(() => {
-    const tree = sourcePaneId === null ? root : (removePane(root, sourcePaneId) ?? root);
-    return (paneId: ChatPaneId) => selectPaneDropZoneResolver(tree, paneId);
-  }, [root, sourcePaneId]);
   if (node.kind === "leaf") {
-    return (
-      <PaneLeaf
-        leaf={node}
-        resolveZone={dropZoneResolver}
-        focused={scopedThreadKey(node.threadRef) === routeThreadKey}
-        onActivate={onActivate}
-        onClosed={onClosed}
-      />
-    );
+    return <PaneLeaf leaf={node} onActivate={onActivate} onClosed={onClosed} />;
   }
   const horizontal = node.direction === "horizontal";
   const splitId = node.id;
   return (
     <div
       ref={containerRef}
-      className={cn("flex min-h-0 min-w-0 flex-1", horizontal ? "flex-row" : "flex-col")}
+      className={cn("flex min-h-0 flex-1", horizontal ? "flex-row" : "flex-col")}
       style={{ "--pane-ratio": node.ratio } as CSSProperties}
       data-chat-pane-split={node.direction}
     >
-      <div className="flex min-h-0 min-w-0 flex-col" style={{ flex: "var(--pane-ratio) 1 0px" }}>
-        <PaneNode
-          node={node.first}
-          root={root}
-          routeThreadKey={routeThreadKey}
-          onActivate={onActivate}
-          onClosed={onClosed}
-        />
+      <div className="flex min-h-0 flex-col" style={{ flex: "var(--pane-ratio) 1 0px" }}>
+        <PaneNode node={node.first} onActivate={onActivate} onClosed={onClosed} />
       </div>
       <ChatPaneResizeHandle
         direction={node.direction}
@@ -171,17 +133,8 @@ function PaneNode({ node, root, routeThreadKey, onActivate, onClosed }: PaneNode
         }
         onRatioCommit={(ratio) => setRatio(splitId, ratio)}
       />
-      <div
-        className="flex min-h-0 min-w-0 flex-col"
-        style={{ flex: "calc(1 - var(--pane-ratio)) 1 0px" }}
-      >
-        <PaneNode
-          node={node.second}
-          root={root}
-          routeThreadKey={routeThreadKey}
-          onActivate={onActivate}
-          onClosed={onClosed}
-        />
+      <div className="flex min-h-0 flex-col" style={{ flex: "calc(1 - var(--pane-ratio)) 1 0px" }}>
+        <PaneNode node={node.second} onActivate={onActivate} onClosed={onClosed} />
       </div>
     </div>
   );
@@ -189,18 +142,15 @@ function PaneNode({ node, root, routeThreadKey, onActivate, onClosed }: PaneNode
 
 const PaneLeaf = memo(function PaneLeaf({
   leaf,
-  resolveZone: resolveZoneFor,
-  focused,
   onActivate,
   onClosed,
 }: {
   leaf: ChatPaneLeaf;
-  resolveZone: (paneId: ChatPaneId) => ReturnType<typeof selectPaneDropZoneResolver>;
-  focused: boolean;
-  onActivate: (threadRef: ScopedThreadRef) => void;
+  onActivate: (leaf: ChatPaneLeaf) => void;
   onClosed: (threadRef: ScopedThreadRef | null) => void;
 }) {
   const { threadRef } = leaf;
+  const focused = useChatPanesStore((state) => state.focusedPaneId === leaf.id);
   const close = useCallback(
     () => onClosed(useChatPanesStore.getState().closePane(leaf.id)),
     [leaf.id, onClosed],
@@ -208,7 +158,6 @@ const PaneLeaf = memo(function PaneLeaf({
   const shell = useThreadShell(threadRef);
   const detail = useThreadDetail(threadRef);
   const status = useThreadStatus(threadRef);
-  const resolveZone = useMemo(() => resolveZoneFor(leaf.id), [leaf.id, resolveZoneFor]);
   const threadSyncPhase = resolveThreadSyncPhase({
     detailExists: detail !== null,
     shellExists: shell !== null,
@@ -220,17 +169,32 @@ const PaneLeaf = memo(function PaneLeaf({
     if (status === "deleted") close();
   }, [close, status]);
 
-  const title = shell?.title ?? "Thread";
-  const headerDrag = usePaneHeaderDrag(leaf, title);
+  const threadTitle = shell?.title ?? "Thread";
+  const title = leaf.surface ? `${surfaceTitle(leaf.surface)} · ${threadTitle}` : threadTitle;
+  // Picks the pane header up after a short move; a plain click leaves it alone.
+  const cancelHeaderDrag = useRef<(() => void) | null>(null);
+  useEffect(() => () => cancelHeaderDrag.current?.(), [leaf.id]);
+  const headerDrag = (event: ReactPointerEvent<HTMLElement>) => {
+    cancelHeaderDrag.current = startChatPaneDrag(event, {
+      content: { threadRef, ...(leaf.surface ? { surface: leaf.surface } : {}) },
+      title,
+      sourcePaneId: leaf.id,
+    });
+  };
+  // The view inside publishes the same add-surface actions the right panel
+  // uses; the header's "+" opens each one as a pane beside this one.
+  const [addSurfaceProps, setAddSurfaceProps] = useState<AddSurfaceProps | null>(null);
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
 
   return (
-    <ChatPaneDropOverlay paneId={leaf.id} resolveZone={resolveZone}>
+    <ChatPaneDropOverlay paneId={leaf.id} resolveZone={resolveDropZone}>
       <section
         aria-label={title}
         data-chat-pane={leaf.id}
         data-chat-pane-focused={focused ? "true" : "false"}
         className={cn(
-          "relative flex min-h-0 min-w-0 flex-1 flex-col",
+          // Narrowest a pane may get; past this the layout scrolls sideways.
+          "relative flex min-h-0 min-w-[420px] flex-1 flex-col",
           !focused &&
             "after:pointer-events-none after:absolute after:inset-0 after:z-30 after:bg-background/35 after:transition-opacity after:duration-150",
         )}
@@ -240,7 +204,7 @@ const PaneLeaf = memo(function PaneLeaf({
           if (event.target instanceof Element && event.target.closest("[data-chat-pane-header]")) {
             return;
           }
-          if (!focused && !isChatPaneDragActive()) onActivate(threadRef);
+          if (!focused && !isChatPaneDragActive()) onActivate(leaf);
         }}
       >
         <div
@@ -255,6 +219,27 @@ const PaneLeaf = memo(function PaneLeaf({
           <span className="min-w-0 flex-1 cursor-grab truncate font-medium select-none active:cursor-grabbing">
             {title}
           </span>
+          {addSurfaceProps ? (
+            <AddSurfaceMenu
+              {...addSurfaceProps}
+              // Land beside this pane, whichever pane had focus before the menu opened.
+              onAdd={(create) => {
+                useChatPanesStore.getState().focusPane(leaf.id);
+                openCreatedSurfaceInSplit(threadRef, create);
+              }}
+              open={addMenuOpen}
+              onOpenChange={setAddMenuOpen}
+              align="end"
+              trigger={
+                <Button
+                  variant="ghost"
+                  size="icon-micro"
+                  aria-label="Add pane"
+                  onPointerDown={(event) => event.stopPropagation()}
+                />
+              }
+            />
+          ) : null}
           <Tooltip>
             <TooltipTrigger
               render={
@@ -279,6 +264,8 @@ const PaneLeaf = memo(function PaneLeaf({
             routeKind="server"
             threadSyncPhase={threadSyncPhase}
             paneMode={focused ? "focused" : "background"}
+            {...(leaf.surface ? { paneSurface: leaf.surface } : {})}
+            onAddSurfaceProps={setAddSurfaceProps}
             reserveTitleBarControlInset={false}
           />
         ) : null}
@@ -287,80 +274,9 @@ const PaneLeaf = memo(function PaneLeaf({
   );
 });
 
-/** Picks the pane header up after a short move; a plain click leaves it alone. */
-function usePaneHeaderDrag(leaf: ChatPaneLeaf, title: string) {
-  const activeFinish = useRef<(() => void) | null>(null);
-  useEffect(
-    () => () => {
-      activeFinish.current?.();
-      if (useChatPaneDragStore.getState().sourcePaneId === leaf.id) {
-        useChatPaneDragStore.getState().end();
-      }
-    },
-    [leaf.id],
-  );
-  return useCallback(
-    (event: ReactPointerEvent<HTMLElement>) => {
-      if (event.button !== 0 || !event.isPrimary || activeFinish.current) return;
-      const start = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
-      let started = false;
-      const finish = () => {
-        activeFinish.current = null;
-        document.removeEventListener("pointermove", onMove, { capture: true });
-        document.removeEventListener("pointerup", onUp, { capture: true });
-        document.removeEventListener("pointercancel", onCancel, { capture: true });
-        document.removeEventListener("keydown", onKey, { capture: true });
-        window.removeEventListener("blur", onCancel);
-        if (started) {
-          document.body.style.removeProperty("cursor");
-          document.body.style.removeProperty("user-select");
-        }
-      };
-      const onMove = (move: PointerEvent) => {
-        if (move.pointerId !== start.pointerId) return;
-        if (!started) {
-          if (Math.hypot(move.clientX - start.x, move.clientY - start.y) < DRAG_DISTANCE) return;
-          started = true;
-          document.body.style.cursor = "grabbing";
-          document.body.style.userSelect = "none";
-          chatPaneDragPointer.current = { x: move.clientX, y: move.clientY };
-          useChatPaneDragStore.getState().start({
-            threadRef: leaf.threadRef,
-            title,
-            sourcePaneId: leaf.id,
-          });
-        }
-        move.preventDefault();
-      };
-      const onUp = (up: PointerEvent) => {
-        if (up.pointerId !== start.pointerId) return;
-        // The layout root applies a release over a pane; a release anywhere
-        // else ends the gesture here.
-        finish();
-        const drag = useChatPaneDragStore.getState();
-        if (drag.target === null) drag.end();
-      };
-      const onCancel = () => {
-        finish();
-        useChatPaneDragStore.getState().end();
-      };
-      const onKey = (key: KeyboardEvent) => {
-        if (key.key === "Escape") onCancel();
-      };
-      activeFinish.current = finish;
-      document.addEventListener("pointermove", onMove, { capture: true });
-      document.addEventListener("pointerup", onUp, { capture: true });
-      document.addEventListener("pointercancel", onCancel, { capture: true });
-      document.addEventListener("keydown", onKey, { capture: true });
-      window.addEventListener("blur", onCancel);
-    },
-    [leaf, title],
-  );
-}
-
-/** Floating label that follows the pointer while a thread is carried over the panes. */
+/** Floating label that follows the pointer while content is carried over the panes. */
 export function ChatPaneDragGhost() {
-  const title = useChatPaneDragStore((state) => (state.threadRef ? state.title : null));
+  const title = useChatPaneDragStore((state) => (state.content ? state.title : null));
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (title === null) return;

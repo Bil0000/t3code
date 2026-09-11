@@ -3,11 +3,13 @@ import { type EnvironmentId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import {
-  canSplitPane,
   collectLeaves,
   filterPaneTree,
+  findLeaf,
+  findNode,
   removePane,
   resolveDropZone,
+  resolveEdgeDropZone,
   selectChatPaneRoot,
   setPaneRatio,
   splitPane,
@@ -20,7 +22,6 @@ const leaf = (id: string): ChatPaneLeaf => ({
   id,
   threadRef: scopeThreadRef("env-1" as EnvironmentId, ThreadId.make(`thread-${id}`)),
 });
-const allowAll = () => true;
 const rect = { left: 0, top: 0, width: 300, height: 100 };
 
 it("keeps a pane group intact while navigating outside it and back", () => {
@@ -49,15 +50,13 @@ describe("splitPane", () => {
     });
   });
 
-  it("caps depth at a 2x2 grid and refuses same-axis nesting", () => {
+  it("nests without a cap and wraps a whole layout when the target is its root", () => {
     let root: ChatPaneNode = splitPane(leaf("a"), "a", "right", leaf("b"), "s1");
-    expect(canSplitPane(root, "a", "horizontal")).toBe(false);
-    expect(canSplitPane(root, "a", "vertical")).toBe(true);
-    root = splitPane(root, "a", "bottom", leaf("c"), "s2");
-    expect(canSplitPane(root, "c", "horizontal")).toBe(false);
-    expect(canSplitPane(root, "c", "vertical")).toBe(false);
-    expect(splitPane(root, "c", "right", leaf("d"), "s3")).toBe(root);
-    expect(collectLeaves(root).map((item) => item.id)).toEqual(["a", "c", "b"]);
+    root = splitPane(root, "b", "right", leaf("c"), "s2");
+    root = splitPane(root, "s1", "bottom", leaf("d"), "s3");
+    expect(collectLeaves(root).map((item) => item.id)).toEqual(["a", "b", "c", "d"]);
+    expect(findNode(root, "s3")).toMatchObject({ direction: "vertical", second: { id: "d" } });
+    expect(splitPane(root, "missing", "right", leaf("e"), "s4")).toBe(root);
   });
 });
 
@@ -81,21 +80,30 @@ describe("setPaneRatio", () => {
 
 describe("resolveDropZone", () => {
   it("prefers the long axis edges and falls back to the short axis in the middle", () => {
-    expect(resolveDropZone(rect, 10, 50, allowAll)).toBe("left");
-    expect(resolveDropZone(rect, 290, 50, allowAll)).toBe("right");
-    expect(resolveDropZone(rect, 150, 10, allowAll)).toBe("top");
-    expect(resolveDropZone(rect, 150, 90, allowAll)).toBe("bottom");
+    expect(resolveDropZone(rect, 10, 50)).toBe("left");
+    expect(resolveDropZone(rect, 290, 50)).toBe("right");
+    expect(resolveDropZone(rect, 150, 10)).toBe("top");
+    expect(resolveDropZone(rect, 150, 90)).toBe("bottom");
     const tall = { left: 0, top: 0, width: 100, height: 300 };
-    expect(resolveDropZone(tall, 50, 10, allowAll)).toBe("top");
-    expect(resolveDropZone(tall, 10, 150, allowAll)).toBe("left");
+    expect(resolveDropZone(tall, 50, 10)).toBe("top");
+    expect(resolveDropZone(tall, 10, 150)).toBe("left");
+    expect(resolveDropZone(rect, -1, 50)).toBeNull();
   });
 
-  it("skips zones the tree refuses and ignores pointers outside the rect", () => {
-    const onlyVertical = (zone: string) => zone === "top" || zone === "bottom";
-    expect(resolveDropZone(rect, 10, 60, onlyVertical)).toBe("bottom");
-    expect(resolveDropZone(rect, 150, 50, () => false)).toBeNull();
-    expect(resolveDropZone(rect, -1, 50, allowAll)).toBeNull();
+  it("targets the layout edge only inside the band", () => {
+    expect(resolveEdgeDropZone(rect, 150, 5)).toBe("top");
+    expect(resolveEdgeDropZone(rect, 295, 50)).toBe("right");
+    expect(resolveEdgeDropZone(rect, 150, 50)).toBeNull();
+    expect(resolveEdgeDropZone(rect, 310, 50)).toBeNull();
   });
+});
+
+it("finds chat panes by thread and panel panes by surface", () => {
+  const diff = { ...leaf("a"), id: "a-diff", surface: { id: "diff", kind: "diff" } as const };
+  const root = splitPane(leaf("a"), "a", "right", diff, "s1");
+  expect(findLeaf(root, leaf("a").threadRef)).toEqual(leaf("a"));
+  expect(findLeaf(root, leaf("a").threadRef, "diff")).toEqual(diff);
+  expect(findLeaf(root, leaf("a").threadRef, "files")).toBeNull();
 });
 
 it("filters hidden leaves for sidebar headers without changing the saved group", () => {

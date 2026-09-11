@@ -13,21 +13,31 @@ const ZONE_CLASS: Record<DropZone, string> = {
 
 interface ChatPaneDropOverlayProps {
   paneId: ChatPaneId;
-  /** Which edge the pointer would split, or null when the tree refuses every zone. */
+  /** Which edge the pointer would split, or null when this target does not apply. */
   resolveZone: (rect: DOMRect, clientX: number, clientY: number) => DropZone | null;
+  /**
+   * Set on the layout's own overlay: when it resolves a zone it wins over
+   * any pane under the pointer, and a null does not clear a pane's target.
+   */
+  priority?: boolean;
   children: ReactNode;
 }
 
 /**
- * Wraps one pane and paints the half it would give to the carried thread.
+ * Wraps one pane and paints the half it would give to the carried content.
  * Pointer moves are read at the document so the gesture works no matter
  * which sensor owns it, and the resolved zone is published to the drag store
  * for the owner to apply on release. Nothing here is hit-testable, so a
  * resting pane never intercepts clicks or wheel events.
  */
-export function ChatPaneDropOverlay({ paneId, resolveZone, children }: ChatPaneDropOverlayProps) {
+export function ChatPaneDropOverlay({
+  paneId,
+  resolveZone,
+  priority = false,
+  children,
+}: ChatPaneDropOverlayProps) {
   const dragging = useChatPaneDragStore(
-    (state) => state.threadRef !== null && state.sourcePaneId !== paneId,
+    (state) => state.content !== null && state.sourcePaneId !== paneId,
   );
   const zone = useChatPaneDragStore((state) =>
     state.target?.paneId === paneId ? state.target.zone : null,
@@ -48,7 +58,9 @@ export function ChatPaneDropOverlay({ paneId, resolveZone, children }: ChatPaneD
         measuredAt = now;
       }
       chatPaneDragPointer.current = { x, y };
-      setTarget(paneId, resolveZone(rect, x, y));
+      const resolved = resolveZone(rect, x, y);
+      if (priority && resolved === null) return;
+      setTarget(paneId, resolved, priority);
     };
     const onPointerMove = (event: PointerEvent) => {
       if (event.isPrimary) track(event.clientX, event.clientY);
@@ -60,10 +72,10 @@ export function ChatPaneDropOverlay({ paneId, resolveZone, children }: ChatPaneD
       document.removeEventListener("pointermove", onPointerMove, { capture: true });
       setTarget(paneId, null);
     };
-  }, [dragging, paneId, resolveZone]);
+  }, [dragging, paneId, priority, resolveZone]);
 
   return (
-    <div ref={wrapperRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+    <div ref={wrapperRef} className="relative flex min-h-0 flex-1 flex-col">
       {children}
       {dragging ? (
         <div className="pointer-events-none absolute inset-0 z-40" data-chat-pane-drop-zones>
