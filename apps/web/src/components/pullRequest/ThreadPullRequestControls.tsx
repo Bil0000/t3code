@@ -3,7 +3,7 @@ import * as Option from "effect/Option";
 import { useEnvironmentThread } from "~/state/threads";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { CheckIcon, GitPullRequestIcon, Link2, PlusIcon } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ComponentProps } from "react";
 import { usePullRequestLinking } from "~/hooks/usePullRequestLinking";
 import { useProject, useThreadShell } from "~/state/entities";
 import {
@@ -20,63 +20,35 @@ import { openLinkPullRequestDialog } from "./LinkPullRequestDialog";
 import { Button } from "../ui/button";
 import { toastManager } from "../ui/toast";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+import { ThreadPullRequestBadgeControl } from "../ThreadStatusIndicators";
 
-export function LinkBranchPullRequestButton({
-  threadRef,
-  url,
-  linked,
-}: {
+type ThreadPullRequestControlsProps = ComponentProps<typeof ThreadPullRequestBadgeControl> & {
   threadRef: ScopedThreadRef;
-  url?: string | undefined;
-  linked: boolean;
-}) {
+  active: boolean;
+};
+
+export function ThreadPullRequestControls(props: ThreadPullRequestControlsProps) {
+  const { threadRef } = props;
   const linking = usePullRequestLinking(threadRef.environmentId);
-  const [pending, setPending] = useState(false);
-  if (linking.mode === "multiple") return <ThreadPullRequestLinkMenu threadRef={threadRef} />;
-  if (linked || !url || !linking.canLink(url)) return null;
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            size="icon-tiny"
-            variant="ghost-muted"
-            aria-label="Link this PR"
-            disabled={pending}
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={async (event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              setPending(true);
-              try {
-                await linking.changeLink(threadRef, url, true);
-              } catch (error) {
-                toastManager.add({
-                  type: "error",
-                  title: "Could not link pull request",
-                  description: error instanceof Error ? error.message : String(error),
-                });
-              } finally {
-                setPending(false);
-              }
-            }}
-          >
-            <Link2 className="size-3" />
-          </Button>
-        }
-      />
-      <TooltipPopup>Link this PR to keep it with this thread</TooltipPopup>
-    </Tooltip>
+  return linking.mode === "multiple" ? (
+    <ThreadPullRequestLinkMenu {...props} />
+  ) : (
+    <ThreadPullRequestBadgeControl {...props} />
   );
 }
 
-function ThreadPullRequestLinkMenu({ threadRef }: { threadRef: ScopedThreadRef }) {
+function ThreadPullRequestLinkMenu({
+  threadRef,
+  active,
+  ...badgeProps
+}: ThreadPullRequestControlsProps) {
   const [open, setOpen] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
   const thread = useThreadShell(threadRef);
+  const readHistory = thread !== null && (active || open);
   const history = useEnvironmentThread(
-    open ? threadRef.environmentId : null,
-    open ? threadRef.threadId : null,
+    readHistory ? threadRef.environmentId : null,
+    readHistory ? threadRef.threadId : null,
   );
   const detail = Option.getOrNull(history.data);
   const page = Option.getOrNull(history.page);
@@ -87,13 +59,29 @@ function ThreadPullRequestLinkMenu({ threadRef }: { threadRef: ScopedThreadRef }
   const linking = usePullRequestLinking(threadRef.environmentId);
   const suggestions = useMemo(
     () =>
-      thread === null || !open
+      thread === null
         ? []
         : threadPullRequestSuggestions(thread, detail?.messages ?? [], project?.repositoryIdentity),
-    [detail?.messages, open, project?.repositoryIdentity, thread],
+    [detail?.messages, project?.repositoryIdentity, thread],
   );
+  const unlinkedCount = suggestions.filter(
+    (suggestion) => !linking.isLinked(thread, suggestion.url),
+  ).length;
   return (
     <Menu open={open} onOpenChange={setOpen}>
+      <ThreadPullRequestBadgeControl
+        {...badgeProps}
+        badge={
+          unlinkedCount > 0 && suggestions.length > 1
+            ? { kind: "pull-request", others: suggestions.length - 1 }
+            : badgeProps.badge
+        }
+        unlinkedCount={unlinkedCount}
+        onOpenPullRequests={() => {
+          if (unlinkedCount > 0) setOpen(true);
+          else badgeProps.onOpenPullRequests();
+        }}
+      />
       <Tooltip>
         <TooltipTrigger
           render={

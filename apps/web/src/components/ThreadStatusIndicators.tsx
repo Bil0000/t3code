@@ -142,6 +142,7 @@ export function ThreadPullRequestBadgeControl({
   number,
   url,
   status,
+  unlinkedCount = 0,
   onOpenPullRequests,
   onOpenPullRequest,
 }: {
@@ -150,16 +151,19 @@ export function ThreadPullRequestBadgeControl({
   number?: number | undefined;
   url?: string | undefined;
   status: PrStatusIndicator | null;
+  unlinkedCount?: number;
   onOpenPullRequests: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLAnchorElement>) => void;
 }) {
   const isStack = badge?.kind === "stack";
   const linkedCount = badge?.kind === "pull-request" && badge.others > 0 ? badge.others + 1 : null;
-  if (!isStack && (number === undefined || url === undefined)) return null;
+  if (!isStack && linkedCount === null && (number === undefined || url === undefined)) return null;
   const label = isStack
     ? `Stack of ${badge.layers} pull requests, ${badge.state}`
     : linkedCount !== null
-      ? `Show all ${linkedCount} linked pull requests`
+      ? unlinkedCount > 0
+        ? `Show all ${linkedCount} pull requests, ${unlinkedCount} not linked`
+        : `Show all ${linkedCount} linked pull requests`
       : (status?.tooltip ?? `PR #${number}, status pending`);
   const className = cn(
     variant === "ghost"
@@ -188,6 +192,7 @@ export function ThreadPullRequestBadgeControl({
             <InlineButton
               className={className}
               aria-label={label}
+              onKeyDown={(event) => event.stopPropagation()}
               onPointerDown={(event) => event.stopPropagation()}
               onClick={(event) => {
                 event.preventDefault();

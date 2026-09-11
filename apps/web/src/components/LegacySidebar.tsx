@@ -1,6 +1,6 @@
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
-import { LinkBranchPullRequestButton } from "./pullRequest/LinkBranchPullRequestButton";
+import { ThreadPullRequestControls } from "./pullRequest/ThreadPullRequestControls";
 import { useRightPanelStore } from "../rightPanelStore";
 import {
   resolveThreadCurrentPullRequestLink,
@@ -19,7 +19,6 @@ import {
   TriangleAlertIcon,
 } from "lucide-react";
 import {
-  ThreadPullRequestBadgeControl,
   prStatusIndicator,
   terminalStatusFromRunningIds,
   ThreadStatusLabel,
@@ -727,7 +726,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         onContextMenu={handleRowContextMenu}
       >
         <div className="flex min-w-0 flex-1 items-center gap-1.5 text-left">
-          <ThreadPullRequestBadgeControl
+          <ThreadPullRequestControls
+            threadRef={threadRef}
+            active={isActive}
             variant="underline"
             badge={
               supportsMultiplePullRequests
@@ -743,17 +744,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
             }}
             onOpenPullRequest={handlePrClick}
           />
-          {supportsMultiplePullRequests || prUrl ? (
-            <LinkBranchPullRequestButton
-              threadRef={threadRef}
-              url={prUrl}
-              linked={
-                supportsMultiplePullRequests
-                  ? currentLinkedPr !== null
-                  : thread.linkedPullRequest != null
-              }
-            />
-          ) : null}
           {threadStatus && <ThreadStatusLabel status={threadStatus} />}
           {renamingThreadKey === threadKey ? (
             <input

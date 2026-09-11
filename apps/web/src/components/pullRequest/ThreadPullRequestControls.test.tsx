@@ -1,10 +1,12 @@
 import { EnvironmentId, ProjectId, ThreadId, type ThreadPullRequestLink } from "@t3tools/contracts";
-import { act, type PropsWithChildren, type ReactElement } from "react";
+import { act, cloneElement, type PropsWithChildren, type ReactElement } from "react";
+import { resolveThreadPullRequestBadge } from "@t3tools/shared/threadPullRequests";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   multiple: true,
+  openLinked: vi.fn(),
   cursor: null as string | null,
   olderText: "",
   dispatch: vi.fn(),
@@ -104,7 +106,8 @@ vi.mock("../ui/menu", () => {
 });
 vi.mock("../ui/tooltip", () => ({
   Tooltip: ({ children }: PropsWithChildren) => children,
-  TooltipTrigger: ({ render }: { render: ReactElement }) => render,
+  TooltipTrigger: ({ render, children }: PropsWithChildren<{ render: ReactElement }>) =>
+    cloneElement(render, undefined, children),
   TooltipPopup: () => null,
 }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: vi.fn() } }));
@@ -113,14 +116,24 @@ import { AppAtomRegistryProvider } from "~/rpc/atomRegistry";
 import { requestOlderThreadTurns } from "@t3tools/client-runtime/state/threads";
 import { threadEnvironment } from "~/state/threads";
 import { toastManager } from "../ui/toast";
-import { LinkBranchPullRequestButton } from "./LinkBranchPullRequestButton";
+import { ThreadPullRequestControls } from "./ThreadPullRequestControls";
 import { LinkPullRequestDialogHost, openLinkPullRequestDialog } from "./LinkPullRequestDialog";
 
 let renderer: ReactTestRenderer;
 function view() {
   return (
     <AppAtomRegistryProvider>
-      <LinkBranchPullRequestButton threadRef={threadRef} url={url(1)} linked={false} />
+      <ThreadPullRequestControls
+        threadRef={threadRef}
+        active
+        variant="underline"
+        badge={resolveThreadPullRequestBadge(state.links)}
+        number={1}
+        url={url(1)}
+        status={null}
+        onOpenPullRequests={state.openLinked}
+        onOpenPullRequest={() => {}}
+      />
       <LinkPullRequestDialogHost />
     </AppAtomRegistryProvider>
   );
@@ -143,6 +156,7 @@ async function click(label: string) {
 }
 beforeEach(() => {
   state.multiple = true;
+  state.openLinked.mockClear();
   state.links = [];
   state.cursor = null;
   state.olderText = "";
@@ -169,7 +183,8 @@ afterEach(async () => {
 
 it("offers all thread PRs and links each separately while keeping the menu available", async () => {
   await render();
-  await click("Link PRs");
+  await click("Show all 3 pull requests, 3 not linked");
+  expect(state.openLinked).not.toHaveBeenCalled();
   expect(state.dispatch).not.toHaveBeenCalled();
   expect(
     renderer.root
@@ -185,6 +200,10 @@ it("offers all thread PRs and links each separately while keeping the menu avail
   ).toBe(true);
   await click("Link PR #3");
   expect(state.links.map((link) => link.number)).toEqual([2, 3]);
+  await click("Show all 3 pull requests, 1 not linked");
+  await click("Link PR #1");
+  await click("Show all 3 linked pull requests");
+  expect(state.openLinked).toHaveBeenCalledTimes(1);
   expect(
     state.dispatch.mock.calls.every(([command]) => command === threadEnvironment.linkPullRequest),
   ).toBe(true);
@@ -229,21 +248,12 @@ it("adds a PR by project number without replacing an existing link", async () =>
   expect(renderer.root.findAllByType("input")).toHaveLength(0);
 });
 
-it("keeps direct linking and hides extra links on older servers", async () => {
+it("keeps the existing PR badge without the removed shortcut on older servers", async () => {
   state.multiple = false;
   await render();
-  await click("Link this PR");
-  expect(state.dispatch).toHaveBeenCalledExactlyOnceWith(threadEnvironment.updateMetadata, {
-    environmentId: threadRef.environmentId,
-    input: {
-      threadId: threadRef.threadId,
-      linkedPullRequest: { projectId: project.id, repository: "acme/web", number: 1, url: url(1) },
-    },
-  });
-  await act(async () =>
-    renderer.update(<LinkBranchPullRequestButton threadRef={threadRef} url={url(1)} linked />),
-  );
-  expect(renderer.toJSON()).toBeNull();
+  expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([url(1)]);
+  expect(renderer.root.findAllByProps({ "aria-label": "Link PRs" })).toHaveLength(0);
+  expect(state.dispatch).not.toHaveBeenCalled();
 });
 
 it("loads older PR suggestions only when requested", async () => {

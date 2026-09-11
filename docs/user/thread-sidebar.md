@@ -102,9 +102,12 @@ mentioned in this thread for the same project. Select a PR to link it. Each clic
 adds only that PR, and the menu stays available after linking. Use **Look for
 older PRs** to check earlier messages.
 
+The **+N** badge includes PRs found in the loaded thread, even before you link
+them. Select it to choose which PR to link. Once all are linked, it opens the
+existing **Linked pull requests** panel.
+
 Right-click the thread and choose **Link PR** to add a PR by number or URL.
-Existing links stay in place. Select the additional PR count to open all linked
-reviews. **Unlink from thread** removes only that review. See
+Existing links stay in place. **Unlink from thread** removes only that review. See
 [Linked pull requests](./source-control.md#linked-pull-requests) for automatic settlement rules.
 
 ## Find and reference work

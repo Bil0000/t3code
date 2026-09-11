@@ -1,6 +1,6 @@
 import { openLinkPullRequestDialog } from "./pullRequest/LinkPullRequestDialog";
 import { useSupportsMultiplePullRequests } from "~/hooks/useSupportsMultiplePullRequests";
-import { LinkBranchPullRequestButton } from "./pullRequest/LinkBranchPullRequestButton";
+import { ThreadPullRequestControls } from "./pullRequest/ThreadPullRequestControls";
 import { resolveThreadCurrentPullRequestLink } from "@t3tools/shared/threadPullRequests";
 import { useAtomValue } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
@@ -190,7 +190,6 @@ import {
 import { SidebarDragLifecycle, SidebarPointerSensor } from "./Sidebar.pointer";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import {
-  ThreadPullRequestBadgeControl,
   ThreadPullRequestsMiniList,
   ThreadWorktreeIndicator,
   prStatusIndicator,
@@ -1493,29 +1492,19 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
     useRightPanelStore.getState().open(threadRef, "pull-requests");
     if (!props.isActive) onThreadActivate(threadRef);
   }, [onThreadActivate, props.isActive, threadRef]);
-  const prBadge =
-    prBadgeShape?.kind === "stack" || pr || currentLinkedPr ? (
-      <ThreadPullRequestBadgeControl
-        variant="underline"
-        badge={prBadgeShape}
-        number={pr?.number ?? currentLinkedPr?.number}
-        url={pr?.url ?? currentLinkedPr?.url}
-        status={prStatus}
-        onOpenPullRequests={handlePrStackClick}
-        onOpenPullRequest={handlePrClick}
-      />
-    ) : null;
-  const prUrl = pr?.url ?? currentLinkedPr?.url;
-  const prLinkButton =
-    supportsMultiplePullRequests || prUrl ? (
-      <LinkBranchPullRequestButton
-        threadRef={threadRef}
-        url={prUrl}
-        linked={
-          supportsMultiplePullRequests ? currentLinkedPr !== null : thread.linkedPullRequest != null
-        }
-      />
-    ) : null;
+  const prBadge = (
+    <ThreadPullRequestControls
+      threadRef={threadRef}
+      active={props.isActive}
+      variant="underline"
+      badge={prBadgeShape}
+      number={pr?.number ?? currentLinkedPr?.number}
+      url={pr?.url ?? currentLinkedPr?.url}
+      status={prStatus}
+      onOpenPullRequests={handlePrStackClick}
+      onOpenPullRequest={handlePrClick}
+    />
+  );
   const terminalStatusIcon = terminalStatus ? (
     <span
       role="img"
@@ -1626,7 +1615,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               remain visible AND clickable while the row is hovered. Only
               the time/jump label yields to the settle affordance. */}
             {prBadge}
-            {variantAction !== "unsettle" ? prLinkButton : null}
             {sortable?.isDragging ? (
               dragDestination
             ) : (
@@ -1927,7 +1915,6 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
               )}
               {terminalStatusIcon}
               {prBadge}
-              {prLinkButton}
               {diff ? (
                 <span className="shrink-0 font-mono">
                   <span className="text-diff-addition-foreground">+{diff.insertions}</span>{" "}
