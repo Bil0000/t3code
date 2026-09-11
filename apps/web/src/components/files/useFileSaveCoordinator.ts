@@ -44,6 +44,7 @@ export function useFileSaveCoordinator({
           debounceMs: FILE_SAVE_DEBOUNCE_MS,
           onPendingChange: (pending) => onPendingChange(relativePath, pending),
           persist: async (nextContents) => {
+            const draft = getOptimisticProjectFileQueryData(environmentId, cwd, relativePath);
             const result = await writeFile({
               environmentId,
               input: {
@@ -58,8 +59,8 @@ export function useFileSaveCoordinator({
               isProjectWriteFileError(error) &&
               error.failure === "checkout_changed" &&
               expectedBranch !== undefined &&
-              getOptimisticProjectFileQueryData(environmentId, cwd, relativePath)?.contents ===
-                nextContents
+              draft?.contents === nextContents &&
+              getOptimisticProjectFileQueryData(environmentId, cwd, relativePath) === draft
             ) {
               clearProjectFileQueryData(environmentId, cwd, relativePath);
             }

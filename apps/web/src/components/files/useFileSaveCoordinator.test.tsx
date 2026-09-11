@@ -74,46 +74,51 @@ afterEach(async () => {
 
 describe("file-save React lifecycle", () => {
   it.each([
-    ["pending edit", "checkout_changed"],
-    ["newer edit", "checkout_changed"],
-    ["pending edit", "operation_failed"],
-  ] as const)("rejects a delayed save with cached %s and %s", async (cached, failure) => {
-    let branch = "review";
-    const onSaveError = vi.fn();
-    const saved: string[] = [];
-    let cachedContents: string | null = cached;
-    optimisticFile.mockImplementation(() => ({ contents: cachedContents }));
-    clearFile.mockImplementation(() => {
-      cachedContents = null;
-    });
-    writeFile.mockImplementation(async ({ input }) => {
-      if (input.expectedBranch !== branch)
-        return AsyncResult.failure(
-          Cause.fail(
-            new ProjectWriteFileError({
-              cwd: defaultProps.cwd,
-              relativePath: defaultProps.relativePath,
-              failure,
-              message: "Save failed",
-            }),
-          ),
-        );
-      saved.push(input.contents);
-      return AsyncResult.success(undefined);
-    });
-    mount({ ...defaultProps, expectedBranch: branch, onSaveError });
-    changeHandler()("pending edit");
-    branch = "other";
-    await vi.advanceTimersByTimeAsync(500);
-    expect(writeFile.mock.calls[0]![0].input.expectedBranch).toBe("review");
-    expect(saved).toEqual([]);
-    expect(confirmFile).not.toHaveBeenCalled();
-    expect(onPendingChange).toHaveBeenLastCalledWith("file.txt", true);
-    expect(onSaveError).toHaveBeenCalledWith("Save failed");
-    expect(cachedContents).toBe(
-      cached === "pending edit" && failure === "checkout_changed" ? null : cached,
-    );
-  });
+    ["pending edit", "checkout_changed", false],
+    ["newer edit", "checkout_changed", false],
+    ["pending edit", "operation_failed", false],
+    ["pending edit", "checkout_changed", true],
+  ] as const)(
+    "rejects a delayed save with cached %s and %s (new draft: %s)",
+    async (cached, failure, newDraft) => {
+      let branch = "review";
+      const onSaveError = vi.fn();
+      const saved: string[] = [];
+      let cachedFile: { contents: string } | null = { contents: cached };
+      optimisticFile.mockImplementation(() => cachedFile);
+      clearFile.mockImplementation(() => {
+        cachedFile = null;
+      });
+      writeFile.mockImplementation(async ({ input }) => {
+        if (newDraft) cachedFile = { contents: cached };
+        if (input.expectedBranch !== branch)
+          return AsyncResult.failure(
+            Cause.fail(
+              new ProjectWriteFileError({
+                cwd: defaultProps.cwd,
+                relativePath: defaultProps.relativePath,
+                failure,
+                message: "Save failed",
+              }),
+            ),
+          );
+        saved.push(input.contents);
+        return AsyncResult.success(undefined);
+      });
+      mount({ ...defaultProps, expectedBranch: branch, onSaveError });
+      changeHandler()("pending edit");
+      branch = "other";
+      await vi.advanceTimersByTimeAsync(500);
+      expect(writeFile.mock.calls[0]![0].input.expectedBranch).toBe("review");
+      expect(saved).toEqual([]);
+      expect(confirmFile).not.toHaveBeenCalled();
+      expect(onPendingChange).toHaveBeenLastCalledWith("file.txt", true);
+      expect(onSaveError).toHaveBeenCalledWith("Save failed");
+      expect(cachedFile?.contents ?? null).toBe(
+        cached === "pending edit" && failure === "checkout_changed" && !newDraft ? null : cached,
+      );
+    },
+  );
 
   it("persists editor model changes after StrictMode setup replay", async () => {
     mount();
