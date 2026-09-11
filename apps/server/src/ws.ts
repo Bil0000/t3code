@@ -2384,17 +2384,42 @@ const makeWsRpcLayer = (
         [WS_METHODS.projectsWriteFile]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsWriteFile,
-            workspaceFileSystem.writeFile(input).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProjectWriteFileError({
+            Effect.gen(function* () {
+              if (input.expectedBranch !== undefined) {
+                yield* gitWorkflow.invalidateLocalStatus(input.cwd);
+                const status = yield* gitWorkflow.localStatus({ cwd: input.cwd }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProjectWriteFileError({
+                        cwd: input.cwd,
+                        relativePath: input.relativePath,
+                        message: "Could not verify the checkout before saving.",
+                        failure: "operation_failed",
+                        cause,
+                      }),
+                  ),
+                );
+                if (!status.isRepo || status.refName !== input.expectedBranch) {
+                  return yield* new ProjectWriteFileError({
                     cwd: input.cwd,
                     relativePath: input.relativePath,
-                    ...projectFileFailureContext(cause),
-                    cause,
-                  }),
-              ),
-            ),
+                    message: "The checkout changed. Reopen the file before saving.",
+                    failure: "operation_failed",
+                  });
+                }
+              }
+              return yield* workspaceFileSystem.writeFile(input).pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProjectWriteFileError({
+                      cwd: input.cwd,
+                      relativePath: input.relativePath,
+                      ...projectFileFailureContext(cause),
+                      cause,
+                    }),
+                ),
+              );
+            }),
             { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.shellOpenInEditor]: (input) =>

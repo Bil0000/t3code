@@ -2,6 +2,7 @@ import type { EnvironmentId } from "@t3tools/contracts";
 import { createRef, useEffect, useMemo } from "react";
 
 import { projectEnvironment } from "~/state/projects";
+import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { FileSaveCoordinator } from "./fileSaveCoordinator";
@@ -13,14 +14,18 @@ interface FileSaveOptions {
   environmentId: EnvironmentId;
   cwd: string;
   relativePath: string;
+  expectedBranch?: string | null;
   onPendingChange: (relativePath: string, pending: boolean) => void;
+  onSaveError?: (message: string | null) => void;
 }
 
 export function useFileSaveCoordinator({
   environmentId,
   cwd,
   relativePath,
+  expectedBranch,
   onPendingChange,
+  onSaveError,
 }: FileSaveOptions): Pick<FileSaveCoordinator, "change"> {
   const writeFile = useAtomCommand(projectEnvironment.writeFile);
   const session = useMemo(() => {
@@ -31,11 +36,21 @@ export function useFileSaveCoordinator({
         const coordinator = new FileSaveCoordinator({
           debounceMs: FILE_SAVE_DEBOUNCE_MS,
           onPendingChange: (pending) => onPendingChange(relativePath, pending),
-          persist: (nextContents) =>
-            writeFile({
+          persist: async (nextContents) => {
+            const result = await writeFile({
               environmentId,
-              input: { cwd, relativePath, contents: nextContents },
-            }),
+              input: {
+                cwd,
+                relativePath,
+                contents: nextContents,
+                ...(expectedBranch !== undefined ? { expectedBranch } : {}),
+              },
+            });
+            onSaveError?.(
+              result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
+            );
+            return result;
+          },
           onConfirmed: (confirmedContents) => {
             confirmProjectFileQueryData(environmentId, cwd, relativePath, confirmedContents);
           },
@@ -47,7 +62,7 @@ export function useFileSaveCoordinator({
         };
       },
     };
-  }, [cwd, environmentId, onPendingChange, relativePath, writeFile]);
+  }, [cwd, environmentId, expectedBranch, onPendingChange, onSaveError, relativePath, writeFile]);
 
   // StrictMode replays effect setup. Retired file sessions stay inert, while the
   // replay gets a fresh coordinator instead of reusing a disposed one.

@@ -1,5 +1,6 @@
 import { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
+import * as Cause from "effect/Cause";
 import { act, StrictMode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
@@ -34,7 +35,7 @@ function FileSurface(props: Parameters<typeof useFileSaveCoordinator>[0]) {
   return <ChangeSource onChange={(contents) => coordinator.change(contents)} />;
 }
 
-function mount(props = defaultProps) {
+function mount(props: Parameters<typeof useFileSaveCoordinator>[0] = defaultProps) {
   act(() => {
     renderer = create(
       <StrictMode>
@@ -64,6 +65,27 @@ afterEach(async () => {
 });
 
 describe("file-save React lifecycle", () => {
+  it("keeps the expected checkout on a save delayed past a branch switch", async () => {
+    let branch = "review";
+    const onSaveError = vi.fn();
+    const saved: string[] = [];
+    writeFile.mockImplementation(async ({ input }) => {
+      if (input.expectedBranch !== branch)
+        return AsyncResult.failure(Cause.fail(new Error("checkout changed")));
+      saved.push(input.contents);
+      return AsyncResult.success(undefined);
+    });
+    mount({ ...defaultProps, expectedBranch: branch, onSaveError });
+    changeHandler()("pending edit");
+    branch = "other";
+    await vi.advanceTimersByTimeAsync(500);
+    expect(writeFile.mock.calls[0]![0].input.expectedBranch).toBe("review");
+    expect(saved).toEqual([]);
+    expect(confirmFile).not.toHaveBeenCalled();
+    expect(onPendingChange).toHaveBeenLastCalledWith("file.txt", true);
+    expect(onSaveError).toHaveBeenCalledWith("checkout changed");
+  });
+
   it("persists editor model changes after StrictMode setup replay", async () => {
     mount();
     changeHandler()("AUDIT7907NATIVE\n");

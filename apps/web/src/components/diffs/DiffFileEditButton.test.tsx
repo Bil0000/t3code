@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const { status, file, refresh } = vi.hoisted(() => ({
   status: {
-    data: { pr: { url: "https://github.com/example/repo/pull/1" } },
+    data: { refName: "review", pr: { url: "https://github.com/example/repo/pull/1" } },
     isSuccess: true,
     isPending: false,
     error: null as string | null,
@@ -87,7 +87,7 @@ it("does not open media files in the text editor", async () => {
 });
 
 it("does not require a pull request for local edits", async () => {
-  status.isSuccess = false;
+  status.data.pr.url = "";
   await open();
   expect(renderer.root.findAllByType("textarea")).toHaveLength(1);
 });

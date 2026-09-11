@@ -597,6 +597,8 @@ interface EditableFileSurfaceProps {
   environmentId: EnvironmentId;
   cwd: string;
   relativePath: string;
+  expectedBranch?: string | null;
+  onSaveError?: (message: string | null) => void;
   composerDraftTarget: ScopedThreadRef | DraftId | null;
   contents: string;
   resolvedTheme: "light" | "dark";
@@ -615,6 +617,8 @@ export function EditableFileSurface({
   environmentId,
   cwd,
   relativePath,
+  expectedBranch,
+  onSaveError,
   composerDraftTarget,
   contents,
   resolvedTheme,
@@ -641,6 +645,8 @@ export function EditableFileSurface({
     environmentId,
     cwd,
     relativePath,
+    ...(expectedBranch !== undefined ? { expectedBranch } : {}),
+    ...(onSaveError ? { onSaveError } : {}),
     onPendingChange,
   });
   const editor = useMemo(

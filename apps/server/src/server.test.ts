@@ -7060,6 +7060,65 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     }).pipe(Effect.provide(NodeHttpServer.layerTest)),
   );
 
+  it.effect("rejects a delayed workspace save after the checkout changes", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const cwd = yield* fs.makeTempDirectoryScoped({ prefix: "t3-ws-guarded-write-" });
+      let branch: string | null = "review";
+      let invalidated = false;
+      yield* buildAppUnderTest({
+        layers: {
+          vcsDriver: { isInsideWorkTree: () => Effect.succeed(true) },
+          gitManager: {
+            invalidateLocalStatus: () =>
+              Effect.sync(() => {
+                invalidated = true;
+              }),
+            localStatus: () =>
+              Effect.sync(() => {
+                assert.isTrue(invalidated);
+                invalidated = false;
+                return {
+                  isRepo: true,
+                  hasPrimaryRemote: false,
+                  isDefaultRef: false,
+                  refName: branch,
+                  hasWorkingTreeChanges: false,
+                  workingTree: { files: [], insertions: 0, deletions: 0 },
+                };
+              }),
+          },
+        },
+      });
+      const wsUrl = yield* getWsServerUrl("/ws");
+      yield* Effect.scoped(
+        withWsRpcClient(wsUrl, (client) =>
+          Effect.gen(function* () {
+            const input = {
+              cwd,
+              relativePath: "file.ts",
+              contents: "saved",
+              expectedBranch: "review",
+            };
+            yield* client[WS_METHODS.projectsWriteFile](input);
+            for (const nextBranch of ["other", null]) {
+              branch = nextBranch;
+              const result = yield* client[WS_METHODS.projectsWriteFile]({
+                ...input,
+                contents: "pending edit",
+              }).pipe(Effect.result);
+              assert.equal(result._tag, "Failure");
+              if (result._tag === "Failure")
+                assert.include(result.failure.message, "checkout changed");
+              assert.equal(yield* fs.readFileString(path.join(cwd, "file.ts")), "saved");
+            }
+          }),
+        ),
+      );
+    }).pipe(Effect.provide(NodeHttpServer.layerTest)),
+  );
+
   it.effect("creates a missing workspace root during websocket project.create dispatch", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;
