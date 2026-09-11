@@ -1433,6 +1433,7 @@ function PullRequestCodeTab({
         </div>
         {fileTreeOpen ? (
           <DiffFileTree
+            widthStorageKey="t3code.pullRequestFileTreeWidth"
             ariaLabel={`Pull request #${detail.number} files`}
             defaultWidth={320}
             entries={fileTreeEntries}

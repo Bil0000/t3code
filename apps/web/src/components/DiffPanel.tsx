@@ -1065,6 +1065,7 @@ export default function DiffPanel({
                 </div>
                 {fileTreeOpen ? (
                   <DiffFileTree
+                    widthStorageKey="t3code.diffFileTreeWidth"
                     ariaLabel={`${reviewSectionTitle} files`}
                     entries={fileTreeEntries}
                     selectedPath={selectedFilePath}

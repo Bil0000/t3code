@@ -32,6 +32,7 @@ interface DiffFileTreeProps {
   readonly selectedPath?: string | null;
   readonly revealRequestId?: number;
   readonly ariaLabel: string;
+  readonly widthStorageKey: string;
   /** Right-aligned content in the header row, after the file count. */
   readonly headerAccessory?: ReactNode;
   /** Rendered under the tree, for a host that still has files to fetch. */
@@ -50,6 +51,7 @@ export function DiffFileTree({
   selectedPath = null,
   revealRequestId = 0,
   ariaLabel,
+  widthStorageKey,
   headerAccessory,
   footer,
   className,
@@ -68,7 +70,7 @@ export function DiffFileTree({
     return () => observer.disconnect();
   }, []);
   const { width, handlers } = useResizableWidth({
-    storageKey: "t3code.diffFileTreeWidth",
+    storageKey: widthStorageKey,
     defaultWidth,
     minWidth: 160,
     maxWidth,

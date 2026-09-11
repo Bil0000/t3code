@@ -1,12 +1,13 @@
 import type { CodeViewScrollTarget } from "@pierre/diffs";
 import type { FileTree as FileTreeModel } from "@pierre/trees";
 import { FileTree } from "@pierre/trees/react";
-import { act, type MouseEvent, type ReactNode } from "react";
+import { act, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { DiffFileTree, type DiffFileTreeEntry } from "./DiffFileTree";
 import { useCodeViewFileReveal } from "./useCodeViewFileReveal";
+import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 
 vi.mock("../../hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 // Tooltip positioning is unrelated to the tree's actual model and activation path.
@@ -41,13 +42,16 @@ describe("diff tree file activation", () => {
   function Panel({
     files = entries,
     selectedPath = null,
+    widthStorageKey = "t3code.diffFileTreeWidth",
   }: {
     files?: DiffFileTreeEntry[];
     selectedPath?: string | null;
+    widthStorageKey?: string;
   }) {
     const reveal = useCodeViewFileReveal(viewer, "working-tree");
     return (
       <DiffFileTree
+        widthStorageKey={widthStorageKey}
         entries={files}
         ariaLabel="Working tree files"
         selectedPath={selectedPath}
@@ -111,6 +115,46 @@ describe("diff tree file activation", () => {
     vi.runOnlyPendingTimers();
     vi.useRealTimers();
     vi.unstubAllGlobals();
+  });
+
+  it("stores resized widths independently for each review surface", async () => {
+    const widths = new Map<string, string>();
+    Object.assign(window, {
+      localStorage: {
+        getItem: (key: string) => widths.get(key) ?? null,
+        setItem: (key: string, value: string) => widths.set(key, value),
+      },
+    });
+    vi.stubGlobal("document", { body: { style: { removeProperty() {} } } });
+    vi.stubGlobal("requestAnimationFrame", () => 1);
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const pointer = {
+      button: 0,
+      pointerId: 1,
+      clientX: 100,
+      preventDefault() {},
+      stopPropagation() {},
+      currentTarget: {
+        setPointerCapture() {},
+        hasPointerCapture: () => true,
+        releasePointerCapture() {},
+      },
+    } as unknown as PointerEvent<HTMLElement>;
+    for (const widthStorageKey of ["t3code.diffFileTreeWidth", "t3code.pullRequestFileTreeWidth"]) {
+      await mount({ widthStorageKey });
+      const { handlers } = renderer!.root.findByType(RightPanelResizeHandle).props;
+      await act(async () => {
+        handlers.onPointerDown(pointer);
+        handlers.onPointerMove({ ...pointer, clientX: 60 });
+        handlers.onPointerUp(pointer);
+      });
+      await act(async () => renderer!.unmount());
+      renderer = undefined;
+    }
+    expect([...widths]).toEqual([
+      ["t3code.diffFileTreeWidth", "296"],
+      ["t3code.pullRequestFileTreeWidth", "296"],
+    ]);
   });
 
   it("reissues the reveal when the sole selected file is activated again", async () => {
