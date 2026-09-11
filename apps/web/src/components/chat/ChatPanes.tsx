@@ -80,19 +80,7 @@ export function ChatPanes({
   );
 
   return (
-    <div
-      className="flex min-h-0 min-w-0 flex-1 overflow-x-auto overflow-y-hidden overscroll-x-contain bg-background"
-      data-chat-panes
-      onPointerUpCapture={() => {
-        if (!isChatPaneDragActive()) return;
-        // The gesture owner's document listeners already ran; defer the
-        // layout change so React finishes this event untouched.
-        queueMicrotask(() => {
-          const opened = commitChatPaneDrop(routeThreadRef);
-          if (opened) follow(opened);
-        });
-      }}
-    >
+    <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden bg-background" data-chat-panes>
       <ChatPaneDropOverlay paneId={root.id} resolveZone={resolveEdgeDropZone} priority>
         <PaneNode node={root} onActivate={activate} onClosed={follow} />
       </ChatPaneDropOverlay>
@@ -118,11 +106,11 @@ function PaneNode({ node, onActivate, onClosed }: PaneNodeProps) {
   return (
     <div
       ref={containerRef}
-      className={cn("flex min-h-0 flex-1", horizontal ? "flex-row" : "flex-col")}
+      className={cn("flex min-h-0 min-w-0 flex-1", horizontal ? "flex-row" : "flex-col")}
       style={{ "--pane-ratio": node.ratio } as CSSProperties}
       data-chat-pane-split={node.direction}
     >
-      <div className="flex min-h-0 flex-col" style={{ flex: "var(--pane-ratio) 1 0px" }}>
+      <div className="flex min-h-0 min-w-0 flex-col" style={{ flex: "var(--pane-ratio) 1 0px" }}>
         <PaneNode node={node.first} onActivate={onActivate} onClosed={onClosed} />
       </div>
       <ChatPaneResizeHandle
@@ -133,7 +121,10 @@ function PaneNode({ node, onActivate, onClosed }: PaneNodeProps) {
         }
         onRatioCommit={(ratio) => setRatio(splitId, ratio)}
       />
-      <div className="flex min-h-0 flex-col" style={{ flex: "calc(1 - var(--pane-ratio)) 1 0px" }}>
+      <div
+        className="flex min-h-0 min-w-0 flex-col"
+        style={{ flex: "calc(1 - var(--pane-ratio)) 1 0px" }}
+      >
         <PaneNode node={node.second} onActivate={onActivate} onClosed={onClosed} />
       </div>
     </div>
@@ -193,8 +184,7 @@ const PaneLeaf = memo(function PaneLeaf({
         data-chat-pane={leaf.id}
         data-chat-pane-focused={focused ? "true" : "false"}
         className={cn(
-          // Narrowest a pane may get; past this the layout scrolls sideways.
-          "relative flex min-h-0 min-w-[420px] flex-1 flex-col",
+          "relative flex min-h-0 min-w-0 flex-1 flex-col",
           !focused &&
             "after:pointer-events-none after:absolute after:inset-0 after:z-30 after:bg-background/35 after:transition-opacity after:duration-150",
         )}
@@ -274,8 +264,14 @@ const PaneLeaf = memo(function PaneLeaf({
   );
 });
 
-/** Floating label that follows the pointer while content is carried over the panes. */
-export function ChatPaneDragGhost() {
+/**
+ * Present only while content is carried. A full-window shield keeps the
+ * release out of embedded browsers and other pane content, so it always
+ * lands here and applies the target the pane overlays resolved; the label
+ * follows the pointer above it.
+ */
+export function ChatPaneDragLayer({ routeThreadRef }: { routeThreadRef: ScopedThreadRef }) {
+  const navigate = useNavigate();
   const title = useChatPaneDragStore((state) => (state.content ? state.title : null));
   const ref = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -293,12 +289,26 @@ export function ChatPaneDragGhost() {
   if (title === null) return null;
   return (
     <div
-      ref={ref}
-      aria-hidden
-      className="pointer-events-none fixed left-0 top-0 z-[60] max-w-64 truncate rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs font-medium text-popover-foreground shadow-lg will-change-transform"
-      style={{ transform: "translate(-9999px, -9999px)" }}
+      className="fixed inset-0 z-[60] touch-none"
+      onPointerUp={() => {
+        const opened = commitChatPaneDrop(routeThreadRef);
+        if (opened) {
+          void navigate({
+            to: "/$environmentId/$threadId",
+            params: buildThreadRouteParams(opened),
+            replace: true,
+          });
+        }
+      }}
     >
-      {title}
+      <div
+        ref={ref}
+        aria-hidden
+        className="pointer-events-none absolute top-0 left-0 max-w-64 truncate rounded-md border border-border bg-popover px-2.5 py-1.5 text-xs font-medium text-popover-foreground shadow-lg will-change-transform"
+        style={{ transform: "translate(-9999px, -9999px)" }}
+      >
+        {title}
+      </div>
     </div>
   );
 }

@@ -90,9 +90,8 @@ panel onto the chat area, or use **+** in a pane header, to open the diff, files
 agents, a terminal, browser, or pull request as its own pane. Closing the tab
 closes the pane.
 
-When more panes are open than fit, the layout scrolls sideways. Drop on the outer
-edge of the chat area to give a pane the full height or width of the layout
-instead of splitting one pane.
+Drop on the outer edge of the chat area to give a pane the full height or width
+of the layout instead of splitting one pane.
 
 Opening a thread outside the split shows it on its own and keeps the layout intact.
 Dropping a thread on a chat that is not part of a split starts another split, so

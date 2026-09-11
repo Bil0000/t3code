@@ -3,17 +3,12 @@ import { useEffect } from "react";
 
 import ChatView from "../components/ChatView";
 import { threadHasStarted } from "../components/ChatView.logic";
-import { ChatPaneDragGhost, ChatPanes } from "../components/chat/ChatPanes";
+import { ChatPaneDragLayer, ChatPanes } from "../components/chat/ChatPanes";
 import { ChatPaneDropOverlay } from "../components/chat/ChatPaneDropOverlay";
-import { commitChatPaneDrop, useChatPanesStore } from "../chatPanesStore";
-import { isChatPaneDragActive } from "../chatPaneDragStore";
+import { useChatPanesStore } from "../chatPanesStore";
 import { resolveDropZone, selectChatPaneRoot } from "../chatPanes.logic";
 import { finalizePromotedDraftThreadByRef, useComposerDraftStore } from "../composerDraftStore";
-import {
-  buildThreadRouteParams,
-  resolveThreadRouteRef,
-  resolveThreadRouteRenderState,
-} from "../threadRoutes";
+import { resolveThreadRouteRef, resolveThreadRouteRenderState } from "../threadRoutes";
 import { resolveThreadSyncPhase } from "../threadSync";
 import { useSidebarPendingFileDropStore } from "../sidebarPendingFileDropStore";
 import { SidebarInset } from "~/components/ui/sidebar";
@@ -109,22 +104,7 @@ function ChatThreadRouteView() {
       ) : (
         // A drop on the plain view starts a new group from this thread. The
         // pane id is a placeholder that matches no saved pane.
-        <div
-          className="flex min-h-0 min-w-0 flex-1"
-          onPointerUpCapture={() => {
-            if (!isChatPaneDragActive()) return;
-            queueMicrotask(() => {
-              const opened = commitChatPaneDrop(threadRef);
-              if (opened) {
-                void navigate({
-                  to: "/$environmentId/$threadId",
-                  params: buildThreadRouteParams(opened),
-                  replace: true,
-                });
-              }
-            });
-          }}
-        >
+        <div className="flex min-h-0 min-w-0 flex-1">
           <ChatPaneDropOverlay paneId={SINGLE_PANE_ID} resolveZone={resolveDropZone}>
             <ChatView
               environmentId={threadRef.environmentId}
@@ -135,7 +115,7 @@ function ChatThreadRouteView() {
           </ChatPaneDropOverlay>
         </div>
       )}
-      <ChatPaneDragGhost />
+      <ChatPaneDragLayer routeThreadRef={threadRef} />
     </SidebarInset>
   );
 }

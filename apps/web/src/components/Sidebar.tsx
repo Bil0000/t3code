@@ -113,7 +113,11 @@ import {
 } from "../threadSelectionStore";
 import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
-import { chatPaneDragPointer, useChatPaneDragStore } from "../chatPaneDragStore";
+import {
+  chatPaneDragPointer,
+  releaseChatPaneDrag,
+  useChatPaneDragStore,
+} from "../chatPaneDragStore";
 import { canOpenInSplit, openInSplit, useChatPanesStore } from "../chatPanesStore";
 import { collectLeaves, filterPaneTree } from "../chatPanes.logic";
 import { SidebarSplitViewHeader } from "./chat/SidebarSplitView";
@@ -3189,15 +3193,14 @@ export default function Sidebar() {
   const finishThreadDrag = useCallback((started: boolean, cancelled: boolean) => {
     dragSensorRef.current = null;
     if (started) {
-      // A release over a pane leaves a target for the pane layout to apply
-      // (it ends the drag itself); a cancel or a release elsewhere ends it here.
       // Rows glide back into place only for a sidebar drop: a pane drop is
       // about to rebuild the split block, and gliding into that is noise.
       const paneDrag = useChatPaneDragStore.getState();
       if (paneDrag.target === null) listMotionRef.current?.release();
       else listMotionRef.current?.suspend();
       setDragState(null);
-      if (cancelled || paneDrag.target === null) paneDrag.end();
+      if (cancelled) paneDrag.end();
+      else releaseChatPaneDrag();
     }
   }, []);
   const attachDragSensor = useCallback((sensor: SidebarPointerSensor) => {

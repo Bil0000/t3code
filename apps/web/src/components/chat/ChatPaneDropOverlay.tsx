@@ -75,7 +75,7 @@ export function ChatPaneDropOverlay({
   }, [dragging, paneId, priority, resolveZone]);
 
   return (
-    <div ref={wrapperRef} className="relative flex min-h-0 flex-1 flex-col">
+    <div ref={wrapperRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
       {children}
       {dragging ? (
         <div className="pointer-events-none absolute inset-0 z-40" data-chat-pane-drop-zones>

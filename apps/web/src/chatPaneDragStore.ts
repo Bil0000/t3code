@@ -75,6 +75,17 @@ export function isChatPaneDragActive(): boolean {
   return useChatPaneDragStore.getState().content !== null;
 }
 
+/**
+ * Called by a gesture owner on release. The pane layout applies a target
+ * from its own pointerup handler in a microtask; the drag ends after that
+ * either way, so a release the layout never sees cannot strand the ghost.
+ */
+export function releaseChatPaneDrag() {
+  const drag = useChatPaneDragStore.getState();
+  if (drag.target === null) drag.end();
+  else setTimeout(drag.end);
+}
+
 /** Pointer slop before a press turns into a drag, so plain clicks still land. */
 const DRAG_DISTANCE = 6;
 
@@ -103,6 +114,8 @@ export function startChatPaneDrag(
   };
   const onMove = (move: PointerEvent) => {
     if (move.pointerId !== start.pointerId) return;
+    // A release outside the window is never delivered; the next move says so.
+    if ((move.buttons & 1) === 0) return onCancel();
     if (!started) {
       if (Math.hypot(move.clientX - start.x, move.clientY - start.y) < DRAG_DISTANCE) return;
       started = true;
@@ -116,8 +129,7 @@ export function startChatPaneDrag(
   const onUp = (up: PointerEvent) => {
     if (up.pointerId !== start.pointerId) return;
     finish();
-    const drag = useChatPaneDragStore.getState();
-    if (drag.target === null) drag.end();
+    releaseChatPaneDrag();
   };
   const onCancel = () => {
     finish();
