@@ -5,6 +5,8 @@ import * as Fiber from "effect/Fiber";
 import * as DateTime from "effect/DateTime";
 import * as Option from "effect/Option";
 import * as Layer from "effect/Layer";
+import * as FileSystem from "effect/FileSystem";
+import * as Path from "effect/Path";
 
 import { VcsRepositoryDetectionError } from "@t3tools/contracts";
 
@@ -18,6 +20,8 @@ function makeLayer(input: {
   readonly detect: VcsDriverRegistry.VcsDriverRegistry["Service"]["detect"];
 }) {
   return GitWorkflowService.layer.pipe(
+    Layer.provide(Path.layer),
+    Layer.provide(FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) })),
     Layer.provide(
       Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
         detect: input.detect,
@@ -29,7 +33,7 @@ function makeLayer(input: {
 }
 
 describe("GitWorkflowService", () => {
-  it.effect.each(["checkout", "pull"])("keeps a %s behind a write in the same worktree", (action) =>
+  it.effect.each(["checkout", "pull", "refresh"])("serializes %s with writes", (action) =>
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
@@ -53,6 +57,8 @@ describe("GitWorkflowService", () => {
       const workflow = yield* GitWorkflowService.make.pipe(
         Effect.provide(
           Layer.mergeAll(
+            Path.layer,
+            FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) }),
             Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
               resolve: ({ cwd }) =>
                 Effect.gen(function* () {
@@ -62,8 +68,14 @@ describe("GitWorkflowService", () => {
                     driver,
                     repository: {
                       kind: "git" as const,
-                      rootPath: cwd === "/other" ? "/other" : "/repo",
-                      metadataPath: null,
+                      rootPath:
+                        cwd === "/other" ? "/other" : cwd === "/pr-worktree" ? cwd : "/repo",
+                      metadataPath:
+                        cwd === "/pr-worktree"
+                          ? "/repo/.git"
+                          : cwd === "/repo/nested"
+                            ? "../.git"
+                            : ".git",
                       freshness: {
                         source: "live-local" as const,
                         observedAt,
@@ -82,16 +94,26 @@ describe("GitWorkflowService", () => {
               pullCurrentBranch: () =>
                 Effect.sync(() => {
                   events.push("pull");
-                  return { status: "pulled" as const, refName: "main", upstreamRef: "origin/main" };
+                  return {
+                    status: "pulled" as const,
+                    refName: "main",
+                    upstreamRef: "origin/main",
+                  };
                 }),
             }),
-            Layer.mock(GitManager.GitManager)({}),
+            Layer.mock(GitManager.GitManager)({
+              preparePullRequestThread: () =>
+                Effect.sync(() => {
+                  events.push("refresh");
+                  return { worktreePath: "/pr-worktree" } as never;
+                }),
+            }),
           ),
         ),
       );
       const write = yield* workflow
-        .withWorktreeLock(
-          "/repo",
+        .withRepositoryLock(
+          action === "refresh" ? "/pr-worktree" : "/repo",
           Effect.gen(function* () {
             events.push("validate");
             yield* Deferred.succeed(entered, undefined);
@@ -104,18 +126,25 @@ describe("GitWorkflowService", () => {
       const command = yield* (
         action === "checkout"
           ? workflow.switchRef({ cwd: "/repo/nested", refName: "other" })
-          : workflow.pullCurrentBranch("/repo/nested")
+          : action === "pull"
+            ? workflow.pullCurrentBranch("/repo/nested")
+            : workflow.preparePullRequestThread({
+                cwd: "/repo/nested",
+                reference: "42",
+                mode: "worktree",
+              })
       ).pipe(Effect.forkScoped);
       yield* Deferred.await(commandResolved);
-      yield* workflow.withWorktreeLock(
+      yield* Effect.yieldNow;
+      yield* workflow.withRepositoryLock(
         "/other",
-        Effect.sync(() => events.push("other worktree")),
+        Effect.sync(() => events.push("other repository")),
       );
-      assert.deepStrictEqual(events, ["validate", "other worktree"]);
+      assert.deepStrictEqual(events, ["validate", "other repository"]);
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(write);
       yield* Fiber.join(command);
-      assert.deepStrictEqual(events, ["validate", "other worktree", "write", action]);
+      assert.deepStrictEqual(events, ["validate", "other repository", "write", action]);
     }).pipe(Effect.scoped),
   );
 
@@ -182,6 +211,8 @@ describe("GitWorkflowService", () => {
     const status = vi.fn();
 
     const testLayer = GitWorkflowService.layer.pipe(
+      Layer.provide(Path.layer),
+      Layer.provide(FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) })),
       Layer.provide(
         Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
           detect: () => Effect.succeed(null),

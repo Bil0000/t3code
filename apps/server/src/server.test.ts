@@ -671,7 +671,7 @@ const buildAppUnderTest = (options?: {
             kind:
               input.requestedKind === "auto" || !input.requestedKind ? "git" : input.requestedKind,
             rootPath: input.cwd,
-            metadataPath: null,
+            metadataPath: tempBaseDir,
             freshness: {
               source: "live-local",
               observedAt: TEST_EPOCH,

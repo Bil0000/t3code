@@ -2427,7 +2427,7 @@ const makeWsRpcLayer = (
             }).pipe((effect) =>
               input.expectedBranch === undefined
                 ? effect
-                : gitWorkflow.withWorktreeLock(input.cwd, effect).pipe(
+                : gitWorkflow.withRepositoryLock(input.cwd, effect).pipe(
                     Effect.mapError((cause) =>
                       cause._tag === "ProjectWriteFileError"
                         ? cause
