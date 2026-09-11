@@ -2409,6 +2409,11 @@ const makeWsRpcLayer = (
                 }
               }
               return yield* workspaceFileSystem.writeFile(input).pipe(
+                Effect.tap(() =>
+                  input.expectedBranch !== undefined
+                    ? gitWorkflow.invalidateLocalStatus(input.cwd)
+                    : Effect.void,
+                ),
                 Effect.mapError(
                   (cause) =>
                     new ProjectWriteFileError({

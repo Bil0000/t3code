@@ -7102,6 +7102,7 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
               expectedBranch: "review",
             };
             yield* client[WS_METHODS.projectsWriteFile](input);
+            assert.isTrue(invalidated);
             for (const nextBranch of ["other", null]) {
               branch = nextBranch;
               const result = yield* client[WS_METHODS.projectsWriteFile]({
