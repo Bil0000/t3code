@@ -84,10 +84,16 @@ it.effect("reads project shells without loading threads or resolving excluded pr
     assert.strictEqual(counter.count(), 1);
     assert.deepStrictEqual(resolved.toSorted(), ["/first", "/second"]);
     resolved.length = 0;
+    yield* sql`UPDATE projection_projects SET scripts_json = 'invalid-json' WHERE project_id IN ('p1', 'p3')`;
     assert.deepStrictEqual(yield* query.getProjectShells([asProjectId("p2")]), [expected[1]!]);
     assert.deepStrictEqual(resolved, ["/second"]);
     resolved.length = 0;
-    assert.deepStrictEqual(yield* query.getProjectShells([]), []);
+    const beforeEmpty = counter.count();
+    assert.deepStrictEqual(
+      yield* query.getProjectShells([]).pipe(Effect.withTracer(counter.tracer)),
+      [],
+    );
+    assert.strictEqual(counter.count(), beforeEmpty);
     assert.deepStrictEqual(yield* query.getProjectShells([asProjectId("p3")]), []);
     assert.deepStrictEqual(resolved, []);
   }).pipe(Effect.provide(layer));
