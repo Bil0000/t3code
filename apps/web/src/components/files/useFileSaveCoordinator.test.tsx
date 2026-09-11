@@ -5,13 +5,19 @@ import { act, StrictMode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-const { writeFile, confirmFile } = vi.hoisted(() => ({
+const { writeFile, confirmFile, clearFile, optimisticFile } = vi.hoisted(() => ({
   writeFile: vi.fn(),
   confirmFile: vi.fn(),
+  clearFile: vi.fn(),
+  optimisticFile: vi.fn(),
 }));
 vi.mock("~/state/projects", () => ({ projectEnvironment: { writeFile: {} } }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => writeFile }));
-vi.mock("./projectFilesQueryState", () => ({ confirmProjectFileQueryData: confirmFile }));
+vi.mock("./projectFilesQueryState", () => ({
+  confirmProjectFileQueryData: confirmFile,
+  clearProjectFileQueryData: clearFile,
+  getOptimisticProjectFileQueryData: optimisticFile,
+}));
 
 import { setMarkdownTaskChecked } from "./filePreviewMode";
 import { useFileSaveCoordinator } from "./useFileSaveCoordinator";
@@ -55,6 +61,8 @@ beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   writeFile.mockReset().mockResolvedValue(AsyncResult.success(undefined));
   confirmFile.mockReset();
+  clearFile.mockReset();
+  optimisticFile.mockReset();
   onPendingChange.mockReset();
 });
 
@@ -65,26 +73,35 @@ afterEach(async () => {
 });
 
 describe("file-save React lifecycle", () => {
-  it("keeps the expected checkout on a save delayed past a branch switch", async () => {
-    let branch = "review";
-    const onSaveError = vi.fn();
-    const saved: string[] = [];
-    writeFile.mockImplementation(async ({ input }) => {
-      if (input.expectedBranch !== branch)
-        return AsyncResult.failure(Cause.fail(new Error("checkout changed")));
-      saved.push(input.contents);
-      return AsyncResult.success(undefined);
-    });
-    mount({ ...defaultProps, expectedBranch: branch, onSaveError });
-    changeHandler()("pending edit");
-    branch = "other";
-    await vi.advanceTimersByTimeAsync(500);
-    expect(writeFile.mock.calls[0]![0].input.expectedBranch).toBe("review");
-    expect(saved).toEqual([]);
-    expect(confirmFile).not.toHaveBeenCalled();
-    expect(onPendingChange).toHaveBeenLastCalledWith("file.txt", true);
-    expect(onSaveError).toHaveBeenCalledWith("checkout changed");
-  });
+  it.each(["pending edit", "newer edit"])(
+    "rejects a delayed save with cached %s after a branch switch",
+    async (cached) => {
+      let branch = "review";
+      const onSaveError = vi.fn();
+      const saved: string[] = [];
+      let cachedContents: string | null = cached;
+      optimisticFile.mockImplementation(() => ({ contents: cachedContents }));
+      clearFile.mockImplementation(() => {
+        cachedContents = null;
+      });
+      writeFile.mockImplementation(async ({ input }) => {
+        if (input.expectedBranch !== branch)
+          return AsyncResult.failure(Cause.fail(new Error("checkout changed")));
+        saved.push(input.contents);
+        return AsyncResult.success(undefined);
+      });
+      mount({ ...defaultProps, expectedBranch: branch, onSaveError });
+      changeHandler()("pending edit");
+      branch = "other";
+      await vi.advanceTimersByTimeAsync(500);
+      expect(writeFile.mock.calls[0]![0].input.expectedBranch).toBe("review");
+      expect(saved).toEqual([]);
+      expect(confirmFile).not.toHaveBeenCalled();
+      expect(onPendingChange).toHaveBeenLastCalledWith("file.txt", true);
+      expect(onSaveError).toHaveBeenCalledWith("checkout changed");
+      expect(cachedContents).toBe(cached === "pending edit" ? null : cached);
+    },
+  );
 
   it("persists editor model changes after StrictMode setup replay", async () => {
     mount();

@@ -6,7 +6,11 @@ import { formatEnvironmentQueryError } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
 
 import { FileSaveCoordinator } from "./fileSaveCoordinator";
-import { confirmProjectFileQueryData } from "./projectFilesQueryState";
+import {
+  clearProjectFileQueryData,
+  confirmProjectFileQueryData,
+  getOptimisticProjectFileQueryData,
+} from "./projectFilesQueryState";
 
 const FILE_SAVE_DEBOUNCE_MS = 500;
 
@@ -46,6 +50,14 @@ export function useFileSaveCoordinator({
                 ...(expectedBranch !== undefined ? { expectedBranch } : {}),
               },
             });
+            if (
+              result._tag === "Failure" &&
+              expectedBranch !== undefined &&
+              getOptimisticProjectFileQueryData(environmentId, cwd, relativePath)?.contents ===
+                nextContents
+            ) {
+              clearProjectFileQueryData(environmentId, cwd, relativePath);
+            }
             onSaveError?.(
               result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
             );
