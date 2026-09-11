@@ -45,7 +45,7 @@ function DiffFileEditor({
     setExpectedBranch(status.data?.refName ?? null);
   const isMedia = isWorkspaceImagePreviewPath(filePath) || isWorkspaceVideoPreviewPath(filePath);
   const canEdit = status.isSuccess && (!pullRequestUrl || status.data?.pr?.url === pullRequestUrl);
-  const file = useProjectFileQuery(environmentId, cwd, filePath, canEdit);
+  const file = useProjectFileQuery(environmentId, cwd, filePath, canEdit, expectedBranch);
   const refreshFile = file.refresh;
   const [pending, setPending] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);

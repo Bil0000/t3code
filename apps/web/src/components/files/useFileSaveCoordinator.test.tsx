@@ -134,6 +134,7 @@ describe("file-save React lifecycle", () => {
       "/workspace",
       "file.txt",
       "AUDIT7907NATIVE\n",
+      undefined,
     );
     expect(onPendingChange).toHaveBeenLastCalledWith("file.txt", false);
   });

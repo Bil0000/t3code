@@ -22,8 +22,18 @@ const EMPTY_PROJECT_FILE_PATH = "";
 const EMPTY_PROJECT_FILE_QUERY_ATOM = Atom.make(
   AsyncResult.initial<ProjectReadFileResult, never>(false),
 ).pipe(Atom.withLabel("project-file-query:empty"));
-function optimisticFileAtom(environmentId: EnvironmentId, cwd: string, relativePath: string) {
-  return projectEnvironment.optimisticFile({ environmentId, cwd, relativePath });
+function optimisticFileAtom(
+  environmentId: EnvironmentId,
+  cwd: string,
+  relativePath: string,
+  expectedBranch?: string | null,
+) {
+  return projectEnvironment.optimisticFile({
+    environmentId,
+    cwd,
+    relativePath,
+    ...(expectedBranch !== undefined ? { expectedBranch } : {}),
+  });
 }
 
 interface ProjectQueryState<A> {
@@ -53,8 +63,9 @@ export function setProjectFileQueryData(
   cwd: string,
   relativePath: string,
   contents: string,
+  expectedBranch?: string | null,
 ): void {
-  appAtomRegistry.set(optimisticFileAtom(environmentId, cwd, relativePath), {
+  appAtomRegistry.set(optimisticFileAtom(environmentId, cwd, relativePath, expectedBranch), {
     confirmedAgainst: undefined,
     data: {
       relativePath,
@@ -69,8 +80,12 @@ export function getOptimisticProjectFileQueryData(
   environmentId: EnvironmentId,
   cwd: string,
   relativePath: string,
+  expectedBranch?: string | null,
 ): ProjectReadFileResult | null {
-  return appAtomRegistry.get(optimisticFileAtom(environmentId, cwd, relativePath))?.data ?? null;
+  return (
+    appAtomRegistry.get(optimisticFileAtom(environmentId, cwd, relativePath, expectedBranch))
+      ?.data ?? null
+  );
 }
 
 export function confirmProjectFileQueryData(
@@ -78,8 +93,9 @@ export function confirmProjectFileQueryData(
   cwd: string,
   relativePath: string,
   contents: string,
+  expectedBranch?: string | null,
 ): boolean {
-  const atom = optimisticFileAtom(environmentId, cwd, relativePath);
+  const atom = optimisticFileAtom(environmentId, cwd, relativePath, expectedBranch);
   const optimisticFile = appAtomRegistry.get(atom);
   if (optimisticFile?.data.contents !== contents) return false;
 
@@ -106,17 +122,22 @@ export function resolveProjectFileQueryData(
   cwd: string,
   relativePath: string | null,
   data: ProjectReadFileResult | null,
+  expectedBranch?: string | null,
 ): ProjectReadFileResult | null {
   if (relativePath === null) return data;
-  return appAtomRegistry.get(optimisticFileAtom(environmentId, cwd, relativePath))?.data ?? data;
+  return (
+    appAtomRegistry.get(optimisticFileAtom(environmentId, cwd, relativePath, expectedBranch))
+      ?.data ?? data
+  );
 }
 
 export function clearProjectFileQueryData(
   environmentId: EnvironmentId,
   cwd: string,
   relativePath: string,
+  expectedBranch?: string | null,
 ): void {
-  appAtomRegistry.set(optimisticFileAtom(environmentId, cwd, relativePath), null);
+  appAtomRegistry.set(optimisticFileAtom(environmentId, cwd, relativePath, expectedBranch), null);
 }
 
 function errorMessage<A>(result: AsyncResult.AsyncResult<A, unknown>): string | null {
@@ -181,6 +202,7 @@ export function useProjectFileQuery(
   cwd: string,
   relativePath: string | null,
   enabled = true,
+  expectedBranch?: string | null,
 ): ProjectQueryState<ProjectReadFileResult> {
   const isMedia =
     relativePath !== null &&
@@ -194,7 +216,7 @@ export function useProjectFileQuery(
   const refresh = useCallback(() => refreshAtom(), [refreshAtom]);
   const data = Option.getOrNull(AsyncResult.value(result));
   const optimisticResult = useAtomValue(
-    optimisticFileAtom(environmentId, cwd, relativePath ?? EMPTY_PROJECT_FILE_PATH),
+    optimisticFileAtom(environmentId, cwd, relativePath ?? EMPTY_PROJECT_FILE_PATH, expectedBranch),
   );
   const optimisticFile = relativePath === null ? null : optimisticResult;
 

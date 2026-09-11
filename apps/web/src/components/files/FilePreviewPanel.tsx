@@ -655,7 +655,7 @@ export function EditableFileSurface({
         persistState: true,
         persistStateStorage: "inMemory",
         onChange: (file, nextLineAnnotations) => {
-          setProjectFileQueryData(environmentId, cwd, relativePath, file.contents);
+          setProjectFileQueryData(environmentId, cwd, relativePath, file.contents, expectedBranch);
           saveCoordinator.change(file.contents);
           if (nextLineAnnotations) {
             const remapped = remapFileCommentAnnotations(
@@ -681,7 +681,15 @@ export function EditableFileSurface({
           }
         },
       }),
-    [addReviewComment, composerDraftTarget, cwd, environmentId, relativePath, saveCoordinator],
+    [
+      addReviewComment,
+      composerDraftTarget,
+      cwd,
+      environmentId,
+      expectedBranch,
+      relativePath,
+      saveCoordinator,
+    ],
   );
 
   useEffect(

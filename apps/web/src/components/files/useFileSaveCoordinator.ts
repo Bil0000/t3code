@@ -44,7 +44,12 @@ export function useFileSaveCoordinator({
           debounceMs: FILE_SAVE_DEBOUNCE_MS,
           onPendingChange: (pending) => onPendingChange(relativePath, pending),
           persist: async (nextContents) => {
-            const draft = getOptimisticProjectFileQueryData(environmentId, cwd, relativePath);
+            const draft = getOptimisticProjectFileQueryData(
+              environmentId,
+              cwd,
+              relativePath,
+              expectedBranch,
+            );
             const result = await writeFile({
               environmentId,
               input: {
@@ -60,9 +65,14 @@ export function useFileSaveCoordinator({
               error.failure === "checkout_changed" &&
               expectedBranch !== undefined &&
               draft?.contents === nextContents &&
-              getOptimisticProjectFileQueryData(environmentId, cwd, relativePath) === draft
+              getOptimisticProjectFileQueryData(
+                environmentId,
+                cwd,
+                relativePath,
+                expectedBranch,
+              ) === draft
             ) {
-              clearProjectFileQueryData(environmentId, cwd, relativePath);
+              clearProjectFileQueryData(environmentId, cwd, relativePath, expectedBranch);
             }
             onSaveError?.(
               result._tag === "Failure" ? formatEnvironmentQueryError(result.cause) : null,
@@ -70,7 +80,13 @@ export function useFileSaveCoordinator({
             return result;
           },
           onConfirmed: (confirmedContents) => {
-            confirmProjectFileQueryData(environmentId, cwd, relativePath, confirmedContents);
+            confirmProjectFileQueryData(
+              environmentId,
+              cwd,
+              relativePath,
+              confirmedContents,
+              expectedBranch,
+            );
           },
         });
         coordinatorRef.current = coordinator;

@@ -33,10 +33,16 @@ export interface OptimisticProjectFileTarget {
   readonly environmentId: EnvironmentId;
   readonly cwd: string;
   readonly relativePath: string;
+  readonly expectedBranch?: string | null;
 }
 
 function optimisticProjectFileKey(target: OptimisticProjectFileTarget): string {
-  return JSON.stringify([target.environmentId, target.cwd, target.relativePath]);
+  return JSON.stringify([
+    target.environmentId,
+    target.cwd,
+    target.relativePath,
+    ...(target.expectedBranch === undefined ? [] : [target.expectedBranch]),
+  ]);
 }
 
 export function createProjectEnvironmentAtoms<R, E>(
