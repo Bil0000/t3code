@@ -1,4 +1,5 @@
 import type { EnvironmentId } from "@t3tools/contracts";
+import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import {
   isWorkspaceImagePreviewPath,
   isWorkspaceVideoPreviewPath,
@@ -8,11 +9,12 @@ import { lazy, Suspense, useCallback, useEffect, useState } from "react";
 
 import { useClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
+import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { useEnvironmentQuery } from "~/state/query";
 import { vcsEnvironment } from "~/state/vcs";
 
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
-import { useProjectFileQuery } from "../files/projectFilesQueryState";
+import { getProjectFileQueryAtom, useProjectFileQuery } from "../files/projectFilesQueryState";
 import { Button } from "../ui/button";
 import { Dialog, DialogDescription, DialogPopup, DialogTitle, DialogTrigger } from "../ui/dialog";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -47,6 +49,7 @@ function DiffFileEditor({
   const canEdit = status.isSuccess && (!pullRequestUrl || status.data?.pr?.url === pullRequestUrl);
   const file = useProjectFileQuery(environmentId, cwd, filePath, canEdit, expectedBranch);
   const refreshFile = file.refresh;
+  const [fileReady, setFileReady] = useState(false);
   const [pending, setPending] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const onPendingChange = useCallback(
@@ -57,8 +60,18 @@ function DiffFileEditor({
     [onSaved],
   );
   useEffect(() => {
-    if (canEdit) refreshFile();
-  }, [canEdit, refreshFile]);
+    if (!canEdit || isMedia) return;
+    const controller = new AbortController();
+    refreshFile();
+    void executeAtomQuery(appAtomRegistry, getProjectFileQueryAtom(environmentId, cwd, filePath), {
+      signal: controller.signal,
+      reportDefect: false,
+      reportFailure: false,
+    }).then(() => {
+      if (!controller.signal.aborted) setFileReady(true);
+    });
+    return () => controller.abort();
+  }, [canEdit, cwd, environmentId, filePath, isMedia, refreshFile]);
 
   const message = isMedia
     ? "This file cannot be edited as text."
@@ -69,13 +82,15 @@ function DiffFileEditor({
           (pullRequestUrl
             ? "Check out this pull request to edit its files."
             : "Working copy is unavailable."))
-      : file.error
-        ? file.error
-        : file.data?.truncated
-          ? "This file is too large to edit here."
-          : file.data === null
-            ? "Loading file..."
-            : null;
+      : !fileReady
+        ? "Loading file..."
+        : file.error
+          ? file.error
+          : file.data?.truncated
+            ? "This file is too large to edit here."
+            : file.data === null
+              ? "Loading file..."
+              : null;
 
   return (
     <>

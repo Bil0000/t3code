@@ -3,7 +3,7 @@ import { act, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
-const { status, file, refresh } = vi.hoisted(() => ({
+const { status, file, refresh, readFile } = vi.hoisted(() => ({
   status: {
     data: { refName: "review", pr: { url: "https://github.com/example/repo/pull/1" } },
     isSuccess: true,
@@ -12,12 +12,16 @@ const { status, file, refresh } = vi.hoisted(() => ({
   },
   file: { data: { contents: "complete file", truncated: false }, error: null as string | null },
   refresh: vi.fn(),
+  readFile: vi.fn(),
 }));
+vi.mock("@t3tools/client-runtime/state/runtime", () => ({ executeAtomQuery: readFile }));
+vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: {} }));
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("~/hooks/useSettings", () => ({ useClientSettings: () => false }));
 vi.mock("~/state/query", () => ({ useEnvironmentQuery: () => status }));
 vi.mock("~/state/vcs", () => ({ vcsEnvironment: { status: () => null } }));
 vi.mock("../files/projectFilesQueryState", () => ({
+  getProjectFileQueryAtom: () => null,
   useProjectFileQuery: () => ({ ...file, refresh }),
 }));
 vi.mock("../DiffWorkerPoolProvider", () => ({
@@ -51,8 +55,10 @@ beforeEach(() => {
   status.isSuccess = true;
   status.error = null;
   file.data.truncated = false;
+  file.data.contents = "complete file";
   file.error = null;
   refresh.mockClear();
+  readFile.mockReset().mockResolvedValue(undefined);
 });
 
 afterEach(async () => {
@@ -78,6 +84,18 @@ it("opens the working file for the checked-out pull request", async () => {
   await open(pullRequestUrl);
   expect(renderer.root.findAllByType("textarea")).toHaveLength(1);
   expect(refresh).toHaveBeenCalledOnce();
+});
+
+it("waits for the new checkout read before showing cached file contents", async () => {
+  let finishRead!: () => void;
+  readFile.mockImplementationOnce(() => new Promise<void>((resolve) => (finishRead = resolve)));
+  file.data.contents = "cached branch A";
+  await open();
+  expect(renderer.root.findAllByType("textarea")).toHaveLength(0);
+  expect(renderer.root.findByType("p").children.join("")).toBe("Loading file...");
+  file.data.contents = "fresh branch B";
+  await act(async () => finishRead());
+  expect(renderer.root.findByType("textarea").props.defaultValue).toBe("fresh branch B");
 });
 
 it("does not open media files in the text editor", async () => {
