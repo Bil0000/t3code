@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
 const state = vi.hoisted(() => ({
   multiple: true,
+  exists: true,
   openLinked: vi.fn(),
   cursor: null as string | null,
   olderText: "",
@@ -33,11 +34,14 @@ const url = (number: number) => "https://github.com/acme/web/pull/" + number;
 vi.mock("~/state/entities", () => ({
   useProjects: () => projects,
   useProject: () => project,
-  useThreadShell: () => ({
-    projectId: project.id,
-    branchPullRequest: { url: url(1) },
-    pullRequests: state.links,
-  }),
+  useThreadShell: () =>
+    state.exists
+      ? {
+          projectId: project.id,
+          branchPullRequest: { url: url(1) },
+          pullRequests: state.links,
+        }
+      : null,
   useServerConfigs: () =>
     new Map([
       [
@@ -156,6 +160,7 @@ async function click(label: string) {
 }
 beforeEach(() => {
   state.multiple = true;
+  state.exists = true;
   state.openLinked.mockClear();
   state.links = [];
   state.cursor = null;
@@ -250,6 +255,14 @@ it("adds a PR by project number without replacing an existing link", async () =>
 
 it("keeps the existing PR badge without the removed shortcut on older servers", async () => {
   state.multiple = false;
+  await render();
+  expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([url(1)]);
+  expect(renderer.root.findAllByProps({ "aria-label": "Link PRs" })).toHaveLength(0);
+  expect(state.dispatch).not.toHaveBeenCalled();
+});
+
+it("keeps the PR link but hides link actions until the draft thread exists", async () => {
+  state.exists = false;
   await render();
   expect(renderer.root.findAllByType("a").map((link) => link.props.href)).toEqual([url(1)]);
   expect(renderer.root.findAllByProps({ "aria-label": "Link PRs" })).toHaveLength(0);

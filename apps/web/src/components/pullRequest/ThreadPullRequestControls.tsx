@@ -67,6 +67,7 @@ function ThreadPullRequestLinkMenu({
   const unlinkedCount = suggestions.filter(
     (suggestion) => !linking.isLinked(thread, suggestion.url),
   ).length;
+  if (thread === null) return <ThreadPullRequestBadgeControl {...badgeProps} />;
   return (
     <Menu open={open} onOpenChange={setOpen}>
       <ThreadPullRequestBadgeControl
