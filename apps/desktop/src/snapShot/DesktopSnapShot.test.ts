@@ -2780,6 +2780,43 @@ it("keeps a truncated element tree when the flat text read fails", async () => {
   );
 });
 
+it("keeps a truncated tree when flat text would not recover any text", async () => {
+  const bounds = { x: 0, y: 0, width: 800, height: 600 };
+  accessibilityByPidMock.mockReset().mockResolvedValue({
+    children: async () => [
+      {
+        role: "window",
+        name: "Editor",
+        bounds,
+        tree: async () => ({ name: "Editor", children: [{ name: "Help", children: [] }] }),
+        children: async () => [
+          {
+            role: "button",
+            name: "Help",
+            description: "Help text ".repeat(250),
+            bounds,
+            children: async () => [],
+          },
+        ],
+      },
+    ],
+  });
+
+  const result = await readAccessibleWindowContext(
+    { title: "Editor", bounds, owner: { processId: 123 } },
+    "darwin",
+    "Editor",
+  );
+  assert.equal(result?.accessibility?.format, "element-tree");
+  assert.isTrue(result?.accessibility?.truncated);
+  assert.include(
+    result?.accessibility?.format === "element-tree"
+      ? result.accessibility.root.children[0]?.description
+      : undefined,
+    "Help text",
+  );
+});
+
 it("times out after three seconds without overlapping the outstanding accessibility read", async () => {
   vi.useFakeTimers();
   accessibilityByPidMock.mockReset();
