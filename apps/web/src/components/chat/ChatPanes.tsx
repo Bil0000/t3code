@@ -1,4 +1,4 @@
-import { scopedThreadKey } from "@t3tools/client-runtime/environment";
+import { scopedThreadKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
 import type { ScopedThreadRef } from "@t3tools/contracts";
 import { useNavigate } from "@tanstack/react-router";
 import { GripVerticalIcon, XIcon } from "lucide-react";
@@ -27,7 +27,8 @@ import { AddSurfaceMenu, surfaceTitle, type AddSurfaceProps } from "~/components
 import { Button } from "~/components/ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "~/components/ui/tooltip";
 import { cn } from "~/lib/utils";
-import { useThreadDetail, useThreadShell, useThreadStatus } from "~/state/entities";
+import { useProject, useThreadDetail, useThreadShell, useThreadStatus } from "~/state/entities";
+import { useEnvironment } from "~/state/environments";
 import { buildThreadRouteParams } from "~/threadRoutes";
 import { resolveThreadSyncPhase } from "~/threadSync";
 import { ChatPaneDropOverlay } from "./ChatPaneDropOverlay";
@@ -162,6 +163,11 @@ const PaneLeaf = memo(function PaneLeaf({
 
   const threadTitle = shell?.title ?? "Thread";
   const title = leaf.surface ? `${surfaceTitle(leaf.surface)} · ${threadTitle}` : threadTitle;
+  const project = useProject(
+    shell ? scopeProjectRef(threadRef.environmentId, shell.projectId) : null,
+  );
+  const environment = useEnvironment(threadRef.environmentId);
+  const origin = [project?.title, environment?.label].filter(Boolean).join(" · ");
   // Picks the pane header up after a short move; a plain click leaves it alone.
   const cancelHeaderDrag = useRef<(() => void) | null>(null);
   useEffect(() => () => cancelHeaderDrag.current?.(), [leaf.id]);
@@ -206,8 +212,11 @@ const PaneLeaf = memo(function PaneLeaf({
           onPointerDown={headerDrag}
         >
           <GripVerticalIcon aria-hidden className="size-3.5 shrink-0 text-muted-foreground/60" />
-          <span className="min-w-0 flex-1 cursor-grab truncate font-medium select-none active:cursor-grabbing">
-            {title}
+          <span className="flex min-w-0 flex-1 cursor-grab items-baseline gap-1.5 select-none active:cursor-grabbing">
+            <span className="min-w-0 shrink-0 truncate font-medium">{title}</span>
+            {origin ? (
+              <span className="min-w-0 truncate text-muted-foreground/70">{origin}</span>
+            ) : null}
           </span>
           {addSurfaceProps ? (
             <AddSurfaceMenu
