@@ -2947,6 +2947,26 @@ pending_approval_requests AS (
         ),
       );
 
+  const getProjectShells: ProjectionSnapshotQueryShape["getProjectShells"] = (projectIds) =>
+    listProjectRows(undefined).pipe(
+      Effect.mapError(
+        toPersistenceSqlOrDecodeError(
+          "ProjectionSnapshotQuery.getProjectShells:query",
+          "ProjectionSnapshotQuery.getProjectShells:decodeRows",
+        ),
+      ),
+      Effect.flatMap((rows) => {
+        const projects = rows.filter(
+          (row) => row.deletedAt === null && (projectIds?.includes(row.projectId) ?? true),
+        );
+        return resolveRepositoryIdentitiesForProjects(projects).pipe(
+          Effect.map((identities) =>
+            projects.map((row) => mapProjectShellRow(row, identities.get(row.projectId) ?? null)),
+          ),
+        );
+      }),
+    );
+
   const getProjectShellById: ProjectionSnapshotQueryShape["getProjectShellById"] = (projectId) =>
     getActiveProjectRowById({ projectId }).pipe(
       Effect.mapError(
@@ -3659,6 +3679,7 @@ pending_approval_requests AS (
     getEventReplayStats,
     getActiveProjectByWorkspaceRoot,
     getProjectShellById,
+    getProjectShells,
     getFirstActiveThreadIdByProjectId,
     getImportedAgentSessionSources,
     getThreadCheckpointContext,
