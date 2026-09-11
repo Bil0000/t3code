@@ -1918,7 +1918,7 @@ function PullRequestsRouteView() {
     if (!rightPanelAvailable) return;
     event.preventDefault();
     event.stopPropagation();
-    toggleRightPanel();
+    if (!event.repeat) toggleRightPanel();
   });
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
