@@ -108,14 +108,8 @@ export function DiffFileTree({
     paths: [],
     search: false,
     unsafeCSS: `${PIERRE_TREE_UNSAFE_CSS}
-      [data-file-tree-virtualized-list='true'],
-      [data-file-tree-virtualized-sticky='true'] {
-        width: max-content;
-        min-width: 100%;
-      }
-      [data-item-section='content'] {
-        flex-shrink: 0;
-        max-width: none;
+      [data-file-tree-virtualized-scroll='true'] {
+        overflow-x: hidden;
       }
     `,
   });
@@ -174,7 +168,7 @@ export function DiffFileTree({
     <div
       ref={containerRef}
       className={cn(
-        "relative flex min-h-0 min-w-40 max-w-[60%] shrink-0 flex-col border-l border-border/60 bg-background",
+        "relative flex min-h-0 min-w-40 max-w-[60%] shrink-0 flex-col border-l border-border/60 bg-background pb-3",
         className,
       )}
       style={{ width }}

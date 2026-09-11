@@ -1209,6 +1209,7 @@ function PullRequestCodeTab({
               render={
                 <Toggle
                   aria-label={fileTreeOpen ? "Hide file tree" : "Show file tree"}
+                  className="data-pressed:border-primary/40 data-pressed:bg-primary/15 data-pressed:text-primary"
                   variant="ghost"
                   size="sm"
                   pressed={fileTreeOpen}
