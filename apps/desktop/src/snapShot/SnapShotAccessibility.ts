@@ -63,19 +63,19 @@ function accessibilityReadSnapshot(
       ? accessibleWindowText(richTree.root, SNAP_SHOT_ACCESSIBLE_TEXT_MAX_CHARS)
       : undefined);
   const accessibility: SnapShotAccessibility | undefined =
-    progress.richComplete && richTree
+    progress.richComplete && richTree && !progress.richTruncated && !richTree.truncated
       ? {
           format: "element-tree",
           coordinateSpace: "captured-image",
           imageSize,
-          truncated: progress.richTruncated || richTree.truncated,
+          truncated: false,
           root: richTree.root,
         }
-      : progress.flatComplete && accessibleText
+      : progress.flatComplete && progress.accessibleText
         ? {
             format: "flat-text",
-            text: accessibleText,
-            truncated: accessibleText.length >= SNAP_SHOT_ACCESSIBLE_TEXT_MAX_CHARS,
+            text: progress.accessibleText,
+            truncated: progress.accessibleText.length >= SNAP_SHOT_ACCESSIBLE_TEXT_MAX_CHARS,
           }
         : richTree
           ? {
