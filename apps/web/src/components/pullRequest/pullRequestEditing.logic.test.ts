@@ -1,6 +1,4 @@
 import {
-  EnvironmentId,
-  ProjectId,
   type PullRequestActor,
   type PullRequestCapabilities,
   type PullRequestComment,
@@ -12,31 +10,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   canEditPullRequestChangeRequest,
   canEditPullRequestComment,
-  resolvePullRequestEditCwd,
 } from "./pullRequestEditing.logic";
-
-it("edits PR files only under a known repository or matching worktree root", () => {
-  const reference = { environmentId: EnvironmentId.make("env"), projectId: ProjectId.make("web") };
-  const thread = { ...reference, worktreePath: "/review" };
-  expect(resolvePullRequestEditCwd(reference, "/repo", null)).toBe("/repo");
-  expect(resolvePullRequestEditCwd(reference, undefined, null)).toBeNull();
-  expect(resolvePullRequestEditCwd(reference, "/repo", thread)).toBe("/review");
-  expect(resolvePullRequestEditCwd(reference, "/repo", { ...thread, worktreePath: null })).toBe(
-    "/repo",
-  );
-  expect(
-    resolvePullRequestEditCwd(reference, "/repo", {
-      ...thread,
-      projectId: ProjectId.make("other"),
-    }),
-  ).toBe("/repo");
-  expect(
-    resolvePullRequestEditCwd(reference, undefined, {
-      ...thread,
-      environmentId: EnvironmentId.make("other"),
-    }),
-  ).toBeNull();
-});
 
 type Subject = Pick<PullRequestDetail, "author" | "capabilities" | "viewer" | "viewerPermissions">;
 

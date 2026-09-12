@@ -20,6 +20,7 @@ import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   readReviewDraft,
   reviewEditKey,
+  reviewPublishKey,
   useReviewEdits,
   type ReviewEditTarget,
 } from "./ReviewEdits";
@@ -48,8 +49,7 @@ export function EditableDiffCodeView<LAnnotation>({
 }) {
   const edits = useReviewEdits();
   const [prepared, setPrepared] = useState<ReadonlyMap<string, PreparedFile>>(new Map());
-  const [loading, setLoading] = useState<string | null>(null);
-  const pending = useRef<string | null>(null);
+  const preparing = useRef(new Map<string, Promise<void>>());
   const mounted = useRef(true);
   const focusRequest = useRef<{ key: string; line: number; character: number } | null>(null);
   useEffect(() => {
@@ -71,9 +71,17 @@ export function EditableDiffCodeView<LAnnotation>({
           item.version !== file.version
         )
           return item;
-        return { ...item, fileDiff: file.fileDiff, edit: true, version: (item.version ?? 0) + 1 };
+        const publishing =
+          target.pullRequestUrl &&
+          edits.publishing.has(reviewPublishKey(target.environmentId, target.pullRequestUrl));
+        return {
+          ...item,
+          fileDiff: file.fileDiff,
+          edit: !publishing,
+          version: (item.version ?? 0) + 1,
+        };
       }),
-    [editing, edits?.drafts, items, prepared],
+    [editing, edits, items, prepared],
   );
   const focus = edits?.focus;
   const createEditor = useCallback(
@@ -102,6 +110,61 @@ export function EditableDiffCodeView<LAnnotation>({
     [editing, focus],
   );
 
+  const prepare = (item: CodeViewItem<LAnnotation>, source?: FileDiffMetadata) => {
+    if (item.type !== "diff" || !editing || !edits || item.fileDiff.type === "deleted") return;
+    const filePath = resolveFileDiffPath(item.fileDiff);
+    const target = editing(filePath);
+    if (
+      !target ||
+      isWorkspaceAudioPreviewPath(filePath) ||
+      isWorkspaceImagePreviewPath(filePath) ||
+      isWorkspaceVideoPreviewPath(filePath)
+    )
+      return;
+    const key = reviewEditKey(target);
+    const cached = prepared.get(item.id);
+    if (cached?.key === key && cached.version === item.version) return;
+    const requestKey = JSON.stringify([key, item.id, item.version]);
+    const pending = preparing.current.get(requestKey);
+    if (pending) return pending;
+    const promise = (async () => {
+      const diff = source ?? item.fileDiff;
+      let fileDiff =
+        diff.isPartial && options?.loadDiffFiles
+          ? hydratePartialDiff("clone", diff, await options.loadDiffFiles(diff))
+          : cloneFileDiffMetadata(diff);
+      if (fileDiff.isPartial) throw new Error("The full file must be available before editing.");
+      const fresh = await readReviewDraft(
+        target,
+        target.pullRequestUrl ? fileDiff.additionLines.join("") : undefined,
+      );
+      if (!mounted.current) return;
+      const draft = edits.begin(fresh);
+      if (fileDiff.additionLines.join("") !== draft.contents) {
+        fileDiff = parseDiffFromFile(
+          fileDiff.type === "new"
+            ? null
+            : {
+                name: fileDiff.prevName ?? fileDiff.name,
+                contents: fileDiff.deletionLines.join(""),
+              },
+          { name: fileDiff.name, contents: draft.contents },
+        );
+        focusRequest.current = null;
+      }
+      setPrepared((previous) =>
+        new Map(previous).set(item.id, {
+          key,
+          fileDiff,
+          pullRequestUrl: target.pullRequestUrl,
+          version: item.version,
+        }),
+      );
+    })().finally(() => preparing.current.delete(requestKey));
+    preparing.current.set(requestKey, promise);
+    return promise;
+  };
+
   return (
     <StyledDiffCodeView<LAnnotation>
       {...props}
@@ -114,6 +177,10 @@ export function EditableDiffCodeView<LAnnotation>({
       }}
       options={{
         ...options,
+        onPostRender: (_node, _instance, _phase, context) => {
+          if (context.type !== "diff" || context.item.edit || edits?.publishing.size) return;
+          void prepare(context.item, context.instance.fileDiff)?.catch(() => {});
+        },
         onLineClick: (line, context) => {
           if (
             !edits ||
@@ -123,8 +190,7 @@ export function EditableDiffCodeView<LAnnotation>({
             line.numberColumn ||
             line.annotationSide === "deletions" ||
             context.item.fileDiff.type === "deleted" ||
-            context.item.edit ||
-            pending.current
+            context.item.edit
           )
             return;
           const event = line.event;
@@ -153,59 +219,13 @@ export function EditableDiffCodeView<LAnnotation>({
             character = range.toString().length;
           }
           focusRequest.current = { key, line: line.lineNumber - 1, character };
-          pending.current = context.item.id;
-          setLoading(context.item.id);
-          void (async () => {
-            try {
-              const current = edits.drafts.get(key);
-              const fresh = await readReviewDraft(target);
-              const draft = current && current.contents !== current.savedContents ? current : fresh;
-              const source = context.instance.fileDiff ?? context.item.fileDiff;
-              let fileDiff =
-                source.isPartial && options?.loadDiffFiles
-                  ? hydratePartialDiff("clone", source, await options.loadDiffFiles(source))
-                  : cloneFileDiffMetadata(source);
-              if (fileDiff.isPartial)
-                throw new Error("The full file must be available before editing.");
-              if (fileDiff.additionLines.join("") !== draft.contents) {
-                fileDiff = parseDiffFromFile(
-                  fileDiff.type === "new"
-                    ? null
-                    : {
-                        name: fileDiff.prevName ?? fileDiff.name,
-                        contents: fileDiff.deletionLines.join(""),
-                      },
-                  { name: fileDiff.name, contents: draft.contents },
-                );
-                focusRequest.current = null;
-                toastManager.add({
-                  type: "info",
-                  title: "Working copy updated",
-                  description: "The latest file is shown. Click a line to continue editing.",
-                });
-              }
-              if (!mounted.current) return;
-              edits.begin(draft);
-              setPrepared((previous) =>
-                new Map(previous).set(context.item.id, {
-                  key,
-                  fileDiff,
-                  pullRequestUrl: target.pullRequestUrl,
-                  version: context.item.version,
-                }),
-              );
-            } catch (cause) {
-              toastManager.add({
-                type: "error",
-                title: "Cannot edit this file",
-                description:
-                  cause instanceof Error ? cause.message : "The working file could not be loaded.",
-              });
-            } finally {
-              pending.current = null;
-              if (mounted.current) setLoading(null);
-            }
-          })();
+          void prepare(context.item, context.instance.fileDiff)?.catch((cause) => {
+            toastManager.add({
+              type: "error",
+              title: "Cannot edit this file",
+              description: cause instanceof Error ? cause.message : "The file could not be loaded.",
+            });
+          });
         },
       }}
       renderHeaderFilenameSuffix={(item) => {
@@ -226,11 +246,6 @@ export function EditableDiffCodeView<LAnnotation>({
                 />
                 <TooltipPopup>Unsaved changes · Cmd/Ctrl+S to save</TooltipPopup>
               </Tooltip>
-            )}
-            {loading === item.id && (
-              <span role="status" className="text-xs text-muted-foreground">
-                Loading editor...
-              </span>
             )}
           </>
         );

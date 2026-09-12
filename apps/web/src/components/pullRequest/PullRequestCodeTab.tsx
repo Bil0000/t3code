@@ -9,7 +9,6 @@ import type {
   PullRequestReviewPosition,
   PullRequestReviewThread,
   PullRequestThreadCommentsResult,
-  ScopedThreadRef,
 } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
@@ -32,10 +31,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
 import { useTheme } from "~/hooks/useTheme";
-import { useProject, useThreadShell } from "~/state/entities";
 import { areAllDiffFilesCollapsed } from "~/lib/diffCollapse";
 import { pullRequestFindingKey, type PullRequestFinding } from "./pullRequestDetail.logic";
-import { canEditPullRequestComment, resolvePullRequestEditCwd } from "./pullRequestEditing.logic";
+import { canEditPullRequestComment } from "./pullRequestEditing.logic";
 import { orderDiffFiles } from "./pullRequestFileOrder.logic";
 import {
   buildFileDiffRenderKey,
@@ -58,7 +56,6 @@ import {
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
-import { vcsEnvironment } from "~/state/vcs";
 
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
@@ -194,7 +191,6 @@ function PullRequestCodeTab({
   environmentId,
   reference,
   detail,
-  threadRef = null,
   selectedCommitOid,
   onSelectedCommitChange,
   pendingFinding,
@@ -207,7 +203,6 @@ function PullRequestCodeTab({
   environmentId: EnvironmentId;
   reference: PullRequestRef;
   detail: PullRequestDetailView;
-  threadRef?: ScopedThreadRef | null;
   /** Commit whose diff is open. Null keeps the whole pull-request diff selected. */
   selectedCommitOid: string | null;
   onSelectedCommitChange: (oid: string | null) => void;
@@ -223,16 +218,6 @@ function PullRequestCodeTab({
 }) {
   const { resolvedTheme } = useTheme();
   const settings = useClientSettings();
-  const thread = useThreadShell(threadRef);
-  const project = useProject({ environmentId, projectId: detail.projectId });
-  const editCwd = resolvePullRequestEditCwd(
-    { environmentId, projectId: detail.projectId },
-    project?.repositoryIdentity?.rootPath,
-    thread,
-  );
-  const editStatus = useEnvironmentQuery(
-    editCwd ? vcsEnvironment.status({ environmentId, input: { cwd: editCwd } }) : null,
-  );
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
   // A change of any size can carry hundreds of commits, and a menu that long is a scroll rather
   // than a choice. The rest arrive ten at a time, on request.
@@ -759,16 +744,17 @@ function PullRequestCodeTab({
 
   const resolveEditTarget = useCallback<ReviewEditTargetResolver>(
     (filePath) =>
-      editCwd && editStatus.data
+      commit === null
         ? {
             environmentId,
-            cwd: editCwd,
+            projectId: detail.projectId,
+            cwd: detail.workspaceRoot,
             filePath,
-            expectedBranch: editStatus.data.refName,
+            expectedBranch: null,
             pullRequestUrl: detail.url,
           }
         : null,
-    [detail.url, editCwd, editStatus.data, environmentId],
+    [commit, detail.projectId, detail.url, detail.workspaceRoot, environmentId],
   );
 
   const renderHeaderMetadata = useCallback(

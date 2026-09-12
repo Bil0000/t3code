@@ -4,20 +4,38 @@ import { act, useEffect, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
-const { read, write, refresh, blockOptions, blocker, toast, refreshStatus, editorOptions } =
-  vi.hoisted(() => ({
-    editorOptions: vi.fn(),
-    read: vi.fn(),
-    refreshStatus: vi.fn(),
-    write: vi.fn(),
-    refresh: vi.fn(),
-    blockOptions: vi.fn(),
-    toast: vi.fn(),
-    blocker: { status: "idle", proceed: vi.fn(), reset: vi.fn() },
-  }));
+const {
+  read,
+  write,
+  refresh,
+  blockOptions,
+  blocker,
+  toast,
+  refreshStatus,
+  editorOptions,
+  prepareWorkspace,
+  publish,
+} = vi.hoisted(() => ({
+  editorOptions: vi.fn(),
+  prepareWorkspace: vi.fn(),
+  publish: vi.fn(),
+  read: vi.fn(),
+  refreshStatus: vi.fn(),
+  write: vi.fn(),
+  refresh: vi.fn(),
+  blockOptions: vi.fn(),
+  toast: vi.fn(),
+  blocker: { status: "idle", proceed: vi.fn(), reset: vi.fn() },
+}));
 vi.mock("@t3tools/client-runtime/state/runtime", () => ({ executeAtomQuery: read }));
 vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: { refresh } }));
-vi.mock("~/state/vcs", () => ({ vcsEnvironment: { refreshStatus: { run: refreshStatus } } }));
+vi.mock("~/state/vcs", () => ({
+  vcsEnvironment: { refreshStatus: { run: refreshStatus } },
+  vcsActionManager: { runStackedAction: () => ({ run: publish }) },
+}));
+vi.mock("~/state/git", () => ({
+  gitEnvironment: { preparePullRequestThread: { run: prepareWorkspace } },
+}));
 vi.mock("@pierre/diffs/editor", () => ({ Editor: editorOptions }));
 vi.mock("~/state/projects", () => ({ projectEnvironment: { writeFile: {} } }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => write }));
@@ -70,7 +88,21 @@ function Probe() {
 
 beforeEach(() => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  vi.stubGlobal("window", new EventTarget());
+  const storage = new Map<string, string>();
+  vi.stubGlobal(
+    "window",
+    Object.assign(new EventTarget(), {
+      localStorage: {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+      },
+    }),
+  );
+  prepareWorkspace.mockReset().mockResolvedValue({
+    _tag: "Success",
+    value: { worktreePath: "/review", branch: "t3-review/feature", isOnPullRequestHead: true },
+  });
+  publish.mockReset().mockResolvedValue({ _tag: "Success" });
   blocker.status = "idle";
   blocker.proceed.mockReset().mockImplementation(() => {
     blocker.status = "idle";
@@ -155,27 +187,15 @@ it.each([
   "https://github.com/example/repo/pull/1",
   "https://gitlab.com/example/repo/-/merge_requests/1",
   "https://bitbucket.org/example/repo/pull-requests/1",
-])("checks the local checkout for %s", async (url) => {
-  refreshStatus.mockResolvedValueOnce({
-    _tag: "Success",
-    value: { refName: "review", pr: { url } },
+  "https://dev.azure.com/example/repo/_git/repo/pullrequest/1",
+])("edits PR contents without reading or switching the checkout for %s", async (url) => {
+  expect(await readReviewDraft({ ...target, pullRequestUrl: url }, "PR contents")).toMatchObject({
+    contents: "PR contents",
+    savedContents: "PR contents",
   });
-  expect(await readReviewDraft({ ...target, pullRequestUrl: url })).toMatchObject({
-    expectedBranch: "review",
-  });
-});
-it("does not trust a stale PR in the live status stream", async () => {
-  refreshStatus.mockResolvedValueOnce({ _tag: "Success", value: { refName: "other", pr: null } });
-  await expect(
-    readReviewDraft({ ...target, pullRequestUrl: "https://github.com/example/repo/pull/1" }),
-  ).rejects.toThrow("Check out");
+  expect(refreshStatus).not.toHaveBeenCalled();
   expect(read).not.toHaveBeenCalled();
-});
-it("refuses a different checked-out PR", async () => {
-  await expect(
-    readReviewDraft({ ...target, pullRequestUrl: "https://github.com/example/repo/pull/2" }),
-  ).rejects.toThrow("Check out");
-  expect(read).not.toHaveBeenCalled();
+  expect(prepareWorkspace).not.toHaveBeenCalled();
 });
 it.each(["failure", "truncated"])("does not edit an incomplete read: %s", async (reason) => {
   read.mockResolvedValueOnce(
@@ -237,7 +257,9 @@ it("preserves dirty drafts when a review surface unmounts", async () => {
       </ReviewEditsProvider>,
     ),
   );
-  await act(async () => edits.begin(savedDraft));
+  await act(async () => {
+    edits.begin(savedDraft);
+  });
   expect(edits.drafts.get(key)?.contents).toBe("changed");
 });
 it("keeps unsaved drafts separate and saves to their original branches", async () => {
@@ -357,7 +379,172 @@ it.each(["pull request", "diff version", "checkout"])(
         ),
       ),
     );
-    expect(viewer().items[0].edit).toBeUndefined();
-    expect(viewer().items[0].fileDiff).toBe(fileDiff);
+    if (changed === "checkout") {
+      expect(viewer().items[0].edit).toBe(true);
+    } else {
+      expect(viewer().items[0].edit).toBeUndefined();
+      expect(viewer().items[0].fileDiff).toBe(fileDiff);
+    }
   },
 );
+
+it("prepares visible PR code before a click and retains edits across folding", async () => {
+  const fileDiff = parseDiffFromFile(
+    { name: "file.ts", contents: "old" },
+    { name: "file.ts", contents: "PR" },
+  );
+  const item = { type: "diff" as const, id: "file.ts", fileDiff, version: 1 };
+  const prTarget = { ...target, pullRequestUrl: "https://github.com/example/repo/pull/1" };
+  const view = (collapsed = false) => (
+    <ReviewEditsProvider>
+      <Probe />
+      <EditableDiffCodeView
+        items={[{ ...item, collapsed, version: collapsed ? 2 : 1 }]}
+        editing={() => prTarget}
+      />
+    </ReviewEditsProvider>
+  );
+  await act(async () => {
+    renderer = create(view());
+  });
+  await act(async () =>
+    renderer.root.findByType(StyledDiffCodeView).props.options.onPostRender(null, null, "render", {
+      type: "diff",
+      item,
+      instance: { fileDiff },
+    }),
+  );
+  expect(renderer.root.findByType(StyledDiffCodeView).props.items[0].edit).toBe(true);
+  expect(refreshStatus).not.toHaveBeenCalled();
+  expect(prepareWorkspace).not.toHaveBeenCalled();
+  await act(async () => edits.change(reviewEditKey(prTarget), "unsaved PR edit"));
+  for (const collapsed of [true, false]) {
+    await act(async () => renderer.update(view(collapsed)));
+    const viewer = renderer.root.findByType(StyledDiffCodeView).props;
+    await act(async () =>
+      viewer.options.onPostRender(null, null, "render", {
+        type: "diff",
+        item: viewer.items[0],
+        instance: { fileDiff },
+      }),
+    );
+  }
+  expect(
+    renderer.root.findByType(StyledDiffCodeView).props.items[0].fileDiff.additionLines.join(""),
+  ).toBe("unsaved PR edit");
+});
+
+it("saves PR files in one workspace, restores saved edits, and retries a failed push", async () => {
+  await mount();
+  const url = "https://github.com/example/repo/pull/1";
+  const first = { ...savedDraft, pullRequestUrl: url };
+  const second = { ...first, filePath: "other.ts" };
+  const firstKey = reviewEditKey(first);
+  const secondKey = reviewEditKey(second);
+  for (const draft of [first, second]) {
+    const draftKey = reviewEditKey(draft);
+    await act(async () => {
+      edits.begin(draft);
+      edits.change(draftKey, "PR edit");
+      edits.focus(draftKey);
+    });
+    await save();
+  }
+  expect(prepareWorkspace).toHaveBeenCalledTimes(1);
+  expect(write.mock.calls.map(([{ input }]) => input)).toEqual([
+    {
+      cwd: "/review",
+      relativePath: "file.ts",
+      contents: "PR edit",
+      expectedContents: "saved",
+      expectedBranch: "t3-review/feature",
+    },
+    {
+      cwd: "/review",
+      relativePath: "other.ts",
+      contents: "PR edit",
+      expectedContents: "saved",
+      expectedBranch: "t3-review/feature",
+    },
+  ]);
+  await act(async () => renderer.unmount());
+  await mount();
+  expect(edits.drafts.get(firstKey)?.contents).toBe("PR edit");
+  expect(edits.drafts.get(secondKey)?.pendingPush).toBe(true);
+  publish.mockResolvedValueOnce({ _tag: "Failure" });
+  await act(async () => {
+    expect(await edits.publish(target.environmentId, url)).toBe(false);
+  });
+  expect(edits.drafts.get(firstKey)?.pendingPush).toBe(true);
+  await act(async () => {
+    expect(await edits.publish(target.environmentId, url)).toBe(true);
+  });
+  expect(publish.mock.lastCall?.[1]).toMatchObject({
+    action: "commit_push",
+    expectedBranch: "t3-review/feature",
+    filePaths: ["file.ts", "other.ts"],
+  });
+  expect(edits.drafts.get(firstKey)?.pendingPush).toBe(false);
+  expect(edits.publishing.size).toBe(0);
+});
+
+it("keeps saved PR edits publishable when browser storage is full", async () => {
+  await mount();
+  const draft = { ...savedDraft, pullRequestUrl: "https://github.com/example/repo/pull/1" };
+  const draftKey = reviewEditKey(draft);
+  await act(async () => {
+    edits.begin(draft);
+    edits.change(draftKey, "edit");
+    edits.focus(draftKey);
+  });
+  window.localStorage.setItem = () => {
+    throw new Error("Quota exceeded");
+  };
+  await save();
+  expect(edits.drafts.get(draftKey)).toMatchObject({ savedContents: "edit", pendingPush: true });
+  expect(toast).toHaveBeenCalledWith(
+    expect.objectContaining({ title: "Browser storage is unavailable" }),
+  );
+  await act(async () => {
+    expect(await edits.publish(target.environmentId, draft.pullRequestUrl)).toBe(true);
+  });
+  expect(edits.drafts.get(draftKey)?.pendingPush).toBe(false);
+});
+
+it("blocks changes and duplicate publication while the writing agent runs", async () => {
+  await mount();
+  const url = "https://gitlab.com/example/repo/-/merge_requests/1";
+  const draft = {
+    ...savedDraft,
+    pullRequestUrl: url,
+    workspace: { cwd: "/review", branch: "review" },
+    pendingPush: true,
+  };
+  const draftKey = reviewEditKey(draft);
+  await act(async () => {
+    edits.begin(draft);
+  });
+  let finish!: (value: unknown) => void;
+  publish.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  let result!: Promise<boolean>;
+  await act(async () => {
+    result = edits.publish(target.environmentId, url);
+  });
+  expect(edits.publishing.size).toBe(1);
+  expect(blockOptions.mock.lastCall?.[0].enableBeforeUnload).toBe(true);
+  await act(async () => {
+    edits.change(draftKey, "must not change");
+    expect(await edits.publish(target.environmentId, url)).toBe(false);
+  });
+  expect(edits.drafts.get(draftKey)?.contents).toBe("saved");
+  await act(async () => {
+    finish({ _tag: "Success" });
+    await result;
+  });
+  expect(edits.publishing.size).toBe(0);
+});
