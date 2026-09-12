@@ -643,7 +643,7 @@ const buildAppUnderTest = (options?: {
                       ? {
                           kind: "git" as const,
                           rootPath: input.cwd,
-                          metadataPath: null,
+                          metadataPath: tempBaseDir,
                           freshness: {
                             source: "live-local" as const,
                             observedAt: TEST_EPOCH,
@@ -7936,6 +7936,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       let statusCalls = 0;
       yield* buildAppUnderTest({
         layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
           gitVcsDriver: {
             pullCurrentBranch: () => Effect.fail(gitError),
           },
@@ -8090,6 +8093,9 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
     Effect.gen(function* () {
       yield* buildAppUnderTest({
         layers: {
+          vcsDriver: {
+            isInsideWorkTree: () => Effect.succeed(true),
+          },
           gitVcsDriver: {
             pullCurrentBranch: () =>
               Effect.succeed({
