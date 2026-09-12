@@ -4,8 +4,9 @@ import { act, useEffect, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
-const { read, write, refresh, blockOptions, blocker, toast } = vi.hoisted(() => ({
+const { read, write, refresh, blockOptions, blocker, toast, refreshStatus } = vi.hoisted(() => ({
   read: vi.fn(),
+  refreshStatus: vi.fn(),
   write: vi.fn(),
   refresh: vi.fn(),
   blockOptions: vi.fn(),
@@ -22,7 +23,7 @@ vi.mock("~/state/vcs", async () => {
   const status = Atom.make(
     AsyncResult.success({ refName: "review", pr: { url: "" } }, { waiting: true }),
   );
-  return { vcsEnvironment: { status: () => status } };
+  return { vcsEnvironment: { status: () => status, refreshStatus: { run: refreshStatus } } };
 });
 vi.mock("~/state/projects", () => ({ projectEnvironment: { writeFile: {} } }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => write }));
@@ -83,6 +84,10 @@ beforeEach(() => {
   refresh.mockClear();
   toast.mockClear();
   setStatus("https://github.com/example/repo/pull/1");
+  refreshStatus.mockReset().mockResolvedValue({
+    _tag: "Success",
+    value: { refName: "review", pr: { url: "https://github.com/example/repo/pull/1" } },
+  });
   read
     .mockReset()
     .mockResolvedValue({ _tag: "Success", value: { contents: "fresh", truncated: false } });
@@ -156,10 +161,20 @@ it.each([
   "https://gitlab.com/example/repo/-/merge_requests/1",
   "https://bitbucket.org/example/repo/pull-requests/1",
 ])("checks the local checkout for %s", async (url) => {
-  setStatus(url);
+  refreshStatus.mockResolvedValueOnce({
+    _tag: "Success",
+    value: { refName: "review", pr: { url } },
+  });
   expect(await readReviewDraft({ ...target, pullRequestUrl: url })).toMatchObject({
     expectedBranch: "review",
   });
+});
+it("does not trust a stale PR in the live status stream", async () => {
+  refreshStatus.mockResolvedValueOnce({ _tag: "Success", value: { refName: "other", pr: null } });
+  await expect(
+    readReviewDraft({ ...target, pullRequestUrl: "https://github.com/example/repo/pull/1" }),
+  ).rejects.toThrow("Check out");
+  expect(read).not.toHaveBeenCalled();
 });
 it("refuses a different checked-out PR", async () => {
   await expect(

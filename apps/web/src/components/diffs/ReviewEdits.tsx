@@ -49,7 +49,7 @@ export function reviewEditKey(target: ReviewEditTarget): string {
 }
 
 export async function readReviewDraft(target: ReviewEditTarget): Promise<ReviewDraft> {
-  const status = await Effect.runPromise(
+  let status = await Effect.runPromise(
     AtomRegistry.getResult(
       appAtomRegistry,
       vcsEnvironment.status({
@@ -58,6 +58,14 @@ export async function readReviewDraft(target: ReviewEditTarget): Promise<ReviewD
       }),
     ),
   );
+  if (target.pullRequestUrl) {
+    const refreshed = await vcsEnvironment.refreshStatus.run(appAtomRegistry, {
+      environmentId: target.environmentId,
+      input: { cwd: target.cwd },
+    });
+    if (refreshed._tag === "Failure") throw new Error(formatEnvironmentQueryError(refreshed.cause));
+    status = refreshed.value;
+  }
   if (target.pullRequestUrl && status.pr?.url !== target.pullRequestUrl) {
     throw new Error("Check out this pull request to edit its files.");
   }
