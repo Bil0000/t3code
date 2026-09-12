@@ -5,6 +5,7 @@ import { scopeThreadRef } from "@t3tools/client-runtime/environment";
 import { resolveUserMessagePresentation } from "@t3tools/client-runtime/user-message";
 import { canForkProjectedAssistantItem } from "@t3tools/client-runtime/state/thread-workflows";
 import {
+  type OrchestrationMessageContext,
   ThreadId,
   type ChatAttachment,
   type ChatFileAttachment,
@@ -14,7 +15,15 @@ import {
   type OrchestrationV2ProjectedTurnItem,
   type RunId,
 } from "@t3tools/contracts";
-import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
+import { encodeComposerContextFragment } from "@t3tools/shared/composerContextClipboard";
+import {
+  parseComposerContextHref,
+  collectComposerContextReferences,
+  replaceComposerContextReferences,
+} from "@t3tools/shared/composerContextReferences";
+import { ComposerContextSheet } from "../../components/ComposerContextSheet";
+import { writeComposerContextClipboard } from "../../lib/composerContextClipboard";
 import {
   codexArtifactTemplatePresentationLabel,
   type CodexArtifactTemplate,
@@ -31,6 +40,9 @@ import {
   renderCodexFileCitationsAsMarkdown,
   splitCodexArtifactTemplateMarkdown,
 } from "@t3tools/client-runtime/codex-markdown-directives";
+import { CHAT_LIST_ANCHOR_OFFSET, resolveChatListAnchoredEndSpace } from "@t3tools/shared/chatList";
+import { imageMimeType } from "@t3tools/shared/image";
+import { videoMimeType } from "@t3tools/shared/video";
 import { SymbolView, type AppSymbolName } from "../../components/AppSymbol";
 import { HeaderHeightContext } from "@react-navigation/elements";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
@@ -72,6 +84,7 @@ import {
 } from "react-native";
 import { FilePreviewModal, type FilePreviewSource } from "../../components/FilePreviewModal";
 import { isPdfFile } from "../../lib/filePreview";
+import { flattenThemeColor } from "../../lib/mobileTheme";
 import { PresentationSource } from "../../components/NativePresentation";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import Animated, {
@@ -83,7 +96,6 @@ import Animated, {
 import { useUniwindTheme } from "../../lib/useUniwindTheme";
 import { IOS_NAV_BAR_HEIGHT } from "../../lib/layoutMetrics";
 import { useFontFamily } from "../../lib/useFontFamily";
-import { renderAssistantCitationsAsText } from "@t3tools/shared/assistantCitations";
 import { scopedThreadKey } from "../../lib/scopedEntities";
 import { copyTextWithHaptic } from "../../lib/copyTextWithHaptic";
 import { tryOpenExternalUrl } from "../../lib/openExternalUrl";
@@ -111,18 +123,13 @@ import {
   type MediaVideoPreviewSource,
 } from "../../lib/videoPreviewSource";
 import { CopyTextButton } from "../../components/CopyTextButton";
-import {
-  parseReviewCommentMessageSegments,
-  type ReviewInlineComment,
-} from "../review/reviewCommentSelection";
+import { parseReviewCommentMessageSegments } from "../review/reviewCommentSelection";
 import type { ReviewDiffTheme } from "../review/shikiReviewHighlighter";
-import { resolveNativeReviewDiffView } from "../diffs/nativeReviewDiffSurface";
 import {
-  buildNativeReviewDiffData,
-  createNativeReviewDiffTheme,
-  NATIVE_REVIEW_DIFF_CONTENT_WIDTH,
-} from "../review/nativeReviewDiffAdapter";
-import { buildReviewParsedDiff } from "../review/reviewModel";
+  ReviewCommentCard,
+  useReviewCommentColors,
+  type ReviewCommentColors,
+} from "../review/ReviewCommentCard";
 import { cn } from "../../lib/cn";
 import {
   deriveCenteredContentHorizontalPadding,
@@ -136,7 +143,6 @@ import {
   resolveNativeMarkdownTypography,
 } from "../../lib/appearancePreferences";
 import { useAppearancePreferences } from "../settings/appearance/AppearancePreferencesProvider";
-import { useAppearanceCodeSurface } from "../settings/appearance/useAppearanceCodeSurface";
 import { markdownFileIconSource } from "@t3tools/mobile-markdown-text/file-icons";
 import { PierreEntryIcon } from "../../components/PierreEntryIcon";
 import { markdownLinkIconSource } from "@t3tools/mobile-markdown-text/link-icons";
@@ -181,8 +187,9 @@ import {
 } from "../../state/assets";
 import { useAtomQueryRunner } from "../../state/use-atom-query-runner";
 import { usePreparedConnection } from "../../state/session";
+import { useThreadSelection } from "../../state/use-thread-selection";
+import { composerDocumentAttachmentRecord } from "../../lib/composerContext";
 import * as Option from "effect/Option";
-import { videoMimeType } from "@t3tools/shared/video";
 import { appAtomRegistry } from "../../state/atom-registry";
 import { environmentThreadShells, threadEnvironment } from "../../state/threads";
 import { useAtomCommand } from "../../state/use-atom-command";
@@ -387,6 +394,8 @@ function MessageAttachmentImage(props: {
     [props.attachmentId, props.name, props.mimeType],
   );
   const uri = useAssetUrl(props.environmentId, resource);
+  const refreshAssetUrl = useRefreshAssetUrl(props.environmentId, resource);
+  const retriedImage = useRef(false);
 
   if (uri === null) {
     return (
@@ -418,7 +427,19 @@ function MessageAttachmentImage(props: {
           })
         }
       >
-        <Image source={{ uri }} className={props.className} resizeMode="cover" />
+        <Image
+          source={{ uri }}
+          className={props.className}
+          resizeMode="cover"
+          onLoad={() => {
+            retriedImage.current = false;
+          }}
+          onError={() => {
+            if (retriedImage.current) return;
+            retriedImage.current = true;
+            void refreshAssetUrl();
+          }}
+        />
       </Pressable>
     </PresentationSource>
   );
@@ -428,7 +449,9 @@ function MessageAttachmentImage(props: {
 // types from newer servers), so literal comparisons do not narrow it. Split
 // with guards and render unknown types as inert rows, never crash.
 function isImageAttachment(attachment: ChatAttachment): attachment is ChatImageAttachment {
-  return attachment.type === "image";
+  // Messages sent before pictures were typed by content carry `file`; they are still
+  // pictures, and reading them as such is what lets them keep their thumbnail.
+  return attachment.type === "image" || imageMimeType(attachment) !== null;
 }
 
 function isFileAttachment(attachment: ChatAttachment): attachment is ChatFileAttachment {
@@ -442,6 +465,8 @@ function MessageAttachmentFile(props: {
   readonly onPressVideo: (attachment: ChatFileAttachment, sourceIdentifier: string) => void;
 }) {
   const sourceIdentifier = useId();
+  const navigation = useNavigation();
+  const { selectedThread } = useThreadSelection();
   const createAssetUrl = useAtomQueryRunner(assetEnvironment.createUrl, {
     refresh: true,
     reportFailure: false,
@@ -549,58 +574,68 @@ function MessageAttachmentFile(props: {
   }
 
   return (
-    <PresentationSource
-      identifier={sourceIdentifier}
-      className="my-1"
-      style={{ width: 280, maxWidth: "100%" }}
-    >
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={`Open ${attachment.name}`}
-        accessibilityValue={{ text: `${fileTypeLabel}, ${sizeLabel}` }}
-        accessibilityState={{ disabled: opening || httpBaseUrl === null, busy: opening }}
-        disabled={opening || httpBaseUrl === null}
-        className="min-w-0 flex-row items-center gap-3 rounded-xl border border-border bg-card p-3 active:bg-subtle"
-        onPress={() =>
-          isPdf
-            ? props.onPressPreview({
-                kind: "pdf",
-                name: attachment.name,
-                environmentId: props.environmentId,
-                resource: {
-                  _tag: "attachment",
-                  attachmentId: attachment.id,
-                  fileName: attachment.name,
-                  mimeType: "application/pdf",
-                },
-                sourceIdentifier,
-              })
-            : shareFile(sourceIdentifier)
-        }
+    <>
+      <PresentationSource
+        identifier={sourceIdentifier}
+        className="my-1"
+        style={{ width: 280, maxWidth: "100%" }}
       >
-        <View className="h-12 w-10 shrink-0 items-center justify-center rounded-lg bg-subtle">
-          {opening ? (
-            <ActivityIndicator size="small" />
-          ) : (
-            <PierreEntryIcon path={attachment.name} kind="file" size={26} />
-          )}
-        </View>
-        <View className="min-w-0 flex-1 gap-1">
-          <Text className="font-t3-medium text-sm text-foreground" numberOfLines={2}>
-            {attachment.name}
-          </Text>
-          <Text className="text-xs text-foreground-muted" numberOfLines={1}>
-            {fileTypeLabel} · {sizeLabel}
-          </Text>
-        </View>
-        <SymbolView
-          name="chevron.right"
-          size={12}
-          tintColorClassName="accent-foreground-muted"
-          type="monochrome"
-        />
-      </Pressable>
-    </PresentationSource>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={`Open ${attachment.name}`}
+          accessibilityValue={{ text: `${fileTypeLabel}, ${sizeLabel}` }}
+          accessibilityState={{ disabled: opening || httpBaseUrl === null, busy: opening }}
+          disabled={opening || httpBaseUrl === null}
+          className="min-w-0 flex-row items-center gap-3 rounded-xl border border-border bg-card p-3 active:bg-subtle"
+          onLongPress={() => shareFile(sourceIdentifier)}
+          onPress={() =>
+            isPdf
+              ? props.onPressPreview({
+                  kind: "pdf",
+                  name: attachment.name,
+                  environmentId: props.environmentId,
+                  resource: {
+                    _tag: "attachment",
+                    attachmentId: attachment.id,
+                    fileName: attachment.name,
+                    mimeType: "application/pdf",
+                  },
+                  sourceIdentifier,
+                })
+              : navigation.navigate("ThreadAttachment", {
+                  environmentId: String(props.environmentId),
+                  ...(selectedThread ? { threadId: String(selectedThread.id) } : {}),
+                  attachmentId: attachment.id,
+                  name: attachment.name,
+                  mimeType: attachment.mimeType,
+                  sizeBytes: String(attachment.sizeBytes),
+                })
+          }
+        >
+          <View className="h-12 w-10 shrink-0 items-center justify-center rounded-lg bg-subtle">
+            {opening ? (
+              <ActivityIndicator size="small" />
+            ) : (
+              <PierreEntryIcon path={attachment.name} kind="file" size={26} />
+            )}
+          </View>
+          <View className="min-w-0 flex-1 gap-1">
+            <Text className="font-t3-medium text-sm text-foreground" numberOfLines={2}>
+              {attachment.name}
+            </Text>
+            <Text className="text-xs text-foreground-muted" numberOfLines={1}>
+              {fileTypeLabel} · {sizeLabel}
+            </Text>
+          </View>
+          <SymbolView
+            name="chevron.right"
+            size={12}
+            tintColorClassName="accent-foreground-muted"
+            type="monochrome"
+          />
+        </Pressable>
+      </PresentationSource>
+    </>
   );
 }
 
@@ -678,15 +713,6 @@ interface MarkdownStyleSet {
   readonly styles: NodeStyleOverrides;
   readonly renderers: CustomRenderers;
   readonly nativeTextStyle: NativeMarkdownTextStyle;
-}
-
-interface ReviewCommentColors {
-  readonly background: ColorValue;
-  readonly border: ColorValue;
-  readonly mutedBackground: ColorValue;
-  readonly text: ColorValue;
-  readonly mutedText: ColorValue;
-  readonly codeBackground: ColorValue;
 }
 
 const failedMarkdownFaviconHosts = new Set<string>();
@@ -1013,22 +1039,6 @@ function MarkdownCodeBlock(props: {
   );
 }
 
-function useReviewCommentColors(): ReviewCommentColors {
-  const theme = useUniwindTheme();
-
-  return useMemo(
-    () => ({
-      background: theme["--color-card"],
-      border: theme["--color-border"],
-      mutedBackground: theme["--color-subtle"],
-      text: theme["--color-foreground"],
-      mutedText: theme["--color-foreground-muted"],
-      codeBackground: theme["--color-md-code-bg"],
-    }),
-    [theme],
-  );
-}
-
 function useMarkdownStyles(
   onLinkPress: (href: string) => void,
   renderImage: MarkdownImageRenderer,
@@ -1053,6 +1063,11 @@ function useMarkdownStyles(
   const markdownCodeText = theme["--color-md-code-text"];
   const markdownInlineCodeText = theme["--color-foreground-secondary"];
   const markdownHrColor = theme["--color-md-hr"];
+  // Native chip drawing parses opaque hex only, and this role is translucent.
+  const contextChipBorderColor = flattenThemeColor(
+    theme["--color-border"],
+    theme["--color-user-bubble"],
+  );
   const markdownUserBodyColor = theme["--color-user-bubble-foreground"];
   const markdownUserCodeBg = theme["--color-md-user-code-bg"];
   const markdownUserCodeText = theme["--color-md-user-code-text"];
@@ -1354,6 +1369,7 @@ function useMarkdownStyles(
           skillTextColor: userBubbleSkillForeground,
           quoteMarkerColor: markdownUserBodyColor,
           dividerColor: markdownUserBodyColor,
+          contextChipBorderColor,
           fontSize: nativeMarkdownTypography.fontSize,
           lineHeight: nativeMarkdownTypography.lineHeight,
           headingFontSizes: nativeMarkdownTypography.headingFontSizes,
@@ -1387,6 +1403,7 @@ function useMarkdownStyles(
           skillTextColor: inlineSkillForeground,
           quoteMarkerColor: markdownBlockquoteBorder,
           dividerColor: markdownHrColor,
+          contextChipBorderColor,
           fontSize: nativeMarkdownTypography.fontSize,
           lineHeight: nativeMarkdownTypography.lineHeight,
           headingFontSizes: nativeMarkdownTypography.headingFontSizes,
@@ -1398,6 +1415,7 @@ function useMarkdownStyles(
     };
   }, [
     boldFontFamily,
+    contextChipBorderColor,
     iconSubtleColor,
     inlineSkillForeground,
     markdownBlockquoteBg,
@@ -1589,6 +1607,19 @@ function renderFeedEntry(
     if (isUser) {
       const enterAnimated = isFreshTimestamp(message.createdAt);
       const intentBadge = resolveUserMessageIntentBadge(message.inputIntent);
+      const referenceIds = new Set(
+        collectComposerContextReferences(message.text).map((reference) => reference.contextId),
+      );
+      const inlineAttachmentIds = new Set(
+        message.context?.records.flatMap((record) =>
+          "attachmentId" in record && referenceIds.has(record.contextId)
+            ? [record.attachmentId]
+            : [],
+        ),
+      );
+      const visibleAttachments = attachments.filter(
+        (attachment) => isImageAttachment(attachment) || !inlineAttachmentIds.has(attachment.id),
+      );
       return (
         <Animated.View
           className="mb-5 items-end"
@@ -1611,20 +1642,6 @@ function renderFeedEntry(
                   : null),
             }}
           >
-            {presentation.text.trim().length > 0 ? (
-              <MarkdownImageAvailableWidthContext
-                value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
-              >
-                <UserMessageContent
-                  text={renderedText}
-                  markdownStyles={styles}
-                  reviewCommentColors={props.reviewCommentColors}
-                  skills={props.skills}
-                  linkHandlers={props.markdownLinkHandlers}
-                  renderImage={props.renderMarkdownImage}
-                />
-              </MarkdownImageAvailableWidthContext>
-            ) : null}
             {entry.pendingMessage?.attachments.map((attachment) =>
               attachment.type === "image" && attachment.uploadedAttachmentId ? (
                 <MessageAttachmentImage
@@ -1647,29 +1664,54 @@ function renderFeedEntry(
                 <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
               ),
             )}
-            {attachments.map((attachment) => {
-              return isImageAttachment(attachment) ? (
-                <MessageAttachmentImage
-                  key={attachment.id}
+            {/* An empty container still takes a gap, which pads every attachment-free bubble. */}
+            {visibleAttachments.length > 0 ? (
+              <View className={inlineAttachmentIds.size ? "flex-row flex-wrap gap-2" : "gap-2"}>
+                {visibleAttachments.map((attachment) => {
+                  return isImageAttachment(attachment) ? (
+                    <MessageAttachmentImage
+                      key={attachment.id}
+                      environmentId={props.environmentId}
+                      attachmentId={attachment.id}
+                      name={attachment.name}
+                      mimeType={attachment.mimeType}
+                      className={
+                        inlineAttachmentIds.size
+                          ? "h-24 w-24 rounded-[14px] bg-white/15"
+                          : "aspect-[1.3] w-full rounded-[14px] bg-white/15"
+                      }
+                      onPressPreview={props.onPressPreview}
+                    />
+                  ) : isFileAttachment(attachment) ? (
+                    <MessageAttachmentFile
+                      key={attachment.id}
+                      environmentId={props.environmentId}
+                      attachment={attachment}
+                      onPressPreview={props.onPressPreview}
+                      onPressVideo={props.onPressVideo}
+                    />
+                  ) : (
+                    <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
+                  );
+                })}
+              </View>
+            ) : null}
+            {message.text.trim().length > 0 ? (
+              <MarkdownImageAvailableWidthContext
+                value={props.userBubbleMaxWidth - USER_BUBBLE_HORIZONTAL_PADDING * 2}
+              >
+                <UserMessageContent
+                  text={renderedText}
                   environmentId={props.environmentId}
-                  attachmentId={attachment.id}
-                  name={attachment.name}
-                  mimeType={attachment.mimeType}
-                  className="aspect-[1.3] w-full rounded-[14px] bg-white/15"
-                  onPressPreview={props.onPressPreview}
+                  context={message.context}
+                  markdownStyles={styles}
+                  reviewCommentColors={props.reviewCommentColors}
+                  skills={props.skills}
+                  linkHandlers={props.markdownLinkHandlers}
+                  renderImage={props.renderMarkdownImage}
                 />
-              ) : isFileAttachment(attachment) ? (
-                <MessageAttachmentFile
-                  key={attachment.id}
-                  environmentId={props.environmentId}
-                  attachment={attachment}
-                  onPressPreview={props.onPressPreview}
-                  onPressVideo={props.onPressVideo}
-                />
-              ) : (
-                <MessageAttachmentUnknown key={attachment.id} name={attachment.name} />
-              );
-            })}
+              </MarkdownImageAvailableWidthContext>
+            ) : null}
           </View>
           <View className="mt-1 flex-row items-center justify-end gap-1 pr-0.5">
             {intentBadge ? (
@@ -1719,6 +1761,16 @@ function renderFeedEntry(
               <CopyTextButton
                 accessibilityLabel="Copy message"
                 text={presentation.text}
+                onCopy={
+                  message.context
+                    ? () =>
+                        writeComposerContextClipboard(message.text, {
+                          version: 1,
+                          source: { environmentId: props.environmentId, messageId: message.id },
+                          records: message.context!.records,
+                        })
+                    : undefined
+                }
                 tintColor={iconSubtleColor}
                 buttonSize={28}
                 iconSize={13}
@@ -1824,21 +1876,89 @@ function renderFeedEntry(
   );
 }
 
-function UserMessageContent(props: {
+type UserMessageContentProps = {
   readonly text: string;
+  readonly environmentId: EnvironmentId;
+  readonly context?: OrchestrationMessageContext;
   readonly markdownStyles: MarkdownStyleSet;
   readonly reviewCommentColors: ReviewCommentColors;
   readonly skills?: ReadonlyArray<SelectableMarkdownSkill>;
   readonly linkHandlers: MarkdownLinkHandlers;
   readonly renderImage: MarkdownImageRenderer;
-}) {
-  const segments = parseReviewCommentMessageSegments(props.text);
+};
+
+function UserMessageContent(props: UserMessageContentProps) {
+  const [selected, setSelected] = useState<{ contextId: string; label: string } | null>(null);
+  const navigation = useNavigation();
+  const { selectedThread } = useThreadSelection();
+  const text = replaceComposerContextReferences(props.text, (ref) => {
+    const available = props.context?.records.some((record) => record.contextId === ref.contextId);
+    return `[${ref.label}${available ? "" : " (unavailable)"}](t3-context://v1/${ref.kind}/${ref.contextId})`;
+  });
+  const onLinkPress = (href: string) => {
+    const reference = parseComposerContextHref(href);
+    if (!reference) return props.linkHandlers.onLinkPress?.(href);
+    const record = props.context?.records.find(
+      (record) => record.contextId === reference.contextId,
+    );
+    if (record?.kind === "mention" && "path" in record) {
+      props.linkHandlers.onLinkPress?.(record.path);
+      return;
+    }
+    // Documents open in the file screen; pictures, video and PDF keep their native viewers.
+    const document = composerDocumentAttachmentRecord(record);
+    if (document) {
+      navigation.navigate("ThreadAttachment", {
+        environmentId: String(props.environmentId),
+        ...(selectedThread ? { threadId: String(selectedThread.id) } : {}),
+        attachmentId: document.attachmentId,
+        name: document.name,
+        mimeType: document.mimeType,
+        sizeBytes: String(document.sizeBytes),
+      });
+      return;
+    }
+    setSelected({ contextId: reference.contextId, label: record?.label ?? "Context unavailable" });
+  };
+  return (
+    <>
+      <LegacyUserMessageContent
+        {...props}
+        text={text}
+        linkHandlers={{ ...props.linkHandlers, onLinkPress }}
+      />
+      {selected ? (
+        <ComposerContextSheet
+          label={selected.label}
+          environmentId={props.environmentId}
+          records={props.context?.records}
+          record={props.context?.records.find((record) => record.contextId === selected.contextId)}
+          onClose={() => setSelected(null)}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function LegacyUserMessageContent(props: UserMessageContentProps) {
+  const text = props.text;
+  const segments = parseReviewCommentMessageSegments(text);
   const hasReviewComment = segments.some((segment) => segment.kind === "review-comment");
+  // A message can hold both a review comment and context chips. The fragment travels with every
+  // text run, so copying from the segmented branch carries the same context as the plain one.
+  const contextClipboardFragment = props.context
+    ? (encodeComposerContextFragment({
+        version: 1,
+        source: { environmentId: props.environmentId },
+        records: props.context.records,
+      }) ?? undefined)
+    : undefined;
   if (!hasReviewComment) {
     if (hasNativeSelectableMarkdownText()) {
       return (
         <SelectableMarkdownText
-          markdown={props.text}
+          markdown={text}
+          contextClipboardFragment={contextClipboardFragment}
           skills={props.skills}
           textStyle={props.markdownStyles.nativeTextStyle}
           preserveSoftBreaks
@@ -1854,7 +1974,7 @@ function UserMessageContent(props: {
         styles={props.markdownStyles.styles}
         theme={props.markdownStyles.theme}
       >
-        {props.text}
+        {text}
       </Markdown>
     );
   }
@@ -1881,6 +2001,7 @@ function UserMessageContent(props: {
           <SelectableMarkdownText
             key={segment.id}
             markdown={text}
+            contextClipboardFragment={contextClipboardFragment}
             skills={props.skills}
             textStyle={props.markdownStyles.nativeTextStyle}
             preserveSoftBreaks
@@ -1899,204 +2020,6 @@ function UserMessageContent(props: {
           </Markdown>
         );
       })}
-    </View>
-  );
-}
-
-const ReviewCommentCard = memo(function ReviewCommentCard(props: {
-  readonly comment: ReviewInlineComment;
-  readonly colors: ReviewCommentColors;
-}) {
-  const { codeSurface, nativeReviewDiffStyle } = useAppearanceCodeSurface();
-  const { themeAppearance: appearanceScheme, themeId } = useAppearancePreferences();
-  const appTheme = useUniwindTheme();
-  const NativeReviewDiffView = resolveNativeReviewDiffView();
-  const patch = useMemo(() => buildReviewCommentPatch(props.comment), [props.comment]);
-  const parsedDiff = useMemo(
-    () => buildReviewParsedDiff(patch, `thread-review-comment:${props.comment.id}`),
-    [patch, props.comment.id],
-  );
-  const nativeReviewDiffData = useMemo(() => buildNativeReviewDiffData(parsedDiff), [parsedDiff]);
-  const compactNativeRows = useMemo(
-    () => nativeReviewDiffData.rows.filter((row) => row.kind !== "file"),
-    [nativeReviewDiffData.rows],
-  );
-  const nativeReviewDiffTheme = useMemo(
-    () => createNativeReviewDiffTheme(appearanceScheme, themeId, appTheme),
-    [appearanceScheme, appTheme, themeId],
-  );
-  const nativeRowsJson = useMemo(() => JSON.stringify(compactNativeRows), [compactNativeRows]);
-  const nativeThemeJson = useMemo(
-    () => JSON.stringify(nativeReviewDiffTheme),
-    [nativeReviewDiffTheme],
-  );
-  const nativeStyleJson = useMemo(
-    () => JSON.stringify(nativeReviewDiffStyle),
-    [nativeReviewDiffStyle],
-  );
-  const nativeDiffHeight = useMemo(
-    () =>
-      Math.min(
-        360,
-        Math.max(
-          112,
-          compactNativeRows.length * nativeReviewDiffStyle.rowHeight +
-            nativeReviewDiffStyle.fileHeaderVerticalMargin,
-        ),
-      ),
-    [compactNativeRows.length, nativeReviewDiffStyle],
-  );
-  const shouldRenderNativeDiff = NativeReviewDiffView != null && compactNativeRows.length > 0;
-
-  return (
-    <View
-      className="w-full overflow-hidden rounded-[16px] border border-continuous"
-      style={{
-        backgroundColor: props.colors.background,
-        borderColor: props.colors.border,
-      }}
-    >
-      <View
-        className="flex-row items-center gap-2 border-b px-3 py-2"
-        style={{ borderColor: props.colors.border }}
-      >
-        <View
-          className="size-6 items-center justify-center rounded-[7px] border-continuous"
-          style={{ backgroundColor: props.colors.mutedBackground }}
-        >
-          <SymbolView
-            name="doc.text"
-            size={13}
-            tintColor={props.colors.mutedText}
-            type="monochrome"
-          />
-        </View>
-        <View className="min-w-0 flex-1">
-          <Text
-            className="font-mono text-xs"
-            numberOfLines={1}
-            style={{ color: props.colors.text }}
-          >
-            {compactFileName(props.comment.filePath)}
-          </Text>
-        </View>
-      </View>
-      {shouldRenderNativeDiff ? (
-        <View
-          className="border-t"
-          collapsable={false}
-          style={{
-            backgroundColor: nativeReviewDiffTheme.background,
-            borderColor: props.colors.border,
-            height: nativeDiffHeight,
-          }}
-        >
-          <NativeReviewDiffView
-            collapsable={false}
-            style={StyleSheet.absoluteFill}
-            appearanceScheme={appearanceScheme}
-            contentWidth={NATIVE_REVIEW_DIFF_CONTENT_WIDTH}
-            rowHeight={nativeReviewDiffStyle.rowHeight}
-            rowsJson={nativeRowsJson}
-            styleJson={nativeStyleJson}
-            themeJson={nativeThemeJson}
-          />
-        </View>
-      ) : props.comment.diff.trim().length > 0 ? (
-        <ScrollView
-          horizontal
-          nestedScrollEnabled
-          directionalLockEnabled
-          showsHorizontalScrollIndicator={false}
-          bounces={false}
-          className="border-t"
-          style={{ backgroundColor: props.colors.codeBackground, borderColor: props.colors.border }}
-          contentContainerStyle={{ padding: 10 }}
-        >
-          <NativeText
-            selectable
-            className="font-mono"
-            style={{
-              color: props.colors.text,
-              fontSize: codeSurface.fontSize,
-              lineHeight: codeSurface.rowHeight,
-            }}
-          >
-            {props.comment.diff.trim()}
-          </NativeText>
-        </ScrollView>
-      ) : null}
-      {props.comment.text.length > 0 ? (
-        <View className="border-t px-3 py-3" style={{ borderColor: props.colors.border }}>
-          <Text selectable className="text-base leading-snug" style={{ color: props.colors.text }}>
-            {props.comment.text}
-          </Text>
-        </View>
-      ) : null}
-    </View>
-  );
-});
-
-function buildReviewCommentPatch(comment: ReviewInlineComment): string {
-  if ((comment.fenceLanguage ?? "diff") !== "diff") {
-    return "";
-  }
-  const diff = comment.diff.trim();
-  if (!diff) {
-    return "";
-  }
-
-  if (diff.startsWith("diff --git ")) {
-    return diff;
-  }
-
-  const normalizedPath = comment.filePath.replaceAll("\\", "/");
-  return [
-    `diff --git a/${normalizedPath} b/${normalizedPath}`,
-    `--- a/${normalizedPath}`,
-    `+++ b/${normalizedPath}`,
-    diff,
-  ].join("\n");
-}
-
-function compactFileName(filePath: string): string {
-  const normalized = filePath.replaceAll("\\", "/");
-  const lastSlashIndex = normalized.lastIndexOf("/");
-  return lastSlashIndex >= 0 ? normalized.slice(lastSlashIndex + 1) : normalized;
-}
-
-function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
-  const theme = useUniwindTheme();
-  const mutedColor = theme["--color-icon-subtle"];
-  const accentColor = theme["--color-primary"];
-  if (!props.hasMoreHistory && props.error === null) {
-    return null;
-  }
-  return (
-    <View className="mb-3 items-center gap-1.5 px-2">
-      {props.hasMoreHistory ? (
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Load earlier activity"
-          disabled={props.loading}
-          onPress={props.onLoadEarlier}
-          className="min-h-9 flex-row items-center justify-center gap-2 rounded-full border border-border/60 bg-surface/80 px-4 py-2 disabled:opacity-50"
-        >
-          {props.loading ? (
-            <ActivityIndicator size="small" color={accentColor} />
-          ) : (
-            <SymbolView name="chevron.up" size={12} tintColor={accentColor} type="monochrome" />
-          )}
-          <Text className="text-sm font-medium text-foreground">
-            {props.loading ? "Loading earlier activity…" : "Load earlier activity"}
-          </Text>
-        </Pressable>
-      ) : null}
-      {props.error !== null ? (
-        <Text className="text-center text-xs" style={{ color: mutedColor }}>
-          {props.error}
-        </Text>
-      ) : null}
     </View>
   );
 }
@@ -3132,3 +3055,39 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
     </PresentationSource>
   );
 });
+
+function ThreadFeedLoadEarlierControl(props: ThreadFeedHistoryControls) {
+  const theme = useUniwindTheme();
+  const mutedColor = theme["--color-icon-subtle"];
+  const accentColor = theme["--color-primary"];
+  if (!props.hasMoreHistory && props.error === null) {
+    return null;
+  }
+  return (
+    <View className="mb-3 items-center gap-1.5 px-2">
+      {props.hasMoreHistory ? (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Load earlier activity"
+          disabled={props.loading}
+          onPress={props.onLoadEarlier}
+          className="min-h-9 flex-row items-center justify-center gap-2 rounded-full border border-border/60 bg-surface/80 px-4 py-2 disabled:opacity-50"
+        >
+          {props.loading ? (
+            <ActivityIndicator size="small" color={accentColor} />
+          ) : (
+            <SymbolView name="chevron.up" size={12} tintColor={accentColor} type="monochrome" />
+          )}
+          <Text className="text-sm font-medium text-foreground">
+            {props.loading ? "Loading earlier activity…" : "Load earlier activity"}
+          </Text>
+        </Pressable>
+      ) : null}
+      {props.error !== null ? (
+        <Text className="text-center text-xs" style={{ color: mutedColor }}>
+          {props.error}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
