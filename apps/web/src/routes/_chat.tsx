@@ -1,5 +1,5 @@
 import { Outlet, createFileRoute, redirect } from "@tanstack/react-router";
-import { DiffFileEditDialog } from "../components/diffs/DiffFileEditButton";
+import { ReviewEditsProvider } from "../components/diffs/ReviewEdits";
 import { useAtomValue } from "@effect/atom-react";
 import { useEffect, useMemo } from "react";
 
@@ -177,11 +177,10 @@ function ChatRouteGlobalShortcuts() {
 
 function ChatRouteLayout() {
   return (
-    <>
+    <ReviewEditsProvider>
       <ChatRouteGlobalShortcuts />
-      <DiffFileEditDialog />
       <Outlet />
-    </>
+    </ReviewEditsProvider>
   );
 }
 
