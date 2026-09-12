@@ -840,7 +840,7 @@ export function PullRequestDetailPanel({
   const savingReview =
     !!reviewEdits?.saving && reviewFiles.some((draft) => draft.contents !== draft.savedContents);
   const hasUnsavedEdits = reviewFiles.some((draft) => draft.contents !== draft.savedContents);
-  const actionPending = pendingAction !== null || !!publishLabel;
+  const actionPending = pendingAction !== null || savingReview || !!publishLabel;
   const [pushedReviewUrl, setPushedReviewUrl] = useState<string | null>(null);
   const update = useAtomCommand(pullRequestEnvironment.update, { reportFailure: false });
   // Scoped to the pull request it was typed against, since this one panel shows a different one
