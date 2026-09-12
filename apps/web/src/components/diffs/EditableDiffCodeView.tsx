@@ -30,6 +30,8 @@ export type ReviewEditTargetResolver = (filePath: string) => ReviewEditTarget | 
 interface PreparedFile {
   key: string;
   fileDiff: FileDiffMetadata;
+  pullRequestUrl: string | undefined;
+  version: number | undefined;
 }
 
 export function EditableDiffCodeView<LAnnotation>({
@@ -62,7 +64,13 @@ export function EditableDiffCodeView<LAnnotation>({
         const file = prepared.get(item.id);
         if (!file || item.type !== "diff" || !edits?.drafts.has(file.key)) return item;
         const target = editing?.(resolveFileDiffPath(item.fileDiff));
-        if (!target || reviewEditKey(target) !== file.key) return item;
+        if (
+          !target ||
+          reviewEditKey(target) !== file.key ||
+          target.pullRequestUrl !== file.pullRequestUrl ||
+          item.version !== file.version
+        )
+          return item;
         return { ...item, fileDiff: file.fileDiff, edit: true, version: (item.version ?? 0) + 1 };
       }),
     [editing, edits?.drafts, items, prepared],
@@ -180,7 +188,14 @@ export function EditableDiffCodeView<LAnnotation>({
               }
               if (!mounted.current) return;
               edits.begin(draft);
-              setPrepared((previous) => new Map(previous).set(context.item.id, { key, fileDiff }));
+              setPrepared((previous) =>
+                new Map(previous).set(context.item.id, {
+                  key,
+                  fileDiff,
+                  pullRequestUrl: target.pullRequestUrl,
+                  version: context.item.version,
+                }),
+              );
             } catch (cause) {
               toastManager.add({
                 type: "error",

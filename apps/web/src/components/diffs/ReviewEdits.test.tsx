@@ -1,3 +1,4 @@
+import { parseDiffFromFile } from "@pierre/diffs";
 import { EnvironmentId } from "@t3tools/contracts";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { act, useEffect, type ReactNode } from "react";
@@ -29,6 +30,7 @@ vi.mock("~/state/projects", () => ({ projectEnvironment: { writeFile: {} } }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => write }));
 vi.mock("~/state/query", () => ({ formatEnvironmentQueryError: () => "Request failed" }));
 vi.mock("../files/projectFilesQueryState", () => ({ getProjectFileQueryAtom: () => "file" }));
+vi.mock("./StyledDiffCodeView", () => ({ StyledDiffCodeView: () => null }));
 vi.mock("../ui/toast", () => ({ toastManager: { add: toast } }));
 vi.mock("@tanstack/react-router", () => ({
   useBlocker: (options: unknown) => {
@@ -47,6 +49,8 @@ vi.mock("../ui/alert-dialog", () => ({
   AlertDialogFooter: ({ children }: { children: ReactNode }) => children,
 }));
 
+import { EditableDiffCodeView } from "./EditableDiffCodeView";
+import { StyledDiffCodeView } from "./StyledDiffCodeView";
 import { appAtomRegistry } from "~/rpc/atomRegistry";
 import { vcsEnvironment } from "~/state/vcs";
 import { readReviewDraft, reviewEditKey, ReviewEditsProvider, useReviewEdits } from "./ReviewEdits";
@@ -280,3 +284,52 @@ it("saves all dirty files before allowing navigation", async () => {
   expect(blocker.proceed).toHaveBeenCalledOnce();
   expect(edits.drafts.size).toBe(0);
 });
+
+it.each(["pull request", "diff version"])(
+  "does not reuse an editor after the %s changes",
+  async (changed) => {
+    vi.stubGlobal("document", { caretPositionFromPoint: () => null });
+    vi.stubGlobal("ShadowRoot", vi.fn());
+    const fileDiff = parseDiffFromFile(
+      { name: "file.ts", contents: "old" },
+      { name: "file.ts", contents: "fresh" },
+    );
+    const item = { type: "diff" as const, id: "file.ts", fileDiff, version: 1 };
+    const url = "https://github.com/example/repo/pull/1";
+    const view = (pullRequestUrl: string, version: number) => (
+      <ReviewEditsProvider>
+        <Probe />
+        <EditableDiffCodeView
+          items={[{ ...item, version }]}
+          editing={() => ({ ...target, pullRequestUrl })}
+        />
+      </ReviewEditsProvider>
+    );
+    await act(async () => {
+      renderer = create(view(url, 1));
+    });
+    const viewer = () => renderer.root.findByType(StyledDiffCodeView).props;
+    await act(async () =>
+      viewer().options.onLineClick(
+        {
+          type: "diff-line",
+          lineNumber: 1,
+          annotationSide: "additions",
+          numberColumn: false,
+          event: { clientX: 0, clientY: 0 },
+          lineElement: { getRootNode: () => null },
+        },
+        { type: "diff", item, instance: { fileDiff } },
+      ),
+    );
+    expect(viewer().items[0].edit).toBe(true);
+    expect(viewer().items[0].fileDiff).not.toBe(fileDiff);
+    await act(async () =>
+      renderer.update(
+        view(changed === "pull request" ? url + "2" : url, changed === "diff version" ? 2 : 1),
+      ),
+    );
+    expect(viewer().items[0].edit).toBeUndefined();
+    expect(viewer().items[0].fileDiff).toBe(fileDiff);
+  },
+);
