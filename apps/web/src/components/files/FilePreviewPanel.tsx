@@ -547,8 +547,7 @@ interface EditableFileSurfaceProps {
   environmentId: EnvironmentId;
   cwd: string;
   relativePath: string;
-  onContentsChange?: (contents: string) => void;
-  composerDraftTarget: ScopedThreadRef | DraftId | null;
+  composerDraftTarget: ScopedThreadRef | DraftId;
   contents: string;
   resolvedTheme: "light" | "dark";
   revealRequestId: number;
@@ -562,11 +561,10 @@ interface FileSelectionOverride {
   range: SelectedLineRange | null;
 }
 
-export function EditableFileSurface({
+function EditableFileSurface({
   environmentId,
   cwd,
   relativePath,
-  onContentsChange,
   composerDraftTarget,
   contents,
   resolvedTheme,
@@ -601,12 +599,8 @@ export function EditableFileSurface({
         persistState: true,
         persistStateStorage: "inMemory",
         onChange: (file, nextLineAnnotations) => {
-          if (onContentsChange) {
-            onContentsChange(file.contents);
-          } else {
-            setProjectFileQueryData(environmentId, cwd, relativePath, file.contents);
-            saveCoordinator.change(file.contents);
-          }
+          setProjectFileQueryData(environmentId, cwd, relativePath, file.contents);
+          saveCoordinator.change(file.contents);
           if (nextLineAnnotations) {
             const remapped = remapFileCommentAnnotations(
               nextLineAnnotations as FileCommentLineAnnotation[],
@@ -614,7 +608,7 @@ export function EditableFileSurface({
             setLineAnnotations(remapped);
             for (const annotation of remapped) {
               for (const entry of annotation.metadata.entries) {
-                if (entry.kind !== "comment" || composerDraftTarget === null) continue;
+                if (entry.kind !== "comment") continue;
                 addReviewComment(
                   composerDraftTarget,
                   buildFileReviewComment({
@@ -631,15 +625,7 @@ export function EditableFileSurface({
           }
         },
       }),
-    [
-      addReviewComment,
-      composerDraftTarget,
-      cwd,
-      environmentId,
-      onContentsChange,
-      relativePath,
-      saveCoordinator,
-    ],
+    [addReviewComment, composerDraftTarget, cwd, environmentId, relativePath, saveCoordinator],
   );
 
   useEffect(
@@ -652,7 +638,7 @@ export function EditableFileSurface({
   const removeAnnotationEntry = useCallback(
     (entryId: string) => {
       setSelectedRange(null);
-      if (composerDraftTarget !== null) removeReviewComment(composerDraftTarget, entryId);
+      removeReviewComment(composerDraftTarget, entryId);
       setLineAnnotations((current) => {
         return current.flatMap((annotation) => {
           const entries = annotation.metadata.entries.filter((entry) => entry.id !== entryId);
@@ -669,7 +655,7 @@ export function EditableFileSurface({
       const entry = lineAnnotations
         .flatMap((annotation) => annotation.metadata.entries)
         .find((candidate) => candidate.id === entryId);
-      if (entry && composerDraftTarget !== null) {
+      if (entry) {
         addReviewComment(
           composerDraftTarget,
           buildFileReviewComment({
@@ -812,8 +798,8 @@ export function EditableFileSurface({
             }}
             options={{
               disableFileHeader: true,
-              enableGutterUtility: composerDraftTarget !== null && !hasOpenCommentForm,
-              enableLineSelection: composerDraftTarget !== null && !hasOpenCommentForm,
+              enableGutterUtility: !hasOpenCommentForm,
+              enableLineSelection: !hasOpenCommentForm,
               onGutterUtilityClick: setSelectedRange,
               onLineSelectionChange: setSelectedRange,
               onLineSelectionEnd: handleLineSelectionEnd,
