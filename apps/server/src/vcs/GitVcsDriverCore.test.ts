@@ -10,6 +10,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
+import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Result from "effect/Result";
 import * as Scope from "effect/Scope";
@@ -131,6 +132,53 @@ const initRepoWithCommit = (
     const initialBranch = yield* git(cwd, ["branch", "--show-current"]);
     return { initialBranch };
   });
+
+it.effect("bounds Git bursts without counting queue time against command timeouts", () =>
+  Effect.gen(function* () {
+    const gate = yield* Deferred.make<void>();
+    const starts = yield* Queue.unbounded<number>();
+    let active = 0;
+    let peak = 0;
+    const spawner = ChildProcessSpawner.make(() =>
+      Effect.acquireRelease(
+        Effect.gen(function* () {
+          peak = Math.max(peak, ++active);
+          yield* Queue.offer(starts, active);
+          return ChildProcessSpawner.makeHandle({
+            ...makeSuccessfulHandle("ok"),
+            exitCode: Deferred.await(gate).pipe(Effect.as(ChildProcessSpawner.ExitCode(0))),
+          });
+        }),
+        () => Effect.sync(() => active--),
+      ),
+    );
+    const driver = yield* makeGitVcsDriverCore().pipe(
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+    const burst = yield* Effect.all(
+      Array.from({ length: 16 }, (_, index) =>
+        driver.execute({
+          operation: "test.gitBurst",
+          cwd: "/repo",
+          args: ["rev-parse", "HEAD"],
+          timeoutMs: index < 4 ? null : 1_000,
+        }),
+      ),
+      { concurrency: "unbounded" },
+    ).pipe(Effect.forkChild);
+
+    yield* Effect.all(Array.from({ length: 4 }, () => Queue.take(starts)));
+    yield* TestClock.adjust("2 seconds");
+    assert.equal(yield* Queue.size(starts), 0);
+    assert.equal(peak, 4);
+    yield* Deferred.succeed(gate, undefined);
+    const results = yield* Fiber.join(burst);
+    assert.equal(results.length, 16);
+    assert.isTrue(results.every((result) => result.stdout === "ok" && result.exitCode === 0));
+    assert.equal(peak, 4);
+    assert.equal(active, 0);
+  }).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
+);
 
 for (const location of ["root", "nested", "worktree"] as const) {
   it.effect(
