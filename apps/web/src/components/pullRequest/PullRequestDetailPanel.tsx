@@ -831,7 +831,10 @@ export function PullRequestDetailPanel({
   const publishLabel =
     detail && reviewEdits?.publishing.get(reviewPublishKey(environmentId, detail.url));
   const reviewFiles = [...(reviewEdits?.drafts.values() ?? [])].filter(
-    (draft) => draft.environmentId === environmentId && draft.pullRequestUrl === detail?.url,
+    (draft) =>
+      draft.environmentId === environmentId &&
+      draft.cwd === detail?.workspaceRoot &&
+      draft.pullRequestUrl === detail?.url,
   );
   const pendingEdits = reviewFiles.filter((draft) => draft.pendingPush).length;
   const savingReview =
@@ -1513,7 +1516,7 @@ export function PullRequestDetailPanel({
                 title={hasUnsavedEdits ? "Save your edits with Cmd/Ctrl+S first" : undefined}
                 onClick={async () => {
                   const url = detail.url;
-                  if (await reviewEdits?.publish(environmentId, url)) {
+                  if (await reviewEdits?.publish(environmentId, detail.workspaceRoot, url)) {
                     setPushedReviewUrl(url);
                     void refreshFromHost();
                   }

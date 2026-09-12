@@ -147,7 +147,7 @@ const ReviewEditsContext = createContext<{
   focus: (key: string | null) => void;
   saving: boolean;
   publishing: ReadonlyMap<string, string>;
-  publish: (environmentId: EnvironmentId, url: string) => Promise<boolean>;
+  publish: (environmentId: EnvironmentId, cwd: string, url: string) => Promise<boolean>;
 } | null>(null);
 
 export const useReviewEdits = () => useContext(ReviewEditsContext);
@@ -220,6 +220,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
             workspace = [...draftsRef.current.values()].find(
               (other) =>
                 other.environmentId === draft.environmentId &&
+                other.cwd === draft.cwd &&
                 other.pullRequestUrl === draft.pullRequestUrl &&
                 other.workspace,
             )?.workspace;
@@ -275,11 +276,14 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
     [update, writeFile],
   );
   const publish = useCallback(
-    async (environmentId: EnvironmentId, url: string) => {
+    async (environmentId: EnvironmentId, cwd: string, url: string) => {
       const key = reviewPublishKey(environmentId, url);
       if (savingRef.current || publishingRef.current.has(key)) return false;
       const files = [...draftsRef.current.entries()].filter(
-        ([, draft]) => draft.environmentId === environmentId && draft.pullRequestUrl === url,
+        ([, draft]) =>
+          draft.environmentId === environmentId &&
+          draft.cwd === cwd &&
+          draft.pullRequestUrl === url,
       );
       if (files.some(([, draft]) => draft.contents !== draft.savedContents)) {
         toastManager.add({
@@ -295,6 +299,15 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
       publishingRef.current.add(key);
       setPublishing((previous) => new Map(previous).set(key, "Committing and pushing..."));
       try {
+        if (
+          pending.some(
+            ([, draft]) =>
+              draft.workspace?.cwd !== workspace.cwd || draft.workspace.branch !== workspace.branch,
+          )
+        )
+          throw new Error(
+            "These saved edits belong to different workspaces. Open each review to publish its changes.",
+          );
         const result = await vcsActionManager
           .runStackedAction({ environmentId, cwd: workspace.cwd })
           .run(appAtomRegistry, {

@@ -473,11 +473,11 @@ it("saves PR files in one workspace, restores saved edits, and retries a failed 
   expect(edits.drafts.get(secondKey)?.pendingPush).toBe(true);
   publish.mockResolvedValueOnce({ _tag: "Failure" });
   await act(async () => {
-    expect(await edits.publish(target.environmentId, url)).toBe(false);
+    expect(await edits.publish(target.environmentId, target.cwd, url)).toBe(false);
   });
   expect(edits.drafts.get(firstKey)?.pendingPush).toBe(true);
   await act(async () => {
-    expect(await edits.publish(target.environmentId, url)).toBe(true);
+    expect(await edits.publish(target.environmentId, target.cwd, url)).toBe(true);
   });
   expect(publish.mock.lastCall?.[1]).toMatchObject({
     action: "commit_push",
@@ -486,6 +486,38 @@ it("saves PR files in one workspace, restores saved edits, and retries a failed 
   });
   expect(edits.drafts.get(firstKey)?.pendingPush).toBe(false);
   expect(edits.publishing.size).toBe(0);
+});
+
+it("saves and publishes the same PR separately for each source workspace", async () => {
+  await mount();
+  const url = "https://github.com/example/repo/pull/1";
+  const first = { ...savedDraft, pullRequestUrl: url };
+  const second = { ...first, cwd: "/other-repo" };
+  for (const [index, draft] of [first, second].entries()) {
+    prepareWorkspace.mockResolvedValueOnce({
+      _tag: "Success",
+      value: { worktreePath: `/review-${index}`, branch: "review", isOnPullRequestHead: true },
+    });
+    await act(async () => {
+      edits.begin(draft);
+      edits.change(reviewEditKey(draft), `edit ${index}`);
+      edits.focus(reviewEditKey(draft));
+    });
+    await save();
+  }
+  expect(write.mock.calls.map(([request]) => request.input.cwd)).toEqual([
+    "/review-0",
+    "/review-1",
+  ]);
+  await act(async () => {
+    expect(await edits.publish(target.environmentId, target.cwd, url)).toBe(true);
+  });
+  expect(edits.drafts.get(reviewEditKey(first))?.pendingPush).toBe(false);
+  expect(edits.drafts.get(reviewEditKey(second))?.pendingPush).toBe(true);
+  await act(async () => {
+    expect(await edits.publish(target.environmentId, second.cwd, url)).toBe(true);
+  });
+  expect(edits.drafts.get(reviewEditKey(second))?.pendingPush).toBe(false);
 });
 
 it("keeps saved PR edits publishable when browser storage is full", async () => {
@@ -506,7 +538,7 @@ it("keeps saved PR edits publishable when browser storage is full", async () => 
     expect.objectContaining({ title: "Browser storage is unavailable" }),
   );
   await act(async () => {
-    expect(await edits.publish(target.environmentId, draft.pullRequestUrl)).toBe(true);
+    expect(await edits.publish(target.environmentId, target.cwd, draft.pullRequestUrl)).toBe(true);
   });
   expect(edits.drafts.get(draftKey)?.pendingPush).toBe(false);
 });
@@ -533,13 +565,13 @@ it("blocks changes and duplicate publication while the writing agent runs", asyn
   );
   let result!: Promise<boolean>;
   await act(async () => {
-    result = edits.publish(target.environmentId, url);
+    result = edits.publish(target.environmentId, target.cwd, url);
   });
   expect(edits.publishing.size).toBe(1);
   expect(blockOptions.mock.lastCall?.[0].enableBeforeUnload).toBe(true);
   await act(async () => {
     edits.change(draftKey, "must not change");
-    expect(await edits.publish(target.environmentId, url)).toBe(false);
+    expect(await edits.publish(target.environmentId, target.cwd, url)).toBe(false);
   });
   expect(edits.drafts.get(draftKey)?.contents).toBe("saved");
   await act(async () => {
