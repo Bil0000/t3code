@@ -56,36 +56,37 @@ describe("GitWorkflowService", () => {
             }),
           ),
         );
+        const resolve: VcsDriverRegistry.VcsDriverRegistry["Service"]["resolve"] = ({ cwd }) =>
+          Effect.gen(function* () {
+            if (cwd === "/repo/nested") yield* Deferred.succeed(commandResolved, undefined);
+            return {
+              kind: "git" as const,
+              driver,
+              repository: {
+                kind: "git" as const,
+                rootPath: cwd === "/other" ? "/other" : cwd === "/pr-worktree" ? cwd : "/repo",
+                metadataPath:
+                  cwd === "/pr-worktree"
+                    ? "/repo/.git"
+                    : cwd === "/repo/nested"
+                      ? "../.git"
+                      : ".git",
+                freshness: {
+                  source: "live-local" as const,
+                  observedAt,
+                  expiresAt: Option.none(),
+                },
+              },
+            };
+          });
         const workflow = yield* GitWorkflowService.make.pipe(
           Effect.provide(
             Layer.mergeAll(
               Path.layer,
               FileSystem.layerNoop({ realPath: (path) => Effect.succeed(path) }),
               Layer.mock(VcsDriverRegistry.VcsDriverRegistry)({
-                resolve: ({ cwd }) =>
-                  Effect.gen(function* () {
-                    if (cwd === "/repo/nested") yield* Deferred.succeed(commandResolved, undefined);
-                    return {
-                      kind: "git" as const,
-                      driver,
-                      repository: {
-                        kind: "git" as const,
-                        rootPath:
-                          cwd === "/other" ? "/other" : cwd === "/pr-worktree" ? cwd : "/repo",
-                        metadataPath:
-                          cwd === "/pr-worktree"
-                            ? "/repo/.git"
-                            : cwd === "/repo/nested"
-                              ? "../.git"
-                              : ".git",
-                        freshness: {
-                          source: "live-local" as const,
-                          observedAt,
-                          expiresAt: Option.none(),
-                        },
-                      },
-                    };
-                  }),
+                resolve,
+                detect: resolve,
               }),
               Layer.mock(GitVcsDriver.GitVcsDriver)({
                 removeWorktree: () =>

@@ -160,7 +160,8 @@ export const make = Effect.gen(function* () {
   const withRepositoryLock: GitWorkflowService["Service"]["withRepositoryLock"] = (cwd, effect) =>
     Effect.gen(function* () {
       const key = yield* Effect.gen(function* () {
-        const handle = yield* registry.resolve({ cwd });
+        const handle = yield* registry.detect({ cwd });
+        if (!handle) return yield* fileSystem.realPath(cwd);
         if (handle.repository.metadataPath === null) {
           return yield* Effect.fail("The repository metadata path is unavailable.");
         }
