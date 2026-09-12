@@ -54,7 +54,7 @@ import { DiffFilePathCopyButton } from "./DiffFilePathCopyButton";
 import { DiffPanelLoadingState, DiffPanelShell, type DiffPanelMode } from "./DiffPanelShell";
 import { DiffStatLabel } from "./chat/DiffStatLabel";
 import { AnnotatableCodeView, type AnnotatableCodeViewHandle } from "./diffs/AnnotatableCodeView";
-import { DiffFileTree } from "./diffs/DiffFileTree";
+import { DiffFileTree, type DiffFileTreeHandle } from "./diffs/DiffFileTree";
 import { DiffFileEditButton } from "./diffs/DiffFileEditButton";
 import { diffFileTreeEntries } from "./diffs/diffFileTree.logic";
 import { Button } from "./ui/button";
@@ -554,7 +554,9 @@ export default function DiffPanel({
     [collapseScopeKey],
   );
 
+  const treeRef = useRef<DiffFileTreeHandle>(null);
   const toggleDiffFileCollapse = useCallback(() => {
+    treeRef.current?.setExpanded(allDiffFilesCollapsed);
     setCodeViewRevision((current) => current + 1);
     setCollapsedDiffFiles((current) => {
       const currentKeys =
@@ -565,7 +567,7 @@ export default function DiffPanel({
         fileKeys: toggleAllDiffFiles(diffFileKeys, currentKeys),
       };
     });
-  }, [collapseScopeKey, diffFileKeys]);
+  }, [allDiffFilesCollapsed, collapseScopeKey, diffFileKeys]);
 
   const selectTurn = (turnId: TurnId) => {
     if (!routeThreadRef) return;
@@ -1066,6 +1068,7 @@ export default function DiffPanel({
                 </div>
                 {fileTreeOpen ? (
                   <DiffFileTree
+                    ref={treeRef}
                     widthStorageKey="t3code.diffFileTreeWidth"
                     ariaLabel={`${reviewSectionTitle} files`}
                     entries={fileTreeEntries}

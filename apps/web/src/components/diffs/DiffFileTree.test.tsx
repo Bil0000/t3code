@@ -1,11 +1,11 @@
 import type { CodeViewScrollTarget } from "@pierre/diffs";
 import type { FileTree as FileTreeModel } from "@pierre/trees";
 import { FileTree } from "@pierre/trees/react";
-import { act, type MouseEvent, type PointerEvent, type ReactNode } from "react";
+import { act, createRef, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
-import { DiffFileTree, type DiffFileTreeEntry } from "./DiffFileTree";
+import { DiffFileTree, type DiffFileTreeEntry, type DiffFileTreeHandle } from "./DiffFileTree";
 import { useCodeViewFileReveal } from "./useCodeViewFileReveal";
 import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
 
@@ -34,6 +34,7 @@ class TreeRow {
 describe("diff tree file activation", () => {
   let renderer: ReactTestRenderer | undefined;
   const targets: CodeViewScrollTarget[] = [];
+  const treeRef = createRef<DiffFileTreeHandle>();
   const viewer = {
     getInstance: () => viewer,
     scrollTo: (target: CodeViewScrollTarget) => targets.push(target),
@@ -51,6 +52,7 @@ describe("diff tree file activation", () => {
     const reveal = useCodeViewFileReveal(viewer, "working-tree");
     return (
       <DiffFileTree
+        ref={treeRef}
         widthStorageKey={widthStorageKey}
         entries={files}
         ariaLabel="Working tree files"
@@ -221,6 +223,20 @@ describe("diff tree file activation", () => {
     await activate("src/");
     expect(directory.isExpanded()).toBe(true);
     expect(targets).toEqual([]);
+  });
+
+  it("lets the panel control all folders without a second collapse button", async () => {
+    await mount({ files: [{ path: "src/nested/app.ts", status: "modified" }] });
+    await act(async () => treeRef.current!.setExpanded(false));
+    for (const path of ["src/", "src/nested/"]) {
+      const directory = model().getItem(path)!;
+      expect("isExpanded" in directory && directory.isExpanded()).toBe(false);
+    }
+    await act(async () => treeRef.current!.setExpanded(true));
+    for (const path of ["src/", "src/nested/"]) {
+      const directory = model().getItem(path)!;
+      expect("isExpanded" in directory && directory.isExpanded()).toBe(true);
+    }
   });
 
   it("does not echo controlled selection, but lets the reader activate it", async () => {

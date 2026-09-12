@@ -1,7 +1,15 @@
 import type { GitStatusEntry } from "@pierre/trees";
-import { FileTree, useFileTree, useFileTreeSelector } from "@pierre/trees/react";
-import { ChevronsDownUpIcon, ChevronsUpDownIcon } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { FileTree, useFileTree } from "@pierre/trees/react";
+import {
+  useEffect,
+  useImperativeHandle,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+  type Ref,
+} from "react";
 
 import { useTheme } from "~/hooks/useTheme";
 import { useResizableWidth } from "~/hooks/useResizableWidth";
@@ -9,10 +17,8 @@ import { cn } from "~/lib/utils";
 import { T3_PIERRE_ICONS } from "~/pierre-icons";
 import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 
-import { areAllDirectoriesExpanded, setAllDirectoriesExpanded } from "../files/fileTreeExpansion";
-import { Button } from "../ui/button";
+import { setAllDirectoriesExpanded } from "../files/fileTreeExpansion";
 import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
-import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 import {
   buildDiffFileTreeUpdates,
   collectDirectoryPaths,
@@ -21,7 +27,12 @@ import {
 
 export type { DiffFileTreeEntry } from "./diffFileTree.logic";
 
+export interface DiffFileTreeHandle {
+  setExpanded: (expanded: boolean) => void;
+}
+
 interface DiffFileTreeProps {
+  readonly ref?: Ref<DiffFileTreeHandle>;
   readonly entries: ReadonlyArray<DiffFileTreeEntry>;
   /** Called with the file's path when the reader picks a file row. */
   readonly onSelectFile: (path: string) => void;
@@ -46,6 +57,7 @@ interface DiffFileTreeProps {
  * compared to a workspace, and the reader came for the files, not the folders.
  */
 export function DiffFileTree({
+  ref,
   entries,
   onSelectFile,
   selectedPath = null,
@@ -113,8 +125,13 @@ export function DiffFileTree({
       }
     `,
   });
-  const allDirectoriesExpanded = useFileTreeSelector(model, (currentModel) =>
-    areAllDirectoriesExpanded(currentModel, directoryPaths),
+  useImperativeHandle(
+    ref,
+    () => ({
+      setExpanded: (expanded: boolean) =>
+        setAllDirectoriesExpanded(model, directoryPaths, expanded),
+    }),
+    [model, directoryPaths],
   );
 
   useEffect(() => {
@@ -181,34 +198,6 @@ export function DiffFileTree({
         <span className="px-1 font-medium text-foreground">Files</span>
         <span className="ml-auto tabular-nums">{entries.length}</span>
         {headerAccessory}
-        {directoryPaths.length > 0 ? (
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  type="button"
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label={
-                    allDirectoriesExpanded ? "Collapse all folders" : "Expand all folders"
-                  }
-                  onClick={() =>
-                    setAllDirectoriesExpanded(model, directoryPaths, !allDirectoriesExpanded)
-                  }
-                />
-              }
-            >
-              {allDirectoriesExpanded ? (
-                <ChevronsDownUpIcon className="size-3.5" />
-              ) : (
-                <ChevronsUpDownIcon className="size-3.5" />
-              )}
-            </TooltipTrigger>
-            <TooltipPopup>
-              {allDirectoriesExpanded ? "Collapse all folders" : "Expand all folders"}
-            </TooltipPopup>
-          </Tooltip>
-        ) : null}
       </div>
       <FileTree
         model={model}

@@ -61,7 +61,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
-import { DiffFileTree } from "../diffs/DiffFileTree";
+import { DiffFileTree, type DiffFileTreeHandle } from "../diffs/DiffFileTree";
 import { DiffFileEditButton } from "../diffs/DiffFileEditButton";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
@@ -626,7 +626,9 @@ function PullRequestCodeTab({
     [items, requestTreeReveal, toggleFile],
   );
 
+  const treeRef = useRef<DiffFileTreeHandle>(null);
   const toggleAllFiles = () => {
+    treeRef.current?.setExpanded(allFilesCollapsed);
     // Held as an override of the default rather than as the file keys on screen: a diff that is
     // still paging would otherwise bring its next slice in folded, moments after the reader
     // asked for everything to be open.
@@ -1433,6 +1435,7 @@ function PullRequestCodeTab({
         </div>
         {fileTreeOpen ? (
           <DiffFileTree
+            ref={treeRef}
             widthStorageKey="t3code.pullRequestFileTreeWidth"
             ariaLabel={`Pull request #${detail.number} files`}
             defaultWidth={320}
