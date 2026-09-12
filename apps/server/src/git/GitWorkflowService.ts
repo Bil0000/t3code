@@ -160,7 +160,8 @@ export const make = Effect.gen(function* () {
   const withRepositoryLock: GitWorkflowService["Service"]["withRepositoryLock"] = (cwd, effect) =>
     Effect.gen(function* () {
       const key = yield* Effect.gen(function* () {
-        const handle = yield* registry.resolve({ cwd });
+        const handle = yield* registry.detect({ cwd });
+        if (!handle) return yield* fileSystem.realPath(cwd);
         if (handle.repository.metadataPath === null) {
           return yield* Effect.fail("The repository metadata path is unavailable.");
         }
@@ -332,7 +333,12 @@ export const make = Effect.gen(function* () {
     runStackedAction: (input, options) =>
       ensureGit("GitWorkflowService.runStackedAction", input.cwd).pipe(
         Effect.andThen(gitManager.runStackedAction(input, options)),
-        (effect) => (input.featureBranch ? withRepositoryLock(input.cwd, effect) : effect),
+        (effect) =>
+          input.featureBranch ||
+          input.expectedBranch !== undefined ||
+          input.pullRequestUrl !== undefined
+            ? withRepositoryLock(input.cwd, effect)
+            : effect,
       ),
     resolvePullRequest: routeGitManager(
       "GitWorkflowService.resolvePullRequest",
