@@ -1,4 +1,18 @@
-import type { PullRequestComment, PullRequestDetail } from "@t3tools/contracts";
+import type { PullRequestComment, PullRequestDetail, ScopedProjectRef } from "@t3tools/contracts";
+
+export function resolvePullRequestEditCwd(
+  reference: ScopedProjectRef,
+  repositoryRoot: string | null | undefined,
+  thread: (ScopedProjectRef & { readonly worktreePath: string | null }) | null,
+): string | null {
+  return (
+    (thread?.environmentId === reference.environmentId && thread.projectId === reference.projectId
+      ? thread.worktreePath
+      : null) ??
+    repositoryRoot ??
+    null
+  );
+}
 
 /** Only the parts of a detail either answer reads, so a caller can pass a whole detail view. */
 type EditingSubject = Pick<
