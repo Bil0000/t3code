@@ -21,6 +21,20 @@ import type { SidebarThreadSummary, Thread } from "../types";
 import { cn } from "../lib/utils";
 import { isLatestTurnSettled } from "../session-logic";
 
+export function shouldNavigateAfterThreadPark(input: {
+  readonly threadKey: string;
+  readonly currentThreadKey: string | null;
+  readonly action: "settle" | "snooze";
+  readonly thread: Pick<SidebarThreadSummary, "settledOverride" | "snoozedUntil"> | null;
+}): boolean {
+  return (
+    input.threadKey === input.currentThreadKey &&
+    (input.action === "settle"
+      ? input.thread?.settledOverride === "settled"
+      : input.thread?.snoozedUntil != null)
+  );
+}
+
 const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export const THREAD_JUMP_HINT_SHOW_DELAY_MS = 200;
 // Visible sidebar rows are prewarmed into the thread-detail cache so opening a
