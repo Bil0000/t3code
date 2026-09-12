@@ -33,7 +33,7 @@ function makeLayer(input: {
 }
 
 describe("GitWorkflowService", () => {
-  it.effect.each(["checkout", "pull", "refresh"])("serializes %s with writes", (action) =>
+  it.effect.each(["checkout", "pull", "refresh", "remove"])("serializes %s with writes", (action) =>
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
@@ -86,6 +86,10 @@ describe("GitWorkflowService", () => {
                 }),
             }),
             Layer.mock(GitVcsDriver.GitVcsDriver)({
+              removeWorktree: () =>
+                Effect.sync(() => {
+                  events.push("remove");
+                }),
               switchRef: ({ refName }) =>
                 Effect.sync(() => {
                   events.push("checkout");
@@ -113,7 +117,7 @@ describe("GitWorkflowService", () => {
       );
       const write = yield* workflow
         .withRepositoryLock(
-          action === "refresh" ? "/pr-worktree" : "/repo",
+          action === "refresh" || action === "remove" ? "/pr-worktree" : "/repo",
           Effect.gen(function* () {
             events.push("validate");
             yield* Deferred.succeed(entered, undefined);
@@ -128,11 +132,13 @@ describe("GitWorkflowService", () => {
           ? workflow.switchRef({ cwd: "/repo/nested", refName: "other" })
           : action === "pull"
             ? workflow.pullCurrentBranch("/repo/nested")
-            : workflow.preparePullRequestThread({
-                cwd: "/repo/nested",
-                reference: "42",
-                mode: "worktree",
-              })
+            : action === "remove"
+              ? workflow.removeWorktree({ cwd: "/repo/nested", path: "/pr-worktree", force: false })
+              : workflow.preparePullRequestThread({
+                  cwd: "/repo/nested",
+                  reference: "42",
+                  mode: "worktree",
+                })
       ).pipe(Effect.forkScoped);
       yield* Deferred.await(commandResolved);
       yield* Effect.yieldNow;
