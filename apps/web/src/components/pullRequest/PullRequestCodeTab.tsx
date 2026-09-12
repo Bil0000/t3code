@@ -59,7 +59,7 @@ import { useAtomCommand } from "~/state/use-atom-command";
 
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
-import { DiffFileTree } from "../diffs/DiffFileTree";
+import { DiffFileTree, type DiffFileTreeHandle } from "../diffs/DiffFileTree";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
 import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
@@ -614,7 +614,9 @@ function PullRequestCodeTab({
     [items, requestTreeReveal, toggleFile],
   );
 
+  const treeRef = useRef<DiffFileTreeHandle>(null);
   const toggleAllFiles = () => {
+    treeRef.current?.setExpanded(allFilesCollapsed);
     // Held as an override of the default rather than as the file keys on screen: a diff that is
     // still paging would otherwise bring its next slice in folded, moments after the reader
     // asked for everything to be open.
@@ -1182,6 +1184,7 @@ function PullRequestCodeTab({
               render={
                 <Toggle
                   aria-label={fileTreeOpen ? "Hide file tree" : "Show file tree"}
+                  className="data-pressed:border-primary/40 data-pressed:bg-primary/15 data-pressed:text-primary"
                   variant="ghost"
                   size="sm"
                   pressed={fileTreeOpen}
@@ -1404,35 +1407,36 @@ function PullRequestCodeTab({
           {reviewOverlay}
         </div>
         {fileTreeOpen ? (
-          <aside className="flex w-[min(20rem,40%)] min-w-48 shrink-0 border-l border-border/60">
-            <DiffFileTree
-              ariaLabel={`Pull request #${detail.number} files`}
-              entries={fileTreeEntries}
-              onSelectFile={revealFile}
-              // The tree lists only what has arrived; a footer says so while the diff is still
-              // paging, and lets the reader pull the rest in without scrolling for it.
-              footer={
-                nextCursor === null ? null : (
-                  <div className="shrink-0 border-t border-border/60 p-2">
-                    <Button
-                      type="button"
-                      size="xs"
-                      variant="outline"
-                      className="w-full"
-                      disabled={diffQuery.isPending}
-                      onClick={diffQuery.error !== null ? () => diffQuery.refresh() : loadNextSlice}
-                    >
-                      {diffQuery.error !== null
-                        ? "Retry"
-                        : diffQuery.isPending
-                          ? "Loading more files..."
-                          : "Load more files"}
-                    </Button>
-                  </div>
-                )
-              }
-            />
-          </aside>
+          <DiffFileTree
+            ref={treeRef}
+            widthStorageKey="t3code.pullRequestFileTreeWidth"
+            ariaLabel={`Pull request #${detail.number} files`}
+            defaultWidth={320}
+            entries={fileTreeEntries}
+            onSelectFile={revealFile}
+            // The tree lists only what has arrived; a footer says so while the diff is still
+            // paging, and lets the reader pull the rest in without scrolling for it.
+            footer={
+              nextCursor === null ? null : (
+                <div className="shrink-0 border-t border-border/60 p-2">
+                  <Button
+                    type="button"
+                    size="xs"
+                    variant="outline"
+                    className="w-full"
+                    disabled={diffQuery.isPending}
+                    onClick={diffQuery.error !== null ? () => diffQuery.refresh() : loadNextSlice}
+                  >
+                    {diffQuery.error !== null
+                      ? "Retry"
+                      : diffQuery.isPending
+                        ? "Loading more files..."
+                        : "Load more files"}
+                  </Button>
+                </div>
+              )
+            }
+          />
         ) : null}
       </div>
       {unstructured}
