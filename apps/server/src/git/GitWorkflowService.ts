@@ -332,7 +332,12 @@ export const make = Effect.gen(function* () {
     runStackedAction: (input, options) =>
       ensureGit("GitWorkflowService.runStackedAction", input.cwd).pipe(
         Effect.andThen(gitManager.runStackedAction(input, options)),
-        (effect) => (input.featureBranch ? withRepositoryLock(input.cwd, effect) : effect),
+        (effect) =>
+          input.featureBranch ||
+          input.expectedBranch !== undefined ||
+          input.pullRequestUrl !== undefined
+            ? withRepositoryLock(input.cwd, effect)
+            : effect,
       ),
     resolvePullRequest: routeGitManager(
       "GitWorkflowService.resolvePullRequest",

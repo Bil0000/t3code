@@ -7128,6 +7128,22 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
             };
             yield* client[WS_METHODS.projectsWriteFile](input);
             assert.isTrue(invalidated);
+            yield* client[WS_METHODS.projectsWriteFile]({
+              ...input,
+              expectedContents: "saved",
+              contents: "new saved",
+            });
+            const stale = yield* client[WS_METHODS.projectsWriteFile]({
+              ...input,
+              expectedContents: "saved",
+              contents: "stale edit",
+            }).pipe(Effect.result);
+            assert.equal(stale._tag, "Failure");
+            assert.equal(yield* fs.readFileString(path.join(cwd, "file.ts")), "new saved");
+            yield* client[WS_METHODS.projectsWriteFile]({
+              ...input,
+              expectedContents: "new saved",
+            });
             for (const nextBranch of ["other", null]) {
               branch = nextBranch;
               const result = yield* client[WS_METHODS.projectsWriteFile]({
