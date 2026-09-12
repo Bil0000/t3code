@@ -2384,16 +2384,62 @@ const makeWsRpcLayer = (
         [WS_METHODS.projectsWriteFile]: (input) =>
           observeRpcEffect(
             WS_METHODS.projectsWriteFile,
-            workspaceFileSystem.writeFile(input).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ProjectWriteFileError({
+            Effect.gen(function* () {
+              if (input.expectedBranch !== undefined) {
+                yield* gitWorkflow.invalidateLocalStatus(input.cwd);
+                const status = yield* gitWorkflow.localStatus({ cwd: input.cwd }).pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new ProjectWriteFileError({
+                        cwd: input.cwd,
+                        relativePath: input.relativePath,
+                        message: "Could not verify the checkout before saving.",
+                        failure: "operation_failed",
+                        cause,
+                      }),
+                  ),
+                );
+                if (!status.isRepo || status.refName !== input.expectedBranch) {
+                  return yield* new ProjectWriteFileError({
                     cwd: input.cwd,
                     relativePath: input.relativePath,
-                    ...projectFileFailureContext(cause),
-                    cause,
-                  }),
-              ),
+                    message: "The checkout changed. Reopen the file before saving.",
+                    failure: "checkout_changed",
+                  });
+                }
+              }
+              return yield* workspaceFileSystem.writeFile(input).pipe(
+                Effect.tap(() =>
+                  input.expectedBranch !== undefined
+                    ? gitWorkflow.invalidateLocalStatus(input.cwd)
+                    : Effect.void,
+                ),
+                Effect.mapError(
+                  (cause) =>
+                    new ProjectWriteFileError({
+                      cwd: input.cwd,
+                      relativePath: input.relativePath,
+                      ...projectFileFailureContext(cause),
+                      cause,
+                    }),
+                ),
+              );
+            }).pipe((effect) =>
+              input.expectedBranch === undefined
+                ? effect
+                : gitWorkflow.withRepositoryLock(input.cwd, effect).pipe(
+                    Effect.mapError((cause) =>
+                      cause._tag === "ProjectWriteFileError"
+                        ? cause
+                        : new ProjectWriteFileError({
+                            cwd: input.cwd,
+                            relativePath: input.relativePath,
+                            failure: "operation_failed",
+                            message: "Could not verify the working copy before saving.",
+                            cause,
+                          }),
+                    ),
+                  ),
             ),
             { "rpc.aggregate": "workspace" },
           ),
