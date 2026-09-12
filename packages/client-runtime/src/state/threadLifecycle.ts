@@ -58,6 +58,7 @@ export function createOptimisticThreadLifecycle(
       thread: OrchestrationThreadShell,
       input: Input,
       now: string,
+      accepted: boolean,
     ) => OrchestrationThreadShell,
   ): typeof command {
     return {
@@ -68,7 +69,7 @@ export function createOptimisticThreadLifecycle(
         const source = sourceSnapshotAtom(target.environmentId);
         const update: PendingThreadUpdate = {
           threadId: target.input.threadId,
-          apply: (thread) => apply(thread, target.input, now),
+          apply: (thread) => apply(thread, target.input, now, update.sequence !== undefined),
         };
         const remove = () =>
           registry.update(pending, (current) => current.filter((item) => item !== update));
@@ -78,6 +79,7 @@ export function createOptimisticThreadLifecycle(
           const result = await command.run(registry, target);
           if (result._tag === "Success") {
             update.sequence = result.value.sequence;
+            registry.update(pending, (current) => [...current]);
             const reconcile = (snapshot: OrchestrationShellSnapshot | null) => {
               if (snapshot === null || snapshot.snapshotSequence >= result.value.sequence) {
                 remove();

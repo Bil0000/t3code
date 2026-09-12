@@ -259,13 +259,16 @@ export function createThreadEnvironmentAtoms<R, E>(
   return {
     ...commands,
     snapshotAtom: optimistic.snapshotAtom,
-    settle: optimistic.wrap(commands.settle, (thread, _input, now) =>
-      !canSnooze(thread, { now }) ||
-      thread.session?.status === "starting" ||
-      thread.session?.status === "running"
+    settle: optimistic.wrap(commands.settle, (thread, _input, now, accepted) =>
+      !accepted &&
+      (!canSnooze(thread, { now }) ||
+        thread.session?.status === "starting" ||
+        thread.session?.status === "running")
         ? thread
         : {
             ...thread,
+            hasPendingApprovals: false,
+            hasPendingUserInput: false,
             settledOverride: "settled",
             settledAt: thread.settledOverride === "settled" ? (thread.settledAt ?? now) : now,
             unsettledAt: null,
@@ -282,11 +285,14 @@ export function createThreadEnvironmentAtoms<R, E>(
       settledAt: null,
       unsettledAt: thread.settledOverride === "active" ? (thread.unsettledAt ?? null) : now,
     })),
-    snooze: optimistic.wrap(commands.snooze, (thread, input, now) =>
-      !canSnooze(thread, { now }) || !(Date.parse(input.snoozedUntil) > Date.parse(now))
+    snooze: optimistic.wrap(commands.snooze, (thread, input, now, accepted) =>
+      (!accepted && !canSnooze(thread, { now })) ||
+      !(Date.parse(input.snoozedUntil) > Date.parse(now))
         ? thread
         : {
             ...thread,
+            hasPendingApprovals: false,
+            hasPendingUserInput: false,
             snoozedUntil: input.snoozedUntil,
             snoozedAt: thread.snoozedUntil === input.snoozedUntil ? (thread.snoozedAt ?? now) : now,
           },

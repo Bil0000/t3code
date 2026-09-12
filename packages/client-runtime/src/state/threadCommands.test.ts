@@ -267,4 +267,32 @@ describe("remote thread lifecycle commands", () => {
       yield* Effect.promise(() => result);
     }),
   );
+
+  for (const action of ["settle", "snooze"] as const) {
+    it.effect(`shows an accepted ${action} while the shell still has an old input request`, () =>
+      Effect.gen(function* () {
+        const h = yield* makeHarness();
+        const stale = {
+          ...SNAPSHOT,
+          threads: [{ ...SNAPSHOT.threads[0]!, hasPendingUserInput: true }],
+        };
+        h.registry.set(h.snapshotAtom(ENVIRONMENT_ID), stale);
+        const result = h.commands[action].run(h.registry, {
+          environmentId: ENVIRONMENT_ID,
+          input: { threadId: THREAD_ID, snoozedUntil: "2099-01-01T00:00:00.000Z" },
+        });
+        const request = yield* Queue.take(h.requests);
+        expect(h.registry.get(h.visibleAtom)?.threads[0]).toBe(stale.threads[0]);
+        yield* Deferred.succeed(request.reply, { sequence: 2 });
+        expect((yield* Effect.promise(() => result))._tag).toBe("Success");
+        expect(h.registry.get(h.visibleAtom)?.threads[0]).toMatchObject(
+          action === "settle"
+            ? { settledOverride: "settled" }
+            : { snoozedUntil: "2099-01-01T00:00:00.000Z" },
+        );
+        expect(h.registry.get(h.visibleAtom)?.threads[0]?.hasPendingUserInput).toBe(false);
+        expect(h.registry.get(h.snapshotAtom(ENVIRONMENT_ID))).toBe(stale);
+      }),
+    );
+  }
 });

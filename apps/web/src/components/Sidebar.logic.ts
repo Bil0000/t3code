@@ -10,6 +10,10 @@ import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/c
 import type { AsyncResult } from "effect/unstable/reactivity";
 import { planPinnedReorder } from "@t3tools/client-runtime/state/thread-sort";
 import {
+  effectiveSnoozed,
+  type ThreadSnoozeShell,
+} from "@t3tools/client-runtime/state/thread-settled";
+import {
   getThreadSortTimestamp,
   resolveSettledThreadTimestamp,
   sortThreads,
@@ -25,13 +29,15 @@ export function shouldNavigateAfterThreadPark(input: {
   readonly threadKey: string;
   readonly currentThreadKey: string | null;
   readonly action: "settle" | "snooze";
-  readonly thread: Pick<SidebarThreadSummary, "settledOverride" | "snoozedUntil"> | null;
+  readonly now: string;
+  readonly thread: (ThreadSnoozeShell & Pick<SidebarThreadSummary, "settledOverride">) | null;
 }): boolean {
   return (
     input.threadKey === input.currentThreadKey &&
+    input.thread !== null &&
     (input.action === "settle"
-      ? input.thread?.settledOverride === "settled"
-      : input.thread?.snoozedUntil != null)
+      ? input.thread.settledOverride === "settled"
+      : effectiveSnoozed(input.thread, { now: input.now }))
   );
 }
 

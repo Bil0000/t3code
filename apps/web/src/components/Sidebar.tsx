@@ -3044,6 +3044,7 @@ export default function Sidebar() {
               threadKey,
               currentThreadKey: routeThreadKeyRef.current,
               action: "settle",
+              now: new Date().toISOString(),
               thread: readThreadShell(threadRef),
             })
           ) {
@@ -3581,6 +3582,7 @@ export default function Sidebar() {
                 threadKey: activeKey,
                 currentThreadKey: routeThreadKeyRef.current,
                 action: "settle",
+                now: new Date().toISOString(),
                 thread: readThreadShell(threadRef),
               })
             )
@@ -3686,6 +3688,7 @@ export default function Sidebar() {
             threadKey,
             currentThreadKey: routeThreadKeyRef.current,
             action: "snooze",
+            now: new Date().toISOString(),
             thread: readThreadShell(threadRef),
           })
         ) {
