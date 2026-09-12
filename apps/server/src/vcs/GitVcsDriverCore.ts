@@ -861,7 +861,6 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const execute: GitVcsDriver.GitVcsDriver["Service"]["execute"] = (input) =>
     executeRaw(input).pipe(
-      gitProcesses.withPermits(1),
       withMetrics({
         counter: gitCommandsTotal,
         timer: gitCommandDuration,
@@ -869,6 +868,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
           operation: input.operation,
         },
       }),
+      gitProcesses.withPermits(1),
       Effect.withSpan(input.operation, {
         kind: "client",
         attributes: {

@@ -8,6 +8,7 @@ import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
+import * as Metric from "effect/Metric";
 import * as Path from "effect/Path";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
@@ -21,6 +22,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import { GitCommandError, type ReviewDiffFileContentsInput } from "@t3tools/contracts";
 import { ServerConfig } from "../config.ts";
+import { gitCommandDuration } from "../observability/Metrics.ts";
 import { makeGitVcsDriverCore, splitNullSeparatedGitStdoutPaths } from "./GitVcsDriverCore.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
 
@@ -177,6 +179,11 @@ it.effect("bounds Git bursts without counting queue time against command timeout
     assert.isTrue(results.every((result) => result.stdout === "ok" && result.exitCode === 0));
     assert.equal(peak, 4);
     assert.equal(active, 0);
+    const duration = yield* Metric.value(
+      Metric.withAttributes(gitCommandDuration, [["operation", "test.gitBurst"]]),
+    );
+    assert.equal(duration.count, 16);
+    assert.equal(duration.sum, 8_000);
   }).pipe(Effect.provide(ServerConfigLayer.pipe(Layer.provideMerge(NodeServices.layer)))),
 );
 
