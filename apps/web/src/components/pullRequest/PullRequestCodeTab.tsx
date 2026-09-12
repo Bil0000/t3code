@@ -58,6 +58,7 @@ import {
 import { pullRequestEnvironment } from "~/state/pullRequests";
 import { useEnvironmentQuery } from "~/state/query";
 import { useAtomCommand } from "~/state/use-atom-command";
+import { vcsEnvironment } from "~/state/vcs";
 
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
@@ -228,6 +229,9 @@ function PullRequestCodeTab({
     { environmentId, projectId: detail.projectId },
     project?.repositoryIdentity?.rootPath,
     thread,
+  );
+  const editStatus = useEnvironmentQuery(
+    editCwd ? vcsEnvironment.status({ environmentId, input: { cwd: editCwd } }) : null,
   );
   const [toggledFiles, setToggledFiles] = useState<ReadonlySet<string>>(() => new Set());
   // A change of any size can carry hundreds of commits, and a menu that long is a scroll rather
@@ -755,15 +759,16 @@ function PullRequestCodeTab({
 
   const resolveEditTarget = useCallback<ReviewEditTargetResolver>(
     (filePath) =>
-      editCwd
+      editCwd && editStatus.data
         ? {
             environmentId,
             cwd: editCwd,
             filePath,
+            expectedBranch: editStatus.data.refName,
             pullRequestUrl: detail.url,
           }
         : null,
-    [detail.url, editCwd, environmentId],
+    [detail.url, editCwd, editStatus.data, environmentId],
   );
 
   const renderHeaderMetadata = useCallback(

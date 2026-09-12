@@ -1,8 +1,6 @@
 import { useBlocker } from "@tanstack/react-router";
 import { executeAtomQuery } from "@t3tools/client-runtime/state/runtime";
 import type { EnvironmentId } from "@t3tools/contracts";
-import * as Effect from "effect/Effect";
-import { AtomRegistry } from "effect/unstable/reactivity";
 import {
   createContext,
   useCallback,
@@ -34,6 +32,7 @@ export interface ReviewEditTarget {
   environmentId: EnvironmentId;
   cwd: string;
   filePath: string;
+  expectedBranch: string | null;
   pullRequestUrl?: string;
   onSaved?: () => void;
 }
@@ -41,33 +40,24 @@ export interface ReviewEditTarget {
 interface ReviewDraft extends ReviewEditTarget {
   contents: string;
   savedContents: string;
-  expectedBranch: string | null;
 }
 
 export function reviewEditKey(target: ReviewEditTarget): string {
-  return JSON.stringify([target.environmentId, target.cwd, target.filePath]);
+  return JSON.stringify([target.environmentId, target.cwd, target.filePath, target.expectedBranch]);
 }
 
 export async function readReviewDraft(target: ReviewEditTarget): Promise<ReviewDraft> {
-  let status = await Effect.runPromise(
-    AtomRegistry.getResult(
-      appAtomRegistry,
-      vcsEnvironment.status({
-        environmentId: target.environmentId,
-        input: { cwd: target.cwd },
-      }),
-    ),
-  );
-  if (target.pullRequestUrl) {
-    const refreshed = await vcsEnvironment.refreshStatus.run(appAtomRegistry, {
-      environmentId: target.environmentId,
-      input: { cwd: target.cwd },
-    });
-    if (refreshed._tag === "Failure") throw new Error(formatEnvironmentQueryError(refreshed.cause));
-    status = refreshed.value;
-  }
+  const refreshed = await vcsEnvironment.refreshStatus.run(appAtomRegistry, {
+    environmentId: target.environmentId,
+    input: { cwd: target.cwd },
+  });
+  if (refreshed._tag === "Failure") throw new Error(formatEnvironmentQueryError(refreshed.cause));
+  const status = refreshed.value;
   if (target.pullRequestUrl && status.pr?.url !== target.pullRequestUrl) {
     throw new Error("Check out this pull request to edit its files.");
+  }
+  if (status.refName !== target.expectedBranch) {
+    throw new Error("The checkout changed. Wait for the diff to update, then try again.");
   }
   const result = await executeAtomQuery(
     appAtomRegistry,
@@ -80,7 +70,6 @@ export async function readReviewDraft(target: ReviewEditTarget): Promise<ReviewD
     ...target,
     contents: result.value.contents,
     savedContents: result.value.contents,
-    expectedBranch: status.refName,
   };
 }
 

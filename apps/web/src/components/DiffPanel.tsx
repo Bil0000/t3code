@@ -511,6 +511,7 @@ export default function DiffPanel({
       });
       if (
         shouldRetryBranchDiffAtEnvironmentCwd ||
+        !gitStatusQuery.data ||
         !editEnvironmentId ||
         !activeCwd ||
         !relativePath
@@ -520,6 +521,7 @@ export default function DiffPanel({
         environmentId: editEnvironmentId,
         cwd: activeCwd,
         filePath: relativePath,
+        expectedBranch: gitStatusQuery.data.refName,
         ...(canRefreshGitDiff ? { onSaved: refreshBranchDiffPreview } : {}),
       };
     },
@@ -527,6 +529,7 @@ export default function DiffPanel({
       activeCwd,
       activeRepositoryRoot,
       editEnvironmentId,
+      gitStatusQuery.data,
       canRefreshGitDiff,
       refreshBranchDiffPreview,
       shouldRetryBranchDiffAtEnvironmentCwd,

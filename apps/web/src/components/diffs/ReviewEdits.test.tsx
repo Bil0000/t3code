@@ -1,31 +1,24 @@
 import { parseDiffFromFile } from "@pierre/diffs";
 import { EnvironmentId } from "@t3tools/contracts";
-import { AsyncResult } from "effect/unstable/reactivity";
 import { act, useEffect, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vite-plus/test";
 
-const { read, write, refresh, blockOptions, blocker, toast, refreshStatus } = vi.hoisted(() => ({
-  read: vi.fn(),
-  refreshStatus: vi.fn(),
-  write: vi.fn(),
-  refresh: vi.fn(),
-  blockOptions: vi.fn(),
-  toast: vi.fn(),
-  blocker: { status: "idle", proceed: vi.fn(), reset: vi.fn() },
-}));
+const { read, write, refresh, blockOptions, blocker, toast, refreshStatus, editorOptions } =
+  vi.hoisted(() => ({
+    editorOptions: vi.fn(),
+    read: vi.fn(),
+    refreshStatus: vi.fn(),
+    write: vi.fn(),
+    refresh: vi.fn(),
+    blockOptions: vi.fn(),
+    toast: vi.fn(),
+    blocker: { status: "idle", proceed: vi.fn(), reset: vi.fn() },
+  }));
 vi.mock("@t3tools/client-runtime/state/runtime", () => ({ executeAtomQuery: read }));
-vi.mock("~/rpc/atomRegistry", async () => {
-  const { AtomRegistry } = await import("effect/unstable/reactivity");
-  return { appAtomRegistry: Object.assign(AtomRegistry.make(), { refresh }) };
-});
-vi.mock("~/state/vcs", async () => {
-  const { Atom, AsyncResult } = await import("effect/unstable/reactivity");
-  const status = Atom.make(
-    AsyncResult.success({ refName: "review", pr: { url: "" } }, { waiting: true }),
-  );
-  return { vcsEnvironment: { status: () => status, refreshStatus: { run: refreshStatus } } };
-});
+vi.mock("~/rpc/atomRegistry", () => ({ appAtomRegistry: { refresh } }));
+vi.mock("~/state/vcs", () => ({ vcsEnvironment: { refreshStatus: { run: refreshStatus } } }));
+vi.mock("@pierre/diffs/editor", () => ({ Editor: editorOptions }));
 vi.mock("~/state/projects", () => ({ projectEnvironment: { writeFile: {} } }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => write }));
 vi.mock("~/state/query", () => ({ formatEnvironmentQueryError: () => "Request failed" }));
@@ -51,16 +44,18 @@ vi.mock("../ui/alert-dialog", () => ({
 
 import { EditableDiffCodeView } from "./EditableDiffCodeView";
 import { StyledDiffCodeView } from "./StyledDiffCodeView";
-import { appAtomRegistry } from "~/rpc/atomRegistry";
-import { vcsEnvironment } from "~/state/vcs";
 import { readReviewDraft, reviewEditKey, ReviewEditsProvider, useReviewEdits } from "./ReviewEdits";
 
-const target = { environmentId: EnvironmentId.make("test"), cwd: "/repo", filePath: "file.ts" };
+const target = {
+  environmentId: EnvironmentId.make("test"),
+  cwd: "/repo",
+  filePath: "file.ts",
+  expectedBranch: "review",
+};
 const savedDraft = {
   ...target,
   contents: "saved",
   savedContents: "saved",
-  expectedBranch: "review",
 };
 const key = reviewEditKey(target);
 let renderer: ReactTestRenderer;
@@ -87,7 +82,7 @@ beforeEach(() => {
   write.mockReset().mockResolvedValue({ _tag: "Success" });
   refresh.mockClear();
   toast.mockClear();
-  setStatus("https://github.com/example/repo/pull/1");
+  editorOptions.mockClear();
   refreshStatus.mockReset().mockResolvedValue({
     _tag: "Success",
     value: { refName: "review", pr: { url: "https://github.com/example/repo/pull/1" } },
@@ -143,22 +138,18 @@ async function blockNavigation() {
   );
 }
 
-function setStatus(url: string) {
-  appAtomRegistry.set(
-    vcsEnvironment.status({
-      environmentId: target.environmentId,
-      input: { cwd: target.cwd },
-    }) as never,
-    AsyncResult.success({ refName: "review", pr: { url } }, { waiting: true }),
-  );
-}
-it("reads working contents while the status stream is still waiting for updates", async () => {
+it("reads fresh working contents after checking the checkout", async () => {
   expect(await readReviewDraft(target)).toMatchObject({
     contents: "fresh",
     savedContents: "fresh",
     expectedBranch: "review",
   });
   expect(read.mock.calls.map((call) => [call[1], call[2].refresh])).toEqual([["file", true]]);
+});
+it("rejects a checkout change before reading working contents", async () => {
+  refreshStatus.mockResolvedValueOnce({ _tag: "Success", value: { refName: "other", pr: null } });
+  await expect(readReviewDraft(target)).rejects.toThrow("checkout changed");
+  expect(read).not.toHaveBeenCalled();
 });
 it.each([
   "https://github.com/example/repo/pull/1",
@@ -249,6 +240,29 @@ it("preserves dirty drafts when a review surface unmounts", async () => {
   await act(async () => edits.begin(savedDraft));
   expect(edits.drafts.get(key)?.contents).toBe("changed");
 });
+it("keeps unsaved drafts separate and saves to their original branches", async () => {
+  await mount();
+  await change("first branch edits");
+  const other = { ...savedDraft, expectedBranch: "other" };
+  const otherKey = reviewEditKey(other);
+  await act(async () => {
+    edits.begin(other);
+    edits.change(otherKey, "second branch edits");
+    edits.focus(otherKey);
+  });
+  await save();
+  expect(write.mock.lastCall?.[0].input).toMatchObject({
+    expectedBranch: "other",
+    contents: "second branch edits",
+  });
+  expect(edits.drafts.get(key)?.contents).toBe("first branch edits");
+  await act(async () => edits.focus(key));
+  await save();
+  expect(write.mock.lastCall?.[0].input).toMatchObject({
+    expectedBranch: "review",
+    contents: "first branch edits",
+  });
+});
 it("does not capture the save shortcut after focus leaves the review editor", async () => {
   await mount();
   await change();
@@ -285,7 +299,7 @@ it("saves all dirty files before allowing navigation", async () => {
   expect(edits.drafts.size).toBe(0);
 });
 
-it.each(["pull request", "diff version"])(
+it.each(["pull request", "diff version", "checkout"])(
   "does not reuse an editor after the %s changes",
   async (changed) => {
     vi.stubGlobal("document", { caretPositionFromPoint: () => null });
@@ -296,12 +310,12 @@ it.each(["pull request", "diff version"])(
     );
     const item = { type: "diff" as const, id: "file.ts", fileDiff, version: 1 };
     const url = "https://github.com/example/repo/pull/1";
-    const view = (pullRequestUrl: string, version: number) => (
+    const view = (pullRequestUrl: string, version: number, expectedBranch = "review") => (
       <ReviewEditsProvider>
         <Probe />
         <EditableDiffCodeView
           items={[{ ...item, version }]}
-          editing={() => ({ ...target, pullRequestUrl })}
+          editing={(filePath) => ({ ...target, filePath, pullRequestUrl, expectedBranch })}
         />
       </ReviewEditsProvider>
     );
@@ -324,9 +338,23 @@ it.each(["pull request", "diff version"])(
     );
     expect(viewer().items[0].edit).toBe(true);
     expect(viewer().items[0].fileDiff).not.toBe(fileDiff);
+    viewer().createEditor({ onChange: vi.fn() });
+    const setSelections = vi.fn();
+    editorOptions.mock.lastCall?.[0].onAttach({
+      getFile: () => ({ name: "b/file.ts", contents: "fresh" }),
+      setSelections,
+      focus: vi.fn(),
+    });
+    expect(setSelections).toHaveBeenCalledWith([
+      { start: { line: 0, character: 0 }, end: { line: 0, character: 0 }, direction: "none" },
+    ]);
     await act(async () =>
       renderer.update(
-        view(changed === "pull request" ? url + "2" : url, changed === "diff version" ? 2 : 1),
+        view(
+          changed === "pull request" ? url + "2" : url,
+          changed === "diff version" ? 2 : 1,
+          changed === "checkout" ? "other" : "review",
+        ),
       ),
     );
     expect(viewer().items[0].edit).toBeUndefined();

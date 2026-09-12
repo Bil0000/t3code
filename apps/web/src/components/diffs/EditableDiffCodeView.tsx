@@ -83,7 +83,7 @@ export function EditableDiffCodeView<LAnnotation>({
         ...editorOptions,
         onAttach: (editor) => {
           const file = editor.getFile();
-          const target = file && editing?.(file.name);
+          const target = file && editing?.(resolveFileDiffPath(file));
           if (!target) return;
           key = reviewEditKey(target);
           const request = focusRequest.current;
@@ -158,10 +158,8 @@ export function EditableDiffCodeView<LAnnotation>({
           void (async () => {
             try {
               const current = edits.drafts.get(key);
-              const draft =
-                current && current.contents !== current.savedContents
-                  ? current
-                  : await readReviewDraft(target);
+              const fresh = await readReviewDraft(target);
+              const draft = current && current.contents !== current.savedContents ? current : fresh;
               const source = context.instance.fileDiff ?? context.item.fileDiff;
               let fileDiff =
                 source.isPartial && options?.loadDiffFiles
