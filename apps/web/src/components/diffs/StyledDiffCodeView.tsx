@@ -7,10 +7,15 @@ import {
   type UncontrolledCodeViewProps,
 } from "@pierre/diffs/react";
 /* oxlint-enable eslint/no-restricted-imports */
-import type { Ref } from "react";
+import { useCallback, type Ref } from "react";
 
-import { DIFF_SURFACE_THEME_UNSAFE_CSS } from "~/lib/diffRendering";
+import {
+  DIFF_SURFACE_THEME_UNSAFE_CSS,
+  resolveFileDiffPath,
+  resolveFileDiffPreviousPath,
+} from "~/lib/diffRendering";
 import { DiffWorkerPoolProvider } from "../DiffWorkerPoolProvider";
+import { DiffRenameBadge } from "./DiffRename";
 
 const DIFF_VIEW_UNSAFE_CSS = `${DIFF_SURFACE_THEME_UNSAFE_CSS}
 :is(
@@ -283,12 +288,36 @@ export function StyledDiffCodeView<LAnnotation = undefined>({
   viewerRef,
   className,
   unsafeCSSExtra,
+  renderHeaderFilenameSuffix,
   ...props
 }: StyledDiffCodeViewProps<LAnnotation>) {
+  const renderFilenameSuffix = useCallback<
+    NonNullable<CodeViewProps<LAnnotation>["renderHeaderFilenameSuffix"]>
+  >(
+    (item) => {
+      if (
+        item.type !== "diff" ||
+        (item.fileDiff.type !== "rename-pure" && item.fileDiff.type !== "rename-changed")
+      )
+        return renderHeaderFilenameSuffix?.(item);
+      return (
+        <>
+          <DiffRenameBadge
+            previousPath={resolveFileDiffPreviousPath(item.fileDiff)}
+            path={resolveFileDiffPath(item.fileDiff)}
+            withChanges={item.fileDiff.type === "rename-changed"}
+          />
+          {renderHeaderFilenameSuffix?.(item)}
+        </>
+      );
+    },
+    [renderHeaderFilenameSuffix],
+  );
   return (
     <DiffWorkerPoolProvider>
       <CodeView<LAnnotation>
         {...props}
+        renderHeaderFilenameSuffix={renderFilenameSuffix}
         {...(viewerRef ? { ref: viewerRef } : {})}
         // The custom element itself is focusable for keyboard scrolling. Its native outline sits
         // outside the panel clipping boundary; actual controls inside retain their own indicators.

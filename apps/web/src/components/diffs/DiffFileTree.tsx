@@ -9,6 +9,7 @@ import {
   useState,
   type ReactNode,
   type Ref,
+  type SyntheticEvent,
 } from "react";
 
 import { useTheme } from "~/hooks/useTheme";
@@ -19,6 +20,8 @@ import { PIERRE_TREE_UNSAFE_CSS, pierreTreeStyle } from "~/pierre-tree-theme";
 
 import { setAllDirectoriesExpanded } from "../files/fileTreeExpansion";
 import { RightPanelResizeHandle } from "../preview/RightPanelResizeHandle";
+import { Tooltip, TooltipPopup } from "../ui/tooltip";
+import { DiffRenameDetails } from "./DiffRename";
 import {
   buildDiffFileTreeUpdates,
   collectDirectoryPaths,
@@ -89,6 +92,21 @@ export function DiffFileTree({
     edge: "left",
   });
   const paths = useMemo(() => entries.map((entry) => entry.path), [entries]);
+  const entriesByPath = useMemo(
+    () => new Map(entries.map((entry) => [entry.path, entry])),
+    [entries],
+  );
+  const [hoveredRow, setHoveredRow] = useState<HTMLElement | null>(null);
+  const hoveredEntry = entriesByPath.get(hoveredRow?.getAttribute("data-item-path") ?? "");
+  const showPathTooltip = (event: SyntheticEvent) => {
+    const row = event.nativeEvent
+      .composedPath()
+      .find(
+        (node): node is HTMLElement =>
+          node instanceof HTMLElement && node.hasAttribute("data-item-path"),
+      );
+    setHoveredRow(row ?? null);
+  };
   const directoryPaths = useMemo(() => collectDirectoryPaths(paths), [paths]);
   const gitStatus = useMemo<ReadonlyArray<GitStatusEntry>>(
     () => entries.map((entry) => ({ path: entry.path, status: entry.status })),
@@ -202,6 +220,16 @@ export function DiffFileTree({
       <FileTree
         model={model}
         aria-label={ariaLabel}
+        onPointerMoveCapture={showPathTooltip}
+        onPointerLeave={() => setHoveredRow(null)}
+        onFocusCapture={showPathTooltip}
+        onKeyUpCapture={(event) => {
+          if (event.key === "Escape") setHoveredRow(null);
+          else showPathTooltip(event);
+        }}
+        onBlurCapture={() => setHoveredRow(null)}
+        onScrollCapture={() => setHoveredRow(null)}
+        onWheelCapture={() => setHoveredRow(null)}
         onClickCapture={(event) => {
           if (
             event.defaultPrevented ||
@@ -228,6 +256,24 @@ export function DiffFileTree({
         className="min-h-0 flex-1 overflow-hidden"
         style={pierreTreeStyle(resolvedTheme)}
       />
+      <Tooltip
+        open={hoveredEntry !== undefined}
+        onOpenChange={(open) => !open && setHoveredRow(null)}
+      >
+        <TooltipPopup role="tooltip" anchor={hoveredRow} side="left" align="start">
+          {hoveredEntry?.previousPath ? (
+            <DiffRenameDetails
+              previousPath={hoveredEntry.previousPath}
+              path={hoveredEntry.path}
+              withChanges={hoveredEntry.renamedWithChanges === true}
+            />
+          ) : (
+            <span className="block max-w-[min(32rem,80vw)] break-all font-mono">
+              {hoveredEntry?.path}
+            </span>
+          )}
+        </TooltipPopup>
+      </Tooltip>
       {footer}
     </div>
   );
