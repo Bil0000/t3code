@@ -118,6 +118,7 @@ import type { PullRequestAgentSelectionInput } from "./PullRequestCodeTab";
 import { openOnHostLabel, showPullRequestLinkContextMenu } from "./pullRequestLinkContextMenu";
 import { PullRequestMarkdownContext } from "./PullRequestMarkdown";
 import { PullRequestCommentActionsContext } from "./PullRequestCommentActions";
+import { Checkbox } from "../ui/checkbox";
 import { PullRequestSummaryTab } from "./PullRequestSummaryTab";
 import { PullRequestTimelineTab } from "./PullRequestTimelineTab";
 import {
@@ -613,6 +614,7 @@ export function PullRequestDetailPanel({
   };
   const [confirmation, setConfirmation] = useState<{
     readonly open: boolean;
+    readonly bypassMergeChecks?: boolean;
     readonly action: "merge" | "close" | "enable-auto-merge" | "revert" | "approve-workflows";
   }>({ open: false, action: "merge" });
   const confirmAction = confirmation.action;
@@ -932,6 +934,7 @@ export function PullRequestDetailPanel({
     action: PullRequestAction,
     method?: PullRequestMergeMethod,
     updateMethod?: PullRequestUpdateMethod,
+    bypassMergeChecks = false,
   ) => {
     const result = await runAction({
       environmentId,
@@ -939,6 +942,7 @@ export function PullRequestDetailPanel({
         ...reference,
         action,
         ...(method ? { mergeMethod: method } : {}),
+        ...(bypassMergeChecks ? { bypassMergeChecks: true } : {}),
         ...(updateMethod ? { updateMethod } : {}),
       },
     });
@@ -981,10 +985,11 @@ export function PullRequestDetailPanel({
     action: PullRequestAction,
     method?: PullRequestMergeMethod,
     updateMethod?: PullRequestUpdateMethod,
+    bypassMergeChecks = false,
   ) => {
     if (actionPending) return false;
     setPendingAction(action);
-    return finishAction(action, method, updateMethod);
+    return finishAction(action, method, updateMethod, bypassMergeChecks);
   };
 
   const performCommentAction = async (body: string, action: "close" | "reopen") => {
@@ -2796,6 +2801,20 @@ export function PullRequestDetailPanel({
                       : `This closes #${reference.number} without merging it.`}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {confirmAction === "merge" &&
+          detail?.capabilities.bypassMergeChecks === true &&
+          detail.viewerPermissions.bypassMergeChecks === true ? (
+            <label className="flex items-start gap-2 text-sm text-destructive">
+              <Checkbox
+                checked={confirmation.bypassMergeChecks === true}
+                disabled={actionPending}
+                onCheckedChange={(checked) =>
+                  setConfirmation((current) => ({ ...current, bypassMergeChecks: checked }))
+                }
+              />
+              Merge without waiting for requirements (bypass checks)
+            </label>
+          ) : null}
           <AlertDialogFooter>
             <AlertDialogClose render={<Button variant="outline" size="sm" />}>
               Cancel
@@ -2807,7 +2826,13 @@ export function PullRequestDetailPanel({
               onClick={() => {
                 const action = confirmAction;
                 setConfirmation((current) => ({ ...current, open: false }));
-                if (action === "merge") void perform("merge", selectedMergeMethod);
+                if (action === "merge")
+                  void perform(
+                    "merge",
+                    selectedMergeMethod,
+                    undefined,
+                    confirmation.bypassMergeChecks === true,
+                  );
                 if (action === "enable-auto-merge")
                   void perform("enable-auto-merge", selectedMergeMethod);
                 if (action === "revert") void perform("revert");
@@ -2816,7 +2841,9 @@ export function PullRequestDetailPanel({
               }}
             >
               {confirmAction === "merge"
-                ? selectedMergeMethodLabel
+                ? confirmation.bypassMergeChecks
+                  ? `Bypass checks and ${selectedMergeMethodLabel.toLowerCase()}`
+                  : selectedMergeMethodLabel
                 : confirmAction === "enable-auto-merge"
                   ? "Enable auto-merge"
                   : confirmAction === "revert"
