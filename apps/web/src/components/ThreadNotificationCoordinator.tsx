@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { useNavigate } from "@tanstack/react-router";
 import type { EnvironmentId, ThreadId } from "@t3tools/contracts";
 import * as Option from "effect/Option";
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import { getClientSettings, useClientSettings } from "../hooks/useSettings";
 import { useEnvironments } from "../state/environments";
@@ -11,6 +11,7 @@ import {
   hasDesktopNotifications,
   hasNotificationSound,
   playNotificationSound,
+  setNotificationBadge,
   unlockNotificationAudio,
 } from "../threadNotifications";
 import { resolveSidebarThreadStatus } from "./Sidebar.logic";
@@ -18,6 +19,29 @@ import { resolveSidebarThreadStatus } from "./Sidebar.logic";
 export function ThreadNotificationCoordinator() {
   const { environments } = useEnvironments();
   const mode = useClientSettings((settings) => settings.notificationMode);
+  const pending = useRef(new Map<string, Notification>());
+  const onNotification = useCallback((tag: string, notification: Notification) => {
+    pending.current.get(tag)?.close();
+    pending.current.set(tag, notification);
+    setNotificationBadge(pending.current.size);
+  }, []);
+
+  useEffect(() => {
+    const clear = () => {
+      for (const notification of pending.current.values()) notification.close();
+      pending.current.clear();
+      setNotificationBadge(0);
+    };
+    clear();
+    if (!hasDesktopNotifications(mode)) return;
+    const unsubscribe = window.desktopBridge?.onNotificationBadgeClear?.(clear);
+    window.addEventListener("focus", clear);
+    return () => {
+      unsubscribe?.();
+      window.removeEventListener("focus", clear);
+      clear();
+    };
+  }, [mode]);
 
   useEffect(() => {
     if (!hasNotificationSound(mode)) return;
@@ -35,11 +59,18 @@ export function ThreadNotificationCoordinator() {
     <EnvironmentNotifications
       key={environment.environmentId}
       environmentId={environment.environmentId}
+      onNotification={onNotification}
     />
   ));
 }
 
-function EnvironmentNotifications({ environmentId }: { environmentId: EnvironmentId }) {
+function EnvironmentNotifications({
+  environmentId,
+  onNotification,
+}: {
+  environmentId: EnvironmentId;
+  onNotification: (tag: string, notification: Notification) => void;
+}) {
   const shell = useAtomValue(environmentShell.stateValueAtom(environmentId));
   const mode = useClientSettings((settings) => settings.notificationMode);
   const navigate = useNavigate();
@@ -81,19 +112,22 @@ function EnvironmentNotifications({ environmentId }: { environmentId: Environmen
       }
       if (
         !hasDesktopNotifications(mode) ||
+        (document.visibilityState === "visible" && document.hasFocus()) ||
         typeof Notification === "undefined" ||
         Notification.permission !== "granted"
       )
         continue;
       try {
+        const tag = `${environmentId}:${thread.id}`;
         const notification = new Notification(
           kind === "completion"
             ? "Thread completed"
             : status === "approval"
               ? "Approval needed"
               : "Input needed",
-          { body: thread.title, tag: `${environmentId}:${thread.id}`, silent: true },
+          { body: thread.title, tag, silent: true },
         );
+        onNotification(tag, notification);
         notification.addEventListener("click", () => {
           notification.close();
           window.focus();
@@ -107,7 +141,7 @@ function EnvironmentNotifications({ environmentId }: { environmentId: Environmen
       }
     }
     previous.current = next;
-  }, [environmentId, mode, navigate, shell]);
+  }, [environmentId, mode, navigate, onNotification, shell]);
 
   return null;
 }
