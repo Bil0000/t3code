@@ -1127,6 +1127,7 @@ export function PullRequestDetailPanel({
           task.prompt.length > 0
             ? "The question is in the composer — read it over, then send."
             : "The pull request is in the composer — type your question, then send.",
+        ...announce,
       });
       return;
     }
@@ -1339,7 +1340,7 @@ export function PullRequestDetailPanel({
         issue,
       ),
       {
-        title: "Opened in a thread",
+        title: "Task ready in the composer",
         description: "The task is in the composer — read it over, then send.",
       },
     );
