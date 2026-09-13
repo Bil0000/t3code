@@ -4715,6 +4715,9 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     ["github", "https://github.com/pingdotgg/codething-mvp/pull/77"],
     ["gitlab", "https://gitlab.com/team/repo/-/merge_requests/77"],
     ["bitbucket", "https://bitbucket.org/team/repo/pull-requests/77"],
+    ["azure-devops", "https://dev.azure.com/team/project/_git/repo/pullrequest/77"],
+    ["forgejo", "https://forgejo.example/forgejo/team/repo/pulls/77"],
+    ["forgejo", "https://gitea.example/team/repo/pulls/77"],
   ] as const)(
     "publishes %s review edits from an isolated worktree with the writing agent",
     ([provider, url]) =>
@@ -4733,21 +4736,49 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         NodeFS.writeFileSync(NodePath.join(cwd, "review.txt"), "unrelated local work\n");
         let generated = false;
         const projectId = ProjectId.make("review-project");
+        const forgejoPullRequest =
+          provider === "forgejo"
+            ? toForgejoChangeRequest(
+                yield* decodeForgejoPullRequest({
+                  number: 77,
+                  title: "Review",
+                  html_url: url,
+                  state: "open",
+                  merged: false,
+                  base: {
+                    ref: "main",
+                    sha: "base",
+                    repo: { full_name: "team/repo", owner: { login: "team" } },
+                  },
+                  head: {
+                    ref: "feature/review",
+                    sha: "head",
+                    repo: { full_name: "team/repo", owner: { login: "team" } },
+                  },
+                }),
+              )
+            : null;
         const adapter = yield* SourceControlProvider.pipe(
           Effect.provide(
             Layer.mock(SourceControlProvider)({
               kind: provider,
               getChangeRequest: () =>
-                Effect.succeed({
-                  provider,
-                  number: 77,
-                  title: "Review",
-                  url,
-                  baseRefName: "main",
-                  headRefName: "feature/review",
-                  state: "open",
-                  updatedAt: Option.none(),
-                }),
+                Effect.succeed(
+                  forgejoPullRequest ?? {
+                    provider,
+                    number: 77,
+                    title: "Review",
+                    url,
+                    baseRefName: "main",
+                    headRefName: "feature/review",
+                    state: "open",
+                    updatedAt: Option.none(),
+                  },
+                ),
+              getRepositoryCloneUrls: ({ repository }) => {
+                expect(repository).toBe("team/repo");
+                return Effect.succeed({ nameWithOwner: repository!, url: remote, sshUrl: remote });
+              },
               getDefaultBranch: () => Effect.succeed("main"),
               listChangeRequests: () => Effect.succeed([]),
             }),
@@ -4818,6 +4849,70 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
         }).pipe(Effect.result);
         expect(wrongBranch._tag).toBe("Failure");
       }),
+  );
+
+  it.effect("does not publish a Forgejo review whose source repository is missing", () =>
+    Effect.gen(function* () {
+      const cwd = yield* makeTempDir("t3code-forgejo-review-");
+      yield* initRepo(cwd);
+      const remote = yield* createBareRemote();
+      yield* runGit(cwd, ["remote", "add", "origin", remote]);
+      yield* runGit(cwd, ["push", "-u", "origin", "main"]);
+      yield* runGit(cwd, ["push", "origin", "HEAD:refs/pull/77/head"]);
+      const before = (yield* runGit(cwd, ["rev-parse", "HEAD"])).stdout;
+      const pullRequest = toForgejoChangeRequest(
+        yield* decodeForgejoPullRequest({
+          number: 77,
+          title: "Unavailable source",
+          html_url: "https://forgejo.example/forgejo/team/repo/pulls/77",
+          state: "open",
+          merged: false,
+          base: {
+            ref: "main",
+            sha: before.trim(),
+            repo: { full_name: "team/repo", owner: { login: "team" } },
+          },
+          head: { ref: "main", sha: before.trim(), repo: null },
+        }),
+      );
+      const adapter = yield* SourceControlProvider.pipe(
+        Effect.provide(
+          Layer.mock(SourceControlProvider)({
+            kind: "forgejo",
+            getChangeRequest: () => Effect.succeed(pullRequest),
+            getDefaultBranch: () => Effect.succeed("main"),
+            listChangeRequests: () => Effect.succeed([]),
+          }),
+        ),
+      );
+      const { manager } = yield* makeManager({ sourceControlProvider: adapter });
+      const prepared = yield* preparePullRequestThread(manager, {
+        cwd,
+        reference: pullRequest.url,
+        mode: "review",
+      });
+      NodeFS.writeFileSync(NodePath.join(prepared.worktreePath!, "README.md"), "review edit\n");
+      const result = yield* runStackedAction(manager, {
+        cwd: prepared.worktreePath!,
+        action: "commit_push",
+        expectedBranch: prepared.branch,
+        pullRequestUrl: pullRequest.url,
+        filePaths: ["README.md"],
+      }).pipe(Effect.result);
+      expect(result._tag).toBe("Failure");
+      if (result._tag === "Failure") {
+        expect(result.failure.message).toContain("PR source repository is unavailable");
+      }
+      expect((yield* runGit(cwd, ["rev-parse", "origin/main"])).stdout).toBe(before);
+      expect((yield* runGit(prepared.worktreePath!, ["rev-parse", "HEAD"])).stdout).toBe(before);
+      expect(
+        (yield* runGit(prepared.worktreePath!, [
+          "for-each-ref",
+          "--format=%(upstream)",
+          `refs/heads/${prepared.branch}`,
+        ])).stdout.trim(),
+      ).toBe("");
+    }),
   );
 
   it.effect("preserves both branch materialization failures when the fallback also fails", () =>
@@ -4932,84 +5027,114 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
     }),
   );
 
-  it.effect.each(["worktree", "review"] as const)(
-    "preserves fork upstream tracking when preparing a %s PR",
-    (mode) =>
-      Effect.gen(function* () {
-        const repoDir = yield* makeTempDir("t3code-git-manager-");
-        yield* initRepo(repoDir);
-        const originDir = yield* createBareRemote();
-        const forkDir = yield* createBareRemote();
-        yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
-        yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
-        yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
-        yield* runGit(repoDir, ["checkout", "-b", "feature/pr-fork"]);
-        NodeFS.writeFileSync(NodePath.join(repoDir, "fork.txt"), "fork\n");
-        yield* runGit(repoDir, ["add", "fork.txt"]);
-        yield* runGit(repoDir, ["commit", "-m", "Fork PR branch"]);
-        yield* runGit(repoDir, ["push", "-u", "fork-seed", "feature/pr-fork"]);
-        yield* runGit(repoDir, ["checkout", "main"]);
+  it.effect.each([
+    ["github", "worktree"],
+    ["github", "review"],
+    ["forgejo", "review"],
+  ] as const)("preserves fork upstream tracking when preparing a %s %s PR", ([provider, mode]) =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const originDir = yield* createBareRemote();
+      const forkDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", originDir]);
+      yield* runGit(repoDir, ["push", "-u", "origin", "main"]);
+      yield* runGit(repoDir, ["remote", "add", "fork-seed", forkDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/pr-fork"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "fork.txt"), "fork\n");
+      yield* runGit(repoDir, ["add", "fork.txt"]);
+      yield* runGit(repoDir, ["commit", "-m", "Fork PR branch"]);
+      yield* runGit(repoDir, ["push", "-u", "fork-seed", "feature/pr-fork"]);
+      yield* runGit(repoDir, ["checkout", "main"]);
 
-        const { manager } = yield* makeManager({
-          ghScenario: {
-            pullRequest: {
-              number: 81,
-              title: "Fork PR",
-              url: "https://github.com/pingdotgg/codething-mvp/pull/81",
-              baseRefName: "main",
-              headRefName: "feature/pr-fork",
-              state: "open",
-              isCrossRepository: true,
-              headRepositoryNameWithOwner: "octocat/codething-mvp",
-              headRepositoryOwnerLogin: "octocat",
-            },
-            repositoryCloneUrls: {
-              "octocat/codething-mvp": {
-                url: forkDir,
-                sshUrl: forkDir,
-              },
+      const pullRequest = {
+        provider,
+        number: 81,
+        title: "Fork PR",
+        url:
+          provider === "forgejo"
+            ? "https://forgejo.example/forgejo/pingdotgg/codething-mvp/pulls/81"
+            : "https://github.com/pingdotgg/codething-mvp/pull/81",
+        baseRefName: "main",
+        headRefName: "feature/pr-fork",
+        state: "open" as const,
+        updatedAt: Option.none(),
+        isCrossRepository: true,
+        headRepositoryNameWithOwner: "octocat/codething-mvp",
+        headRepositoryOwnerLogin: "octocat",
+      };
+      const adapter =
+        provider === "forgejo"
+          ? yield* SourceControlProvider.pipe(
+              Effect.provide(
+                Layer.mock(SourceControlProvider)({
+                  kind: provider,
+                  getChangeRequest: () => Effect.succeed(pullRequest),
+                  getRepositoryCloneUrls: ({ repository }) => {
+                    expect(repository).toBe("octocat/codething-mvp");
+                    return Effect.succeed({
+                      nameWithOwner: repository!,
+                      url: forkDir,
+                      sshUrl: forkDir,
+                    });
+                  },
+                  getDefaultBranch: () => Effect.succeed("main"),
+                  listChangeRequests: () => Effect.succeed([]),
+                }),
+              ),
+            )
+          : undefined;
+      const { manager } = yield* makeManager({
+        ...(adapter ? { sourceControlProvider: adapter } : {}),
+        ghScenario: {
+          pullRequest,
+          repositoryCloneUrls: {
+            "octocat/codething-mvp": {
+              url: forkDir,
+              sshUrl: forkDir,
             },
           },
-        });
+        },
+      });
 
-        const result = yield* preparePullRequestThread(manager, {
-          cwd: repoDir,
-          reference: "81",
-          mode,
-        });
+      const result = yield* preparePullRequestThread(manager, {
+        cwd: repoDir,
+        reference: "81",
+        mode,
+      });
 
-        if (mode === "review") {
-          NodeFS.writeFileSync(NodePath.join(result.worktreePath!, "fork.txt"), "reviewed fork\n");
-          yield* runStackedAction(manager, {
-            cwd: result.worktreePath!,
-            action: "commit_push",
-            expectedBranch: result.branch,
-            pullRequestUrl: "https://github.com/pingdotgg/codething-mvp/pull/81",
-            filePaths: ["fork.txt"],
-          });
-          expect(
-            (yield* runGit(repoDir, ["show", "fork-seed/feature/pr-fork:fork.txt"])).stdout,
-          ).toBe("reviewed fork\n");
-          expect((yield* runGit(repoDir, ["show", "origin/main:README.md"])).stdout).not.toContain(
-            "reviewed fork",
-          );
-        }
-        expect(result.worktreePath).not.toBeNull();
-        const upstreamRef = (yield* runGit(result.worktreePath as string, [
-          "rev-parse",
-          "--abbrev-ref",
-          "@{upstream}",
-        ])).stdout.trim();
-        expect(upstreamRef).toBe("fork-seed/feature/pr-fork");
-        expect(upstreamRef.startsWith("origin/")).toBe(false);
+      if (mode === "review") {
+        NodeFS.writeFileSync(NodePath.join(result.worktreePath!, "fork.txt"), "reviewed fork\n");
+        yield* runStackedAction(manager, {
+          cwd: result.worktreePath!,
+          action: "commit_push",
+          expectedBranch: result.branch,
+          pullRequestUrl: pullRequest.url,
+          filePaths: ["fork.txt"],
+        });
         expect(
-          (yield* runGit(result.worktreePath as string, [
-            "config",
-            "--get",
-            "remote.fork-seed.url",
-          ])).stdout.trim(),
-        ).toBe(forkDir);
-      }),
+          (yield* runGit(repoDir, ["show", "fork-seed/feature/pr-fork:fork.txt"])).stdout,
+        ).toBe("reviewed fork\n");
+        expect((yield* runGit(repoDir, ["show", "origin/main:README.md"])).stdout).not.toContain(
+          "reviewed fork",
+        );
+      }
+      expect(result.worktreePath).not.toBeNull();
+      const upstreamRef = (yield* runGit(result.worktreePath as string, [
+        "rev-parse",
+        "--abbrev-ref",
+        "@{upstream}",
+      ])).stdout.trim();
+      expect(upstreamRef).toBe("fork-seed/feature/pr-fork");
+      expect(upstreamRef.startsWith("origin/")).toBe(false);
+      expect(
+        (yield* runGit(result.worktreePath as string, [
+          "config",
+          "--get",
+          "remote.fork-seed.url",
+        ])).stdout.trim(),
+      ).toBe(forkDir);
+    }),
   );
 
   it.effect("preserves fork upstream tracking when preparing a local PR thread", () =>
