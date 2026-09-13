@@ -6467,12 +6467,18 @@ export default function ChatView(props: ChatViewProps) {
         command === "composer.host" ||
         command === "composer.effort" ||
         command === "composer.mode" ||
-        command === "composer.workspace" ||
-        command === "composer.branch"
+        command === "composer.workspace"
       ) {
         event.preventDefault();
         event.stopPropagation();
         if (!event.repeat) composerRef.current?.openControl(command);
+        return;
+      }
+
+      if (command === "composer.branch") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (!event.repeat) branchToolbarRef.current?.openBranchPicker();
         return;
       }
 
