@@ -32,7 +32,15 @@ import {
 } from "lucide-react";
 import { useAtomRefresh } from "@effect/atom-react";
 import * as Schema from "effect/Schema";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useEffectEvent,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 import { useLocalStorage } from "~/hooks/useLocalStorage";
 import { useClientSettings, useUpdateClientSettings } from "~/hooks/useSettings";
@@ -505,7 +513,11 @@ function PullRequestCodeTab({
           groupAt(anchor.side, anchor.line).draft = true;
         }
 
-        const collapsed = isFileDiffCollapsed(fileKey, foldOverride, toggledFiles);
+        const collapsed = isFileDiffCollapsed(
+          fileKey,
+          foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded"),
+          toggledFiles,
+        );
 
         const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
           side: toViewerSide(group.side),
@@ -558,6 +570,7 @@ function PullRequestCodeTab({
       foldOverride,
       pendingComments,
       placedThreadIds,
+      settings.diffFilesCollapsed,
       toggledFiles,
     ],
   );
@@ -668,9 +681,15 @@ function PullRequestCodeTab({
     if (item) revealFile(resolveFileDiffPath(item.fileDiff));
     else if (nextCursor !== null) loadNextSlice();
   };
+  const expandGuideFile = useEffectEvent(() => {
+    if (guideItem?.collapsed) toggleFile(guideItem.id);
+  });
   const guideFileId = guideItem?.id;
   useEffect(() => {
-    if (guided && guideFileId) requestTreeReveal(guideFileId);
+    if (guided && guideFileId) {
+      expandGuideFile();
+      requestTreeReveal(guideFileId);
+    }
   }, [guided, guideFileId, requestTreeReveal]);
 
   const treeRef = useRef<DiffFileTreeHandle>(null);
