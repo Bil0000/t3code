@@ -46,21 +46,25 @@ export const installNotificationBadge = Effect.fn("desktop.ipc.installNotificati
     const ipc = yield* DesktopIpc.DesktopIpc;
     const app = yield* ElectronApp.ElectronApp;
     const platform = yield* HostProcessPlatform;
-    const clear = () => applyNotificationBadge(platform, { count: 0, image: null });
+    const clear = () => {
+      applyNotificationBadge(platform, { count: 0, image: null });
+      for (const window of Electron.BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send(SET_NOTIFICATION_BADGE_CHANNEL);
+      }
+    };
     yield* ipc.handle(
       DesktopIpc.makeIpcMethod({
         channel: SET_NOTIFICATION_BADGE_CHANNEL,
         payload: NotificationBadge,
         result: Schema.Void,
-        handler: (badge) => Effect.sync(() => applyNotificationBadge(platform, badge)),
+        handler: (badge) =>
+          Effect.sync(() => {
+            if (badge.count > 0 && Electron.BrowserWindow.getFocusedWindow()) clear();
+            else applyNotificationBadge(platform, badge);
+          }),
       }),
     );
-    yield* app.on("browser-window-focus", () => {
-      clear();
-      for (const window of Electron.BrowserWindow.getAllWindows()) {
-        if (!window.isDestroyed()) window.webContents.send(SET_NOTIFICATION_BADGE_CHANNEL);
-      }
-    });
+    yield* app.on("browser-window-focus", clear);
     yield* app.on("before-quit", clear);
     yield* Effect.addFinalizer(() => Effect.sync(clear));
   },
