@@ -2,6 +2,7 @@ import { assert, describe, it } from "vite-plus/test";
 import {
   compileResolvedKeybindingsConfig,
   DEFAULT_RESOLVED_KEYBINDINGS,
+  mergeWithDefaultKeybindings,
 } from "@t3tools/shared/keybindings";
 
 import {
@@ -1063,6 +1064,48 @@ describe("plus key parsing", () => {
 });
 
 describe("composer and pull request shortcuts", () => {
+  it("fills missing server commands without replacing saved bindings", () => {
+    const olderServerBindings = DEFAULT_RESOLVED_KEYBINDINGS.filter(
+      (binding) => !binding.command.startsWith("pullRequest.copy"),
+    );
+    const input = event({ key: "k", metaKey: true, shiftKey: true });
+    assert.strictEqual(
+      resolveShortcutCommand(input, olderServerBindings, { platform: "MacIntel" }),
+      null,
+    );
+    const bindings = mergeWithDefaultKeybindings(olderServerBindings);
+    assert.strictEqual(
+      resolveShortcutCommand(input, bindings, { platform: "MacIntel" }),
+      "pullRequest.copyUrl",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "y", metaKey: true, shiftKey: true }), bindings, {
+        platform: "MacIntel",
+      }),
+      "pullRequest.copyNumber",
+    );
+    const remapped = mergeWithDefaultKeybindings(
+      compileResolvedKeybindingsConfig([
+        { key: "mod+shift+8", command: "pullRequest.copyUrl", when: "terminalOpen" },
+        { key: "mod+shift+y", command: "composer.effort" },
+      ]),
+    );
+    assert.strictEqual(resolveShortcutCommand(input, remapped, { platform: "MacIntel" }), null);
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "8", ctrlKey: true, shiftKey: true }), remapped, {
+        platform: "Linux",
+        context: { terminalOpen: true },
+      }),
+      "pullRequest.copyUrl",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(event({ key: "y", ctrlKey: true, shiftKey: true }), remapped, {
+        platform: "Linux",
+      }),
+      "composer.effort",
+    );
+  });
+
   it.each(["terminalOpen", "previewFocus", "previewOpen", "modelPickerOpen"])(
     "honors custom PR shortcut conditions for %s",
     (condition) => {
