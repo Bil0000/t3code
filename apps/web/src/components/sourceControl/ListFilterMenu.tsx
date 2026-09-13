@@ -134,7 +134,9 @@ export function ListFilterRadioGroup<Value extends string>({
           <MenuRadioItem
             key={option.value}
             value={option.value}
-            className={option.unavailable ? "data-disabled:pointer-events-auto" : undefined}
+            className={
+              option.unavailable !== undefined ? "data-disabled:pointer-events-auto" : undefined
+            }
             // A host the server has already said it cannot read is not a choice here: offering
             // it would answer the press by replacing a working list with that failure.
             disabled={option.unavailable !== undefined}
@@ -146,7 +148,7 @@ export function ListFilterRadioGroup<Value extends string>({
             </span>
           </MenuRadioItem>
         );
-        if (!option.unavailable) return item;
+        if (option.unavailable === undefined) return item;
         return (
           <Tooltip key={option.value}>
             <TooltipTrigger render={item} />
