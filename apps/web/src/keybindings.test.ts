@@ -1063,6 +1063,26 @@ describe("plus key parsing", () => {
 });
 
 describe("composer and pull request shortcuts", () => {
+  it.each(["terminalOpen", "previewFocus", "previewOpen", "modelPickerOpen"])(
+    "honors custom PR shortcut conditions for %s",
+    (condition) => {
+      const bindings = compileResolvedKeybindingsConfig([
+        { key: "mod+shift+k", command: "pullRequest.copyUrl", when: condition },
+        { key: "mod+shift+k", command: "pullRequest.copyNumber", when: `!${condition}` },
+      ]);
+      const input = event({ key: "k", ctrlKey: true, shiftKey: true });
+      for (const enabled of [false, true]) {
+        assert.strictEqual(
+          resolveShortcutCommand(input, bindings, {
+            platform: "Linux",
+            context: { [condition]: enabled },
+          }),
+          enabled ? "pullRequest.copyUrl" : "pullRequest.copyNumber",
+        );
+      }
+    },
+  );
+
   const shortcuts = [
     ["h", "composer.host"],
     ["e", "composer.effort"],

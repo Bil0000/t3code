@@ -6268,6 +6268,17 @@ export default function ChatView(props: ChatViewProps) {
     terminalUiOpenByThreadRef.current[activeThreadKey] = current;
   }, [activeThreadKey, focusComposer, terminalUiState.terminalOpen]);
 
+  const getShortcutContext = useCallback(
+    () => ({
+      terminalFocus: getTerminalFocusOwner() !== null,
+      terminalOpen: Boolean(terminalUiState.terminalOpen),
+      previewFocus: isPreviewFocused(),
+      previewOpen: previewPanelOpen,
+      modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
+    }),
+    [composerRef, previewPanelOpen, terminalUiState.terminalOpen],
+  );
+
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
       if (preventRepeatedTerminalCloseShortcut(event, keybindings)) {
@@ -6288,13 +6299,7 @@ export default function ChatView(props: ChatViewProps) {
       if (event.defaultPrevented && terminalFocusOwner === null) {
         return;
       }
-      const shortcutContext = {
-        terminalFocus: terminalFocusOwner !== null,
-        terminalOpen: Boolean(terminalUiState.terminalOpen),
-        previewFocus: isPreviewFocused(),
-        previewOpen: previewPanelOpen,
-        modelPickerOpen: composerRef.current?.isModelPickerOpen() ?? false,
-      };
+      const shortcutContext = getShortcutContext();
 
       if (
         !shortcutContext.terminalFocus &&
@@ -6540,7 +6545,7 @@ export default function ChatView(props: ChatViewProps) {
     supportsSettlement,
     confirmAndUnpinThread,
     copyActiveThreadReference,
-    previewPanelOpen,
+    getShortcutContext,
     toggleRightPanel,
     toggleRightPanelMaximized,
     toggleTerminalVisibility,
@@ -8536,6 +8541,7 @@ export default function ChatView(props: ChatViewProps) {
       // reader's feet. A link the agent wrote can open any other one here, and that one has to be
       // checkable out like it is anywhere else.
       <PullRequestDetailPanel
+        getShortcutContext={getShortcutContext}
         shortcutsEnabled={
           rightPanelOpen && activeRightPanelSurface?.id === renderedRightPanelSurface.id
         }

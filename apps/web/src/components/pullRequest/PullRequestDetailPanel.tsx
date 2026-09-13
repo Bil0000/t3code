@@ -61,8 +61,11 @@ import { type DraftId, useComposerDraftStore } from "~/composerDraftStore";
 import { useNewThreadHandler } from "~/hooks/useHandleNewThread";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
 import { isCommandPaletteOpen } from "~/commandPaletteBus";
-import { resolveShortcutCommand, shortcutLabelForCommand } from "~/keybindings";
-import { isTerminalFocused } from "~/lib/terminalFocus";
+import {
+  resolveShortcutCommand,
+  shortcutLabelForCommand,
+  type ShortcutMatchContext,
+} from "~/keybindings";
 import { primaryServerKeybindingsAtom } from "~/state/server";
 import { useClientSettings } from "~/hooks/useSettings";
 import {
@@ -465,6 +468,7 @@ function PullRequestBaseFreshnessWarning({
 export function PullRequestDetailPanel({
   environmentId,
   shortcutsEnabled,
+  getShortcutContext,
   threadRef = null,
   reference: requestedReference,
   listEntry = null,
@@ -478,6 +482,7 @@ export function PullRequestDetailPanel({
 }: {
   environmentId: EnvironmentId;
   shortcutsEnabled: boolean;
+  getShortcutContext: () => ShortcutMatchContext;
   onSelectPullRequest?: ((reference: PullRequestRef) => void) | undefined;
   /**
    * The thread this panel sits beside, if any. Links that are not the pull
@@ -730,7 +735,7 @@ export function PullRequestDetailPanel({
   const copyFromShortcut = useEffectEvent((event: KeyboardEvent) => {
     if (!shortcutsEnabled || event.defaultPrevented || isCommandPaletteOpen()) return;
     const command = resolveShortcutCommand(event, keybindings, {
-      context: { terminalFocus: isTerminalFocused() },
+      context: getShortcutContext(),
     });
     const value =
       command === "pullRequest.copyUrl"
