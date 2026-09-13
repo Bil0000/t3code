@@ -2566,7 +2566,10 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
               ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
               "--",
             ],
-            { maxOutputBytes: REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES },
+            {
+              maxOutputBytes: REVIEW_DIFF_PATCH_MAX_OUTPUT_BYTES,
+              appendTruncationMarker: true,
+            },
           ).pipe(
             Effect.map((result) => ({ diff: result.stdout, truncated: result.stdoutTruncated })),
           )

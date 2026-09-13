@@ -813,6 +813,31 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("review diff previews", () => {
+    it.effect("returns a truncated staged preview and refuses to unstage it", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        yield* initRepoWithCommit(cwd);
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* writeTextFile(cwd, "large.txt", "large staged line\n".repeat(8_000));
+        yield* git(cwd, ["add", "large.txt"]);
+        const index = yield* git(cwd, ["write-tree"]);
+        const source = (yield* driver.getReviewDiffPreview({ cwd, workingTreeScope: "staged" }))
+          .sources[0]!;
+        assert.isTrue(source.truncated);
+        assert.include(source.diff, "diff --git a/large.txt b/large.txt");
+        const error = yield* driver
+          .applyReviewPatch({
+            cwd,
+            sourceKind: "staged",
+            expectedDiffHash: source.diffHash,
+            fileIndex: 0,
+          })
+          .pipe(Effect.flip);
+        assert.include(error.detail, "Refresh the diff");
+        assert.equal(yield* git(cwd, ["write-tree"]), index);
+      }),
+    );
+
     it.effect(
       "stages one hunk, retains the index across later edits, and commits only staged content",
       () =>
