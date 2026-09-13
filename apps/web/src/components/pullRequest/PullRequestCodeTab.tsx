@@ -622,7 +622,7 @@ function PullRequestCodeTab({
   // an effect reading a ref could run before that node exists and would never arm the observer.
   const [sentinel, setSentinel] = useState<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (sentinel === null || !canLoadNextSlice) return;
+    if (guided || sentinel === null || !canLoadNextSlice) return;
     const observer = new IntersectionObserver(
       (observed) => {
         if (observed.some((entry) => entry.isIntersecting)) loadNextSlice();
@@ -632,7 +632,7 @@ function PullRequestCodeTab({
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [canLoadNextSlice, loadNextSlice, sentinel]);
+  }, [canLoadNextSlice, guided, loadNextSlice, sentinel]);
 
   // A stable identity: the viewer's SlotPortals memoizes each file's header/annotation portal on
   // these render props, so a fresh function here would recreate every visible file's portal on
