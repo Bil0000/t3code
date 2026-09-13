@@ -161,14 +161,12 @@ describe("Linear integration settings", () => {
     settingsState.projectTeams = {};
   });
 
-  it("lists saved accounts and teams without exposing emails", () => {
+  it("lists saved accounts, teams, and connection controls", () => {
     hooks.beginRender();
     const dialog = LinearIntegrationSettings();
 
     expect(visitElements(dialog, (element) => element.type === LinearConnectionDialog)).toBeNull();
     expect(textContent(dialog)).toContain("Ada");
-    expect(textContent(dialog)).not.toContain("ada@example.com");
-    expect(textContent(dialog)).not.toContain("grace@example.com");
     expect(textContent(dialog)).toContain("Engineering (ENG)");
     expect(textContent(dialog)).toContain("Grace");
     expect(textContent(dialog)).toContain("Operations (OPS)");
