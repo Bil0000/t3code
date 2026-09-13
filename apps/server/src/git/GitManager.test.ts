@@ -598,6 +598,7 @@ function runStackedAction(
     actionId?: string;
     commitMessage?: string;
     featureBranch?: boolean;
+    stagedOnly?: boolean;
     filePaths?: readonly string[];
     expectedBranch?: string;
     pullRequestUrl?: string;
@@ -2987,6 +2988,140 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
           Effect.map((result) => result.stdout.trim()),
         ),
       ).toContain("- details from user");
+    }),
+  );
+
+  it.effect("generates a commit from the index without staging later edits", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "approved\n");
+      yield* runGit(repoDir, ["add", "README.md"]);
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "later edit\n");
+      let patch = "";
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: (input) =>
+            Effect.sync(() => {
+              patch = input.stagedPatch;
+              return { subject: "Reviewed change", body: "" };
+            }),
+        },
+      });
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+        stagedOnly: true,
+      });
+      expect(result.commit.status).toBe("created");
+      expect(patch).toContain("+approved");
+      expect(patch).not.toContain("later edit");
+      expect((yield* runGit(repoDir, ["show", "HEAD:README.md"])).stdout).toBe("approved\n");
+      expect((yield* runGit(repoDir, ["diff"])).stdout).toContain("+later edit");
+      const empty = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+        stagedOnly: true,
+      });
+      expect(empty.commit.status).toBe("skipped_no_changes");
+      expect((yield* runGit(repoDir, ["diff"])).stdout).toContain("+later edit");
+    }),
+  );
+
+  it.effect(
+    "rejects changes staged during commit-title generation without changing the index",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const git = yield* GitVcsDriver.GitVcsDriver;
+        NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "approved\n");
+        yield* runGit(repoDir, ["add", "README.md"]);
+        const { manager } = yield* makeManager({
+          textGeneration: {
+            generateCommitMessage: () =>
+              Effect.gen(function* () {
+                NodeFS.writeFileSync(NodePath.join(repoDir, "later.txt"), "later\n");
+                yield* runGit(repoDir, ["add", "later.txt"]);
+                return { subject: "Reviewed change", body: "" };
+              }).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, git), Effect.orDie),
+          },
+        });
+        const error = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit",
+          stagedOnly: true,
+        }).pipe(Effect.flip);
+        expect(error.message).toContain("Staged changes changed");
+        expect((yield* runGit(repoDir, ["show", ":README.md"])).stdout).toBe("approved\n");
+        expect((yield* runGit(repoDir, ["diff", "--cached", "--name-only"])).stdout.trim()).toBe(
+          "README.md\nlater.txt",
+        );
+        expect((yield* runGit(repoDir, ["rev-list", "--count", "HEAD"])).stdout.trim()).toBe("1");
+      }),
+  );
+
+  it.effect(
+    "rejects a staged snapshot when another commit advances HEAD during title generation",
+    () =>
+      Effect.gen(function* () {
+        const repoDir = yield* makeTempDir("t3code-git-manager-");
+        yield* initRepo(repoDir);
+        const git = yield* GitVcsDriver.GitVcsDriver;
+        NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "approved\n");
+        yield* runGit(repoDir, ["add", "README.md"]);
+        const { manager } = yield* makeManager({
+          textGeneration: {
+            generateCommitMessage: () =>
+              Effect.gen(function* () {
+                NodeFS.writeFileSync(NodePath.join(repoDir, "other.txt"), "other commit\n");
+                yield* runGit(repoDir, ["add", "other.txt"]);
+                yield* runGit(repoDir, ["commit", "-m", "Other commit"]);
+                return { subject: "Stale review", body: "" };
+              }).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, git), Effect.orDie),
+          },
+        });
+        const error = yield* runStackedAction(manager, {
+          cwd: repoDir,
+          action: "commit",
+          stagedOnly: true,
+        }).pipe(Effect.flip);
+        expect(error.message).toContain("branch changed");
+        expect((yield* runGit(repoDir, ["log", "-1", "--format=%s"])).stdout.trim()).toBe(
+          "Other commit",
+        );
+        expect((yield* runGit(repoDir, ["show", "HEAD:other.txt"])).stdout).toBe("other commit\n");
+        expect((yield* runGit(repoDir, ["diff", "--cached"])).stdout).toBe("");
+      }),
+  );
+
+  it.effect("rejects a branch switch at the same HEAD during commit-title generation", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const git = yield* GitVcsDriver.GitVcsDriver;
+      NodeFS.writeFileSync(NodePath.join(repoDir, "README.md"), "approved\n");
+      yield* runGit(repoDir, ["add", "README.md"]);
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: () =>
+            Effect.gen(function* () {
+              yield* runGit(repoDir, ["switch", "-c", "other"]);
+              return { subject: "Stale review", body: "" };
+            }).pipe(Effect.provideService(GitVcsDriver.GitVcsDriver, git), Effect.orDie),
+        },
+      });
+      const error = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit",
+        stagedOnly: true,
+      }).pipe(Effect.flip);
+      expect(error.message).toContain("branch changed");
+      expect((yield* runGit(repoDir, ["symbolic-ref", "--short", "HEAD"])).stdout.trim()).toBe(
+        "other",
+      );
+      expect((yield* runGit(repoDir, ["rev-list", "--count", "HEAD"])).stdout.trim()).toBe("1");
+      expect((yield* runGit(repoDir, ["show", ":README.md"])).stdout).toBe("approved\n");
     }),
   );
 

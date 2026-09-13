@@ -33,6 +33,7 @@ interface DiffCommentAnnotationEntry {
 
 interface DiffCommentAnnotationGroup {
   entries: DiffCommentAnnotationEntry[];
+  hunk?: { fileDiff: FileDiffMetadata; index: number };
 }
 
 type DiffCommentLineAnnotation = DiffLineAnnotation<DiffCommentAnnotationGroup>;
@@ -89,6 +90,7 @@ interface AnnotatableCodeViewProps {
   className?: string;
   editing?: ReviewEditTargetResolver;
   renderHeaderFilenameSuffix: (fileDiff: FileDiffMetadata) => ReactNode;
+  renderHunkAction?: (fileDiff: FileDiffMetadata, hunkIndex: number) => ReactNode;
   renderHeaderPrefix: (
     fileDiff: FileDiffMetadata,
     fileKey: string,
@@ -112,6 +114,7 @@ export function AnnotatableCodeView({
   editing,
   renderHeaderFilenameSuffix,
   renderHeaderPrefix,
+  renderHunkAction,
 }: AnnotatableCodeViewProps) {
   const addReviewComment = useComposerDraftStore((store) => store.addReviewComment);
   const removeReviewComment = useComposerDraftStore((store) => store.removeReviewComment);
@@ -150,8 +153,18 @@ export function AnnotatableCodeView({
               text: comment.text,
             });
           }, []);
-        const annotations =
-          draft?.fileKey === fileKey ? [...persisted, draft.annotation] : persisted;
+        const hunkActions: DiffCommentLineAnnotation[] = renderHunkAction
+          ? fileDiff.hunks.map((hunk, index) => ({
+              side: hunk.additionCount > 0 ? "additions" : "deletions",
+              lineNumber: hunk.additionCount > 0 ? hunk.additionStart : hunk.deletionStart,
+              metadata: { entries: [], hunk: { fileDiff, index } },
+            }))
+          : [];
+        const annotations = [
+          ...hunkActions,
+          ...persisted,
+          ...(draft?.fileKey === fileKey ? [draft.annotation] : []),
+        ];
         return {
           id: fileKey,
           type: "diff",
@@ -169,7 +182,7 @@ export function AnnotatableCodeView({
           ),
         };
       }),
-    [draft, files, reviewComments, sectionId],
+    [draft, files, reviewComments, sectionId, renderHunkAction],
   );
 
   const removeEntry = useCallback(
@@ -267,6 +280,11 @@ export function AnnotatableCodeView({
           : null
       }
       renderAnnotation={(annotation) => {
+        if (annotation.metadata.hunk)
+          return renderHunkAction?.(
+            annotation.metadata.hunk.fileDiff,
+            annotation.metadata.hunk.index,
+          );
         const hasDraft = annotation.metadata.entries.some((entry) => entry.kind === "draft");
         return (
           <div
