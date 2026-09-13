@@ -818,7 +818,9 @@ export function PullRequestSummaryTab({
                         size="xs"
                         variant="ghost"
                         className="shrink-0"
-                        disabled={pendingFinding !== null && pendingFinding !== undefined}
+                        disabled={
+                          actionPending || (pendingFinding !== null && pendingFinding !== undefined)
+                        }
                         onClick={() => onFixFinding(finding)}
                       >
                         <HammerIcon className="size-3" />
@@ -950,7 +952,10 @@ export function PullRequestSummaryTab({
                             size="xs"
                             variant="ghost"
                             className="-mt-1 shrink-0"
-                            disabled={pendingFinding !== null && pendingFinding !== undefined}
+                            disabled={
+                              actionPending ||
+                              (pendingFinding !== null && pendingFinding !== undefined)
+                            }
                             onClick={() => onFixFinding(finding)}
                           >
                             <HammerIcon className="size-3" />

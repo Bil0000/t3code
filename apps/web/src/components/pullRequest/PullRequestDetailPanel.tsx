@@ -1753,7 +1753,7 @@ export function PullRequestDetailPanel({
                     <TooltipTrigger
                       render={
                         <MenuTrigger
-                          disabled={handoff !== null}
+                          disabled={actionPending || handoff !== null}
                           render={
                             <Button
                               size="xs"
@@ -1778,7 +1778,10 @@ export function PullRequestDetailPanel({
                     <TooltipPopup>Check out this pull request</TooltipPopup>
                   </Tooltip>
                   <MenuPopup align="end" side="bottom" className="min-w-72">
-                    <MenuItem onClick={() => startCheckout("worktree")}>
+                    <MenuItem
+                      disabled={actionPending || handoff !== null}
+                      onClick={() => startCheckout("worktree")}
+                    >
                       <GitBranchIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
                       <span className="flex min-w-0 flex-col">
                         <span>In a separate worktree</span>
@@ -1787,7 +1790,10 @@ export function PullRequestDetailPanel({
                         </span>
                       </span>
                     </MenuItem>
-                    <MenuItem onClick={() => startCheckout("local")}>
+                    <MenuItem
+                      disabled={actionPending || handoff !== null}
+                      onClick={() => startCheckout("local")}
+                    >
                       <FolderGit2Icon className="mt-0.5 size-3.5 shrink-0 self-start" />
                       <span className="flex min-w-0 flex-col">
                         <span>In this repository</span>
@@ -1801,7 +1807,7 @@ export function PullRequestDetailPanel({
                         environments={pickableEnvironments}
                         value={actingEnvironmentId}
                         onChange={(next) => setActingScope({ pullRequestKey, environmentId: next })}
-                        disabled={handoff !== null}
+                        disabled={actionPending || handoff !== null}
                       />
                     ) : null}
                   </MenuPopup>
@@ -1838,7 +1844,7 @@ export function PullRequestDetailPanel({
                         <Button
                           size="xs"
                           variant="destructive-outline"
-                          disabled={handoff !== null}
+                          disabled={actionPending || handoff !== null}
                           onClick={startResolveConflicts}
                           aria-label={
                             handoff === "conflicts" ? "Preparing..." : "Resolve conflicts"
@@ -2003,7 +2009,10 @@ export function PullRequestDetailPanel({
                     />
                     Refresh
                   </MenuItem>
-                  <MenuItem disabled={handoff !== null} onClick={askAboutPullRequest}>
+                  <MenuItem
+                    disabled={actionPending || handoff !== null}
+                    onClick={askAboutPullRequest}
+                  >
                     <MessageCircleQuestionIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
                     <span className="flex min-w-0 flex-col">
                       <span>{handoff === "ask" ? "Opening..." : "Ask a question"}</span>
@@ -2014,7 +2023,10 @@ export function PullRequestDetailPanel({
                       </span>
                     </span>
                   </MenuItem>
-                  <MenuItem disabled={handoff !== null} onClick={explainPullRequest}>
+                  <MenuItem
+                    disabled={actionPending || handoff !== null}
+                    onClick={explainPullRequest}
+                  >
                     <BookOpenIcon className="mt-0.5 size-3.5 shrink-0 self-start" />
                     <span className="flex min-w-0 flex-col">
                       <span>{handoff === "explain" ? "Opening..." : "Explain this PR"}</span>
@@ -2023,7 +2035,7 @@ export function PullRequestDetailPanel({
                       </span>
                     </span>
                   </MenuItem>
-                  <MenuItem disabled={handoff !== null} onClick={startFixFindings}>
+                  <MenuItem disabled={actionPending || handoff !== null} onClick={startFixFindings}>
                     <HammerIcon className="size-3.5" />
                     {handoff === "findings" ? "Preparing..." : handoffLabels.fixFindings}
                   </MenuItem>
@@ -2032,7 +2044,7 @@ export function PullRequestDetailPanel({
                       environments={pickableEnvironments}
                       value={actingEnvironmentId}
                       onChange={(next) => setActingScope({ pullRequestKey, environmentId: next })}
-                      disabled={handoff !== null}
+                      disabled={actionPending || handoff !== null}
                     />
                   ) : null}
                   <MenuSeparator />
