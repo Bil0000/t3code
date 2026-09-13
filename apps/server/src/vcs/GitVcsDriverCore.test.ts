@@ -1553,6 +1553,59 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
   });
 
   describe("worktree operations", () => {
+    it.effect("uses parallel checkout without skipping filters or hooks", () =>
+      Effect.gen(function* () {
+        const cwd = yield* makeTmpDir();
+        const { initialBranch } = yield* initRepoWithCommit(cwd);
+        const fs = yield* FileSystem.FileSystem;
+        const path = yield* Path.Path;
+        const driver = yield* GitVcsDriver.GitVcsDriver;
+        yield* git(cwd, ["config", "filter.test.smudge", "sed s/original/filtered/g"]);
+        yield* writeTextFile(cwd, ".gitattributes", "asset.txt filter=test\n");
+        yield* writeTextFile(cwd, "asset.txt", "original\n");
+        yield* git(cwd, ["add", "."]);
+        yield* git(cwd, ["commit", "-m", "filtered asset"]);
+        yield* writeTextFile(
+          cwd,
+          ".git/hooks/post-checkout",
+          "#!/bin/sh\ngit config checkout.workers > checkout-workers\nexit 0\n",
+        );
+        yield* fs.chmod(path.join(cwd, ".git/hooks/post-checkout"), 0o755);
+        const worktreePath = path.join(yield* makeTmpDir("git-worktrees-"), "parallel");
+
+        yield* driver.createWorktree({
+          cwd,
+          path: worktreePath,
+          refName: initialBranch,
+          newRefName: "feature/parallel",
+          baseRefName: initialBranch,
+        });
+
+        assert.equal(yield* fs.readFileString(path.join(worktreePath, "checkout-workers")), "0\n");
+        assert.equal(yield* fs.readFileString(path.join(worktreePath, "asset.txt")), "filtered\n");
+        assert.equal(
+          yield* git(worktreePath, ["rev-parse", "HEAD"]),
+          yield* git(cwd, ["rev-parse", "HEAD"]),
+        );
+        assert.equal(
+          yield* git(cwd, ["config", "branch.feature/parallel.gh-merge-base"]),
+          initialBranch,
+        );
+        yield* git(cwd, ["config", "checkout.workers", "1"]);
+        const configuredPath = path.join(yield* makeTmpDir("git-worktrees-"), "configured");
+        yield* driver.createWorktree({
+          cwd,
+          path: configuredPath,
+          refName: initialBranch,
+          newRefName: "feature/configured",
+        });
+        assert.equal(
+          yield* fs.readFileString(path.join(configuredPath, "checkout-workers")),
+          "1\n",
+        );
+      }),
+    );
+
     // NTFS rejects a newline in a file name, so there is nothing to preserve there.
     it.effect.skipIf(HostProcessPlatform.defaultValue() === "win32")(
       "preserves newline characters in worktree paths when listing refs",
@@ -1914,8 +1967,20 @@ it.layer(TestLayer)("GitVcsDriver core integration", (it) => {
         const remoteHead = yield* git(peer, ["rev-parse", "HEAD"]);
         assert.notEqual(beforeFetch, remoteHead);
 
+        yield* git(peer, ["push", "origin", "HEAD:refs/heads/unrelated"]);
         const driver = yield* GitVcsDriver.GitVcsDriver;
-        yield* driver.fetchRemote({ cwd, remoteName: "origin" });
+        yield* driver.fetchRemote({
+          cwd,
+          remoteName: "origin",
+          refName: `origin/${initialBranch}`,
+        });
+        assert.isFalse(
+          yield* driver.remoteBranchExists({ cwd, remoteName: "origin", refName: "unrelated" }),
+        );
+        yield* driver.fetchRemote({ cwd, remoteName: "origin", refName: "local-only" });
+        assert.isTrue(
+          yield* driver.remoteBranchExists({ cwd, remoteName: "origin", refName: "unrelated" }),
+        );
 
         assert.equal(
           yield* driver.remoteBranchExists({

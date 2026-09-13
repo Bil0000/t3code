@@ -3019,10 +3019,16 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       ? ["worktree", "add", "-b", input.newRefName, worktreePath, input.refName]
       : ["worktree", "add", worktreePath, input.refName];
 
-    yield* executeGit("GitVcsDriver.createWorktree", input.cwd, args, {
-      fallbackErrorDetail: "git worktree add failed",
-      timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
-    });
+    const checkoutWorkers = (yield* readConfigValue(input.cwd, "checkout.workers")) ?? "0";
+    yield* executeGit(
+      "GitVcsDriver.createWorktree",
+      input.cwd,
+      ["-c", `checkout.workers=${checkoutWorkers}`, ...args],
+      {
+        fallbackErrorDetail: "git worktree add failed",
+        timeoutMs: WORKTREE_ADD_TIMEOUT_MS,
+      },
+    );
 
     // `git worktree add` leaves submodules empty, so a repo that keeps agent
     // skills, tooling or source in one gets a worktree that is quietly missing
@@ -3180,15 +3186,24 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const fetchRemote: GitVcsDriver.GitVcsDriver["Service"]["fetchRemote"] = Effect.fn("fetchRemote")(
     function* (input) {
+      const args = ["fetch", "--quiet", input.remoteName];
+      const options = {
+        env: STATUS_UPSTREAM_REFRESH_ENV,
+        fallbackErrorDetail: `git fetch ${input.remoteName} failed`,
+      };
+      const fetchAll = executeGit("GitVcsDriver.fetchRemote", input.cwd, args, options);
+      if (input.refName === undefined) {
+        return yield* fetchAll.pipe(Effect.asVoid);
+      }
+      const branch =
+        parseRemoteRefWithRemoteNames(input.refName, [input.remoteName])?.branchName ??
+        input.refName;
       yield* executeGit(
         "GitVcsDriver.fetchRemote",
         input.cwd,
-        ["fetch", "--quiet", input.remoteName],
-        {
-          env: STATUS_UPSTREAM_REFRESH_ENV,
-          fallbackErrorDetail: `git fetch ${input.remoteName} failed`,
-        },
-      );
+        [...args, `+refs/heads/${branch}:refs/remotes/${input.remoteName}/${branch}`],
+        options,
+      ).pipe(Effect.catch(() => fetchAll));
     },
   );
 
