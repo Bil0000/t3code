@@ -10,12 +10,15 @@ const state = vi.hoisted(() => ({
   navigate: vi.fn(),
   sound: vi.fn(),
   badge: vi.fn(),
+  environmentIds: ["one", "two"],
 }));
 vi.mock("@effect/atom-react", () => ({ useAtomValue: (id: string) => state.shells.get(id) }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => state.navigate }));
 vi.mock("../state/shell", () => ({ environmentShell: { stateValueAtom: (id: string) => id } }));
 vi.mock("../state/environments", () => ({
-  useEnvironments: () => ({ environments: [{ environmentId: "one" }, { environmentId: "two" }] }),
+  useEnvironments: () => ({
+    environments: state.environmentIds.map((environmentId) => ({ environmentId })),
+  }),
 }));
 vi.mock("../hooks/useSettings", () => ({
   useClientSettings: (select: (settings: { notificationMode: string }) => unknown) =>
@@ -35,6 +38,9 @@ class TestNotification extends EventTarget {
   static permission = "granted";
   static sent: TestNotification[] = [];
   close = vi.fn();
+  get tag() {
+    return this.options.tag ?? "";
+  }
   constructor(
     readonly title: string,
     readonly options: NotificationOptions,
@@ -76,6 +82,7 @@ async function render() {
 beforeEach(() => {
   vi.clearAllMocks();
   state.mode = "notifications";
+  state.environmentIds = ["one", "two"];
   state.shells.set("one", shell());
   state.shells.set("two", shell());
   focused = false;
@@ -133,6 +140,26 @@ it("does not badge old completions on first load or reconnect", async () => {
   await render();
   expect(TestNotification.sent).toHaveLength(0);
   expect(state.badge.mock.calls.every(([count]) => count === 0)).toBe(true);
+});
+
+it("removes alerts only from environments that leave the client", async () => {
+  await render();
+  complete("one");
+  complete("two");
+  await render();
+  expect(state.badge).toHaveBeenLastCalledWith(2);
+  const [removed, retained] = TestNotification.sent;
+  state.environmentIds = ["two"];
+  await render();
+  expect(state.badge).toHaveBeenLastCalledWith(1);
+  expect(removed!.close).toHaveBeenCalledOnce();
+  expect(retained!.close).not.toHaveBeenCalled();
+  await render();
+  expect(removed!.close).toHaveBeenCalledOnce();
+  state.environmentIds = [];
+  await render();
+  expect(state.badge).toHaveBeenLastCalledWith(0);
+  expect(retained!.close).toHaveBeenCalledOnce();
 });
 
 it("starts a fresh count after another native app window gains focus", async () => {

@@ -19,16 +19,29 @@ import { resolveSidebarThreadStatus } from "./Sidebar.logic";
 export function ThreadNotificationCoordinator() {
   const { environments } = useEnvironments();
   const mode = useClientSettings((settings) => settings.notificationMode);
-  const pending = useRef(new Map<string, Notification>());
-  const onNotification = useCallback((tag: string, notification: Notification) => {
-    pending.current.get(tag)?.close();
-    pending.current.set(tag, notification);
+  const pending = useRef(
+    new Map<string, { environmentId: EnvironmentId; notification: Notification }>(),
+  );
+  const onNotification = useCallback((environmentId: EnvironmentId, notification: Notification) => {
+    pending.current.get(notification.tag)?.notification.close();
+    pending.current.set(notification.tag, { environmentId, notification });
     setNotificationBadge(pending.current.size);
   }, []);
 
   useEffect(() => {
+    const activeIds = new Set(environments.map(({ environmentId }) => environmentId));
+    const count = pending.current.size;
+    for (const [tag, { environmentId, notification }] of pending.current) {
+      if (activeIds.has(environmentId)) continue;
+      notification.close();
+      pending.current.delete(tag);
+    }
+    if (count !== pending.current.size) setNotificationBadge(pending.current.size);
+  }, [environments]);
+
+  useEffect(() => {
     const clear = () => {
-      for (const notification of pending.current.values()) notification.close();
+      for (const { notification } of pending.current.values()) notification.close();
       pending.current.clear();
       setNotificationBadge(0);
     };
@@ -69,7 +82,7 @@ function EnvironmentNotifications({
   onNotification,
 }: {
   environmentId: EnvironmentId;
-  onNotification: (tag: string, notification: Notification) => void;
+  onNotification: (environmentId: EnvironmentId, notification: Notification) => void;
 }) {
   const shell = useAtomValue(environmentShell.stateValueAtom(environmentId));
   const mode = useClientSettings((settings) => settings.notificationMode);
@@ -127,7 +140,7 @@ function EnvironmentNotifications({
               : "Input needed",
           { body: thread.title, tag, silent: true },
         );
-        onNotification(tag, notification);
+        onNotification(environmentId, notification);
         notification.addEventListener("click", () => {
           notification.close();
           window.focus();
