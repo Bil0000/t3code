@@ -60,9 +60,9 @@ import { useAtomCommand } from "~/state/use-atom-command";
 import { DiffPanelLoadingState } from "../DiffPanelShell";
 import { DiffCommentAnnotation } from "../diffs/DiffCommentAnnotation";
 import { DiffFileTree, type DiffFileTreeHandle } from "../diffs/DiffFileTree";
+import { EditableDiffCodeView, type ReviewEditTargetResolver } from "../diffs/EditableDiffCodeView";
 import { useCodeViewFileReveal } from "../diffs/useCodeViewFileReveal";
 import { diffFileTreeEntries } from "../diffs/diffFileTree.logic";
-import { StyledDiffCodeView } from "../diffs/StyledDiffCodeView";
 import { Button } from "../ui/button";
 import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "../ui/collapsible";
 import {
@@ -742,6 +742,21 @@ function PullRequestCodeTab({
     [toggleFile],
   );
 
+  const resolveEditTarget = useCallback<ReviewEditTargetResolver>(
+    (filePath) =>
+      commit === null
+        ? {
+            environmentId,
+            projectId: detail.projectId,
+            cwd: detail.workspaceRoot,
+            filePath,
+            expectedBranch: null,
+            pullRequestUrl: detail.url,
+          }
+        : null,
+    [commit, detail.projectId, detail.url, detail.workspaceRoot, environmentId],
+  );
+
   const renderHeaderMetadata = useCallback(
     (item: CodeViewItem<ReviewAnnotationGroup>) => {
       if (item.type !== "diff") return null;
@@ -1384,7 +1399,7 @@ function PullRequestCodeTab({
           {/* The viewer virtualizes against the element it is told is scrolling and places its
               rows absolutely, so it has to own that element — the thread diff panel hands it the
               same one. Scrolling from a parent instead leaves it painting over its neighbours. */}
-          <StyledDiffCodeView<ReviewAnnotationGroup>
+          <EditableDiffCodeView<ReviewAnnotationGroup>
             // Keep scrollbar space stable so file metadata and line numbers do not shift as a
             // diff crosses the overflow boundary. The viewer is itself focusable for keyboard
             // interaction, but its native host outline clips and competes with the focus
@@ -1400,6 +1415,7 @@ function PullRequestCodeTab({
             // is running out of diff.
             renderCodeViewFooter={renderCodeViewFooter}
             renderHeaderPrefix={renderHeaderPrefix}
+            editing={resolveEditTarget}
             renderHeaderMetadata={renderHeaderMetadata}
             renderAnnotation={renderAnnotation}
             unsafeCSSExtra={REPLACE_FILE_COUNTS_CSS}
