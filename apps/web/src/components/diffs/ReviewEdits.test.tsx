@@ -672,6 +672,7 @@ it("saves PR files in one workspace, restores saved edits, and retries a failed 
   await mount();
   expect(edits.drafts.get(firstKey)?.contents).toBe("PR edit");
   expect(edits.drafts.get(secondKey)?.pendingPush).toBe(true);
+  expect(blockOptions.mock.lastCall?.[0].enableBeforeUnload).toBe(false);
   publish.mockResolvedValueOnce({ _tag: "Failure" });
   await act(async () => {
     expect(await edits.publish(target.environmentId, target.cwd, url)).toBe(false);
@@ -721,28 +722,49 @@ it("saves and publishes the same PR separately for each source workspace", async
   expect(edits.drafts.get(reviewEditKey(second))?.pendingPush).toBe(false);
 });
 
-it("keeps saved PR edits publishable when browser storage is full", async () => {
-  await mount();
-  const draft = { ...savedDraft, pullRequestUrl: "https://github.com/example/repo/pull/1" };
-  const draftKey = reviewEditKey(draft);
-  await act(async () => {
-    edits.begin(draft);
-    edits.change(draftKey, "edit");
-    edits.focus(draftKey);
-  });
-  window.localStorage.setItem = () => {
-    throw new Error("Quota exceeded");
-  };
-  await save();
-  expect(edits.drafts.get(draftKey)).toMatchObject({ savedContents: "edit", pendingPush: true });
-  expect(toast).toHaveBeenCalledWith(
-    expect.objectContaining({ title: "Browser storage is unavailable" }),
-  );
-  await act(async () => {
-    expect(await edits.publish(target.environmentId, target.cwd, draft.pullRequestUrl)).toBe(true);
-  });
-  expect(edits.drafts.get(draftKey)?.pendingPush).toBe(false);
-});
+it.each(["save", "publish"])(
+  "protects saved PR edits until %s recovers browser storage failure",
+  async (recovery) => {
+    await mount();
+    const draft = { ...savedDraft, pullRequestUrl: "https://github.com/example/repo/pull/1" };
+    const draftKey = reviewEditKey(draft);
+    await act(async () => {
+      edits.begin(draft);
+      edits.change(draftKey, "edit");
+      edits.focus(draftKey);
+    });
+    const setItem = window.localStorage.setItem;
+    window.localStorage.setItem = () => {
+      throw new Error("Quota exceeded");
+    };
+    await save();
+    expect(edits.drafts.get(draftKey)).toMatchObject({ savedContents: "edit", pendingPush: true });
+    expect(toast).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Browser storage is unavailable" }),
+    );
+    expect(blockOptions.mock.lastCall?.[0].enableBeforeUnload).toBe(true);
+    const leave = vi.fn();
+    await act(async () => edits.requestLeave(leave));
+    expect(leave).toHaveBeenCalledOnce();
+    if (recovery === "save") {
+      window.localStorage.setItem = setItem;
+      await act(async () => edits.change(draftKey, "another edit"));
+      await save();
+      expect(edits.drafts.get(draftKey)).toMatchObject({
+        savedContents: "another edit",
+        pendingPush: true,
+      });
+    } else {
+      await act(async () => {
+        expect(await edits.publish(target.environmentId, target.cwd, draft.pullRequestUrl)).toBe(
+          true,
+        );
+      });
+      expect(edits.drafts.get(draftKey)?.pendingPush).toBe(false);
+    }
+    expect(blockOptions.mock.lastCall?.[0].enableBeforeUnload).toBe(false);
+  },
+);
 
 it("blocks changes and duplicate publication while the writing agent runs", async () => {
   await mount();
