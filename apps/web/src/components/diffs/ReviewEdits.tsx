@@ -129,12 +129,14 @@ function persistSavedReviews(drafts: ReadonlyMap<string, ReviewDraft>) {
       ),
       SavedReviews,
     );
+    return true;
   } catch {
     toastManager.add({
       type: "info",
       title: "Browser storage is unavailable",
       description: "Your files are saved on disk. Push any pending edits before closing this tab.",
     });
+    return false;
   }
 }
 
@@ -166,6 +168,7 @@ export function useReviewPanelLeaveGuard(ref: ScopedThreadRef | null) {
 
 export function ReviewEditsProvider({ children }: { children: ReactNode }) {
   const [drafts, setDrafts] = useState<ReadonlyMap<string, ReviewDraft>>(readSavedReviews);
+  const [savedReviewsPersisted, setSavedReviewsPersisted] = useState(true);
   const draftsRef = useRef(drafts);
   const focusedKey = useRef<string | null>(null);
   const [publishing, setPublishing] = useState<ReadonlyMap<string, string>>(new Map());
@@ -195,7 +198,11 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
       if (shouldBlock) setError(null);
       return shouldBlock;
     },
-    enableBeforeUnload: dirty || saving || publishing.size > 0,
+    enableBeforeUnload:
+      dirty ||
+      saving ||
+      publishing.size > 0 ||
+      (!savedReviewsPersisted && [...drafts.values()].some((draft) => draft.pendingPush)),
     withResolver: true,
   });
   const update = useCallback((next: ReadonlyMap<string, ReviewDraft>) => {
@@ -314,7 +321,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
               savedContents: draft.contents,
               ...(workspace ? { workspace, pendingPush: true } : {}),
             });
-            if (workspace) persistSavedReviews(next);
+            if (workspace) setSavedReviewsPersisted(persistSavedReviews(next));
             update(next);
           }
           appAtomRegistry.refresh(
@@ -386,7 +393,7 @@ export function ReviewEditsProvider({ children }: { children: ReactNode }) {
           const draft = next.get(fileKey);
           if (draft) next.set(fileKey, { ...draft, pendingPush: false });
         }
-        persistSavedReviews(next);
+        setSavedReviewsPersisted(persistSavedReviews(next));
         update(next);
         toastManager.add({ type: "success", title: "Changes pushed to the PR" });
         return true;
