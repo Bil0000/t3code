@@ -60,8 +60,8 @@ async function setFaviconBadge(count: number) {
     canvas.width = canvas.height = 64;
     const context = canvas.getContext("2d");
     if (!context) return;
-    // Leave room for the badge to straddle the icon's corner, like the desktop badge.
-    context.drawImage(image, 0, 12, 52, 52);
+    // Keep the favicon full-size; only overlay the counter in its top-right corner.
+    context.drawImage(image, 0, 0, 64, 64);
     context.translate(32, 0);
     context.scale(0.5, 0.5);
     drawNotificationBadge(context, count);
