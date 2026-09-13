@@ -545,6 +545,8 @@ interface ComposerDraftStoreState {
   setDraftThreadContext: (
     threadRef: ComposerThreadTarget,
     options: {
+      threadId?: ThreadId;
+      promotedTo?: ScopedThreadRef | null;
       branch?: string | null;
       worktreePath?: string | null;
       projectRef?: ScopedProjectRef;
@@ -2755,7 +2757,7 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
                 ? "manual"
                 : existing.environmentSelection);
             const nextDraftThread: DraftThreadState = {
-              threadId: existing.threadId,
+              threadId: options.threadId ?? existing.threadId,
               environmentId: nextProjectRef.environmentId,
               projectId: nextProjectRef.projectId,
               logicalProjectKey: existing.logicalProjectKey,
@@ -2777,9 +2779,13 @@ const composerDraftStore = create<ComposerDraftStoreState>()(
               envMode:
                 options.envMode ?? (nextWorktreePath ? "worktree" : (existing.envMode ?? "local")),
               startFromOrigin: nextStartFromOrigin,
-              promotedTo: existing.promotedTo ?? null,
+              promotedTo:
+                options.promotedTo === undefined
+                  ? (existing.promotedTo ?? null)
+                  : options.promotedTo,
             };
             const isUnchanged =
+              nextDraftThread.threadId === existing.threadId &&
               nextDraftThread.environmentId === existing.environmentId &&
               nextDraftThread.projectId === existing.projectId &&
               nextDraftThread.logicalProjectKey === existing.logicalProjectKey &&

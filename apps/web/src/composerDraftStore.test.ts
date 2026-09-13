@@ -66,6 +66,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test"
 
 import {
   COMPOSER_DRAFT_STORAGE_KEY,
+  beginBackgroundDraftSubmissionByRef,
+  clearBackgroundDraftSubmissionByRef,
   clearComposerDraftsEnvironment,
   composerDraftHasUserContent,
   finalizePromotedDraftThreadByRef,
@@ -1300,7 +1302,7 @@ describe("composerDraftStore project draft thread mapping", () => {
     expect(store.getComposerDraft(draftId)?.prompt).toBe("keep this prompt");
   });
 
-  it("rotates a failed bootstrap thread id without losing its draft", () => {
+  it("rotates a failed bootstrap thread id without changing the next draft", () => {
     const store = useComposerDraftStore.getState();
     const retryThreadId = ThreadId.make("thread-retry");
     store.setProjectDraftThreadId(projectRef, draftId, {
@@ -1314,13 +1316,24 @@ describe("composerDraftStore project draft thread mapping", () => {
       interactionMode: "plan",
     });
     store.setPrompt(draftId, "keep this prompt");
-    markPromotedDraftThreadByRef(scopeThreadRef(TEST_ENVIRONMENT_ID, threadId));
+    const pendingRef = scopeThreadRef(TEST_ENVIRONMENT_ID, threadId);
+    beginBackgroundDraftSubmissionByRef(pendingRef);
+    markPromotedDraftThreadByRef(pendingRef);
+    store.setProjectDraftThreadId(projectRef, otherDraftId, { threadId: otherThreadId });
+    store.setPrompt(otherDraftId, "second task");
 
-    store.setLogicalProjectDraftThreadId(scopedProjectKey(projectRef), projectRef, draftId, {
+    store.setDraftThreadContext(draftId, {
       threadId: retryThreadId,
+      promotedTo: null,
       createdAt: "2026-01-01T00:01:00.000Z",
     });
 
+    clearBackgroundDraftSubmissionByRef(pendingRef);
+    expect(store.getDraftThreadByProjectRef(projectRef)?.draftId).toBe(otherDraftId);
+    expect(store.getComposerDraft(otherDraftId)?.prompt).toBe("second task");
+    expect(useComposerDraftStore.getState().backgroundSubmissionThreadKeys).not.toHaveProperty(
+      scopedThreadKey(pendingRef),
+    );
     expect(useComposerDraftStore.getState().getDraftThread(draftId)).toMatchObject({
       threadId: retryThreadId,
       branch: "feature/test",
