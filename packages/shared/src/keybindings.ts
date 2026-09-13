@@ -47,7 +47,7 @@ export const DEFAULT_KEYBINDINGS: ReadonlyArray<KeybindingRule> = [
   { key: "mod+shift+h", command: "composer.host", when: "!terminalFocus" },
   { key: "mod+alt+e", command: "composer.effort", when: "!terminalFocus" },
   { key: "mod+alt+a", command: "composer.mode", when: "!terminalFocus" },
-  { key: "mod+alt+t", command: "composer.workspace", when: "!terminalFocus" },
+  { key: "mod+alt+s", command: "composer.workspace", when: "!terminalFocus" },
   { key: "mod+alt+g", command: "composer.branch", when: "!terminalFocus" },
   { key: "mod+alt+p", command: "composer.previousWorktree", when: "!terminalFocus" },
   { key: "alt+arrowup", command: "modelPicker.previousProvider", when: "modelPickerOpen" },

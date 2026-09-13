@@ -1067,12 +1067,12 @@ describe("composer control shortcuts", () => {
     ["h", "composer.host", true],
     ["e", "composer.effort", false],
     ["a", "composer.mode", false],
-    ["t", "composer.workspace", false],
+    ["s", "composer.workspace", false],
     ["g", "composer.branch", false],
     ["p", "composer.previousWorktree", false],
   ] as const;
 
-  for (const platform of ["MacIntel", "Linux"]) {
+  for (const platform of ["MacIntel", "Win32", "Linux"]) {
     it.each(shortcuts)(
       `resolves %s on ${platform} and leaves terminal input alone`,
       (key, command, shiftKey) => {
@@ -1099,6 +1099,47 @@ describe("composer control shortcuts", () => {
       },
     );
   }
+
+  it("leaves AltGr text entry alone on Windows and Linux", () => {
+    for (const platform of ["Win32", "Linux"]) {
+      const input = event({
+        key: "€",
+        code: "KeyE",
+        ctrlKey: true,
+        altKey: true,
+        getModifierState: (key) => key === "AltGraph",
+      });
+      assert.isNull(resolveShortcutCommand(input, DEFAULT_RESOLVED_KEYBINDINGS, { platform }));
+      assert.strictEqual(
+        resolveShortcutCommand(
+          { ...input, getModifierState: () => false },
+          DEFAULT_RESOLVED_KEYBINDINGS,
+          { platform },
+        ),
+        "composer.effort",
+      );
+    }
+  });
+
+  it("keeps Firefox modifier reporting usable on Windows and macOS", () => {
+    const getModifierState = (key: string) => key === "AltGraph";
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "e", ctrlKey: true, altKey: true, getModifierState }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "Win32" },
+      ),
+      "composer.effort",
+    );
+    assert.strictEqual(
+      resolveShortcutCommand(
+        event({ key: "´", code: "KeyE", metaKey: true, altKey: true, getModifierState }),
+        DEFAULT_RESOLVED_KEYBINDINGS,
+        { platform: "MacIntel" },
+      ),
+      "composer.effort",
+    );
+  });
 
   it.each(shortcuts)("uses a custom binding for %s", (_key, command) => {
     const bindings = compileResolvedKeybindingsConfig([
