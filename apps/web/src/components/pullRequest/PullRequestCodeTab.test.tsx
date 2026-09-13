@@ -4,11 +4,10 @@ import { act, type ComponentProps, type ReactNode } from "react";
 import { create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, expect, it, vi } from "vite-plus/test";
 
-const { query, command, refresh, settings } = vi.hoisted(() => ({
+const { query, command, refresh } = vi.hoisted(() => ({
   query: vi.fn(),
   command: vi.fn(),
   refresh: vi.fn(),
-  settings: { diffLayout: "unified", diffFilesCollapsed: false, wordWrap: false },
 }));
 vi.mock("~/state/query", () => ({ useEnvironmentQuery: query }));
 vi.mock("~/state/use-atom-command", () => ({ useAtomCommand: () => command }));
@@ -18,7 +17,7 @@ vi.mock("~/state/pullRequests", () => ({
 vi.mock("@effect/atom-react", () => ({ useAtomRefresh: () => refresh }));
 vi.mock("~/hooks/useTheme", () => ({ useTheme: () => ({ resolvedTheme: "dark" }) }));
 vi.mock("~/hooks/useSettings", () => ({
-  useClientSettings: () => settings,
+  useClientSettings: () => ({ diffLayout: "unified", wordWrap: false }),
   useUpdateClientSettings: () => command,
 }));
 vi.mock("~/hooks/useLocalStorage", () => ({
@@ -98,7 +97,6 @@ const click = async (label: string) => {
 };
 afterEach(async () => {
   await act(async () => renderer?.unmount());
-  settings.diffFilesCollapsed = false;
   vi.unstubAllGlobals();
 });
 
@@ -163,7 +161,6 @@ it("loads guide pages only on request and resumes scroll loading outside the gui
 
 it("opens the guide file in each commit scope and keeps manual collapses within that scope", async () => {
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
-  settings.diffFilesCollapsed = true;
   const pages = ["all", "commit"].map((contents) => ({
     patch: `diff --git a/file.ts b/file.ts\n--- a/file.ts\n+++ b/file.ts\n@@ -1 +1 @@\n-old\n+${contents}\n`,
     truncated: false,
@@ -193,6 +190,7 @@ it("opens the guide file in each commit scope and keeps manual collapses within 
   await act(async () => {
     renderer = create(view(null));
   });
+  await click("Collapse all files");
   expect(renderer.root.findAllByType("pre")).toHaveLength(0);
   await click("Guided review");
   expect(renderer.root.findByType("pre").children).toEqual(["all"]);

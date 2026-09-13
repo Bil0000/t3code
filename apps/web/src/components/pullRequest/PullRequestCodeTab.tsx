@@ -513,11 +513,7 @@ function PullRequestCodeTab({
           groupAt(anchor.side, anchor.line).draft = true;
         }
 
-        const collapsed = isFileDiffCollapsed(
-          fileKey,
-          foldOverride ?? (settings.diffFilesCollapsed ? "folded" : "expanded"),
-          toggledFiles,
-        );
+        const collapsed = isFileDiffCollapsed(fileKey, foldOverride, toggledFiles);
 
         const annotations: ReviewAnnotation[] = [...groups.values()].map((group) => ({
           side: toViewerSide(group.side),
@@ -570,7 +566,6 @@ function PullRequestCodeTab({
       foldOverride,
       pendingComments,
       placedThreadIds,
-      settings.diffFilesCollapsed,
       toggledFiles,
     ],
   );
