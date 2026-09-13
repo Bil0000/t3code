@@ -22,6 +22,7 @@ import {
   ArrowUpRightIcon,
   BookOpenIcon,
   CircleDotIcon,
+  CopyIcon,
   ChevronDownIcon,
   ExternalLinkIcon,
   FileDiffIcon,
@@ -741,7 +742,7 @@ export function PullRequestDetailPanel({
       command === "pullRequest.copyUrl"
         ? (detail?.url ?? matchingListEntry?.url)
         : command === "pullRequest.copyNumber"
-          ? String(reference.number)
+          ? `#${reference.number}`
           : null;
     if (!value) return;
     event.preventDefault();
@@ -2134,7 +2135,8 @@ export function PullRequestDetailPanel({
                       {shortcutLabelForCommand(keybindings, "pullRequest.copyUrl")}
                     </MenuShortcut>
                   </MenuItem>
-                  <MenuItem onClick={() => copyReference(String(reference.number), "PR number")}>
+                  <MenuItem onClick={() => copyReference(`#${reference.number}`, "PR number")}>
+                    <CopyIcon className="size-3.5" />
                     Copy PR number
                     <MenuShortcut>
                       {shortcutLabelForCommand(keybindings, "pullRequest.copyNumber")}

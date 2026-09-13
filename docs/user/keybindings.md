@@ -24,7 +24,7 @@ in Settings.
 ## Copy pull request references
 
 With a PR open in the right panel or on the Pull Requests page, use `mod+shift+k`
-to copy its URL and `mod+shift+y` to copy its number without a `#` prefix.
+to copy its URL and `mod+shift+y` to copy its number with a `#` prefix.
 Both shortcuts can be changed in Settings. They copy the selected PR and leave
 terminal input alone.
 
